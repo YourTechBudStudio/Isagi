@@ -1,0 +1,25 @@
+{
+  "name": "isagi",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.9.0",
+  "scripts": {
+    "mobile": "pnpm --filter @isagi/mobile",
+    "lint": "pnpm run -r --parallel lint",
+    "format": "pnpm run -r --parallel format",
+    "typecheck": "pnpm run -r --parallel typecheck",
+    "test": "pnpm run -r --parallel --if-present test"
+  },
+  "devDependencies": {
+    "@isagi/tooling": "workspace:*",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "prettier": "^3.7.4",
+    "prettier-plugin-tailwindcss": "^0.7.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.50.1"
+  }
+}

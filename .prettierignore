@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+dist/
+apps/mobile/dist/
+apps/mobile/web-build/
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
+app-example
+coverage/
+node_modules/
+*.tsbuildinfo
