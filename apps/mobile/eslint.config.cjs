@@ -1,15 +1,15 @@
-import { defineConfig, globalIgnores } from "eslint/config";
-import expoConfig from "eslint-config-expo/flat";
-import {
+const { defineConfig, globalIgnores } = require("eslint/config");
+const expoConfig = require("eslint-config-expo/flat");
+const {
   baseLanguageOptions,
   baseRules,
   commonIgnores,
   plugins,
   prettierConfig,
   tsFiles,
-} from "@isagi/tooling/eslint";
+} = require("@isagi/tooling/eslint");
 
-export default defineConfig([
+module.exports = defineConfig([
   ...expoConfig,
   prettierConfig,
   globalIgnores([
