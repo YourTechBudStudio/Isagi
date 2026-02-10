@@ -15,16 +15,18 @@ Isagi (codename) is a **context continuity engine** for creative work: capture r
 
 ## Value proposition
 
-1) **Capture once** → sparks are durable and low-friction (mobile-first capture, desktop-first deep work).
-2) **Auto-triage (propose-only)** → a Triager runs on capture, asks clarifying questions, and proposes work items per workstream.
-3) **Warm starts** → every task/session opens pre-loaded with the relevant spark, prior outputs, rubrics, and a “where we left off” summary.
-4) **Context compounds** → outputs become artifacts that downstream agents can read.
-5) **Backlog security** → the system helps you keep drafts/storylines queued so you don’t run dry.
+1. **Capture once** → sparks are durable and low-friction (mobile-first capture, desktop-first deep work).
+2. **Auto-triage (propose-only)** → a Triager runs on capture, asks clarifying questions, and proposes work items per workstream.
+3. **Warm starts** → every task/session opens pre-loaded with the relevant spark, prior outputs, rubrics, and a “where we left off” summary.
+4. **Context compounds** → outputs become artifacts that downstream agents can read.
+5. **Backlog security** → the system helps you keep drafts/storylines queued so you don’t run dry.
 
 ## Core principles
 
 - **Home is for focused work, not capture.** Capture happens via quick-add widgets.
 - **Anti-overwhelm by design.** Keep “everything” accessible, but show only a small number of “next steps” by default.
+- **Mobile is code-free.** Phone supports triage and agent chat; coding/repo work stays on desktop.
+- **Small by default.** Mobile home shows a short “what’s next” list (start with 3) with a clear “Show all”.
 - **Manual intent, warm automation.** The Triager proposes; you decide what gets created and run. Conversations resume warm.
 - **Universal primitives.** Avoid per-workstream bespoke object models; use a small shared set of concepts.
 - **Agents collaborate, they don’t replace you.** Background runs can pause and ask for input.

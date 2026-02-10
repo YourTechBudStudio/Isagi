@@ -12,6 +12,10 @@ These docs are **ideation-stage living documents** for Isagi (codename): a conte
 - **[Product overview](./product.md)** — what the project is, who it’s for, and what value it provides.
 - **[Mental model](./mental-model.md)** — the core concepts, lifecycles, and invariants.
 
+## UX notes
+
+- **[Mobile home screen](./mobile/home.md)** — the mobile landing page: resume (mobile-only), “what’s next”, triage, backlog health.
+
 ## Conventions
 
 - These docs intentionally avoid RFC-level specificity while we’re still exploring.

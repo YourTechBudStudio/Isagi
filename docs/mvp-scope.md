@@ -25,6 +25,7 @@ Built in phases, each delivering meaningful value. Starting with YouTube deep in
 ### What's In
 
 #### 1. Quick Capture
+
 - **Android-first home screen widget** — One-tap spark entry without needing to open the app
 - **Widget launch is snappy** — Tapping the widget opens a lightweight capture overlay/screen (native Android)
 - **Voice input** — Record audio, upload, and run server-side speech-to-text
@@ -35,28 +36,34 @@ Built in phases, each delivering meaningful value. Starting with YouTube deep in
 The Triager runs automatically on capture, but it **never auto-generates artifacts**.
 
 It runs lightweight rubrics for each configured workstream and outputs per spark:
+
 - Which workstreams this spark fits (YouTube, Social Marketing, etc.)
 - Brief reasoning for each match
 - Clarifying questions if the spark is ambiguous
+- **Derived sparks** (optional) — follow-on sparks that emerge during triage/brainstorming
 
 **Interaction model:**
+
 - Triager may pause for your input (clarifying questions / brainstorming)
 - After triage, the system proposes creating **work items** per applicable workstream
 - You approve/redirect; only then are work items created
+
+**Note:** “Propose-only” still applies — the Triager can propose derived sparks, containers, and work items, but nothing downstream is created/committed without your confirmation.
 
 #### 3. YouTube Deep Integration
 
 **Project Template:**
 When you decide to pursue a YouTube spark, system creates a project with pre-defined tasks:
 
-| Task | Agent | Pre-loaded Context |
-|------|-------|-------------------|
-| Northstar | Northstar Agent | Spark, triager output, your Northstar rubric |
-| Research | Research Agent | Spark, Northstar (once complete), research rubric |
-| Titles & Thumbnails | T&T Agent | Spark, Northstar, research findings, T&T rubric |
-| Storyline | Storyline Agent | All prior outputs, storyline rubric |
+| Task                | Agent           | Pre-loaded Context                                |
+| ------------------- | --------------- | ------------------------------------------------- |
+| Northstar           | Northstar Agent | Spark, triager output, your Northstar rubric      |
+| Research            | Research Agent  | Spark, Northstar (once complete), research rubric |
+| Titles & Thumbnails | T&T Agent       | Spark, Northstar, research findings, T&T rubric   |
+| Storyline           | Storyline Agent | All prior outputs, storyline rubric               |
 
 **Research Agent Flow:**
+
 1. Agent reviews spark + Northstar
 2. Proposes 3-4 research directions based on research rubric
 3. You approve, modify, or redirect
@@ -65,24 +72,30 @@ When you decide to pursue a YouTube spark, system creates a project with pre-def
 6. You can ask follow-up questions triggering more research
 
 **All Agents Have:**
+
 - First-principles thinking — challenge your ideas, question assumptions, propose alternatives
 - Context summary on resume — "Last time we established X, you wanted Y, where do you want to pick up?"
 - Access to shared file system — can read outputs from other agents
 - Your rubric pre-loaded — knows the structure of expected output
 
 **Resumable Chat Interface:**
+
 - Each task opens a chat screen (mobile-friendly; desktop is primary for deep work)
 - Can pause mid-conversation and resume later
 - Agent maintains full context across sessions
 - Side panel shows relevant artifacts (research docs, Northstar, etc.)
 
+Mobile supports full agent conversations for thinking/triage/decisions; coding and repo workflows remain desktop-first.
+
 #### 4. Shared File System (artifacts)
+
 - All agent outputs persist as artifacts
 - Downstream agents can access upstream outputs
 - Uses OpenCode SDK for intelligent context retrieval
 - Agent prompts include hints about where relevant context lives
 
 #### 5. Social Marketing (Lightweight)
+
 - Triager outputs "this could be a social post" with reasoning
 - Triager proposes a work item (e.g., "Draft LinkedIn post", "Draft Twitter thread")
 - When you run the draft action, an agent produces a rough draft (e.g., 1-2 paragraphs / a short thread)
@@ -93,15 +106,15 @@ When you decide to pursue a YouTube spark, system creates a project with pre-def
 
 ### What's Out (Future Phases)
 
-| Feature | Why Deferred |
-|---------|--------------|
-| Deep agents for LinkedIn, Twitter, Courses, Newsletter | Validate YouTube flow first |
-| Alexa skill | Start with widget + voice; add Alexa later |
-| ClickUp/Drive auto-integration | Manual export for now; automate later |
-| Team collaboration features | Solo use case first |
-| Configurable workstream addition | Hardcode YouTube first; make configurable once patterns emerge |
-| Notification/reminder system | See if organic check-ins suffice |
-| Product development workstream + coding workflows | Not in MVP |
+| Feature                                                | Why Deferred                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------- |
+| Deep agents for LinkedIn, Twitter, Courses, Newsletter | Validate YouTube flow first                                    |
+| Alexa skill                                            | Start with widget + voice; add Alexa later                     |
+| ClickUp/Drive auto-integration                         | Manual export for now; automate later                          |
+| Team collaboration features                            | Solo use case first                                            |
+| Configurable workstream addition                       | Hardcode YouTube first; make configurable once patterns emerge |
+| Notification/reminder system                           | See if organic check-ins suffice                               |
+| Product development workstream + coding workflows      | Not in MVP                                                     |
 
 ---
 
@@ -110,7 +123,7 @@ When you decide to pursue a YouTube spark, system creates a project with pre-def
 ### Platform strategy (MVP)
 
 - **Desktop is primary** — deep work happens in a desktop-first web app (SPA)
-- **Mobile is capture-first** — Android app focuses on quick capture + light agent chat
+- **Mobile is capture-first** — Android app focuses on quick capture + full agent conversations for non-code work
 - **Android-first** — prioritize Android; iOS is explicitly deferred
 - **Widget-first capture** — native Android widget + capture overlay for "instant-feel" capture
 - **Single persistent environment** — metadata + artifacts live on one always-on Linux box in v0
@@ -180,18 +193,18 @@ Spark
 
 ### Technology Choices (MVP-level)
 
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
-| Desktop app | Vite + React SPA | Primary surface for deep work |
-| Mobile app (Android-first) | Expo (React Native) with prebuild/native projects | Fast iteration with access to native widget/overlay |
-| Widget + capture overlay | Native Android (Kotlin) | "Instant-feel" capture from home screen |
-| Backend | Node.js + Express | Keep it simple for v0 |
-| Streaming | Server-Sent Events (SSE) | Streaming output without WebSockets in v0 |
-| Auth | Single-user admin token | Avoid building full auth early; keep MVP secure enough |
-| Persistence | SQLite + filesystem (self-hosted) | Simple, durable, and easy to operate in a single persistent environment |
-| Speech-to-text | Server-side STT (self-hosted) | Low-friction voice capture without on-device complexity |
-| Agent orchestration | OpenCode SDK | Already validated, handles context retrieval well |
-| LLM | Claude | Already using, quality is validated |
+| Component                  | Choice                                            | Rationale                                                               |
+| -------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------- |
+| Desktop app                | Vite + React SPA                                  | Primary surface for deep work                                           |
+| Mobile app (Android-first) | Expo (React Native) with prebuild/native projects | Fast iteration with access to native widget/overlay                     |
+| Widget + capture overlay   | Native Android (Kotlin)                           | "Instant-feel" capture from home screen                                 |
+| Backend                    | Node.js + Express                                 | Keep it simple for v0                                                   |
+| Streaming                  | Server-Sent Events (SSE)                          | Streaming output without WebSockets in v0                               |
+| Auth                       | Single-user admin token                           | Avoid building full auth early; keep MVP secure enough                  |
+| Persistence                | SQLite + filesystem (self-hosted)                 | Simple, durable, and easy to operate in a single persistent environment |
+| Speech-to-text             | Server-side STT (self-hosted)                     | Low-friction voice capture without on-device complexity                 |
+| Agent orchestration        | OpenCode SDK                                      | Already validated, handles context retrieval well                       |
+| LLM                        | Claude                                            | Already using, quality is validated                                     |
 
 ---
 
@@ -200,10 +213,12 @@ Spark
 ### Hybrid Async + Interactive
 
 **Async (background):**
+
 - Triager runs on new sparks
 - Lightweight pre-processing and context loading
 
 **Interactive (checkpoints):**
+
 - Approve/modify research directions
 - Answer clarifying questions during development
 - Make creative decisions on storyline flow
@@ -227,14 +242,14 @@ You're primed immediately. No "where was I?" friction.
 
 ## Success Criteria (2-Week Test)
 
-| Metric | Target | Why It Matters |
-|--------|--------|----------------|
-| **Storylines in backlog** | 2-3 developed storylines ready to record | This is the output that enables videos |
-| **Social drafts** | 5-10 rough drafts ready for final edit | Tests backlog building |
-| **Capture frequency** | 5+ sparks/week via quick-add | Validates capture habit |
-| **Time to storyline** | Measurably faster than current manual process | Validates efficiency gain |
-| **Actually published** | 1 video + 2 social posts | Backlog is leading indicator; published is the real outcome |
-| **Agent conversation completion** | Resuming and completing conversations, not abandoning | Tests whether hybrid model works |
+| Metric                            | Target                                                | Why It Matters                                              |
+| --------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
+| **Storylines in backlog**         | 2-3 developed storylines ready to record              | This is the output that enables videos                      |
+| **Social drafts**                 | 5-10 rough drafts ready for final edit                | Tests backlog building                                      |
+| **Capture frequency**             | 5+ sparks/week via quick-add                          | Validates capture habit                                     |
+| **Time to storyline**             | Measurably faster than current manual process         | Validates efficiency gain                                   |
+| **Actually published**            | 1 video + 2 social posts                              | Backlog is leading indicator; published is the real outcome |
+| **Agent conversation completion** | Resuming and completing conversations, not abandoning | Tests whether hybrid model works                            |
 
 ### Qualitative Signals
 
@@ -254,26 +269,28 @@ You're primed immediately. No "where was I?" friction.
 
 ## Risks & Mitigations
 
-| Risk | Likelihood | Mitigation |
-|------|------------|------------|
-| Hybrid requires too-frequent engagement | Medium | Track checkpoint pile-up; allow some async completion if needed |
-| Agent quality insufficient for "last mile" refinement | Low | Already validated agent quality through manual use |
-| Voice capture too lossy | Medium | Triager handles disambiguation; iterate on capture UX |
-| Capture doesn’t feel instant (cold-start + context load) | Medium | Keep capture overlay lightweight; defer non-essential work until after capture |
-| Build takes too long, lose momentum | Medium | Strict Phase 1 scope; use AI coding assistance |
-| Still hit wall at recording (downstream bottleneck) | Medium | Accept system improves development, not production; 30-50% improvement is still valuable |
+| Risk                                                     | Likelihood | Mitigation                                                                               |
+| -------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| Hybrid requires too-frequent engagement                  | Medium     | Track checkpoint pile-up; allow some async completion if needed                          |
+| Agent quality insufficient for "last mile" refinement    | Low        | Already validated agent quality through manual use                                       |
+| Voice capture too lossy                                  | Medium     | Triager handles disambiguation; iterate on capture UX                                    |
+| Capture doesn’t feel instant (cold-start + context load) | Medium     | Keep capture overlay lightweight; defer non-essential work until after capture           |
+| Build takes too long, lose momentum                      | Medium     | Strict Phase 1 scope; use AI coding assistance                                           |
+| Still hit wall at recording (downstream bottleneck)      | Medium     | Accept system improves development, not production; 30-50% improvement is still valuable |
 
 ---
 
 ## Out of Scope Clarifications
 
 **This system is NOT:**
+
 - A full project management tool (use ClickUp for that)
 - A content storage system (final artifacts go to Drive)
 - A team collaboration platform (solo creator focus)
 - A scheduling/publishing tool (handles development, not distribution)
 
 **This system IS:**
+
 - A context continuity engine
 - A warm-start provider for creative work
 - An activation energy eliminator
