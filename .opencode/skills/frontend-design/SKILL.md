@@ -39,6 +39,29 @@ The design system follows its own theme and palette, but the **interaction quali
 
 **Always respect `prefers-reduced-motion`** - when the user has motion reduction enabled, skip animations entirely rather than degrading them.
 
+## Voice & Copywriting (Isagi tone)
+
+Default voice for UI copy is **witty, playful, and nerdy** with a light through-line of:
+
+- The app is an AI that’s *cheerfully* “trying to take over the world,”
+- but in a clearly comedic, non-threatening way.
+
+Guidelines:
+
+- **Stay useful first**: clarity beats jokes. Humor should *support* comprehension, not replace it.
+- **Short punchlines**: one good line per surface. Avoid paragraph jokes or repeated bits.
+- **Comedic-villain, not scary**: no violent/abusive language, no real-world harm, no coercive threats.
+- **Nerd seasoning**: sprinkle references (compilers, diff/merge, stack traces, cron jobs, cache invalidation) but don’t gate the UI behind in-jokes.
+- **App speaks as “I”** when helpful (“I queued this for you.”), but avoid cringe roleplay.
+- **Error states are kind**: funny, but still actionable.
+
+Copy patterns to use:
+
+- Status chips: “Plotting…”, “Assimilating context…”, “Rehydrating your brain cache…”
+- CTAs: “Resume (mobile)”, “Unblock me”, “Approve the scheme”, “Capture a spark”, “Deploy idea → backlog”
+- Empty states: “Nothing to unblock. Suspicious. I’ll allow it.”
+- Micro-hints: “No code on mobile. I respect your thumbs.”
+
 ## Frontend Aesthetics Guidelines
 
 Focus on:
