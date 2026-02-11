@@ -4,12 +4,14 @@ import { useCallback, useState } from "react";
 import {
   Dimensions,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SparkInput } from "./SparkInput";
 import { TagBar } from "./TagBar";
@@ -33,6 +35,7 @@ const MAX_SHEET_HEIGHT = SCREEN_HEIGHT * 0.9;
  * on Animated.View; className is used freely on plain View/Text/Pressable.
  */
 export function CaptureSheet(): React.ReactElement {
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState("");
   const [selectedWorkstreams, setSelectedWorkstreams] = useState<string[]>([]);
   const [selectedContainers, setSelectedContainers] = useState<string[]>([]);
@@ -42,10 +45,11 @@ export function CaptureSheet(): React.ReactElement {
   // Account for tag bar (~48), submit row (~56), padding (~80).
   const contentOverhead = 184;
   const desiredHeight = inputHeight + contentOverhead;
-  const sheetHeight = Math.min(
+  const baseSheetHeight = Math.min(
     MAX_SHEET_HEIGHT,
     Math.max(MIN_SHEET_HEIGHT, desiredHeight),
   );
+  const sheetHeight = baseSheetHeight + insets.bottom;
 
   const handleToggleWorkstream = useCallback((id: string) => {
     setSelectedWorkstreams(prev =>
@@ -80,7 +84,7 @@ export function CaptureSheet(): React.ReactElement {
   const hasContent = text.trim().length > 0;
 
   return (
-    <View className="flex-1 justify-end">
+    <View style={styles.root}>
       {/* Scrim — uses inline styles on Animated.View to avoid NativeWind conflicts */}
       <Animated.View
         entering={FadeIn.duration(180)}
@@ -90,16 +94,23 @@ export function CaptureSheet(): React.ReactElement {
         <Pressable onPress={handleDismiss} style={styles.scrimPressable} />
       </Animated.View>
 
-      {/* Sheet — padding behavior pushes content above keyboard on both platforms */}
-      <KeyboardAvoidingView behavior="padding">
-        <View style={[styles.sheet, { height: sheetHeight }]}>
-          {/* Drag handle */}
-          <View className="items-center pt-3 pb-1">
-            <View className="bg-text-tertiary h-1 w-10 rounded-full opacity-50" />
-          </View>
+      <View
+        style={[
+          styles.sheet,
+          { height: sheetHeight, paddingBottom: insets.bottom },
+        ]}
+      >
+        {/* Drag handle */}
+        <View className="items-center pt-3 pb-1">
+          <View className="bg-text-tertiary h-1 w-10 rounded-full opacity-50" />
+        </View>
 
-          {/* Content */}
-          <View className="flex-1 px-5 pt-2 pb-3">
+        {/* Content */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.sheetContent}
+        >
+          <View className="flex-1 px-5 pt-2 pb-0">
             {/* Tag bar */}
             <TagBar
               selectedWorkstreams={selectedWorkstreams}
@@ -116,7 +127,7 @@ export function CaptureSheet(): React.ReactElement {
             />
 
             {/* Submit row */}
-            <View className="flex-row items-center justify-end pt-3">
+            <View className="mt-auto flex-row items-center justify-end pt-3">
               <Pressable
                 onPress={handleSubmit}
                 disabled={!hasContent}
@@ -137,8 +148,8 @@ export function CaptureSheet(): React.ReactElement {
               </Pressable>
             </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </View>
   );
 }
@@ -146,6 +157,10 @@ export function CaptureSheet(): React.ReactElement {
 const styles = StyleSheet.create({
   scrim: {
     ...StyleSheet.absoluteFillObject,
+  },
+  root: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "flex-end",
   },
   scrimPressable: {
     flex: 1,
@@ -156,5 +171,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     overflow: "hidden",
+  },
+  sheetContent: {
+    flex: 1,
   },
 });

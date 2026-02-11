@@ -1,8 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -10,6 +9,7 @@ import Animated, {
   withDelay,
   withTiming,
 } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 /**
  * Floating Action Button for capturing sparks.
@@ -18,6 +18,11 @@ import Animated, {
 export function CaptureFab(): React.ReactElement {
   const opacity = useSharedValue(0);
   const insets = useSafeAreaInsets();
+  const screenHeight = Dimensions.get("screen").height;
+  const windowHeight = Dimensions.get("window").height;
+  const systemBottomInset = Math.max(0, screenHeight - windowHeight);
+  const navBarGap = Math.max(0, systemBottomInset - insets.bottom);
+  const bottomOffset = Math.max(0, insets.bottom - navBarGap);
 
   useEffect(() => {
     opacity.value = withDelay(
@@ -37,7 +42,7 @@ export function CaptureFab(): React.ReactElement {
 
   return (
     <Animated.View
-      style={[styles.container, { bottom: insets.bottom }, animStyle]}
+      style={[styles.container, { bottom: bottomOffset }, animStyle]}
     >
       <Pressable
         onPress={handlePress}
