@@ -3,3 +3,51 @@
 @import "tailwindcss/utilities.css";
 
 @import "nativewind/theme";
+
+@theme {
+  /* ── Canvas (light) ── */
+  --color-canvas: #f8f8fa;
+  --color-canvas-elevated: #ffffff;
+  --color-canvas-subtle: #f0f0f4;
+
+  /* ── Glass surfaces (light glassmorphism) ── */
+  --color-glass: rgba(255, 255, 255, 0.72);
+  --color-glass-border: rgba(0, 0, 0, 0.06);
+  --color-glass-highlight: rgba(255, 255, 255, 0.9);
+
+  /* ── Text ── */
+  --color-text-primary: #1c1c1e;
+  --color-text-secondary: #636366;
+  --color-text-tertiary: #aeaeb2;
+
+  /* ── Accents (blue/purple/cyan family) ── */
+  --color-accent-amber: #e8850e;
+  --color-accent-amber-soft: rgba(232, 133, 14, 0.1);
+  --color-accent-blue: #007aff;
+  --color-accent-blue-soft: rgba(0, 122, 255, 0.08);
+  --color-accent-violet: #9754e0;
+  --color-accent-violet-soft: rgba(151, 84, 224, 0.08);
+  --color-accent-green: #28a745;
+  --color-accent-green-soft: rgba(40, 167, 69, 0.08);
+  --color-accent-red: #ff3b30;
+  --color-accent-cyan: #32ade6;
+  --color-accent-cyan-soft: rgba(50, 173, 230, 0.08);
+
+  /* ── Spark / capture ── */
+  --color-spark: #007aff;
+  --color-spark-soft: rgba(0, 122, 255, 0.08);
+
+  /* ── Font families ── */
+  --font-display: "Sora_700Bold";
+  --font-display-semi: "Sora_600SemiBold";
+  --font-display-medium: "Sora_500Medium";
+  --font-display-regular: "Sora_400Regular";
+  --font-body: "SourceSans3_400Regular";
+  --font-body-medium: "SourceSans3_500Medium";
+  --font-body-semi: "SourceSans3_600SemiBold";
+  --font-body-bold: "SourceSans3_700Bold";
+
+  /* ── Spacing extras ── */
+  --spacing-18: 4.5rem;
+  --spacing-88: 22rem;
+}
