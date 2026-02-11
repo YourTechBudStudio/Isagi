@@ -39,16 +39,51 @@ The design system follows its own theme and palette, but the **interaction quali
 
 **Always respect `prefers-reduced-motion`** - when the user has motion reduction enabled, skip animations entirely rather than degrading them.
 
+### Color Palette — Catppuccin Macchiato
+
+The design system uses the **Catppuccin Macchiato** flavor as its canonical color palette ([catppuccin.com/palette](https://catppuccin.com/palette)). All UI work must use these tokens — do not invent ad-hoc colors.
+
+| Role             | Token             | Hex       | Catppuccin name              |
+| ---------------- | ----------------- | --------- | ---------------------------- |
+| Canvas           | `canvas`          | `#24273a` | Base                         |
+| Elevated surface | `canvas-elevated` | `#363a4f` | Surface 0                    |
+| Subtle surface   | `canvas-subtle`   | `#2e3244` | — (between Base & Surface 0) |
+| Primary text     | `text-primary`    | `#cad3f5` | Text                         |
+| Secondary text   | `text-secondary`  | `#a5adcb` | Subtext 0                    |
+| Tertiary text    | `text-tertiary`   | `#6e738d` | Overlay 0                    |
+| Blue accent      | `accent-blue`     | `#8aadf4` | Blue                         |
+| Violet accent    | `accent-violet`   | `#c6a0f6` | Mauve                        |
+| Amber accent     | `accent-amber`    | `#f5a97f` | Peach                        |
+| Green accent     | `accent-green`    | `#a6da95` | Green                        |
+| Red accent       | `accent-red`      | `#ed8796` | Red                          |
+| Cyan accent      | `accent-cyan`     | `#91d7e3` | Sky                          |
+| Spark / capture  | `spark`           | `#7dc4e4` | Sapphire                     |
+
+**Soft tints**: Each accent has a `-soft` variant at 12-14% opacity (e.g., `accent-blue-soft: rgba(10, 132, 255, 0.12)`). Use these for card fills and pastel backgrounds.
+
+**Card borders**: `rgba(255, 255, 255, 0.06)` — subtle white edge that defines card boundaries without harshness.
+
+**Background atmosphere**: Use 2-3 overlapping full-screen `LinearGradient` layers with Catppuccin accents at 2-4% opacity and different angles. This creates a faint nebula wash. Every layer must cover the full screen (no `height`/`top` clipping) to avoid hard edges.
+
+### Typography
+
+| Role    | Font family       | Weights                                         | Purpose                                                                                 |
+| ------- | ----------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Display | **Sora**          | 400 Regular, 500 Medium, 600 SemiBold, 700 Bold | Headings, titles, emphasis. Geometric and distinctive.                                  |
+| Body    | **Source Sans 3** | 400 Regular, 500 Medium, 600 SemiBold, 700 Bold | Body text, labels, UI copy. Optimized for readability and fast scanning at small sizes. |
+
+Both are loaded via `@expo-google-fonts` packages. Font tokens are defined in `global.css` (e.g., `--font-display`, `--font-body`) and used via NativeWind `className` utilities (`font-display`, `font-body`, etc.).
+
 ## Voice & Copywriting (Isagi tone)
 
 Default voice for UI copy is **witty, playful, and nerdy** with a light through-line of:
 
-- The app is an AI that’s *cheerfully* “trying to take over the world,”
+- The app is an AI that’s _cheerfully_ “trying to take over the world,”
 - but in a clearly comedic, non-threatening way.
 
 Guidelines:
 
-- **Stay useful first**: clarity beats jokes. Humor should *support* comprehension, not replace it.
+- **Stay useful first**: clarity beats jokes. Humor should _support_ comprehension, not replace it.
 - **Short punchlines**: one good line per surface. Avoid paragraph jokes or repeated bits.
 - **Comedic-villain, not scary**: no violent/abusive language, no real-world harm, no coercive threats.
 - **Nerd seasoning**: sprinkle references (compilers, diff/merge, stack traces, cron jobs, cache invalidation) but don’t gate the UI behind in-jokes.
@@ -66,15 +101,13 @@ Copy patterns to use:
 
 Focus on:
 
-- **Typography**: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics; unexpected, characterful font choices. Pair a distinctive display font with a refined body font.
-- **Color & Theme**: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes.
+- **Typography**: Use the established Sora (display) + Source Sans 3 (body) pairing. Do not introduce new font families unless explicitly requested. Sora provides geometric character for headings; Source Sans 3 provides exceptional readability for body text and scanning.
+- **Color & Theme**: Use the Catppuccin Macchiato palette defined above. All colors must come from the established tokens. Use soft tints (12-14% opacity accents) for card backgrounds to create visual rhythm across sections. Do not invent ad-hoc colors.
 - **Motion**: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions. Use scroll-triggering and hover states that surprise.
 - **Spatial Composition**: Unexpected layouts. Asymmetry. Overlap. Diagonal flow. Grid-breaking elements. Generous negative space OR controlled density.
-- **Backgrounds & Visual Details**: Create atmosphere and depth rather than defaulting to solid colors. Add contextual effects and textures that match the overall aesthetic. Apply creative forms like gradient meshes, noise textures, geometric patterns, layered transparencies, dramatic shadows, decorative borders, custom cursors, and grain overlays.
+- **Backgrounds & Visual Details**: Use overlapping full-screen `LinearGradient` layers with Catppuccin accent colors at very low opacity (2-4%) to create a subtle nebula wash on the canvas. Every gradient layer must cover the full viewport (no `height`/`top` clipping) to avoid hard edges. Cards use solid pastel tint fills (not blur/glassmorphism) for performance and visual clarity.
 
-NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, and cookie-cutter design that lacks context-specific character.
-
-Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
+Stay within the established design system (Catppuccin Macchiato palette, Sora + Source Sans 3 fonts, pastel-tinted cards). Consistency across the app is more important than novelty per screen. Creativity should express through layout, spacing, motion, and copywriting — not by inventing new colors or fonts.
 
 **IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well.
 
