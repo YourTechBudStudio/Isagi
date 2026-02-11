@@ -5,37 +5,37 @@
 @import "nativewind/theme";
 
 @theme {
-  /* ── Canvas (light) ── */
-  --color-canvas: #f8f8fa;
-  --color-canvas-elevated: #ffffff;
-  --color-canvas-subtle: #f0f0f4;
+  /* ── Canvas (Catppuccin Macchiato) ── */
+  --color-canvas: #24273a;
+  --color-canvas-elevated: #363a4f;
+  --color-canvas-subtle: #2e3244;
 
-  /* ── Glass surfaces (light glassmorphism) ── */
-  --color-glass: rgba(255, 255, 255, 0.72);
-  --color-glass-border: rgba(0, 0, 0, 0.06);
-  --color-glass-highlight: rgba(255, 255, 255, 0.9);
+  /* ── Card surfaces ── */
+  --color-glass: rgba(255, 255, 255, 0.04);
+  --color-glass-border: rgba(255, 255, 255, 0.06);
+  --color-glass-highlight: rgba(255, 255, 255, 0.09);
 
-  /* ── Text ── */
-  --color-text-primary: #1c1c1e;
-  --color-text-secondary: #636366;
-  --color-text-tertiary: #aeaeb2;
+  /* ── Text (Catppuccin Macchiato) ── */
+  --color-text-primary: #cad3f5;
+  --color-text-secondary: #a5adcb;
+  --color-text-tertiary: #6e738d;
 
-  /* ── Accents (blue/purple/cyan family) ── */
-  --color-accent-amber: #e8850e;
-  --color-accent-amber-soft: rgba(232, 133, 14, 0.1);
-  --color-accent-blue: #007aff;
-  --color-accent-blue-soft: rgba(0, 122, 255, 0.08);
-  --color-accent-violet: #9754e0;
-  --color-accent-violet-soft: rgba(151, 84, 224, 0.08);
-  --color-accent-green: #28a745;
-  --color-accent-green-soft: rgba(40, 167, 69, 0.08);
-  --color-accent-red: #ff3b30;
-  --color-accent-cyan: #32ade6;
-  --color-accent-cyan-soft: rgba(50, 173, 230, 0.08);
+  /* ── Accents (Catppuccin Macchiato palette) ── */
+  --color-accent-amber: #f5a97f;
+  --color-accent-amber-soft: rgba(245, 169, 127, 0.14);
+  --color-accent-blue: #8aadf4;
+  --color-accent-blue-soft: rgba(138, 173, 244, 0.12);
+  --color-accent-violet: #c6a0f6;
+  --color-accent-violet-soft: rgba(198, 160, 246, 0.12);
+  --color-accent-green: #a6da95;
+  --color-accent-green-soft: rgba(166, 218, 149, 0.12);
+  --color-accent-red: #ed8796;
+  --color-accent-cyan: #91d7e3;
+  --color-accent-cyan-soft: rgba(145, 215, 227, 0.12);
 
-  /* ── Spark / capture ── */
-  --color-spark: #007aff;
-  --color-spark-soft: rgba(0, 122, 255, 0.08);
+  /* ── Spark / capture (Sapphire — distinctive from Blue) ── */
+  --color-spark: #7dc4e4;
+  --color-spark-soft: rgba(125, 196, 228, 0.12);
 
   /* ── Font families ── */
   --font-display: "Sora_700Bold";

@@ -38,9 +38,11 @@ export function CaptureFab(): React.ReactElement {
         accessibilityLabel="Capture a spark"
         className="overflow-hidden rounded-full"
       >
-        <View className="bg-accent-blue flex-row items-center px-5 py-3.5">
+        <View className="bg-accent-blue-soft border-glass-border flex-row items-center rounded-full border px-5 py-3.5">
           <Text className="mr-2 text-lg">&#x26A1;</Text>
-          <Text className="font-body-semi text-sm text-white">Capture</Text>
+          <Text className="font-body-semi text-accent-blue text-sm">
+            Capture
+          </Text>
         </View>
       </Pressable>
     </Animated.View>
@@ -52,10 +54,10 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 40,
     right: 24,
-    shadowColor: "#007aff",
+    shadowColor: "#000000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
     elevation: 8,
   },
 });

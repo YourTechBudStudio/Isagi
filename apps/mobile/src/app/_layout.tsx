@@ -46,7 +46,7 @@ export default function RootLayout(): React.ReactElement | null {
   return (
     <>
       <Stack screenOptions={{ headerShown: false }} />
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
     </>
   );
 }

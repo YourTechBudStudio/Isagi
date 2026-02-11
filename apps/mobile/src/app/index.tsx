@@ -1,5 +1,4 @@
-import { LinearGradient } from "expo-linear-gradient";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BacklogHealth } from "@/components/home/BacklogHealth";
@@ -18,17 +17,7 @@ import {
 export default function HomeScreen(): React.ReactElement {
   return (
     <View className="bg-canvas flex-1">
-      {/* Subtle ambient gradient — cool blue/violet wash at the top */}
-      <LinearGradient
-        colors={[
-          "rgba(0, 122, 255, 0.04)",
-          "rgba(151, 84, 224, 0.03)",
-          "transparent",
-        ]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 0.45 }}
-        style={styles.ambientTop}
-      />
+      {/* No ambient gradient — Catppuccin Base is warm enough on its own */}
 
       <SafeAreaView className="flex-1" edges={["top"]}>
         {/* ScrollView must have zero style/className — see AGENTS.md */}
@@ -54,10 +43,3 @@ export default function HomeScreen(): React.ReactElement {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  ambientTop: {
-    ...StyleSheet.absoluteFillObject,
-    height: "50%",
-  },
-});
