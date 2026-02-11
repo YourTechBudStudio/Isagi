@@ -1,37 +1,43 @@
-import { BlurView } from "expo-blur";
 import type { ReactNode } from "react";
-import { StyleSheet, View } from "react-native";
+import { View } from "react-native";
+
+/**
+ * Available pastel tints. Each maps to a soft accent background
+ * defined in the @theme tokens (global.css).
+ */
+type CardTint = "blue" | "violet" | "amber" | "green" | "cyan" | "neutral";
+
+const TINT_BG: Record<CardTint, string> = {
+  blue: "bg-accent-blue-soft",
+  violet: "bg-accent-violet-soft",
+  amber: "bg-accent-amber-soft",
+  green: "bg-accent-green-soft",
+  cyan: "bg-accent-cyan-soft",
+  neutral: "bg-canvas-subtle",
+};
 
 interface GlassCardProps {
   readonly children: ReactNode;
   readonly className?: string;
-  /** Blur intensity 0-100. Defaults to 60 for a soft frosted-glass feel. */
-  readonly intensity?: number;
+  /** Pastel tint color. Defaults to "blue". */
+  readonly tint?: CardTint;
 }
 
 /**
- * Light-mode frosted card with blur backdrop. Uses a bright tint
- * and a subtle border so cards feel elevated above the canvas.
+ * Pastel-tinted card with a subtle border. Each section of the home
+ * screen picks its own tint so the page has visual rhythm instead
+ * of uniform white.
  */
 export function GlassCard({
   children,
   className,
-  intensity = 60,
+  tint = "blue",
 }: GlassCardProps): React.ReactElement {
   return (
-    <View className={`overflow-hidden rounded-2xl ${className ?? ""}`}>
-      <BlurView intensity={intensity} tint="light" style={styles.blur}>
-        <View className="border-glass-border bg-glass border p-5">
-          {children}
-        </View>
-      </BlurView>
+    <View
+      className={`${TINT_BG[tint]} border-glass-border rounded-2xl border p-5 ${className ?? ""}`}
+    >
+      {children}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  blur: {
-    borderRadius: 16,
-    overflow: "hidden",
-  },
-});

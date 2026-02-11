@@ -39,7 +39,7 @@ export function ResumeCard({ item }: ResumeCardProps): React.ReactElement {
           Resume
         </Text>
 
-        <GlassCard>
+        <GlassCard tint="blue">
           {item ? (
             <Pressable
               accessibilityRole="button"

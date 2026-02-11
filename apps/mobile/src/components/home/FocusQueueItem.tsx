@@ -22,14 +22,11 @@ export function FocusQueueItem({
       accessibilityLabel={`${isWaiting ? "Waiting on you" : "Suggested next"}: ${item.title}`}
       className="mb-3"
     >
-      <View className="border-glass-border bg-glass flex-row items-start rounded-2xl border p-4">
-        {/* Accent bar */}
-        <View
-          className={`mt-0.5 mr-3.5 h-11 w-1 rounded-full ${
-            isWaiting ? "bg-accent-amber" : "bg-accent-blue"
-          }`}
-        />
-
+      <View
+        className={`border-glass-border flex-row items-start rounded-2xl border p-4 ${
+          isWaiting ? "bg-accent-amber-soft" : "bg-accent-blue-soft"
+        }`}
+      >
         <View className="flex-1">
           {/* Type chip + timestamp */}
           <View className="mb-1.5 flex-row items-center">

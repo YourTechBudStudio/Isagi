@@ -39,7 +39,7 @@ export function SparkTriage({ sparks }: SparkTriageProps): React.ReactElement {
           Sparks to develop
         </Text>
 
-        <GlassCard>
+        <GlassCard tint="violet">
           {/* Spark count headline */}
           <View className="mb-4 flex-row items-center">
             <View className="bg-accent-violet-soft mr-3 h-10 w-10 items-center justify-center rounded-full">
@@ -60,7 +60,7 @@ export function SparkTriage({ sparks }: SparkTriageProps): React.ReactElement {
           {sparks.slice(0, 2).map(spark => (
             <View
               key={spark.id}
-              className="border-glass-border bg-canvas-subtle mb-2.5 rounded-xl border px-4 py-3"
+              className="bg-canvas-elevated mb-2.5 rounded-xl px-4 py-3"
             >
               <Text
                 className="font-body text-text-secondary text-sm leading-5"
