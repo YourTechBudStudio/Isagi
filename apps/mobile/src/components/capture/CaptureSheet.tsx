@@ -1,16 +1,24 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Dimensions,
-  KeyboardAvoidingView,
+  Keyboard,
+  type KeyboardEvent,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeOut,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SparkInput } from "./SparkInput";
@@ -40,6 +48,7 @@ export function CaptureSheet(): React.ReactElement {
   const [selectedWorkstreams, setSelectedWorkstreams] = useState<string[]>([]);
   const [selectedContainers, setSelectedContainers] = useState<string[]>([]);
   const [inputHeight, setInputHeight] = useState(100);
+  const keyboardOffset = useSharedValue(0);
 
   // Dynamic sheet height: grows with content, clamped between min and max.
   // Account for tag bar (~48), submit row (~56), padding (~80).
@@ -50,6 +59,45 @@ export function CaptureSheet(): React.ReactElement {
     Math.max(MIN_SHEET_HEIGHT, desiredHeight),
   );
   const sheetHeight = baseSheetHeight + insets.bottom;
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const handleShow = (event: KeyboardEvent): void => {
+      const keyboardHeight =
+        Platform.OS === "android"
+          ? event.endCoordinates.height
+          : Math.max(0, event.endCoordinates.height - insets.bottom);
+      const duration = event.duration ?? 220;
+      keyboardOffset.value = withTiming(keyboardHeight, {
+        duration,
+        easing: Easing.out(Easing.cubic),
+      });
+    };
+
+    const handleHide = (event?: KeyboardEvent): void => {
+      const duration = event?.duration ?? 200;
+      keyboardOffset.value = withTiming(0, {
+        duration,
+        easing: Easing.out(Easing.cubic),
+      });
+    };
+
+    const showSubscription = Keyboard.addListener(showEvent, handleShow);
+    const hideSubscription = Keyboard.addListener(hideEvent, handleHide);
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [insets.bottom, keyboardOffset]);
+
+  const sheetLiftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -keyboardOffset.value }],
+  }));
 
   const handleToggleWorkstream = useCallback((id: string) => {
     setSelectedWorkstreams(prev =>
@@ -94,22 +142,19 @@ export function CaptureSheet(): React.ReactElement {
         <Pressable onPress={handleDismiss} style={styles.scrimPressable} />
       </Animated.View>
 
-      <View
-        style={[
-          styles.sheet,
-          { height: sheetHeight, paddingBottom: insets.bottom },
-        ]}
-      >
-        {/* Drag handle */}
-        <View className="items-center pt-3 pb-1">
-          <View className="bg-text-tertiary h-1 w-10 rounded-full opacity-50" />
-        </View>
-
-        {/* Content */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={styles.sheetContent}
+      <Animated.View style={sheetLiftStyle}>
+        <View
+          style={[
+            styles.sheet,
+            { height: sheetHeight, paddingBottom: insets.bottom },
+          ]}
         >
+          {/* Drag handle */}
+          <View className="items-center pt-3 pb-1">
+            <View className="bg-text-tertiary h-1 w-10 rounded-full opacity-50" />
+          </View>
+
+          {/* Content */}
           <View className="flex-1 px-5 pt-2 pb-0">
             {/* Tag bar */}
             <TagBar
@@ -148,8 +193,8 @@ export function CaptureSheet(): React.ReactElement {
               </Pressable>
             </View>
           </View>
-        </KeyboardAvoidingView>
-      </View>
+        </View>
+      </Animated.View>
     </View>
   );
 }
@@ -171,8 +216,5 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     overflow: "hidden",
-  },
-  sheetContent: {
-    flex: 1,
   },
 });
