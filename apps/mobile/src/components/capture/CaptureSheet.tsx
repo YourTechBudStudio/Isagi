@@ -2,6 +2,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
+  Alert,
   Dimensions,
   Keyboard,
   type KeyboardEvent,
@@ -126,8 +127,27 @@ export function CaptureSheet(): React.ReactElement {
   }, [text, selectedWorkstreams, selectedContainers]);
 
   const handleDismiss = useCallback(() => {
+    if (text.trim().length > 0) {
+      Keyboard.dismiss();
+      Alert.alert(
+        "Discard spark?",
+        "You have unsaved changes that will be lost.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => {
+              router.back();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
     router.back();
-  }, []);
+  }, [text]);
 
   const hasContent = text.trim().length > 0;
 
