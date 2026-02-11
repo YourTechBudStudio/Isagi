@@ -2,6 +2,7 @@ import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -16,6 +17,7 @@ import Animated, {
  */
 export function CaptureFab(): React.ReactElement {
   const opacity = useSharedValue(0);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     opacity.value = withDelay(
@@ -34,18 +36,18 @@ export function CaptureFab(): React.ReactElement {
   };
 
   return (
-    <Animated.View style={[styles.container, animStyle]}>
+    <Animated.View
+      style={[styles.container, { bottom: insets.bottom }, animStyle]}
+    >
       <Pressable
         onPress={handlePress}
         accessibilityRole="button"
         accessibilityLabel="Capture a spark"
         className="overflow-hidden rounded-full"
       >
-        <View className="bg-accent-blue-soft border-glass-border flex-row items-center rounded-full border px-5 py-3.5">
-          <Text className="mr-2 text-lg">&#x26A1;</Text>
-          <Text className="font-body-semi text-accent-blue text-sm">
-            Capture
-          </Text>
+        <View className="bg-accent-blue border-glass-border flex-row items-center rounded-full border px-5 py-3.5">
+          <Text className="text-canvas mr-2 text-lg">&#x26A1;</Text>
+          <Text className="font-body-semi text-canvas text-sm">Capture</Text>
         </View>
       </Pressable>
     </Animated.View>
