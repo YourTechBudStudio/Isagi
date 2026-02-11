@@ -45,7 +45,17 @@ export default function RootLayout(): React.ReactElement | null {
 
   return (
     <>
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen
+          name="capture"
+          options={{
+            presentation: "transparentModal",
+            animation: "none",
+            headerShown: false,
+          }}
+        />
+      </Stack>
       <StatusBar style="light" />
     </>
   );

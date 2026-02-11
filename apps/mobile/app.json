@@ -23,6 +23,11 @@
       "predictiveBackGestureEnabled": false,
       "package": "studio.yourtechbud.isagi"
     },
+    "androidNavigationBar": {
+      "backgroundColor": "#00000000",
+      "barStyle": "light-content",
+      "enforceContrast": false
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
@@ -39,6 +44,23 @@
           "dark": {
             "backgroundColor": "#000000"
           }
+        }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "CaptureWidget",
+              "label": "Isagi Capture",
+              "minWidth": "40dp",
+              "minHeight": "40dp",
+              "targetCellWidth": 1,
+              "targetCellHeight": 1,
+              "description": "Quick capture a spark from your home screen",
+              "resizeMode": "none"
+            }
+          ]
         }
       ]
     ],

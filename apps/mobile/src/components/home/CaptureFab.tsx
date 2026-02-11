@@ -1,11 +1,13 @@
 import * as Haptics from "expo-haptics";
+import { router } from "expo-router";
 import { useEffect } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
-  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 
 /**
@@ -13,21 +15,22 @@ import Animated, {
  * Clean pill with the primary accent color and haptic feedback.
  */
 export function CaptureFab(): React.ReactElement {
-  const scale = useSharedValue(0);
+  const opacity = useSharedValue(0);
 
   useEffect(() => {
-    scale.value = withDelay(
-      1000,
-      withSpring(1, { damping: 12, stiffness: 120 }),
+    opacity.value = withDelay(
+      600,
+      withTiming(1, { duration: 250, easing: Easing.out(Easing.ease) }),
     );
-  }, [scale]);
+  }, [opacity]);
 
   const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+    opacity: opacity.value,
   }));
 
   const handlePress = (): void => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    router.push("/capture");
   };
 
   return (

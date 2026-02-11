@@ -97,3 +97,60 @@ export const MOCK_BACKLOG: BacklogMetrics = {
   sparksAwaiting: 12,
   waitingOnYou: 2,
 };
+
+// ── Workstreams & Containers ──
+
+export interface Workstream {
+  readonly id: string;
+  readonly label: string;
+  readonly color: string;
+}
+
+export interface Container {
+  readonly id: string;
+  readonly label: string;
+  /** If set, this container is scoped to a specific workstream. Null = global. */
+  readonly workstreamId: string | null;
+}
+
+export const MOCK_WORKSTREAMS: readonly Workstream[] = [
+  { id: "ws-yt", label: "YouTube", color: "#ed8796" },
+  { id: "ws-social", label: "Social Marketing", color: "#8aadf4" },
+  { id: "ws-product", label: "Product Development", color: "#a6da95" },
+];
+
+export const MOCK_CONTAINERS: readonly Container[] = [
+  // YouTube-scoped
+  {
+    id: "ct-hook",
+    label: "Video: Hook Framework",
+    workstreamId: "ws-yt",
+  },
+  {
+    id: "ct-ai-deep",
+    label: "Video: AI Agents Deep Dive",
+    workstreamId: "ws-yt",
+  },
+  // Product Development-scoped
+  {
+    id: "ct-isagi",
+    label: "Isagi MVP",
+    workstreamId: "ws-product",
+  },
+  {
+    id: "ct-widget",
+    label: "Capture Widget",
+    workstreamId: "ws-product",
+  },
+  // Global (no workstream scope)
+  {
+    id: "ct-ideas",
+    label: "Parking Lot",
+    workstreamId: null,
+  },
+  {
+    id: "ct-reading",
+    label: "Reading List",
+    workstreamId: null,
+  },
+];
