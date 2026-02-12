@@ -1,5 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
+import { Zap } from "lucide-react-native";
 import { useEffect } from "react";
 import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -51,7 +52,9 @@ export function CaptureFab(): React.ReactElement {
         className="overflow-hidden rounded-full"
       >
         <View className="bg-accent-blue border-glass-border flex-row items-center rounded-full border px-5 py-3.5">
-          <Text className="text-canvas mr-2 text-lg">&#x26A1;</Text>
+          <View className="mr-2">
+            <Zap size={16} strokeWidth={2.2} color="#24273a" />
+          </View>
           <Text className="font-body-semi text-canvas text-sm">Capture</Text>
         </View>
       </Pressable>

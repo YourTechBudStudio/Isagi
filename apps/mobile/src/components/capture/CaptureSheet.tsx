@@ -1,5 +1,6 @@
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
+import { Send } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
@@ -9,7 +10,6 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
   View,
 } from "react-native";
 import Animated, {
@@ -175,7 +175,7 @@ export function CaptureSheet(): React.ReactElement {
           </View>
 
           {/* Content */}
-          <View className="flex-1 px-5 pt-2 pb-0">
+          <View className="flex-1 px-5 pt-2 pb-3">
             {/* Tag bar */}
             <TagBar
               selectedWorkstreams={selectedWorkstreams}
@@ -196,20 +196,19 @@ export function CaptureSheet(): React.ReactElement {
               <Pressable
                 onPress={handleSubmit}
                 disabled={!hasContent}
-                className={`flex-row items-center rounded-full border px-5 py-2.5 ${
+                accessibilityRole="button"
+                accessibilityLabel="Submit spark"
+                className={`h-11 w-11 items-center justify-center rounded-full border ${
                   hasContent
                     ? "bg-accent-blue-soft border-accent-blue/20"
                     : "bg-glass border-glass-border"
                 }`}
               >
-                <Text className="mr-1.5 text-sm">{"\u26A1"}</Text>
-                <Text
-                  className={`font-body-semi text-sm ${
-                    hasContent ? "text-accent-blue" : "text-text-tertiary"
-                  }`}
-                >
-                  Capture
-                </Text>
+                <Send
+                  size={18}
+                  strokeWidth={2.25}
+                  color={hasContent ? "#8aadf4" : "#6e738d"}
+                />
               </Pressable>
             </View>
           </View>

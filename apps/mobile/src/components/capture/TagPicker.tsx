@@ -1,3 +1,4 @@
+import { Check } from "lucide-react-native";
 import { useCallback, useMemo, useState } from "react";
 import {
   FlatList,
@@ -54,9 +55,7 @@ export function TagPicker({
             }`}
           >
             {isSelected ? (
-              <Text className="text-xs font-bold text-[#24273a]">
-                {"\u2713"}
-              </Text>
+              <Check size={12} strokeWidth={2.75} color="#24273a" />
             ) : null}
           </View>
           <Text

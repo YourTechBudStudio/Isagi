@@ -53,9 +53,9 @@
             {
               "name": "CaptureWidget",
               "label": "Isagi Capture",
-              "minWidth": "40dp",
+              "minWidth": "110dp",
               "minHeight": "40dp",
-              "targetCellWidth": 1,
+              "targetCellWidth": 2,
               "targetCellHeight": 1,
               "description": "Quick capture a spark from your home screen",
               "resizeMode": "none"

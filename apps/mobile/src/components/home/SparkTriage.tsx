@@ -1,3 +1,4 @@
+import { Zap } from "lucide-react-native";
 import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 import Animated, {
@@ -43,7 +44,7 @@ export function SparkTriage({ sparks }: SparkTriageProps): React.ReactElement {
           {/* Spark count headline */}
           <View className="mb-4 flex-row items-center">
             <View className="bg-accent-violet-soft mr-3 h-10 w-10 items-center justify-center rounded-full">
-              <Text className="text-lg">&#x26A1;</Text>
+              <Zap size={18} strokeWidth={2.1} color="#c6a0f6" />
             </View>
             <View className="flex-1">
               <Text className="font-display-semi text-text-primary text-base">
