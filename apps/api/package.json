@@ -1,0 +1,41 @@
+{
+  "name": "@isagi/api",
+  "version": "0.0.1",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"pnpm run watch:build\" \"pnpm run watch:run\"",
+    "start": "node ./dist/main.cjs",
+    "watch:build": "nodemon --watch \"src/**/*\" -e ts,js,mts --exec \"pnpm run esbuild\"",
+    "watch:run": "nodemon --watch \"dist/**/*\" -e js,cjs ./dist/main.cjs --root ../../.isagi/data",
+    "tsc": "tsc",
+    "esbuild": "esbuild src/main.ts --platform=node --bundle --format=cjs --outfile=dist/main.cjs --sourcemap",
+    "build": "rm -rf dist && pnpm run esbuild --minify",
+    "lint": "prettier --check . && eslint src",
+    "format": "prettier --write . && eslint --fix src",
+    "typecheck": "tsc --noEmit",
+    "db:studio": "drizzle-kit studio"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@isagi/contract": "workspace:*",
+    "@isagi/tooling": "workspace:*",
+    "@libsql/client": "^0.15.15",
+    "@orpc/server": "^1.13.4",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
+    "drizzle-orm": "^0.45.1",
+    "express": "^5.2.1",
+    "uuidv7": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "^0.31.9",
+    "esbuild": "^0.27.3",
+    "nodemon": "^3.1.11"
+  }
+}

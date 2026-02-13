@@ -1,0 +1,13 @@
+{
+  "extends": "@isagi/tooling/tsconfig/node.json",
+  "compilerOptions": {
+    "moduleSuffixes": [""],
+    "outDir": "./dist",
+    "rootDir": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["**/*"],
+  "exclude": ["node_modules"]
+}

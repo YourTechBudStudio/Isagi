@@ -1,4 +1,9 @@
 scratch/*
 
+.isagi/
+
 # Javascript stuff
 node_modules
+
+# Todo files
+TODO.md
