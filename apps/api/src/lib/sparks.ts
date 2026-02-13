@@ -5,17 +5,23 @@ interface WriteSparkFileOptions {
   readonly dataRoot: string;
   readonly sparkId: string;
   readonly title: string;
+  readonly titleSlug: string;
   readonly text: string;
   readonly createdAt: Date;
 }
 
 export function extractSparkTitle(text: string): string {
-  const cleaned = text
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const title = words.slice(0, 8).join(" ");
+  return title.length > 0 ? title : "Untitled spark";
+}
+
+export function slugifySparkTitle(title: string): string {
+  const cleaned = title
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
     .filter(Boolean)
-    .slice(0, 8)
     .join("-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -25,9 +31,9 @@ export function extractSparkTitle(text: string): string {
 
 export function createSparkFileName(
   sparkId: string,
-  extractedTitle: string,
+  titleSlug: string,
 ): string {
-  return `${sparkId}-${extractedTitle}.md`;
+  return `${sparkId}-${titleSlug}.md`;
 }
 
 function escapeYamlString(value: string): string {
@@ -43,6 +49,7 @@ export async function writeSparkFile({
   dataRoot,
   sparkId,
   title,
+  titleSlug,
   text,
   createdAt,
 }: WriteSparkFileOptions): Promise<string> {
@@ -50,7 +57,10 @@ export async function writeSparkFile({
   await mkdir(sparksDir, { recursive: true });
 
   const safeTitle = escapeYamlString(title);
-  const filePath = path.join(sparksDir, createSparkFileName(sparkId, title));
+  const filePath = path.join(
+    sparksDir,
+    createSparkFileName(sparkId, titleSlug),
+  );
   const content = [
     "---",
     `id: ${sparkId}`,

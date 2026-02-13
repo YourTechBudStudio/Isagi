@@ -5,14 +5,18 @@ import { uuidv7 } from "uuidv7";
 import { runtimeConfig } from "../../lib/config";
 import { db } from "../../lib/db/client";
 import { sparks } from "../../lib/db/schema";
-import { extractSparkTitle, writeSparkFile } from "../../lib/sparks";
+import {
+  extractSparkTitle,
+  slugifySparkTitle,
+  writeSparkFile,
+} from "../../lib/sparks";
 
 const os = implement(contract.user.sparks);
 
 export const capture = os.capture.handler(async ({ input }) => {
   let sparkId: string | undefined;
-  let extractedTitle: string | undefined;
   let title: string | undefined;
+  let titleSlug: string | undefined;
   let filePath: string | undefined;
 
   try {
@@ -20,11 +24,13 @@ export const capture = os.capture.handler(async ({ input }) => {
     const createdAt = new Date();
     const text = input.text.trim();
     title = extractSparkTitle(text);
+    titleSlug = slugifySparkTitle(title);
 
     filePath = await writeSparkFile({
       dataRoot: runtimeConfig.dataRoot,
       sparkId,
       title,
+      titleSlug,
       text,
       createdAt,
     });
@@ -40,8 +46,8 @@ export const capture = os.capture.handler(async ({ input }) => {
   } catch (error) {
     console.error("oRPC user.sparks.capture failed", {
       sparkId,
-      extractedTitle,
       title,
+      titleSlug,
       filePath,
       dataRoot: runtimeConfig.dataRoot,
       textLength: input.text.length,
