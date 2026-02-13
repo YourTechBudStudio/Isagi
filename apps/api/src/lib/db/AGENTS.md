@@ -27,6 +27,14 @@ Prefer a normalized relational schema by default.
 - If denormalization is chosen, document the rationale in code (what it
   unlocks and what consistency rules apply).
 
+## Primary key preference
+
+Prefer a generic `id` primary key per table and enforce business uniqueness with dedicated unique constraints.
+
+- Use `id` as the table primary key.
+- Model natural/composite uniqueness with `unique(...)` indexes instead of composite primary keys.
+- This keeps schema evolution easier (e.g., widening or changing uniqueness rules later).
+
 ## Migrations (DrizzleKit)
 
 - Config: `drizzle.config.ts` (local file db at `${ISAGI_ROOT}/isagi.db`, no auth tokens)
