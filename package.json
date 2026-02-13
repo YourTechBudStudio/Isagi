@@ -5,6 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@10.9.0",
   "scripts": {
+    "api": "pnpm --filter @isagi/api",
     "mobile": "pnpm --filter @isagi/mobile",
     "lint": "pnpm run -r --parallel lint",
     "format": "pnpm run -r --parallel format",

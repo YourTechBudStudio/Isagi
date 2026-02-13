@@ -1,3 +1,4 @@
+import { useMutation } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { Send } from "lucide-react-native";
@@ -22,6 +23,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useORPC } from "@/services/ORPCContext";
+
 import { SparkInput } from "./SparkInput";
 import { TagBar } from "./TagBar";
 
@@ -45,11 +48,30 @@ const MAX_SHEET_HEIGHT = SCREEN_HEIGHT * 0.9;
  */
 export function CaptureSheet(): React.ReactElement {
   const insets = useSafeAreaInsets();
+  const orpc = useORPC();
   const [text, setText] = useState("");
   const [selectedWorkstreams, setSelectedWorkstreams] = useState<string[]>([]);
   const [selectedContainers, setSelectedContainers] = useState<string[]>([]);
   const [inputHeight, setInputHeight] = useState(100);
   const keyboardOffset = useSharedValue(0);
+
+  // TODO: Bind selectedWorkstreams and selectedContainers to the API once the
+  //       backend supports tags in the capture contract.
+  const captureMutation = useMutation(
+    orpc.user.sparks.capture.mutationOptions({
+      onSuccess: () => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        router.back();
+      },
+      onError: () => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        Alert.alert(
+          "Capture failed",
+          "Couldn't save your spark. Check your connection and try again.",
+        );
+      },
+    }),
+  );
 
   // Dynamic sheet height: grows with content, clamped between min and max.
   // Account for tag bar (~48), submit row (~56), padding (~80).
@@ -113,18 +135,11 @@ export function CaptureSheet(): React.ReactElement {
   }, []);
 
   const handleSubmit = useCallback(() => {
-    if (!text.trim() && selectedWorkstreams.length === 0) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-    // Mock: log and close
-    console.log("[Spark Captured]", {
-      text,
-      workstreams: selectedWorkstreams,
-      containers: selectedContainers,
-    });
-
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.back();
-  }, [text, selectedWorkstreams, selectedContainers]);
+    captureMutation.mutate({ text: trimmed });
+  }, [text, captureMutation]);
 
   const handleDismiss = useCallback(() => {
     if (text.trim().length > 0) {
@@ -150,6 +165,7 @@ export function CaptureSheet(): React.ReactElement {
   }, [text]);
 
   const hasContent = text.trim().length > 0;
+  const isSubmitting = captureMutation.isPending;
 
   return (
     <View style={styles.root}>
@@ -195,11 +211,11 @@ export function CaptureSheet(): React.ReactElement {
             <View className="mt-auto flex-row items-center justify-end pt-3">
               <Pressable
                 onPress={handleSubmit}
-                disabled={!hasContent}
+                disabled={!hasContent || isSubmitting}
                 accessibilityRole="button"
                 accessibilityLabel="Submit spark"
                 className={`h-11 w-11 items-center justify-center rounded-full border ${
-                  hasContent
+                  hasContent && !isSubmitting
                     ? "bg-accent-blue-soft border-accent-blue/20"
                     : "bg-glass border-glass-border"
                 }`}
@@ -207,7 +223,7 @@ export function CaptureSheet(): React.ReactElement {
                 <Send
                   size={18}
                   strokeWidth={2.25}
-                  color={hasContent ? "#8aadf4" : "#6e738d"}
+                  color={hasContent && !isSubmitting ? "#8aadf4" : "#6e738d"}
                 />
               </Pressable>
             </View>
