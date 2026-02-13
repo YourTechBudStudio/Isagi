@@ -6,7 +6,6 @@ interface RuntimeConfig {
   readonly dataRoot: string;
   readonly userApiKey: string;
   readonly databaseUrl: string;
-  readonly databaseAuthToken?: string;
 }
 
 function parsePort(rawPort: string | undefined): number {
@@ -42,7 +41,6 @@ function resolveUserApiKey(nodeEnv: string): string {
 const nodeEnv = process.env.NODE_ENV?.trim() || "development";
 const dataRoot = resolveDataRoot();
 const databaseUrl = resolveDatabaseUrl(dataRoot);
-const databaseAuthToken = process.env.ISAGI_DATABASE_AUTH_TOKEN?.trim();
 
 export const runtimeConfig: RuntimeConfig = {
   port: parsePort(process.env.PORT),
@@ -50,5 +48,4 @@ export const runtimeConfig: RuntimeConfig = {
   dataRoot,
   userApiKey: resolveUserApiKey(nodeEnv),
   databaseUrl,
-  databaseAuthToken: databaseAuthToken || undefined,
 };

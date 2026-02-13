@@ -16,6 +16,5 @@ export default defineConfig({
   dialect: "turso",
   dbCredentials: {
     url: databaseUrl,
-    authToken: process.env.ISAGI_DATABASE_AUTH_TOKEN,
   },
 });

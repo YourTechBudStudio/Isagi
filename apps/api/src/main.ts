@@ -6,7 +6,7 @@ import express from "express";
 
 import { runtimeConfig } from "./lib/config";
 import { closeDb } from "./lib/db/client";
-import { ensureDatabaseReady } from "./lib/db/init";
+import { runMigrations } from "./lib/db/migrations";
 import { ensureDataDirectories } from "./lib/sparks";
 import { orpcRouter } from "./router";
 
@@ -49,7 +49,7 @@ app.get("/", (_req, res) => {
 
 async function main(): Promise<void> {
   await ensureDataDirectories(runtimeConfig.dataRoot);
-  await ensureDatabaseReady();
+  await runMigrations();
 
   const server = app.listen(runtimeConfig.port, () => {
     console.log(`Isagi API listening on port '${runtimeConfig.port}'`);

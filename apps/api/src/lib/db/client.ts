@@ -6,7 +6,6 @@ import * as schema from "./schema";
 
 const client = createClient({
   url: runtimeConfig.databaseUrl,
-  authToken: runtimeConfig.databaseAuthToken,
 });
 
 export const db = drizzle(client, { schema });

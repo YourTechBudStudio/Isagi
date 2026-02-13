@@ -14,7 +14,9 @@
     "lint": "prettier --check . && eslint src",
     "format": "prettier --write . && eslint --fix src",
     "typecheck": "tsc --noEmit",
-    "db:studio": "drizzle-kit studio"
+    "db:generate": "ISAGI_ROOT=../../.isagi/data drizzle-kit generate",
+    "db:migrate": "ISAGI_ROOT=../../.isagi/data drizzle-kit migrate",
+    "db:studio": "ISAGI_ROOT=../../.isagi/data drizzle-kit studio"
   },
   "keywords": [],
   "author": "",

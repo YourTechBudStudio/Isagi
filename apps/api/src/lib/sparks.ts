@@ -9,13 +9,25 @@ interface WriteSparkFileOptions {
   readonly createdAt: Date;
 }
 
-export function createSparkTitle(text: string): string {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) {
-    return "Untitled Spark";
-  }
+export function extractSparkTitle(text: string): string {
+  const cleaned = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 8)
+    .join("-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 
-  return words.slice(0, 8).join(" ");
+  return cleaned.length > 0 ? cleaned : "untitled-spark";
+}
+
+export function createSparkFileName(
+  sparkId: string,
+  extractedTitle: string,
+): string {
+  return `${sparkId}-${extractedTitle}.md`;
 }
 
 function escapeYamlString(value: string): string {
@@ -38,7 +50,7 @@ export async function writeSparkFile({
   await mkdir(sparksDir, { recursive: true });
 
   const safeTitle = escapeYamlString(title);
-  const filePath = path.join(sparksDir, `${sparkId}.md`);
+  const filePath = path.join(sparksDir, createSparkFileName(sparkId, title));
   const content = [
     "---",
     `id: ${sparkId}`,
