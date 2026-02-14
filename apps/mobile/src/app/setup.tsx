@@ -75,11 +75,11 @@ export default function SetupScreen(): React.ReactElement {
 
       setConfig(savedConfig);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      toast.success("Connection verified. Cleared for capture.");
+      toast.success("Connection verified. Your ideas have nowhere to hide.");
     } catch {
       setSaving(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      toast.error("Couldn't reach the API. Check URL and key.");
+      toast.error("Can't reach the mothership. Double-check URL and key.");
     }
   }, [apiUrl, setConfig, toast, userApiKey]);
 

@@ -38,15 +38,27 @@ interface ToastContextValue {
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 const TONE_BG: Record<ToastTone, string> = {
-  success: "bg-accent-green-soft",
-  error: "bg-accent-red-soft",
-  info: "bg-accent-blue-soft",
+  success: "bg-canvas-elevated",
+  error: "bg-canvas-elevated",
+  info: "bg-canvas-elevated",
+};
+
+const TONE_BORDER: Record<ToastTone, string> = {
+  success: "border-l-accent-green",
+  error: "border-l-accent-red",
+  info: "border-l-accent-blue",
 };
 
 const TONE_TEXT: Record<ToastTone, string> = {
   success: "text-accent-green",
   error: "text-accent-red",
   info: "text-accent-blue",
+};
+
+const TONE_LABEL: Record<ToastTone, string> = {
+  success: "Mission accomplished",
+  error: "Uh oh",
+  info: "Intel",
 };
 
 export function useToast(): ToastContextValue {
@@ -136,16 +148,12 @@ function ToastHost({
         style={[styles.toastWrap, { bottom: insets.bottom + 20 }]}
       >
         <View
-          className={`${TONE_BG[toast.tone]} border-glass-border rounded-2xl border px-4 py-3`}
+          className={`${TONE_BG[toast.tone]} ${TONE_BORDER[toast.tone]} border-glass-border rounded-2xl border border-l-2 px-4 py-3`}
         >
           <Text
             className={`font-body-semi ${TONE_TEXT[toast.tone]} text-xs tracking-widest uppercase`}
           >
-            {toast.tone === "success"
-              ? "Success"
-              : toast.tone === "error"
-                ? "Error"
-                : "Status"}
+            {TONE_LABEL[toast.tone]}
           </Text>
           <Text className="font-body text-text-primary mt-1 text-sm leading-5">
             {toast.title}
@@ -159,6 +167,8 @@ function ToastHost({
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    elevation: 9999,
     alignItems: "center",
     justifyContent: "flex-end",
   },

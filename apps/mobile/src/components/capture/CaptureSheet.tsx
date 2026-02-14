@@ -62,7 +62,7 @@ export function CaptureSheet(): React.ReactElement {
   const captureMutation = useMutation(
     orpc.user.sparks.capture.mutationOptions({
       onSuccess: () => {
-        toast.success("Spark captured.");
+        toast.success("Spark captured. One step closer to world domination.");
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.back();
       },
