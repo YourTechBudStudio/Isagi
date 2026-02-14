@@ -20,6 +20,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useState } from "react";
 
+import { ToastProvider } from "@/components/ui/ToastProvider";
 import { type AppConfig, getAppConfig } from "@/services/appConfig";
 import { AppConfigProvider } from "@/services/AppConfigContext";
 import { createORPC } from "@/services/orpc";
@@ -91,27 +92,29 @@ export default function RootLayout(): React.ReactElement | null {
   return (
     <QueryClientProvider client={queryClient}>
       <AppConfigProvider value={{ config, configChecked, setConfig }}>
-        <ORPCProvider value={orpcUtils}>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen
-              name="capture"
-              options={{
-                presentation: "transparentModal",
-                animation: "none",
-                headerShown: false,
-              }}
-            />
-            <Stack.Screen
-              name="setup"
-              options={{
-                headerShown: false,
-                gestureEnabled: false,
-              }}
-            />
-          </Stack>
-          <StatusBar style="light" />
-        </ORPCProvider>
+        <ToastProvider>
+          <ORPCProvider value={orpcUtils}>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="index" />
+              <Stack.Screen
+                name="capture"
+                options={{
+                  presentation: "transparentModal",
+                  animation: "none",
+                  headerShown: false,
+                }}
+              />
+              <Stack.Screen
+                name="setup"
+                options={{
+                  headerShown: false,
+                  gestureEnabled: false,
+                }}
+              />
+            </Stack>
+            <StatusBar style="light" />
+          </ORPCProvider>
+        </ToastProvider>
       </AppConfigProvider>
     </QueryClientProvider>
   );

@@ -23,6 +23,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useToast } from "@/components/ui/ToastProvider";
 import { useORPC } from "@/services/ORPCContext";
 
 import { SparkInput } from "./SparkInput";
@@ -49,6 +50,7 @@ const MAX_SHEET_HEIGHT = SCREEN_HEIGHT * 0.9;
 export function CaptureSheet(): React.ReactElement {
   const insets = useSafeAreaInsets();
   const orpc = useORPC();
+  const toast = useToast();
   const [text, setText] = useState("");
   const [selectedWorkstreams, setSelectedWorkstreams] = useState<string[]>([]);
   const [selectedContainers, setSelectedContainers] = useState<string[]>([]);
@@ -60,6 +62,7 @@ export function CaptureSheet(): React.ReactElement {
   const captureMutation = useMutation(
     orpc.user.sparks.capture.mutationOptions({
       onSuccess: () => {
+        toast.success("Spark captured.");
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.back();
       },

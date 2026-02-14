@@ -12,9 +12,9 @@ export interface AppConfig {
  * Normalize a user-entered URL so it always ends with `/api`.
  *
  * Handles trailing slashes and the common case where someone
- * enters `http://host:12000` without the path segment.
+ * enters `http://host:13000` without the path segment.
  */
-function normalizeApiUrl(raw: string): string {
+export function normalizeApiUrl(raw: string): string {
   let url = raw.trim().replace(/\/+$/, "");
 
   if (!url.endsWith("/api")) {

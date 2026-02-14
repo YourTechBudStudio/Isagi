@@ -2,6 +2,7 @@ import { contract } from "@isagi/contract/api";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { ContractRouterClient } from "@orpc/contract";
+import { inferRPCMethodFromContractRouter } from "@orpc/contract";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 
 import type { AppConfig } from "./appConfig";
@@ -21,6 +22,7 @@ export function createORPC(config: AppConfig): {
 } {
   const link = new RPCLink({
     url: config.apiUrl,
+    method: inferRPCMethodFromContractRouter(contract),
     headers: () => ({
       authorization: `Bearer ${config.userApiKey}`,
     }),

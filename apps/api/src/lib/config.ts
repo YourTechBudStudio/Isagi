@@ -10,7 +10,7 @@ interface RuntimeConfig {
 
 function parsePort(rawPort: string | undefined): number {
   if (!rawPort) {
-    return 12000;
+    return 13000;
   }
 
   const port = Number.parseInt(rawPort, 10);

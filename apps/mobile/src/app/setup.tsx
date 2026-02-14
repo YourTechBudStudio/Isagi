@@ -14,14 +14,24 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { NebulaBackground } from "@/components/ui/NebulaBackground";
-import { setAppConfig } from "@/services/appConfig";
+import { useToast } from "@/components/ui/ToastProvider";
+import { normalizeApiUrl, setAppConfig } from "@/services/appConfig";
 import { useAppConfig } from "@/services/AppConfigContext";
+import { createORPC } from "@/services/orpc";
 
 const URL_HINTS: readonly { label: string; value: string }[] = [
   { label: "iOS simulator", value: "http://localhost:13000" },
   { label: "Android emulator", value: "http://10.0.2.2:13000" },
-  { label: "Physical device", value: "http://192.168.1.45:13000" },
+  { label: "Physical device", value: "http://192.168.1.42:13000" },
 ];
+
+async function pingServer(params: {
+  apiUrl: string;
+  userApiKey: string;
+}): Promise<void> {
+  const { client } = createORPC(params);
+  await client.user.health.ping();
+}
 
 /**
  * First-launch setup screen.
@@ -31,6 +41,7 @@ const URL_HINTS: readonly { label: string; value: string }[] = [
  */
 export default function SetupScreen(): React.ReactElement {
   const { setConfig } = useAppConfig();
+  const toast = useToast();
 
   const [apiUrl, setApiUrl] = useState("");
   const [userApiKey, setUserApiKey] = useState("dev-isagi");
@@ -54,18 +65,23 @@ export default function SetupScreen(): React.ReactElement {
     setSaving(true);
 
     try {
+      const normalizedUrl = normalizeApiUrl(trimmedUrl);
+      await pingServer({ apiUrl: normalizedUrl, userApiKey: trimmedKey });
+
       const savedConfig = await setAppConfig({
-        apiUrl: trimmedUrl,
+        apiUrl: normalizedUrl,
         userApiKey: trimmedKey,
       });
 
       setConfig(savedConfig);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      toast.success("Connection verified. Cleared for capture.");
     } catch {
       setSaving(false);
-      Alert.alert("Save failed", "Couldn't persist config. Please try again.");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      toast.error("Couldn't reach the API. Check URL and key.");
     }
-  }, [apiUrl, setConfig, userApiKey]);
+  }, [apiUrl, setConfig, toast, userApiKey]);
 
   const canSave = apiUrl.trim().length > 0 && userApiKey.trim().length > 0;
 
@@ -180,7 +196,7 @@ export default function SetupScreen(): React.ReactElement {
                   canSave && !saving ? "text-canvas" : "text-canvas opacity-60"
                 }`}
               >
-                {saving ? "Saving..." : "Lock it in"}
+                {saving ? "Checking..." : "Lock it in"}
               </Text>
             </Pressable>
 
