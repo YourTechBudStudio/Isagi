@@ -191,3 +191,54 @@ export const apply = os.apply.handler(async ({ input }) => {
     });
   }
 });
+
+export const messages = os.messages.handler(async ({ input }) => {
+  try {
+    const triage = await getSparkTriageBySparkId(input.sparkId);
+    if (!triage) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `Triage session not found for spark ${input.sparkId}`,
+      });
+    }
+
+    const session = await findOpencodeSessionByExternalId(
+      triage.opencodeSessionId,
+    );
+    if (!session) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `OpenCode session missing for spark ${input.sparkId}`,
+      });
+    }
+
+    const instance = await getOpencodeInstanceById(session.opencodeInstanceId);
+    if (!instance) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "OpenCode instance not found",
+      });
+    }
+
+    const client = getOpencodeClient({
+      baseUrl: instance.baseUrl,
+      rootPath: instance.rootPath,
+    });
+    const result = await client.session.messages({
+      sessionID: session.opencodeSessionId,
+      limit: input.limit,
+    });
+
+    return result.data ?? [];
+  } catch (error) {
+    console.error("oRPC user.triage.messages failed", {
+      sparkId: input.sparkId,
+      error,
+    });
+
+    if (error instanceof ORPCError) {
+      throw error;
+    }
+
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "Failed to load triage messages",
+    });
+  }
+});

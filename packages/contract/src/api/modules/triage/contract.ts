@@ -79,9 +79,42 @@ const apply = oc
     }),
   );
 
+const messages = oc
+  .route({ method: "GET", path: "/triage/:sparkId/messages" })
+  .input(
+    z.object({
+      sparkId: z.string(),
+      limit: z.number().int().positive().max(500).optional(),
+    }),
+  )
+  .output(
+    z.array(
+      z.object({
+        info: z
+          .object({
+            id: z.string(),
+            sessionID: z.string(),
+            role: z.enum(["user", "assistant"]),
+          })
+          .passthrough(),
+        parts: z.array(
+          z
+            .object({
+              id: z.string(),
+              sessionID: z.string(),
+              messageID: z.string(),
+              type: z.string(),
+            })
+            .passthrough(),
+        ),
+      }),
+    ),
+  );
+
 export const triageContract = {
   list,
   state,
   send,
   apply,
+  messages,
 };
