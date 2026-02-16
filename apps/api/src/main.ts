@@ -7,7 +7,14 @@ import express from "express";
 import { runtimeConfig } from "./lib/config";
 import { closeDb } from "./lib/db/client";
 import { runMigrations } from "./lib/db/migrations";
+import { getDefaultOpencodeRootPath } from "./lib/opencode";
+import {
+  startOpencodeGlobalEventLoop,
+  stopOpencodeGlobalEventLoop,
+} from "./lib/opencode-events";
+import { bootstrapPrompts } from "./lib/prompts";
 import { ensureDataDirectories } from "./lib/sparks";
+import { registerTriageSseRoute } from "./modules/triage/sse";
 import { orpcRouter } from "./router";
 
 const app = express();
@@ -27,6 +34,7 @@ function toHeaders(request: express.Request): Headers {
 
 app.use(cors());
 app.use(express.json());
+registerTriageSseRoute(app);
 
 app.use("/api*splat", async (req, res, next) => {
   const { matched } = await handler.handle(req, res, {
@@ -49,7 +57,9 @@ app.get("/", (_req, res) => {
 
 async function main(): Promise<void> {
   await ensureDataDirectories(runtimeConfig.dataRoot);
+  await bootstrapPrompts(runtimeConfig.dataRoot);
   await runMigrations();
+  await startOpencodeGlobalEventLoop(getDefaultOpencodeRootPath());
 
   const server = app.listen(runtimeConfig.port, () => {
     console.log(`Isagi API listening on port '${runtimeConfig.port}'`);
@@ -57,6 +67,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     server.close();
+    await stopOpencodeGlobalEventLoop();
     await closeDb();
     process.exit(0);
   };

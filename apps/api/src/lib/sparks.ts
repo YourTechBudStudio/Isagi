@@ -2,10 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 interface WriteSparkFileOptions {
-  readonly dataRoot: string;
+  readonly filePath: string;
   readonly sparkId: string;
   readonly title: string;
-  readonly titleSlug: string;
   readonly text: string;
   readonly createdAt: Date;
 }
@@ -36,31 +35,84 @@ export function createSparkFileName(
   return `${sparkId}-${titleSlug}.md`;
 }
 
+export function createSparkTriageFileName(
+  sparkId: string,
+  titleSlug: string,
+): string {
+  return `${sparkId}-${titleSlug}.triage.yaml`;
+}
+
+export function getOriginalSparksDir(dataRoot: string): string {
+  return path.join(dataRoot, "sparks", "original");
+}
+
+export function getWorkingSparksDir(dataRoot: string): string {
+  return path.join(dataRoot, "sparks");
+}
+
+export function getWorkstreamsDir(dataRoot: string): string {
+  return path.join(dataRoot, "workstreams");
+}
+
+export function getPromptsDir(dataRoot: string): string {
+  return path.join(dataRoot, "prompts");
+}
+
+export function resolveWorkingSparkPath(params: {
+  dataRoot: string;
+  sparkId: string;
+  titleSlug: string;
+}): string {
+  return path.join(
+    getWorkingSparksDir(params.dataRoot),
+    createSparkFileName(params.sparkId, params.titleSlug),
+  );
+}
+
+export function resolveOriginalSparkPath(params: {
+  dataRoot: string;
+  sparkId: string;
+  titleSlug: string;
+}): string {
+  return path.join(
+    getOriginalSparksDir(params.dataRoot),
+    createSparkFileName(params.sparkId, params.titleSlug),
+  );
+}
+
+export function resolveSparkTriagePath(params: {
+  dataRoot: string;
+  sparkId: string;
+  titleSlug: string;
+}): string {
+  return path.join(
+    getWorkingSparksDir(params.dataRoot),
+    createSparkTriageFileName(params.sparkId, params.titleSlug),
+  );
+}
+
 function escapeYamlString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\"/g, '\\"');
 }
 
 export async function ensureDataDirectories(dataRoot: string): Promise<void> {
   await mkdir(dataRoot, { recursive: true });
-  await mkdir(path.join(dataRoot, "sparks"), { recursive: true });
+  await mkdir(getWorkingSparksDir(dataRoot), { recursive: true });
+  await mkdir(getOriginalSparksDir(dataRoot), { recursive: true });
+  await mkdir(getWorkstreamsDir(dataRoot), { recursive: true });
+  await mkdir(getPromptsDir(dataRoot), { recursive: true });
 }
 
 export async function writeSparkFile({
-  dataRoot,
+  filePath,
   sparkId,
   title,
-  titleSlug,
   text,
   createdAt,
 }: WriteSparkFileOptions): Promise<string> {
-  const sparksDir = path.join(dataRoot, "sparks");
-  await mkdir(sparksDir, { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true });
 
   const safeTitle = escapeYamlString(title);
-  const filePath = path.join(
-    sparksDir,
-    createSparkFileName(sparkId, titleSlug),
-  );
   const content = [
     "---",
     `id: ${sparkId}`,
@@ -74,4 +126,13 @@ export async function writeSparkFile({
 
   await writeFile(filePath, content, "utf8");
   return filePath;
+}
+
+export async function writeSparkTriageFile(
+  triagePath: string,
+): Promise<string> {
+  const content = ["version: 1", "items: []", ""].join("\n");
+  await mkdir(path.dirname(triagePath), { recursive: true });
+  await writeFile(triagePath, content, "utf8");
+  return triagePath;
 }

@@ -3,13 +3,17 @@ import { implement, ORPCError } from "@orpc/server";
 import { uuidv7 } from "uuidv7";
 
 import { runtimeConfig } from "../../lib/config";
-import { db } from "../../lib/db/client";
-import { sparks } from "../../lib/db/schema";
+import { createSpark } from "../../lib/db/sparks.repository";
 import {
   extractSparkTitle,
+  resolveOriginalSparkPath,
+  resolveSparkTriagePath,
+  resolveWorkingSparkPath,
   slugifySparkTitle,
   writeSparkFile,
+  writeSparkTriageFile,
 } from "../../lib/sparks";
+import { startSparkTriage } from "../../lib/triage-service";
 
 const os = implement(contract.user.sparks);
 
@@ -17,7 +21,9 @@ export const capture = os.capture.handler(async ({ input }) => {
   let sparkId: string | undefined;
   let title: string | undefined;
   let titleSlug: string | undefined;
-  let filePath: string | undefined;
+  let originalPath: string | undefined;
+  let workingPath: string | undefined;
+  let triagePath: string | undefined;
 
   try {
     sparkId = uuidv7();
@@ -26,20 +32,56 @@ export const capture = os.capture.handler(async ({ input }) => {
     title = extractSparkTitle(text);
     titleSlug = slugifySparkTitle(title);
 
-    filePath = await writeSparkFile({
+    originalPath = resolveOriginalSparkPath({
       dataRoot: runtimeConfig.dataRoot,
       sparkId,
-      title,
       titleSlug,
+    });
+    workingPath = resolveWorkingSparkPath({
+      dataRoot: runtimeConfig.dataRoot,
+      sparkId,
+      titleSlug,
+    });
+    triagePath = resolveSparkTriagePath({
+      dataRoot: runtimeConfig.dataRoot,
+      sparkId,
+      titleSlug,
+    });
+
+    await writeSparkFile({
+      filePath: originalPath,
+      sparkId,
+      title,
       text,
       createdAt,
     });
 
-    await db.insert(sparks).values({
+    await writeSparkFile({
+      filePath: workingPath,
+      sparkId,
+      title,
+      text,
+      createdAt,
+    });
+
+    await writeSparkTriageFile(triagePath);
+
+    await createSpark({
       id: sparkId,
       title,
-      path: filePath,
+      path: workingPath,
+      originalPath,
+      workingPath,
+      triagePath,
       createdAt,
+    });
+
+    void startSparkTriage(sparkId).catch(error => {
+      console.error("Failed to start spark triage", {
+        sparkId,
+        title,
+        error,
+      });
     });
 
     return { sparkId, title };
@@ -48,7 +90,9 @@ export const capture = os.capture.handler(async ({ input }) => {
       sparkId,
       title,
       titleSlug,
-      filePath,
+      originalPath,
+      workingPath,
+      triagePath,
       dataRoot: runtimeConfig.dataRoot,
       textLength: input.text.length,
       error,

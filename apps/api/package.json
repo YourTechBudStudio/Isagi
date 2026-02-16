@@ -25,12 +25,14 @@
     "@isagi/contract": "workspace:*",
     "@isagi/tooling": "workspace:*",
     "@libsql/client": "^0.15.15",
+    "@opencode-ai/sdk": "^1.2.5",
     "@orpc/server": "^1.13.4",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
     "drizzle-orm": "^0.45.1",
     "express": "^5.2.1",
-    "uuidv7": "^1.1.0"
+    "uuidv7": "^1.1.0",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
