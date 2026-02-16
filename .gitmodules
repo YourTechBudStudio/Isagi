@@ -1,0 +1,4 @@
+[submodule "vendor/opencode"]
+	path = vendor/opencode
+	url = git@github.com:anomalyco/opencode.git
+	branch = dev

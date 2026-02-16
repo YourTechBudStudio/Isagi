@@ -24,7 +24,19 @@ apps/
 packages/
   contract/       # shared schemas + API contract + SSE event types
   tooling/        # shared eslint/tsconfig/prettier setup (Fluidcast-style)
+
+vendor/
+  opencode/       # git submodule; upstream OpenCode source (SDK reference)
 ```
+
+## OpenCode Submodule
+
+This repo vendors the upstream OpenCode repository as a git submodule so agents can inspect the actual SDK/source when docs are unclear.
+
+- Location: `vendor/opencode/`
+- After cloning: `git submodule update --init --recursive`
+- To bump the pinned revision: `git submodule update --remote --merge vendor/opencode` then commit the updated gitlink
+- When answering OpenCode SDK questions, start with: `vendor/opencode/sdks/`, `vendor/opencode/specs/`, and `vendor/opencode/packages/`
 
 ## Build, Lint, and Test Commands
 
