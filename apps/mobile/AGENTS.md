@@ -17,59 +17,25 @@ This is an Expo (React Native) app for capture-first flows and mobile-friendly a
 - React 19 + React Native 0.81
 - NativeWind v5 + Tailwind CSS v4 (styling)
 - react-native-reanimated, gesture-handler, screens, safe-area-context
-- PNPM for package management
-
-### Planned (add only when needed)
-
 - oRPC (end-to-end type-safe API client)
 - TanStack React Query
 - Zustand
+- PNPM for package management
 
-## Technical specification
+## Core rules (succinct)
 
-- **Routing:** All routes live in `src/app/` (Expo Router). Do not put non-route modules inside `src/app/`.
-- **Styling:** Prefer NativeWind `className` for layout and styling. Keep global Tailwind/NativeWind imports in `src/app/global.css`.
-- **UX posture:** Mobile is code-free. It supports capture, triage, and decisions; repo/coding workflows stay desktop-first.
+- **Routing:** only routes in `src/app/`.
+- **Styling:** default to `className`; use `style` only for layout-critical containers.
+- **Do not mix** `style` + `className` on the same element.
+- **Layout-critical components:** use `style={{ flex: 1 }}` for `SafeAreaView`,
+  `PagerView`, and `FlatList`. Keep padding in wrapper Views.
+- **ScrollView:** no `style` or `className`; it must be the direct child of a
+  flex container. Put padding on an inner View.
+- **Stacking:** avoid `zIndex`/absolute layout; keep header → tabs → body → footer.
+- **Composer placement:** keep as a footer sibling, not inside the scroll/list.
 
-### NativeWind v5 critical constraint: never mix `style` and `className`
-
-In NativeWind v5, the `style` prop **completely overrides** all styles applied via `className` — even for non-overlapping properties. This means that if you set `fontFamily` via `style` and `color` via `className`, the color will be silently dropped.
-
-**Rule: never pass both `style` and `className` on the same element.** Put everything through `className` using Tailwind utilities and custom `@theme` tokens.
-
-```tsx
-// BAD — className color will be silently dropped
-<Text style={{ fontFamily: "Sora_700Bold" }} className="text-white text-xl">
-
-// GOOD — everything via className using @theme font tokens
-<Text className="font-display text-white text-xl">
-```
-
-Font families are defined as `@theme` tokens in `global.css` (e.g., `--font-display`, `--font-body`) and used via `font-display`, `font-body`, etc. className utilities.
-
-The only safe exception is `Animated` styles from `useAnimatedStyle()` applied to `Animated.View` / `Animated.Text` — those control layout transforms (opacity, translateY) and don't conflict with className visual styles, as long as you don't set color/font/background properties in the animated style.
-
-### NativeWind v5 critical constraint: no `style` or `className` on ScrollView
-
-`ScrollView` must have **zero** `style` and **zero** `className` props — both silently break rendering and make content invisible. Place ScrollView as a direct child of a flex container (e.g. `SafeAreaView` with `flex-1`), and use a child `<View>` for content padding. Do **not** wrap ScrollView in a `<View className="flex-1">` — that also breaks it.
-
-```tsx
-// BAD — content will be invisible
-<ScrollView className="flex-1" contentContainerClassName="px-5 pt-4">
-// ALSO BAD — style breaks it too
-<ScrollView style={{ flex: 1 }}>
-// ALSO BAD — flex-1 wrapper breaks it
-<View className="flex-1"><ScrollView>...</ScrollView></View>
-
-// GOOD — ScrollView as direct child of flex container, zero props
-<SafeAreaView className="flex-1" edges={["top"]}>
-  <ScrollView>
-    <View className="px-5 pt-4">
-      {/* content */}
-    </View>
-  </ScrollView>
-</SafeAreaView>
-```
+Font families come from `@theme` tokens in `src/app/global.css` and should be
+applied via `className` (e.g., `font-display`, `font-body`).
 
 ## Package structure
 

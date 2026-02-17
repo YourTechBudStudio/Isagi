@@ -104,6 +104,7 @@ export default function RootLayout(): React.ReactElement | null {
                   headerShown: false,
                 }}
               />
+              <Stack.Screen name="triage" />
               <Stack.Screen
                 name="setup"
                 options={{

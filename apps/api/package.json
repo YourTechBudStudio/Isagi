@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "ISAGI_ROOT=.isagi/data drizzle-kit generate",
     "db:migrate": "ISAGI_ROOT=.isagi/data drizzle-kit migrate",
-    "db:studio": "ISAGI_ROOT=..isagi/data drizzle-kit studio"
+    "db:studio": "ISAGI_ROOT=.isagi/data drizzle-kit studio"
   },
   "keywords": [],
   "author": "",

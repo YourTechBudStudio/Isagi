@@ -85,6 +85,12 @@ export function registerTriageSseRoute(app: express.Express): void {
       rootPath: instance.rootPath,
     });
 
+    console.log("[triage-debug][api.sse] connected", {
+      sparkId,
+      opencodeSessionId: triage.opencodeSessionId,
+      instanceBaseUrl: instance.baseUrl,
+    });
+
     res.status(200);
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -116,15 +122,34 @@ export function registerTriageSseRoute(app: express.Express): void {
           continue;
         }
 
+        const type =
+          payload && typeof payload === "object"
+            ? Reflect.get(payload, "type")
+            : undefined;
+        console.log("[triage-debug][api.sse] forward", {
+          sparkId,
+          opencodeSessionId: triage.opencodeSessionId,
+          type,
+        });
+
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
     } catch (error) {
+      console.error("[triage-debug][api.sse] stream error", {
+        sparkId,
+        opencodeSessionId: triage.opencodeSessionId,
+        error,
+      });
       if (!abortController.signal.aborted) {
         res.write(
           `data: ${JSON.stringify({ error: error instanceof Error ? error.message : "Event stream failed" })}\n\n`,
         );
       }
     } finally {
+      console.log("[triage-debug][api.sse] disconnected", {
+        sparkId,
+        opencodeSessionId: triage.opencodeSessionId,
+      });
       res.end();
     }
   });

@@ -156,9 +156,15 @@ export async function startSparkTriage(sparkId: string): Promise<void> {
     title: `Triage: ${spark.title}`,
   });
 
-  const opencodeSessionId = created.data?.id;
+  const opencodeSessionId =
+    created.data?.id ??
+    (typeof Reflect.get(created, "id") === "string"
+      ? (Reflect.get(created, "id") as string)
+      : undefined);
   if (!opencodeSessionId) {
-    throw new Error("OpenCode session.create returned no session id");
+    throw new Error(
+      `OpenCode session.create returned no session id: ${JSON.stringify(created)}`,
+    );
   }
   await createOpencodeSession({
     opencodeInstanceId: instance.id,
@@ -205,6 +211,17 @@ export async function handleOpencodeGlobalEvent(input: {
 
   const type = Reflect.get(input.payload, "type");
   const properties = Reflect.get(input.payload, "properties");
+  const eventSessionId =
+    properties && typeof properties === "object"
+      ? typeof Reflect.get(properties, "sessionID") === "string"
+        ? (Reflect.get(properties, "sessionID") as string)
+        : getMessageSessionId(properties)
+      : undefined;
+
+  console.log("[triage-debug][global-event]", {
+    type,
+    sessionId: eventSessionId,
+  });
 
   if (type === "message.updated") {
     const sessionId = getMessageSessionId(properties);

@@ -226,6 +226,13 @@ export const messages = os.messages.handler(async ({ input }) => {
       limit: input.limit,
     });
 
+    console.log("[triage-debug][api.messages] loaded", {
+      sparkId: input.sparkId,
+      opencodeSessionId: session.opencodeSessionId,
+      count: result.data?.length ?? 0,
+      firstMessageIds: (result.data ?? []).slice(0, 3).map(msg => msg.info.id),
+    });
+
     return result.data ?? [];
   } catch (error) {
     console.error("oRPC user.triage.messages failed", {

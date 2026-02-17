@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import net from "node:net";
 
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
@@ -65,8 +66,10 @@ async function waitForHealth(
   while (Date.now() - start < timeoutMs) {
     try {
       const client = createOpencodeClient({ baseUrl, directory: rootPath });
-      await client.global.health();
-      return;
+      const health = await client.global.health();
+      if (health.data?.healthy === true) {
+        return;
+      }
     } catch {
       await sleep(200);
     }
@@ -77,13 +80,10 @@ async function waitForHealth(
 
 async function spawnOpenCodeServer(rootPath: string): Promise<SpawnResult> {
   const port = await allocatePort();
-  const args = [
-    "serve",
-    "--hostname=127.0.0.1",
-    `--port=${port}`,
-    `--directory=${rootPath}`,
-  ];
+  await mkdir(rootPath, { recursive: true });
+  const args = ["serve", "--hostname=127.0.0.1", `--port=${port}`];
   const proc = spawn("opencode", args, {
+    cwd: rootPath,
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
   });
@@ -101,8 +101,8 @@ async function spawnOpenCodeServer(rootPath: string): Promise<SpawnResult> {
 async function isHealthy(baseUrl: string, rootPath: string): Promise<boolean> {
   try {
     const client = createOpencodeClient({ baseUrl, directory: rootPath });
-    await client.global.health();
-    return true;
+    const health = await client.global.health();
+    return health.data?.healthy === true;
   } catch {
     return false;
   }
@@ -178,6 +178,7 @@ export function getOpencodeClient(input: {
   return createOpencodeClient({
     baseUrl: input.baseUrl,
     directory: input.rootPath,
+    throwOnError: true,
   });
 }
 

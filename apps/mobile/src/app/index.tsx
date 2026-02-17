@@ -12,7 +12,6 @@ import {
   MOCK_BACKLOG,
   MOCK_FOCUS_QUEUE,
   MOCK_RESUME,
-  MOCK_SPARKS,
 } from "@/constants/mock-data";
 
 export default function HomeScreen(): React.ReactElement {
@@ -25,7 +24,7 @@ export default function HomeScreen(): React.ReactElement {
             <Greeting />
             <ResumeCard item={MOCK_RESUME} />
             <FocusQueue items={MOCK_FOCUS_QUEUE} />
-            <SparkTriage sparks={MOCK_SPARKS} />
+            <SparkTriage />
             <BacklogHealth metrics={MOCK_BACKLOG} />
 
             {/* Footer quip */}
