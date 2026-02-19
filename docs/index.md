@@ -1,22 +1,39 @@
 # Isagi documentation
 
-These docs are **ideation-stage living documents** for Isagi (codename): a context continuity engine for capturing sparks and turning them into outcomes across workstreams using humans + agents.
+These docs define the current MVP direction for Isagi: a desktop-first context continuity engine for coding/product workflows.
 
 ## Source of truth
 
-- **[Value Proposition Canvas](./value-proposition-canvas.md)** — the canonical customer/value framing. If conflicts exist, this wins.
-- **[MVP scope (Phase 1)](./mvp-scope.md)** — what we are building now. For MVP decisions, this wins.
+- **[MVP scope](./mvp-scope.md)** - canonical build scope and implementation priorities. For MVP decisions, this wins.
+- **[Product overview](./product.md)** - product framing and intended value.
+- **[Mental model](./mental-model.md)** - core concepts, invariants, and lifecycle semantics.
+- **[Value Proposition Canvas](./value-proposition-canvas.md)** - strategic customer/value framing (not implementation scope).
 
-## Start here
+## Core docs
 
-- **[Product overview](./product.md)** — what the project is, who it’s for, and what value it provides.
-- **[Mental model](./mental-model.md)** — the core concepts, lifecycles, and invariants.
+- **[MVP scope](./mvp-scope.md)**
+- **[Product overview](./product.md)**
+- **[Mental model](./mental-model.md)**
 
-## UX notes
+## Journeys
 
-- **[Mobile home screen](./mobile/home.md)** — the mobile landing page: resume (mobile-only), “what’s next”, triage, backlog health.
+- **[Coding workflow journey](./journeys/coding-workflow.md)** - step-by-step desktop journey from spark to completed task.
+
+## Architecture
+
+- **[Execution model](./architecture/execution-model.md)** - execution roots, git modes, sessions, worktrees, and close-task safety.
+- **[Notes model](./architecture/notes-model.md)** - global notes storage, scoping, write semantics, and provenance.
+
+## Configuration
+
+- **[Area/Project/Task rules](./config/area-project-task-rules.md)** - defaults, overrides, and rule hierarchy.
+
+## Archived docs
+
+- **[Mobile home screen (archived)](./archived/mobile-home.md)** - preserved for future mobile reactivation; not part of current MVP.
 
 ## Conventions
 
-- These docs intentionally avoid RFC-level specificity while we’re still exploring.
-- Each doc has a **What’s undecided** section to track open questions.
+- Keep docs concise but explicit on invariants.
+- Avoid duplicating deep mechanics across files; link to the owning doc instead.
+- Prefer `area/project/task` terminology in active docs.

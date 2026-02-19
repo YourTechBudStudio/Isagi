@@ -4,7 +4,9 @@
 **Product name:** Spark System  
 **Last updated:** 2026-02-07
 
-If anything else in `docs/` conflicts with this canvas, **this document wins**.
+This canvas is the **strategic framing source of truth**.
+
+For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 **MVP constraint:** In Phase 1, the Triager is **propose-only** (see [MVP scope](./mvp-scope.md)). Any “development” described below should be interpreted as _proposing work items and enabling warm-start sessions_, not auto-generating artifacts.
 
@@ -16,15 +18,15 @@ If anything else in `docs/` conflicts with this canvas, **this document wins**.
 
 ### Jobs to be Done
 
-| Job                                                                                          | Type       | Priority |
-| -------------------------------------------------------------------------------------------- | ---------- | -------- |
-| Post content consistently across platforms (YouTube weekly, LinkedIn 2x/week, Twitter often) | Core       | Highest  |
-| Develop raw ideas into content-ready artifacts (Northstar, storylines, drafts)               | Core       | High     |
-| Research topics before creating content                                                      | Core       | High     |
-| Maintain a healthy backlog/pipeline so I never run dry                                       | Core       | High     |
-| Capture ideas quickly when they occur (on the go, voice, mobile)                             | Supporting | High     |
-| Share artifacts with team members (editor)                                                   | Supporting | Medium   |
-| Track progress on content projects                                                           | Supporting | Low      |
+| Job                                                                                                 | Type       | Priority |
+| --------------------------------------------------------------------------------------------------- | ---------- | -------- |
+| Progress coding/product tasks consistently with low startup friction                                | Core       | Highest  |
+| Develop raw sparks into executable tasks and durable notes                                          | Core       | High     |
+| Run multiple task threads in parallel without repo/context collisions                               | Core       | High     |
+| Maintain a healthy actionable queue so I always know what to do next                                | Core       | High     |
+| Capture ideas quickly when they occur                                                               | Supporting | High     |
+| Preserve internal documentation/notes without coupling them to public/open-source code repositories | Supporting | Medium   |
+| Track progress across areas/projects/tasks                                                          | Supporting | Low      |
 
 ### Pains
 
@@ -43,16 +45,16 @@ If anything else in `docs/` conflicts with this canvas, **this document wins**.
 
 ### Gains
 
-| Gain                                                                                                                                                                                          | Importance |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| **Warm starts** — when I sit down to work, context is loaded, I'm primed, the boulder is already rolling                                                                                      | Critical   |
-| **Co-ownership** — building together with AI, not just reviewing; feeling challenged and discovering breadth                                                                                  | Critical   |
-| **Context continuity** — agent knows the spark, research, prior outputs, my rubrics; I never start from zero                                                                                  | Critical   |
-| **Pipeline visibility** — "I have 3-4 storylines queued" feeling of security                                                                                                                  | High       |
-| **Getting to the fun parts faster** — system handles unfun parts (research, context loading) so I can do creative work                                                                        | High       |
-| **Parallelized development** — multiple rubrics run simultaneously in background                                                                                                              | High       |
-| **Mobile-first capture + agent conversations** — capture on phone; phone conversations can be real brainstorming/triage/decision-making, and can escalate into deeper work (often on desktop) | Medium     |
-| **Cheap rubric creation** — can make micro-rubrics for small filtering tasks                                                                                                                  | Medium     |
+| Gain                                                                                                                    | Importance |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **Warm starts** — when I sit down to work, context is loaded and the boulder is already rolling                         | Critical   |
+| **Co-ownership** — building with AI while keeping executive control                                                     | Critical   |
+| **Context continuity** — I never have to restate history to continue                                                    | Critical   |
+| **Queue visibility** — I can quickly see what is waiting on me and what to run next                                     | High       |
+| **Getting to the fun parts faster** — less setup, more execution                                                        | High       |
+| **Parallelized execution** — multiple task threads can run safely in parallel                                           | High       |
+| **Desktop-first focus for deep work** — one primary surface for coding/repo-heavy sessions                              | Medium     |
+| **Cheap rule evolution** — behavior evolves through configurable rules/templates instead of hardcoded workflow branches | Medium     |
 
 ---
 
@@ -60,18 +62,17 @@ If anything else in `docs/` conflicts with this canvas, **this document wins**.
 
 ### Products & Features
 
-| Feature                            | Description                                                                                                                                                                   |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Quick capture**                  | Home screen widget + voice input. Frictionless spark entry on mobile.                                                                                                         |
-| **Smart triager**                  | Runs lightweight rubrics per workstream. Output: "This spark fits YouTube, LinkedIn, Twitter" with reasoning + clarifying questions.                                          |
-| **Resumable chat agents**          | Each task opens a chat screen. Can pause and resume. Conversations persist with full context. Mobile-friendly design; desktop is primary for deep work.                       |
-| **Context continuity engine**      | Every conversation starts pre-loaded with: the spark, relevant research, prior outputs, your rubrics, and a summary that primes you on where things stand.                    |
-| **Research agent**                 | Proposes research directions → you approve/modify → runs deep research → returns findings with sources. All stored for downstream agents.                                     |
-| **Workstream agents**              | Northstar agent, Titles/Thumbnails agent, Storyline agent—each pre-primed with your rubrics and access to prior outputs.                                                      |
-| **Shared file system**             | All artifacts persist. Research outputs available to Northstar agent. Northstar available to Storyline agent. Context compounds. Uses OpenCode SDK for intelligent retrieval. |
-| **First-principles collaboration** | All agents challenge, question, propose alternatives. You make executive calls. Agents help you discover breadth through criticism and alternate ideas.                       |
-| **Project templates**              | "Create YouTube video" spawns a project with pre-defined tasks. Each task links to its agent with context pre-loaded.                                                         |
-| **Export to Drive/ClickUp**        | Final artifacts pushed to external systems for team access. System is for thinking, not storage.                                                                              |
+| Feature                            | Description                                                                                                    |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Quick capture**                  | Frictionless spark entry from desktop (mobile capture can be layered later).                                   |
+| **Smart triager**                  | Clarifies sparks and proposes area/project/task creation with reasoning and questions.                         |
+| **Resumable chat agents**          | Each task opens a chat/session surface. Sessions persist and can be resumed.                                   |
+| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.                 |
+| **Command-driven execution**       | Task start behavior comes from configurable commands/rules, not hardcoded task types.                          |
+| **Notes model**                    | Durable notes persist with area/project/task provenance and scope-aware retrieval.                             |
+| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                           |
+| **Generic primitives**             | A small universal model (area/project/task/spark/notes) supports many workflows without bespoke object models. |
+| **External integration ready**     | Merge/release/storage integrations can be layered later without changing the core continuity model.            |
 
 ### Pain Relievers
 
@@ -79,8 +80,8 @@ If anything else in `docs/` conflicts with this canvas, **this document wins**.
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | Activation energy to start     | Agent primes YOU: "Last time we established X, you wanted Y, where do you want to pick up?" Boulder already rolling. |
 | Context loading friction       | Context continuity engine handles all priming. You never explain what you're working on.                             |
-| Running dry on social media    | Triager continuously develops sparks into draft posts. Backlog builds passively.                                     |
-| "What should I research?"      | Research agent proposes directions based on topic + rubric. You approve, it executes.                                |
+| Running out of next actions    | Triager + focus queue keep actionable tasks visible and reviewable.                                                  |
+| "What should I do next?"       | Warm-start sessions and task context reduce decision friction at start time.                                         |
 | Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                           |
 | Sequential rubric execution    | Agents can run in parallel in background. You review at checkpoints.                                                 |
 | Capture friction               | Single quick-add widget. No decision about "where does this go?"                                                     |
@@ -90,15 +91,15 @@ If anything else in `docs/` conflicts with this canvas, **this document wins**.
 
 ### Gain Creators
 
-| Gain                                       | How Product Creates It                                                                                                                                                          |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Warm starts                                | Every task you open has context loaded, research available, agent primes you on where things stand                                                                              |
-| Co-ownership                               | Hybrid model: async background work + interactive checkpoints where you steer and make executive calls                                                                          |
-| Context continuity                         | Shared file system + OpenCode SDK for intelligent retrieval. Agents access each other's outputs.                                                                                |
-| Pipeline security                          | Dashboard shows: "3 storylines ready, 7 LinkedIn drafts in backlog"                                                                                                             |
-| Getting to fun parts faster                | Research (unfun) is pre-done. Context loading (unfun) is automated. You jump straight to creative decisions.                                                                    |
-| Mobile-first capture + agent conversations | Chat-based interface works well on phone for real agent conversations (triage/brainstorming/decisions), but deep work (especially code/repo work) primarily happens on desktop. |
-| Cheap rubrics                              | Rubric = prompt template + triggers. Add new ones without coding.                                                                                                               |
+| Gain                        | How Product Creates It                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| Warm starts                 | Every task/session opens with context assembled and clear next decision points            |
+| Co-ownership                | Interactive checkpoints keep user in control while agents accelerate execution            |
+| Context continuity          | Structured notes + session history + provenance links preserve continuity                 |
+| Queue security              | Home/focus surfaces show what is blocked, active, and ready                               |
+| Getting to fun parts faster | Setup and recall overhead are reduced by rules, defaults, and resumable sessions          |
+| Desktop-first deep work     | One primary execution surface reduces context fragmentation                               |
+| Cheap rule evolution        | Rules/templates allow iterative behavior tuning without redesigning the core object model |
 
 ---
 
@@ -133,6 +134,6 @@ The difference between:
 2. **Prime the human too** — Agent summarizes state so you remember where you left off
 3. **Co-ownership, not delegation** — You make executive calls; agents help you discover breadth
 4. **Fun parts fast** — Automate the unfun (research, context loading); preserve the fun (creative decisions, brainstorming)
-5. **Mobile-first capture** — Check-ins on phone should naturally escalate to deeper work (often on desktop)
+5. **Desktop-first MVP** — Ship one strong deep-work surface first; add mobile later when core behavior is stable
 6. **Sparks can die** — Active work matters; graveyard of unpromoted sparks is acceptable
 7. **Context compounds** — Every agent output is available to downstream agents

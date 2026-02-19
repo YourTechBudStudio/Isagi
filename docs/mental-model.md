@@ -1,232 +1,184 @@
-# Isagi — mental model
+# Isagi - mental model
 
-**Last updated:** 2026-02-07
+**Last updated:** 2026-02-19
 
-This document defines the universal concepts and invariants we’re using while designing Isagi.
+This document defines the core concepts and invariants for the active MVP.
 
-## Glossary (universal concepts)
+## Glossary
 
-### Workstream (Area)
+### Area
 
-A stable lens that groups related work and capabilities (e.g., **YouTube**, **Social Marketing**, **Product Development**). Workstreams are not templates/instances.
+An area defines a stable domain of work and the rules/templates that govern it.
 
-Workstreams can:
+Area responsibilities:
 
-- own artifacts (e.g., living blueprints, audience personas)
-- define **processor profiles** (derived agents)
-- provide UI surfaces
+- define defaults and constraints
+- define command templates
+- define git mode (`none | area_repo | project_repo`)
+- define default execution root behavior
 
-**MVP workstreams (Phase 1):**
+### Project
 
-- **YouTube** (deep pipeline)
-- **Social Marketing** (draft-only pipeline; platform-specific processors)
+A project is a logical grouping of work inside an area.
+
+Projects:
+
+- organize tasks
+- can carry project-level default execution root rules
+- may map to a git repo depending on area git mode
+
+### Task
+
+A task is the unit of execution.
+
+Task properties (conceptual):
+
+- belongs to exactly one project
+- has session history
+- may have an attached worktree lifecycle
+- can be started via command templates or as empty chat
 
 ### Spark
 
-A raw captured input (often a one-liner). Sparks exist so you don’t lose ideas.
+A spark is a raw idea capture.
 
-Spark view/lifecycle states:
+Sparks are global inputs that triager develops into proposed project/task structures.
 
-- `inbox` → `backlog` → `active` → `archived`
-- or `rejected`
+### Note
 
-Cancellation semantics:
+A note is the primary durable output in MVP.
 
-- Rejecting/archiving a spark **cancels in-flight sessions** that were spawned from it (via derived work items).
-- **Committed artifacts are not deleted**; they keep provenance links back to the spark.
+Notes are global storage objects with provenance tags (spark/area/project/task references) used for scoping and future filtering.
 
-### Container (Scope, global)
+### Session
 
-A global context bucket that work belongs to. Containers are cross-linkable across workstreams.
+A session is a durable execution record tied to a task.
 
-Examples:
+Session categories in practice:
 
-- `Project: Fluidcast`
-- `Video: Interleaved Thinking`
+- triage session
+- execution chat session
+- follow-up session
 
-Containers have a **ContainerType** (defined via YAML manifest) plus attributes.
+Multiple sessions can exist under one task.
 
-### Work Item
+### Worktree
 
-The unit of work you pick up and act on. A work item can be handled by a **human** or an **agent**.
+A worktree is an optional execution environment attached to a task.
 
-Key properties:
+Worktree lifecycle is task-scoped, not session-scoped.
 
-- primary `container_id`
-- optional `spark_id`
-- `status`, `priority`
-- `blocked_by[]` dependencies
-- linked artifacts
-- actions
-- sessions
+---
 
-### Artifact
+## Core invariants
 
-An output (document, blob, link, or structured dataset). Artifacts can be versioned (“living artifacts”).
+1. **Triager is propose-only.** Nothing is created until user finalizes.
+2. **Every task belongs to a project.** No orphan tasks.
+3. **Execution root is deterministic.**
+4. **Worktree lifecycle is task-bound.**
+5. **Task close is safety-gated.**
+6. **Notes are the MVP output layer.**
 
-Ownership and visibility:
+---
 
-- Each artifact is owned by exactly **one workstream**.
-- Artifacts can be **private** or **public**.
-  - **Public** artifacts may be referenced/used across workstreams.
-- Ownership still stays with a single workstream.
+## Execution root resolver
 
-#### Social artifacts (Phase 1)
+Execution root resolves in this order:
 
-For Social Marketing, drafts are stored as full artifacts (not just triage output) with platform metadata (e.g., `platform=linkedin|twitter`).
+1. task-level override
+2. project default
+3. area default
+4. area root fallback
 
-### Action
+`git_mode` and execution-root defaults are related but independent rules.
 
-A runnable operation attached to a work item. Actions are executed by processors and create sessions.
+---
 
-Examples:
+## Area git modes
 
-- “Run research”
-- “Brainstorm North Star”
-- “Start/Resume coding env”
-- “Draft storyline”
+Each area declares one fixed git mode:
 
-### Processor
+- `none`
+- `area_repo`
+- `project_repo`
 
-An entity that can execute actions.
+When `project_repo` is active, project creation requires repo initialization via:
 
-Types:
+- clone from URL, or
+- create empty local git repo (remote optional later)
 
-- **Human processor** (the user)
-- **Agent processor** (triager, brainstormer, research, documentation, etc.)
-
-### Processor Profile (YAML-first)
-
-A workstream-defined derivative of a universal agent processor.
-
-Example:
-
-- `universal.brainstorm` → `youtube.north_star`
-
-Profiles define:
-
-- prompt pack / rubric
-- how inputs are selected (selectors)
-- expected outputs (artifact(s) written)
-- whether/where they may emit gates
-
-### Session (unified execution record)
-
-A session is the durable record for “something happening” tied to a work item.
-
-Session subtypes:
-
-- **ChatSession**: interactive human↔agent conversation
-- **AgentSession**: background agent execution started by an action
-- **CodeSession**: remote coding environment (IDE + TTY)
-
-Sessions can be running, paused, waiting for a gate, done, or cancelled.
-
-### Context Pack (Warm Start Brief)
-
-A **Context Pack** is the computed bundle that makes a session feel like continuing rather than beginning.
-
-Every time you open or resume a session, the system should assemble a Context Pack containing (at minimum):
-
-- the spark (if any) and triager output
-- relevant artifacts (upstream outputs, pinned artifacts, and any required rubrics)
-- a short “where we left off” summary
-- the next decision point (or the active GateRequest)
-
-This is the core invariant behind “warm starts” and “context continuity.”
-
-### GateRequest
-
-A request for human input emitted by a session (typically an AgentSession).
-
-GateRequests:
-
-- appear in the Focus Queue as items labeled **Waiting on you** (UI)
-- can carry structured payloads (forms/patches) and/or open a chat
-- when completed, resume the paused session
-
-## Input selection (artifact selectors)
-
-Actions/profiles select inputs via a small DSL:
-
-- `label:<x>` — artifacts with a label
-- `container_all` — all artifacts in the work item’s container
-- `workstream_all` — all artifacts owned by the work item’s workstream
-
-Additionally:
-
-- **Pinned artifacts on a work item are always included** as inputs.
-
-Labels should follow light conventions to avoid entropy (e.g., `yt/*`, `social/*`, `prod/*`).
-
-## Home + focus model (UX invariants)
-
-- Capture is primarily via quick-add widgets, not the home screen.
-- Home optimizes for **focused work** and low activation energy:
-  - **Resume**: open the last relevant session attached to the most recently active work item (device-scoped; mobile resumes mobile)
-  - **Focus Queue**: a small list of work items, including “waiting on you” items (internally `GateRequest`)
-  - **Spark development / triage**: a lightweight entry into Triager conversations on new sparks
-  - Lightweight indicators (e.g., pending triage, backlog health)
+---
 
 ## Triage model
 
-The **Triager** is an agent processor.
-
 Triage flow:
 
-1. Triager runs automatically on capture and expands/clarifies a spark.
-2. Triager proposes which workstreams fit, with reasoning, and may ask clarifying questions.
-3. Triager consults manifests/templates to decide what could be created.
-4. Triager proposes:
-   - derived sparks (optional)
-   - containers (optional)
-   - initial work items (per applicable workstream)
-   - suggested actions
-5. User confirms/edits; objects are created.
+1. Spark is created.
+2. Triager runs and asks clarifying questions when needed.
+3. Triager proposes graph changes (spark/project/task only).
+4. User reviews proposals in a review surface.
+5. Finalize applies approved proposals atomically.
 
-Derived sparks are cheap follow-ons that emerge during triage/brainstorming. They should follow the same propose/confirm posture as other triage outputs.
+Triage output states include proposed/approved/rejected/applied semantics in implementation, but user-facing behavior is review then finalize.
 
-**Invariant:** Triager is **propose-only**. It does not auto-generate artifacts; artifacts are created by running actions that start sessions.
+---
 
-## Execution + storage model (hybrid)
+## Task/session/worktree lifecycle
 
-**MVP default (Phase 1): single persistent environment**
+1. Open task.
+2. Start empty session or command-driven session.
+3. Optional setup runs (for commands that require environment prep).
+4. Session continues across resumptions.
+5. Multiple sessions can run under same task.
+6. If task has worktree, sessions reuse that worktree.
+7. Close task requires resolved repo state.
+8. On success, task is done, sessions close, worktree/branch clean up.
 
-- Canonical storage:
-  - metadata in a database
-  - artifact bodies/blobs on a persistent filesystem
-- Execution:
-  - actions run in the same always-on environment
+---
 
-**Optional future direction (post-MVP): control/execution split**
+## Home and focus model (desktop-first)
 
-- Canonical storage:
-  - metadata in a database
-  - artifact bodies/blobs in object storage
-- Execution:
-  - many actions can run in control-plane context
-  - actions that need tooling/filesystem can materialize selected artifacts into an ephemeral sandbox (Sprite/Fly) and write outputs back as artifacts
-- Code sessions:
-  - resumable environment
-  - provide separate actions: **Open IDE** and **Open TTY**
-  - use TTL + reference counting: a session can be shared by multiple work items and is destroyed when unreferenced
+Home/dashboard prioritizes:
 
-## Example: YouTube spark → video
+1. resume
+2. focus queue
+3. spark triage
 
-Spark: “interleaved thinking is cool, possible video?”
+Focus queue is task-first, with session-level visibility:
 
-1. Triage expands the spark (Anthropic feature, target persona(s), livestream+recorded, code demo intent).
-2. Triager proposes a `Video` container.
-3. User creates work items such as Research, North Star, Storyline, Code Demo.
-4. Running an action creates a session; the session may emit GateRequests (e.g., approve research plan, pick primary+secondary persona).
-5. Sessions produce artifacts (dossier, docs, outlines). Follow-ups are suggested; chaining is manual in v1.
+- waiting-on-you sessions prioritized
+- active/idle sessions visible as chips/badges
 
-## Not in MVP
+---
 
-- Product development workstreams/coding workflows.
+## Notes model (conceptual)
 
-## What’s undecided
+- Notes are globally stored, not coupled to code repo commits.
+- Session scope determines default note search scope.
+- Read-before-write semantics are enforced for safe concurrent edits.
+- Canonical taxonomy supports area/project-oriented organization.
 
-- The exact shape of ContainerType manifests and ProcessorProfile YAML schemas.
-- How much “auto-trigger” exists in v1 vs fully manual actions.
-- The boundary between control-plane execution and sandbox execution.
+See `docs/architecture/notes-model.md` for operational details.
+
+---
+
+## Example (coding spark to execution)
+
+Spark: "Use git worktrees to parallelize small coding tasks."
+
+1. Spark captured on desktop.
+2. Triager asks clarifying questions and proposes:
+   - one project/task for product implementation
+   - optional follow-on proposals if approved
+3. User reviews and finalizes proposals.
+4. User opens task and starts command-driven coding session.
+5. Work continues across one or more sessions on the same task.
+6. Task closes only after repo state passes safety checks.
+
+---
+
+## What remains intentionally flexible
+
+- Exact command template schema details.
+- Exact UI polish for review/focus surfaces.
+- Exact notes tool shape (documented as suggested contracts for MVP).

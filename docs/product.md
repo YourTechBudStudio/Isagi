@@ -1,83 +1,67 @@
-# Isagi — product overview (codename)
+# Isagi - product overview (codename)
 
-**Last updated:** 2026-02-07
+**Last updated:** 2026-02-19
 
 ## One-liner
 
-Isagi (codename) is a **context continuity engine** for creative work: capture raw ideas (“sparks”), then turn them into durable artifacts via **warm-start** agent conversations where the system pre-loads everything needed so you never start from zero.
+Isagi is a context continuity engine for execution-heavy knowledge work: capture sparks, triage them into structured work, and run resumable agent sessions so you never restart from zero.
 
 ## The problem
 
-- The work is fun once you’re in it, but **starting** is hard.
-- The real tax is **activation energy**: context loading, remembering where you left off, and re-priming AI every time.
-- Ideas arrive randomly (often on mobile) and get scattered across tools.
-- Even when captured, they decay without a pipeline: you run dry when it’s time to post.
+- Starting is harder than doing.
+- Context loading is expensive and repetitive.
+- Parallel tasks collide without clean execution boundaries.
+- Ideas and follow-ups decay when not converted into structured work.
 
 ## Value proposition
 
-1. **Capture once** → sparks are durable and low-friction (mobile-first capture, desktop-first deep work).
-2. **Auto-triage (propose-only)** → a Triager runs on capture, asks clarifying questions, and proposes work items per workstream.
-3. **Warm starts** → every task/session opens pre-loaded with the relevant spark, prior outputs, rubrics, and a “where we left off” summary.
-4. **Context compounds** → outputs become artifacts that downstream agents can read.
-5. **Backlog security** → the system helps you keep drafts/storylines queued so you don’t run dry.
+1. **Capture quickly** - sparks are easy to record when ideas hit.
+2. **Clarify before committing** - triager strengthens sparks and proposes work in reviewable form.
+3. **Warm starts** - every task resumes with context already assembled.
+4. **Parallel safely** - task-scoped execution and worktree rules reduce collisions.
+5. **Durable thinking** - notes persist with provenance for reuse and filtering.
 
 ## Core principles
 
-- **Home is for focused work, not capture.** Capture happens via quick-add widgets.
-- **Anti-overwhelm by design.** Keep “everything” accessible, but show only a small number of “next steps” by default.
-- **Mobile is code-free.** Phone supports triage and agent chat; coding/repo work stays on desktop.
-- **Small by default.** Mobile home shows a short “what’s next” list (start with 3) with a clear “Show all”.
-- **Manual intent, warm automation.** The Triager proposes; you decide what gets created and run. Conversations resume warm.
-- **Universal primitives.** Avoid per-workstream bespoke object models; use a small shared set of concepts.
-- **Agents collaborate, they don’t replace you.** Background runs can pause and ask for input.
-- **Co-ownership over delegation.** Agents challenge assumptions and propose alternatives; you make executive calls.
+- **Desktop-first for MVP.** Keep one primary execution surface.
+- **Generic primitives over hardcoded workflows.** Build area/project/task first.
+- **Propose then commit.** Triager is propose-only; finalize is explicit.
+- **Safety over convenience at close time.** Do not allow silent unresolved closures.
+- **Continuity over novelty.** Resume and focus are more important than feed-style discovery.
 
-## What Isagi feels like to use (intended UX)
+## Active MVP scenario
 
-- **Capture** on phone instantly (text + voice).
-- **Auto-triage** runs in the background and proposes next steps by workstream.
-- **Deep work** happens primarily on desktop (review, editing, longer agent sessions).
-- You open a proposed work item and get a **warm start**: “here’s the spark, what we know, and the next decision.”
-- You run an action to start a **resumable session**. If the agent needs your input it emits a **GateRequest**.
+Primary scenario: coding/product workflow.
 
-## Primary scenarios (early)
+Typical flow:
 
-### YouTube creation (deep)
+1. Capture spark on desktop.
+2. Triager asks clarifying questions and proposes project/task changes.
+3. Review and finalize proposals atomically.
+4. Open task and run command-driven session(s).
+5. Continue until resolved, then close task with safety checks.
 
-Spark → (triage) → Video container → work items like Northstar, Research, Titles/Thumbnails, Storyline → artifacts like docs/outlines/dossiers.
+Detailed journey: `docs/journeys/coding-workflow.md`.
 
-### Social Marketing (lightweight)
+## Derivative workflows
 
-Spark → (triage) → Social work items (e.g., “Draft LinkedIn post”, “Draft Twitter thread”) → draft artifacts in a backlog.
+YouTube/social/content workflows are treated as derivative patterns on top of the same primitives, not hardcoded MVP pipelines.
 
-## MVP notes
+## Architecture references
 
-- The MVP is a **context continuity engine** first.
-- We intentionally avoid over-committing to storage/execution architecture until implementation clarifies constraints.
+- Execution mechanics: `docs/architecture/execution-model.md`
+- Notes output model: `docs/architecture/notes-model.md`
+- Rules/defaults schema: `docs/config/area-project-task-rules.md`
 
-## Future architecture direction (post-MVP, ideation)
+## Non-goals (current MVP)
 
-Primary direction: a **single persistent environment** (one always-on Linux box) that runs the app and maintains a persistent filesystem.
+- Mobile app execution surface.
+- Full in-app PR/merge/release orchestration.
+- Rich multi-user collaboration and permissions.
+- Workflow-specific deep templates as the primary product shape.
 
-Optional direction (later, if needed):
+## What remains open
 
-- **Control plane (always-on):** stores metadata + artifacts, runs most agent/chat interactions, schedules/background processing.
-- **Execution plane (sandboxed):** ephemeral environments (e.g., Sprites/Fly) for actions that need isolated tooling/filesystems (especially coding environments).
-- **Local bridge (optional):** connects local repos + OpenCode context to the system.
-
-## Non-goals (for now)
-
-- Becoming a generic task manager / daily planner.
-- Multi-user collaboration and permissions.
-- Full automation that runs chains without user intent.
-- BYOK/productized key management (initially use the creator’s keys).
-
-## Not in MVP
-
-- Product development workflows (coding sessions, repo/PR integration).
-
-## What’s undecided
-
-- Exact “focus” mechanics (WIP limits, scoring, timetable integration).
-- How far coding sessions go (IDE choice, repo integration, PR automation).
-- When/if to introduce deeper workflow graphs beyond actions + sessions.
+- How strict command templates should be per area.
+- How far to go on automated task health scoring.
+- Which derivative workflows should be added first after core stability.

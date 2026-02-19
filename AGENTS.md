@@ -19,7 +19,7 @@ scratch/          # scratch notes / temporary working docs (non-canonical)
 apps/
   api/            # Node + Express; SSE; SQLite + filesystem artifacts; voice STT
   web/            # Vite + React SPA (desktop-first deep work)
-  mobile/         # Expo (React Native) capture + light chat (no native widget folder yet)
+  mobile/         # DISCONTINUED for current MVP phase (do not modify unless explicitly requested)
 
 packages/
   contract/       # shared schemas + API contract + SSE event types
@@ -107,8 +107,8 @@ See `docs/index.md` for architecture and product documentation.
 
 Source-of-truth ordering:
 
-- `docs/value-proposition-canvas.md` - canonical customer/value framing
-- `docs/mvp-scope.md` - MVP decisions
+- `docs/mvp-scope.md` - MVP decisions (implementation source of truth)
+- `docs/value-proposition-canvas.md` - strategic customer/value framing
 - `docs/product.md` and `docs/mental-model.md` - overview + core invariants
 
 **IMPORTANT:** Before creating or updating documentation, load the `documentation` skill for guidance on what to document, when to document, and how to structure it.
@@ -181,6 +181,7 @@ Macro UI/UX work includes:
 - Changes may affect multiple packages as the repo grows.
 - Always run `pnpm install` after modifying dependencies.
 - Always run `pnpm <app|package> format && pnpm <app|package> lint` after creating new files.
+- Mobile app work is out of active MVP scope; do not edit `apps/mobile` unless the user explicitly asks.
 - When making architectural changes, ask yourself: "Should this be documented?"
 - Load the `documentation` skill when:
   - Adding new components or subsystems
