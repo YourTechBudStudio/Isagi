@@ -34,6 +34,8 @@ Session and provenance metadata can add spark/task-level linkage.
 
 Default search scope follows active session/execution scope.
 
+If a scope parameter is provided explicitly, it overrides session-default scope for that query.
+
 ## Read-before-write semantics
 
 Notes enforce read-before-write style update safety.
@@ -43,6 +45,12 @@ Expected behavior:
 1. read current note content/version
 2. apply update intent
 3. reject stale writes if note changed since read
+
+Pseudo-contract pattern:
+
+1. `read_note(path) -> { content, revision }`
+2. `create_note(...)` or `patch_note(..., expected_revision=revision)`
+3. write fails when `expected_revision` is stale
 
 Conflict resolution is handled by user/agent retry with fresh read.
 

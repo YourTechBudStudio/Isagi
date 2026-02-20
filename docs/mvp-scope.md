@@ -36,13 +36,14 @@ Triager runs automatically on spark creation, but remains **propose-only**.
 
 Triager behavior in MVP:
 
-- Strengthen unclear sparks via clarifying questions.
+- Start with spark-strengthening questions before proposing routing or object creation.
 - Read area/project/task rules from filesystem configuration.
 - Propose only graph mutations:
   - create spark
   - create project
   - create task
 - Keep all proposed changes in review state until user finalizes.
+- Graph mutations are committed only through the triage `Finalize` flow.
 
 #### 3) Proposal review and atomic finalize
 
@@ -64,6 +65,7 @@ Triager behavior in MVP:
 - Multiple sessions can exist per task.
 - Focus queue is task-first with session-level visibility.
 - Sessions can be resumed from home/dashboard and task views.
+- Non-triage execution sessions do not directly create spark/project/task objects.
 
 #### 6) Command-driven task start
 
@@ -109,6 +111,7 @@ Triager behavior in MVP:
 - **Desktop is the only active product surface for MVP.**
 - Backend remains single-tenant/self-hosted (`SQLite + filesystem + SSE`).
 - OpenCode is the session execution engine; Isagi is orchestration/control UX.
+- Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
 
 ### Core flow
 

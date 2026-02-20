@@ -2,13 +2,13 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-07
+**Last updated:** 2026-02-19
 
 This canvas is the **strategic framing source of truth**.
 
 For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
-**MVP constraint:** In Phase 1, the Triager is **propose-only** (see [MVP scope](./mvp-scope.md)). Any “development” described below should be interpreted as _proposing work items and enabling warm-start sessions_, not auto-generating artifacts.
+**MVP constraint:** In Phase 1, the Triager is **propose-only** (see [MVP scope](./mvp-scope.md)). Any “development” described below should be interpreted as _proposing tasks and enabling warm-start sessions_, not auto-generating outputs.
 
 ---
 
@@ -34,14 +34,14 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 | -------------------------------------------------------------------------------------------------------------------- | -------- |
 | **Activation energy to start** — even though the work is fun, initiating feels like pushing a boulder uphill         | Severe   |
 | **Context loading friction** — priming AI with context, remembering where I left off, explaining what I'm working on | Severe   |
-| **Running dry on social media** — no backlog when I need to post, even though I have ideas all the time              | Severe   |
-| **Research friction** — specifically figuring out _what_ to research                                                 | Severe   |
+| **Backlog fragility** — no healthy queue when it's time to execute                                                   | Severe   |
+| **Direction friction** — uncertainty about what to do next                                                           | Severe   |
 | **Every conversation starts cold** — no continuity between sessions                                                  | Moderate |
-| **Manual rubric execution is sequential and tedious** — storyline alone takes 6 hours across 2 days                  | Moderate |
+| **Sequential execution drag** — parallelizable work gets forced into serial effort                                   | Moderate |
 | **Capture friction** — confusion about where to put ideas                                                            | Moderate |
 | **Ideas decay** — lose context, forget about them, laundry list graveyard                                            | Moderate |
-| **Small/micro rubrics aren't worth creating manually**                                                               | Moderate |
-| **Context scattered** — have to copy-paste artifacts to share with team                                              | Low      |
+| **High setup overhead for small tasks** — context/briefing cost exceeds task size                                    | Moderate |
+| **Context scattered** — notes and decisions are spread across tools                                                  | Low      |
 
 ### Gains
 
@@ -64,15 +64,15 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 | Feature                            | Description                                                                                                    |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Quick capture**                  | Frictionless spark entry from desktop (mobile capture can be layered later).                                   |
+| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                                |
 | **Smart triager**                  | Clarifies sparks and proposes area/project/task creation with reasoning and questions.                         |
-| **Resumable chat agents**          | Each task opens a chat/session surface. Sessions persist and can be resumed.                                   |
+| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                              |
 | **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.                 |
 | **Command-driven execution**       | Task start behavior comes from configurable commands/rules, not hardcoded task types.                          |
 | **Notes model**                    | Durable notes persist with area/project/task provenance and scope-aware retrieval.                             |
 | **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                           |
 | **Generic primitives**             | A small universal model (area/project/task/spark/notes) supports many workflows without bespoke object models. |
-| **External integration ready**     | Merge/release/storage integrations can be layered later without changing the core continuity model.            |
+| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.                         |
 
 ### Pain Relievers
 
@@ -83,11 +83,11 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 | Running out of next actions    | Triager + focus queue keep actionable tasks visible and reviewable.                                                  |
 | "What should I do next?"       | Warm-start sessions and task context reduce decision friction at start time.                                         |
 | Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                           |
-| Sequential rubric execution    | Agents can run in parallel in background. You review at checkpoints.                                                 |
-| Capture friction               | Single quick-add widget. No decision about "where does this go?"                                                     |
-| Ideas decay                    | Triager processes sparks automatically. Mini-development happens without you initiating.                             |
-| Micro-rubrics not worth it     | Rubrics are config, not code. Easy to add lightweight filtering rubrics.                                             |
-| Copy-paste for team            | Export function pushes artifacts to Drive. Thinking here, artifacts there.                                           |
+| Sequential execution drag      | Task-scoped sessions support parallel progress with explicit checkpoints.                                            |
+| Capture friction               | Quick capture avoids early routing decisions.                                                                        |
+| Ideas decay                    | Triager converts sparks into reviewable proposals and follow-on work.                                                |
+| High setup overhead            | Rules and command templates make starting small tasks cheap.                                                         |
+| Context scattered              | Notes and provenance keep decisions and outputs discoverable.                                                        |
 
 ### Gain Creators
 
@@ -107,7 +107,7 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 > **The system eliminates context loading as a barrier to creative work.**
 >
-> Every agent conversation starts pre-loaded with: the spark, relevant research, prior outputs, your rubrics, and a summary that primes you on where things stand.
+> Every agent conversation starts pre-loaded with: the spark, relevant notes, prior decisions, execution context, and a summary that primes you on where things stand.
 >
 > You never start from zero. You never explain what you're working on. You never hunt for documents. You just continue.
 >
@@ -122,7 +122,7 @@ The bottleneck isn't time, organization, or even enjoyment—the work is fun onc
 The difference between:
 
 - "I need to open Notion, start a new doc, pull up my rubric, prime the AI, remember what I was doing..."
-- "I'll just check the app... oh, there's a storyline conversation waiting... let me respond to this one question..."
+- "I'll just check the app... oh, there's a task session waiting... let me respond to this one question..."
 
 ...is the difference between not starting and accidentally doing 2 hours of productive work.
 
@@ -133,7 +133,7 @@ The difference between:
 1. **Warm starts over cold starts** — Every interaction should feel like continuing, not beginning
 2. **Prime the human too** — Agent summarizes state so you remember where you left off
 3. **Co-ownership, not delegation** — You make executive calls; agents help you discover breadth
-4. **Fun parts fast** — Automate the unfun (research, context loading); preserve the fun (creative decisions, brainstorming)
+4. **Fun parts fast** — Automate the unfun (context loading, setup overhead); preserve the fun (creative decisions, execution)
 5. **Desktop-first MVP** — Ship one strong deep-work surface first; add mobile later when core behavior is stable
 6. **Sparks can die** — Active work matters; graveyard of unpromoted sparks is acceptable
-7. **Context compounds** — Every agent output is available to downstream agents
+7. **Context compounds** — Notes and session outputs remain available to downstream work

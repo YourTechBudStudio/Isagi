@@ -4,6 +4,24 @@
 
 This document defines configuration-level rules and defaults for area/project/task behavior.
 
+## Expected filesystem layout
+
+Minimal canonical layout (illustrative):
+
+```txt
+areas/
+  <area-id>/
+    area.yaml
+    projects/
+      <project-id>/
+        project.yaml
+```
+
+Notes:
+
+- Area and project IDs should be stable and filesystem-safe.
+- ID values should match directory names to reduce ambiguity.
+
 ## Core object responsibilities
 
 - **Area**
@@ -43,6 +61,23 @@ Rules:
 - one fixed mode per area
 - no mixed mode ambiguity inside the same area
 
+## Minimal config fields
+
+Minimum expected fields (conceptual):
+
+- area:
+  - `id`
+  - `git_mode`
+  - default execution root policy
+  - command template defaults
+- project:
+  - `id`
+  - parent area reference
+  - optional execution root override
+  - optional command template override
+
+These are intentionally minimal to keep configuration evolvable in MVP.
+
 ## Project creation requirements by git mode
 
 - if `none`: project does not require repo setup
@@ -61,6 +96,12 @@ Template-controlled options can include:
 - setup-required start
 - starter prompt auto-send
 - policy constraints by area/project
+
+Template declaration hierarchy:
+
+- area declares default command templates
+- project may override selected defaults
+- task may reference a template and optionally override specific runtime parameters
 
 ## Future extension points (workflows later)
 

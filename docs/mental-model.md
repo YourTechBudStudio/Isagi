@@ -78,6 +78,7 @@ Worktree lifecycle is task-scoped, not session-scoped.
 4. **Worktree lifecycle is task-bound.**
 5. **Task close is safety-gated.**
 6. **Notes are the MVP output layer.**
+7. **Only triage/finalize mutates graph objects.** Execution sessions do not directly create spark/project/task objects.
 
 ---
 
@@ -114,7 +115,7 @@ When `project_repo` is active, project creation requires repo initialization via
 Triage flow:
 
 1. Spark is created.
-2. Triager runs and asks clarifying questions when needed.
+2. Triager clarifies/strengthens the spark first (questions before routing/proposals when needed).
 3. Triager proposes graph changes (spark/project/task only).
 4. User reviews proposals in a review surface.
 5. Finalize applies approved proposals atomically.
@@ -133,6 +134,8 @@ Triage output states include proposed/approved/rejected/applied semantics in imp
 6. If task has worktree, sessions reuse that worktree.
 7. Close task requires resolved repo state.
 8. On success, task is done, sessions close, worktree/branch clean up.
+
+Runtime failure, verification, and sync details are canonical in `docs/architecture/execution-model.md`.
 
 ---
 

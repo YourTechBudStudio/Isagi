@@ -35,6 +35,8 @@
    - ask triager via chat to revise proposals
    - manually edit proposal fields where allowed
 
+Only the triage review/finalize path mutates graph objects. Execution sessions do not directly create spark/project/task objects.
+
 ## Scenario C: Finalize and object creation (atomic)
 
 1. User clicks `Finalize`.
@@ -90,7 +92,7 @@ Examples:
 ## Error and recovery paths
 
 - **Triage apply failure:** keep triage open, show failure details, allow correction and retry.
-- **Setup failure on task start:** show full error, allow retry.
+- **Setup failure on task start:** show full error, allow retry, and clean failed setup artifacts when safe to do so.
 - **Close-task verification failure:** block close, show reason and output details.
 - **Network unavailable:** block close checks that require remote verification.
 
@@ -98,6 +100,7 @@ Examples:
 
 - Triager is propose-only.
 - Finalize is atomic.
+- Only triage/finalize mutates graph objects.
 - Every task belongs to a project.
 - Execution root resolution is deterministic.
 - Worktree lifecycle is task-scoped.
