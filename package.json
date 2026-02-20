@@ -7,6 +7,7 @@
   "scripts": {
     "api": "pnpm --filter @isagi/api",
     "mobile": "pnpm --filter @isagi/mobile",
+    "web": "pnpm --filter @isagi/web",
     "lint": "pnpm run -r --parallel lint",
     "format": "pnpm run -r --parallel format",
     "typecheck": "pnpm run -r --parallel typecheck",
