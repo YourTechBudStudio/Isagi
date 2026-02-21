@@ -35,16 +35,14 @@ Target structure (React Router + Vite convention):
 ```
 apps/web/
 ├── src/
-│   ├── routes/               # Route components and layouts
+│   ├── pages/                # App pages and layouts
 │   ├── components/           # Reusable UI components
-│   ├── hooks/                # Custom React hooks
-│   ├── utils/                # Pure utilities/helpers
+│   ├── lib/                  # Pure utilities/helpers
 │   ├── services/             # API client(s), data fetching
 │   ├── store/                # State management (if/when introduced)
-│   ├── constants/            # App constants (avoid magic strings)
-│   ├── App.tsx               # Router configuration and global providers
+│   ├── routes.tsx            # Router configuration and global providers
 │   ├── main.tsx              # App entry point
-│   └── index.css             # Tailwind v4 theme imports
+│   └── global.css            # Tailwind v4 theme imports
 ├── index.html
 ├── vite.config.ts
 ├── eslint.config.js
