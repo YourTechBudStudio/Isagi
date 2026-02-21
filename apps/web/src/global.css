@@ -1,1 +1,40 @@
 @import "tailwindcss";
+@import "@fontsource/sora/400.css";
+@import "@fontsource/sora/500.css";
+@import "@fontsource/sora/600.css";
+@import "@fontsource/sora/700.css";
+@import "@fontsource/source-sans-3/400.css";
+@import "@fontsource/source-sans-3/500.css";
+@import "@fontsource/source-sans-3/600.css";
+@import "@fontsource/source-sans-3/700.css";
+
+@theme {
+  --color-canvas: #24273a;
+  --color-canvas-elevated: #363a4f;
+  --color-canvas-subtle: #2e3244;
+  --color-text-primary: #cad3f5;
+  --color-text-secondary: #a5adcb;
+  --color-text-tertiary: #6e738d;
+  --color-accent-blue: #8aadf4;
+  --color-accent-violet: #c6a0f6;
+  --color-accent-amber: #f5a97f;
+  --color-accent-green: #a6da95;
+  --color-accent-red: #ed8796;
+  --color-accent-cyan: #91d7e3;
+  --color-spark: #7dc4e4;
+
+  --font-display: "Sora", sans-serif;
+  --font-body: "Source Sans 3", sans-serif;
+}
+
+/* Custom scrollbar to keep it clean */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--color-canvas-elevated);
+  border-radius: 20px;
+}
