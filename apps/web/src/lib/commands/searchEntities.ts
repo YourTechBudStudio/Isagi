@@ -1,4 +1,5 @@
-import { homeFocusQueueItems, homeSparks } from "../mock/home.mock";
+import { homeFocusQueueItems, homeSparks } from "@/lib/mock/home.mock";
+
 import { COMMANDS } from "./registry";
 import type { ArgumentType } from "./types";
 
@@ -20,7 +21,7 @@ export interface EntitySearchResults {
   results: SearchResult[];
 }
 
-export function useEntitySearch(
+export function searchEntities(
   type: ArgumentType | null,
   filterText: string,
   contextId?: string,

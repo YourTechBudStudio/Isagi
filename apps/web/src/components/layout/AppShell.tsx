@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
 
+import { CommandPalette } from "@/components/command-palette/CommandPalette";
 import { cn } from "@/lib/cn";
-
-import { CommandPalette } from "../command-palette/CommandPalette";
 
 type AppShellProps = {
   readonly sidebar: ReactNode;

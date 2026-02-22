@@ -40,7 +40,7 @@ apps/web/
 │   ├── components/           # Reusable UI components
 │   ├── lib/                  # Pure utilities/helpers
 │   ├── services/             # API client(s), data fetching
-│   ├── store/                # State management (if/when introduced)
+│   ├── stores/               # State management (if/when introduced)
 │   ├── routes.tsx            # Router configuration and global providers
 │   ├── main.tsx              # App entry point
 │   └── global.css            # Tailwind v4 theme imports
@@ -63,7 +63,7 @@ apps/web/
 
 ### Zustand rules (copied from player-view)
 
-- Avoid using the store object directly. Put selectors in `src/store/{store_name}.selectors.ts`.
+- Avoid using the store object directly. Put selectors in `src/stores/{store_name}.selectors.ts`.
 - Do not export the store object. For direct access, add selector functions that use `getState()` and return a subsection.
 - Selectors should return only what the component needs; prefer filtering inside selectors (use shallow selection to prevent re-renders).
 - Group all actions under an `actions` field; provide a selector that returns the actions object.
