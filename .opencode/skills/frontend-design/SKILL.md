@@ -86,7 +86,7 @@ Guidelines:
 - **Stay useful first**: clarity beats jokes. Humor should _support_ comprehension, not replace it.
 - **Short punchlines**: one good line per surface. Avoid paragraph jokes or repeated bits.
 - **Comedic-villain, not scary**: no violent/abusive language, no real-world harm, no coercive threats.
-- **Nerd seasoning**: sprinkle references (compilers, diff/merge, stack traces, cron jobs, cache invalidation) but don’t gate the UI behind in-jokes.
+- **Developer-centric humor**: The humor should be explicitly for devs. Lean into shared developer pain points, engineering culture, and inside jokes (e.g., merge conflicts, ignored lint rules, cache invalidation, pushing to production on Fridays, blaming DNS) rather than generic tech humor. However, ensure it doesn't gate the UI usability behind these jokes.
 - **App speaks as “I”** when helpful (“I queued this for you.”), but avoid cringe roleplay.
 - **Error states are kind**: funny, but still actionable.
 
