@@ -26,6 +26,11 @@ import {
 import { homeSidebarItems } from "@/lib/mock/sidebar.mock";
 
 export default function Home() {
+  const isMac =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+  const commandPaletteShortcut = isMac ? "⌘P" : "Ctrl+P";
+
   return (
     <AppShell
       sidebar={<ContextSidebar items={homeSidebarItems} />}
@@ -40,7 +45,7 @@ export default function Home() {
         <header className="z-20 flex h-16 items-center justify-end px-8">
           <div className="text-text-secondary flex items-center gap-3 text-sm opacity-60 transition-opacity hover:opacity-100">
             <kbd className="text-text-primary rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] shadow-sm">
-              ⌘K
+              {commandPaletteShortcut}
             </kbd>
             <span className="text-xs font-medium tracking-wide uppercase">
               Command Palette
