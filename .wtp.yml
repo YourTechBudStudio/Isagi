@@ -1,0 +1,5 @@
+hooks:
+  post_create:
+    # Copy real files from the MAIN worktree into the NEW worktree
+    - type: command
+      command: pnpm install
