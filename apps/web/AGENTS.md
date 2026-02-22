@@ -16,6 +16,7 @@ This is a Vite + React SPA for deep work and desktop-first flows.
 - React 19 + React Compiler
 - React Router (declarative routing mode)
 - Tailwind CSS v4 (styling)
+- Lucide react for icons
 - oRPC (end-to-end type-safe API client)
 - TanStack React Query
 - Zustand
