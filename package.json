@@ -29,6 +29,10 @@
       "lightningcss": "1.30.1",
       "lightningcss@1.31.1": "1.30.1",
       "react-native-css>lightningcss": "1.30.1"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "unrs-resolver"
+    ]
   }
 }
