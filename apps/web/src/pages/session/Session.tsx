@@ -2,44 +2,33 @@ import { motion } from "framer-motion";
 import {
   CheckCircle2,
   ChevronRight,
-  CircleDashed,
-  Code2,
-  CornerDownRight,
-  FileCode,
-  GitBranch,
-  PanelRight,
   Sparkles,
-  Terminal,
   TerminalSquare,
   X,
-  XCircle,
 } from "lucide-react";
 import { useState } from "react";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { ContextSidebar } from "@/components/layout/ContextSidebar";
 import { ScrollableArea } from "@/components/layout/ScrollableArea";
-import { Button } from "@/components/ui/Button";
+import { Composer } from "@/components/session/Composer";
+import { ProposalCard } from "@/components/session/ProposalCard";
+import { SessionActionBar } from "@/components/session/SessionActionBar";
 import { IconButton } from "@/components/ui/IconButton";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-import { cn } from "@/lib/cn";
-
-const sidebarItems = [
-  { id: "auth", label: "Refactor Auth Flow", state: "active" },
-  {
-    id: "dark-mode",
-    label: 'Triage: "Dark mode toggle"',
-    state: "highlighted",
-  },
-  { id: "db-research", label: "Research: sqlite vs turso" },
-] as const;
+import {
+  sessionComposerConfig,
+  sessionHeader,
+  sessionProposals,
+} from "@/lib/mock/session.mock";
+import { sessionSidebarItems } from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   return (
     <AppShell
-      sidebar={<ContextSidebar items={sidebarItems} />}
+      sidebar={<ContextSidebar items={sessionSidebarItems} />}
       atmosphere={
         <div className="pointer-events-none absolute inset-0 mix-blend-screen">
           <div className="from-accent-blue/2 to-accent-violet/3 absolute inset-0 bg-linear-to-br via-transparent" />
@@ -47,61 +36,13 @@ export default function Session() {
       }
     >
       <main className="relative z-10 flex flex-1 flex-col">
-        <header className="pointer-events-none absolute top-6 right-6 left-6 z-20 flex items-center justify-between">
-          <div className="text-text-tertiary pointer-events-auto flex items-center gap-2 text-sm font-medium">
-            <span className="hover:text-text-secondary cursor-pointer transition-colors">
-              Frontend
-            </span>
-            <ChevronRight className="h-3.5 w-3.5 opacity-50" />
-            <span className="hover:text-text-secondary cursor-pointer transition-colors">
-              Spark System
-            </span>
-            <ChevronRight className="h-3.5 w-3.5 opacity-50" />
-            <span className="text-text-primary">Triage: Dark mode toggle</span>
-          </div>
-
-          <div className="bg-canvas-elevated/80 pointer-events-auto flex items-center gap-3 rounded-2xl border border-white/10 p-1.5 shadow-lg backdrop-blur-md">
-            <div className="flex items-center gap-2 border-r border-white/10 px-3 py-1">
-              <GitBranch className="text-text-secondary h-4 w-4" />
-              <span className="text-text-secondary font-mono text-sm">
-                main
-              </span>
-              <div
-                className="bg-accent-amber ml-1 h-1.5 w-1.5 animate-pulse rounded-full"
-                title="Uncommitted changes"
-              />
-            </div>
-
-            <div className="flex items-center gap-1 px-1">
-              <IconButton
-                icon={<Terminal className="h-4 w-4" />}
-                title="Open Terminal"
-              />
-              <IconButton
-                icon={<Code2 className="h-4 w-4" />}
-                title="Open VS Code"
-              />
-            </div>
-
-            <Button
-              variant="primary"
-              size="md"
-              leadingIcon={<CheckCircle2 className="h-4 w-4" />}
-              className="bg-accent-violet hover:bg-accent-violet/90 text-canvas ml-1"
-            >
-              Complete Task
-            </Button>
-
-            <div className="ml-1 border-l border-white/10 pl-1">
-              <IconButton
-                icon={<PanelRight className="h-4 w-4" />}
-                onClick={() => setRightPanelOpen(!rightPanelOpen)}
-                title="Toggle Artifacts"
-                className={cn(rightPanelOpen && "text-text-primary bg-white/5")}
-              />
-            </div>
-          </div>
-        </header>
+        <SessionActionBar
+          breadcrumbs={sessionHeader.breadcrumbs}
+          currentContext={sessionHeader.currentContext}
+          branchName={sessionHeader.branchName}
+          isArtifactsOpen={rightPanelOpen}
+          onToggleArtifacts={() => setRightPanelOpen(!rightPanelOpen)}
+        />
 
         <ScrollableArea className="flex-1 px-12 pt-24 pb-48">
           <div className="mx-auto flex max-w-3xl flex-col gap-8">
@@ -177,7 +118,8 @@ export default function Session() {
               <div className="text-text-primary space-y-4 text-[15px] leading-relaxed">
                 <p>
                   I&apos;ve checked the styles. We are currently hardcoded to
-                  the <strong>Catppuccin Macchiato</strong> dark theme.
+                  the
+                  <strong> Catppuccin Macchiato</strong> dark theme.
                 </p>
                 <p>
                   To implement a toggle, we&apos;ll need to define a light theme
@@ -195,79 +137,13 @@ export default function Session() {
           </div>
         </ScrollableArea>
 
-        <div className="from-canvas via-canvas pointer-events-none absolute right-0 bottom-0 left-0 bg-linear-to-t to-transparent p-6 pt-12">
-          <div className="pointer-events-auto mx-auto max-w-3xl">
-            <div className="bg-canvas-elevated focus-within:border-accent-violet/50 focus-within:ring-accent-violet/20 overflow-hidden rounded-2xl border border-white/10 shadow-2xl transition-all focus-within:ring-1">
-              <div className="p-4 pb-2">
-                <textarea
-                  className="text-text-primary placeholder:text-text-tertiary max-h-50 min-h-11 w-full resize-none bg-transparent text-[15px] focus:outline-none"
-                  placeholder="Tell me what to do... (/ for commands)"
-                  rows={1}
-                />
-              </div>
-
-              <div className="flex items-center justify-between border-t border-white/5 bg-white/2 px-3 py-2.5">
-                <div className="flex items-center gap-1.5">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    leadingIcon={
-                      <Sparkles className="text-accent-violet h-3.5 w-3.5" />
-                    }
-                    trailingIcon={
-                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                    }
-                    className="font-medium"
-                  >
-                    Brainstorming
-                  </Button>
-
-                  <div className="mx-1 h-3 w-px bg-white/10" />
-
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    trailingIcon={
-                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                    }
-                    className="font-medium"
-                  >
-                    Claude 3.5 Sonnet
-                  </Button>
-
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    trailingIcon={
-                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                    }
-                    className="font-medium"
-                  >
-                    Fast
-                  </Button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <IconButton
-                    icon={<FileCode className="h-4 w-4" />}
-                    variant="subtle"
-                    size="sm"
-                  />
-                  <IconButton
-                    icon={<CornerDownRight className="h-4 w-4" />}
-                    size="sm"
-                    className="text-text-primary bg-white/10 hover:bg-white/20"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="text-text-tertiary mt-3 text-center text-[11px] font-light">
-              Isagi can make mistakes. Verify code before deploying to
-              production.
-            </div>
-          </div>
-        </div>
+        <Composer
+          modeLabel={sessionComposerConfig.modeLabel}
+          modelLabel={sessionComposerConfig.modelLabel}
+          speedLabel={sessionComposerConfig.speedLabel}
+          placeholder={sessionComposerConfig.placeholder}
+          disclaimer={sessionComposerConfig.disclaimer}
+        />
       </main>
 
       <motion.div
@@ -296,105 +172,16 @@ export default function Session() {
           </div>
 
           <ScrollableArea className="flex-1 space-y-4 p-5">
-            <SurfaceCard tone="green" className="rounded-xl p-4 transition-all">
-              <div className="mb-2 flex items-start justify-between">
-                <div className="text-accent-green flex items-center gap-2 text-sm font-semibold">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Approved
-                </div>
-              </div>
-              <h3 className="text-text-primary mb-1 font-medium">
-                Create Project
-              </h3>
-              <p className="text-text-secondary text-sm">Theme System</p>
-            </SurfaceCard>
-
-            <SurfaceCard
-              tone="elevated"
-              className="rounded-xl border-white/5 bg-white/2 p-4 opacity-60 grayscale transition-all"
-            >
-              <div className="mb-2 flex items-start justify-between">
-                <div className="text-text-tertiary flex items-center gap-2 text-sm font-semibold">
-                  <XCircle className="h-4 w-4" />
-                  Rejected
-                </div>
-                <button className="text-text-tertiary hover:text-text-primary text-xs underline decoration-white/20 underline-offset-2">
-                  Restore
-                </button>
-              </div>
-              <h3 className="text-text-primary mb-1 font-medium line-through decoration-white/20">
-                Create Task
-              </h3>
-              <p className="text-text-secondary text-sm line-through decoration-white/20">
-                Refactor global.css
-              </p>
-            </SurfaceCard>
-
-            <SurfaceCard
-              tone="violet"
-              className="group relative overflow-hidden rounded-xl p-4"
-            >
-              <div className="bg-accent-violet/10 pointer-events-none absolute top-0 right-0 h-24 w-24 translate-x-1/2 -translate-y-1/2 rounded-full blur-2xl" />
-
-              <div className="relative z-10 mb-3 flex items-start justify-between">
-                <div className="text-accent-violet flex items-center gap-2 text-sm font-semibold">
-                  <CircleDashed className="h-4 w-4" />
-                  Pending Review
-                </div>
-                <button className="text-text-tertiary hover:text-text-primary text-xs transition-colors">
-                  Edit
-                </button>
-              </div>
-
-              <div className="relative z-10 mb-4">
-                <h3 className="text-text-primary mb-1 text-[15px] font-medium">
-                  Create Task
-                </h3>
-                <p className="text-text-secondary mb-3 text-sm">
-                  Implement Dark Mode Toggle
-                </p>
-                <div className="text-text-tertiary rounded-lg bg-black/20 p-2.5 font-mono text-xs">
-                  Depends on: Project "Theme System"
-                </div>
-              </div>
-
-              <div className="relative z-10 flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="md"
-                  className="bg-accent-green/10 hover:bg-accent-green/20 text-accent-green border-accent-green/20 flex-1 border"
-                >
-                  Approve
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="md"
-                  className="bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border-accent-red/20 flex-1 border"
-                >
-                  Reject
-                </Button>
-              </div>
-            </SurfaceCard>
+            {sessionProposals.map(proposal => (
+              <ProposalCard
+                key={proposal.id}
+                status={proposal.status}
+                title={proposal.title}
+                subtitle={proposal.subtitle}
+                dependencyLabel={proposal.dependencyLabel}
+              />
+            ))}
           </ScrollableArea>
-
-          <div className="bg-canvas/50 border-t border-white/5 p-4 backdrop-blur-md">
-            <div className="flex flex-col gap-2">
-              <Button
-                variant="primary"
-                size="lg"
-                className="w-full hover:scale-[1.02]"
-              >
-                Finalize All
-              </Button>
-              <Button
-                variant="ghost"
-                size="lg"
-                className="text-text-secondary hover:text-text-primary w-full border border-white/10"
-              >
-                Reject All
-              </Button>
-            </div>
-          </div>
         </motion.aside>
       </motion.div>
     </AppShell>

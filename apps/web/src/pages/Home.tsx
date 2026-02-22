@@ -8,6 +8,8 @@ import {
   TerminalSquare,
 } from "lucide-react";
 
+import { FocusQueueItem } from "@/components/home/FocusQueueItem";
+import { SparkCard } from "@/components/home/SparkCard";
 import { AppShell } from "@/components/layout/AppShell";
 import { ContextSidebar } from "@/components/layout/ContextSidebar";
 import { ScrollableArea } from "@/components/layout/ScrollableArea";
@@ -15,23 +17,18 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-
-const sidebarItems = [
-  { id: "auth", label: "Refactor Auth Flow", state: "active" },
-  { id: "dark-mode", label: 'Triage: "Dark mode toggle"' },
-  { id: "db-research", label: "Research: sqlite vs turso" },
-] as const;
-
-const sparks = [
-  { id: "worktree", title: "Git worktree parallelization", time: "2h ago" },
-  { id: "mock", title: "New dashboard mock", time: "4h ago" },
-  { id: "cra", title: "Migrate away from CRA", time: "Yesterday" },
-] as const;
+import {
+  homeFocusQueueItems,
+  homeInboxSparkCount,
+  homeResumeContext,
+  homeSparks,
+} from "@/lib/mock/home.mock";
+import { homeSidebarItems } from "@/lib/mock/sidebar.mock";
 
 export default function Home() {
   return (
     <AppShell
-      sidebar={<ContextSidebar items={sidebarItems} />}
+      sidebar={<ContextSidebar items={homeSidebarItems} />}
       atmosphere={
         <div className="pointer-events-none absolute inset-0 mix-blend-screen">
           <div className="from-accent-blue/[0.03] to-accent-violet/[0.04] absolute inset-0 bg-gradient-to-br via-transparent" />
@@ -91,18 +88,18 @@ export default function Home() {
                   <div>
                     <div className="mb-2 flex items-center gap-3">
                       <span className="text-text-primary group-hover:text-accent-blue text-xl font-medium transition-colors duration-300">
-                        Refactor Auth Flow
+                        {homeResumeContext.title}
                       </span>
                       <Badge
                         tone="blue"
                         icon={<Clock className="h-3 w-3" />}
                         className="border-accent-blue/10"
                       >
-                        Last active 14m ago
+                        {homeResumeContext.lastActiveLabel}
                       </Badge>
                     </div>
                     <p className="text-text-secondary text-sm font-light">
-                      Project: Spark System MVP
+                      {homeResumeContext.projectLabel}
                     </p>
                   </div>
                   <Button
@@ -132,43 +129,25 @@ export default function Home() {
             />
 
             <div className="space-y-3">
-              <SurfaceCard
-                tone="elevated"
-                interactive
-                className="group flex cursor-pointer items-center justify-between p-5 shadow-sm hover:border-white/[0.08] hover:bg-white/[0.04]"
-              >
-                <div className="flex flex-col">
-                  <span className="group-hover:text-accent-green mb-1 text-[15px] font-medium transition-colors">
-                    Implement desktop layout shell
-                  </span>
-                  <span className="text-text-tertiary text-xs font-medium tracking-wide uppercase">
-                    Project: Spark System MVP
-                  </span>
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leadingIcon={<TerminalSquare className="h-3.5 w-3.5" />}
-                  className="scale-95 opacity-0 group-hover:scale-100 group-hover:opacity-100"
-                >
-                  Start Session
-                </Button>
-              </SurfaceCard>
-
-              <SurfaceCard
-                tone="elevated"
-                interactive
-                className="group flex cursor-pointer items-center justify-between p-5 shadow-sm hover:border-white/[0.08] hover:bg-white/[0.04]"
-              >
-                <div className="flex flex-col">
-                  <span className="group-hover:text-accent-green mb-1 text-[15px] font-medium transition-colors">
-                    Write setup instructions for SQLite
-                  </span>
-                  <span className="text-text-tertiary text-xs font-medium tracking-wide uppercase">
-                    Project: Backend Foundation
-                  </span>
-                </div>
-              </SurfaceCard>
+              {homeFocusQueueItems.map(item => (
+                <FocusQueueItem
+                  key={item.id}
+                  title={item.title}
+                  project={item.project}
+                  action={
+                    item.actionLabel ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        leadingIcon={<TerminalSquare className="h-3.5 w-3.5" />}
+                        className="scale-95 opacity-0 group-hover:scale-100 group-hover:opacity-100"
+                      >
+                        {item.actionLabel}
+                      </Button>
+                    ) : null
+                  }
+                />
+              ))}
             </div>
           </motion.section>
 
@@ -187,35 +166,18 @@ export default function Home() {
                   trailingIcon={<ArrowRight className="h-4 w-4" />}
                   className="text-text-tertiary hover:text-accent-violet font-medium"
                 >
-                  View all 12 sparks
+                  View all {homeInboxSparkCount} sparks
                 </Button>
               }
             />
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {sparks.map(spark => (
-                <div key={spark.id} className="group relative cursor-pointer">
-                  <div className="from-accent-violet/10 to-accent-blue/10 absolute -inset-0.5 rounded-2xl bg-gradient-to-br opacity-0 blur transition duration-500 group-hover:opacity-100" />
-                  <SurfaceCard
-                    tone="subtle"
-                    interactive
-                    className="hover:bg-canvas-elevated relative flex h-full flex-col justify-between p-5 transition-colors duration-300"
-                  >
-                    <div>
-                      <p className="text-text-primary group-hover:text-accent-violet mb-3 text-[15px] leading-snug font-medium transition-colors">
-                        "{spark.title}"
-                      </p>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-text-tertiary text-xs">
-                        {spark.time}
-                      </span>
-                      <div className="bg-accent-violet/10 text-accent-violet flex h-6 w-6 items-center justify-center rounded-full opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-                        <ArrowRight className="h-3 w-3" />
-                      </div>
-                    </div>
-                  </SurfaceCard>
-                </div>
+              {homeSparks.map(spark => (
+                <SparkCard
+                  key={spark.id}
+                  title={spark.title}
+                  time={spark.time}
+                />
               ))}
             </div>
           </motion.section>
