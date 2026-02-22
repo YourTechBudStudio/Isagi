@@ -282,6 +282,9 @@ importers:
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
+      zustand:
+        specifier: ^5.0.11
+        version: 5.0.11(@types/react@19.2.14)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
       '@isagi/tooling':
         specifier: workspace:*
@@ -12298,6 +12301,11 @@ snapshots:
     dependencies:
       react: 19.1.0
 
+  use-sync-external-store@1.6.0(react@19.2.4):
+    dependencies:
+      react: 19.2.4
+    optional: true
+
   utils-merge@1.0.1: {}
 
   uuid@7.0.3: {}
@@ -12481,3 +12489,9 @@ snapshots:
       '@types/react': 19.1.17
       react: 19.1.0
       use-sync-external-store: 1.6.0(react@19.1.0)
+
+  zustand@5.0.11(@types/react@19.2.14)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4)):
+    optionalDependencies:
+      '@types/react': 19.2.14
+      react: 19.2.4
+      use-sync-external-store: 1.6.0(react@19.2.4)

@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
+import { CommandPalette } from "../command-palette/CommandPalette";
+
 type AppShellProps = {
   readonly sidebar: ReactNode;
   readonly children: ReactNode;
@@ -22,6 +24,7 @@ export function AppShell({
         className,
       )}
     >
+      <CommandPalette />
       {atmosphere}
       {sidebar}
       {children}
