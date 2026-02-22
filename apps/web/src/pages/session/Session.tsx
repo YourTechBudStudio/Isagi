@@ -16,56 +16,38 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { AppShell } from "@/components/layout/AppShell";
+import { ContextSidebar } from "@/components/layout/ContextSidebar";
+import { ScrollableArea } from "@/components/layout/ScrollableArea";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { cn } from "@/lib/cn";
+
+const sidebarItems = [
+  { id: "auth", label: "Refactor Auth Flow", state: "active" },
+  {
+    id: "dark-mode",
+    label: 'Triage: "Dark mode toggle"',
+    state: "highlighted",
+  },
+  { id: "db-research", label: "Research: sqlite vs turso" },
+] as const;
+
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   return (
-    <div className="bg-canvas text-text-primary font-body selection:bg-accent-violet/30 relative flex h-screen w-full overflow-hidden">
-      {/* Background Atmosphere */}
-      <div className="pointer-events-none absolute inset-0 mix-blend-screen">
-        <div className="from-accent-blue/2 to-accent-violet/3 absolute inset-0 bg-linear-to-br via-transparent" />
-      </div>
-
-      {/* Left Sidebar (Active Sessions) - Kept identical to Home for continuity */}
-      <aside className="bg-canvas relative z-10 flex w-70 flex-col justify-between border-r border-white/5 p-5">
-        <div>
-          <div className="mb-10">
-            <h3 className="text-text-tertiary mb-4 flex items-center gap-2 text-xs font-semibold tracking-wider uppercase">
-              <div className="bg-accent-green/80 h-1.5 w-1.5 rounded-full shadow-[0_0_8px_rgba(166,218,149,0.8)]" />
-              Active Context
-            </h3>
-            <div className="space-y-1.5">
-              <button className="group flex w-full items-center justify-between rounded-xl border border-white/3 bg-white/4 px-3 py-2.5 text-left text-sm shadow-sm transition-all duration-300 hover:bg-white/6">
-                <span className="truncate pr-2 font-medium">
-                  Refactor Auth Flow
-                </span>
-                <ChevronRight className="text-text-tertiary h-4 w-4 -translate-x-1 opacity-0 transition-opacity duration-300 group-hover:translate-x-0 group-hover:opacity-100" />
-              </button>
-              <button className="text-accent-violet group flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-300">
-                <span className="truncate pr-2">
-                  Triage: "Dark mode toggle"
-                </span>
-              </button>
-              <button className="text-text-secondary group flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-300 hover:bg-white/3">
-                <span className="truncate pr-2">Research: sqlite vs turso</span>
-              </button>
-            </div>
-          </div>
+    <AppShell
+      sidebar={<ContextSidebar items={sidebarItems} />}
+      atmosphere={
+        <div className="pointer-events-none absolute inset-0 mix-blend-screen">
+          <div className="from-accent-blue/2 to-accent-violet/3 absolute inset-0 bg-linear-to-br via-transparent" />
         </div>
-
-        <div className="text-text-secondary hover:text-text-primary group flex cursor-pointer items-center gap-3 px-2 py-2 text-sm transition-colors">
-          <div className="bg-canvas-elevated flex h-8 w-8 items-center justify-center rounded-full border border-white/5 shadow-sm transition-colors group-hover:border-white/10">
-            I
-          </div>
-          <span className="font-medium">Isagi Core</span>
-        </div>
-      </aside>
-
-      {/* Center Workspace */}
+      }
+    >
       <main className="relative z-10 flex flex-1 flex-col">
-        {/* Floating Action Bar / Header */}
         <header className="pointer-events-none absolute top-6 right-6 left-6 z-20 flex items-center justify-between">
-          {/* Breadcrumbs (Left) */}
           <div className="text-text-tertiary pointer-events-auto flex items-center gap-2 text-sm font-medium">
             <span className="hover:text-text-secondary cursor-pointer transition-colors">
               Frontend
@@ -78,7 +60,6 @@ export default function Session() {
             <span className="text-text-primary">Triage: Dark mode toggle</span>
           </div>
 
-          {/* Action Bar (Right) */}
           <div className="bg-canvas-elevated/80 pointer-events-auto flex items-center gap-3 rounded-2xl border border-white/10 p-1.5 shadow-lg backdrop-blur-md">
             <div className="flex items-center gap-2 border-r border-white/10 px-3 py-1">
               <GitBranch className="text-text-secondary h-4 w-4" />
@@ -92,41 +73,38 @@ export default function Session() {
             </div>
 
             <div className="flex items-center gap-1 px-1">
-              <button
-                className="text-text-secondary hover:text-text-primary rounded-xl p-2 transition-colors hover:bg-white/5"
+              <IconButton
+                icon={<Terminal className="h-4 w-4" />}
                 title="Open Terminal"
-              >
-                <Terminal className="h-4 w-4" />
-              </button>
-              <button
-                className="text-text-secondary hover:text-text-primary rounded-xl p-2 transition-colors hover:bg-white/5"
+              />
+              <IconButton
+                icon={<Code2 className="h-4 w-4" />}
                 title="Open VS Code"
-              >
-                <Code2 className="h-4 w-4" />
-              </button>
+              />
             </div>
 
-            <button className="bg-accent-violet hover:bg-accent-violet/90 text-canvas ml-1 flex items-center gap-2 rounded-xl px-4 py-1.5 text-sm font-semibold shadow-sm transition-transform duration-300 hover:scale-105">
-              <CheckCircle2 className="h-4 w-4" />
+            <Button
+              variant="primary"
+              size="md"
+              leadingIcon={<CheckCircle2 className="h-4 w-4" />}
+              className="bg-accent-violet hover:bg-accent-violet/90 text-canvas ml-1"
+            >
               Complete Task
-            </button>
+            </Button>
 
             <div className="ml-1 border-l border-white/10 pl-1">
-              <button
-                className={`text-text-secondary hover:text-text-primary rounded-xl p-2 transition-colors hover:bg-white/5 ${rightPanelOpen ? "text-text-primary bg-white/5" : ""}`}
+              <IconButton
+                icon={<PanelRight className="h-4 w-4" />}
                 onClick={() => setRightPanelOpen(!rightPanelOpen)}
                 title="Toggle Artifacts"
-              >
-                <PanelRight className="h-4 w-4" />
-              </button>
+                className={cn(rightPanelOpen && "text-text-primary bg-white/5")}
+              />
             </div>
           </div>
         </header>
 
-        {/* Chat Feed */}
-        <div className="custom-scrollbar flex-1 overflow-y-auto px-12 pt-24 pb-48">
+        <ScrollableArea className="flex-1 px-12 pt-24 pb-48">
           <div className="mx-auto flex max-w-3xl flex-col gap-8">
-            {/* User Message */}
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -140,7 +118,6 @@ export default function Session() {
               </div>
             </motion.div>
 
-            {/* Agent Message (Triager) */}
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -154,7 +131,6 @@ export default function Session() {
                 </span>
               </div>
 
-              {/* Reasoning Block */}
               <div className="border-accent-violet/30 border-l-2 py-1 pl-4">
                 <div className="text-text-secondary hover:text-text-primary mb-2 flex cursor-pointer items-center gap-2 text-sm font-medium transition-colors">
                   <ChevronRight className="h-3.5 w-3.5 rotate-90" />
@@ -166,13 +142,15 @@ export default function Session() {
                   the canonical palette, which is inherently dark. A "dark mode
                   toggle" might imply they want a light mode variant (Latte?),
                   or they want to toggle between system default and forced
-                  Macchiato. Let's check `global.css` to see how Tailwind v4 is
-                  configured for themes.
+                  Macchiato. Let&apos;s check `global.css` to see how Tailwind
+                  v4 is configured for themes.
                 </div>
               </div>
 
-              {/* Tool Call */}
-              <div className="bg-canvas-elevated my-2 overflow-hidden rounded-xl border border-white/5 font-mono text-[13px]">
+              <SurfaceCard
+                tone="elevated"
+                className="bg-canvas-elevated my-2 overflow-hidden rounded-xl border-white/5 font-mono text-[13px]"
+              >
                 <div className="flex items-center justify-between border-b border-white/5 bg-white/2 px-4 py-2">
                   <div className="text-text-secondary flex items-center gap-2">
                     <TerminalSquare className="h-3.5 w-3.5" />
@@ -194,35 +172,32 @@ export default function Session() {
                     </code>
                   </pre>
                 </div>
-              </div>
+              </SurfaceCard>
 
-              {/* Text Response */}
               <div className="text-text-primary space-y-4 text-[15px] leading-relaxed">
                 <p>
-                  I've checked the styles. We are currently hardcoded to the{" "}
-                  <strong>Catppuccin Macchiato</strong> dark theme.
+                  I&apos;ve checked the styles. We are currently hardcoded to
+                  the <strong>Catppuccin Macchiato</strong> dark theme.
                 </p>
                 <p>
-                  To implement a toggle, we'll need to define a light theme
+                  To implement a toggle, we&apos;ll need to define a light theme
                   palette (like Catppuccin Latte) in CSS variables and add a
                   state manager (Zustand or React Context) to toggle a `.dark`
                   or `.theme-latte` class on the root HTML element.
                 </p>
                 <p className="text-accent-blue font-medium">
-                  I'm plotting a scheme. I've drafted some proposals in the
-                  panel on the right. Review them, and if they look sufficiently
-                  diabolical, we can finalize and get to building.
+                  I&apos;m plotting a scheme. I&apos;ve drafted some proposals
+                  in the panel on the right. Review them, and if they look
+                  sufficiently diabolical, we can finalize and get to building.
                 </p>
               </div>
             </motion.div>
           </div>
-        </div>
+        </ScrollableArea>
 
-        {/* Chat Input (Bottom Anchored) */}
         <div className="from-canvas via-canvas pointer-events-none absolute right-0 bottom-0 left-0 bg-linear-to-t to-transparent p-6 pt-12">
           <div className="pointer-events-auto mx-auto max-w-3xl">
             <div className="bg-canvas-elevated focus-within:border-accent-violet/50 focus-within:ring-accent-violet/20 overflow-hidden rounded-2xl border border-white/10 shadow-2xl transition-all focus-within:ring-1">
-              {/* Text Input Area */}
               <div className="p-4 pb-2">
                 <textarea
                   className="text-text-primary placeholder:text-text-tertiary max-h-50 min-h-11 w-full resize-none bg-transparent text-[15px] focus:outline-none"
@@ -231,42 +206,62 @@ export default function Session() {
                 />
               </div>
 
-              {/* Controls & Actions Row */}
               <div className="flex items-center justify-between border-t border-white/5 bg-white/2 px-3 py-2.5">
-                {/* Engine Controls (Left) */}
                 <div className="flex items-center gap-1.5">
-                  <button className="text-text-secondary hover:text-text-primary flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-white/5">
-                    <Sparkles className="text-accent-violet h-3.5 w-3.5" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leadingIcon={
+                      <Sparkles className="text-accent-violet h-3.5 w-3.5" />
+                    }
+                    trailingIcon={
+                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
+                    }
+                    className="font-medium"
+                  >
                     Brainstorming
-                    <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                  </button>
+                  </Button>
 
                   <div className="mx-1 h-3 w-px bg-white/10" />
 
-                  <button className="text-text-secondary hover:text-text-primary flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-white/5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    trailingIcon={
+                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
+                    }
+                    className="font-medium"
+                  >
                     Claude 3.5 Sonnet
-                    <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                  </button>
+                  </Button>
 
-                  <button className="text-text-secondary hover:text-text-primary flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-white/5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    trailingIcon={
+                      <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
+                    }
+                    className="font-medium"
+                  >
                     Fast
-                    <ChevronRight className="h-3 w-3 rotate-90 opacity-50" />
-                  </button>
+                  </Button>
                 </div>
 
-                {/* Submit Actions (Right) */}
                 <div className="flex items-center gap-2">
-                  <button className="text-text-tertiary hover:text-text-primary rounded-lg p-1.5 transition-colors hover:bg-white/5">
-                    <FileCode className="h-4 w-4" />
-                  </button>
-                  <button className="text-text-primary rounded-lg bg-white/10 p-1.5 transition-colors hover:bg-white/20">
-                    <CornerDownRight className="h-4 w-4" />
-                  </button>
+                  <IconButton
+                    icon={<FileCode className="h-4 w-4" />}
+                    variant="subtle"
+                    size="sm"
+                  />
+                  <IconButton
+                    icon={<CornerDownRight className="h-4 w-4" />}
+                    size="sm"
+                    className="text-text-primary bg-white/10 hover:bg-white/20"
+                  />
                 </div>
               </div>
             </div>
 
-            {/* Tiny disclaimer */}
             <div className="text-text-tertiary mt-3 text-center text-[11px] font-light">
               Isagi can make mistakes. Verify code before deploying to
               production.
@@ -275,7 +270,6 @@ export default function Session() {
         </div>
       </main>
 
-      {/* Right Panel (Triage Artifacts) - Two-Layer Animation */}
       <motion.div
         initial={false}
         animate={{ width: rightPanelOpen ? 384 : 0 }}
@@ -288,25 +282,21 @@ export default function Session() {
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
           className="bg-canvas absolute top-0 bottom-0 left-0 flex w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
         >
-          {/* Panel Header */}
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/5 px-5">
             <h2 className="text-text-tertiary flex items-center gap-2 text-xs font-semibold tracking-wider uppercase">
               <div className="bg-accent-blue/80 h-1.5 w-1.5 rounded-full shadow-[0_0_8px_rgba(138,173,244,0.8)]" />
               Proposed Actions
             </h2>
-            <button
+            <IconButton
               onClick={() => setRightPanelOpen(false)}
-              className="text-text-tertiary hover:text-text-primary rounded-lg p-1.5 transition-colors hover:bg-white/5"
+              icon={<X className="h-4 w-4" />}
+              variant="subtle"
               title="Close Panel"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            />
           </div>
 
-          {/* Panel Content (Scrollable) */}
-          <div className="custom-scrollbar flex-1 space-y-4 overflow-y-auto p-5">
-            {/* Approved Mutation */}
-            <div className="bg-accent-green/4 border-accent-green/20 rounded-xl border p-4 transition-all">
+          <ScrollableArea className="flex-1 space-y-4 p-5">
+            <SurfaceCard tone="green" className="rounded-xl p-4 transition-all">
               <div className="mb-2 flex items-start justify-between">
                 <div className="text-accent-green flex items-center gap-2 text-sm font-semibold">
                   <CheckCircle2 className="h-4 w-4" />
@@ -317,10 +307,12 @@ export default function Session() {
                 Create Project
               </h3>
               <p className="text-text-secondary text-sm">Theme System</p>
-            </div>
+            </SurfaceCard>
 
-            {/* Rejected Mutation */}
-            <div className="rounded-xl border border-white/5 bg-white/2 p-4 opacity-60 grayscale transition-all">
+            <SurfaceCard
+              tone="elevated"
+              className="rounded-xl border-white/5 bg-white/2 p-4 opacity-60 grayscale transition-all"
+            >
               <div className="mb-2 flex items-start justify-between">
                 <div className="text-text-tertiary flex items-center gap-2 text-sm font-semibold">
                   <XCircle className="h-4 w-4" />
@@ -336,10 +328,12 @@ export default function Session() {
               <p className="text-text-secondary text-sm line-through decoration-white/20">
                 Refactor global.css
               </p>
-            </div>
+            </SurfaceCard>
 
-            {/* Pending Mutation */}
-            <div className="bg-canvas-subtle border-accent-violet/30 group relative overflow-hidden rounded-xl border p-4 shadow-[0_0_16px_rgba(198,160,246,0.05)] transition-all">
+            <SurfaceCard
+              tone="violet"
+              className="group relative overflow-hidden rounded-xl p-4"
+            >
               <div className="bg-accent-violet/10 pointer-events-none absolute top-0 right-0 h-24 w-24 translate-x-1/2 -translate-y-1/2 rounded-full blur-2xl" />
 
               <div className="relative z-10 mb-3 flex items-start justify-between">
@@ -365,29 +359,44 @@ export default function Session() {
               </div>
 
               <div className="relative z-10 flex items-center gap-2">
-                <button className="bg-accent-green/10 hover:bg-accent-green/20 text-accent-green border-accent-green/20 flex-1 rounded-lg border py-2 text-sm font-semibold transition-colors">
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="bg-accent-green/10 hover:bg-accent-green/20 text-accent-green border-accent-green/20 flex-1 border"
+                >
                   Approve
-                </button>
-                <button className="bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border-accent-red/20 flex-1 rounded-lg border py-2 text-sm font-semibold transition-colors">
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="bg-accent-red/10 hover:bg-accent-red/20 text-accent-red border-accent-red/20 flex-1 border"
+                >
                   Reject
-                </button>
+                </Button>
               </div>
-            </div>
-          </div>
+            </SurfaceCard>
+          </ScrollableArea>
 
-          {/* Panel Footer (Batch Actions) */}
           <div className="bg-canvas/50 border-t border-white/5 p-4 backdrop-blur-md">
             <div className="flex flex-col gap-2">
-              <button className="bg-accent-blue hover:bg-accent-blue/90 text-canvas w-full rounded-xl py-2.5 text-sm font-semibold shadow-sm transition-transform duration-300 hover:scale-[1.02]">
+              <Button
+                variant="primary"
+                size="lg"
+                className="w-full hover:scale-[1.02]"
+              >
                 Finalize All
-              </button>
-              <button className="text-text-secondary hover:text-text-primary w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold transition-colors hover:bg-white/5">
+              </Button>
+              <Button
+                variant="ghost"
+                size="lg"
+                className="text-text-secondary hover:text-text-primary w-full border border-white/10"
+              >
                 Reject All
-              </button>
+              </Button>
             </div>
           </div>
         </motion.aside>
       </motion.div>
-    </div>
+    </AppShell>
   );
 }
