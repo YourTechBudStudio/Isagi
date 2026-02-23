@@ -22,7 +22,10 @@ import {
   sessionHeader,
   sessionProposals,
 } from "@/lib/mock/session.mock";
-import { sessionSidebarItems } from "@/lib/mock/sidebar.mock";
+import {
+  mockSidebarProjects,
+  mockSidebarTriage,
+} from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -35,7 +38,14 @@ export default function Session() {
   );
 
   return (
-    <AppShell sidebar={<ContextSidebar items={sessionSidebarItems} />}>
+    <AppShell
+      sidebar={
+        <ContextSidebar
+          triageItems={mockSidebarTriage}
+          projects={mockSidebarProjects}
+        />
+      }
+    >
       <main className="relative z-10 flex h-screen flex-1 flex-col overflow-y-auto">
         <motion.div
           initial={false}
