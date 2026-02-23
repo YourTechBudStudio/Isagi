@@ -23,7 +23,10 @@ import {
   homeResumeContext,
   homeSparks,
 } from "@/lib/mock/home.mock";
-import { homeSidebarItems } from "@/lib/mock/sidebar.mock";
+import {
+  mockSidebarProjects,
+  mockSidebarTriage,
+} from "@/lib/mock/sidebar.mock";
 
 export default function Home() {
   const isMac =
@@ -33,7 +36,12 @@ export default function Home() {
 
   return (
     <AppShell
-      sidebar={<ContextSidebar items={homeSidebarItems} />}
+      sidebar={
+        <ContextSidebar
+          triageItems={mockSidebarTriage}
+          projects={mockSidebarProjects}
+        />
+      }
       atmosphere={
         <div className="pointer-events-none absolute inset-0 mix-blend-screen">
           <div className="from-accent-blue/[0.03] to-accent-violet/[0.04] absolute inset-0 bg-gradient-to-br via-transparent" />

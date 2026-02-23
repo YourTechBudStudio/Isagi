@@ -21,14 +21,22 @@ import {
   sessionHeader,
   sessionProposals,
 } from "@/lib/mock/session.mock";
-import { sessionSidebarItems } from "@/lib/mock/sidebar.mock";
+import {
+  mockSidebarProjects,
+  mockSidebarTriage,
+} from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   return (
     <AppShell
-      sidebar={<ContextSidebar items={sessionSidebarItems} />}
+      sidebar={
+        <ContextSidebar
+          triageItems={mockSidebarTriage}
+          projects={mockSidebarProjects}
+        />
+      }
       atmosphere={
         <div className="pointer-events-none absolute inset-0 mix-blend-screen">
           <div className="from-accent-blue/2 to-accent-violet/3 absolute inset-0 bg-linear-to-br via-transparent" />
