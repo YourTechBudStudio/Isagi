@@ -12,11 +12,11 @@ import { FocusQueueItem } from "@/components/home/FocusQueueItem";
 import { SparkCard } from "@/components/home/SparkCard";
 import { AppShell } from "@/components/layout/AppShell";
 import { ContextSidebar } from "@/components/layout/ContextSidebar";
-import { ScrollableArea } from "@/components/layout/ScrollableArea";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { cn } from "@/lib/cn";
 import {
   homeFocusQueueItems,
   homeInboxSparkCount,
@@ -41,9 +41,15 @@ export default function Home() {
         </div>
       }
     >
-      <main className="relative z-10 flex flex-1 flex-col">
-        <header className="z-20 flex h-16 items-center justify-end px-8">
-          <div className="text-text-secondary flex items-center gap-3 text-sm opacity-60 transition-opacity hover:opacity-100">
+      <main className="relative z-10 flex h-screen flex-1 flex-col overflow-y-auto">
+        <div
+          className={cn(
+            "from-canvas via-canvas/80 pointer-events-none fixed top-0 right-[var(--layout-scrollbar-size)] z-20 h-24 bg-linear-to-b to-transparent",
+            "left-[var(--layout-sidebar-width)]",
+          )}
+        />
+        <header className="pointer-events-none fixed top-0 right-0 left-[var(--layout-sidebar-width)] z-30 flex h-16 items-center justify-end px-8">
+          <div className="text-text-secondary pointer-events-auto flex items-center gap-3 text-sm opacity-60 transition-opacity hover:opacity-100">
             <kbd className="text-text-primary rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] shadow-sm">
               {commandPaletteShortcut}
             </kbd>
@@ -53,7 +59,7 @@ export default function Home() {
           </div>
         </header>
 
-        <ScrollableArea className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-8 pt-12 pb-16">
+        <div className="mx-auto flex w-full max-w-4xl flex-col px-8 pt-28 pb-16">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -186,7 +192,7 @@ export default function Home() {
               ))}
             </div>
           </motion.section>
-        </ScrollableArea>
+        </div>
       </main>
     </AppShell>
   );

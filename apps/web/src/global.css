@@ -25,16 +25,33 @@
 
   --font-display: "Sora", sans-serif;
   --font-body: "Source Sans 3", sans-serif;
+
+  --layout-sidebar-width: 17.5rem;
+  --layout-panel-width: 384px;
+  --layout-scrollbar-size: 12px;
 }
 
-/* Custom scrollbar to keep it clean */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+html,
+body {
+  background-color: var(--color-canvas);
 }
-.custom-scrollbar::-webkit-scrollbar-track {
+
+/* Apple-inspired global scrollbar */
+*::-webkit-scrollbar {
+  width: var(--layout-scrollbar-size);
+  height: var(--layout-scrollbar-size);
+}
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-.custom-scrollbar::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 180ms ease;
+}
+*:hover::-webkit-scrollbar-thumb,
+*.is-scrolling::-webkit-scrollbar-thumb {
   background-color: var(--color-canvas-elevated);
-  border-radius: 20px;
 }

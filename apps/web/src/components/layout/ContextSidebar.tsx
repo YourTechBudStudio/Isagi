@@ -37,7 +37,7 @@ export function ContextSidebar({
   return (
     <aside
       className={cn(
-        "bg-canvas relative z-10 flex w-70 flex-col justify-between border-r border-white/5 p-5",
+        "bg-canvas fixed top-0 left-0 z-20 flex h-dvh w-[var(--layout-sidebar-width)] shrink-0 flex-col justify-between border-r border-white/5 p-5",
         className,
       )}
     >

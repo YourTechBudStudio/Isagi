@@ -10,10 +10,7 @@ export function ScrollableArea({
   ...props
 }: ScrollableAreaProps) {
   return (
-    <div
-      className={cn("custom-scrollbar overflow-y-auto", className)}
-      {...props}
-    >
+    <div className={cn("overflow-y-auto", className)} {...props}>
       {children}
     </div>
   );

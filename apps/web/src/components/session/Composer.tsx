@@ -7,6 +7,7 @@ import {
 
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { cn } from "@/lib/cn";
 
 type ComposerProps = {
   readonly modeLabel: string;
@@ -14,6 +15,7 @@ type ComposerProps = {
   readonly speedLabel: string;
   readonly placeholder: string;
   readonly disclaimer: string;
+  readonly containerClassName?: string;
 };
 
 export function Composer({
@@ -22,9 +24,15 @@ export function Composer({
   speedLabel,
   placeholder,
   disclaimer,
+  containerClassName,
 }: ComposerProps) {
   return (
-    <div className="from-canvas via-canvas pointer-events-none absolute right-0 bottom-0 left-0 bg-linear-to-t to-transparent p-6 pt-12">
+    <div
+      className={cn(
+        "pointer-events-none bg-transparent p-6 pt-12",
+        containerClassName,
+      )}
+    >
       <div className="pointer-events-auto mx-auto max-w-3xl">
         <div className="bg-canvas-elevated focus-within:border-accent-violet/50 focus-within:ring-accent-violet/20 overflow-hidden rounded-2xl border border-white/10 shadow-2xl transition-all focus-within:ring-1">
           <div className="p-4 pb-2">

@@ -1,3 +1,4 @@
+import { motion, useMotionValueEvent, useScroll } from "framer-motion";
 import {
   CheckCircle2,
   ChevronRight,
@@ -6,6 +7,7 @@ import {
   PanelRight,
   Terminal,
 } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -26,8 +28,36 @@ export function SessionActionBar({
   isArtifactsOpen,
   onToggleArtifacts,
 }: SessionActionBarProps) {
+  const { scrollY } = useScroll();
+  const [hidden, setHidden] = useState(false);
+
+  useMotionValueEvent(scrollY, "change", latest => {
+    const previous = scrollY.getPrevious() ?? 0;
+    if (latest > previous && latest > 50) {
+      setHidden(true);
+    } else {
+      setHidden(false);
+    }
+  });
+
+  const headerClassName = cn(
+    "pointer-events-none fixed top-6 z-30 flex items-center justify-between",
+    "left-[calc(var(--layout-sidebar-width)+1.5rem)]",
+    isArtifactsOpen
+      ? "right-[calc(var(--layout-panel-width)+1.5rem)]"
+      : "right-6",
+  );
+
   return (
-    <header className="pointer-events-none absolute top-6 right-6 left-6 z-20 flex items-center justify-between">
+    <motion.header
+      variants={{
+        visible: { y: 0 },
+        hidden: { y: "-150%" },
+      }}
+      animate={hidden ? "hidden" : "visible"}
+      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      className={headerClassName}
+    >
       <div className="text-text-tertiary pointer-events-auto flex items-center gap-2 text-sm font-medium">
         {breadcrumbs.map((crumb, index) => (
           <div key={`${crumb}-${index}`} className="flex items-center gap-2">
@@ -84,6 +114,6 @@ export function SessionActionBar({
           />
         </div>
       </div>
-    </header>
+    </motion.header>
   );
 }
