@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertCircle, CircleDashed, Play } from "lucide-react";
+import { AlertCircle, CircleDashed, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import type { SessionState } from "@/lib/mock/sidebar.mock";
@@ -7,7 +7,6 @@ import type { SessionState } from "@/lib/mock/sidebar.mock";
 type SidebarSessionItemProps = {
   readonly title: string;
   readonly state: SessionState;
-  readonly statusText?: string;
   readonly isActiveRoute?: boolean;
 };
 
@@ -17,28 +16,24 @@ const statusConfig: Record<
   {
     icon: LucideIcon;
     iconClassName: string;
-    chipClassName: string;
     containerClassName: string;
   }
 > = {
   waiting: {
     icon: AlertCircle,
     iconClassName: "text-accent-red animate-pulse", // Gentle pulse for waiting
-    chipClassName: "bg-accent-red/10 text-accent-red",
     containerClassName:
       "hover:bg-white/[0.04] border border-transparent hover:border-white/[0.03]",
   },
   active: {
-    icon: Play,
-    iconClassName: "text-spark animate-spin-slow fill-spark/20", // Custom slow spin
-    chipClassName: "bg-spark/10 text-spark",
+    icon: Loader2,
+    iconClassName: "text-spark animate-spin", // Standard smooth spin
     containerClassName:
       "hover:bg-white/[0.04] border border-transparent hover:border-white/[0.03]",
   },
   idle: {
     icon: CircleDashed,
     iconClassName: "text-text-tertiary",
-    chipClassName: "hidden", // We usually don't show a chip for idle
     containerClassName: "opacity-70 hover:opacity-100 transition-opacity",
   },
 };
@@ -46,7 +41,6 @@ const statusConfig: Record<
 export function SidebarSessionItem({
   title,
   state,
-  statusText,
   isActiveRoute,
 }: SidebarSessionItemProps) {
   const config = statusConfig[state];
@@ -78,17 +72,6 @@ export function SidebarSessionItem({
           {title}
         </span>
       </div>
-
-      {statusText && state !== "idle" && (
-        <span
-          className={cn(
-            "ml-2 flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide shadow-sm",
-            config.chipClassName,
-          )}
-        >
-          {statusText}
-        </span>
-      )}
     </button>
   );
 }

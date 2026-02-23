@@ -1,7 +1,6 @@
-import { PenTool } from "lucide-react";
-
-import { cn } from "@/lib/cn";
 import type { SidebarTriage } from "@/lib/mock/sidebar.mock";
+
+import { SidebarSessionItem } from "./SidebarSessionItem";
 
 type SidebarTriageSectionProps = {
   readonly items: ReadonlyArray<SidebarTriage>;
@@ -24,20 +23,12 @@ export function SidebarTriageSection({ items }: SidebarTriageSectionProps) {
 
       <div className="space-y-0.5">
         {interactedItems.map(item => (
-          <button
+          <SidebarSessionItem
             key={item.id}
-            className={cn(
-              "group relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-300",
-              item.isActiveRoute
-                ? "bg-canvas-elevated text-text-primary border border-white/[0.05] font-medium shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]"
-                : "text-text-secondary hover:text-text-primary border border-transparent hover:bg-white/[0.03]",
-            )}
-          >
-            <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
-              <PenTool className="text-accent-violet h-3.5 w-3.5" />
-            </div>
-            <span className="truncate">{item.title}</span>
-          </button>
+            title={item.title}
+            state={item.state}
+            isActiveRoute={item.isActiveRoute}
+          />
         ))}
       </div>
 

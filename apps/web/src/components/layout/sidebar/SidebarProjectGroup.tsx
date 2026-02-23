@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 
 import type { SidebarProject } from "@/lib/mock/sidebar.mock";
@@ -20,6 +21,7 @@ const STATE_WEIGHT: Record<string, number> = {
 
 export function SidebarProjectGroup({ project }: SidebarProjectGroupProps) {
   const [expandedCount, setExpandedCount] = useState(SESSIONS_PER_PAGE);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   // 1. Sort sessions strictly by priority weight
   const sortedSessions = [...project.sessions].sort(
@@ -30,32 +32,49 @@ export function SidebarProjectGroup({ project }: SidebarProjectGroupProps) {
   const visibleSessions = sortedSessions.slice(0, expandedCount);
   const remainingCount = sortedSessions.length - expandedCount;
 
+  // 3. Determine if we have hidden waiting sessions
+  const hasWaitingSessions = project.sessions.some(s => s.state === "waiting");
+
   return (
     <div className="mb-8 last:mb-0">
-      <h3 className="text-text-tertiary mb-3 flex items-center gap-2 px-3 text-[10px] font-semibold tracking-widest uppercase">
+      <button
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        className="text-text-tertiary hover:text-text-secondary group mb-2 flex w-full items-center gap-2 px-3 text-[10px] font-semibold tracking-widest uppercase transition-colors"
+      >
+        <span className="text-text-tertiary/50 group-hover:text-text-tertiary flex h-3 w-3 items-center justify-center transition-colors">
+          {isCollapsed ? (
+            <ChevronRight className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )}
+        </span>
         {project.name}
-      </h3>
-
-      <div className="relative space-y-0.5">
-        {visibleSessions.map(session => (
-          <SidebarSessionItem
-            key={session.id}
-            title={session.title}
-            state={session.state}
-            statusText={session.statusText}
-            isActiveRoute={session.isActiveRoute}
-          />
-        ))}
-
-        {remainingCount > 0 && (
-          <button
-            onClick={() => setExpandedCount(prev => prev + SESSIONS_PER_PAGE)}
-            className="text-text-tertiary hover:text-text-secondary mt-1 w-full rounded-xl px-3 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/[0.02]"
-          >
-            Show {Math.min(remainingCount, SESSIONS_PER_PAGE)} more...
-          </button>
+        {isCollapsed && hasWaitingSessions && (
+          <div className="bg-accent-red h-1.5 w-1.5 animate-pulse rounded-full" />
         )}
-      </div>
+      </button>
+
+      {!isCollapsed && (
+        <div className="relative space-y-0.5">
+          {visibleSessions.map(session => (
+            <SidebarSessionItem
+              key={session.id}
+              title={session.title}
+              state={session.state}
+              isActiveRoute={session.isActiveRoute}
+            />
+          ))}
+
+          {remainingCount > 0 && (
+            <button
+              onClick={() => setExpandedCount(prev => prev + SESSIONS_PER_PAGE)}
+              className="text-text-tertiary hover:text-text-secondary mt-1 w-full rounded-xl px-3 py-2.5 text-left text-xs font-medium transition-colors hover:bg-white/[0.02]"
+            >
+              Show {Math.min(remainingCount, SESSIONS_PER_PAGE)} more...
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

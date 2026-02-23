@@ -17,6 +17,7 @@ export type SidebarProject = {
 export type SidebarTriage = {
   readonly id: string;
   readonly title: string;
+  readonly state: SessionState;
   // CRITICAL: Only show triage sessions if the user has interacted with them.
   // This prevents the sidebar from becoming cluttered with untouched auto-proposals.
   readonly hasInteracted: boolean;
@@ -29,16 +30,19 @@ export const mockSidebarTriage: ReadonlyArray<SidebarTriage> = [
   {
     id: "tr-1",
     title: 'Triage: "Dark mode toggle"',
+    state: "waiting",
     hasInteracted: true, // Should show
   },
   {
     id: "tr-2",
     title: 'Triage: "Add a database layer"',
+    state: "idle",
     hasInteracted: false, // Should NOT show
   },
   {
     id: "tr-3",
     title: 'Triage: "Fix login bug"',
+    state: "active",
     hasInteracted: true, // Should show
     isActiveRoute: true, // Mocking this as the active page
   },
