@@ -50,7 +50,7 @@ export function SidebarProjectGroup({ project }: SidebarProjectGroupProps) {
         </span>
         {project.name}
         {isCollapsed && hasWaitingSessions && (
-          <div className="bg-accent-red h-1.5 w-1.5 animate-pulse rounded-full" />
+          <div className="bg-accent-amber h-1.5 w-1.5 animate-pulse rounded-full" />
         )}
       </button>
 

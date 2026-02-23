@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { AlertCircle, CircleDashed, Loader2 } from "lucide-react";
+import { CircleDashed, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import type { SessionState } from "@/lib/mock/sidebar.mock";
@@ -14,14 +14,13 @@ type SidebarSessionItemProps = {
 const statusConfig: Record<
   SessionState,
   {
-    icon: LucideIcon;
-    iconClassName: string;
+    icon?: LucideIcon;
+    iconClassName?: string;
     containerClassName: string;
   }
 > = {
   waiting: {
-    icon: AlertCircle,
-    iconClassName: "text-accent-red animate-pulse", // Gentle pulse for waiting
+    // For waiting, we use a custom SVG for a concentric dot instead of a standard Lucide icon
     containerClassName:
       "hover:bg-white/[0.04] border border-transparent hover:border-white/[0.03]",
   },
@@ -59,7 +58,21 @@ export function SidebarSessionItem({
     >
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
-          <StatusIcon className={cn("h-3.5 w-3.5", config.iconClassName)} />
+          {state === "waiting" ? (
+            <div className="relative flex h-3 w-3 items-center justify-center">
+              {/* Outer pulsing ring */}
+              <div
+                className="border-accent-amber/40 absolute inset-0 animate-ping rounded-full border"
+                style={{ animationDuration: "3s" }}
+              />
+              {/* Inner subtle dot */}
+              <div className="bg-accent-amber/80 h-1.5 w-1.5 rounded-full" />
+            </div>
+          ) : (
+            StatusIcon && (
+              <StatusIcon className={cn("h-3.5 w-3.5", config.iconClassName)} />
+            )
+          )}
         </div>
         <span
           className={cn(
