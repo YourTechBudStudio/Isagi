@@ -7,6 +7,7 @@ import {
   Sparkles,
   TerminalSquare,
 } from "lucide-react";
+import { Link } from "react-router";
 
 import { FocusQueueItem } from "@/components/home/FocusQueueItem";
 import { SparkCard } from "@/components/home/SparkCard";
@@ -179,14 +180,16 @@ export default function Home() {
               icon={<Sparkles className="text-accent-violet h-5 w-5" />}
               title="Triage Inbox"
               action={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  trailingIcon={<ArrowRight className="h-4 w-4" />}
-                  className="text-text-tertiary hover:text-accent-violet font-medium"
-                >
-                  View all {homeInboxSparkCount} sparks
-                </Button>
+                <Link to="/sparks">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    trailingIcon={<ArrowRight className="h-4 w-4" />}
+                    className="text-text-tertiary hover:text-accent-violet font-medium"
+                  >
+                    View all {homeInboxSparkCount} sparks
+                  </Button>
+                </Link>
               }
             />
 
