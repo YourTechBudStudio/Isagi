@@ -74,7 +74,8 @@ export default function Sparks() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const isBacklogEmpty =
+  const isInboxEmpty =
+    activeTriages.length === 0 &&
     todaySparks.length === 0 &&
     thisWeekSparks.length === 0 &&
     olderSparks.length === 0;
@@ -133,7 +134,7 @@ export default function Sparks() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
           >
-            {isBacklogEmpty ? (
+            {isInboxEmpty ? (
               <SparksEmptyState />
             ) : (
               <div className="flex flex-col gap-10">
