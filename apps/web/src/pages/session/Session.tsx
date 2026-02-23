@@ -35,22 +35,9 @@ export default function Session() {
   );
 
   return (
-    <AppShell
-      sidebar={<ContextSidebar items={sessionSidebarItems} />}
-      atmosphere={
-        <div className="pointer-events-none absolute inset-0 mix-blend-screen">
-          <div className="from-accent-blue/2 to-accent-violet/3 absolute inset-0 bg-linear-to-br via-transparent" />
-        </div>
-      }
-    >
-      <main className="relative z-10 flex flex-1 flex-col">
-        <div
-          className={cn(
-            "from-canvas via-canvas/80 pointer-events-none fixed top-0 z-20 h-24 bg-linear-to-b to-transparent",
-            "left-[var(--layout-sidebar-width)]",
-            rightPanelOpen ? "right-[var(--layout-panel-width)]" : "right-0",
-          )}
-        />
+    <AppShell sidebar={<ContextSidebar items={sessionSidebarItems} />}>
+      <main className="relative z-10 flex h-screen flex-1 flex-col overflow-y-auto">
+        <div className="from-canvas via-canvas/80 pointer-events-none fixed top-0 right-0 left-[var(--layout-sidebar-width)] z-20 h-24 bg-linear-to-b to-transparent" />
         <SessionActionBar
           breadcrumbs={sessionHeader.breadcrumbs}
           currentContext={sessionHeader.currentContext}

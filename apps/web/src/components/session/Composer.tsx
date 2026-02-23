@@ -29,7 +29,7 @@ export function Composer({
   return (
     <div
       className={cn(
-        "from-canvas via-canvas pointer-events-none bg-linear-to-t to-transparent p-6 pt-12",
+        "pointer-events-none bg-transparent p-6 pt-12",
         containerClassName,
       )}
     >

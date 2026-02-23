@@ -19,7 +19,7 @@ export function AppShell({
   return (
     <div
       className={cn(
-        "bg-canvas text-text-primary font-body selection:bg-accent-violet/30 relative flex min-h-screen w-full overflow-x-hidden pl-[var(--layout-sidebar-width)]",
+        "bg-canvas text-text-primary font-body selection:bg-accent-violet/30 relative flex h-screen w-full overflow-hidden pl-[var(--layout-sidebar-width)]",
         className,
       )}
     >
