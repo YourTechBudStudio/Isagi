@@ -116,7 +116,7 @@ export default function Session() {
                     <CheckCircle2 className="h-3 w-3" /> 12ms
                   </span>
                 </div>
-                <div className="text-text-tertiary custom-scrollbar max-h-32 overflow-y-auto bg-black/20 p-4">
+                <div className="text-text-tertiary max-h-32 overflow-y-auto bg-black/20 p-4">
                   <pre>
                     <code>
                       {`@theme {

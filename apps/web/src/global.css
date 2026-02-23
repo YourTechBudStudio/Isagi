@@ -30,14 +30,20 @@
   --layout-panel-width: 384px;
 }
 
-/* Custom scrollbar to keep it clean */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+/* Apple-inspired global scrollbar */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
-.custom-scrollbar::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   background: transparent;
 }
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: var(--color-canvas-elevated);
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15);
   border-radius: 20px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
 }
