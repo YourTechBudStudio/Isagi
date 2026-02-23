@@ -37,7 +37,16 @@ export default function Session() {
   return (
     <AppShell sidebar={<ContextSidebar items={sessionSidebarItems} />}>
       <main className="relative z-10 flex h-screen flex-1 flex-col overflow-y-auto">
-        <div className="from-canvas via-canvas/80 pointer-events-none fixed top-0 right-0 left-[var(--layout-sidebar-width)] z-20 h-24 bg-linear-to-b to-transparent" />
+        <motion.div
+          initial={false}
+          animate={{
+            right: rightPanelOpen
+              ? "calc(var(--layout-panel-width) + var(--layout-scrollbar-size))"
+              : "var(--layout-scrollbar-size)",
+          }}
+          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-[var(--layout-sidebar-width)] z-20 h-24 bg-linear-to-b to-transparent"
+        />
         <SessionActionBar
           breadcrumbs={sessionHeader.breadcrumbs}
           currentContext={sessionHeader.currentContext}
