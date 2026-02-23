@@ -16,6 +16,7 @@ import { ProposalCard } from "@/components/session/ProposalCard";
 import { SessionActionBar } from "@/components/session/SessionActionBar";
 import { IconButton } from "@/components/ui/IconButton";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { cn } from "@/lib/cn";
 import {
   sessionComposerConfig,
   sessionHeader,
@@ -25,6 +26,13 @@ import { sessionSidebarItems } from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const composerInsetClassName = cn(
+    "fixed bottom-0 z-30",
+    "left-[calc(var(--layout-sidebar-width)+1.5rem)]",
+    rightPanelOpen
+      ? "right-[calc(var(--layout-panel-width)+1.5rem)]"
+      : "right-6",
+  );
 
   return (
     <AppShell
@@ -36,6 +44,13 @@ export default function Session() {
       }
     >
       <main className="relative z-10 flex flex-1 flex-col">
+        <div
+          className={cn(
+            "from-canvas via-canvas/80 pointer-events-none fixed top-0 z-20 h-24 bg-linear-to-b to-transparent",
+            "left-[var(--layout-sidebar-width)]",
+            rightPanelOpen ? "right-[var(--layout-panel-width)]" : "right-0",
+          )}
+        />
         <SessionActionBar
           breadcrumbs={sessionHeader.breadcrumbs}
           currentContext={sessionHeader.currentContext}
@@ -44,7 +59,7 @@ export default function Session() {
           onToggleArtifacts={() => setRightPanelOpen(!rightPanelOpen)}
         />
 
-        <ScrollableArea className="flex-1 px-12 pt-24 pb-48">
+        <div className="px-12 pt-24 pb-48">
           <div className="mx-auto flex max-w-3xl flex-col gap-8">
             <motion.div
               initial={{ opacity: 0, y: 10 }}
@@ -135,7 +150,7 @@ export default function Session() {
               </div>
             </motion.div>
           </div>
-        </ScrollableArea>
+        </div>
 
         <Composer
           modeLabel={sessionComposerConfig.modeLabel}
@@ -143,6 +158,7 @@ export default function Session() {
           speedLabel={sessionComposerConfig.speedLabel}
           placeholder={sessionComposerConfig.placeholder}
           disclaimer={sessionComposerConfig.disclaimer}
+          containerClassName={composerInsetClassName}
         />
       </main>
 
@@ -156,7 +172,7 @@ export default function Session() {
           initial={false}
           animate={{ x: rightPanelOpen ? 0 : "100%" }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          className="bg-canvas absolute top-0 bottom-0 left-0 flex w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
+          className="bg-canvas fixed top-0 right-0 z-40 flex h-dvh w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
         >
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/5 px-5">
             <h2 className="text-text-tertiary flex items-center gap-2 text-xs font-semibold tracking-wider uppercase">

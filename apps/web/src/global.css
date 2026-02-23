@@ -25,6 +25,9 @@
 
   --font-display: "Sora", sans-serif;
   --font-body: "Source Sans 3", sans-serif;
+
+  --layout-sidebar-width: 17.5rem;
+  --layout-panel-width: 384px;
 }
 
 /* Custom scrollbar to keep it clean */
