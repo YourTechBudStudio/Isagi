@@ -41,18 +41,18 @@ export function CommandPalette() {
 
   const inputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
 
-  // Keyboard shortcut listener for Cmd/Ctrl + K, Cmd/Ctrl + P, Cmd/Ctrl + N
+  // Keyboard shortcut listener for Cmd/Ctrl + K, Cmd/Ctrl + P, Ctrl + M
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
       const isCmdP =
         (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p";
-      const isCmdN = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n";
+      const isCtrlM = e.ctrlKey && e.key.toLowerCase() === "m";
 
       if (isCmdK || isCmdP) {
         e.preventDefault();
         open();
-      } else if (isCmdN) {
+      } else if (isCtrlM) {
         e.preventDefault();
         const cmd = COMMANDS.find(c => c.id === "capture-spark");
         if (cmd) {
