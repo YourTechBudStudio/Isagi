@@ -1,82 +1,38 @@
-import "./lib/env";
+import { createServer } from "node:http";
 
-import { RPCHandler } from "@orpc/server/node";
-import cors from "cors";
-import express from "express";
+import { OpenAPIHandler } from "@orpc/openapi/node";
+import { onError } from "@orpc/server";
+import { CORSPlugin } from "@orpc/server/plugins";
 
-import { runtimeConfig } from "./lib/config";
-import { closeDb } from "./lib/db/client";
-import { runMigrations } from "./lib/db/migrations";
-import { getDefaultOpencodeRootPath } from "./lib/opencode";
-import {
-  startOpencodeGlobalEventLoop,
-  stopOpencodeGlobalEventLoop,
-} from "./lib/opencode-events";
-import { bootstrapPrompts } from "./lib/prompts";
-import { ensureDataDirectories } from "./lib/sparks";
-import { registerTriageSseRoute } from "./modules/triage/sse";
-import { orpcRouter } from "./router";
+import { router } from "./router";
 
-const app = express();
-const handler = new RPCHandler(orpcRouter);
+const handler = new OpenAPIHandler(router, {
+  plugins: [new CORSPlugin()],
+  interceptors: [
+    onError(error => {
+      console.error(error);
+    }),
+  ],
+});
 
-function toHeaders(request: express.Request): Headers {
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (typeof value === "string") {
-      headers.set(key, value);
-    } else if (Array.isArray(value)) {
-      headers.set(key, value.join(", "));
-    }
-  }
-  return headers;
+const port = Number.parseInt(process.env.PORT ?? "13000", 10);
+if (!Number.isInteger(port) || port <= 0) {
+  throw new Error("PORT must be a positive integer");
 }
 
-app.use(cors());
-app.use(express.json());
-registerTriageSseRoute(app);
-
-app.use("/api*splat", async (req, res, next) => {
+const server = createServer(async (req, res) => {
   const { matched } = await handler.handle(req, res, {
-    prefix: "/api",
     context: {
-      headers: toHeaders(req),
+      headers: req.headers,
     },
   });
 
-  if (matched) {
-    return;
+  if (!matched) {
+    res.statusCode = 404;
+    res.end("Not Found");
   }
-
-  next();
 });
 
-app.get("/", (_req, res) => {
-  res.send("Isagi API is online.\n");
-});
-
-async function main(): Promise<void> {
-  await ensureDataDirectories(runtimeConfig.dataRoot);
-  await bootstrapPrompts(runtimeConfig.dataRoot);
-  await runMigrations();
-  await startOpencodeGlobalEventLoop(getDefaultOpencodeRootPath());
-
-  const server = app.listen(runtimeConfig.port, () => {
-    console.log(`Isagi API listening on port '${runtimeConfig.port}'`);
-  });
-
-  const shutdown = async (): Promise<void> => {
-    server.close();
-    await stopOpencodeGlobalEventLoop();
-    await closeDb();
-    process.exit(0);
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-}
-
-main().catch(error => {
-  console.error("Failed to start Isagi API:", error);
-  process.exit(1);
+server.listen(port, "127.0.0.1", () => {
+  console.log(`Isagi API listening on 127.0.0.1:${port}`);
 });

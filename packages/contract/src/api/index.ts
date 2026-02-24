@@ -1,11 +1,12 @@
-import { healthContract } from "./modules/health";
-import { sparksContract } from "./modules/sparks";
-import { triageContract } from "./modules/triage";
+import { oc } from "@orpc/contract";
+import z from "zod";
+
+const health = oc.route({ method: "GET", path: "/health" }).output(
+  z.object({
+    status: z.literal("ok"),
+  }),
+);
 
 export const contract = {
-  user: {
-    health: healthContract,
-    sparks: sparksContract,
-    triage: triageContract,
-  },
+  health,
 };

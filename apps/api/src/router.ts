@@ -1,42 +1,19 @@
 import { contract } from "@isagi/contract/api";
 import { implement, ORPCError } from "@orpc/server";
 
-import { runtimeConfig } from "./lib/config";
-import { router as healthRouter } from "./modules/health/router";
-import { router as sparksRouter } from "./modules/sparks/router";
-import { router as triageRouter } from "./modules/triage/router";
+const os = implement(contract);
 
-const root = implement(contract).$context<{ headers: Headers }>();
-const userOs = implement(contract.user).$context<{ headers: Headers }>();
+export const router = os.router({
+  health: os.health.handler(async () => {
+    try {
+      return { status: "ok" };
+    } catch (error) {
+      if (error instanceof ORPCError) {
+        throw error;
+      }
 
-const requireUserApiKey = userOs.middleware(async ({ context, next }) => {
-  const authorization = context.headers.get("authorization");
-  const token = authorization?.startsWith("Bearer ")
-    ? authorization.slice("Bearer ".length)
-    : undefined;
-
-  if (!token || token !== runtimeConfig.userApiKey) {
-    throw new ORPCError("UNAUTHORIZED", {
-      message: "Invalid user API key",
-    });
-  }
-
-  return next({
-    context: {
-      actor: {
-        kind: "user",
-        userId: "user",
-      },
-    },
-  });
-});
-
-const userRouter = userOs.use(requireUserApiKey).router({
-  health: healthRouter,
-  sparks: sparksRouter,
-  triage: triageRouter,
-});
-
-export const orpcRouter = root.router({
-  user: userRouter,
+      console.error("Health check failed:", error);
+      throw new ORPCError("INTERNAL_SERVER_ERROR");
+    }
+  }),
 });
