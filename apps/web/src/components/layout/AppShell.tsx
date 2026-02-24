@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect } from "react";
+import { Toaster } from "sonner";
 
 import { CommandPalette } from "@/components/command-palette/CommandPalette";
 import { cn } from "@/lib/cn";
@@ -94,6 +95,17 @@ export function AppShell({
         className,
       )}
     >
+      <Toaster
+        theme="dark"
+        toastOptions={{
+          classNames: {
+            toast: "font-body shadow-xl",
+            description: "text-text-secondary font-body",
+            actionButton: "bg-accent-blue text-canvas font-body font-medium",
+            cancelButton: "bg-canvas-subtle text-text-secondary font-body",
+          },
+        }}
+      />
       <CommandPalette />
       {atmosphere}
       {sidebar}

@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 
 import { CommandPaletteDropdown } from "@/components/command-palette/CommandPaletteDropdown";
 import { CommandPaletteInput } from "@/components/command-palette/CommandPaletteInput";
@@ -36,17 +37,30 @@ export function CommandPalette() {
   const [collectedArgs, setCollectedArgs] = useState<CollectedArgs>({});
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const resetHighlight = () => setHighlightedIndex(0);
 
-  // Keyboard shortcut listener for Cmd/Ctrl + K and Cmd/Ctrl + P
+  const inputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+
+  // Keyboard shortcut listener for Cmd/Ctrl + K, Cmd/Ctrl + P, Ctrl + M
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       const isCmdK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
       const isCmdP =
         (e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "p";
+      const isCtrlM = e.ctrlKey && e.key.toLowerCase() === "m";
 
       if (isCmdK || isCmdP) {
         e.preventDefault();
+        open();
+      } else if (isCtrlM) {
+        e.preventDefault();
+        const cmd = COMMANDS.find(c => c.id === "capture-spark");
+        if (cmd) {
+          setActiveCommand(cmd);
+          setCollectedArgs({});
+          setInputText("");
+          resetHighlight();
+        }
         open();
       }
     };
@@ -76,8 +90,6 @@ export function CommandPalette() {
 
   const allVisibleOptions = [...recommended, ...results];
 
-  const resetHighlight = () => setHighlightedIndex(0);
-
   const handleClose = () => {
     close();
     setTimeout(() => {
@@ -91,6 +103,15 @@ export function CommandPalette() {
   const executeCommand = (cmd: CommandDef, args: CollectedArgs) => {
     console.log("\uD83D\uDE80 EXECUTE COMMAND", { command: cmd.id, args });
     handleClose();
+
+    if (cmd.id === "capture-spark") {
+      toast.success("Spark captured.", {
+        action: {
+          label: "Open triage now",
+          onClick: () => console.log("Open triage clicked"),
+        },
+      });
+    }
   };
 
   const handleSelectCommand = (selected: SearchResult) => {
@@ -123,9 +144,19 @@ export function CommandPalette() {
     }
   };
 
-  const handleEnterForText = () => {
+  const handleEnterForTextOrMarkdown = (isCmdOrCtrl: boolean = false) => {
     if (!activeCommand || !currentArg) return;
-    if (!inputText.trim()) return;
+
+    if (currentArg.type === "markdown" && !isCmdOrCtrl) {
+      return;
+    }
+
+    if (!inputText.trim()) {
+      if (currentArg.type === "markdown") {
+        toast.error("You cannot submit an empty spark.");
+      }
+      return;
+    }
 
     const nextArgs = {
       ...collectedArgs,
@@ -150,8 +181,9 @@ export function CommandPalette() {
       return;
     }
 
-    if (currentArg?.type === "text") {
-      handleEnterForText();
+    if (currentArg?.type === "text" || currentArg?.type === "markdown") {
+      // In option selection via enter, it's not a cmd+enter
+      handleEnterForTextOrMarkdown();
       return;
     }
 
@@ -160,12 +192,19 @@ export function CommandPalette() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
+      if (currentArg?.type === "markdown" && inputText.trim()) {
+        if (!window.confirm("Discard this spark?")) {
+          e.preventDefault();
+          return;
+        }
+      }
       e.preventDefault();
       handleClose();
       return;
     }
 
     if (e.key === "ArrowDown") {
+      if (currentArg?.type === "markdown") return; // Allow normal textarea navigation
       e.preventDefault();
       if (allVisibleOptions.length === 0) return;
       setHighlightedIndex(prev =>
@@ -175,6 +214,7 @@ export function CommandPalette() {
     }
 
     if (e.key === "ArrowUp") {
+      if (currentArg?.type === "markdown") return; // Allow normal textarea navigation
       e.preventDefault();
       if (allVisibleOptions.length === 0) return;
       setHighlightedIndex(prev => Math.max(prev - 1, 0));
@@ -202,6 +242,12 @@ export function CommandPalette() {
     }
 
     if (e.key === "Enter") {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+
+      if (currentArg?.type === "markdown" && !isCmdOrCtrl) {
+        return; // Handled by CommandPaletteInput textarea auto-bullet logic
+      }
+
       e.preventDefault();
 
       if (!activeCommand) {
@@ -209,8 +255,8 @@ export function CommandPalette() {
         return;
       }
 
-      if (currentArg?.type === "text") {
-        handleEnterForText();
+      if (currentArg?.type === "text" || currentArg?.type === "markdown") {
+        handleEnterForTextOrMarkdown(isCmdOrCtrl);
         return;
       }
 
@@ -220,7 +266,8 @@ export function CommandPalette() {
 
   const placeholderText = currentArg?.placeholder || "Type a command...";
   const emptyStateMessage = getEmptyStateMessage();
-  const shouldHideDropdown = currentArg?.type === "text";
+  const shouldHideDropdown =
+    currentArg?.type === "text" || currentArg?.type === "markdown";
 
   const modal = (
     <AnimatePresence>
@@ -252,11 +299,12 @@ export function CommandPalette() {
             onClick={e => e.stopPropagation()}
           >
             <CommandPaletteInput
-              inputRef={inputRef}
+              inputRef={inputRef as React.RefObject<any>}
               inputText={inputText}
               placeholder={placeholderText}
               activeCommand={activeCommand}
               collectedArgs={collectedArgs}
+              currentArgType={currentArg?.type}
               onChange={(value: string) => {
                 setInputText(value);
                 resetHighlight();
@@ -279,7 +327,7 @@ export function CommandPalette() {
               <div className="bg-canvas/30 font-body text-text-tertiary flex items-center border-t border-white/5 px-4 py-3 text-sm">
                 <span className="mr-2 opacity-70">Press</span>
                 <kbd className="text-text-primary mr-2 rounded border border-white/10 bg-white/10 px-1.5 py-0.5 text-xs shadow-sm">
-                  Enter
+                  {currentArg?.type === "markdown" ? "⌘↵" : "Enter"}
                 </kbd>
                 <span className="opacity-70">to submit</span>
               </div>
