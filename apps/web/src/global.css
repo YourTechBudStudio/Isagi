@@ -68,3 +68,49 @@ body {
 .animate-spin-slow {
   animation: spin-slow 3s linear infinite;
 }
+
+/* Sonner toast overrides — Catppuccin Macchiato
+   :root ancestor bumps specificity above Sonner's built-in dark theme rules */
+:root [data-sonner-toaster][data-sonner-theme="dark"] {
+  --normal-bg: var(--color-canvas-elevated);
+  --normal-border: rgba(255, 255, 255, 0.06);
+  --normal-text: var(--color-text-primary);
+
+  --success-bg: var(--color-canvas-elevated);
+  --success-border: rgba(166, 218, 149, 0.2);
+  --success-text: var(--color-accent-green);
+
+  --error-bg: var(--color-canvas-elevated);
+  --error-border: rgba(237, 135, 150, 0.2);
+  --error-text: var(--color-accent-red);
+
+  --info-bg: var(--color-canvas-elevated);
+  --info-border: rgba(138, 173, 244, 0.2);
+  --info-text: var(--color-accent-blue);
+
+  --warning-bg: var(--color-canvas-elevated);
+  --warning-border: rgba(245, 169, 127, 0.2);
+  --warning-text: var(--color-accent-amber);
+}
+
+/* Sonner action button — ghost style, Apple-inspired */
+:root [data-sonner-toast][data-styled="true"] [data-button] {
+  background: transparent;
+  color: var(--color-accent-blue);
+  font-weight: 600;
+  font-family: var(--font-body);
+  transition: opacity 200ms ease;
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-button]:hover {
+  opacity: 0.8;
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-cancel] {
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+:root [data-sonner-toast][data-styled="true"] [data-cancel]:hover {
+  color: var(--color-text-secondary);
+}

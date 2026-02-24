@@ -59,4 +59,17 @@ export const COMMANDS: CommandDef[] = [
     aliases: ["debug"],
     arguments: [],
   },
+  {
+    id: "capture-spark",
+    label: "Capture Spark",
+    aliases: ["new spark", "spark", "idea"],
+    arguments: [
+      {
+        id: "content",
+        type: "markdown",
+        placeholder: "Dump your brain cache...",
+        labelPrefix: "Spark:",
+      },
+    ],
+  },
 ];

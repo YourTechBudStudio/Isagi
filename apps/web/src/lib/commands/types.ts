@@ -1,4 +1,4 @@
-export type ArgumentType = "project" | "task" | "spark" | "text";
+export type ArgumentType = "project" | "task" | "spark" | "text" | "markdown";
 
 export interface CommandArgument {
   id: string;
