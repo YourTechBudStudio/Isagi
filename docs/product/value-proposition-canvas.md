@@ -6,7 +6,7 @@
 
 This canvas is the **strategic framing source of truth**.
 
-For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
+For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wins.
 
 **MVP constraint:** In Phase 1, the Triager is **propose-only** (see [MVP scope](./mvp-scope.md)). Any “development” described below should be interpreted as _proposing tasks and enabling warm-start sessions_, not auto-generating outputs.
 

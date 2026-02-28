@@ -103,15 +103,7 @@ pnpm <package|app> lint
 
 ## Architecture Documentation
 
-See `docs/index.md` for architecture and product documentation.
-
-Source-of-truth ordering:
-
-- `docs/mvp-scope.md` - MVP decisions (implementation source of truth)
-- `docs/value-proposition-canvas.md` - strategic customer/value framing
-- `docs/product.md` and `docs/mental-model.md` - overview + core invariants
-
-**IMPORTANT:** Before creating or updating documentation, load the `documentation` skill for guidance on what to document, when to document, and how to structure it.
+See `docs/README.md` for architecture and product documentation.
 
 ## When to Use Skills
 

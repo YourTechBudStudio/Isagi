@@ -159,7 +159,7 @@ UI requirements:
 Safety posture:
 
 - default behavior remains safety-gated close (blocking) when checks definitively show unresolved state
-- in power mode, checks that cannot be made definitive across multiple roots may be downgraded to warn-only with explicit user confirmation (as defined in `docs/mvp-scope.md`)
+- in power mode, checks that cannot be made definitive across multiple roots may be downgraded to warn-only with explicit user confirmation (as defined in `docs/product/mvp-scope.md`)
 
 ## Sync policy and network requirements
 

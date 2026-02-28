@@ -51,7 +51,7 @@ YouTube/social/content workflows are treated as derivative patterns on top of th
 
 - Execution mechanics: `docs/architecture/execution-model.md`
 - Resources output model: `docs/architecture/resources-model.md`
-- Rules/defaults schema: `docs/config/area-project-task-rules.md`
+- Rules/defaults schema: `docs/product/config/area-project-task-rules.md`
 
 ## Non-goals (current MVP)
 
