@@ -1,6 +1,6 @@
 # Execution Model
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments.
 
@@ -14,11 +14,37 @@ Conventions:
 - project directories live under their parent area root
 - task execution roots resolve to either area root or project root per resolver/defaults
 
-Git mode implications:
+Area storage mode implications (v1):
 
-- `none`: execution root is filesystem-only (no required git semantics)
-- `area_repo`: area root is git-backed; projects are subpaths under the area repo
-- `project_repo`: each project root is independently git-backed
+- `area_monorepo`: area root is git-backed; projects are subpaths under the area repo
+- `resource_repos`: work is split across multiple git roots (typically one per resource)
+
+Resources semantics live in `docs/architecture/resources-model.md`.
+
+## Workspace layout (v1)
+
+MVP uses a single canonical workspace root.
+
+Conceptual layout:
+
+```txt
+workspace/
+  areas/
+    <area-id>/
+      area.yaml
+      resources/
+        <resource-name>/
+      projects/
+        <project-id>/
+          project.yaml
+          resources/
+            <resource-name>/
+```
+
+Remarks:
+
+- workspace paths are derived from ownership + naming; identity is not the path
+- tasks may create worktrees/branches under an execution root, but the workspace remains the canonical place to find them
 
 ## Execution root resolver
 
@@ -29,17 +55,25 @@ Execution root is resolved deterministically in this order:
 3. area default
 4. area root fallback
 
-This resolver applies regardless of area git mode.
+This resolver applies regardless of area storage mode.
 
-## Git modes per area (`none | area_repo | project_repo`)
+## Execution scope
 
-Each area declares one fixed git mode:
+In v1, tasks have an execution scope only.
 
-- `none` - no git lifecycle required for execution.
-- `area_repo` - area-level repository is canonical git root.
-- `project_repo` - each project is repository-backed.
+- execution scope determines the default working directory/root for sessions and commands
+- v1 does not define a separate access scope; safety posture is safe-by-review
 
-When `project_repo` is used, project creation requires either:
+`safe-by-review` means changes are made in git-backed working copies so they are inspectable and reviewable (diff/history) before being shared or merged.
+
+## Area storage modes (`area_monorepo | resource_repos`)
+
+Each area declares one fixed storage mode:
+
+- `area_monorepo` - area-level repository is the canonical git root
+- `resource_repos` - work is composed from multiple git roots (typically one per resource)
+
+When `resource_repos` is used, resource creation requires either:
 
 - clone from URL, or
 - initialize empty local repo.
@@ -51,6 +85,16 @@ When `project_repo` is used, project creation requires either:
 - A task may have one attached worktree lifecycle.
 - Worktree lifecycle is tied to task lifecycle, not session lifecycle.
 - If a task has an attached worktree, sessions for that task reuse it.
+
+## Worktree isolation
+
+Worktrees provide task-level isolation.
+
+Requirements:
+
+- worktrees are created per-task (not shared across tasks)
+- a task reuses its attached worktree across sessions
+- close-task cleanup deletes the task worktree and branch on successful close
 
 ## Start task behavior (command-driven)
 
@@ -103,6 +147,19 @@ On failed close verification:
 Manual override:
 
 - explicit discard can be used as an intentional force-resolve path
+
+## Power mode (multi-repo context)
+
+Power mode indicates that a session may operate across multiple git roots in one execution context.
+
+UI requirements:
+
+- persistent badges: `Power Mode`, `Multi-repo Context`
+
+Safety posture:
+
+- default behavior remains safety-gated close (blocking) when checks definitively show unresolved state
+- in power mode, checks that cannot be made definitive across multiple roots may be downgraded to warn-only with explicit user confirmation (as defined in `docs/mvp-scope.md`)
 
 ## Sync policy and network requirements
 

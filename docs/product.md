@@ -1,6 +1,6 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 ## One-liner
 
@@ -19,7 +19,7 @@ Isagi is a context continuity engine for execution-heavy knowledge work: capture
 2. **Clarify before committing** - triager strengthens sparks and proposes work in reviewable form.
 3. **Warm starts** - every task resumes with context already assembled.
 4. **Parallel safely** - task-scoped execution and worktree rules reduce collisions.
-5. **Durable thinking** - notes persist with provenance for reuse and filtering.
+5. **Durable thinking** - resources persist with provenance for reuse and filtering.
 
 ## Core principles
 
@@ -50,7 +50,7 @@ YouTube/social/content workflows are treated as derivative patterns on top of th
 ## Architecture references
 
 - Execution mechanics: `docs/architecture/execution-model.md`
-- Notes output model: `docs/architecture/notes-model.md`
+- Resources output model: `docs/architecture/resources-model.md`
 - Rules/defaults schema: `docs/config/area-project-task-rules.md`
 
 ## Non-goals (current MVP)

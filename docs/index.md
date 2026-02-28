@@ -21,8 +21,8 @@ These docs define the current MVP direction for Isagi: a desktop-first context c
 
 ## Architecture
 
-- **[Execution model](./architecture/execution-model.md)** - execution roots, git modes, sessions, worktrees, and close-task safety.
-- **[Notes model](./architecture/notes-model.md)** - global notes storage, scoping, write semantics, and provenance.
+- **[Execution model](./architecture/execution-model.md)** - execution roots, storage modes, sessions, worktrees, and close-task safety.
+- **[Resources model](./architecture/resources-model.md)** - durable resources, storage modes, and lifecycle semantics.
 
 ## Configuration
 

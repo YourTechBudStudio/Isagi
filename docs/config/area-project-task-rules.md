@@ -1,6 +1,6 @@
 # Area/Project/Task Rules
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 This document defines configuration-level rules and defaults for area/project/task behavior.
 
@@ -9,15 +9,20 @@ This document defines configuration-level rules and defaults for area/project/ta
 Minimal canonical layout (illustrative):
 
 ```txt
-areas/
-  <area-id>/
-    area.yaml
-    projects/
-      <project-id>/
-        project.yaml
+workspace/
+  areas/
+    <area-id>/
+      area.yaml
+      resources/
+        <resource-name>/
+      projects/
+        <project-id>/
+          project.yaml
+          resources/
+            <resource-name>/
 ```
 
-Notes:
+Remarks:
 
 - Area and project IDs should be stable and filesystem-safe.
 - ID values should match directory names to reduce ambiguity.
@@ -26,12 +31,12 @@ Notes:
 
 - **Area**
   - owns rule templates and defaults
-  - declares git mode
+  - declares storage mode
   - declares area-level execution defaults
 - **Project**
   - groups tasks
   - can override execution defaults
-  - may be repo-backed depending on area git mode
+  - may be repo-backed depending on area storage mode
 - **Task**
   - execution unit
   - may override execution root
@@ -48,18 +53,18 @@ Execution root resolution order:
 
 This hierarchy should be explicit and deterministic.
 
-## Area git mode and constraints
+## Area storage mode and constraints
 
-Allowed per-area values:
+Allowed per-area values (v1):
 
-- `none`
-- `area_repo`
-- `project_repo`
+- `area_monorepo`
+- `resource_repos`
 
 Rules:
 
 - one fixed mode per area
 - no mixed mode ambiguity inside the same area
+- v1 resources are git-backed only; attach/detach is out of scope
 
 ## Minimal config fields
 
@@ -67,7 +72,7 @@ Minimum expected fields (conceptual):
 
 - area:
   - `id`
-  - `git_mode`
+  - `storage_mode`
   - default execution root policy
   - command template defaults
 - project:
@@ -78,13 +83,10 @@ Minimum expected fields (conceptual):
 
 These are intentionally minimal to keep configuration evolvable in MVP.
 
-## Project creation requirements by git mode
+## Project creation requirements by storage mode
 
-- if `none`: project does not require repo setup
-- if `area_repo`: area repo is available; project may still define execution defaults
-- if `project_repo`: project creation must initialize repository state
-  - clone from URL, or
-  - init empty repo
+- if `area_monorepo`: area repo is initialized/cloned once; projects are subpaths under it
+- if `resource_repos`: project scaffolding creates the expected workspace subpaths; resources are initialized/cloned as git-backed units when created
 
 ## Command templates and start behavior
 

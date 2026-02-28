@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -14,7 +14,7 @@ Area responsibilities:
 
 - define defaults and constraints
 - define command templates
-- define git mode (`none | area_repo | project_repo`)
+- define storage mode (`area_monorepo | resource_repos`)
 - define default execution root behavior
 
 ### Project
@@ -25,7 +25,7 @@ Projects:
 
 - organize tasks
 - can carry project-level default execution root rules
-- may map to a git repo depending on area git mode
+- may be repo-backed depending on area storage mode
 
 ### Task
 
@@ -44,11 +44,17 @@ A spark is a raw idea capture.
 
 Sparks are global inputs that triager develops into proposed project/task structures.
 
-### Note
+### Resource
 
-A note is the primary durable output in MVP.
+A resource is the primary durable output in MVP.
 
-Notes are global storage objects with provenance tags (spark/area/project/task references) used for scoping and future filtering.
+Resources are git-backed units of knowledge/code owned by an area or project and used for context continuity.
+
+### Legacy output model (deprecated)
+
+Earlier drafts used a different durable output concept. MVP uses resources.
+
+Canonical model: `docs/architecture/resources-model.md`.
 
 ### Session
 
@@ -77,8 +83,14 @@ Worktree lifecycle is task-scoped, not session-scoped.
 3. **Execution root is deterministic.**
 4. **Worktree lifecycle is task-bound.**
 5. **Task close is safety-gated.**
-6. **Notes are the MVP output layer.**
+6. **Resources are the MVP durable output layer.**
 7. **Only triage/finalize mutates graph objects.** Execution sessions do not directly create spark/project/task objects.
+
+## Resources vs execution
+
+- tasks still anchor sessions and execution history
+- sessions run in an execution scope resolved deterministically
+- v1 posture is safe-by-review; resources are git-backed and changes are reviewable
 
 ---
 
@@ -91,19 +103,18 @@ Execution root resolves in this order:
 3. area default
 4. area root fallback
 
-`git_mode` and execution-root defaults are related but independent rules.
+`storage_mode` and execution-root defaults are related but independent rules.
 
 ---
 
-## Area git modes
+## Area storage modes
 
-Each area declares one fixed git mode:
+Each area declares one fixed storage mode:
 
-- `none`
-- `area_repo`
-- `project_repo`
+- `area_monorepo`
+- `resource_repos`
 
-When `project_repo` is active, project creation requires repo initialization via:
+When `resource_repos` is active, resource creation requires repository initialization via:
 
 - clone from URL, or
 - create empty local git repo (remote optional later)
@@ -154,14 +165,13 @@ Focus queue is task-first, with session-level visibility:
 
 ---
 
-## Notes model (conceptual)
+## Resources model (conceptual)
 
-- Notes are globally stored, not coupled to code repo commits.
-- Session scope determines default note search scope.
-- Read-before-write semantics are enforced for safe concurrent edits.
-- Canonical taxonomy supports area/project-oriented organization.
+- Resources are git-backed and owned by areas/projects.
+- Session scope influences default resource retrieval and context assembly.
+- v1 constraints: human/template creation, no attach/detach.
 
-See `docs/architecture/notes-model.md` for operational details.
+See `docs/architecture/resources-model.md` for operational details.
 
 ---
 
@@ -184,4 +194,4 @@ Spark: "Use git worktrees to parallelize small coding tasks."
 
 - Exact command template schema details.
 - Exact UI polish for review/focus surfaces.
-- Exact notes tool shape (documented as suggested contracts for MVP).
+- Exact resources tooling shape (documented as suggested contracts for MVP).

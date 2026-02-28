@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 This document defines what we are building for the MVP.
 
@@ -79,16 +79,18 @@ Triager behavior in MVP:
 - Worktree lifecycle is tied to task lifecycle.
 - Tasks can reuse the same attached worktree across multiple sessions.
 - Closing a task is blocked until repo state is resolved (merged/discarded).
+- Power mode carve-out: in multi-repo execution contexts, some checks may be warn-only when a definitive resolved/unresolved verdict cannot be computed safely; the user must explicitly confirm before closing.
 - On successful close:
   - mark task done
   - close associated sessions
   - delete task worktree and branch
 
-#### 8) Notes model integration
+#### 8) Resources model integration
 
-- Notes replace artifact-centric MVP output modeling.
-- Notes are global storage with area/project/task provenance.
-- Session scope determines default note search scope.
+- Resources replace artifact-centric MVP output modeling.
+- Resources are git-backed and owned by areas/projects.
+- Session/execution scope influences default resource retrieval and context assembly.
+- v1 constraint: resources are created by humans or templates; execution sessions do not create resources directly.
 
 ---
 
@@ -149,7 +151,7 @@ Qualitative validation signals:
 | Scope drift into workflow-specific templates too early | Keep model generic; encode behavior via rules/config        |
 | Git lifecycle edge cases create user confusion         | Keep close-task gates explicit and error states inspectable |
 | Proposal queue grows without decisions                 | Keep review/finalize UX fast and batch-friendly             |
-| Notes become unstructured quickly                      | Keep provenance tags + scoped search from day one           |
+| Resources sprawl without conventions                   | Keep ownership + naming rules and scope-aware retrieval     |
 
 ---
 
@@ -159,4 +161,4 @@ Qualitative validation signals:
 2. Implement triage review/finalize flow with atomic apply guarantees.
 3. Implement task execution surface and multi-session visibility.
 4. Implement worktree lifecycle gates for close-task safety.
-5. Implement scoped notes tools + indexing.
+5. Implement scoped resources tooling + indexing.

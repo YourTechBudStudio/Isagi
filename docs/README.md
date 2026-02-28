@@ -17,7 +17,7 @@ This is the living index for all documentation under `docs/`.
 ## Architecture
 
 - [architecture/execution-model.md](./architecture/execution-model.md)
-- [architecture/notes-model.md](./architecture/notes-model.md)
+- [architecture/resources-model.md](./architecture/resources-model.md)
 
 ## Configuration
 

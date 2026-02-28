@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 ## Journey goals
 
@@ -105,4 +105,4 @@ Examples:
 - Execution root resolution is deterministic.
 - Worktree lifecycle is task-scoped.
 - Task closure is safety-gated.
-- Notes persist with scope-aware retrieval.
+- Resources persist with scope-aware retrieval.

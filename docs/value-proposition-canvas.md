@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-19
+**Last updated:** 2026-02-26
 
 This canvas is the **strategic framing source of truth**.
 
@@ -18,15 +18,15 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 ### Jobs to be Done
 
-| Job                                                                                                 | Type       | Priority |
-| --------------------------------------------------------------------------------------------------- | ---------- | -------- |
-| Progress coding/product tasks consistently with low startup friction                                | Core       | Highest  |
-| Develop raw sparks into executable tasks and durable notes                                          | Core       | High     |
-| Run multiple task threads in parallel without repo/context collisions                               | Core       | High     |
-| Maintain a healthy actionable queue so I always know what to do next                                | Core       | High     |
-| Capture ideas quickly when they occur                                                               | Supporting | High     |
-| Preserve internal documentation/notes without coupling them to public/open-source code repositories | Supporting | Medium   |
-| Track progress across areas/projects/tasks                                                          | Supporting | Low      |
+| Job                                                                                                     | Type       | Priority |
+| ------------------------------------------------------------------------------------------------------- | ---------- | -------- |
+| Progress coding/product tasks consistently with low startup friction                                    | Core       | Highest  |
+| Develop raw sparks into executable tasks and durable resources                                          | Core       | High     |
+| Run multiple task threads in parallel without repo/context collisions                                   | Core       | High     |
+| Maintain a healthy actionable queue so I always know what to do next                                    | Core       | High     |
+| Capture ideas quickly when they occur                                                                   | Supporting | High     |
+| Preserve internal documentation/resources without coupling them to public/open-source code repositories | Supporting | Medium   |
+| Track progress across areas/projects/tasks                                                              | Supporting | Low      |
 
 ### Pains
 
@@ -41,7 +41,7 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 | **Capture friction** — confusion about where to put ideas                                                            | Moderate |
 | **Ideas decay** — lose context, forget about them, laundry list graveyard                                            | Moderate |
 | **High setup overhead for small tasks** — context/briefing cost exceeds task size                                    | Moderate |
-| **Context scattered** — notes and decisions are spread across tools                                                  | Low      |
+| **Context scattered** — docs and decisions are spread across tools                                                   | Low      |
 
 ### Gains
 
@@ -62,17 +62,17 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 ### Products & Features
 
-| Feature                            | Description                                                                                                    |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                                |
-| **Smart triager**                  | Clarifies sparks and proposes area/project/task creation with reasoning and questions.                         |
-| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                              |
-| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.                 |
-| **Command-driven execution**       | Task start behavior comes from configurable commands/rules, not hardcoded task types.                          |
-| **Notes model**                    | Durable notes persist with area/project/task provenance and scope-aware retrieval.                             |
-| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                           |
-| **Generic primitives**             | A small universal model (area/project/task/spark/notes) supports many workflows without bespoke object models. |
-| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.                         |
+| Feature                            | Description                                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                             |
+| **Smart triager**                  | Clarifies sparks and proposes area/project/task creation with reasoning and questions.                      |
+| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                           |
+| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.              |
+| **Command-driven execution**       | Task start behavior comes from configurable commands/rules, not hardcoded task types.                       |
+| **Resources model**                | Durable resources persist with provenance and scope-aware retrieval.                                        |
+| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                        |
+| **Generic primitives**             | A small universal model (area/project/task/spark/resources) supports many workflows without bespoke models. |
+| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.                      |
 
 ### Pain Relievers
 
@@ -87,7 +87,7 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 | Capture friction               | Quick capture avoids early routing decisions.                                                                        |
 | Ideas decay                    | Triager converts sparks into reviewable proposals and follow-on work.                                                |
 | High setup overhead            | Rules and command templates make starting small tasks cheap.                                                         |
-| Context scattered              | Notes and provenance keep decisions and outputs discoverable.                                                        |
+| Context scattered              | Resources and provenance keep decisions and outputs discoverable.                                                    |
 
 ### Gain Creators
 
@@ -95,7 +95,7 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 | --------------------------- | ----------------------------------------------------------------------------------------- |
 | Warm starts                 | Every task/session opens with context assembled and clear next decision points            |
 | Co-ownership                | Interactive checkpoints keep user in control while agents accelerate execution            |
-| Context continuity          | Structured notes + session history + provenance links preserve continuity                 |
+| Context continuity          | Structured resources + session history + provenance links preserve continuity             |
 | Queue security              | Home/focus surfaces show what is blocked, active, and ready                               |
 | Getting to fun parts faster | Setup and recall overhead are reduced by rules, defaults, and resumable sessions          |
 | Desktop-first deep work     | One primary execution surface reduces context fragmentation                               |
@@ -107,7 +107,7 @@ For implementation scope and MVP build decisions, `docs/mvp-scope.md` wins.
 
 > **The system eliminates context loading as a barrier to creative work.**
 >
-> Every agent conversation starts pre-loaded with: the spark, relevant notes, prior decisions, execution context, and a summary that primes you on where things stand.
+> Every agent conversation starts pre-loaded with: the spark, relevant resources, prior decisions, execution context, and a summary that primes you on where things stand.
 >
 > You never start from zero. You never explain what you're working on. You never hunt for documents. You just continue.
 >
@@ -136,4 +136,4 @@ The difference between:
 4. **Fun parts fast** — Automate the unfun (context loading, setup overhead); preserve the fun (creative decisions, execution)
 5. **Desktop-first MVP** — Ship one strong deep-work surface first; add mobile later when core behavior is stable
 6. **Sparks can die** — Active work matters; graveyard of unpromoted sparks is acceptable
-7. **Context compounds** — Notes and session outputs remain available to downstream work
+7. **Context compounds** — Resources and session outputs remain available to downstream work
