@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 This document defines what we are building for the MVP.
 
@@ -76,14 +76,21 @@ Triager behavior in MVP:
 
 #### 7) Worktree lifecycle + close-task safety
 
-- Worktree lifecycle is tied to task lifecycle.
-- Tasks can reuse the same attached worktree across multiple sessions.
-- Closing a task is blocked until repo state is resolved (merged/discarded).
+- Worktrees are repo-scoped execution environments that live outside `workspace/` under a workspace-sibling worktree root.
+- Tasks hold immutable worktree mappings and may reference shared worktrees.
+- Worktree policy is resolved at task creation; git/worktree checks and create/attach happen at task start.
+- Task creation snapshots source/merge-target branch baseline for later start/close checks.
+- If execution root is not inside a git repo, no managed worktree is created.
+- Closing a task is blocked until repo state is resolved (merged/discarded), unless another active task references the same worktree.
+- When close checks apply, dirty worktree state blocks close.
 - Power mode carve-out: in multi-repo execution contexts, some checks may be warn-only when a definitive resolved/unresolved verdict cannot be computed safely; the user must explicitly confirm before closing.
 - On successful close:
   - mark task done
   - close associated sessions
-  - delete task worktree and branch
+  - delete task worktree and branch only when no active references remain and close checks pass
+- Worktree-related start/close errors (including missing mapped worktree or branch-baseline drift/removal) are terminal for that task; recovery is manual resolution/cleanup then restart from blank task.
+
+Detailed runtime mechanics are canonical in `docs/architecture/execution-model.md`.
 
 #### 8) Resources model integration
 

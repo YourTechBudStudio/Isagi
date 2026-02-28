@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 ## Journey goals
 
@@ -49,15 +49,17 @@ Only the triage review/finalize path mutates graph objects. Execution sessions d
 
 1. User opens a created task.
 2. Task tab opens immediately.
-3. If selected command requires setup, UI shows `Preparing environment...`.
-4. If command has starter prompt, it auto-sends as a user-style message.
-5. Session becomes active for iterative execution.
+3. At start, system runs setup checks, including worktree create/attach when task policy requires it.
+4. If selected command requires setup, UI shows `Preparing environment...`.
+5. `started` is reached only after environment attach succeeds.
+6. If command has starter prompt, it auto-sends as a user-style message.
+7. Session becomes active for iterative execution.
 
 ## Scenario E: Multi-session task handling
 
 1. User can create additional sessions on same task.
 2. All sessions for that task share the task lifecycle context.
-3. If task has an attached worktree, all task sessions reuse it.
+3. If task has a worktree mapping, all task sessions reuse that mapped worktree.
 4. Focus queue remains task-first with session visibility.
 5. Session chips behavior:
    - max 3 visible per task card
@@ -67,12 +69,16 @@ Only the triage review/finalize path mutates graph objects. Execution sessions d
 ## Scenario F: Close task with git safety checks
 
 1. User chooses `Close task`.
-2. System verifies task repo state.
-3. If unresolved, close is blocked with clear reason/output details.
-4. If resolved, close succeeds and system:
+2. System checks whether another active task references the same worktree (active means started, not done, and not in error).
+3. If another active task references it, this task closes without running worktree close checks.
+4. Otherwise, system verifies the mapped worktree still exists.
+5. If mapped worktree is missing, task enters `error` and close is not completed.
+6. Otherwise, system verifies repo/worktree state.
+7. If worktree is dirty or otherwise unresolved, close is blocked with clear reason/output details.
+8. If resolved, close succeeds and system:
    - marks task done
    - closes associated sessions
-   - deletes task worktree/branch
+   - deletes task worktree/branch only when no active references remain
 
 ## Command surfaces (top bar + command palette)
 
@@ -92,7 +98,8 @@ Examples:
 ## Error and recovery paths
 
 - **Triage apply failure:** keep triage open, show failure details, allow correction and retry.
-- **Setup failure on task start:** show full error, allow retry, and clean failed setup artifacts when safe to do so.
+- **Worktree failure on task start:** set task to `error` (for example missing mapped worktree or branch-baseline drift); task is not recoverable in place and must be restarted from blank after manual resolution/cleanup.
+- **Worktree failure on close:** if mapped worktree is missing at close-check time, set task to `error`; user remediates manually, then uses restart-from-blank task action.
 - **Close-task verification failure:** block close, show reason and output details.
 - **Network unavailable:** block close checks that require remote verification.
 
@@ -103,6 +110,6 @@ Examples:
 - Only triage/finalize mutates graph objects.
 - Every task belongs to a project.
 - Execution root resolution is deterministic.
-- Worktree lifecycle is task-scoped.
+- Worktree mapping is task-scoped and immutable after assignment.
 - Task closure is safety-gated.
 - Resources persist with scope-aware retrieval.

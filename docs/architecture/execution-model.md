@@ -1,6 +1,6 @@
 # Execution Model
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments.
 
@@ -8,11 +8,18 @@ This document defines runtime execution behavior for tasks, sessions, and git-ba
 
 `area root` means the canonical filesystem root for one area.
 
+`worktree root` means the workspace-sibling root where all managed git worktrees live.
+
+`main workspace branch` means the branch in the main workspace repository that is snapshotted at task creation as the merge-target baseline for that task.
+
 Conventions:
 
 - each area has one stable area root directory
 - project directories live under their parent area root
 - task execution roots resolve to either area root or project root per resolver/defaults
+- managed worktrees live under `worktree root`, not under `workspace/`
+- worktree identity is globally unique by `(repo-key, branch-slug)`
+- naming/normalization constraints for `repo-key` and `branch-slug` are defined in `docs/product/config/area-project-task-rules.md`
 
 Area storage mode implications (v1):
 
@@ -28,23 +35,27 @@ MVP uses a single canonical workspace root.
 Conceptual layout:
 
 ```txt
-workspace/
-  areas/
-    <area-id>/
-      area.yaml
-      resources/
-        <resource-name>/
-      projects/
-        <project-id>/
-          project.yaml
-          resources/
-            <resource-name>/
+isagi-root/
+  workspace/
+    areas/
+      <area-id>/
+        area.yaml
+        resources/
+          <resource-name>/
+        projects/
+          <project-id>/
+            project.yaml
+            resources/
+              <resource-name>/
+  worktrees/
+    <repo-key>-<branch-slug>/
 ```
 
 Remarks:
 
 - workspace paths are derived from ownership + naming; identity is not the path
-- tasks may create worktrees/branches under an execution root, but the workspace remains the canonical place to find them
+- execution root still determines command/session default working context
+- managed worktrees are physically created under `worktree root`
 
 ## Execution root resolver
 
@@ -82,19 +93,21 @@ When `resource_repos` is used, resource creation requires either:
 
 - Task is the execution anchor.
 - A task can have multiple sessions.
-- A task may have one attached worktree lifecycle.
-- Worktree lifecycle is tied to task lifecycle, not session lifecycle.
-- If a task has an attached worktree, sessions for that task reuse it.
+- A task may include one immutable worktree assignment.
+- Worktree assignment points to a globally unique `(repo-key, branch-slug)` identity.
+- Multiple tasks may reference the same worktree identity.
+- If a task has a worktree assignment, sessions for that task reuse that same worktree.
 
 ## Worktree isolation
 
-Worktrees provide task-level isolation.
+Worktrees provide repo/branch-scoped execution environments.
 
 Requirements:
 
-- worktrees are created per-task (not shared across tasks)
-- a task reuses its attached worktree across sessions
-- close-task cleanup deletes the task worktree and branch on successful close
+- worktrees are not created during task creation; create/attach runs at task start
+- worktree assignment is immutable once set on a task
+- tasks may share a worktree; cleanup decisions are reference-aware
+- active reference means another task that is started, not done, and not in error
 
 ## Start task behavior (command-driven)
 
@@ -108,6 +121,14 @@ Command-driven start may include:
 - environment setup
 - optional starter prompt auto-send
 
+Worktree policy timing:
+
+- worktree creation policy resolves at task creation (task override -> project default -> area default -> system default)
+- task creation snapshots worktree identity and branch baseline (source branch + merge target branch from the main workspace branch at creation time)
+- all policy enforcement and git/worktree operations run at task start
+- if execution root is not inside a git repo, no managed worktree is created
+- branch baseline is validated at task start against the task snapshot
+
 UI behavior:
 
 - open task tab immediately
@@ -116,28 +137,34 @@ UI behavior:
 Setup failure semantics:
 
 - surface full error details in-session
-- provide explicit retry action
-- if setup failed before any successful task session turn, cleanup may remove failed setup artifacts (for example stale worktree/branch) so retry starts clean
-- do not auto-delete established worktrees that have already been used by successful sessions
+- provide explicit retry action for non-worktree setup failures
+- if mapped worktree is missing, task enters `error`
+- if source or merge-target branch snapshot has changed/been removed, task enters `error`
+- worktree-related task errors are terminal; remedy is manual resolution/cleanup then restart task from blank state (existing task progress is not preserved)
 
 ## Close task behavior (verification, blocking, cleanup)
 
 Close-task flow:
 
-1. run verification checks for task repo/worktree state
-2. if unresolved, block close and show clear reason/output
-3. if resolved, complete close
+1. if another active task references the same worktree, skip verification checks and allow close
+2. otherwise verify the mapped worktree still exists; if missing, task enters `error`
+3. otherwise run verification checks for task repo/worktree state
+4. if unresolved, block close and show clear reason/output
+5. if resolved, complete close
 
 Verification intent:
 
 - prevent silent loss of unresolved task changes
 - allow close only when state is verifiably resolved or explicitly discarded
+- when checks run, dirty worktree state blocks close
+- evaluate merge/deletability against the task's snapshotted merge target
+- enforce non-force cleanup semantics equivalent to deletability under `git branch -d`
 
 On successful close:
 
 - mark task done
 - close all task sessions
-- delete task worktree and branch
+- when no active task references remain and checks pass, delete task worktree and branch
 
 On failed close verification:
 
@@ -160,6 +187,7 @@ Safety posture:
 
 - default behavior remains safety-gated close (blocking) when checks definitively show unresolved state
 - in power mode, checks that cannot be made definitive across multiple roots may be downgraded to warn-only with explicit user confirmation (as defined in `docs/product/mvp-scope.md`)
+- power mode does not auto-orchestrate worktrees across multiple repos; multi-repo worktree handling remains manual
 
 ## Sync policy and network requirements
 

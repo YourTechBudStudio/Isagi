@@ -1,6 +1,6 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 ## One-liner
 
@@ -18,7 +18,7 @@ Isagi is a context continuity engine for execution-heavy knowledge work: capture
 1. **Capture quickly** - sparks are easy to record when ideas hit.
 2. **Clarify before committing** - triager strengthens sparks and proposes work in reviewable form.
 3. **Warm starts** - every task resumes with context already assembled.
-4. **Parallel safely** - task-scoped execution and worktree rules reduce collisions.
+4. **Parallel safely** - task-scoped execution plus repo/branch-scoped shared worktree mapping rules reduce collisions.
 5. **Durable thinking** - resources persist with provenance for reuse and filtering.
 
 ## Core principles

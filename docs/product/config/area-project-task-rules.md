@@ -1,6 +1,6 @@
 # Area/Project/Task Rules
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 This document defines configuration-level rules and defaults for area/project/task behavior.
 
@@ -26,6 +26,7 @@ Remarks:
 
 - Area and project IDs should be stable and filesystem-safe.
 - ID values should match directory names to reduce ambiguity.
+- Managed worktrees are not part of `workspace/`; they live under a separate workspace-sibling worktree root.
 
 ## Core object responsibilities
 
@@ -53,6 +54,39 @@ Execution root resolution order:
 
 This hierarchy should be explicit and deterministic.
 
+## Worktree creation policy
+
+Per-task worktree behavior is controlled by a policy enum:
+
+- `ALWAYS` - create a new worktree at task start; fail if the target worktree already exists
+- `IF_NOT_EXISTS` - create when missing, otherwise attach to existing worktree (system default)
+- `NEVER` - require existing worktree; fail if missing
+
+Worktree identity fields:
+
+- `repo-key` and `branch-slug` are required identity fields for managed worktrees
+- both fields must be normalized to sanitized filesystem-safe slugs before use (for example lowercase, separator-safe values)
+- uniqueness is enforced on the normalized `(repo-key, branch-slug)` pair
+
+Policy resolver hierarchy:
+
+1. task override
+2. project default
+3. area default
+4. system default (`IF_NOT_EXISTS`)
+
+Timing:
+
+- policy is resolved and snapshotted at task creation
+- branch baseline for later merge checks is snapshotted at task creation
+- policy enforcement and all git/worktree operations run at task start
+
+Constraints:
+
+- worktree assignment on task is immutable once set
+- create/attach requires execution root to be inside a git repo
+- policy violations fail task start and place the task in `error`; recovery requires manual cleanup and restart from blank task
+
 ## Area storage mode and constraints
 
 Allowed per-area values (v1):
@@ -74,11 +108,13 @@ Minimum expected fields (conceptual):
   - `id`
   - `storage_mode`
   - default execution root policy
+  - default worktree creation policy (optional)
   - command template defaults
 - project:
   - `id`
   - parent area reference
   - optional execution root override
+  - optional worktree creation policy override
   - optional command template override
 
 These are intentionally minimal to keep configuration evolvable in MVP.

@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-28
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -35,7 +35,7 @@ Task properties (conceptual):
 
 - belongs to exactly one project
 - has session history
-- may have an attached worktree lifecycle
+- may carry an immutable worktree assignment
 - can be started via command templates or as empty chat
 
 ### Spark
@@ -70,9 +70,9 @@ Multiple sessions can exist under one task.
 
 ### Worktree
 
-A worktree is an optional execution environment attached to a task.
+A worktree is an optional repo/branch-scoped execution environment.
 
-Worktree lifecycle is task-scoped, not session-scoped.
+Worktree identity is globally unique by `(repo-key, branch-slug)` and tasks reference it through immutable assignment.
 
 ---
 
@@ -81,10 +81,12 @@ Worktree lifecycle is task-scoped, not session-scoped.
 1. **Triager is propose-only.** Nothing is created until user finalizes.
 2. **Every task belongs to a project.** No orphan tasks.
 3. **Execution root is deterministic.**
-4. **Worktree lifecycle is task-bound.**
-5. **Task close is safety-gated.**
-6. **Resources are the MVP durable output layer.**
-7. **Only triage/finalize mutates graph objects.** Execution sessions do not directly create spark/project/task objects.
+4. **Worktree assignment is immutable per task.**
+5. **Worktree identity is globally unique by `(repo-key, branch-slug)`.**
+6. **Worktree operations are git-context-gated.**
+7. **Task close is safety-gated.**
+8. **Resources are the MVP durable output layer.**
+9. **Only triage/finalize mutates graph objects.** Execution sessions do not directly create spark/project/task objects.
 
 ## Resources vs execution
 
@@ -138,15 +140,16 @@ Triage output states include proposed/approved/rejected/applied semantics in imp
 ## Task/session/worktree lifecycle
 
 1. Open task.
-2. Start empty session or command-driven session.
-3. Optional setup runs (for commands that require environment prep).
-4. Session continues across resumptions.
-5. Multiple sessions can run under same task.
-6. If task has worktree, sessions reuse that worktree.
-7. Close task requires resolved repo state.
-8. On success, task is done, sessions close, worktree/branch clean up.
+2. Worktree policy resolves at task creation (task -> project -> area -> system default), and branch baseline is snapshotted.
+3. Start empty session or command-driven session; start-time checks handle worktree create/attach when applicable.
+4. Task is `started` only after successful environment attach.
+5. Session continues across resumptions; multiple sessions under one task reuse the same mapped worktree.
+6. Close task runs safety checks unless another active task references the same worktree.
+7. On success, task is done, sessions close, and worktree/branch cleanup is conditional on active references + verification checks.
+8. Worktree-related start/close failures can move task to `error`; remedy is manual resolution/cleanup then restart from blank task.
 
-Runtime failure, verification, and sync details are canonical in `docs/architecture/execution-model.md`.
+Runtime mechanics are canonical in `docs/architecture/execution-model.md`.
+Worktree policy and naming constraints are canonical in `docs/product/config/area-project-task-rules.md`.
 
 ---
 
