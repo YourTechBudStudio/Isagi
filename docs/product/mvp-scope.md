@@ -37,7 +37,7 @@ Triager runs automatically on spark creation, but remains **propose-only**.
 Triager behavior in MVP:
 
 - Start with spark-strengthening questions before proposing routing or object creation.
-- Read area/project/task rules from filesystem configuration.
+- Consult agent-facing area guidance (for example area-level `AGENTS.md`, plus explicitly reading the relevant area-level `TRIAGE.md` as instructed by the triager's automatic starting message; see `docs/product/config/agent-guidance-projections.md`).
 - Propose only graph mutations:
   - create spark
   - create project

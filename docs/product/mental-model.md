@@ -16,6 +16,7 @@ Area responsibilities:
 - define command templates
 - define storage mode (`area_monorepo | resource_repos`)
 - define default execution root behavior
+- may project agent-facing guidance to files like `AGENTS.md` and `TRIAGE.md`
 
 ### Project
 
@@ -26,6 +27,8 @@ Projects:
 - organize tasks
 - can carry project-level default execution root rules
 - may be repo-backed depending on area storage mode
+
+Note: In MVP direction, authoritative configuration is metadata-backed; filesystem guidance (for example `AGENTS.md` / `TRIAGE.md`) is primarily for agent context.
 
 ### Task
 

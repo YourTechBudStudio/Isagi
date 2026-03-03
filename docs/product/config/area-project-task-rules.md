@@ -12,12 +12,12 @@ Minimal canonical layout (illustrative):
 workspace/
   areas/
     <area-id>/
-      area.yaml
+      AGENTS.md
+      TRIAGE.md
       resources/
         <resource-name>/
       projects/
         <project-id>/
-          project.yaml
           resources/
             <resource-name>/
 ```
@@ -31,7 +31,8 @@ Remarks:
 ## Core object responsibilities
 
 - **Area**
-  - owns rule templates and defaults
+  - owns defaults and constraints (authoritative metadata)
+  - may project agent guidance to filesystem (`AGENTS.md`, `TRIAGE.md`)
   - declares storage mode
   - declares area-level execution defaults
 - **Project**
@@ -41,7 +42,7 @@ Remarks:
 - **Task**
   - execution unit
   - may override execution root
-  - references command template for start behavior
+  - references command templates for start behavior (authoritative metadata)
 
 ## Defaults and override hierarchy
 
@@ -102,14 +103,14 @@ Rules:
 
 ## Minimal config fields
 
-Minimum expected fields (conceptual):
+Minimum expected fields (conceptual metadata):
 
 - area:
   - `id`
   - `storage_mode`
   - default execution root policy
   - default worktree creation policy (optional)
-  - command template defaults
+  - command template defaults (executable contracts; metadata-backed)
 - project:
   - `id`
   - parent area reference
@@ -119,6 +120,8 @@ Minimum expected fields (conceptual):
 
 These are intentionally minimal to keep configuration evolvable in MVP.
 
+Agent-facing guidance can be projected to area-level files like `AGENTS.md` and `TRIAGE.md`. See `docs/product/config/agent-guidance-projections.md`.
+
 ## Project creation requirements by storage mode
 
 - if `area_monorepo`: area repo is initialized/cloned once; projects are subpaths under it
@@ -127,6 +130,8 @@ These are intentionally minimal to keep configuration evolvable in MVP.
 ## Command templates and start behavior
 
 Start behavior should be defined by templates/rules, not hardcoded task types.
+
+In MVP direction, command templates are treated as metadata-backed executable contracts (not authored as filesystem config). Agent-facing guidance is projected separately; see `docs/product/config/agent-guidance-projections.md`.
 
 Template-controlled options can include:
 

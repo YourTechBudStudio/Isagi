@@ -26,7 +26,7 @@
 ## Scenario B: Triage and proposal review
 
 1. Triager starts from spark-strengthening questions.
-2. Triager consults area/project/task rules and current state.
+2. Triager consults area guidance (for example `AGENTS.md` and explicitly loaded `TRIAGE.md`; see `docs/product/config/agent-guidance-projections.md`) and current state.
 3. Triager proposes one or more graph mutations (spark/project/task only).
 4. Proposals appear in review state, backed by persisted proposal data.
 5. User can:

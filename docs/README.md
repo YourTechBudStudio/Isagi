@@ -29,6 +29,7 @@ These docs define the current MVP direction for Isagi: a desktop-first context c
 ### docs/product/
 
 - [docs/product/archived/mobile-home.md](/docs/product/archived/mobile-home.md)
+- [docs/product/config/agent-guidance-projections.md](/docs/product/config/agent-guidance-projections.md)
 - [docs/product/config/area-project-task-rules.md](/docs/product/config/area-project-task-rules.md)
 - [docs/product/mental-model.md](/docs/product/mental-model.md)
 - [docs/product/mvp-scope.md](/docs/product/mvp-scope.md)

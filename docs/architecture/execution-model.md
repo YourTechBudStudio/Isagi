@@ -39,12 +39,12 @@ isagi-root/
   workspace/
     areas/
       <area-id>/
-        area.yaml
+        AGENTS.md
+        TRIAGE.md
         resources/
           <resource-name>/
         projects/
           <project-id>/
-            project.yaml
             resources/
               <resource-name>/
   worktrees/
