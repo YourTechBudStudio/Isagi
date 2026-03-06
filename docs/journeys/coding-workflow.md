@@ -1,115 +1,98 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-06
 
 ## Journey goals
 
 - Make execution feel resumable, not restart-heavy.
-- Convert sparks into actionable task structures safely.
+- Keep task upkeep lightweight.
 - Support parallel coding threads without context collisions.
-- Keep close-task behavior safe and explicit.
+- Keep review and handoff on the same task instead of creating subtask overhead.
 
 ## Actors and surfaces
 
-- **User** - creates sparks, approves proposals, runs sessions, closes tasks.
-- **Desktop app (Isagi)** - orchestration, review, command surfaces, lifecycle controls.
-- **Triager session** - clarifies sparks and proposes graph changes.
-- **Execution session (OpenCode-backed)** - task-focused agent work.
+- **User** - creates tasks, starts sessions, and changes statuses.
+- **Desktop app (Isagi)** - task list, command surfaces, git controls, session visibility.
+- **Execution session (OpenCode-backed)** - task-linked agent work.
 
-## Scenario A: Spark capture on desktop
+## Scenario A: Create a task from command palette
 
-1. User creates a spark from desktop capture input.
-2. Spark is stored quickly with minimal friction.
-3. System shows success feedback and an `Open triage now` action.
-4. If user clicks `Open triage now`, a new tab opens and is focused.
+1. User runs a command such as `Create task`.
+2. User selects a project or uses the currently active project context.
+3. User enters task details such as title, optional priority, and labels.
+4. Task appears in the project task list with its project-defined default status.
 
-## Scenario B: Triage and proposal review
+## Scenario B: Start an ad-hoc session
 
-1. Triager starts from spark-strengthening questions.
-2. Triager consults area guidance (for example `AGENTS.md` and explicitly loaded `TRIAGE.md`; see `docs/product/config/agent-guidance-projections.md`) and current state.
-3. Triager proposes one or more graph mutations (spark/project/task only).
-4. Proposals appear in review state, backed by persisted proposal data.
-5. User can:
-   - approve/reject individual rows
-   - bulk approve/reject
-   - ask triager via chat to revise proposals
-   - manually edit proposal fields where allowed
+1. User starts a session from project context without creating a task first.
+2. Isagi creates a visible task automatically.
+3. The task title is generated from the first user message and can be renamed later.
+4. The session is attached to that task and opens in the project repo root.
 
-Only the triage review/finalize path mutates graph objects. Execution sessions do not directly create spark/project/task objects.
+## Scenario C: Choose execution mode and begin work
 
-## Scenario C: Finalize and object creation (atomic)
+1. Session starts from the task's project repo root.
+2. User chooses to:
+   - stay on the current branch
+   - create/use a managed worktree
+   - decide interactively when the project/global default is `ask_each_time`
+3. If a managed worktree is selected, Isagi creates it automatically.
+4. Agent work begins in the chosen execution root.
 
-1. User clicks `Finalize`.
-2. System applies all approved proposals atomically.
-3. Remaining proposed items are auto-rejected.
-4. On success, triage tab shows created objects with `Open` actions.
-5. User can continue chatting in triage or close the tab.
+## Scenario D: Continue across one or more sessions
 
-## Scenario D: Open task and start execution
+1. User can open additional sessions on the same task.
+2. Sessions are peers; none is primary by default.
+3. One session may implement while another reviews or follows up.
+4. Sessions can be manually closed when they are no longer relevant.
 
-1. User opens a created task.
-2. Task tab opens immediately.
-3. At start, system runs setup checks, including worktree create/attach when task policy requires it.
-4. If selected command requires setup, UI shows `Preparing environment...`.
-5. `started` is reached only after environment attach succeeds.
-6. If command has starter prompt, it auto-sends as a user-style message.
-7. Session becomes active for iterative execution.
+## Scenario E: Rebind and collision-awareness
 
-## Scenario E: Multi-session task handling
+1. During a session, the user may switch branches or move to/from a managed worktree.
+2. If the execution root path changes, Isagi rebinds the same session to the new root.
+3. Isagi warns when other active or idle-but-recent sessions share that directory.
+4. Task and session UI can show overlapping sessions or active session counts for that directory.
+5. The warning helps the user inspect overlapping sessions without hard-blocking work.
 
-1. User can create additional sessions on same task.
-2. All sessions for that task share the task lifecycle context.
-3. If task has a worktree mapping, all task sessions reuse that mapped worktree.
-4. Focus queue remains task-first with session visibility.
-5. Session chips behavior:
-   - max 3 visible per task card
-   - order: waiting-on-you, active, idle
-   - overflow (`+N`) opens session picker
+## Scenario F: Update task status
 
-## Scenario F: Close task with git safety checks
+1. User changes task status manually.
+2. Status labels are project-specific but map to global buckets.
+3. Moving the task into a `done`-bucket status closes its sessions.
+4. Git merge and worktree cleanup remain separate manual actions.
 
-1. User chooses `Close task`.
-2. System checks whether another active task references the same worktree (active means started, not done, and not in error).
-3. If another active task references it, this task closes without running worktree close checks.
-4. Otherwise, system verifies the mapped worktree still exists.
-5. If mapped worktree is missing, task enters `error` and close is not completed.
-6. Otherwise, system verifies repo/worktree state.
-7. If worktree is dirty or otherwise unresolved, close is blocked with clear reason/output details.
-8. If resolved, close succeeds and system:
-   - marks task done
-   - closes associated sessions
-   - deletes task worktree/branch only when no active references remain
+## Future phase note
+
+Spark capture and spark triage are deferred to Phase 2. They are not part of the first MVP release path documented here.
 
 ## Command surfaces (top bar + command palette)
 
 Commands are available through:
 
-- top-bar contextual actions in task view
+- top-bar contextual actions in task and session views
 - global command palette
 
 Examples:
 
-- open task session
+- create task
+- start ad-hoc session
 - start new task session
-- create spark
-- open triage
-- close task
+- change task status
+- switch execution root / create worktree
 
 ## Error and recovery paths
 
-- **Triage apply failure:** keep triage open, show failure details, allow correction and retry.
-- **Worktree failure on task start:** set task to `error` (for example missing mapped worktree or branch-baseline drift); task is not recoverable in place and must be restarted from blank after manual resolution/cleanup.
-- **Worktree failure on close:** if mapped worktree is missing at close-check time, set task to `error`; user remediates manually, then uses restart-from-blank task action.
-- **Close-task verification failure:** block close, show reason and output details.
-- **Network unavailable:** block close checks that require remote verification.
+- **Ad-hoc session title is poor:** keep the auto-generated task, but allow quick rename.
+- **Worktree creation failure:** keep the session in `error` and let the user retry or choose a different execution root.
+- **Rebind failure:** preserve the same session identity, surface the error, and wait for manual correction.
+- **Collision warning ignored:** do not block work; keep directory/session visibility available so the user can self-correct.
 
 ## Invariants checklist
 
-- Triager is propose-only.
-- Finalize is atomic.
-- Only triage/finalize mutates graph objects.
 - Every task belongs to a project.
-- Execution root resolution is deterministic.
-- Worktree mapping is task-scoped and immutable after assignment.
-- Task closure is safety-gated.
-- Resources persist with scope-aware retrieval.
+- Every session belongs to a task.
+- No subtasks exist in v0; review and handoff stay on the same task.
+- Tasks are execution-agnostic.
+- Task status is manual and project-customizable.
+- Sessions can change execution root during work.
+- Collision warnings are advisory, not blocking.

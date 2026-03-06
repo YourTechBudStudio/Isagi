@@ -1,158 +1,115 @@
 # Isagi - mental model
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-06
 
 This document defines the core concepts and invariants for the active MVP.
 
 ## Glossary
 
-### Area
-
-An area defines a stable domain of work and the rules/templates that govern it.
-
-Area responsibilities:
-
-- define defaults and constraints
-- define command templates
-- define storage mode (`area_monorepo | resource_repos`)
-- define default execution root behavior
-- may project agent-facing guidance to files like `AGENTS.md` and `TRIAGE.md`
-
 ### Project
 
-A project is a logical grouping of work inside an area.
+A project is an existing local git repo registered in Isagi.
 
 Projects:
 
-- organize tasks
-- can carry project-level default execution root rules
-- may be repo-backed depending on area storage mode
-
-Note: In MVP direction, authoritative configuration is metadata-backed; filesystem guidance (for example `AGENTS.md` / `TRIAGE.md`) is primarily for agent context.
+- own tasks
+- define customizable task statuses
+- can carry project-level git execution defaults
 
 ### Task
 
-A task is the unit of execution.
+A task is the smallest accountable unit of outcome inside a project.
 
-Task properties (conceptual):
+Tasks:
 
-- belongs to exactly one project
-- has session history
-- may carry an immutable worktree assignment
-- can be started via command templates or as empty chat
+- belong to exactly one project
+- track intent and progress
+- can have multiple sessions
+- are execution-agnostic
 
-### Spark
-
-A spark is a raw idea capture.
-
-Sparks are global inputs that triager develops into proposed project/task structures.
-
-### Resource
-
-A resource is the primary durable output in MVP.
-
-Resources are git-backed units of knowledge/code owned by an area or project and used for context continuity.
-
-### Legacy output model (deprecated)
-
-Earlier drafts used a different durable output concept. MVP uses resources.
-
-Canonical model: `docs/architecture/resources-model.md`.
+Canonical task contract: `docs/product/task-model.md`.
 
 ### Session
 
-A session is a durable execution record tied to a task.
+A session is the execution surface attached to a task.
 
-Session categories in practice:
+Sessions:
 
-- triage session
-- execution chat session
-- follow-up session
+- are where agent work happens
+- can start in the project repo or a managed worktree
+- can be rebound to a different execution root during work
+- are not the durable output themselves
 
-Multiple sessions can exist under one task.
+### Spark
+
+A spark is a deferred Phase 2 raw global inbox capture concept.
+
+The first MVP release does not depend on sparks. They may return later as a backlog-feeding companion to the task-first core.
 
 ### Worktree
 
-A worktree is an optional repo/branch-scoped execution environment.
+A worktree is an optional git execution environment used by a session.
 
-Worktree identity is globally unique by `(repo-key, branch-slug)` and tasks reference it through immutable assignment.
+Managed worktrees are created automatically when chosen, but merge and deletion remain manual in v0.
+
+### Resource (deferred)
+
+`Resource` remains a deferred durable-output concept from earlier drafts. It is not part of the active task-first v0 core.
+
+Reference: `docs/architecture/resources-model.md`.
+
+### Legacy term: Area
+
+Earlier drafts used `Area` as a core primitive. The active MVP no longer depends on area-first modeling.
 
 ---
 
 ## Core invariants
 
-1. **Triager is propose-only.** Nothing is created until user finalizes.
-2. **Every task belongs to a project.** No orphan tasks.
-3. **Execution root is deterministic.**
-4. **Worktree assignment is immutable per task.**
-5. **Worktree identity is globally unique by `(repo-key, branch-slug)`.**
-6. **Worktree operations are git-context-gated.**
-7. **Task close is safety-gated.**
-8. **Resources are the MVP durable output layer.**
-9. **Only triage/finalize mutates graph objects.** Execution sessions do not directly create spark/project/task objects.
+1. **Every task belongs to exactly one project.**
+2. **Tasks never move between projects.** Archive and recreate instead.
+3. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks.
+4. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
+5. **Task status is manual.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
+6. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
+7. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions.
+8. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
-## Resources vs execution
+## Task-first MVP posture
 
-- tasks still anchor sessions and execution history
-- sessions run in an execution scope resolved deterministically
-- v1 posture is safe-by-review; resources are git-backed and changes are reviewable
+The active MVP is task-first:
 
----
+- projects provide repo context
+- tasks track accountability and progress
+- sessions do the execution work
+- sparks remain useful for backlog health, but do not gate task creation
 
-## Execution root resolver
+Read together:
 
-Execution root resolves in this order:
-
-1. task-level override
-2. project default
-3. area default
-4. area root fallback
-
-`storage_mode` and execution-root defaults are related but independent rules.
+- `docs/product/task-model.md`
+- `docs/architecture/execution-model.md`
+- `docs/product/config/project-task-git-rules.md`
 
 ---
 
-## Area storage modes
+## Execution posture
 
-Each area declares one fixed storage mode:
-
-- `area_monorepo`
-- `resource_repos`
-
-When `resource_repos` is active, resource creation requires repository initialization via:
-
-- clone from URL, or
-- create empty local git repo (remote optional later)
-
----
-
-## Triage model
-
-Triage flow:
-
-1. Spark is created.
-2. Triager clarifies/strengthens the spark first (questions before routing/proposals when needed).
-3. Triager proposes graph changes (spark/project/task only).
-4. User reviews proposals in a review surface.
-5. Finalize applies approved proposals atomically.
-
-Triage output states include proposed/approved/rejected/applied semantics in implementation, but user-facing behavior is review then finalize.
-
----
-
-## Task/session/worktree lifecycle
-
-1. Open task.
-2. Worktree policy resolves at task creation (task -> project -> area -> system default), and branch baseline is snapshotted.
-3. Start empty session or command-driven session; start-time checks handle worktree create/attach when applicable.
-4. Task is `started` only after successful environment attach.
-5. Session continues across resumptions; multiple sessions under one task reuse the same mapped worktree.
-6. Close task runs safety checks unless another active task references the same worktree.
-7. On success, task is done, sessions close, and worktree/branch cleanup is conditional on active references + verification checks.
-8. Worktree-related start/close failures can move task to `error`; remedy is manual resolution/cleanup then restart from blank task.
+- The only guaranteed inherited execution context is the task's project repo root.
+- Sessions may rebind to managed worktrees or other valid roots while preserving the same conversation identity.
+- Project-level git mode defaults can shape how sessions start, but sessions remain user-driven.
+- The system records passive execution snapshots and surfaces collision warnings when multiple recent sessions share a directory.
 
 Runtime mechanics are canonical in `docs/architecture/execution-model.md`.
-Worktree policy and naming constraints are canonical in `docs/product/config/area-project-task-rules.md`.
+
+---
+
+## Spark posture
+
+- Spark capture and spark triage are deferred to Phase 2.
+- The first MVP release does not depend on a spark inbox.
+- If reintroduced later, sparks should act as backlog feeders rather than the mandatory start of work.
+
+Guidance projection ideas live in `docs/product/config/agent-guidance-projections.md`.
 
 ---
 
@@ -160,44 +117,21 @@ Worktree policy and naming constraints are canonical in `docs/product/config/are
 
 Home/dashboard prioritizes:
 
-1. resume
-2. focus queue
-3. spark triage
+1. recent sessions to resume
+2. task list / focus queue
 
-Focus queue is task-first, with session-level visibility:
+Focus remains task-first with session-level visibility:
 
-- waiting-on-you sessions prioritized
-- active/idle sessions visible as chips/badges
-
----
-
-## Resources model (conceptual)
-
-- Resources are git-backed and owned by areas/projects.
-- Session scope influences default resource retrieval and context assembly.
-- v1 constraints: human/template creation, no attach/detach.
-
-See `docs/architecture/resources-model.md` for operational details.
-
----
-
-## Example (coding spark to execution)
-
-Spark: "Use git worktrees to parallelize small coding tasks."
-
-1. Spark captured on desktop.
-2. Triager asks clarifying questions and proposes:
-   - one project/task for product implementation
-   - optional follow-on proposals if approved
-3. User reviews and finalizes proposals.
-4. User opens task and starts command-driven coding session.
-5. Work continues across one or more sessions on the same task.
-6. Task closes only after repo state passes safety checks.
+- active and idle sessions remain visible on tasks
+- directory-level collision warnings help avoid accidental overlap
+- review and handoff stay attached to the same task rather than spawning subtasks
 
 ---
 
 ## What remains intentionally flexible
 
-- Exact command template schema details.
-- Exact UI polish for review/focus surfaces.
-- Exact resources tooling shape (documented as suggested contracts for MVP).
+- Phase 2 spark inbox / spark-triage design
+- status-change automation hooks
+- planner-assisted task creation
+- project-group support for multi-repo work
+- whether the deferred resources model returns as an active subsystem

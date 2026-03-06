@@ -1,204 +1,146 @@
 # Execution Model
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-06
 
-This document defines runtime execution behavior for tasks, sessions, and git-backed environments.
+This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the task-first MVP.
 
 ## Path conventions
 
-`area root` means the canonical filesystem root for one area.
+`project root` means the local git repo root registered as a project in Isagi.
 
-`worktree root` means the workspace-sibling root where all managed git worktrees live.
+`worktree root` means the workspace-sibling root where Isagi-managed git worktrees live.
 
-`main workspace branch` means the branch in the main workspace repository that is snapshotted at task creation as the merge-target baseline for that task.
+`execution root` means the filesystem root currently bound to a session process.
+
+`repo-key` means a stable filesystem-safe identifier derived from the registered project/repo identity for managed worktree naming.
+
+`branch-slug` means a normalized filesystem-safe representation of the branch name for managed worktree naming.
 
 Conventions:
 
-- each area has one stable area root directory
-- project directories live under their parent area root
-- task execution roots resolve to either area root or project root per resolver/defaults
-- managed worktrees live under `worktree root`, not under `workspace/`
-- worktree identity is globally unique by `(repo-key, branch-slug)`
-- naming/normalization constraints for `repo-key` and `branch-slug` are defined in `docs/product/config/area-project-task-rules.md`
-
-Area storage mode implications (v1):
-
-- `area_monorepo`: area root is git-backed; projects are subpaths under the area repo
-- `resource_repos`: work is split across multiple git roots (typically one per resource)
-
-Resources semantics live in `docs/architecture/resources-model.md`.
+- projects remain in their existing local paths; Isagi does not redefine their canonical location
+- managed worktrees live under `worktree root`, not inside the registered project repo
+- sessions can move between execution roots over time
+- git naming/default rules are defined in `docs/product/config/project-task-git-rules.md`
 
 ## Workspace layout (v1)
 
-MVP uses a single canonical workspace root.
+Isagi metadata and managed worktrees live under Isagi-controlled paths, while projects remain where they already exist on disk.
 
 Conceptual layout:
 
 ```txt
 isagi-root/
-  workspace/
-    areas/
-      <area-id>/
-        AGENTS.md
-        TRIAGE.md
-        resources/
-          <resource-name>/
-        projects/
-          <project-id>/
-            resources/
-              <resource-name>/
+  data/
   worktrees/
     <repo-key>-<branch-slug>/
 ```
 
 Remarks:
 
-- workspace paths are derived from ownership + naming; identity is not the path
-- execution root still determines command/session default working context
+- project repos themselves are not copied into `isagi-root/`
 - managed worktrees are physically created under `worktree root`
+- execution root determines the working directory for the current session process
 
-## Execution root resolver
+## Execution root defaults
 
-Execution root is resolved deterministically in this order:
+Every session attached to a task inherits one guaranteed starting context: the task's project repo root.
 
-1. task-level override
+Git mode selection resolves in this order:
+
+1. explicit session choice
 2. project default
-3. area default
-4. area root fallback
+3. global default
 
-This resolver applies regardless of area storage mode.
+Supported modes:
 
-## Execution scope
+- `same_branch`
+- `managed_worktree`
+- `ask_each_time`
 
-In v1, tasks have an execution scope only.
+Initial global default is `same_branch`.
 
-- execution scope determines the default working directory/root for sessions and commands
-- v1 does not define a separate access scope; safety posture is safe-by-review
+Project default is nullable and falls back to the global default.
 
-`safe-by-review` means changes are made in git-backed working copies so they are inspectable and reviewable (diff/history) before being shared or merged.
+Other task or project metadata may be shown in side panels as view-only context, but only the project repo root is guaranteed runtime inheritance in v0.
 
-## Area storage modes (`area_monorepo | resource_repos`)
+## Task/session relationship
 
-Each area declares one fixed storage mode:
+- Task owns planning and accountability.
+- Session owns execution context.
+- A task does not carry an immutable branch or worktree assignment.
+- Multiple sessions under the same task may operate on different branches or roots.
+- Outputs live in code, documents, and other filesystem changes, not in the session object itself.
 
-- `area_monorepo` - area-level repository is the canonical git root
-- `resource_repos` - work is composed from multiple git roots (typically one per resource)
+## Session lifecycle and states
 
-When `resource_repos` is used, resource creation requires either:
+- Sessions are created by opening a task or by starting an ad-hoc session that auto-creates a visible task.
+- Sessions can remain attached to a task across multiple resumptions.
+- Sessions can be manually closed.
+- Sessions auto-close when the parent task enters a `done`-bucket status.
 
-- clone from URL, or
-- initialize empty local repo.
+Session states:
 
-## Task/session/worktree relationship
+- `active` - the agent is processing
+- `idle` - the agent is waiting on the user
+- `closed` - the session is intentionally no longer active
+- `error` - hidden technical failure state for start/rebind issues
 
-- Task is the execution anchor.
-- A task can have multiple sessions.
-- A task may include one immutable worktree assignment.
-- Worktree assignment points to a globally unique `(repo-key, branch-slug)` identity.
-- Multiple tasks may reference the same worktree identity.
-- If a task has a worktree assignment, sessions for that task reuse that same worktree.
+## Execution root switches and rebind
 
-## Worktree isolation
+- Users may change branch or switch to/from a managed worktree during a session.
+- Branch/worktree controls are user-driven and happen at the user's risk.
+- If the execution root path changes, Isagi rebinds the same session to the new root.
+- Rebind may start a new backend process, but the conversation/session identity stays the same.
+- If the user wants a separate execution thread, they should create a separate session instead of rebinding the existing one.
 
-Worktrees provide repo/branch-scoped execution environments.
+## Managed worktree behavior
 
-Requirements:
+- Worktree creation is automated when `managed_worktree` is chosen.
+- Managed worktrees live under `worktree root`.
+- Merge remains a manual activity assisted by UI/actions, not an automatic side effect of task or session completion.
+- Worktree deletion also remains manual in v0.
+- If worktree creation or rebind fails, the session may enter `error` until the user retries or selects a different execution root.
 
-- worktrees are not created during task creation; create/attach runs at task start
-- worktree assignment is immutable once set on a task
-- tasks may share a worktree; cleanup decisions are reference-aware
-- active reference means another task that is started, not done, and not in error
+## Passive execution snapshots
 
-## Start task behavior (command-driven)
+On each user request in a session:
 
-Task start can run in two modes:
+- observe the current execution root and branch name
+- compare against the previous snapshot for that session
+- persist a new snapshot only when one of those values changed
 
-- empty chat session
-- command-driven start flow
+Implementations may also store supporting fields such as:
 
-Command-driven start may include:
+- timestamp
+- repo identifier
+- `is_worktree`
+- trigger source
 
-- environment setup
-- optional starter prompt auto-send
+External git changes between user requests are intentionally only captured on the next interaction.
 
-Worktree policy timing:
+## Collision awareness
 
-- worktree creation policy resolves at task creation (task override -> project default -> area default -> system default)
-- task creation snapshots worktree identity and branch baseline (source branch + merge target branch from the main workspace branch at creation time)
-- all policy enforcement and git/worktree operations run at task start
-- if execution root is not inside a git repo, no managed worktree is created
-- branch baseline is validated at task start against the task snapshot
+- Isagi warns when multiple sessions share the same execution directory.
+- The recent-activity window is an implementation-configurable heuristic rather than a fixed product invariant.
+- Warnings consider:
+  - `active` sessions
+  - `idle` sessions that are still within the recent-activity window
+- `closed` sessions are excluded.
+- Warnings are advisory and do not hard-block user actions.
+- Task and session surfaces should expose read-only visibility such as overlapping sessions, active session counts, or last known execution roots where useful.
 
-UI behavior:
+## Task status interaction
 
-- open task tab immediately
-- show `Preparing environment...` only when setup is required
-
-Setup failure semantics:
-
-- surface full error details in-session
-- provide explicit retry action for non-worktree setup failures
-- if mapped worktree is missing, task enters `error`
-- if source or merge-target branch snapshot has changed/been removed, task enters `error`
-- worktree-related task errors are terminal; remedy is manual resolution/cleanup then restart task from blank state (existing task progress is not preserved)
-
-## Close task behavior (verification, blocking, cleanup)
-
-Close-task flow:
-
-1. if another active task references the same worktree, skip verification checks and allow close
-2. otherwise verify the mapped worktree still exists; if missing, task enters `error`
-3. otherwise run verification checks for task repo/worktree state
-4. if unresolved, block close and show clear reason/output
-5. if resolved, complete close
-
-Verification intent:
-
-- prevent silent loss of unresolved task changes
-- allow close only when state is verifiably resolved or explicitly discarded
-- when checks run, dirty worktree state blocks close
-- evaluate merge/deletability against the task's snapshotted merge target
-- enforce non-force cleanup semantics equivalent to deletability under `git branch -d`
-
-On successful close:
-
-- mark task done
-- close all task sessions
-- when no active task references remain and checks pass, delete task worktree and branch
-
-On failed close verification:
-
-- task remains open
-- user can inspect details and retry later
-
-Manual override:
-
-- explicit discard can be used as an intentional force-resolve path
-
-## Power mode (multi-repo context)
-
-Power mode indicates that a session may operate across multiple git roots in one execution context.
-
-UI requirements:
-
-- persistent badges: `Power Mode`, `Multi-repo Context`
-
-Safety posture:
-
-- default behavior remains safety-gated close (blocking) when checks definitively show unresolved state
-- in power mode, checks that cannot be made definitive across multiple roots may be downgraded to warn-only with explicit user confirmation (as defined in `docs/product/mvp-scope.md`)
-- power mode does not auto-orchestrate worktrees across multiple repos; multi-repo worktree handling remains manual
-
-## Sync policy and network requirements
-
-- sync policy is hybrid: background sync plus manual sync command
-- background sync targets default-branch refs used for close verification
-- manual sync can be triggered from command surfaces for the currently relevant branch context
-- close verification runs on `Close task` action
-- if network is unavailable for required verification, close is blocked with explicit message
+- Task status remains manual in v0.
+- Project-specific statuses map to the global buckets `todo`, `in_progress`, and `done`.
+- Entering a `done`-bucket status is the terminal close event for that task's sessions.
 
 ## Out-of-scope for MVP
 
 - Full in-app PR lifecycle management.
-- Full in-app merge conflict resolution UI.
+- Automatic merge on task or session completion.
+- Automatic worktree deletion based on remote merge detection.
+- Hard locking of branches or directories.
+- Project-group / multi-repo orchestration.
 - Release/deploy orchestration.

@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-06
 
 This document defines what we are building for the MVP.
 
@@ -12,11 +12,11 @@ If anything else in `docs/` conflicts with this scope, **this document wins for 
 
 ## Overview
 
-Phase 1 is a **desktop-first coding/product workflow continuity system**.
+Phase 1 is a **desktop-first task and session orchestration system for repo-based coding/product work**.
 
-The MVP objective is to reduce activation energy by making every task feel resumable, contextual, and safe to execute with parallel agent sessions.
+The MVP objective is to reduce activation energy and increase throughput by making project-scoped work easy to start, resume, and run in parallel with agent sessions.
 
-The system remains generic: no hardcoded YouTube/social pipelines in MVP.
+The product remains ad-hoc: Isagi supports specialized workflows, but does not force one rigid workflow for every kind of work.
 
 ---
 
@@ -24,92 +24,72 @@ The system remains generic: no hardcoded YouTube/social pipelines in MVP.
 
 ### What's in
 
-#### 1) Desktop spark capture
+#### 1) Project registry of existing local git repos
 
-- Create sparks directly in desktop.
-- Capture is lightweight and low-friction (short text-first input).
-- New spark creation may immediately offer `Open triage now`.
+- A project is an existing local git repo already present on the machine.
+- Projects are the containers that own tasks.
+- Projects can define customizable task statuses and optional git execution defaults.
 
-#### 2) Smart triager (propose-only)
+#### 2) Task model
 
-Triager runs automatically on spark creation, but remains **propose-only**.
+- Tasks are created manually first.
+- Every task belongs to exactly one project.
+- Tasks track status, priority, labels, and related sessions.
+- No subtasks in v0.
+- Project-specific statuses map into global buckets: `todo`, `in_progress`, `done`.
 
-Triager behavior in MVP:
+Detailed contract: `docs/product/task-model.md`.
 
-- Start with spark-strengthening questions before proposing routing or object creation.
-- Consult agent-facing area guidance (for example area-level `AGENTS.md`, plus explicitly reading the relevant area-level `TRIAGE.md` as instructed by the triager's automatic starting message; see `docs/product/config/agent-guidance-projections.md`).
-- Propose only graph mutations:
-  - create spark
-  - create project
-  - create task
-- Keep all proposed changes in review state until user finalizes.
-- Graph mutations are committed only through the triage `Finalize` flow.
+#### 3) Session-first execution
 
-#### 3) Proposal review and atomic finalize
-
-- Triager proposals are file-backed and reviewable.
-- User can approve/reject/edit individually or in bulk.
-- `Finalize` applies all approved proposals atomically.
-- Unapproved proposed items are auto-rejected on finalize.
-
-#### 4) Area/Project/Task model (generic primitives)
-
-- `Area` = rules/templates/defaults.
-- `Project` = logical grouping under an area.
-- `Task` = executable unit.
-- Every task must belong to a project.
-
-#### 5) Task execution and multi-session workflow
-
-- Opening a task opens a chat/session surface.
+- Sessions are the execution surfaces attached to tasks.
 - Multiple sessions can exist per task.
-- Focus queue is task-first with session-level visibility.
-- Sessions can be resumed from home/dashboard and task views.
-- Non-triage execution sessions do not directly create spark/project/task objects.
+- Starting an ad-hoc session auto-creates a visible task with a generated title.
+- Sessions remain open until manually closed or the task enters a terminal `done`-bucket status.
 
-#### 6) Command-driven task start
+#### 4) Git execution modes + managed worktrees
 
-- Start behavior is command/template driven, not task-type hardcoded.
-- A task can start with:
-  - empty chat session, or
-  - command flow (optional setup + optional starter prompt).
+- Sessions start from the task's project repo root.
+- Git execution defaults are configurable at two levels:
+  - global default
+  - nullable project override
+- Supported modes:
+  - `same_branch`
+  - `managed_worktree`
+  - `ask_each_time`
+- Explicit session choice can override those defaults at session start.
+- Managed worktree creation is automated when chosen.
+- Merge remains manual.
+- Worktree deletion remains manual for now.
 
-#### 7) Worktree lifecycle + close-task safety
+Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
 
-- Worktrees are repo-scoped execution environments that live outside `workspace/` under a workspace-sibling worktree root.
-- Tasks hold immutable worktree mappings and may reference shared worktrees.
-- Worktree policy is resolved at task creation; git/worktree checks and create/attach happen at task start.
-- Task creation snapshots source/merge-target branch baseline for later start/close checks.
-- If execution root is not inside a git repo, no managed worktree is created.
-- Closing a task is blocked until repo state is resolved (merged/discarded), unless another active task references the same worktree.
-- When close checks apply, dirty worktree state blocks close.
-- Power mode carve-out: in multi-repo execution contexts, some checks may be warn-only when a definitive resolved/unresolved verdict cannot be computed safely; the user must explicitly confirm before closing.
-- On successful close:
-  - mark task done
-  - close associated sessions
-  - delete task worktree and branch only when no active references remain and close checks pass
-- Worktree-related start/close errors (including missing mapped worktree or branch-baseline drift/removal) are terminal for that task; recovery is manual resolution/cleanup then restart from blank task.
+#### 5) Passive execution tracking + collision warnings
 
-Detailed runtime mechanics are canonical in `docs/architecture/execution-model.md`.
+- Isagi records passive execution snapshots on user requests when the observed execution root or branch changes.
+- Collision warnings surface when multiple active or idle-but-recent sessions share a directory.
+- Git controls remain user-driven; warnings are advisory rather than blocking.
 
-#### 8) Resources model integration
+#### 6) Manual task workflow controls
 
-- Resources replace artifact-centric MVP output modeling.
-- Resources are git-backed and owned by areas/projects.
-- Session/execution scope influences default resource retrieval and context assembly.
-- v1 constraint: resources are created by humans or templates; execution sessions do not create resources directly.
+- Status changes are manual in v0.
+- Tasks can carry nullable `priority` and nullable `labels`.
+- Statuses are designed to become future automation hooks, but hooks are deferred.
 
 ---
 
 ### What's out (future phases)
 
-| Feature                                 | Why deferred                                           |
-| --------------------------------------- | ------------------------------------------------------ |
-| Mobile app implementation               | Desktop-first focus for MVP velocity                   |
-| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP           |
-| Hardcoded YouTube/social deep pipelines | Build generic primitives first                         |
-| Multi-user collaboration/permissions    | Solo workflow first                                    |
-| Rich scheduling/reminder system         | Focus on execution continuity before planning features |
+| Feature                                 | Why deferred                                                      |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| Mobile app implementation               | Desktop-first focus for MVP velocity                              |
+| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                      |
+| Active status-change automation hooks   | Keep task upkeep manual and predictable first                     |
+| Global spark inbox + spark triage       | Validate the task-first core before adding backlog feed workflows |
+| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow              |
+| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                  |
+| Multi-user collaboration/permissions    | Solo workflow first                                               |
+| Rich scheduling/reminder system         | Focus on execution continuity before planning features            |
 
 ---
 
@@ -124,48 +104,49 @@ Detailed runtime mechanics are canonical in `docs/architecture/execution-model.m
 
 ### Core flow
 
-```
-Spark -> Triager (propose-only) -> Review -> Finalize (atomic)
-     -> Task open -> Session(s) + optional worktree
-     -> Continue/resume until resolved
-     -> Close task (safety checks) -> Done + cleanup
+```txt
+Project -> Create task or start ad-hoc session
+        -> Session opens in project repo root
+        -> Stay on current branch or switch to managed worktree
+        -> Continue/resume across one or more sessions
+        -> Move task through project-defined statuses until done
 ```
 
 ---
 
 ## Success criteria (initial)
 
-| Metric                  | Target                                                              |
-| ----------------------- | ------------------------------------------------------------------- |
-| Task resume rate        | Most active tasks are resumed at least once rather than abandoned   |
-| Triager finalize rate   | Proposed changes are regularly finalized, not left stale            |
-| Time-to-first-execution | Opening a task to first meaningful agent turn is low-friction       |
-| Parallel throughput     | Multiple tasks can progress concurrently without context collisions |
-| Close-task safety       | No accidental task closure with unresolved repo state               |
+| Metric                | Target                                                              |
+| --------------------- | ------------------------------------------------------------------- |
+| Task resume rate      | Most active tasks are resumed at least once rather than abandoned   |
+| Time-to-first-session | Opening work to first meaningful agent turn is low-friction         |
+| Parallel throughput   | Multiple tasks can progress concurrently without context collisions |
+| Low-overhead upkeep   | Tasks stay useful without feeling like admin overhead               |
+| Collision visibility  | Overlapping directory activity is visible before it causes mistakes |
 
 Qualitative validation signals:
 
-- "I can pick up where I left off instantly."
-- "I can run multiple coding threads without stepping on myself."
-- "I trust task close behavior to prevent accidental loss."
+- "I can start work without ceremony."
+- "I can keep 2-3 threads going without the tool becoming overhead."
+- "I can see when another session is about to stomp this directory."
 
 ---
 
 ## Risks and mitigations
 
-| Risk                                                   | Mitigation                                                  |
-| ------------------------------------------------------ | ----------------------------------------------------------- |
-| Scope drift into workflow-specific templates too early | Keep model generic; encode behavior via rules/config        |
-| Git lifecycle edge cases create user confusion         | Keep close-task gates explicit and error states inspectable |
-| Proposal queue grows without decisions                 | Keep review/finalize UX fast and batch-friendly             |
-| Resources sprawl without conventions                   | Keep ownership + naming rules and scope-aware retrieval     |
+| Risk                                     | Mitigation                                                                  |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| Git mode choices create startup friction | Limit to three modes and allow project/global defaults                      |
+| Stale sessions make warnings noisy       | Add manual session close and use a recent-activity window                   |
+| Managed worktrees create cleanup debt    | Automate creation, keep merge/delete manual, surface cleanup later          |
+| Runtime context expectations drift       | Document project repo root as the only guaranteed inherited runtime context |
 
 ---
 
 ## Near-term implementation priorities
 
-1. Lock area/project/task contracts in API + docs.
-2. Implement triage review/finalize flow with atomic apply guarantees.
-3. Implement task execution surface and multi-session visibility.
-4. Implement worktree lifecycle gates for close-task safety.
-5. Implement scoped resources tooling + indexing.
+1. Lock project/task/session contracts and status model in API + docs.
+2. Implement manual task creation and ad-hoc session auto-task creation.
+3. Implement session execution surface with git mode selection and rebind behavior.
+4. Implement passive snapshots, collision warnings, and session closure states.
+5. Implement project registration, explicit git defaults, and read-only execution visibility.

@@ -1,32 +1,33 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-02-28
+**Last updated:** 2026-03-06
 
 ## One-liner
 
-Isagi is a context continuity engine for execution-heavy knowledge work: capture sparks, triage them into structured work, and run resumable agent sessions so you never restart from zero.
+Isagi is a desktop-first task and session orchestration tool for repo-based work: keep project-scoped tasks, run resumable agent sessions, and manage git execution without heavyweight process overhead.
 
 ## The problem
 
 - Starting is harder than doing.
 - Context loading is expensive and repetitive.
-- Parallel tasks collide without clean execution boundaries.
-- Ideas and follow-ups decay when not converted into structured work.
+- Parallel coding threads collide without clear visibility into shared execution roots.
+- Backlogs decay when there is too much overhead between capture, planning, and execution.
 
 ## Value proposition
 
-1. **Capture quickly** - sparks are easy to record when ideas hit.
-2. **Clarify before committing** - triager strengthens sparks and proposes work in reviewable form.
-3. **Warm starts** - every task resumes with context already assembled.
-4. **Parallel safely** - task-scoped execution plus repo/branch-scoped shared worktree mapping rules reduce collisions.
-5. **Durable thinking** - resources persist with provenance for reuse and filtering.
+1. **Start quickly** - create a task or jump straight into an ad-hoc session without ceremony.
+2. **Warm starts** - sessions resume inside the right project context instead of from zero.
+3. **Parallel safely enough** - optional managed worktrees plus collision warnings reduce accidental overlap.
+4. **Low-overhead tracking** - tasks hold accountability and progress without becoming a heavyweight workflow system.
+5. **Flexible git execution** - stay on the current branch by default or spin up managed worktrees when needed.
 
 ## Core principles
 
 - **Desktop-first for MVP.** Keep one primary execution surface.
-- **Generic primitives over hardcoded workflows.** Build area/project/task first.
-- **Propose then commit.** Triager is propose-only; finalize is explicit.
-- **Safety over convenience at close time.** Do not allow silent unresolved closures.
+- **Task-first, not workflow-first.** Use projects, tasks, and sessions as the minimum stable core.
+- **Execution and planning stay separate.** Sessions do the work; tasks track accountability and progress.
+- **User sovereignty over git.** Branch and worktree controls remain user-driven, with warnings instead of hard locks.
+- **Backlog tooling can wait.** Spark capture and triage can return in Phase 2 if the task-first core proves worthwhile.
 - **Continuity over novelty.** Resume and focus are more important than feed-style discovery.
 
 ## Active MVP scenario
@@ -35,34 +36,39 @@ Primary scenario: coding/product workflow.
 
 Typical flow:
 
-1. Capture spark on desktop.
-2. Triager asks clarifying questions and proposes project/task changes.
-3. Review and finalize proposals atomically.
-4. Open task and run command-driven session(s).
-5. Continue until resolved, then close task with safety checks.
+1. Register an existing local git repo as a project.
+2. Create a task or start an ad-hoc session that auto-creates a task.
+3. Run one or more sessions against that task.
+4. Stay on the current branch or switch to a managed worktree when needed.
+5. Move the task through project-defined statuses until done.
+6. Keep backlog planning lightweight; richer spark tooling is deferred until after the first MVP release.
 
 Detailed journey: `docs/journeys/coding-workflow.md`.
 
 ## Derivative workflows
 
-YouTube/social/content workflows are treated as derivative patterns on top of the same primitives, not hardcoded MVP pipelines.
+YouTube/social/content workflows are still expected to layer on top of the same core, but they are not driving the active MVP shape.
 
 ## Architecture references
 
+- Task model: `docs/product/task-model.md`
 - Execution mechanics: `docs/architecture/execution-model.md`
-- Resources output model: `docs/architecture/resources-model.md`
-- Rules/defaults schema: `docs/product/config/area-project-task-rules.md`
+- Project/task git rules: `docs/product/config/project-task-git-rules.md`
 - Agent guidance projections: `docs/product/config/agent-guidance-projections.md`
 
 ## Non-goals (current MVP)
 
 - Mobile app execution surface.
+- Fully automated merge and cleanup workflows.
+- Strict workflow enforcement for all work.
+- Global spark inbox + spark triage in the first MVP release.
+- Project-group / multi-repo execution as an active MVP feature.
 - Full in-app PR/merge/release orchestration.
 - Rich multi-user collaboration and permissions.
-- Workflow-specific deep templates as the primary product shape.
 
 ## What remains open
 
-- How strict command templates should be per area.
-- How far to go on automated task health scoring.
-- Which derivative workflows should be added first after core stability.
+- What the Phase 2 spark inbox + spark-triage backlog feeder should look like.
+- When git-safety behavior should become stricter than warnings/manual cleanup.
+- How much passive context assembly should happen automatically on session resume.
+- Which team-oriented features matter first after solo workflow stability.

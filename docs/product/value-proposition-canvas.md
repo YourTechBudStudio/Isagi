@@ -2,13 +2,13 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-02-26
+**Last updated:** 2026-03-06
 
 This canvas is the **strategic framing source of truth**.
 
 For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wins.
 
-**MVP constraint:** In Phase 1, the Triager is **propose-only** (see [MVP scope](./mvp-scope.md)). Any “development” described below should be interpreted as _proposing tasks and enabling warm-start sessions_, not auto-generating outputs.
+**MVP constraint:** In Phase 1, the release focuses on projects, tasks, sessions, and worktree controls. Spark triage is deferred to Phase 2. Any "development" described below should be interpreted as _creating or shaping tasks and enabling warm-start sessions_, not auto-generating outputs.
 
 ---
 
@@ -21,12 +21,12 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 | Job                                                                                                     | Type       | Priority |
 | ------------------------------------------------------------------------------------------------------- | ---------- | -------- |
 | Progress coding/product tasks consistently with low startup friction                                    | Core       | Highest  |
-| Develop raw sparks into executable tasks and durable resources                                          | Core       | High     |
+| Develop raw sparks into executable tasks when backlog help is needed                                    | Core       | High     |
 | Run multiple task threads in parallel without repo/context collisions                                   | Core       | High     |
 | Maintain a healthy actionable queue so I always know what to do next                                    | Core       | High     |
 | Capture ideas quickly when they occur                                                                   | Supporting | High     |
 | Preserve internal documentation/resources without coupling them to public/open-source code repositories | Supporting | Medium   |
-| Track progress across areas/projects/tasks                                                              | Supporting | Low      |
+| Track progress across projects/tasks                                                                    | Supporting | Low      |
 
 ### Pains
 
@@ -62,17 +62,17 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 ### Products & Features
 
-| Feature                            | Description                                                                                                 |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                             |
-| **Smart triager**                  | Clarifies sparks and proposes area/project/task creation with reasoning and questions.                      |
-| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                           |
-| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.              |
-| **Command-driven execution**       | Task start behavior comes from configurable commands/rules, not hardcoded task types.                       |
-| **Resources model**                | Durable resources persist with provenance and scope-aware retrieval.                                        |
-| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                        |
-| **Generic primitives**             | A small universal model (area/project/task/spark/resources) supports many workflows without bespoke models. |
-| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.                      |
+| Feature                            | Description                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                      |
+| **Smart triager (Phase 2)**        | Clarifies sparks and proposes project/task follow-on work when backlog help is needed.               |
+| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                    |
+| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.       |
+| **Command-driven execution**       | Session start behavior comes from lightweight defaults and git mode rules, not hardcoded task types. |
+| **Managed worktrees**              | Worktree creation becomes a fast optional workflow for isolated coding threads.                      |
+| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                 |
+| **Generic primitives**             | A small universal model (project/task/session/spark) supports many workflows without bespoke models. |
+| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.               |
 
 ### Pain Relievers
 
@@ -80,26 +80,26 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | Activation energy to start     | Agent primes YOU: "Last time we established X, you wanted Y, where do you want to pick up?" Boulder already rolling. |
 | Context loading friction       | Context continuity engine handles all priming. You never explain what you're working on.                             |
-| Running out of next actions    | Triager + focus queue keep actionable tasks visible and reviewable.                                                  |
+| Running out of next actions    | Task lists keep actionable work visible in Phase 1; later spark tools may help feed backlog.                         |
 | "What should I do next?"       | Warm-start sessions and task context reduce decision friction at start time.                                         |
 | Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                           |
-| Sequential execution drag      | Task-scoped sessions support parallel progress with explicit checkpoints.                                            |
+| Sequential execution drag      | Task-linked sessions plus optional managed worktrees support safer parallel progress.                                |
 | Capture friction               | Quick capture avoids early routing decisions.                                                                        |
-| Ideas decay                    | Triager converts sparks into reviewable proposals and follow-on work.                                                |
-| High setup overhead            | Rules and command templates make starting small tasks cheap.                                                         |
-| Context scattered              | Resources and provenance keep decisions and outputs discoverable.                                                    |
+| Ideas decay                    | Phase 2 spark tools can later convert loose ideas into follow-on work when needed.                                   |
+| High setup overhead            | Defaults and lightweight git controls make starting small tasks cheap.                                               |
+| Context scattered              | Project-scoped tasks and session history keep decisions and outputs discoverable.                                    |
 
 ### Gain Creators
 
-| Gain                        | How Product Creates It                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------- |
-| Warm starts                 | Every task/session opens with context assembled and clear next decision points            |
-| Co-ownership                | Interactive checkpoints keep user in control while agents accelerate execution            |
-| Context continuity          | Structured resources + session history + provenance links preserve continuity             |
-| Queue security              | Home/focus surfaces show what is blocked, active, and ready                               |
-| Getting to fun parts faster | Setup and recall overhead are reduced by rules, defaults, and resumable sessions          |
-| Desktop-first deep work     | One primary execution surface reduces context fragmentation                               |
-| Cheap rule evolution        | Rules/templates allow iterative behavior tuning without redesigning the core object model |
+| Gain                        | How Product Creates It                                                         |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| Warm starts                 | Every task/session opens with context assembled and clear next decision points |
+| Co-ownership                | Interactive checkpoints keep user in control while agents accelerate execution |
+| Context continuity          | Project context + task history + session history preserve continuity           |
+| Queue security              | Home/focus surfaces show what is blocked, active, and ready                    |
+| Getting to fun parts faster | Setup and recall overhead are reduced by defaults and resumable sessions       |
+| Desktop-first deep work     | One primary execution surface reduces context fragmentation                    |
+| Cheap rule evolution        | Rules/templates allow iterative behavior tuning without redesigning the core   |
 
 ---
 
@@ -107,7 +107,7 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 > **The system eliminates context loading as a barrier to creative work.**
 >
-> Every agent conversation starts pre-loaded with: the spark, relevant resources, prior decisions, execution context, and a summary that primes you on where things stand.
+> The product direction is that agent conversations feel pre-loaded with: the relevant task or spark, project context, prior decisions, execution context, and a summary that primes you on where things stand.
 >
 > You never start from zero. You never explain what you're working on. You never hunt for documents. You just continue.
 >
@@ -117,7 +117,7 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 ## Key Insight
 
-The bottleneck isn't time, organization, or even enjoyment—the work is fun once you're in it. The bottleneck is **activation energy to start**, especially when tired from a full-time job.
+The bottleneck isn't time, organization, or even enjoyment - the work is fun once you're in it. The bottleneck is **activation energy to start**, especially when tired from a full-time job.
 
 The difference between:
 
@@ -130,10 +130,10 @@ The difference between:
 
 ## Design Principles
 
-1. **Warm starts over cold starts** — Every interaction should feel like continuing, not beginning
-2. **Prime the human too** — Agent summarizes state so you remember where you left off
-3. **Co-ownership, not delegation** — You make executive calls; agents help you discover breadth
-4. **Fun parts fast** — Automate the unfun (context loading, setup overhead); preserve the fun (creative decisions, execution)
-5. **Desktop-first MVP** — Ship one strong deep-work surface first; add mobile later when core behavior is stable
-6. **Sparks can die** — Active work matters; graveyard of unpromoted sparks is acceptable
-7. **Context compounds** — Resources and session outputs remain available to downstream work
+1. **Warm starts over cold starts** - Every interaction should feel like continuing, not beginning
+2. **Prime the human too** - Agent summarizes state so you remember where you left off
+3. **Co-ownership, not delegation** - You make executive calls; agents help you discover breadth
+4. **Fun parts fast** - Automate the unfun (context loading, setup overhead); preserve the fun (creative decisions, execution)
+5. **Desktop-first MVP** - Ship one strong deep-work surface first; add mobile later when core behavior is stable
+6. **Sparks can die** - Active work matters; graveyard of unpromoted sparks is acceptable
+7. **Context compounds** - Project context and session outputs remain available to downstream work
