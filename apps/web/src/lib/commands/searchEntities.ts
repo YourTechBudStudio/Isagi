@@ -1,4 +1,4 @@
-import { homeFocusQueueItems, homeSparks } from "@/lib/mock/home.mock";
+import { homeCandidateTasks, homeSparks } from "@/lib/mock/home.mock";
 
 import { fuzzyScore } from "./fuzzy";
 import { COMMANDS } from "./registry";
@@ -91,7 +91,7 @@ export function searchEntities(
       allEntities = MOCK_PROJECTS.map(p => ({ id: p.id, label: p.name }));
       break;
     case "task":
-      allEntities = homeFocusQueueItems.map(t => ({
+      allEntities = homeCandidateTasks.map(t => ({
         id: t.id,
         label: t.title,
       }));

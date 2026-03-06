@@ -3,6 +3,7 @@ import { ArrowRight } from "lucide-react";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { cn } from "@/lib/cn";
 
+// Retained for future Home and spark-focused surfaces once Phase 2 brings triage back.
 type SparkCardProps = {
   readonly title: string;
   readonly time: string;
