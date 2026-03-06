@@ -15,6 +15,14 @@
 - **Desktop app (Isagi)** - task list, command surfaces, git controls, session visibility.
 - **Execution session (OpenCode-backed)** - task-linked agent work.
 
+## Entry posture: open app and resume work
+
+1. Home opens as a global orientation surface.
+2. The most recent resumable session is the primary jump-in target.
+3. Additional open sessions appear as compact secondary options.
+4. If there are no resumable sessions, the app may show lightweight candidate tasks.
+5. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
+
 ## Scenario A: Create a task from command palette
 
 1. User runs a command such as `Create task`.

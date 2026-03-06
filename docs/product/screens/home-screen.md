@@ -1,0 +1,86 @@
+# Home Screen (MVP)
+
+**Last updated:** 2026-03-06
+
+## One-liner
+
+The desktop Home screen answers: **"What can I resume right now with the least friction?"**
+
+## Primary job
+
+- Act as a minimal global orientation surface.
+- Help the user jump back into active work quickly.
+- Keep attention on live execution threads rather than backlog management.
+
+## Non-goals
+
+- Becoming a project-management dashboard.
+- Becoming a daily planner or priority-ranking system.
+- Replacing project detail as the place to browse and manage tasks deliberately.
+- Reintroducing Phase 2 spark inbox or triage behavior into the active MVP Home surface.
+
+## Global posture
+
+- Home is **global**, not project-scoped.
+- Home is **session-led**, not task-led.
+- Home is optimized for fast re-entry, not broad system visibility.
+- The command palette remains the primary way to jump to a specific project when the user wants deliberate navigation.
+
+## Information hierarchy
+
+### Resume now
+
+- The primary hero surface is the **most recent resumable session**.
+- This is the dominant action on Home.
+- The goal is to let the user continue momentum without first scanning projects or task lists.
+
+### Other open sessions
+
+- Additional open sessions appear as compact secondary options.
+- They should be shown in a simple vertical list rather than a dense dashboard treatment.
+- Each item should stay lightweight and scan-friendly.
+- Helpful metadata may include the project name, priority, and last active time.
+
+### No-resume fallback
+
+- If there are no resumable sessions, Home may show a lightweight set of candidate tasks.
+- This fallback exists to help the user restart momentum, not to become a full task browser.
+- Deliberate task selection across a project still belongs in project detail.
+
+## Ranking and selection rules
+
+- The Home hero is the **most recent resumable session**.
+- Additional open sessions are secondary and should remain visually subordinate to the hero.
+- Home may show priority as supporting metadata, but it should not turn into a global planning or ranking surface.
+- Manual signals such as closed sessions, done-bucket task completion, or technical error states are stronger than heuristic guesses about relevance.
+
+## Empty states
+
+### No projects
+
+- Primary CTA: **Add your first project**.
+- The empty state should explain that projects are existing local git repos registered in Isagi.
+
+### Projects exist, but no tasks or sessions yet
+
+- Primary CTA: **Start a session**.
+- Secondary CTA: **Create task**.
+- This keeps startup aligned with the MVP's low-friction, session-first posture.
+
+### Tasks exist, but no resumable sessions
+
+- Show lightweight candidate tasks.
+- Keep the UI minimal and action-oriented.
+- Pair the task fallback with a clear route to command palette or project detail when the user wants to choose more deliberately.
+
+## Relationship to sidebar and command palette
+
+- The sidebar already provides persistent visibility into active and idle sessions.
+- Home should complement that persistent context rather than duplicate it with a large dashboard.
+- The command palette remains the fastest way to open a specific project or trigger actions from anywhere.
+
+## Out of scope / future phase notes
+
+- Global spark inbox and spark triage remain out of scope for Phase 1 Home.
+- Rich daily planning, pinned-project ranking, and broader backlog curation remain future-phase concerns.
+- A future version may refine candidate-task heuristics, but the MVP should prefer clarity and low friction over clever ranking.

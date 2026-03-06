@@ -115,12 +115,15 @@ Guidance projection ideas live in `docs/product/config/agent-guidance-projection
 
 ## Home and focus model (desktop-first)
 
-Home/dashboard prioritizes:
+Home is a minimal global re-entry surface.
 
-1. recent sessions to resume
-2. task list / focus queue
+- Home prioritizes resumable sessions first.
+- Home may show lightweight fallback tasks only when there is no session to resume.
+- Home is not the primary place for deliberate task browsing or project management.
 
-Focus remains task-first with session-level visibility:
+Detailed Home-screen guidance lives in `docs/product/screens/home-screen.md`.
+
+Focus remains task-first with session-level visibility elsewhere in the product:
 
 - active and idle sessions remain visible on tasks
 - directory-level collision warnings help avoid accidental overlap

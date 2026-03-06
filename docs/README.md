@@ -29,12 +29,13 @@ These docs define the current MVP direction for Isagi: a desktop-first task and 
 
 ### docs/product/
 
-- [docs/product/archived/mobile-home.md](docs/product/archived/mobile-home.md)
 - [docs/product/config/agent-guidance-projections.md](docs/product/config/agent-guidance-projections.md)
 - [docs/product/config/project-task-git-rules.md](docs/product/config/project-task-git-rules.md)
 - [docs/product/mental-model.md](docs/product/mental-model.md)
 - [docs/product/mvp-scope.md](docs/product/mvp-scope.md)
 - [docs/product/overview.md](docs/product/overview.md)
+- [docs/product/screens/archived/mobile-home.md](docs/product/screens/archived/mobile-home.md)
+- [docs/product/screens/home-screen.md](docs/product/screens/home-screen.md)
 - [docs/product/task-model.md](docs/product/task-model.md)
 - [docs/product/value-proposition-canvas.md](docs/product/value-proposition-canvas.md)
 
