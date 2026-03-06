@@ -45,7 +45,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 
 - If there are no resumable sessions, Home may show a lightweight set of candidate tasks.
 - This fallback exists to help the user restart momentum, not to become a full task browser.
-- Deliberate task selection across a project still belongs in project detail.
+- Deliberate task selection still belongs in project-specific task surfaces and the command palette rather than Home itself.
 
 ## Ranking and selection rules
 
@@ -71,7 +71,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 
 - Show lightweight candidate tasks.
 - Keep the UI minimal and action-oriented.
-- Pair the task fallback with a clear route to command palette or project detail when the user wants to choose more deliberately.
+- Pair the task fallback with a clear route to command palette or project-specific task surfaces when the user wants to choose more deliberately.
 
 ## Relationship to sidebar and command palette
 

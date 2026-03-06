@@ -18,6 +18,8 @@ The MVP objective is to reduce activation energy and increase throughput by maki
 
 The product remains ad-hoc: Isagi supports specialized workflows, but does not force one rigid workflow for every kind of work.
 
+Repo projects may organize work directly as tasks or through optional collections, but execution remains task- and session-driven from the project repo root.
+
 ---
 
 ## Phase 1 scope
@@ -27,18 +29,22 @@ The product remains ad-hoc: Isagi supports specialized workflows, but does not f
 #### 1) Project registry of existing local git repos
 
 - A project is an existing local git repo already present on the machine.
-- Projects are the containers that own tasks.
+- Projects are the containers that own tasks and optional collections.
 - Projects can define customizable task statuses and optional git execution defaults.
+- Projects may also define terminology aliases for presentation, but aliases do not change the underlying model.
 
 #### 2) Task model
 
 - Tasks are created manually first.
 - Every task belongs to exactly one project.
+- Tasks may optionally belong to one collection inside that project.
 - Tasks track status, priority, labels, and related sessions.
 - No subtasks in v0.
 - Project-specific statuses map into global buckets: `todo`, `in_progress`, `done`.
 
-Detailed contract: `docs/product/task-model.md`.
+Collections are optional grouping containers inside a project. They do not receive sessions directly and do not redefine execution context.
+
+Detailed contracts: `docs/product/task-model.md` and `docs/product/collection-model.md`.
 
 #### 3) Session-first execution
 
@@ -80,16 +86,17 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 
 ### What's out (future phases)
 
-| Feature                                 | Why deferred                                                      |
-| --------------------------------------- | ----------------------------------------------------------------- |
-| Mobile app implementation               | Desktop-first focus for MVP velocity                              |
-| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                      |
-| Active status-change automation hooks   | Keep task upkeep manual and predictable first                     |
-| Global spark inbox + spark triage       | Validate the task-first core before adding backlog feed workflows |
-| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow              |
-| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                  |
-| Multi-user collaboration/permissions    | Solo workflow first                                               |
-| Rich scheduling/reminder system         | Focus on execution continuity before planning features            |
+| Feature                                 | Why deferred                                                         |
+| --------------------------------------- | -------------------------------------------------------------------- |
+| Mobile app implementation               | Desktop-first focus for MVP velocity                                 |
+| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                         |
+| Active status-change automation hooks   | Keep task upkeep manual and predictable first                        |
+| Global spark inbox + spark triage       | Validate the task-first core before adding backlog feed workflows    |
+| Roll-up / portfolio projects            | Keep the single-repo execution model sharp before adding aggregation |
+| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow                 |
+| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                     |
+| Multi-user collaboration/permissions    | Solo workflow first                                                  |
+| Rich scheduling/reminder system         | Focus on execution continuity before planning features               |
 
 ---
 
@@ -101,6 +108,7 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 - Backend remains single-tenant/self-hosted (`SQLite + filesystem + SSE`).
 - OpenCode is the session execution engine; Isagi is orchestration/control UX.
 - Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
+- Repo projects may organize work through direct tasks or optional collections, but sessions still start from tasks in the project repo root.
 
 ### Core flow
 
@@ -145,7 +153,7 @@ Qualitative validation signals:
 
 ## Near-term implementation priorities
 
-1. Lock project/task/session contracts and status model in API + docs.
+1. Lock project/collection/task/session contracts and status model in API + docs.
 2. Implement manual task creation and ad-hoc session auto-task creation.
 3. Implement session execution surface with git mode selection and rebind behavior.
 4. Implement passive snapshots, collision warnings, and session closure states.

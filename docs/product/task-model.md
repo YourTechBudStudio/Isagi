@@ -10,6 +10,7 @@ A task is the smallest accountable unit of outcome inside a project.
 
 - Tasks hold planning and accountability without forcing a rigid workflow.
 - Sessions do the work; tasks track what the work is, where it belongs, and how far it has moved.
+- Tasks remain the canonical actionable unit even when a project uses workflow-specific status names or UI aliases.
 - The MVP is optimized for low-overhead execution in existing local git repos, so task is the stable object around which sessions accumulate.
 
 ## Task definition
@@ -28,10 +29,12 @@ Those are execution choices made while working on the task, not part of task ide
 
 1. Every task belongs to exactly one project.
 2. A task cannot move projects after creation.
-3. A task can have multiple sessions.
-4. No session is primary by default.
-5. No subtasks exist in v0; review and handoff stay on the same task.
-6. Task completion is status-driven; git cleanliness is not required in v0.
+3. A task may optionally belong to one collection in that project.
+4. A task can have multiple sessions.
+5. Sessions attach to tasks only.
+6. No session is primary by default.
+7. No subtasks exist in v0; review and handoff stay on the same task.
+8. Task completion is status-driven; git cleanliness is not required in v0.
 
 ## Minimal schema
 
@@ -45,6 +48,7 @@ Required fields:
 
 Optional fields:
 
+- `collection_id` - nullable foreign key to a project-local collection
 - `priority` - nullable enum: `p1 | p2 | p3 | p4 | p5`
 - `labels` - nullable list or relation
 - optional workflow metadata such as description, assignee, or reviewer
@@ -52,10 +56,12 @@ Optional fields:
 ## Status model
 
 - Statuses are customizable per project.
+- Project-specific status vocabularies may diverge by workflow as long as each status maps to one global bucket.
 - Every project status maps to one global bucket:
   - `todo`
   - `in_progress`
   - `done`
+- Status remains intrinsic to the task rather than view-specific, roll-up-specific, or collection-specific.
 - Moving a task into a `done`-bucket status is how the MVP treats the task as complete/closed.
 - Review, reassignment, and handoff are modeled as status or metadata changes on the same task.
 - Future automation hooks may attach to status changes, but that behavior is deferred.
@@ -70,9 +76,17 @@ Optional fields:
 
 Detailed runtime behavior lives in `docs/architecture/execution-model.md`.
 
+## Collection relationship
+
+- A task may optionally belong to one collection in the same project.
+- Collection membership groups related tasks around a broader outcome without changing task identity.
+- Collection membership does not change execution-root inheritance, session ownership, or task status semantics.
+- Canonical collection semantics live in `docs/product/collection-model.md`.
+
 ## Project relationship
 
 - A project is an existing local git repo registered in Isagi.
+- Tasks may live directly under the project or under an optional collection inside the project.
 - The task inherits its project repo as the default execution context.
 - Project-level git execution defaults can influence how sessions start, but they do not redefine task identity.
 

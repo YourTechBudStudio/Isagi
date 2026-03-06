@@ -12,7 +12,7 @@
 ## Actors and surfaces
 
 - **User** - creates tasks, starts sessions, and changes statuses.
-- **Desktop app (Isagi)** - task list, command surfaces, git controls, session visibility.
+- **Desktop app (Isagi)** - project-scoped task surfaces, optional collection grouping, command surfaces, git controls, and session visibility.
 - **Execution session (OpenCode-backed)** - task-linked agent work.
 
 ## Entry posture: open app and resume work
@@ -27,8 +27,9 @@
 
 1. User runs a command such as `Create task`.
 2. User selects a project or uses the currently active project context.
-3. User enters task details such as title, optional priority, and labels.
+3. User enters task details such as title, optional priority, labels, and optionally a collection.
 4. Task appears in the project task list with its project-defined default status.
+5. If no collection is chosen, the task lives directly under the project.
 
 ## Scenario B: Start an ad-hoc session
 
@@ -36,6 +37,7 @@
 2. Isagi creates a visible task automatically.
 3. The task title is generated from the first user message and can be renamed later.
 4. The session is attached to that task and opens in the project repo root.
+5. The auto-created task is a normal project task and may remain ungrouped until the user later assigns it to a collection.
 
 ## Scenario C: Choose execution mode and begin work
 
@@ -98,7 +100,9 @@ Examples:
 ## Invariants checklist
 
 - Every task belongs to a project.
+- Every task may belong to zero or one collection inside that project.
 - Every session belongs to a task.
+- Sessions do not belong directly to collections.
 - No subtasks exist in v0; review and handoff stay on the same task.
 - Tasks are execution-agnostic.
 - Task status is manual and project-customizable.

@@ -4,7 +4,7 @@
 
 ## One-liner
 
-Isagi is a desktop-first task and session orchestration tool for repo-based work: keep project-scoped tasks, run resumable agent sessions, and manage git execution without heavyweight process overhead.
+Isagi is a desktop-first task and session orchestration tool for repo-based work: keep project-scoped tasks and optional collections, run resumable agent sessions, and manage git execution without heavyweight process overhead.
 
 ## The problem
 
@@ -24,8 +24,9 @@ Isagi is a desktop-first task and session orchestration tool for repo-based work
 ## Core principles
 
 - **Desktop-first for MVP.** Keep one primary execution surface.
-- **Task-first, not workflow-first.** Use projects, tasks, and sessions as the minimum stable core.
+- **Task-first, not workflow-first.** Use repo projects, optional collections, tasks, and sessions as the minimum stable core.
 - **Execution and planning stay separate.** Sessions do the work; tasks track accountability and progress.
+- **Grouping should not redefine execution.** Collections may organize work, but repo projects remain the execution containers.
 - **User sovereignty over git.** Branch and worktree controls remain user-driven, with warnings instead of hard locks.
 - **Backlog tooling can wait.** Spark capture and triage can return in Phase 2 if the task-first core proves worthwhile.
 - **Continuity over novelty.** Resume and focus are more important than feed-style discovery.
@@ -37,20 +38,22 @@ Primary scenario: coding/product workflow.
 Typical flow:
 
 1. Register an existing local git repo as a project.
-2. Create a task or start an ad-hoc session that auto-creates a task.
-3. Run one or more sessions against that task.
-4. Stay on the current branch or switch to a managed worktree when needed.
-5. Move the task through project-defined statuses until done.
-6. Keep backlog planning lightweight; richer spark tooling is deferred until after the first MVP release.
+2. Organize work directly as tasks or under optional collections, depending on the project's workflow.
+3. Create a task or start an ad-hoc session that auto-creates a task.
+4. Run one or more sessions against that task.
+5. Stay on the current branch or switch to a managed worktree when needed.
+6. Move the task through project-defined statuses until done.
+7. Keep backlog planning lightweight; richer spark tooling is deferred until after the first MVP release.
 
 Detailed journey: `docs/journeys/coding-workflow.md`.
 
 ## Derivative workflows
 
-YouTube/social/content workflows are still expected to layer on top of the same core, but they are not driving the active MVP shape.
+Outcome-centric workflows such as content or video work are expected to fit inside the same repo-project model by using optional collections plus project-defined task statuses, without changing execution-root semantics.
 
 ## Architecture references
 
+- Collection model: `docs/product/collection-model.md`
 - Task model: `docs/product/task-model.md`
 - Execution mechanics: `docs/architecture/execution-model.md`
 - Project/task git rules: `docs/product/config/project-task-git-rules.md`

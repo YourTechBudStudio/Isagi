@@ -12,9 +12,22 @@ A project is an existing local git repo registered in Isagi.
 
 Projects:
 
-- own tasks
+- own tasks and optional collections
 - define customizable task statuses
 - can carry project-level git execution defaults
+
+### Collection
+
+A collection is an optional grouping container inside a single project.
+
+Collections:
+
+- organize related tasks around a broader outcome
+- belong to exactly one project
+- do not own execution context
+- do not receive sessions directly
+
+Canonical collection contract: `docs/product/collection-model.md`.
 
 ### Task
 
@@ -23,8 +36,10 @@ A task is the smallest accountable unit of outcome inside a project.
 Tasks:
 
 - belong to exactly one project
+- may optionally belong to one collection in that project
 - track intent and progress
 - can have multiple sessions
+- remain the canonical actionable unit even when a project uses aliases in the UI
 - are execution-agnostic
 
 Canonical task contract: `docs/product/task-model.md`.
@@ -66,26 +81,31 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 
 ## Core invariants
 
-1. **Every task belongs to exactly one project.**
-2. **Tasks never move between projects.** Archive and recreate instead.
-3. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks.
-4. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
-5. **Task status is manual.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
-6. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
-7. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions.
-8. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
+1. **Every project is an existing local git repo.**
+2. **Every task belongs to exactly one project.**
+3. **A task may belong to zero or one collection inside that project.**
+4. **Tasks never move between projects.** Archive and recreate instead.
+5. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks.
+6. **Sessions never belong directly to collections.**
+7. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
+8. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
+9. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
+10. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions.
+11. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
 ## Task-first MVP posture
 
 The active MVP is task-first:
 
 - projects provide repo context
-- tasks track accountability and progress
+- collections optionally group related tasks
+- tasks remain the canonical actionable unit for accountability and progress
 - sessions do the execution work
 - sparks remain useful for backlog health, but do not gate task creation
 
 Read together:
 
+- `docs/product/collection-model.md`
 - `docs/product/task-model.md`
 - `docs/architecture/execution-model.md`
 - `docs/product/config/project-task-git-rules.md`
@@ -134,7 +154,9 @@ Focus remains task-first with session-level visibility elsewhere in the product:
 ## What remains intentionally flexible
 
 - Phase 2 spark inbox / spark-triage design
+- project-local aliases for presentation (configuration details live in `docs/product/config/project-task-git-rules.md`)
+- collection-centric views and grouping behavior
 - status-change automation hooks
 - planner-assisted task creation
-- project-group support for multi-repo work
+- roll-up portfolios / project-group support for multi-repo work
 - whether the deferred resources model returns as an active subsystem

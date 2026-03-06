@@ -8,7 +8,7 @@ This canvas is the **strategic framing source of truth**.
 
 For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wins.
 
-**MVP constraint:** In Phase 1, the release focuses on projects, tasks, sessions, and worktree controls. Spark triage is deferred to Phase 2. Any "development" described below should be interpreted as _creating or shaping tasks and enabling warm-start sessions_, not auto-generating outputs.
+**MVP constraint:** In Phase 1, the release focuses on projects, collections, tasks, sessions, and worktree controls. Spark triage is deferred to Phase 2, and quick-capture surfaces are strategic but not part of the strict first release path. Any "development" described below should be interpreted as _creating or shaping tasks and enabling warm-start sessions_, not auto-generating outputs.
 
 ---
 
@@ -62,17 +62,17 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 ### Products & Features
 
-| Feature                            | Description                                                                                          |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **Quick capture**                  | Frictionless spark entry with low startup cost.                                                      |
-| **Smart triager (Phase 2)**        | Clarifies sparks and proposes project/task follow-on work when backlog help is needed.               |
-| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                    |
-| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.       |
-| **Command-driven execution**       | Session start behavior comes from lightweight defaults and git mode rules, not hardcoded task types. |
-| **Managed worktrees**              | Worktree creation becomes a fast optional workflow for isolated coding threads.                      |
-| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                 |
-| **Generic primitives**             | A small universal model (project/task/session/spark) supports many workflows without bespoke models. |
-| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.               |
+| Feature                            | Description                                                                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Quick capture (future phase)**   | A later low-friction capture surface for sparks or ideas outside the strict Phase 1 release path.                              |
+| **Smart triager (Phase 2)**        | Clarifies sparks and proposes project/task follow-on work when backlog help is needed.                                         |
+| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                                              |
+| **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.                                 |
+| **Command-driven execution**       | Session start behavior comes from lightweight defaults and git mode rules, not hardcoded task types.                           |
+| **Managed worktrees**              | Worktree creation becomes a fast optional workflow for isolated coding threads.                                                |
+| **First-principles collaboration** | Agents challenge assumptions, propose alternatives, and keep user as decision-maker.                                           |
+| **Generic primitives**             | A small universal model (project/collection/task/session, with spark deferred) supports many workflows without bespoke models. |
+| **Integration-ready foundation**   | External integrations can be layered later without changing the core continuity model.                                         |
 
 ### Pain Relievers
 
@@ -84,7 +84,7 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 | "What should I do next?"       | Warm-start sessions and task context reduce decision friction at start time.                                         |
 | Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                           |
 | Sequential execution drag      | Task-linked sessions plus optional managed worktrees support safer parallel progress.                                |
-| Capture friction               | Quick capture avoids early routing decisions.                                                                        |
+| Capture friction               | A future quick-capture surface can avoid early routing decisions once capture returns to the active product.         |
 | Ideas decay                    | Phase 2 spark tools can later convert loose ideas into follow-on work when needed.                                   |
 | High setup overhead            | Defaults and lightweight git controls make starting small tasks cheap.                                               |
 | Context scattered              | Project-scoped tasks and session history keep decisions and outputs discoverable.                                    |
@@ -107,7 +107,7 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 > **The system eliminates context loading as a barrier to creative work.**
 >
-> The product direction is that agent conversations feel pre-loaded with: the relevant task or spark, project context, prior decisions, execution context, and a summary that primes you on where things stand.
+> In the active MVP, agent conversations should feel pre-loaded with: the relevant task, project context, prior decisions, execution context, and a summary that primes you on where things stand. Future spark tooling may later feed into the same continuity model.
 >
 > You never start from zero. You never explain what you're working on. You never hunt for documents. You just continue.
 >

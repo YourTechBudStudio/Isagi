@@ -14,7 +14,15 @@ Projects define the repo context and default git mode; sessions decide how work 
 - Project registration should validate that the configured path is already a git repo.
 - Project IDs should be stable and filesystem-safe.
 - Repo path is stored separately from project identity.
+- Projects may define optional collections for grouping work, but the repo project remains the execution container.
 - Tasks inherit the project repo root as their default execution context.
+- Collections do not redefine execution root.
+
+## Display aliases
+
+- Projects may define project-local UI terminology aliases for labels such as `collection`.
+- Aliases are presentation-only and do not rename canonical model terms in docs or contracts.
+- Aliases do not change task ownership, session ownership, status semantics, or execution behavior.
 
 ## Git mode defaults
 
@@ -66,12 +74,15 @@ Rules:
 - `id`
 - repo path / repo reference
 - nullable default git mode
+- optional collection definitions
 - project-defined task statuses mapped to global buckets
+- optional display aliases for project-local terminology
 - optional default task labels or related workflow metadata
 
 ## Deferred extension points
 
 - project groups / multi-repo execution
+- roll-up / portfolio projects
 - stricter merge or cleanup enforcement
 - status-change automation hooks
 - richer project-level agent guidance projections
