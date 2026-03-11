@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { LayoutDashboard, ListTodo } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 
 import { AppShell } from "@/components/layout/AppShell";
@@ -9,20 +9,23 @@ import { ProjectActionBar } from "@/components/project/ProjectActionBar";
 import { ProjectBoardView } from "@/components/project/ProjectBoardView";
 import { ProjectEmptyState } from "@/components/project/ProjectEmptyState";
 import { ProjectListView } from "@/components/project/ProjectListView";
+import { ProjectViewContextBar } from "@/components/project/ProjectViewContextBar";
 import { cn } from "@/lib/cn";
 import { getMockProject } from "@/lib/mock/project.mock";
 import {
   mockSidebarProjects,
   mockSidebarTriage,
 } from "@/lib/mock/sidebar.mock";
-
-type ViewMode = "board" | "list";
+import {
+  readProjectViewState,
+  writeProjectViewState,
+} from "@/lib/project-detail-storage";
+import { filterProjectTasks, sortProjectTasks } from "@/lib/utils/task-utils";
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
-  const [viewMode, setViewMode] = useState<ViewMode>("board");
-
-  const project = getMockProject(id ?? "");
+  const projectId = id ?? "";
+  const project = getMockProject(projectId);
 
   if (!project) {
     return (
@@ -34,7 +37,60 @@ export default function ProjectDetail() {
     );
   }
 
+  return (
+    <ProjectDetailContent
+      key={projectId}
+      project={project}
+      projectId={projectId}
+    />
+  );
+}
+
+type ProjectDetailContentProps = {
+  readonly projectId: string;
+  readonly project: NonNullable<ReturnType<typeof getMockProject>>;
+};
+
+function ProjectDetailContent({
+  projectId,
+  project,
+}: ProjectDetailContentProps) {
+  const savedState = readProjectViewState(projectId);
+  const [viewMode, setViewMode] = useState(savedState.viewMode);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState(
+    savedState.priorityFilter,
+  );
+  const [collectionFilter, setCollectionFilter] = useState(
+    savedState.collectionFilter,
+  );
+  const [sortKey, setSortKey] = useState(savedState.sortKey);
+
+  useEffect(() => {
+    writeProjectViewState(projectId, {
+      viewMode,
+      priorityFilter,
+      collectionFilter,
+      sortKey,
+    });
+  }, [collectionFilter, priorityFilter, projectId, sortKey, viewMode]);
+
   const isEmpty = project.tasks.length === 0;
+  const collectionOptions = Array.from(
+    new Set(
+      project.tasks
+        .map(task => task.collection)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+  const filteredTasks = sortProjectTasks(
+    filterProjectTasks(project.tasks, {
+      searchQuery,
+      priorityFilter,
+      collectionFilter,
+    }),
+    sortKey,
+  );
 
   return (
     <AppShell
@@ -53,7 +109,7 @@ export default function ProjectDetail() {
       <main className="relative z-10 flex h-screen flex-1 flex-col overflow-y-auto">
         {!isEmpty && <ProjectActionBar />}
 
-        <div className="mx-auto flex h-full w-full max-w-350 flex-col px-8 pt-24 pb-32">
+        <div className="mx-auto flex h-full w-full flex-col px-8 pt-24 pb-32">
           <motion.header
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -65,31 +121,53 @@ export default function ProjectDetail() {
             </h1>
 
             {!isEmpty && (
-              <div className="flex items-center gap-2 border-b border-white/5 pb-4">
-                <button
-                  onClick={() => setViewMode("board")}
-                  className={cn(
-                    "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                    viewMode === "board"
-                      ? "text-text-primary bg-white/10"
-                      : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                  )}
-                >
-                  <LayoutDashboard className="h-4 w-4" />
-                  Board
-                </button>
-                <button
-                  onClick={() => setViewMode("list")}
-                  className={cn(
-                    "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                    viewMode === "list"
-                      ? "text-text-primary bg-white/10"
-                      : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                  )}
-                >
-                  <ListTodo className="h-4 w-4" />
-                  List
-                </button>
+              <div className="flex flex-col gap-4 border-b border-white/5 pb-5">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setViewMode("board")}
+                    className={cn(
+                      "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
+                      viewMode === "board"
+                        ? "text-text-primary bg-white/10"
+                        : "text-text-secondary hover:text-text-primary hover:bg-white/5",
+                    )}
+                  >
+                    <LayoutDashboard className="h-4 w-4" />
+                    Board
+                  </button>
+                  <button
+                    onClick={() => setViewMode("list")}
+                    className={cn(
+                      "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
+                      viewMode === "list"
+                        ? "text-text-primary bg-white/10"
+                        : "text-text-secondary hover:text-text-primary hover:bg-white/5",
+                    )}
+                  >
+                    <ListTodo className="h-4 w-4" />
+                    List
+                  </button>
+                </div>
+
+                <ProjectViewContextBar
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  priorityFilter={priorityFilter}
+                  onPriorityChange={setPriorityFilter}
+                  collectionFilter={collectionFilter}
+                  onCollectionChange={setCollectionFilter}
+                  sortKey={sortKey}
+                  onSortChange={setSortKey}
+                  collectionOptions={collectionOptions}
+                  resultCount={filteredTasks.length}
+                  totalCount={project.tasks.length}
+                  onReset={() => {
+                    setSearchQuery("");
+                    setPriorityFilter("all");
+                    setCollectionFilter("all");
+                    setSortKey("due_date");
+                  }}
+                />
               </div>
             )}
           </motion.header>
@@ -108,7 +186,7 @@ export default function ProjectDetail() {
                     transition={{ duration: 0.3 }}
                     className="h-full"
                   >
-                    <ProjectBoardView tasks={project.tasks} />
+                    <ProjectBoardView tasks={filteredTasks} />
                   </motion.div>
                 ) : (
                   <motion.div
@@ -117,8 +195,9 @@ export default function ProjectDetail() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.3 }}
+                    className="w-full"
                   >
-                    <ProjectListView tasks={project.tasks} />
+                    <ProjectListView tasks={filteredTasks} />
                   </motion.div>
                 )}
               </AnimatePresence>

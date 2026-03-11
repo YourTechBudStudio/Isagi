@@ -1,9 +1,8 @@
 import { motion, useMotionValueEvent, useScroll } from "framer-motion";
-import { Filter, FolderPlus, Plus, Sparkles } from "lucide-react";
+import { FolderPlus, Plus, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
-import { IconButton } from "@/components/ui/IconButton";
 
 export function ProjectActionBar() {
   const { scrollY } = useScroll();
@@ -28,15 +27,7 @@ export function ProjectActionBar() {
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
       className="pointer-events-none fixed top-6 right-6 z-30 flex items-center justify-between"
     >
-      {/* We only render the right side actions. Project identity is in the page header. */}
       <div className="bg-canvas-elevated/80 pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 p-1.5 shadow-lg backdrop-blur-md">
-        <div className="flex items-center gap-1 border-r border-white/10 px-1 pr-2">
-          <IconButton
-            icon={<Filter className="h-4 w-4" />}
-            title="Filter Tasks"
-          />
-        </div>
-
         <div className="flex items-center gap-1 border-r border-white/10 px-1 pr-2">
           <Button
             variant="secondary"

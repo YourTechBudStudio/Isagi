@@ -56,6 +56,7 @@ export const mockProjectCore: MockProjectData = {
       status: "done",
       priority: "high",
       labels: ["api", "realtime"],
+      collection: "Realtime Infrastructure",
       sessionState: "none",
     },
     {
@@ -64,6 +65,7 @@ export const mockProjectCore: MockProjectData = {
       status: "in_progress",
       priority: "medium",
       labels: ["api", "design"],
+      collection: "Realtime Infrastructure",
       sessionState: "none",
     },
     {

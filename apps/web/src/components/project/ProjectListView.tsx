@@ -35,25 +35,27 @@ export function ProjectListView({ tasks }: ProjectListViewProps) {
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="flex max-w-5xl flex-col gap-10 pt-4 pb-16"
+      className="flex w-full flex-col gap-12 pt-6 pb-16"
     >
       {GROUPS.map(group => {
         const groupTasks = tasks.filter(t => t.status === group.id);
 
-        if (groupTasks.length === 0) return null;
+        if (groupTasks.length === 0) {
+          return null;
+        }
 
         return (
           <motion.div key={group.id} variants={groupVariants}>
-            <div className="mb-3 flex items-center gap-3 border-b border-white/5 pb-2">
-              <h3 className="text-text-primary font-display text-sm font-semibold tracking-tight">
+            <div className="mb-4 flex items-center gap-3 px-2">
+              <h3 className="text-text-primary font-display text-base font-semibold tracking-tight">
                 {group.label}
               </h3>
-              <span className="bg-canvas-elevated text-text-tertiary flex h-5 w-5 items-center justify-center rounded-full border border-white/5 text-[10px] font-medium">
+              <span className="text-text-tertiary flex h-5 w-5 items-center justify-center rounded-full bg-white/[0.04] text-[10px] font-medium">
                 {groupTasks.length}
               </span>
             </div>
 
-            <div className="flex flex-col">
+            <div className="flex flex-col gap-1">
               {groupTasks.map(task => (
                 <ProjectTaskRow key={task.id} task={task} />
               ))}

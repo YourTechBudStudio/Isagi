@@ -3,7 +3,9 @@ import { useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/Badge";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
+import { getDueDateColor, getPriorityColor } from "@/lib/utils/task-utils";
 
 type ProjectTaskCardProps = {
   readonly task: MockTask;
@@ -11,19 +13,6 @@ type ProjectTaskCardProps = {
 
 export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
   const navigate = useNavigate();
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case "high":
-        return "red";
-      case "medium":
-        return "amber";
-      case "low":
-        return "blue";
-      default:
-        return "neutral";
-    }
-  };
 
   const renderSessionIndicator = () => {
     if (task.sessionState === "active") {
@@ -86,7 +75,9 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
 
       <div className="mt-1 flex items-center justify-between border-t border-white/5 pt-3">
         {task.dueDate ? (
-          <span className="text-text-tertiary font-mono text-xs">
+          <span
+            className={cn("font-mono text-xs", getDueDateColor(task.dueDate))}
+          >
             {task.dueDate}
           </span>
         ) : (
