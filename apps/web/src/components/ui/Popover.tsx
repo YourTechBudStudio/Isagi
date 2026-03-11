@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 type PopoverProps = {
@@ -13,6 +13,14 @@ type PopoverProps = {
   readonly minWidth?: number;
 };
 
+const HIDDEN_POPOVER_STYLE: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  visibility: "hidden",
+  pointerEvents: "none",
+};
+
 export function Popover({
   open,
   onClose,
@@ -22,29 +30,37 @@ export function Popover({
   minWidth,
 }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<React.CSSProperties>({});
 
-  // Compute position when opening
-  useEffect(() => {
-    if (!open || !anchorRef.current) return;
-    const rect = anchorRef.current.getBoundingClientRect();
-    const base: React.CSSProperties = {
-      position: "fixed",
-      top: rect.bottom + 6,
-      minWidth: minWidth ?? rect.width,
-    };
-
-    if (align === "start") {
-      base.left = rect.left;
-    } else if (align === "center") {
-      base.left = rect.left + rect.width / 2;
-      base.transform = "translateX(-50%)";
-    } else {
-      base.right = window.innerWidth - rect.right;
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
     }
 
-    setPosition(base);
-  }, [open, anchorRef, align, minWidth]);
+    const popoverElement = popoverRef.current;
+    const anchorElement = anchorRef.current;
+    if (!popoverElement || !anchorElement) {
+      return;
+    }
+
+    const rect = anchorElement.getBoundingClientRect();
+    popoverElement.style.top = `${rect.bottom + 6}px`;
+    popoverElement.style.minWidth = `${minWidth ?? rect.width}px`;
+    popoverElement.style.left = "";
+    popoverElement.style.right = "";
+    popoverElement.style.translate = "";
+
+    if (align === "start") {
+      popoverElement.style.left = `${rect.left}px`;
+    } else if (align === "center") {
+      popoverElement.style.left = `${rect.left + rect.width / 2}px`;
+      popoverElement.style.translate = "-50% 0";
+    } else {
+      popoverElement.style.right = `${window.innerWidth - rect.right}px`;
+    }
+
+    popoverElement.style.visibility = "visible";
+    popoverElement.style.pointerEvents = "auto";
+  }, [open, onClose, anchorRef, align, minWidth]);
 
   // Close on outside click
   useEffect(() => {
@@ -91,7 +107,7 @@ export function Popover({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: -4 }}
           transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-          style={position}
+          style={HIDDEN_POPOVER_STYLE}
           className="bg-canvas-elevated z-[100] overflow-hidden rounded-xl border border-white/10 shadow-2xl"
         >
           {children}
