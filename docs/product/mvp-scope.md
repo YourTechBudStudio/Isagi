@@ -49,10 +49,15 @@ Detailed contracts: `docs/product/task-model.md` and `docs/product/collection-mo
 
 #### 3) Session-first execution
 
-- Sessions are the execution surfaces attached to tasks.
-- Multiple sessions can exist per task.
-- Starting an ad-hoc session auto-creates a visible task with a generated title.
-- Sessions remain open until manually closed or the task enters a terminal `done`-bucket status.
+- Sessions are the execution surfaces where agent work happens.
+- Phase 1 supports two session paths:
+  - task-backed sessions for accountable tracked work
+  - project-scoped scratch sessions for quick exploration or Q&A
+- Multiple task-backed sessions can exist per task.
+- Starting a task-backed ad-hoc session auto-creates a visible task with a generated title.
+- Scratch sessions do not create visible tasks and do not participate in backlog tracking.
+- Both session kinds use the same execution engine and git controls.
+- Sessions remain open until manually closed, except task-backed sessions that auto-close when the task enters a terminal `done`-bucket status.
 
 #### 4) Git execution modes + managed worktrees
 
@@ -115,11 +120,16 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 ### Core flow
 
 ```txt
-Project -> Create task or start ad-hoc session
+Project -> Create task or start task-backed ad-hoc session
         -> Session opens in project repo root
         -> Stay on current branch or switch to managed worktree
         -> Continue/resume across one or more sessions
         -> Move task through project-defined statuses until done
+
+Project -> Start scratch session
+        -> Session opens in project repo root
+        -> Ask questions or do lightweight exploration
+        -> Close manually when no longer needed
 ```
 
 ---
@@ -156,7 +166,7 @@ Qualitative validation signals:
 ## Near-term implementation priorities
 
 1. Lock project/collection/task/session contracts and status model in API + docs.
-2. Implement manual task creation and ad-hoc session auto-task creation.
+2. Implement manual task creation, task-backed ad-hoc session auto-task creation, and project-scoped scratch sessions.
 3. Implement session execution surface with git mode selection and rebind behavior.
 4. Implement passive snapshots, collision warnings, and session closure states.
 5. Implement project registration, explicit git defaults, and read-only execution visibility.

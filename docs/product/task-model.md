@@ -30,8 +30,8 @@ Those are execution choices made while working on the task, not part of task ide
 1. Every task belongs to exactly one project.
 2. A task cannot move projects after creation.
 3. A task may optionally belong to one collection in that project.
-4. A task can have multiple sessions.
-5. Sessions attach to tasks only.
+4. A task can have multiple task-linked sessions.
+5. Task-linked sessions attach to tasks only.
 6. No session is primary by default.
 7. No subtasks exist in v0; review and handoff stay on the same task.
 8. Task completion is status-driven; git cleanliness is not required in v0.
@@ -72,13 +72,15 @@ Optional fields:
 
 ## Session relationship
 
-- Every session belongs to a task.
-- Sessions are the execution surfaces where agent work happens.
+- This section describes **task-linked sessions**, not the separate scratch-session path.
+- Every task-linked session belongs to exactly one task.
+- Task-linked sessions are the execution surfaces where accountable tracked work happens.
 - No persistent model-level primary session exists, even if UI surfaces temporarily prioritize one open session for convenience.
-- Planning or organizing sessions still attach to tasks; project-level planning flows should create or resume a dedicated planning task rather than introducing a project-scoped session type.
-- A task may accumulate multiple sessions for different kinds of work, such as implementation, review, or follow-up.
-- Starting an ad-hoc session auto-creates a visible task with a generated title based on the first user message.
-- Sessions auto-close when the parent task enters a terminal `done`-bucket status.
+- Planning or organizing sessions still attach to tasks; project-level planning flows should create or resume a dedicated planning task rather than introducing a second planning object.
+- A task may accumulate multiple task-linked sessions for different kinds of work, such as implementation, review, or follow-up.
+- Starting a task-backed ad-hoc session auto-creates a visible task with a generated title based on the first user message.
+- Task-linked sessions auto-close when the parent task enters a terminal `done`-bucket status.
+- Scratch sessions are a separate project-scoped exploration path with no task. They intentionally live outside the task/accountability model.
 - UI-specific prioritization guidance lives in `docs/product/screens/task-detail-sheet.md`.
 
 Detailed runtime behavior lives in `docs/architecture/execution-model.md`.

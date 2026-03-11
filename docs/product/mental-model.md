@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -46,10 +46,13 @@ Canonical task contract: `docs/product/task-model.md`.
 
 ### Session
 
-A session is the execution surface attached to a task.
+A session is an execution surface inside a project.
 
 Sessions:
 
+- come in two MVP forms:
+  - task-linked sessions for accountable tracked work
+  - project-scoped scratch sessions for quick exploration or Q&A
 - are where agent work happens
 - can start in the project repo or a managed worktree
 - can be rebound to a different execution root during work
@@ -85,13 +88,15 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 2. **Every task belongs to exactly one project.**
 3. **A task may belong to zero or one collection inside that project.**
 4. **Tasks never move between projects.** Archive and recreate instead.
-5. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks, and planning flows do the same or resume a dedicated planning task.
-6. **Sessions never belong directly to collections.**
-7. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
-8. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
-9. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
-10. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions; MVP surfaces do not expose a second completion action separate from status.
-11. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
+5. **Sessions come in two kinds.** A session is either task-linked or a project-scoped scratch session.
+6. **Every task-linked session belongs to exactly one task.** Ad-hoc tracked work auto-creates visible tasks, and planning flows do the same or resume a dedicated planning task.
+7. **Scratch sessions belong to a project, not a task or collection.** They are intentionally outside backlog accountability.
+8. **Sessions never belong directly to collections.**
+9. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
+10. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
+11. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
+12. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its task-linked sessions; MVP surfaces do not expose a second completion action separate from status.
+13. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
 ## Task-first MVP posture
 
@@ -138,6 +143,7 @@ Guidance projection ideas live in `docs/product/config/agent-guidance-projection
 Home is a minimal global re-entry surface.
 
 - Home prioritizes resumable sessions first.
+- Home may surface both task sessions and scratch sessions, with scratch sessions visibly marked as scratch.
 - Home may show lightweight fallback tasks only when there is no session to resume.
 - Home is not the primary place for deliberate task browsing or project management.
 

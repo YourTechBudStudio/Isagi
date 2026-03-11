@@ -1,6 +1,6 @@
 # Execution Model
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the task-first MVP.
 
@@ -44,7 +44,9 @@ Remarks:
 
 ## Execution root defaults
 
-Every session attached to a task inherits one guaranteed starting context: the task's project repo root.
+Task-linked sessions inherit one guaranteed starting context: the task's project repo root.
+
+Scratch sessions inherit one guaranteed starting context: the selected project's repo root.
 
 Git mode selection resolves in this order:
 
@@ -68,16 +70,21 @@ Other task or project metadata may be shown in side panels as view-only context,
 
 - Task owns planning and accountability.
 - Session owns execution context.
+- Task-linked sessions belong to tasks.
+- Scratch sessions are project-scoped exploration sessions with no task and no backlog/accountability object.
 - A task does not carry an immutable branch or worktree assignment.
 - Multiple sessions under the same task may operate on different branches or roots.
 - Outputs live in code, documents, and other filesystem changes, not in the session object itself.
 
 ## Session lifecycle and states
 
-- Sessions are created by opening a task or by starting an ad-hoc session that auto-creates a visible task.
-- Sessions can remain attached to a task across multiple resumptions.
+- Task-linked sessions are created by opening a task or by starting a task-backed ad-hoc session that auto-creates a visible task.
+- Scratch sessions are created by explicitly starting a scratch session against a selected project.
+- Task-linked sessions can remain attached to a task across multiple resumptions.
+- Scratch sessions can remain attached to their project context across multiple resumptions.
 - Sessions can be manually closed.
-- Sessions auto-close when the parent task enters a `done`-bucket status.
+- Task-linked sessions auto-close when the parent task enters a `done`-bucket status.
+- Scratch sessions do not auto-close from task status because they have no task.
 
 Session states:
 
@@ -119,6 +126,8 @@ Implementations may also store supporting fields such as:
 
 External git changes between user requests are intentionally only captured on the next interaction.
 
+These passive snapshots apply to both task-linked and scratch sessions.
+
 ## Collision awareness
 
 - Isagi warns when multiple sessions share the same execution directory.
@@ -129,13 +138,15 @@ External git changes between user requests are intentionally only captured on th
 - `closed` sessions are excluded.
 - Warnings are advisory and do not hard-block user actions.
 - Task and session surfaces should expose read-only visibility such as overlapping sessions, active session counts, or last known execution roots where useful.
+- Scratch sessions participate in the same directory-level warning model as task-linked sessions.
 
 ## Task status interaction
 
 - Task status remains manual in v0.
 - Project-specific statuses map to the global buckets `todo`, `in_progress`, and `done`.
-- Entering a `done`-bucket status is the terminal close event for that task's sessions.
+- Entering a `done`-bucket status is the terminal close event for that task's task-linked sessions.
 - Runtime closure is driven by status transition rather than a distinct `Complete task` action.
+- Scratch sessions are unaffected by task status because they are not task-backed.
 
 ## Out-of-scope for MVP
 

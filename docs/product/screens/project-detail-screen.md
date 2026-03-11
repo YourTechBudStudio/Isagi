@@ -118,7 +118,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - **Plan with PM agent** starts a normal session that uses a specialized project-manager agent.
 - This planning flow starts against the project as a whole rather than the currently selected view or filter context.
-- Launching that flow should create or resume a dedicated planning task inside the project so the session still follows the invariant that every session belongs to a task.
+- Launching that flow should create or resume a dedicated planning task inside the project so backlog-shaping work stays accountable and visible on the board.
 - Its main role is backlog planning, organization, cleanup, and identifying next work.
 - Once started, it appears in the existing session/sidebar model like any other session rather than introducing a separate concept.
 

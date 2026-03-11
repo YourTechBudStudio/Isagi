@@ -13,16 +13,17 @@
 
 - **User** - creates tasks, starts sessions, and changes statuses.
 - **Desktop app (Isagi)** - project-scoped task surfaces, optional collection grouping, command surfaces, git controls, and session visibility.
-- **Execution session (OpenCode-backed)** - task-linked agent work.
+- **Execution session (OpenCode-backed)** - task-linked agent work plus project-scoped scratch exploration.
 
 ## Entry posture: open app and resume work
 
 1. Home opens as a global orientation surface.
 2. The most recent resumable session is the primary jump-in target.
 3. Additional open sessions appear as compact secondary options.
-4. If there are no resumable sessions, the app may show lightweight candidate tasks.
-5. Global `Start a session` flows route through the command palette so project selection happens explicitly before execution begins.
-6. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
+4. Those open sessions may include both task-linked and scratch sessions; scratch sessions should be visibly marked as scratch.
+5. If there are no resumable sessions, the app may show lightweight candidate tasks.
+6. Global `Start a session` flows route through the command palette so project selection happens explicitly before execution begins.
+7. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
 
 ## Scenario A: Register a project
 
@@ -52,7 +53,7 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 4. The PM session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
 5. The planning session appears in the normal session/sidebar model like any other task-linked session.
 
-## Scenario D: Start an ad-hoc session
+## Scenario D: Start a task-backed ad-hoc session
 
 1. User starts a session from project context without creating a task first.
 2. Isagi creates a visible task automatically.
@@ -60,9 +61,19 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 4. The session is attached to that task and opens in the project repo root.
 5. The auto-created task is a normal project task and may remain ungrouped until the user later assigns it to a collection.
 
-## Scenario E: Choose execution mode and begin work
+## Scenario E: Start a scratch session
 
-1. Session starts from the task's project repo root.
+1. User runs a `Start scratch session` command from the command palette.
+2. User selects a project explicitly.
+3. Isagi opens a session in that project's repo root without creating a task.
+4. The session uses the same conversation shell, git controls, and execution behavior as normal sessions.
+5. The scratch session stays visible in Home and the sidebar like any other session, but it is visibly marked as scratch.
+
+## Scenario F: Choose execution mode and begin work
+
+1. Session starts from:
+   - the task's project repo root for a task-backed session
+   - the selected project's repo root for a scratch session
 2. User chooses to:
    - stay on the current branch
    - create/use a managed worktree
@@ -70,14 +81,16 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 3. If a managed worktree is selected, Isagi creates it automatically.
 4. Agent work begins in the chosen execution root.
 
-## Scenario F: Continue across one or more sessions
+## Scenario G: Continue across one or more sessions
 
 1. User can open additional sessions on the same task.
 2. Sessions are peers; none is primary by default.
 3. One session may implement while another reviews or follows up.
 4. Sessions can be manually closed when they are no longer relevant.
 
-## Scenario G: Rebind and collision-awareness
+Scratch sessions can also remain open and resumable across multiple short exploration loops, but they stay outside board/task tracking.
+
+## Scenario H: Rebind and collision-awareness
 
 1. During a session, the user may switch branches or move to/from a managed worktree.
 2. If the execution root path changes, Isagi rebinds the same session to the new root.
@@ -85,7 +98,7 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 4. Task and session UI can show overlapping sessions or active session counts for that directory.
 5. The warning helps the user inspect overlapping sessions without hard-blocking work.
 
-## Scenario H: Update task status
+## Scenario I: Update task status
 
 1. User changes task status manually.
 2. Status labels are project-specific but map to global buckets.
@@ -111,11 +124,13 @@ Project Detail and the Session screen should reuse the same contextual action-ba
 - The task-detail drawer is a lighter modal exception rather than a full action-bar surface.
 - Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
 - The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
+- Scratch sessions stay primarily command-palette-driven so project selection remains explicit and they do not masquerade as backlog items.
 
 Examples:
 
 - create task
-- start ad-hoc session
+- start task-backed ad-hoc session
+- start scratch session
 - start new task session
 - change task status
 - switch execution root / create worktree
@@ -131,7 +146,8 @@ Examples:
 
 - Every task belongs to a project.
 - Every task may belong to zero or one collection inside that project.
-- Every session belongs to a task.
+- Every task-linked session belongs to a task.
+- Scratch sessions belong to a project and do not belong to tasks or collections.
 - Sessions do not belong directly to collections.
 - No subtasks exist in v0; review and handoff stay on the same task.
 - Tasks are execution-agnostic.

@@ -82,6 +82,7 @@ The Task Detail sheet answers: **"What do I need to know about this task right n
 - The Task Detail sheet is the fast bridge from backlog item to execution.
 - It relies on inline metadata editing and a primary session CTA rather than its own standalone action bar.
 - The Session screen remains the primary place where actual agent work happens.
+- Scratch sessions bypass the Task Detail sheet because they are started outside task context and do not attach to tasks.
 - Canonical parent-surface context lives in `docs/product/screens/project-detail-screen.md`.
 - Canonical execution-surface context lives in `docs/product/screens/session-screen.md`.
 

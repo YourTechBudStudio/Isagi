@@ -8,10 +8,10 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 ## Primary job
 
-- Act as the chat-first execution surface for one task-linked agent session.
+- Act as the chat-first execution surface for one agent session, whether that session is task-backed or scratch.
 - Keep the conversation dominant so the user can type the next message immediately.
 - Keep execution state visible without crowding the conversation canvas.
-- Provide lightweight access to task context, task status, and session utilities without turning the page into a second backlog surface.
+- Provide lightweight access to task context, task status, and session utilities when the session is task-backed, without turning the page into a second backlog surface.
 - Reuse the same floating contextual action-bar pattern as Project Detail so the main work surfaces feel consistent.
 
 ## Non-goals
@@ -24,12 +24,15 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 ## Surface posture
 
-- A session is always tied to a task, including planning-oriented sessions that use a dedicated planning task.
+- The Session screen has two MVP variants that share the same shell:
+  - task sessions for tracked accountable work
+  - scratch sessions for project-scoped exploration without a task
+- Planning-oriented sessions remain task-backed by using a dedicated planning task.
 - The Session screen is chat-first and execution-aware.
 - The visible session title is independent from the task title and is generated for the session itself.
 - The top identity area should stay extremely minimal.
 - There should be no large resumability or task-summary block above the fold.
-- Task identity remains stable even when execution root changes through rebind behavior.
+- When a session is task-backed, task identity remains stable even when execution root changes through rebind behavior.
 
 ## Information hierarchy
 
@@ -60,7 +63,9 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 - A right-side context panel opens by default.
 - Its open/closed state should be remembered per session.
-- The panel provides the task context and nearby session visibility that support the current conversation.
+- Task sessions use this panel for task context and nearby session visibility that support the current conversation.
+- Scratch sessions should not invent fake task context.
+- For scratch sessions, the right panel should be omitted rather than showing empty or placeholder task UI.
 
 ## Action-bar actions
 
@@ -88,8 +93,8 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 ## Right-panel contents
 
-- The right panel should lead with task metadata first.
-- Recommended section order:
+- For task sessions, the right panel should lead with task metadata first.
+- Recommended section order for task sessions:
   1. task metadata
   2. notes / description / context
   3. active sibling sessions on the same task
@@ -98,6 +103,7 @@ The Session screen answers: **"How do I keep talking to this agent session while
 - The task status control should live in this panel rather than in the action bar or execution rail.
 - Notes remain supportive context rather than the main surface of the page.
 - Sibling-session visibility should stay limited to active sibling sessions in Phase 1.
+- Scratch sessions do not have a task side panel, do not expose task-status controls, and should keep the conversation shell clean rather than substituting project-context filler.
 
 ## Task status and session closure rules
 
@@ -126,8 +132,9 @@ Canonical task and runtime semantics live in:
 - Home is the minimal re-entry surface that gets the user back into a session quickly.
 - Project Detail is the deliberate project-scoped backlog surface.
 - The Task Detail sheet is the thin bridge from a task on the board into execution.
-- The Session screen is where the actual agent work happens.
+- The Session screen is where the actual agent work happens, whether the session is task-backed or scratch.
 - Project Detail and Session share the floating contextual action-bar pattern, while the Task Detail sheet remains the lighter drawer exception.
+- Scratch sessions bypass the Task Detail sheet because they are not task-backed.
 
 Related docs:
 

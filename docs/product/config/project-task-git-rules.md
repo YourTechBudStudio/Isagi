@@ -94,6 +94,8 @@ Rules:
 - Sessions may switch execution root during work.
 - If execution root changes, the same session is rebound rather than replaced.
 - A task may end up with multiple sessions using different roots at the user's discretion.
+- Scratch sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as task-backed sessions.
+- Scratch sessions differ only in not creating or attaching to a task.
 
 ## Collision warnings
 

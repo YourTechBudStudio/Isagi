@@ -33,6 +33,8 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 - The primary hero surface is the **most recent resumable session**.
 - This is the dominant action on Home.
 - The goal is to let the user continue momentum without first scanning projects or task lists.
+- The hero may be either a task session or a scratch session.
+- Scratch sessions should carry a strong visible scratch indicator wherever they appear.
 
 ### Other open sessions
 
@@ -40,6 +42,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 - They should be shown in a simple vertical list rather than a dense dashboard treatment.
 - Each item should stay lightweight and scan-friendly.
 - Helpful metadata may include the project name, priority, and last active time.
+- Scratch sessions should appear in the same list rather than a separate subsection, while remaining visibly marked as scratch.
 
 ### No-resume fallback
 
@@ -51,6 +54,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 
 - The Home hero is the **most recent resumable session**.
 - Additional open sessions are secondary and should remain visually subordinate to the hero.
+- Scratch sessions follow the same recency-led model rather than being automatically down-ranked.
 - Home may show priority as supporting metadata, but it should not turn into a global planning or ranking surface.
 - Manual signals such as closed sessions, done-bucket task completion, or technical error states are stronger than heuristic guesses about relevance.
 
@@ -67,8 +71,10 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 - Primary CTA: **Start a session**.
 - Secondary CTA: **Create task**.
 - `Start a session` here should route through the command palette with the start-session command preselected.
-- Project selection is required before the ad-hoc session starts.
-- That ad-hoc flow auto-creates a visible task from the first user message.
+- Project selection is required before the session starts.
+- That command-palette flow may branch into either:
+  - a task-backed ad-hoc session that auto-creates a visible task from the first user message
+  - a scratch session that stays project-scoped and does not create a task
 - `Create task` should also route through explicit project selection rather than assuming implicit project context on Home.
 - This keeps startup aligned with the MVP's low-friction, session-first posture.
 
@@ -81,9 +87,11 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 ## Relationship to sidebar and command palette
 
 - The sidebar already provides persistent visibility into active and idle sessions.
+- Those session lists may include both task sessions and scratch sessions.
 - Home should complement that persistent context rather than duplicate it with a large dashboard.
 - The command palette remains the fastest way to open a specific project or trigger actions from anywhere.
 - Global session-start actions from Home should use the command palette rather than guessing project context implicitly.
+- The command palette is also the primary place where the user chooses between a task-backed ad-hoc session and a scratch session.
 
 ## Out of scope / future phase notes
 

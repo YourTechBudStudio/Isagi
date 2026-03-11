@@ -1,6 +1,6 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-11
 
 ## One-liner
 
@@ -15,7 +15,7 @@ Isagi is a desktop-first task and session orchestration tool for repo-based work
 
 ## Value proposition
 
-1. **Start quickly** - create a task or jump straight into an ad-hoc session without ceremony.
+1. **Start quickly** - create a task, jump into a task-backed ad-hoc session, or open a scratch session when you just need quick repo context.
 2. **Warm starts** - sessions resume inside the right project context instead of from zero.
 3. **Parallel safely enough** - optional managed worktrees plus collision warnings reduce accidental overlap.
 4. **Low-overhead tracking** - tasks hold accountability and progress without becoming a heavyweight workflow system.
@@ -26,6 +26,7 @@ Isagi is a desktop-first task and session orchestration tool for repo-based work
 - **Desktop-first for MVP.** Keep one primary execution surface.
 - **Task-first, not workflow-first.** Use repo projects, optional collections, tasks, and sessions as the minimum stable core.
 - **Execution and planning stay separate.** Sessions do the work; tasks track accountability and progress.
+- **Low-commitment exploration should stay lightweight.** Scratch sessions are project-scoped and intentionally avoid creating backlog noise when the user only needs quick answers.
 - **Grouping should not redefine execution.** Collections may organize work, but repo projects remain the execution containers.
 - **User sovereignty over git.** Branch and worktree controls remain user-driven, with warnings instead of hard locks.
 - **Backlog tooling can wait.** Spark capture and triage can return in Phase 2 if the task-first core proves worthwhile.
@@ -39,11 +40,13 @@ Typical flow:
 
 1. Register an existing local git repo as a project.
 2. Organize work directly as tasks or under optional collections, depending on the project's workflow.
-3. Create a task or start an ad-hoc session that auto-creates a task.
+3. Create a task or start a task-backed ad-hoc session that auto-creates a task.
 4. Run one or more sessions against that task.
 5. Stay on the current branch or switch to a managed worktree when needed.
 6. Move the task through project-defined statuses until done.
 7. Keep backlog planning lightweight; richer spark tooling is deferred until after the first MVP release.
+
+When the user only needs quick project-scoped exploration or Q&A, they may instead start a scratch session. Scratch sessions reuse the same execution shell and git controls, but they do not create tasks or appear on project boards.
 
 Detailed journey: `docs/journeys/coding-workflow.md`.
 
