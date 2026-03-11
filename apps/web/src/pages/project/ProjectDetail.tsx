@@ -114,7 +114,7 @@ function ProjectDetailContent({
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className="mb-12 flex flex-col gap-6"
+            className="mb-8 flex flex-col gap-6"
           >
             <h1 className="font-display text-text-primary text-5xl font-semibold tracking-tight">
               {project.name}
@@ -122,52 +122,56 @@ function ProjectDetailContent({
 
             {!isEmpty && (
               <div className="flex flex-col gap-4 border-b border-white/5 pb-5">
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setViewMode("board")}
-                    className={cn(
-                      "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                      viewMode === "board"
-                        ? "text-text-primary bg-white/10"
-                        : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                    )}
-                  >
-                    <LayoutDashboard className="h-4 w-4" />
-                    Board
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={cn(
-                      "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                      viewMode === "list"
-                        ? "text-text-primary bg-white/10"
-                        : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                    )}
-                  >
-                    <ListTodo className="h-4 w-4" />
-                    List
-                  </button>
-                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setViewMode("board")}
+                      className={cn(
+                        "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
+                        viewMode === "board"
+                          ? "text-text-primary bg-white/10"
+                          : "text-text-secondary hover:text-text-primary hover:bg-white/5",
+                      )}
+                    >
+                      <LayoutDashboard className="h-4 w-4" />
+                      Board
+                    </button>
+                    <button
+                      onClick={() => setViewMode("list")}
+                      className={cn(
+                        "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
+                        viewMode === "list"
+                          ? "text-text-primary bg-white/10"
+                          : "text-text-secondary hover:text-text-primary hover:bg-white/5",
+                      )}
+                    >
+                      <ListTodo className="h-4 w-4" />
+                      List
+                    </button>
+                  </div>
 
-                <ProjectViewContextBar
-                  searchQuery={searchQuery}
-                  onSearchChange={setSearchQuery}
-                  priorityFilter={priorityFilter}
-                  onPriorityChange={setPriorityFilter}
-                  collectionFilter={collectionFilter}
-                  onCollectionChange={setCollectionFilter}
-                  sortKey={sortKey}
-                  onSortChange={setSortKey}
-                  collectionOptions={collectionOptions}
-                  resultCount={filteredTasks.length}
-                  totalCount={project.tasks.length}
-                  onReset={() => {
-                    setSearchQuery("");
-                    setPriorityFilter("all");
-                    setCollectionFilter("all");
-                    setSortKey("due_date");
-                  }}
-                />
+                  <div className="flex-1" />
+
+                  <ProjectViewContextBar
+                    searchQuery={searchQuery}
+                    onSearchChange={setSearchQuery}
+                    priorityFilter={priorityFilter}
+                    onPriorityChange={setPriorityFilter}
+                    collectionFilter={collectionFilter}
+                    onCollectionChange={setCollectionFilter}
+                    sortKey={sortKey}
+                    onSortChange={setSortKey}
+                    collectionOptions={collectionOptions}
+                    resultCount={filteredTasks.length}
+                    totalCount={project.tasks.length}
+                    onReset={() => {
+                      setSearchQuery("");
+                      setPriorityFilter("all");
+                      setCollectionFilter("all");
+                      setSortKey("due_date");
+                    }}
+                  />
+                </div>
               </div>
             )}
           </motion.header>

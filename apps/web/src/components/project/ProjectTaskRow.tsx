@@ -30,7 +30,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
           variant="secondary"
           size="sm"
           leadingIcon={<RefreshCw className="h-3.5 w-3.5" />}
-          className="border-transparent bg-white/[0.04] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/[0.08]"
+          className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/[0.08]"
           onClick={e => {
             e.stopPropagation();
             navigate(`/session/${task.id}`);
@@ -46,7 +46,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
         variant="secondary"
         size="sm"
         leadingIcon={<Play className="h-3.5 w-3.5" />}
-        className="border-transparent bg-white/[0.04] opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/[0.08]"
+        className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/8"
         onClick={e => {
           e.stopPropagation();
           navigate(`/session/${task.id}`);
@@ -59,11 +59,11 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
 
   return (
     <div
-      className="group flex cursor-pointer items-center justify-between rounded-2xl px-4 py-3.5 transition-all duration-300 hover:bg-white/[0.03] active:scale-[0.995]"
+      className="group flex cursor-pointer items-center justify-between border-b border-white/5 px-4 py-3 transition-colors duration-200 last:border-b-0 hover:bg-white/[0.02]"
       onClick={() => navigate(`/session/${task.id}`)}
     >
       <div className="flex items-center gap-5">
-        <span className="text-text-primary text-[15px] font-medium tracking-tight">
+        <span className="text-text-primary text-[14px] font-medium tracking-tight">
           {task.title}
         </span>
         <div className="flex items-center gap-2 opacity-80 transition-opacity group-hover:opacity-100">
