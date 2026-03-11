@@ -56,8 +56,8 @@ export function ProjectViewContextBar({
     priorityFilter !== "all" || collectionFilter !== "all";
 
   return (
-    <div className="flex w-full items-center justify-between">
-      <span className="text-text-tertiary text-xs font-medium">
+    <div className="flex items-center gap-4">
+      <span className="text-text-tertiary text-[13px] font-medium">
         {resultCount} of {totalCount} tasks
       </span>
 
@@ -67,7 +67,7 @@ export function ProjectViewContextBar({
             "flex h-8 items-center gap-2 rounded-full border px-3 text-[13px] transition-all duration-300",
             searchQuery.trim().length > 0
               ? "border-accent-blue/30 bg-accent-blue/5 focus-within:border-accent-blue/50 focus-within:bg-accent-blue/10"
-              : "border-transparent bg-white/[0.04] focus-within:border-white/20 focus-within:bg-white/[0.06] hover:bg-white/[0.08]",
+              : "border-transparent bg-white/4 focus-within:border-white/20 focus-within:bg-white/6 hover:bg-white/8",
           )}
         >
           <Search
@@ -104,7 +104,7 @@ export function ProjectViewContextBar({
               "flex h-8 cursor-pointer items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-all duration-300",
               isDisplayMenuOpen || hasActiveFilters
                 ? "border-accent-blue/30 bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20"
-                : "text-text-secondary hover:text-text-primary border-transparent bg-white/[0.04] hover:bg-white/[0.08]",
+                : "text-text-secondary hover:text-text-primary border-transparent bg-white/4 hover:bg-white/8",
             )}
           >
             <SlidersHorizontal className="h-3.5 w-3.5" />
