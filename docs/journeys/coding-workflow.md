@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 ## Journey goals
 
@@ -31,7 +31,15 @@
 4. Task appears in the project task list with its project-defined default status.
 5. If no collection is chosen, the task lives directly under the project.
 
-## Scenario B: Start an ad-hoc session
+## Scenario B: Plan or clean up backlog with PM agent
+
+1. User opens a project and chooses **Plan with PM agent**.
+2. Isagi creates or resumes a dedicated planning task for that project.
+3. A normal session starts on that planning task using a specialized PM agent.
+4. The PM session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
+5. The planning session appears in the normal session/sidebar model like any other task-linked session.
+
+## Scenario C: Start an ad-hoc session
 
 1. User starts a session from project context without creating a task first.
 2. Isagi creates a visible task automatically.
@@ -39,7 +47,7 @@
 4. The session is attached to that task and opens in the project repo root.
 5. The auto-created task is a normal project task and may remain ungrouped until the user later assigns it to a collection.
 
-## Scenario C: Choose execution mode and begin work
+## Scenario D: Choose execution mode and begin work
 
 1. Session starts from the task's project repo root.
 2. User chooses to:
@@ -49,14 +57,14 @@
 3. If a managed worktree is selected, Isagi creates it automatically.
 4. Agent work begins in the chosen execution root.
 
-## Scenario D: Continue across one or more sessions
+## Scenario E: Continue across one or more sessions
 
 1. User can open additional sessions on the same task.
 2. Sessions are peers; none is primary by default.
 3. One session may implement while another reviews or follows up.
 4. Sessions can be manually closed when they are no longer relevant.
 
-## Scenario E: Rebind and collision-awareness
+## Scenario F: Rebind and collision-awareness
 
 1. During a session, the user may switch branches or move to/from a managed worktree.
 2. If the execution root path changes, Isagi rebinds the same session to the new root.
@@ -64,12 +72,13 @@
 4. Task and session UI can show overlapping sessions or active session counts for that directory.
 5. The warning helps the user inspect overlapping sessions without hard-blocking work.
 
-## Scenario F: Update task status
+## Scenario G: Update task status
 
 1. User changes task status manually.
 2. Status labels are project-specific but map to global buckets.
-3. Moving the task into a `done`-bucket status closes its sessions.
-4. Git merge and worktree cleanup remain separate manual actions.
+3. There is no separate `Complete task` mutation in the MVP UI; task closure happens through status change.
+4. Moving the task into a `done`-bucket status closes its sessions.
+5. Git merge and worktree cleanup remain separate manual actions.
 
 ## Future phase note
 
@@ -79,8 +88,15 @@ Spark capture and spark triage are deferred to Phase 2. They are not part of the
 
 Commands are available through:
 
-- top-bar contextual actions in task and session views
+- top-bar contextual actions in project, task, and session surfaces
 - global command palette
+
+The project/task-facing surfaces and the session surface should reuse the same contextual action-bar style for common actions.
+
+- The shared style keeps action placement and interaction posture familiar across surfaces.
+- Project Detail uses that same style while swapping in project-specific actions such as planning, task creation, collection creation, filters, and saved-view controls.
+- Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
+- The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
 
 Examples:
 

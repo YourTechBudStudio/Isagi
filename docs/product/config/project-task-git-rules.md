@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -20,9 +20,19 @@ Projects define the repo context and default git mode; sessions decide how work 
 
 ## Display aliases
 
-- Projects may define project-local UI terminology aliases for labels such as `collection`.
+- Projects may define project-local UI terminology aliases for visible model terms such as `collection`.
+- These terminology aliases are distinct from task `labels` metadata.
 - Aliases are presentation-only and do not rename canonical model terms in docs or contracts.
 - Aliases do not change task ownership, session ownership, status semantics, or execution behavior.
+
+## Saved views
+
+- Projects may define saved views for project-detail task surfaces.
+- A new project starts with default **Board** and **List** views.
+- Users may edit, delete, or create additional views over time.
+- Saved view config may control layout, grouping, filters, and sorting.
+- The product should remember the last-used view per project.
+- View config affects presentation only; it does not change task ownership, task status semantics, or execution behavior.
 
 ## Git mode defaults
 
@@ -77,6 +87,7 @@ Rules:
 - optional collection definitions
 - project-defined task statuses mapped to global buckets
 - optional display aliases for project-local terminology
+- optional saved-view definitions and last-used view state
 - optional default task labels or related workflow metadata
 
 ## Deferred extension points

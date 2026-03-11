@@ -1,6 +1,6 @@
 # Execution Model
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the task-first MVP.
 
@@ -135,11 +135,12 @@ External git changes between user requests are intentionally only captured on th
 - Task status remains manual in v0.
 - Project-specific statuses map to the global buckets `todo`, `in_progress`, and `done`.
 - Entering a `done`-bucket status is the terminal close event for that task's sessions.
+- Runtime closure is driven by status transition rather than a distinct `Complete task` action.
 
 ## Out-of-scope for MVP
 
 - Full in-app PR lifecycle management.
-- Automatic merge on task or session completion.
+- Automatic merge on status-driven task or session closure.
 - Automatic worktree deletion based on remote merge detection.
 - Hard locking of branches or directories.
 - Project-group / multi-repo orchestration.

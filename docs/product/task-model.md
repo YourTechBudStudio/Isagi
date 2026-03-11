@@ -1,6 +1,6 @@
 # Task Model (MVP)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 ## One-liner
 
@@ -35,6 +35,7 @@ Those are execution choices made while working on the task, not part of task ide
 6. No session is primary by default.
 7. No subtasks exist in v0; review and handoff stay on the same task.
 8. Task completion is status-driven; git cleanliness is not required in v0.
+9. There is no standalone `Complete task` control distinct from task status in the MVP.
 
 ## Minimal schema
 
@@ -63,6 +64,7 @@ Optional fields:
   - `done`
 - Status remains intrinsic to the task rather than view-specific, roll-up-specific, or collection-specific.
 - Moving a task into a `done`-bucket status is how the MVP treats the task as complete/closed.
+- UI surfaces should complete or close tasks by updating status rather than introducing a separate `Complete task` command.
 - Review, reassignment, and handoff are modeled as status or metadata changes on the same task.
 - Future automation hooks may attach to status changes, but that behavior is deferred.
 
@@ -70,6 +72,7 @@ Optional fields:
 
 - Every session belongs to a task.
 - Sessions are the execution surfaces where agent work happens.
+- Planning or organizing sessions still attach to tasks; project-level planning flows should create or resume a dedicated planning task rather than introducing a project-scoped session type.
 - A task may accumulate multiple sessions for different kinds of work, such as implementation, review, or follow-up.
 - Starting an ad-hoc session auto-creates a visible task with a generated title based on the first user message.
 - Sessions auto-close when the parent task enters a terminal `done`-bucket status.

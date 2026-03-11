@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Product name:** Spark System  
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 This document defines what we are building for the MVP.
 
@@ -41,6 +41,7 @@ Repo projects may organize work directly as tasks or through optional collection
 - Tasks track status, priority, labels, and related sessions.
 - No subtasks in v0.
 - Project-specific statuses map into global buckets: `todo`, `in_progress`, `done`.
+- Collections remain grouping-only in Phase 1; task closure still happens through task status rather than collection state.
 
 Collections are optional grouping containers inside a project. They do not receive sessions directly and do not redefine execution context.
 
@@ -79,6 +80,7 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 #### 6) Manual task workflow controls
 
 - Status changes are manual in v0.
+- There is no standalone `Complete task` action in the MVP; moving a task into a `done`-bucket status is how the product treats it as complete/closed.
 - Tasks can carry nullable `priority` and nullable `labels`.
 - Statuses are designed to become future automation hooks, but hooks are deferred.
 

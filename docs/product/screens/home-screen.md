@@ -1,6 +1,6 @@
 # Home Screen (MVP)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 ## One-liner
 
@@ -65,6 +65,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 
 - Primary CTA: **Start a session**.
 - Secondary CTA: **Create task**.
+- `Start a session` here means the ad-hoc flow that auto-creates a visible task from the first user message.
 - This keeps startup aligned with the MVP's low-friction, session-first posture.
 
 ### Tasks exist, but no resumable sessions

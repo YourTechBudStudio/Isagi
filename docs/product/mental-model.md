@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-10
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -85,12 +85,12 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 2. **Every task belongs to exactly one project.**
 3. **A task may belong to zero or one collection inside that project.**
 4. **Tasks never move between projects.** Archive and recreate instead.
-5. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks.
+5. **Every session belongs to a task.** Ad-hoc sessions auto-create visible tasks, and planning flows do the same or resume a dedicated planning task.
 6. **Sessions never belong directly to collections.**
 7. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
 8. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
 9. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
-10. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions.
+10. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its sessions; MVP surfaces do not expose a second completion action separate from status.
 11. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
 ## Task-first MVP posture
@@ -142,6 +142,12 @@ Home is a minimal global re-entry surface.
 - Home is not the primary place for deliberate task browsing or project management.
 
 Detailed Home-screen guidance lives in `docs/product/screens/home-screen.md`.
+
+Project Detail is the deliberate project/backlog surface for one repo project.
+
+- Project Detail is where the user inspects project work shape, organizes backlog, and picks the next actionable task.
+- Detailed Project Detail guidance lives in `docs/product/screens/project-detail-screen.md`.
+- Detailed execution-surface guidance lives in `docs/product/screens/session-screen.md`.
 
 Focus remains task-first with session-level visibility elsewhere in the product:
 
