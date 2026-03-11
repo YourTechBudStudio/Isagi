@@ -1,8 +1,8 @@
 # Value Proposition Canvas (source of truth)
 
 **Codename:** Isagi  
-**Product name:** Spark System  
-**Last updated:** 2026-03-06
+**Legacy product name:** Spark System  
+**Last updated:** 2026-03-11
 
 This canvas is the **strategic framing source of truth**.
 
@@ -12,7 +12,7 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 ---
 
-# Value Proposition Canvas: Spark System
+# Value Proposition Canvas: Isagi
 
 ## Customer Profile
 

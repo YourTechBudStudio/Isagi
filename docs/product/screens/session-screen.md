@@ -1,6 +1,6 @@
 # Session Screen (MVP)
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 ## One-liner
 
@@ -11,7 +11,7 @@ The Session screen answers: **"What is the agent doing for this task right now, 
 - Act as the execution surface for one task-linked agent session.
 - Keep the current task, execution root, and session state visible while work is in progress.
 - Let the user continue work, steer execution, and update task state without leaving the session unnecessarily.
-- Reuse the same contextual action-bar pattern as other task-facing surfaces so common actions feel consistent.
+- Reuse the same contextual action-bar pattern as Project Detail so common actions feel consistent across the main full-page work surfaces.
 
 ## Non-goals
 
@@ -46,8 +46,9 @@ The Session screen answers: **"What is the agent doing for this task right now, 
 
 ## Shared contextual action bar
 
-- The contextual action bar is a shared surface pattern across session, task, and project-detail views.
+- The contextual action bar is a shared surface pattern across the Session screen and Project Detail.
 - The shared pattern should keep placement, density, and interaction posture familiar even when each page exposes different actions.
+- The Task Detail sheet is a lighter modal/drawer exception that uses inline metadata and a primary session CTA instead of its own full action bar.
 - On the Session screen, that bar should emphasize task-linked and execution-aware actions such as:
   - current task/breadcrumb context
   - branch or execution-root visibility

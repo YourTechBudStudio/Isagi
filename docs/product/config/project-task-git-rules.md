@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -12,6 +12,8 @@ Projects define the repo context and default git mode; sessions decide how work 
 
 - A project points at an existing local git repo.
 - Project registration should validate that the configured path is already a git repo.
+- Project registration requires only a project name and repo path.
+- Other project configuration remains optional after registration.
 - Project IDs should be stable and filesystem-safe.
 - Repo path is stored separately from project identity.
 - Projects may define optional collections for grouping work, but the repo project remains the execution container.
@@ -31,8 +33,29 @@ Projects define the repo context and default git mode; sessions decide how work 
 - A new project starts with default **Board** and **List** views.
 - Users may edit, delete, or create additional views over time.
 - Saved view config may control layout, grouping, filters, and sorting.
+- Phase 1 layout options are:
+  - `list`
+  - `kanban`
+- Phase 1 grouping options are:
+  - `status`
+  - `label`
+  - `collection`
+  - `none`
+- Phase 1 sorting options are:
+  - `due_date`
+  - `priority`
+  - `updated_at`
+  - `created_at`
+- Phase 1 filter fields are:
+  - `status`
+  - `priority`
+  - `label`
+  - `collection`
+  - `due_date`
+- Filters operate over task metadata.
 - The product should remember the last-used view per project.
 - View config affects presentation only; it does not change task ownership, task status semantics, or execution behavior.
+- Phase 1 explicitly excludes calendar layout, formulas/computed fields, and cross-project views.
 
 ## Git mode defaults
 
@@ -82,6 +105,7 @@ Rules:
 ## Minimal project config fields
 
 - `id`
+- `name`
 - repo path / repo reference
 - nullable default git mode
 - optional collection definitions

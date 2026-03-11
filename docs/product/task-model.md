@@ -1,6 +1,6 @@
 # Task Model (MVP)
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 ## One-liner
 
@@ -51,8 +51,10 @@ Optional fields:
 
 - `collection_id` - nullable foreign key to a project-local collection
 - `priority` - nullable enum: `p1 | p2 | p3 | p4 | p5`
+- `due_date` - nullable task due date used for planning and sorting
 - `labels` - nullable list or relation
-- optional workflow metadata such as description, assignee, or reviewer
+- `description` / `notes` - nullable longform task context
+- optional workflow metadata such as assignee or reviewer
 
 ## Status model
 
@@ -72,10 +74,12 @@ Optional fields:
 
 - Every session belongs to a task.
 - Sessions are the execution surfaces where agent work happens.
+- No persistent model-level primary session exists, even if UI surfaces temporarily prioritize one open session for convenience.
 - Planning or organizing sessions still attach to tasks; project-level planning flows should create or resume a dedicated planning task rather than introducing a project-scoped session type.
 - A task may accumulate multiple sessions for different kinds of work, such as implementation, review, or follow-up.
 - Starting an ad-hoc session auto-creates a visible task with a generated title based on the first user message.
 - Sessions auto-close when the parent task enters a terminal `done`-bucket status.
+- UI-specific prioritization guidance lives in `docs/product/screens/task-detail-sheet.md`.
 
 Detailed runtime behavior lives in `docs/architecture/execution-model.md`.
 

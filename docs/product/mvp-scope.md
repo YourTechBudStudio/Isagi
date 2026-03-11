@@ -1,8 +1,8 @@
 # MVP Scope (Phase 1)
 
 **Codename:** Isagi  
-**Product name:** Spark System  
-**Last updated:** 2026-03-10
+**Legacy product name:** Spark System  
+**Last updated:** 2026-03-11
 
 This document defines what we are building for the MVP.
 

@@ -1,6 +1,6 @@
 # Project Detail Screen (MVP)
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 ## One-liner
 
@@ -40,15 +40,18 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - If the project has no tasks yet, the page should shift from backlog scanning to a clear empty state.
 - The empty state should explain that there is no actionable project work yet.
-- Primary CTA: **New task**.
-- Planning alternative: **Plan with PM agent** to create or reorganize backlog through a dedicated planning task.
-- **New collection** may remain available as a secondary action, but it should not dominate the first-use path.
+- Co-primary CTAs:
+  - **Plan with PM agent**
+  - **Start ad-hoc session**
+- `Plan with PM agent` fits projects whose backlog still needs shaping or cleanup.
+- `Start ad-hoc session` fits projects where the user already knows what they want to do and wants the first prompt to create the task.
+- **New task** and **New collection** may remain available as secondary manual actions, but they should not dominate the first-use path.
 
 ### Common actions first
 
 - Common project actions should stay visible and consistent with the session surface action-bar pattern.
 - The primary planning action is **Plan with PM agent**.
-- Secondary actions include **New task**, **New collection**, and view/filter controls.
+- Secondary actions include **New task**, **New collection**, **Project settings**, and view/filter controls.
 
 ### Tasks as the main surface
 
@@ -63,11 +66,14 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - This shared style should keep placement, density, and interaction posture familiar across surfaces, even when the actions differ.
 - On Project Detail, that bar should emphasize project-scoped actions such as:
   - `Plan with PM agent`
+  - `Start ad-hoc session`
   - `New task`
   - `New collection`
+  - `Project settings`
   - filter controls
   - view customization controls
 - The goal is consistency of action handling, not identical button sets across pages.
+- `Project settings` should open the Project Settings screen described in `docs/product/screens/project-settings-screen.md`.
 
 ## Saved views
 
@@ -96,28 +102,21 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Helpful metadata may include status, priority, due date, labels, and collection when present.
 - Each task should also show a subtle session affordance:
   - `Start session` when no session exists yet
-  - `Resume` when there is an existing relevant session
+  - `Resume` when there is an existing open session, targeting the latest open session first
   - a lightweight active indicator when a session is currently live
 - These affordances should stay visually secondary so the board does not collapse into a session list.
 
 ## Task detail side sheet
 
 - Clicking a task should open a right-side detail sheet rather than a full page.
-- The side sheet should include the task fields most needed for planning and resuming work:
-  - title
-  - status
-  - priority
-  - due date
-  - labels
-  - collection
-  - description or notes
-  - linked sessions
-- The primary execution CTA in the side sheet should be **Start session** or **Resume session**, depending on task history.
-- There is no standalone **Complete task** action in MVP. Completing or closing a task happens by moving it into a `done`-bucket status.
+- The sheet should stay thin and action-oriented so the board remains the primary backlog surface.
+- Task rows/cards expose subtle session affordances, and the detail sheet expands that into task-specific action and context.
+- Canonical task-sheet behavior lives in `docs/product/screens/task-detail-sheet.md`.
 
 ## Project manager agent
 
 - **Plan with PM agent** starts a normal session that uses a specialized project-manager agent.
+- This planning flow starts against the project as a whole rather than the currently selected view or filter context.
 - Launching that flow should create or resume a dedicated planning task inside the project so the session still follows the invariant that every session belongs to a task.
 - Its main role is backlog planning, organization, cleanup, and identifying next work.
 - Once started, it appears in the existing session/sidebar model like any other session rather than introducing a separate concept.

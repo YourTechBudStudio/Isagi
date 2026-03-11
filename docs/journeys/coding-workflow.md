@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 ## Journey goals
 
@@ -21,17 +21,30 @@
 2. The most recent resumable session is the primary jump-in target.
 3. Additional open sessions appear as compact secondary options.
 4. If there are no resumable sessions, the app may show lightweight candidate tasks.
-5. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
+5. Global `Start a session` flows route through the command palette so project selection happens explicitly before execution begins.
+6. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
 
-## Scenario A: Create a task from command palette
+## Scenario A: Register a project
+
+1. User runs an `Add project` command from the command palette.
+2. User provides the required registration inputs:
+   - project name
+   - repo path
+3. Isagi validates that the path points to an existing local git repo.
+4. The project is registered without requiring statuses, aliases, or git defaults up front.
+5. Success feedback offers `Open project` and `Open settings` as follow-up actions.
+
+Detailed registration-surface guidance lives in `docs/product/screens/project-registration-flow.md`.
+
+## Scenario B: Create a task from command palette
 
 1. User runs a command such as `Create task`.
-2. User selects a project or uses the currently active project context.
+2. User selects a project explicitly.
 3. User enters task details such as title, optional priority, labels, and optionally a collection.
 4. Task appears in the project task list with its project-defined default status.
 5. If no collection is chosen, the task lives directly under the project.
 
-## Scenario B: Plan or clean up backlog with PM agent
+## Scenario C: Plan or clean up backlog with PM agent
 
 1. User opens a project and chooses **Plan with PM agent**.
 2. Isagi creates or resumes a dedicated planning task for that project.
@@ -39,7 +52,7 @@
 4. The PM session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
 5. The planning session appears in the normal session/sidebar model like any other task-linked session.
 
-## Scenario C: Start an ad-hoc session
+## Scenario D: Start an ad-hoc session
 
 1. User starts a session from project context without creating a task first.
 2. Isagi creates a visible task automatically.
@@ -47,7 +60,7 @@
 4. The session is attached to that task and opens in the project repo root.
 5. The auto-created task is a normal project task and may remain ungrouped until the user later assigns it to a collection.
 
-## Scenario D: Choose execution mode and begin work
+## Scenario E: Choose execution mode and begin work
 
 1. Session starts from the task's project repo root.
 2. User chooses to:
@@ -57,14 +70,14 @@
 3. If a managed worktree is selected, Isagi creates it automatically.
 4. Agent work begins in the chosen execution root.
 
-## Scenario E: Continue across one or more sessions
+## Scenario F: Continue across one or more sessions
 
 1. User can open additional sessions on the same task.
 2. Sessions are peers; none is primary by default.
 3. One session may implement while another reviews or follows up.
 4. Sessions can be manually closed when they are no longer relevant.
 
-## Scenario F: Rebind and collision-awareness
+## Scenario G: Rebind and collision-awareness
 
 1. During a session, the user may switch branches or move to/from a managed worktree.
 2. If the execution root path changes, Isagi rebinds the same session to the new root.
@@ -72,7 +85,7 @@
 4. Task and session UI can show overlapping sessions or active session counts for that directory.
 5. The warning helps the user inspect overlapping sessions without hard-blocking work.
 
-## Scenario G: Update task status
+## Scenario H: Update task status
 
 1. User changes task status manually.
 2. Status labels are project-specific but map to global buckets.
@@ -88,13 +101,14 @@ Spark capture and spark triage are deferred to Phase 2. They are not part of the
 
 Commands are available through:
 
-- top-bar contextual actions in project, task, and session surfaces
+- top-bar contextual actions in project and session surfaces
 - global command palette
 
-The project/task-facing surfaces and the session surface should reuse the same contextual action-bar style for common actions.
+Project Detail and the Session screen should reuse the same contextual action-bar style for common actions.
 
 - The shared style keeps action placement and interaction posture familiar across surfaces.
 - Project Detail uses that same style while swapping in project-specific actions such as planning, task creation, collection creation, filters, and saved-view controls.
+- The task-detail drawer is a lighter modal exception rather than a full action-bar surface.
 - Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
 - The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
 

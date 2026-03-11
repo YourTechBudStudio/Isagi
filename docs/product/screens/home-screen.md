@@ -1,6 +1,6 @@
 # Home Screen (MVP)
 
-**Last updated:** 2026-03-10
+**Last updated:** 2026-03-11
 
 ## One-liner
 
@@ -60,12 +60,16 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 
 - Primary CTA: **Add your first project**.
 - The empty state should explain that projects are existing local git repos registered in Isagi.
+- `Add your first project` should launch the command-palette-backed project registration wizard described in `docs/product/screens/project-registration-flow.md`.
 
 ### Projects exist, but no tasks or sessions yet
 
 - Primary CTA: **Start a session**.
 - Secondary CTA: **Create task**.
-- `Start a session` here means the ad-hoc flow that auto-creates a visible task from the first user message.
+- `Start a session` here should route through the command palette with the start-session command preselected.
+- Project selection is required before the ad-hoc session starts.
+- That ad-hoc flow auto-creates a visible task from the first user message.
+- `Create task` should also route through explicit project selection rather than assuming implicit project context on Home.
 - This keeps startup aligned with the MVP's low-friction, session-first posture.
 
 ### Tasks exist, but no resumable sessions
@@ -79,6 +83,7 @@ The desktop Home screen answers: **"What can I resume right now with the least f
 - The sidebar already provides persistent visibility into active and idle sessions.
 - Home should complement that persistent context rather than duplicate it with a large dashboard.
 - The command palette remains the fastest way to open a specific project or trigger actions from anywhere.
+- Global session-start actions from Home should use the command palette rather than guessing project context implicitly.
 
 ## Out of scope / future phase notes
 

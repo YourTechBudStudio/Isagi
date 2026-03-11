@@ -42,7 +42,10 @@ Active product docs:
 - [docs/product/overview.md](docs/product/overview.md)
 - [docs/product/screens/home-screen.md](docs/product/screens/home-screen.md)
 - [docs/product/screens/project-detail-screen.md](docs/product/screens/project-detail-screen.md)
+- [docs/product/screens/project-registration-flow.md](docs/product/screens/project-registration-flow.md)
+- [docs/product/screens/project-settings-screen.md](docs/product/screens/project-settings-screen.md)
 - [docs/product/screens/session-screen.md](docs/product/screens/session-screen.md)
+- [docs/product/screens/task-detail-sheet.md](docs/product/screens/task-detail-sheet.md)
 - [docs/product/task-model.md](docs/product/task-model.md)
 - [docs/product/value-proposition-canvas.md](docs/product/value-proposition-canvas.md)
 
