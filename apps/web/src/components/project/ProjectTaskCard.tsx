@@ -71,7 +71,7 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
     <SurfaceCard
       tone="elevated"
       interactive
-      className="group flex cursor-pointer flex-col gap-3 p-4 hover:border-white/10"
+      className="group flex cursor-pointer flex-col gap-3 p-4 hover:border-white/10 hover:bg-white/[0.03]"
       onClick={handleOpenSheet}
     >
       <div className="flex items-start justify-between gap-2">

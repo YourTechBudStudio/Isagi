@@ -49,11 +49,11 @@ export function ProjectBoardView({ tasks }: ProjectBoardViewProps) {
             variants={columnVariants}
             className="flex w-80 shrink-0 flex-col gap-4"
           >
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-text-primary font-display text-sm font-semibold tracking-tight">
+            <div className="mb-2 flex items-center justify-between px-1">
+              <h3 className="text-text-secondary text-[11px] font-medium tracking-wider uppercase">
                 {col.label}
               </h3>
-              <span className="bg-canvas-elevated text-text-tertiary flex h-6 w-6 items-center justify-center rounded-full border border-white/5 text-xs font-medium">
+              <span className="text-text-tertiary flex h-5 w-5 items-center justify-center rounded-full bg-white/5 text-[10px] font-medium">
                 {columnTasks.length}
               </span>
             </div>

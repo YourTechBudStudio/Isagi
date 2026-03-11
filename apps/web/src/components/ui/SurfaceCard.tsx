@@ -11,7 +11,7 @@ type SurfaceCardProps = HTMLAttributes<HTMLDivElement> & {
 
 const toneClasses: Record<SurfaceCardTone, string> = {
   subtle: "bg-canvas-subtle border-white/5",
-  elevated: "border-white/[0.04] bg-white/[0.02]",
+  elevated: "bg-canvas-elevated/40 border-white/6",
   blue: "bg-accent-blue/[0.08] border-accent-blue/10",
   violet:
     "bg-canvas-subtle border-accent-violet/30 shadow-[0_0_16px_rgba(198,160,246,0.05)]",

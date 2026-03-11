@@ -136,14 +136,14 @@ function ProjectDetailContent({
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className="mb-8 flex flex-col gap-6"
+            className="mb-6 flex flex-col gap-4"
           >
             <h1 className="font-display text-text-primary text-5xl font-semibold tracking-tight">
               {project.name}
             </h1>
 
             {!isEmpty && (
-              <div className="flex flex-col gap-4 border-b border-white/5 pb-5">
+              <div className="flex flex-col gap-4 border-b border-white/6 pb-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <button

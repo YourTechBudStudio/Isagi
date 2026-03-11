@@ -30,18 +30,16 @@ export function ProjectActionBar() {
       <div className="bg-canvas-elevated/80 pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 p-1.5 shadow-lg backdrop-blur-md">
         <div className="flex items-center gap-1 border-r border-white/10 px-1 pr-2">
           <Button
-            variant="secondary"
+            variant="ghost"
             size="md"
             leadingIcon={<FolderPlus className="h-4 w-4" />}
-            className="text-text-secondary hover:text-text-primary border-none bg-transparent hover:bg-white/5"
           >
             New Collection
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
             size="md"
             leadingIcon={<Plus className="h-4 w-4" />}
-            className="text-text-secondary hover:text-text-primary border-none bg-transparent hover:bg-white/5"
           >
             New Task
           </Button>
