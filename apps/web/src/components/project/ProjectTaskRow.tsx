@@ -1,5 +1,5 @@
 import { Play, RefreshCw } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -13,11 +13,24 @@ type ProjectTaskRowProps = {
 
 export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
   const navigate = useNavigate();
+  const [, setSearchParams] = useSearchParams();
+
+  const handleOpenSheet = () => {
+    setSearchParams({ taskId: task.id });
+  };
+
+  const handleStartSession = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/session/${task.id}`);
+  };
 
   const renderSessionAffordance = () => {
     if (task.sessionState === "active") {
       return (
-        <div className="bg-accent-violet/10 border-accent-violet/20 flex items-center gap-2 rounded-full border px-3 py-1.5">
+        <div
+          className="bg-accent-violet/10 border-accent-violet/20 flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5"
+          onClick={handleStartSession}
+        >
           <div className="bg-accent-violet h-2 w-2 animate-pulse rounded-full" />
           <span className="text-accent-violet text-xs font-medium">Active</span>
         </div>
@@ -31,10 +44,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
           size="sm"
           leadingIcon={<RefreshCw className="h-3.5 w-3.5" />}
           className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/[0.08]"
-          onClick={e => {
-            e.stopPropagation();
-            navigate(`/session/${task.id}`);
-          }}
+          onClick={handleStartSession}
         >
           Resume
         </Button>
@@ -47,10 +57,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
         size="sm"
         leadingIcon={<Play className="h-3.5 w-3.5" />}
         className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/8"
-        onClick={e => {
-          e.stopPropagation();
-          navigate(`/session/${task.id}`);
-        }}
+        onClick={handleStartSession}
       >
         Start
       </Button>
@@ -60,7 +67,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
   return (
     <div
       className="group flex cursor-pointer items-center justify-between border-b border-white/5 px-4 py-3 transition-colors duration-200 last:border-b-0 hover:bg-white/[0.02]"
-      onClick={() => navigate(`/session/${task.id}`)}
+      onClick={handleOpenSheet}
     >
       <div className="flex items-center gap-5">
         <span className="text-text-primary text-[14px] font-medium tracking-tight">

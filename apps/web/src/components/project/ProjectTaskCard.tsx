@@ -1,5 +1,5 @@
 import { Play, RefreshCw } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/Badge";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
@@ -13,11 +13,25 @@ type ProjectTaskCardProps = {
 
 export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
   const navigate = useNavigate();
+  const [, setSearchParams] = useSearchParams();
+
+  const handleOpenSheet = () => {
+    setSearchParams({ taskId: task.id });
+  };
+
+  const handleStartSession = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/session/${task.id}`);
+  };
 
   const renderSessionIndicator = () => {
     if (task.sessionState === "active") {
       return (
-        <div className="flex items-center gap-1.5" title="Session Active">
+        <div
+          className="flex items-center gap-1.5"
+          title="Session Active"
+          onClick={handleStartSession}
+        >
           <div className="bg-accent-violet h-2 w-2 animate-pulse rounded-full" />
           <span className="text-accent-violet text-[10px] font-medium tracking-wider uppercase">
             Active
@@ -30,6 +44,7 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
         <div
           className="text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 transition-colors"
           title="Resume Session"
+          onClick={handleStartSession}
         >
           <RefreshCw className="h-3 w-3" />
           <span className="text-[10px] font-medium tracking-wider uppercase">
@@ -42,6 +57,7 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
       <div
         className="text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 transition-colors"
         title="Start Session"
+        onClick={handleStartSession}
       >
         <Play className="h-3 w-3" />
         <span className="text-[10px] font-medium tracking-wider uppercase">
@@ -56,7 +72,7 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
       tone="elevated"
       interactive
       className="group flex cursor-pointer flex-col gap-3 p-4 hover:border-white/10"
-      onClick={() => navigate(`/session/${task.id}`)}
+      onClick={handleOpenSheet}
     >
       <div className="flex items-start justify-between gap-2">
         <h4 className="text-text-primary text-sm leading-snug font-medium">

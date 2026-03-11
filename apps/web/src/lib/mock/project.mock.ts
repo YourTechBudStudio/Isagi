@@ -2,6 +2,12 @@ export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 export type SessionState = "none" | "resume" | "active";
 
+export type MockOpenSession = {
+  readonly id: string;
+  readonly label: string;
+  readonly isActive: boolean;
+};
+
 export type MockTask = {
   readonly id: string;
   readonly title: string;
@@ -11,6 +17,8 @@ export type MockTask = {
   readonly labels: ReadonlyArray<string>;
   readonly collection?: string;
   readonly sessionState: SessionState;
+  readonly notes?: string;
+  readonly openSessions?: ReadonlyArray<MockOpenSession>;
 };
 
 export type MockProjectData = {
@@ -32,6 +40,13 @@ export const mockProjectCore: MockProjectData = {
       collection: "Q1 Milestones",
       sessionState: "active",
       dueDate: "2026-03-15",
+      notes:
+        "Need to make sure we don't clobber the primary index. Look into `git worktree add` and how it handles detached HEAD states. Might need to write a custom wrapper script for the agents.",
+      openSessions: [
+        { id: "s-1a", label: "Session #3 — 12 min ago", isActive: true },
+        { id: "s-1b", label: "Session #2 — 2h ago", isActive: false },
+        { id: "s-1c", label: "Session #1 — yesterday", isActive: false },
+      ],
     },
     {
       id: "t-2",
@@ -40,6 +55,8 @@ export const mockProjectCore: MockProjectData = {
       priority: "medium",
       labels: ["ui", "bug"],
       sessionState: "resume",
+      notes:
+        "The project titles are bleeding over the edge on 13-inch displays. Probably just needs a `truncate` utility class and `min-w-0` on the flex child.",
     },
     {
       id: "t-3",

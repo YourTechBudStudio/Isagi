@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { LayoutDashboard, ListTodo } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { ContextSidebar } from "@/components/layout/ContextSidebar";
@@ -10,8 +10,9 @@ import { ProjectBoardView } from "@/components/project/ProjectBoardView";
 import { ProjectEmptyState } from "@/components/project/ProjectEmptyState";
 import { ProjectListView } from "@/components/project/ProjectListView";
 import { ProjectViewContextBar } from "@/components/project/ProjectViewContextBar";
+import { TaskDetailSheet } from "@/components/project/TaskDetailSheet";
 import { cn } from "@/lib/cn";
-import { getMockProject } from "@/lib/mock/project.mock";
+import { getMockProject, type MockTask } from "@/lib/mock/project.mock";
 import {
   mockSidebarProjects,
   mockSidebarTriage,
@@ -66,6 +67,20 @@ function ProjectDetailContent({
   );
   const [sortKey, setSortKey] = useState(savedState.sortKey);
 
+  // Local state for tasks to enable inline editing
+  const [tasks, setTasks] = useState<MockTask[]>([...project.tasks]);
+  const [prevProjectId, setPrevProjectId] = useState(projectId);
+
+  // Reset tasks if project changes (e.g. navigation)
+  if (projectId !== prevProjectId) {
+    setTasks([...project.tasks]);
+    setPrevProjectId(projectId);
+  }
+
+  // URL state for the task sheet
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedTaskId = searchParams.get("taskId");
+
   useEffect(() => {
     writeProjectViewState(projectId, {
       viewMode,
@@ -75,22 +90,29 @@ function ProjectDetailContent({
     });
   }, [collectionFilter, priorityFilter, projectId, sortKey, viewMode]);
 
-  const isEmpty = project.tasks.length === 0;
+  const isEmpty = tasks.length === 0;
   const collectionOptions = Array.from(
     new Set(
-      project.tasks
+      tasks
         .map(task => task.collection)
         .filter((value): value is string => Boolean(value)),
     ),
   ).sort((left, right) => left.localeCompare(right));
+
   const filteredTasks = sortProjectTasks(
-    filterProjectTasks(project.tasks, {
+    filterProjectTasks(tasks, {
       searchQuery,
       priorityFilter,
       collectionFilter,
     }),
     sortKey,
   );
+
+  const handleTaskUpdate = (updatedTask: MockTask) => {
+    setTasks(prev =>
+      prev.map(t => (t.id === updatedTask.id ? updatedTask : t)),
+    );
+  };
 
   return (
     <AppShell
@@ -209,6 +231,14 @@ function ProjectDetailContent({
           </div>
         </div>
       </main>
+
+      <TaskDetailSheet
+        taskId={selectedTaskId}
+        tasks={tasks}
+        collectionOptions={collectionOptions}
+        onClose={() => setSearchParams({})}
+        onUpdateTask={handleTaskUpdate}
+      />
     </AppShell>
   );
 }
