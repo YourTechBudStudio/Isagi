@@ -22,7 +22,7 @@ Projects define the repo context and default git mode; sessions decide how work 
 
 ## Display aliases
 
-- Projects may define project-local UI terminology aliases for visible model terms such as `collection`.
+- Projects may define project-local UI terminology aliases for visible model terms such as `collection`, `task`, or other workflow-facing labels.
 - These terminology aliases are distinct from task `labels` metadata.
 - Aliases are presentation-only and do not rename canonical model terms in docs or contracts.
 - Aliases do not change task ownership, session ownership, status semantics, or execution behavior.

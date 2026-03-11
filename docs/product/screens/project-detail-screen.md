@@ -40,17 +40,16 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - If the project has no tasks yet, the page should shift from backlog scanning to a clear empty state.
 - The empty state should explain that there is no actionable project work yet.
-- Co-primary CTAs:
-  - **Plan with PM agent**
-  - **Start ad-hoc session**
+- Primary shaping action: **Plan with PM agent**.
 - `Plan with PM agent` fits projects whose backlog still needs shaping or cleanup.
-- `Start ad-hoc session` fits projects where the user already knows what they want to do and wants the first prompt to create the task.
-- **New task** and **New collection** may remain available as secondary manual actions, but they should not dominate the first-use path.
+- **New task** and **New collection** are the main manual follow-up actions when the user wants to seed the board directly.
+- The empty state should keep the user focused on creating visible board work rather than jumping straight into a project-level execution shortcut.
 
 ### Common actions first
 
 - Common project actions should stay visible and consistent with the session surface action-bar pattern.
 - The primary planning action is **Plan with PM agent**.
+- These actions are backlog-shaping controls first, not execution-first shortcuts.
 - Secondary actions include **New task**, **New collection**, **Project settings**, and view/filter controls.
 
 ### Tasks as the main surface
@@ -66,7 +65,6 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - This shared style should keep placement, density, and interaction posture familiar across surfaces, even when the actions differ.
 - On Project Detail, that bar should emphasize project-scoped actions such as:
   - `Plan with PM agent`
-  - `Start ad-hoc session`
   - `New task`
   - `New collection`
   - `Project settings`
@@ -100,10 +98,12 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - Each task row/card should expose lightweight metadata for quick scanning.
 - Helpful metadata may include status, priority, due date, labels, and collection when present.
+- Clicking the main body of a task row/card should open the Task Detail sheet for inspection and lightweight editing.
 - Each task should also show a subtle session affordance:
   - `Start session` when no session exists yet
   - `Resume` when there is an existing open session, targeting the latest open session first
   - a lightweight active indicator when a session is currently live
+- The task-level session affordance is the direct path into execution, while task selection itself should open the sheet first.
 - These affordances should stay visually secondary so the board does not collapse into a session list.
 
 ## Task detail side sheet
@@ -111,6 +111,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Clicking a task should open a right-side detail sheet rather than a full page.
 - The sheet should stay thin and action-oriented so the board remains the primary backlog surface.
 - Task rows/cards expose subtle session affordances, and the detail sheet expands that into task-specific action and context.
+- The detail sheet is the canonical bridge between board selection and execution on Project Detail.
 - Canonical task-sheet behavior lives in `docs/product/screens/task-detail-sheet.md`.
 
 ## Project manager agent

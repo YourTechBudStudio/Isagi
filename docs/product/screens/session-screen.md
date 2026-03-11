@@ -4,74 +4,142 @@
 
 ## One-liner
 
-The Session screen answers: **"What is the agent doing for this task right now, and what can I do next without losing execution context?"**
+The Session screen answers: **"How do I keep talking to this agent session while staying aware of the execution context that could bite me?"**
 
 ## Primary job
 
-- Act as the execution surface for one task-linked agent session.
-- Keep the current task, execution root, and session state visible while work is in progress.
-- Let the user continue work, steer execution, and update task state without leaving the session unnecessarily.
-- Reuse the same contextual action-bar pattern as Project Detail so common actions feel consistent across the main full-page work surfaces.
+- Act as the chat-first execution surface for one task-linked agent session.
+- Keep the conversation dominant so the user can type the next message immediately.
+- Keep execution state visible without crowding the conversation canvas.
+- Provide lightweight access to task context, task status, and session utilities without turning the page into a second backlog surface.
+- Reuse the same floating contextual action-bar pattern as Project Detail so the main work surfaces feel consistent.
 
 ## Non-goals
 
 - Replacing Project Detail as the deliberate backlog-management surface.
-- Becoming a portfolio or project analytics view.
+- Replacing the Task Detail sheet as the fast task-inspection bridge from board to execution.
 - Introducing a standalone `Complete task` action distinct from status.
-- Automating merge, cleanup, or PR lifecycle work as a side effect of task completion.
+- Turning the page into a planning dashboard, analytics surface, or backlog board.
+- Keeping rich git controls permanently expanded in a way that competes with the chat.
 
-## Page posture
+## Surface posture
 
 - A session is always tied to a task, including planning-oriented sessions that use a dedicated planning task.
-- The Session screen is execution-first and conversation-centric.
-- Task identity stays stable even when the execution root changes.
-- Session UI should expose useful context without turning the page into a second backlog board.
+- The Session screen is chat-first and execution-aware.
+- The visible session title is independent from the task title and is generated for the session itself.
+- The top identity area should stay extremely minimal.
+- There should be no large resumability or task-summary block above the fold.
+- Task identity remains stable even when execution root changes through rebind behavior.
 
 ## Information hierarchy
 
-### Contextual action bar
+### Minimal identity header
 
-- The top action bar should keep the current task context, execution context, and common task/session actions visible.
-- This is the canonical explanation of the shared contextual action-bar pattern also reused by Project Detail.
+- The page may show a small session title as quiet identity chrome.
+- This area should not become a task-metadata header.
+- Project name, task metadata, and other supporting context belong in the right panel rather than the main canvas chrome.
 
-### Conversation surface
+### Floating contextual action bar
+
+- The Session screen keeps a floating contextual action bar separate from the minimal identity header.
+- This bar is the shared full-page action pattern also used by Project Detail.
+- On Session, the bar should prioritize session utilities and deeper execution actions rather than task-summary content.
+
+### Conversation canvas
 
 - The conversation is the dominant surface of the page.
-- Session history, current turn, and agent progress stay central.
+- The user should land directly in the conversation with the composer ready for the next turn.
+- No large checkpoint, resumability summary, or task brief should compete with the latest conversation turns by default.
 
-### Contextual side visibility
+### Bottom execution rail
 
-- Supporting read-only context may live in a right-side panel or equivalent secondary surface.
-- Useful examples include overlapping sessions, last known execution root, related task metadata, or other task/session visibility that helps the user avoid mistakes.
+- Live execution state should stay visible near the composer, where the user is actively working.
+- This rail shows current runtime state rather than becoming the place for every deeper git action.
 
-## Shared contextual action bar
+### Right context panel
 
-- The contextual action bar is a shared surface pattern across the Session screen and Project Detail.
-- The shared pattern should keep placement, density, and interaction posture familiar even when each page exposes different actions.
-- The Task Detail sheet is a lighter modal/drawer exception that uses inline metadata and a primary session CTA instead of its own full action bar.
-- On the Session screen, that bar should emphasize task-linked and execution-aware actions such as:
-  - current task/breadcrumb context
-  - branch or execution-root visibility
-  - execution-root switching or managed-worktree actions
-  - environment shortcuts such as editor or terminal actions
-  - task-status updates
-  - contextual panel toggles
-- Session actions may update task status, but the MVP does not add a separate `Complete task` action. Moving the task into a `done`-bucket status is how the product treats it as complete/closed.
+- A right-side context panel opens by default.
+- Its open/closed state should be remembered per session.
+- The panel provides the task context and nearby session visibility that support the current conversation.
 
-## Relationship to task status
+## Action-bar actions
 
-- Sessions remain attached to their parent task across resumptions until manually closed or the task enters a terminal `done`-bucket status.
-- Status updates may happen from the session surface when the user wants to advance or close the task.
-- Review, follow-up, and handoff work remain on the same task rather than spawning subtasks.
+- The Session action bar should cover:
+  - collapse sidebar
+  - open terminal
+  - open VS Code
+  - reveal richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions
+  - close session
+  - toggle right panel
+- `Close session` is a true session-level action and is a better fit here than `Complete task`.
+- `Close session` should ask for confirmation only when the agent is currently running.
+- The action bar may expose git and workspace actions, but it should avoid turning into a dense always-expanded control deck.
 
-## Right-side contextual visibility
+## Execution rail contents
 
-- Secondary context should help the user understand what else is active around the current session without competing with the conversation itself.
-- This area is appropriate for read-only visibility such as collision warnings, related sessions, execution-root history, or lightweight task metadata.
+- The bottom execution rail should stay always visible near the composer.
+- It should show the current execution state at a glance:
+  - branch
+  - repo-root versus managed-worktree mode
+  - dirty or uncommitted-change indicator
+  - collision chip when relevant
+- The rail should emphasize current state and warnings, while richer git actions stay discoverable from the action bar.
+- This keeps live runtime visibility near the composer and reserves the action bar for deeper execution changes.
+
+## Right-panel contents
+
+- The right panel should lead with task metadata first.
+- Recommended section order:
+  1. task metadata
+  2. notes / description / context
+  3. active sibling sessions on the same task
+  4. optional execution details
+- Task metadata here may include the task title, status, priority, due date, labels, and collection when present.
+- The task status control should live in this panel rather than in the action bar or execution rail.
+- Notes remain supportive context rather than the main surface of the page.
+- Sibling-session visibility should stay limited to active sibling sessions in Phase 1.
+
+## Task status and session closure rules
+
+- The MVP does not add a standalone `Complete task` control on the Session screen.
+- Task completion remains status-driven.
+- Moving the task into a `done`-bucket status is what closes the task in MVP.
+- Task status changes may happen from the Session screen, but they should happen through the right-panel status control.
+- Session closure is a separate session-level action and should not be conflated with task completion.
+
+Canonical task and runtime semantics live in:
+
+- `docs/product/task-model.md`
+- `docs/architecture/execution-model.md`
+
+## Collision and sibling-session visibility
+
+- Collision warnings are advisory rather than blocking.
+- The Session screen should surface collision awareness as:
+  - a chip in the execution rail when relevant
+  - an expanded warning treatment when the collision is active enough to deserve more attention
+- The right panel may also show related context such as active sibling sessions or execution details that help the user self-correct.
+- Sibling-session visibility here is for awareness, not for redefining a primary session model.
+
+## Relationship to Home, Project Detail, and Task Detail
+
+- Home is the minimal re-entry surface that gets the user back into a session quickly.
+- Project Detail is the deliberate project-scoped backlog surface.
+- The Task Detail sheet is the thin bridge from a task on the board into execution.
+- The Session screen is where the actual agent work happens.
+- Project Detail and Session share the floating contextual action-bar pattern, while the Task Detail sheet remains the lighter drawer exception.
+
+Related docs:
+
+- `docs/product/screens/home-screen.md`
+- `docs/product/screens/project-detail-screen.md`
+- `docs/product/screens/task-detail-sheet.md`
+- `docs/journeys/coding-workflow.md`
 
 ## Out of scope / future phase notes
 
 - Separate completion controls distinct from task status.
+- Full in-app PR, merge, or release orchestration.
 - Automatic merge or worktree cleanup on task closure.
 - Rich backlog-planning controls that belong on Project Detail.
-- Full in-app PR, merge, or release orchestration.
+- Closed-session history as a major panel section.
