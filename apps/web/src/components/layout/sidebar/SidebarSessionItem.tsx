@@ -2,11 +2,12 @@ import type { LucideIcon } from "lucide-react";
 import { CircleDashed, Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
-import type { SessionState } from "@/lib/mock/sidebar.mock";
+import type { SessionKind, SessionState } from "@/lib/mock/sidebar.mock";
 
 type SidebarSessionItemProps = {
   readonly title: string;
   readonly state: SessionState;
+  readonly kind?: SessionKind;
   readonly isActiveRoute?: boolean;
 };
 
@@ -40,10 +41,12 @@ const statusConfig: Record<
 export function SidebarSessionItem({
   title,
   state,
+  kind = "task",
   isActiveRoute,
 }: SidebarSessionItemProps) {
   const config = statusConfig[state];
   const StatusIcon = config.icon;
+  const isScratch = kind === "scratch";
 
   return (
     <button
@@ -52,12 +55,12 @@ export function SidebarSessionItem({
         config.containerClassName,
         // Active Route overriding styles (Elevated look)
         isActiveRoute &&
-          "bg-canvas-elevated border-white/[0.05] opacity-100 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]",
-        !isActiveRoute && "hover:bg-white/[0.03]",
+          "bg-canvas-elevated border-white/5 opacity-100 shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]",
+        !isActiveRoute && "hover:bg-white/3",
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-        <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center">
+        <div className="flex h-4 w-4 shrink-0 items-center justify-center">
           {state === "waiting" ? (
             <div className="relative flex h-3 w-3 items-center justify-center">
               {/* Outer pulsing ring */}
@@ -85,6 +88,11 @@ export function SidebarSessionItem({
           {title}
         </span>
       </div>
+      {isScratch && (
+        <span className="text-accent-cyan bg-accent-cyan/8 ml-2 shrink-0 rounded-md px-1.5 py-0.5 text-[10px] leading-tight font-medium">
+          Scratch
+        </span>
+      )}
     </button>
   );
 }

@@ -68,6 +68,7 @@ export function SidebarProjectGroup({ project }: SidebarProjectGroupProps) {
               key={session.id}
               title={session.title}
               state={session.state}
+              kind={session.kind}
               isActiveRoute={session.isActiveRoute}
             />
           ))}

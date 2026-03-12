@@ -7,6 +7,8 @@ type FocusQueueItemProps = {
   readonly title: string;
   readonly project: string;
   readonly action?: ReactNode;
+  readonly badge?: ReactNode;
+  readonly hoverAccent?: "green" | "cyan";
   readonly className?: string;
 };
 
@@ -14,6 +16,8 @@ export function FocusQueueItem({
   title,
   project,
   action,
+  badge,
+  hoverAccent = "green",
   className,
 }: FocusQueueItemProps) {
   return (
@@ -26,9 +30,19 @@ export function FocusQueueItem({
       )}
     >
       <div className="flex flex-col">
-        <span className="group-hover:text-accent-green mb-1 text-[15px] font-medium transition-colors">
-          {title}
-        </span>
+        <div className="mb-1 flex items-center gap-2.5">
+          <span
+            className={cn(
+              "text-[15px] font-medium transition-colors",
+              hoverAccent === "cyan"
+                ? "group-hover:text-accent-cyan"
+                : "group-hover:text-accent-green",
+            )}
+          >
+            {title}
+          </span>
+          {badge}
+        </div>
         <span className="text-text-tertiary text-xs font-medium tracking-wide uppercase">
           Project: {project}
         </span>

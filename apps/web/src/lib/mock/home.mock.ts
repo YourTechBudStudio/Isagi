@@ -1,7 +1,10 @@
+export type SessionKind = "task" | "scratch";
+
 export type HomeResumeContext = {
   readonly title: string;
   readonly lastActiveLabel: string;
   readonly projectLabel: string;
+  readonly kind: SessionKind;
 };
 
 export type HomeProject = {
@@ -14,6 +17,7 @@ export type HomeOpenSession = {
   readonly title: string;
   readonly project: string;
   readonly actionLabel?: string;
+  readonly kind: SessionKind;
 };
 
 export type HomeCandidateTask = {
@@ -42,9 +46,10 @@ export const homeProjects: ReadonlyArray<HomeProject> = [
 ];
 
 export const homeResumeContext: HomeResumeContext | null = {
-  title: "Refactor Auth Flow",
-  lastActiveLabel: "Last active 14m ago",
+  title: "Quick repo Q&A — dependency audit",
+  lastActiveLabel: "Last active 3m ago",
   projectLabel: "Project: Spark System MVP",
+  kind: "scratch",
 };
 
 export const homeOpenSessions: ReadonlyArray<HomeOpenSession> = [
@@ -53,12 +58,21 @@ export const homeOpenSessions: ReadonlyArray<HomeOpenSession> = [
     title: "Implement desktop layout shell",
     project: "Spark System MVP",
     actionLabel: "Resume",
+    kind: "task",
+  },
+  {
+    id: "scratch-explore-ci",
+    title: "Explore CI pipeline options",
+    project: "Backend Foundation",
+    actionLabel: "Resume",
+    kind: "scratch",
   },
   {
     id: "sqlite-setup",
     title: "Write setup instructions for SQLite",
     project: "Backend Foundation",
     actionLabel: "Resume",
+    kind: "task",
   },
 ];
 

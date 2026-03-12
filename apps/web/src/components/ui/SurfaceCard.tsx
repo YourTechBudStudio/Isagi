@@ -2,7 +2,13 @@ import type { HTMLAttributes } from "react";
 
 import { cn } from "@/lib/cn";
 
-type SurfaceCardTone = "subtle" | "elevated" | "blue" | "violet" | "green";
+type SurfaceCardTone =
+  | "subtle"
+  | "elevated"
+  | "blue"
+  | "violet"
+  | "green"
+  | "cyan";
 
 type SurfaceCardProps = HTMLAttributes<HTMLDivElement> & {
   readonly tone?: SurfaceCardTone;
@@ -16,6 +22,7 @@ const toneClasses: Record<SurfaceCardTone, string> = {
   violet:
     "bg-canvas-subtle border-accent-violet/30 shadow-[0_0_16px_rgba(198,160,246,0.05)]",
   green: "bg-accent-green/4 border-accent-green/20",
+  cyan: "bg-accent-cyan/[0.08] border-accent-cyan/10",
 };
 
 export function SurfaceCard({

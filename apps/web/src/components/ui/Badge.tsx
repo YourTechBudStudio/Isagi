@@ -2,7 +2,14 @@ import type { ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
-type BadgeTone = "blue" | "green" | "violet" | "amber" | "red" | "neutral";
+type BadgeTone =
+  | "blue"
+  | "green"
+  | "violet"
+  | "amber"
+  | "red"
+  | "cyan"
+  | "neutral";
 
 type BadgeProps = {
   readonly children: ReactNode;
@@ -17,6 +24,7 @@ const toneClasses: Record<BadgeTone, string> = {
   violet: "bg-accent-violet/10 text-accent-violet border-accent-violet/20",
   amber: "bg-accent-amber/10 text-accent-amber border-accent-amber/20",
   red: "bg-accent-red/10 text-accent-red border-accent-red/20",
+  cyan: "bg-accent-cyan/10 text-accent-cyan border-accent-cyan/20",
   neutral: "bg-white/5 text-text-secondary border-white/10",
 };
 
