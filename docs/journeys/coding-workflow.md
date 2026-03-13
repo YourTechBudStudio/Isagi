@@ -28,12 +28,12 @@
 ## Scenario A: Register a project
 
 1. User runs an `Add project` command from the command palette.
-2. User provides the required registration inputs:
-   - project name
-   - repo path
-3. Isagi validates that the path points to an existing local git repo.
-4. The project is registered without requiring statuses, aliases, or git defaults up front.
-5. Success feedback offers `Open project` and `Open settings` as follow-up actions.
+2. User provides a local repo directory either by pasting a path or using a folder picker helper.
+3. Isagi validates that the selected directory is an existing local git repo.
+4. Isagi preloads an inferred editable project name based on the selected folder.
+5. User confirms the inferred name or edits it before submitting registration.
+6. The project is registered without requiring statuses, aliases, or git defaults up front.
+7. Success feedback offers `Open project` and `Open settings` as follow-up actions.
 
 Detailed registration-surface guidance lives in `docs/product/screens/project-registration-flow.md`.
 

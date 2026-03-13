@@ -1,6 +1,6 @@
 # Session Screen (MVP)
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-12
 
 ## One-liner
 
@@ -66,6 +66,7 @@ The Session screen answers: **"How do I keep talking to this agent session while
 - Task sessions use this panel for task context and nearby session visibility that support the current conversation.
 - Scratch sessions should not invent fake task context.
 - For scratch sessions, the right panel should be omitted rather than showing empty or placeholder task UI.
+- Scratch sessions therefore do not expose a right-panel toggle because there is no panel to reveal.
 
 ## Action-bar actions
 
@@ -75,10 +76,11 @@ The Session screen answers: **"How do I keep talking to this agent session while
   - open VS Code
   - reveal richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions
   - close session
-  - toggle right panel
+  - toggle right panel for task-backed sessions only
 - `Close session` is a true session-level action and is a better fit here than `Complete task`.
 - `Close session` should ask for confirmation only when the agent is currently running.
 - The action bar may expose git and workspace actions, but it should avoid turning into a dense always-expanded control deck.
+- Scratch sessions should omit the right-panel toggle entirely.
 
 ## Execution rail contents
 

@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-12
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -12,13 +12,14 @@ Projects define the repo context and default git mode; sessions decide how work 
 
 - A project points at an existing local git repo.
 - Project registration should validate that the configured path is already a git repo.
-- Project registration requires only a project name and repo path.
+- Project registration is repo-first: the user selects or pastes a local repo directory, then confirms an inferred editable project name.
 - Other project configuration remains optional after registration.
 - Project IDs should be stable and filesystem-safe.
 - Repo path is stored separately from project identity.
 - Projects may define optional collections for grouping work, but the repo project remains the execution container.
 - Tasks inherit the project repo root as their default execution context.
 - Collections do not redefine execution root.
+- Canonical registration-flow guidance lives in `docs/product/screens/project-registration-flow.md`.
 
 ## Display aliases
 

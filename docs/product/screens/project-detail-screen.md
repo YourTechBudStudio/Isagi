@@ -1,6 +1,6 @@
 # Project Detail Screen (MVP)
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-12
 
 ## One-liner
 
@@ -40,16 +40,18 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - If the project has no tasks yet, the page should shift from backlog scanning to a clear empty state.
 - The empty state should explain that there is no actionable project work yet.
-- Primary shaping action: **Plan with PM agent**.
+- The empty state should expose two clear next steps:
+  - **Plan with PM agent**
+  - **Start ad-hoc session**
 - `Plan with PM agent` fits projects whose backlog still needs shaping or cleanup.
-- **New task** and **New collection** are the main manual follow-up actions when the user wants to seed the board directly.
-- The empty state should keep the user focused on creating visible board work rather than jumping straight into a project-level execution shortcut.
+- `Start ad-hoc session` fits projects where the user wants to begin visible tracked work immediately through a task-backed ad-hoc session.
+- Manual actions such as **New task** and **New collection** still exist, but they are secondary to the empty-state CTA pair.
 
 ### Common actions first
 
 - Common project actions should stay visible and consistent with the session surface action-bar pattern.
 - The primary planning action is **Plan with PM agent**.
-- These actions are backlog-shaping controls first, not execution-first shortcuts.
+- These actions are persistent page-level controls, even when the project empty state presents a more specific CTA pair.
 - Secondary actions include **New task**, **New collection**, **Project settings**, and view/filter controls.
 
 ### Tasks as the main surface
