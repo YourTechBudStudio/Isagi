@@ -99,10 +99,13 @@ export function AppShell({
         theme="dark"
         toastOptions={{
           classNames: {
-            toast: "font-body shadow-xl",
+            toast:
+              "font-body shadow-xl bg-canvas-elevated border border-white/10 text-text-primary",
+            title: "text-text-primary font-medium",
             description: "text-text-secondary font-body",
             actionButton: "bg-accent-blue text-canvas font-body font-medium",
-            cancelButton: "bg-canvas-subtle text-text-secondary font-body",
+            cancelButton:
+              "bg-transparent text-text-secondary font-body hover:text-text-primary hover:bg-white/5 transition-colors",
           },
         }}
       />
