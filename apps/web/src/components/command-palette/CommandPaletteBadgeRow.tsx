@@ -1,39 +1,40 @@
-import type { CommandDef } from "@/lib/commands/types";
-
-type CollectedArgs = Record<string, { value: string; label: string }>;
+import type { HistoryFrame } from "@/lib/commands/types";
 
 type CommandPaletteBadgeRowProps = {
-  readonly activeCommand: CommandDef | null;
-  readonly collectedArgs: CollectedArgs;
+  readonly commandLabel: string | null;
+  readonly history: ReadonlyArray<HistoryFrame>;
 };
 
 export function CommandPaletteBadgeRow({
-  activeCommand,
-  collectedArgs,
+  commandLabel,
+  history,
 }: CommandPaletteBadgeRowProps) {
-  const hasBadges =
-    Boolean(activeCommand) || Object.keys(collectedArgs).length > 0;
+  const hasBadges = Boolean(commandLabel) || history.length > 0;
 
-  if (!hasBadges) return null;
+  if (!hasBadges) {
+    return null;
+  }
 
   return (
     <div className="mt-4 flex flex-wrap gap-2">
-      {activeCommand && (
+      {commandLabel && (
         <div className="bg-canvas-subtle font-body text-text-secondary flex items-center gap-1.5 rounded-md border border-white/5 px-2.5 py-1 text-sm transition-colors duration-150">
-          {activeCommand.label}
+          {commandLabel}
         </div>
       )}
-      {Object.entries(collectedArgs).map(([key, argData]) => {
-        const argDef = activeCommand?.arguments.find(arg => arg.id === key);
-        const prefix = argDef?.labelPrefix ? `${argDef.labelPrefix} ` : "";
+
+      {history.map(frame => {
+        const prefix = frame.step.labelPrefix
+          ? `${frame.step.labelPrefix} `
+          : "";
 
         return (
           <div
-            key={key}
+            key={`${frame.step.id}-${frame.value.label}`}
             className="bg-accent-blue-soft border-accent-blue/20 font-body text-accent-blue flex items-center rounded-md border px-2.5 py-1 text-sm transition-colors duration-150"
           >
             <span className="mr-1 opacity-70">{prefix}</span>
-            {argData.label}
+            {frame.value.label}
           </div>
         );
       })}

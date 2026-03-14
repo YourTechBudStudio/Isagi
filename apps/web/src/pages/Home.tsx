@@ -15,8 +15,10 @@ import {
   mockSidebarProjects,
   mockSidebarTriage,
 } from "@/lib/mock/sidebar.mock";
+import { useCommandPaletteActions } from "@/stores/commandPalette.selectors";
 
 export default function Home() {
+  const { launchCommand } = useCommandPaletteActions();
   const isMac =
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad|iPod/.test(navigator.platform);
@@ -61,8 +63,15 @@ export default function Home() {
         </header>
 
         <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-8 pt-28 pb-16">
-          {viewState === "no-projects" && <NoProjectsView />}
-          {viewState === "no-sessions" && <NoSessionsView />}
+          {viewState === "no-projects" && (
+            <NoProjectsView onAddProject={() => launchCommand("add-project")} />
+          )}
+          {viewState === "no-sessions" && (
+            <NoSessionsView
+              onCreateTask={() => launchCommand("create-task")}
+              onStartSession={() => launchCommand("start-work-session")}
+            />
+          )}
           {viewState === "no-resumable" && (
             <NoResumableView tasks={homeScreenData.candidateTasks} />
           )}
@@ -78,7 +87,11 @@ export default function Home() {
   );
 }
 
-function NoProjectsView() {
+type NoProjectsViewProps = {
+  readonly onAddProject: () => void;
+};
+
+function NoProjectsView({ onAddProject }: NoProjectsViewProps) {
   return (
     <HomeEmptyState
       icon={<FolderPlus className="text-text-tertiary h-8 w-8" />}
@@ -89,6 +102,7 @@ function NoProjectsView() {
           variant="primary"
           size="lg"
           trailingIcon={<Plus className="h-4 w-4" />}
+          onClick={onAddProject}
         >
           Add your first project
         </Button>
@@ -97,7 +111,12 @@ function NoProjectsView() {
   );
 }
 
-function NoSessionsView() {
+type NoSessionsViewProps = {
+  readonly onStartSession: () => void;
+  readonly onCreateTask: () => void;
+};
+
+function NoSessionsView({ onCreateTask, onStartSession }: NoSessionsViewProps) {
   return (
     <HomeEmptyState
       icon={<Rocket className="text-accent-blue h-8 w-8" />}
@@ -109,6 +128,7 @@ function NoSessionsView() {
             variant="primary"
             size="lg"
             trailingIcon={<Play className="h-4 w-4" />}
+            onClick={onStartSession}
           >
             Start a session
           </Button>
@@ -116,6 +136,7 @@ function NoSessionsView() {
             variant="secondary"
             size="lg"
             trailingIcon={<Plus className="h-4 w-4" />}
+            onClick={onCreateTask}
           >
             Create task
           </Button>

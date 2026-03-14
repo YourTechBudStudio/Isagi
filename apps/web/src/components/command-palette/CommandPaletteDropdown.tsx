@@ -1,8 +1,8 @@
 import type { SearchResult } from "@/lib/commands/searchEntities";
 
 type CommandPaletteDropdownProps = {
-  readonly recommended: SearchResult[];
-  readonly results: SearchResult[];
+  readonly recommended: ReadonlyArray<SearchResult>;
+  readonly results: ReadonlyArray<SearchResult>;
   readonly highlightedIndex: number;
   readonly emptyStateMessage: string;
   readonly onHighlight: (index: number) => void;

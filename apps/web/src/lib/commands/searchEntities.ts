@@ -1,82 +1,129 @@
 import { homeCandidateTasks, homeSparks } from "@/lib/mock/home.mock";
 
+import { type CommandId, COMMANDS } from "./commands";
 import { fuzzyScore } from "./fuzzy";
-import { COMMANDS } from "./registry";
-import type { ArgumentType, CommandDef } from "./types";
+import type { EntityType, SelectedOption } from "./types";
 
-// Extracted from mock data to simulate a normalized list of entities
 const MOCK_PROJECTS = [
   { id: "project-1", name: "Spark System MVP" },
   { id: "project-2", name: "Backend Foundation" },
   { id: "project-3", name: "Frontend Architecture" },
   { id: "project-4", name: "Deployment Pipeline" },
-];
+] as const;
 
-export interface SearchResult {
-  id: string;
-  label: string;
+export interface CommandSearchResult {
+  readonly kind: "command";
+  readonly id: CommandId;
+  readonly label: string;
+  readonly commandId: CommandId;
 }
 
+export interface EntitySearchResult extends SelectedOption {
+  readonly kind: "entity";
+}
+
+export type SearchResult = CommandSearchResult | EntitySearchResult;
+
 export interface EntitySearchResults {
-  recommended: SearchResult[];
-  results: SearchResult[];
+  readonly recommended: ReadonlyArray<SearchResult>;
+  readonly results: ReadonlyArray<SearchResult>;
 }
 
 type ScoredResult = {
-  score: number;
-  index: number;
-  item: SearchResult;
+  readonly score: number;
+  readonly index: number;
+  readonly item: SearchResult;
 };
 
-function sortByScore(results: ScoredResult[]): SearchResult[] {
-  return results
+function sortByScore(results: ReadonlyArray<ScoredResult>): SearchResult[] {
+  return [...results]
     .sort((a, b) => {
       if (a.score === b.score) {
         return a.index - b.index;
       }
+
       return b.score - a.score;
     })
     .map(result => result.item);
 }
 
-function scoreCommand(command: CommandDef, query: string): number | null {
+function scoreCommand(
+  command: (typeof COMMANDS)[number],
+  query: string,
+): number | null {
   const scores: number[] = [];
   const labelScore = fuzzyScore(query, command.label);
-  if (labelScore !== null) scores.push(labelScore);
+  if (labelScore !== null) {
+    scores.push(labelScore);
+  }
 
   if (command.aliases) {
     for (const alias of command.aliases) {
       const aliasScore = fuzzyScore(query, alias);
-      if (aliasScore !== null) scores.push(aliasScore);
+      if (aliasScore !== null) {
+        scores.push(aliasScore);
+      }
     }
   }
 
-  if (scores.length === 0) return null;
+  if (scores.length === 0) {
+    return null;
+  }
+
   return Math.max(...scores);
 }
 
+function createCommandSearchResult(
+  command: (typeof COMMANDS)[number],
+): CommandSearchResult {
+  return {
+    kind: "command",
+    id: command.id,
+    label: command.label,
+    commandId: command.id,
+  };
+}
+
+function createEntitySearchResult(option: SelectedOption): EntitySearchResult {
+  return {
+    kind: "entity",
+    id: option.id,
+    label: option.label,
+  };
+}
+
 export function searchEntities(
-  type: ArgumentType | null,
+  type: EntityType | null,
   filterText: string,
   contextId?: string,
 ): EntitySearchResults {
   const normalizedFilter = filterText.trim();
   const isFiltering = normalizedFilter.length > 0;
 
-  // If no type is provided, we default to searching the commands registry itself
   if (!type) {
     if (!isFiltering) {
       return {
         recommended: [],
-        results: COMMANDS.map(cmd => ({ id: cmd.id, label: cmd.label })),
+        results: COMMANDS.map(createCommandSearchResult),
       };
     }
 
-    const matchedCommands = COMMANDS.map((cmd, index) => {
-      const score = scoreCommand(cmd, normalizedFilter);
-      if (score === null) return null;
-      return { score, index, item: { id: cmd.id, label: cmd.label } };
-    }).filter((result): result is ScoredResult => result !== null);
+    const matchedCommands: ScoredResult[] = COMMANDS.flatMap(
+      (command, index) => {
+        const score = scoreCommand(command, normalizedFilter);
+        if (score === null) {
+          return [];
+        }
+
+        return [
+          {
+            score,
+            index,
+            item: createCommandSearchResult(command),
+          },
+        ];
+      },
+    );
 
     return {
       recommended: [],
@@ -84,34 +131,35 @@ export function searchEntities(
     };
   }
 
-  let allEntities: SearchResult[] = [];
+  let allEntities: EntitySearchResult[] = [];
 
   switch (type) {
     case "project":
-      allEntities = MOCK_PROJECTS.map(p => ({ id: p.id, label: p.name }));
+      allEntities = MOCK_PROJECTS.map(project =>
+        createEntitySearchResult({ id: project.id, label: project.name }),
+      );
       break;
     case "task":
-      allEntities = homeCandidateTasks.map(t => ({
-        id: t.id,
-        label: t.title,
-      }));
+      allEntities = homeCandidateTasks.map(task =>
+        createEntitySearchResult({ id: task.id, label: task.title }),
+      );
       break;
     case "spark":
-      allEntities = homeSparks.map(s => ({ id: s.id, label: s.title }));
+      allEntities = homeSparks.map(spark =>
+        createEntitySearchResult({ id: spark.id, label: spark.title }),
+      );
       break;
-    case "text":
-      return { recommended: [], results: [] };
   }
 
-  // Filter based on input
   if (isFiltering) {
-    const scored = allEntities
-      .map((entity, index) => {
-        const score = fuzzyScore(normalizedFilter, entity.label);
-        if (score === null) return null;
-        return { score, index, item: entity };
-      })
-      .filter((result): result is ScoredResult => result !== null);
+    const scored: ScoredResult[] = allEntities.flatMap((entity, index) => {
+      const score = fuzzyScore(normalizedFilter, entity.label);
+      if (score === null) {
+        return [];
+      }
+
+      return [{ score, index, item: entity }];
+    });
 
     return {
       recommended: [],
@@ -119,15 +167,14 @@ export function searchEntities(
     };
   }
 
-  // Extract recommended if we have a contextId and we're NOT actively filtering
-  let recommended: SearchResult[] = [];
+  let recommended: EntitySearchResult[] = [];
   let results = allEntities;
 
-  if (!isFiltering && contextId) {
-    const recommendedItem = allEntities.find(e => e.id === contextId);
+  if (contextId) {
+    const recommendedItem = allEntities.find(entity => entity.id === contextId);
     if (recommendedItem) {
       recommended = [recommendedItem];
-      results = allEntities.filter(e => e.id !== contextId);
+      results = allEntities.filter(entity => entity.id !== contextId);
     }
   }
 
