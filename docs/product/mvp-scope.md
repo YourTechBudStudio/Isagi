@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Legacy product name:** Spark System  
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-13
 
 This document defines what we are building for the MVP.
 
@@ -31,7 +31,7 @@ Repo projects may organize work directly as tasks or through optional collection
 - A project is an existing local git repo already present on the machine.
 - Projects are the containers that own tasks and optional collections.
 - Projects can define customizable task statuses and optional git execution defaults.
-- Projects may also define terminology aliases for presentation, but aliases do not change the underlying model.
+- Projects may also define project-local terminology for presentation, such as a `Task label` or `Collection label`, without changing the underlying model.
 
 #### 2) Task model
 

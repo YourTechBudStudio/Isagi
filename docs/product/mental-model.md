@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-13
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -39,7 +39,7 @@ Tasks:
 - may optionally belong to one collection in that project
 - track intent and progress
 - can have multiple sessions
-- remain the canonical actionable unit even when a project uses aliases in the UI
+- remain the canonical actionable unit even when a project uses project-local terminology in the UI
 - are execution-agnostic
 
 Canonical task contract: `docs/product/task-model.md`.
@@ -166,7 +166,7 @@ Focus remains task-first with session-level visibility elsewhere in the product:
 ## What remains intentionally flexible
 
 - Phase 2 spark inbox / spark-triage design
-- project-local aliases for presentation (configuration details live in `docs/product/config/project-task-git-rules.md`)
+- project-local terminology for presentation (configuration details live in `docs/product/config/project-task-git-rules.md`)
 - collection-centric views and grouping behavior
 - status-change automation hooks
 - planner-assisted task creation

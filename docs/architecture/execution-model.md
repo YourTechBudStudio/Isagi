@@ -1,6 +1,6 @@
 # Execution Model
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-13
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the task-first MVP.
 
@@ -85,13 +85,22 @@ Other task or project metadata may be shown in side panels as view-only context,
 - Sessions can be manually closed.
 - Task-linked sessions auto-close when the parent task enters a `done`-bucket status.
 - Scratch sessions do not auto-close from task status because they have no task.
+- Some session records may later be archived when a project-level mutation invalidates their prior repo context, such as a repo-path change.
 
 Session states:
 
 - `active` - the agent is processing
 - `idle` - the agent is waiting on the user
 - `closed` - the session is intentionally no longer active
+- `archived` - the session is retained as historical record only and cannot be resumed because its prior repo binding is no longer considered live
 - `error` - hidden technical failure state for start/rebind issues
+
+Notes:
+
+- `closed` and `archived` are both non-active states, but they differ in cause.
+- `closed` is the normal intentional end state for a session the user no longer wants to keep active.
+- `archived` is a non-resumable preservation state used when a higher-level change, such as a repo-path change, makes the old execution context invalid.
+- Repo-path-change semantics are defined canonically in `docs/product/config/project-task-git-rules.md`.
 
 ## Execution root switches and rebind
 
@@ -136,6 +145,7 @@ These passive snapshots apply to both task-linked and scratch sessions.
   - `active` sessions
   - `idle` sessions that are still within the recent-activity window
 - `closed` sessions are excluded.
+- `archived` sessions are also excluded.
 - Warnings are advisory and do not hard-block user actions.
 - Task and session surfaces should expose read-only visibility such as overlapping sessions, active session counts, or last known execution roots where useful.
 - Scratch sessions participate in the same directory-level warning model as task-linked sessions.

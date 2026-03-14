@@ -1,6 +1,6 @@
 # Project Registration Flow (MVP)
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-13
 
 ## One-liner
 
@@ -73,7 +73,7 @@ Project registration should not require additional setup before the project beco
 Examples of configuration that may be added later:
 
 - project-defined statuses
-- collection aliases or other display aliases
+- project-local terminology such as `Task label` or `Collection label`
 - default git mode
 - saved views
 - labels or related workflow metadata
@@ -100,4 +100,4 @@ Canonical project-config semantics live in `docs/product/config/project-task-git
 - Registering remote HTTPS or SSH repo URLs directly.
 - Bulk project import.
 - Template-driven project setup.
-- Mandatory status, alias, or git-mode configuration during first registration.
+- Mandatory status, terminology, or git-mode configuration during first registration.

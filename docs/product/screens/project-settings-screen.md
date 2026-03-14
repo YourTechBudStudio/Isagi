@@ -1,6 +1,6 @@
 # Project Settings Screen (MVP)
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-13
 
 ## One-liner
 
@@ -9,7 +9,7 @@ The Project Settings screen answers: **"Where do I configure this repo-project w
 ## Primary job
 
 - Provide a secondary configuration surface for one project.
-- Keep project-level setup such as statuses, aliases, and defaults out of the everyday backlog view.
+- Keep project-level setup such as repo defaults, task statuses, and terminology out of the everyday backlog view.
 - Give users a clear place to adjust project behavior after registration.
 
 ## Non-goals
@@ -17,6 +17,7 @@ The Project Settings screen answers: **"Where do I configure this repo-project w
 - Replacing Project Detail as the main workboard.
 - Becoming a daily workflow surface.
 - Duplicating task or session execution controls.
+- Owning project rename, saved views, or collection-instance management.
 
 ## Entry posture
 
@@ -31,9 +32,68 @@ The Project Settings screen answers: **"Where do I configure this repo-project w
 ## Information hierarchy
 
 - Start with project-level configuration that shapes task and session behavior.
-- Typical settings here include project-defined statuses, display aliases, default git mode, saved views, and optional label or workflow defaults.
+- Phase 1 Project Settings should focus on:
+  - repository reference / repo-path management
+  - default git mode
+  - task statuses
+  - terminology (`Task label`, `Collection label`)
 - Keep field-level semantics consistent with the canonical project config docs.
 - Preserve a clean separation between project configuration and task/backlog manipulation.
+
+## Recommended settings structure
+
+The MVP settings surface should stay tight and deliberate.
+
+Recommended section order:
+
+1. **Repository**
+2. **Default Git Mode**
+3. **Task Statuses**
+4. **Terminology**
+
+This keeps the screen focused on project-wide behavior and meaning rather than live backlog structure.
+
+## Repository section
+
+- Project rename belongs on **Project Detail** as part of visible project identity, not in Project Settings.
+- Project Settings should show the registered repo path / repo reference and provide a deliberate `Change repo path` action.
+- Changing the repo path is a high-risk action.
+- When the repo path changes:
+  - tasks remain on the project
+  - existing sessions are archived
+  - archived sessions cannot be resumed
+- The repo-path change flow should make these consequences explicit before confirmation.
+
+## Task statuses
+
+- Project Settings is the Phase 1 home for configuring task statuses.
+- Users should be able to:
+  - create statuses
+  - edit status names
+  - delete statuses
+  - reorder statuses
+  - map each status to a global bucket (`todo`, `in_progress`, `done`)
+- Status order matters:
+  - it expresses expected task progression posture
+  - it determines grouped ordering in kanban and list views when grouped by status
+- Phase 1 does not include status automation rules or hooks.
+
+## Terminology
+
+- Terminology replaces the looser `aliases` framing in the Project Settings UI.
+- The screen should expose:
+  - **Task label**
+  - **Collection label**
+- `Task label` is presentation-only.
+- `Collection label` defaults to `Milestone` in the UI.
+- The UI should treat this as terminology, even if the underlying implementation represents it through a default collection-kind definition for future compatibility.
+
+## What stays out of Project Settings
+
+- Project name editing lives on **Project Detail**.
+- Collection instances are managed from **Project Detail**, not Project Settings.
+- Saved views are created, edited, and managed from **Project Detail**.
+- Default task labels are not part of the Phase 1 Project Settings surface.
 
 ## Relationship to project config docs
 

@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-13
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -21,12 +21,17 @@ Projects define the repo context and default git mode; sessions decide how work 
 - Collections do not redefine execution root.
 - Canonical registration-flow guidance lives in `docs/product/screens/project-registration-flow.md`.
 
-## Display aliases
+## Terminology
 
-- Projects may define project-local UI terminology aliases for visible model terms such as `collection`, `task`, or other workflow-facing labels.
-- These terminology aliases are distinct from task `labels` metadata.
-- Aliases are presentation-only and do not rename canonical model terms in docs or contracts.
-- Aliases do not change task ownership, session ownership, status semantics, or execution behavior.
+- Projects may define project-local UI terminology labels for visible model terms such as `task` and `collection`.
+- These terminology labels are distinct from task `labels` metadata.
+- Terminology is presentation-only and does not rename canonical model terms in docs or contracts.
+- Terminology does not change task ownership, session ownership, status semantics, or execution behavior.
+- `Task label` remains a UI-only label.
+- `Collection label` defaults to `Milestone` in the UI.
+- Phase 1 still exposes one collection concept to the user.
+- Internally, a project may carry one default collection-kind definition for forward compatibility with multiple collection kinds later; this simply means one project-owned definition for the single collection concept exposed in the MVP UI.
+- That forward-compatible implementation detail does not change the Phase 1 user-facing model.
 
 ## Saved views
 
@@ -78,6 +83,20 @@ Rules:
 - project git mode is nullable and falls back to the global default
 - task creation should not require choosing a git mode
 - session start may override the default when the user wants a different execution strategy
+- The global default is product-level configuration even though its dedicated configuration surface is outside the current screen-doc set.
+
+## Project-defined task statuses
+
+- Projects define their own ordered task statuses.
+- Each status maps to a global bucket:
+  - `todo`
+  - `in_progress`
+  - `done`
+- Status order is meaningful in Phase 1:
+  - it expresses expected workflow progression posture
+  - it determines grouped ordering in list and kanban views when grouped by status
+- Phase 1 status config may support create/edit/delete/reorder behavior.
+- Phase 1 excludes status automation hooks and rule-based transitions.
 
 ## Managed worktree rules
 
@@ -98,6 +117,15 @@ Rules:
 - Scratch sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as task-backed sessions.
 - Scratch sessions differ only in not creating or attaching to a task.
 
+## Repo-path changes
+
+- A project's repo path / repo reference is editable after registration.
+- Changing the repo path is a high-risk project-level mutation.
+- When the repo path changes:
+  - existing sessions tied to the prior repo path are archived
+  - archived sessions cannot be resumed
+  - tasks remain project-owned and are not deleted by the repo-path change
+
 ## Collision warnings
 
 - Warn when another `active` or idle-but-recent session shares the same execution directory.
@@ -111,9 +139,9 @@ Rules:
 - `name`
 - repo path / repo reference
 - nullable default git mode
-- optional collection definitions
+- optional collection definitions and related project-owned collection data, without implying that collection-instance management belongs in Project Settings
 - project-defined task statuses mapped to global buckets
-- optional display aliases for project-local terminology
+- optional project terminology labels (`task`, `collection`)
 - optional saved-view definitions and last-used view state
 - optional default task labels or related workflow metadata
 

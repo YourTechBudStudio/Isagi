@@ -1,6 +1,6 @@
 # Project Detail Screen (MVP)
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-13
 
 ## One-liner
 
@@ -33,6 +33,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 ### Project identity and view context
 
 - The top of the page should establish the project identity clearly.
+- The project name should be editable inline on Project Detail rather than hidden in Project Settings.
 - Saved views should be directly accessible as tabs.
 - The page should remember the last-used view for that project.
 
@@ -74,6 +75,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
   - view customization controls
 - The goal is consistency of action handling, not identical button sets across pages.
 - `Project settings` should open the Project Settings screen described in `docs/product/screens/project-settings-screen.md`.
+- That settings surface owns workflow semantics and repo-level defaults rather than live backlog structure such as saved views or collection instances.
 
 ## Saved views
 
@@ -81,6 +83,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - A project starts with default **Board** and **List** views, but users may edit, delete, or add views later.
 - Saved views may control layout, grouping, filters, and sorting without changing canonical task semantics.
 - The project should reopen into the last-used view rather than forcing one static default forever.
+- Saved views are created, edited, and managed from Project Detail rather than Project Settings.
 - Canonical saved-view configuration rules live in `docs/product/config/project-task-git-rules.md`.
 
 ## Default views
@@ -128,6 +131,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - Collections are one of the available grouping and filtering dimensions on Project Detail.
 - They should not dominate the default information hierarchy.
+- Collection instances are managed from Project Detail as operational backlog structure rather than from Project Settings.
 - Users may create collection-centric views when helpful, but the MVP does not require a dedicated collections-first default tab.
 
 ## Out of scope / future phase notes

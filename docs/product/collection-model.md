@@ -1,6 +1,6 @@
 # Collection Model (MVP)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-13
 
 ## One-liner
 
@@ -56,12 +56,15 @@ Related docs:
 - not a session container
 - not a second status context for the same task
 
-## Aliasing and presentation
+## Terminology and presentation
 
-- Projects may rename `collection` in the UI for workflow fit.
-- Aliases are presentation-only and do not change the canonical model term in docs or contracts.
-- The same project may also alias other visible labels, but `task` remains the canonical actionable concept.
-- Project-local alias configuration is described in `docs/product/config/project-task-git-rules.md`.
+- Projects may rename `collection` in the UI for workflow fit through a project-local `Collection label`.
+- Phase 1 still presents a single collection concept to the user even when that label changes.
+- Implementations may back that label with one default collection-kind definition per project for future extension.
+- That forward-compatible implementation detail does not introduce multiple collection kinds in the MVP UX.
+- This terminology is presentation-only and does not change the canonical model term in docs or contracts.
+- The same project may also rename other visible labels, but `task` remains the canonical actionable concept.
+- Project-local terminology configuration is described in `docs/product/config/project-task-git-rules.md`.
 
 ## Deferred / intentionally flexible
 
