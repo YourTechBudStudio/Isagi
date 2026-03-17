@@ -266,9 +266,6 @@ function ProjectDetailContent({
                         }))
                       }
                       onCreateView={handleCreateView}
-                      onRenameView={handleRenameView}
-                      onDuplicateView={handleDuplicateView}
-                      onDeleteView={handleDeleteView}
                     />
 
                     <ProjectViewContextBar
@@ -307,6 +304,11 @@ function ProjectDetailContent({
                           sortKey: "due_date",
                         }));
                       }}
+                      selectedView={selectedView}
+                      viewsCount={viewsState.views.length}
+                      onRenameView={handleRenameView}
+                      onDuplicateView={handleDuplicateView}
+                      onDeleteView={handleDeleteView}
                     />
                   </div>
                 </div>
