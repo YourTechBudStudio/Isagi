@@ -12,6 +12,7 @@ import { ProjectSavedViewTabs } from "@/components/project/ProjectSavedViewTabs"
 import { ProjectSettingsSheet } from "@/components/project/ProjectSettingsSheet";
 import { ProjectViewContextBar } from "@/components/project/ProjectViewContextBar";
 import { TaskDetailModal } from "@/components/project/TaskDetailModal";
+import { EditableHeading } from "@/components/ui/EditableHeading";
 import { getMockProject, type MockTask } from "@/lib/mock/project.mock";
 import {
   mockSidebarProjects,
@@ -54,11 +55,12 @@ type ProjectDetailContentProps = {
 
 function ProjectDetailContent({
   projectId,
-  projectName,
+  projectName: initialProjectName,
   initialTasks,
 }: ProjectDetailContentProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [localProjectName, setLocalProjectName] = useState(initialProjectName);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const selectedTaskId = searchParams.get("taskId");
@@ -113,9 +115,11 @@ function ProjectDetailContent({
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
               className="mb-6 flex flex-col gap-4"
             >
-              <h1 className="font-display text-text-primary text-5xl font-semibold tracking-tight">
-                {projectName}
-              </h1>
+              <EditableHeading
+                initialValue={localProjectName}
+                onSave={setLocalProjectName}
+                className="font-display text-text-primary self-start text-5xl font-semibold tracking-tight"
+              />
 
               {!isEmpty && (
                 <div className="flex flex-col gap-4 border-b border-white/6 pb-5">
@@ -202,7 +206,7 @@ function ProjectDetailContent({
         <ProjectSettingsSheet
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
-          projectName={projectName}
+          projectName={localProjectName}
         />
       </div>
 
