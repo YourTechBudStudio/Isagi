@@ -1,5 +1,4 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { LayoutDashboard, ListTodo } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 
@@ -9,18 +8,22 @@ import { ProjectActionBar } from "@/components/project/ProjectActionBar";
 import { ProjectBoardView } from "@/components/project/ProjectBoardView";
 import { ProjectEmptyState } from "@/components/project/ProjectEmptyState";
 import { ProjectListView } from "@/components/project/ProjectListView";
+import { ProjectSavedViewTabs } from "@/components/project/ProjectSavedViewTabs";
 import { ProjectSettingsSheet } from "@/components/project/ProjectSettingsSheet";
 import { ProjectViewContextBar } from "@/components/project/ProjectViewContextBar";
 import { TaskDetailModal } from "@/components/project/TaskDetailModal";
-import { cn } from "@/lib/cn";
 import { getMockProject, type MockTask } from "@/lib/mock/project.mock";
 import {
   mockSidebarProjects,
   mockSidebarTriage,
 } from "@/lib/mock/sidebar.mock";
 import {
-  readProjectViewState,
-  writeProjectViewState,
+  createProjectSavedViewId,
+  DEFAULT_PROJECT_VIEWS_STATE,
+  getNextProjectViewName,
+  type ProjectSavedView,
+  readProjectViewsState,
+  writeProjectViewsState,
 } from "@/lib/project-detail-storage";
 import { filterProjectTasks, sortProjectTasks } from "@/lib/utils/task-utils";
 
@@ -57,26 +60,12 @@ function ProjectDetailContent({
   projectId,
   project,
 }: ProjectDetailContentProps) {
-  const savedState = readProjectViewState(projectId);
-  const [viewMode, setViewMode] = useState(savedState.viewMode);
+  const initialViewsState = readProjectViewsState(projectId);
+  const [viewsState, setViewsState] = useState(initialViewsState);
   const [searchQuery, setSearchQuery] = useState("");
-  const [priorityFilter, setPriorityFilter] = useState(
-    savedState.priorityFilter,
-  );
-  const [collectionFilter, setCollectionFilter] = useState(
-    savedState.collectionFilter,
-  );
-  const [sortKey, setSortKey] = useState(savedState.sortKey);
 
   // Local state for tasks to enable inline editing
   const [tasks, setTasks] = useState<MockTask[]>([...project.tasks]);
-  const [prevProjectId, setPrevProjectId] = useState(projectId);
-
-  // Reset tasks if project changes (e.g. navigation)
-  if (projectId !== prevProjectId) {
-    setTasks([...project.tasks]);
-    setPrevProjectId(projectId);
-  }
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -84,14 +73,14 @@ function ProjectDetailContent({
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTaskId = searchParams.get("taskId");
 
+  const selectedView =
+    viewsState.views.find(view => view.id === viewsState.selectedViewId) ??
+    viewsState.views[0] ??
+    DEFAULT_PROJECT_VIEWS_STATE.views[0];
+
   useEffect(() => {
-    writeProjectViewState(projectId, {
-      viewMode,
-      priorityFilter,
-      collectionFilter,
-      sortKey,
-    });
-  }, [collectionFilter, priorityFilter, projectId, sortKey, viewMode]);
+    writeProjectViewsState(projectId, viewsState);
+  }, [projectId, viewsState]);
 
   const isEmpty = tasks.length === 0;
   const collectionOptions = Array.from(
@@ -105,16 +94,62 @@ function ProjectDetailContent({
   const filteredTasks = sortProjectTasks(
     filterProjectTasks(tasks, {
       searchQuery,
-      priorityFilter,
-      collectionFilter,
+      priorityFilter: selectedView.priorityFilter,
+      collectionFilter: selectedView.collectionFilter,
     }),
-    sortKey,
+    selectedView.sortKey,
   );
 
   const handleTaskUpdate = (updatedTask: MockTask) => {
     setTasks(prev =>
       prev.map(t => (t.id === updatedTask.id ? updatedTask : t)),
     );
+  };
+
+  const updateSelectedView = (
+    updater: (view: ProjectSavedView) => ProjectSavedView,
+  ) => {
+    setViewsState(prev => {
+      const currentView =
+        prev.views.find(view => view.id === prev.selectedViewId) ??
+        prev.views[0];
+      const safeCurrentView =
+        currentView ?? DEFAULT_PROJECT_VIEWS_STATE.views[0];
+
+      return {
+        ...prev,
+        views: prev.views.map(view =>
+          view.id === safeCurrentView.id ? updater(safeCurrentView) : view,
+        ),
+      };
+    });
+  };
+
+  const handleCreateView = ({
+    name,
+    layout,
+  }: {
+    readonly name: string;
+    readonly layout: "board" | "list";
+  }) => {
+    setViewsState(prev => {
+      const sourceView =
+        prev.views.find(view => view.id === prev.selectedViewId) ??
+        prev.views[0];
+      const safeSourceView = sourceView ?? DEFAULT_PROJECT_VIEWS_STATE.views[0];
+
+      const nextView = {
+        ...safeSourceView,
+        id: createProjectSavedViewId(),
+        name: name || getNextProjectViewName(layout, prev.views),
+        layout,
+      };
+
+      return {
+        selectedViewId: nextView.id,
+        views: [...prev.views, nextView],
+      };
+    });
   };
 
   return (
@@ -152,53 +187,54 @@ function ProjectDetailContent({
 
               {!isEmpty && (
                 <div className="flex flex-col gap-4 border-b border-white/6 pb-5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setViewMode("board")}
-                        className={cn(
-                          "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                          viewMode === "board"
-                            ? "text-text-primary bg-white/10"
-                            : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                        )}
-                      >
-                        <LayoutDashboard className="h-4 w-4" />
-                        Board
-                      </button>
-                      <button
-                        onClick={() => setViewMode("list")}
-                        className={cn(
-                          "flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
-                          viewMode === "list"
-                            ? "text-text-primary bg-white/10"
-                            : "text-text-secondary hover:text-text-primary hover:bg-white/5",
-                        )}
-                      >
-                        <ListTodo className="h-4 w-4" />
-                        List
-                      </button>
-                    </div>
-
-                    <div className="flex-1" />
+                  <div className="flex items-center justify-between gap-6">
+                    <ProjectSavedViewTabs
+                      views={viewsState.views}
+                      selectedViewId={selectedView.id}
+                      onSelectView={viewId =>
+                        setViewsState(prev => ({
+                          ...prev,
+                          selectedViewId: viewId,
+                        }))
+                      }
+                      onCreateView={handleCreateView}
+                    />
 
                     <ProjectViewContextBar
                       searchQuery={searchQuery}
                       onSearchChange={setSearchQuery}
-                      priorityFilter={priorityFilter}
-                      onPriorityChange={setPriorityFilter}
-                      collectionFilter={collectionFilter}
-                      onCollectionChange={setCollectionFilter}
-                      sortKey={sortKey}
-                      onSortChange={setSortKey}
+                      priorityFilter={selectedView.priorityFilter}
+                      onPriorityChange={priorityFilter =>
+                        updateSelectedView(view => ({
+                          ...view,
+                          priorityFilter,
+                        }))
+                      }
+                      collectionFilter={selectedView.collectionFilter}
+                      onCollectionChange={collectionFilter =>
+                        updateSelectedView(view => ({
+                          ...view,
+                          collectionFilter,
+                        }))
+                      }
+                      sortKey={selectedView.sortKey}
+                      onSortChange={sortKey =>
+                        updateSelectedView(view => ({
+                          ...view,
+                          sortKey,
+                        }))
+                      }
                       collectionOptions={collectionOptions}
                       resultCount={filteredTasks.length}
                       totalCount={project.tasks.length}
                       onReset={() => {
                         setSearchQuery("");
-                        setPriorityFilter("all");
-                        setCollectionFilter("all");
-                        setSortKey("due_date");
+                        updateSelectedView(view => ({
+                          ...view,
+                          priorityFilter: "all",
+                          collectionFilter: "all",
+                          sortKey: "due_date",
+                        }));
                       }}
                     />
                   </div>
@@ -211,9 +247,9 @@ function ProjectDetailContent({
                 <ProjectEmptyState projectId={projectId} />
               ) : (
                 <AnimatePresence mode="wait">
-                  {viewMode === "board" ? (
+                  {selectedView.layout === "board" ? (
                     <motion.div
-                      key="board"
+                      key={selectedView.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
@@ -224,7 +260,7 @@ function ProjectDetailContent({
                     </motion.div>
                   ) : (
                     <motion.div
-                      key="list"
+                      key={selectedView.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
