@@ -11,7 +11,7 @@ import { ProjectEmptyState } from "@/components/project/ProjectEmptyState";
 import { ProjectListView } from "@/components/project/ProjectListView";
 import { ProjectSettingsSheet } from "@/components/project/ProjectSettingsSheet";
 import { ProjectViewContextBar } from "@/components/project/ProjectViewContextBar";
-import { TaskDetailSheet } from "@/components/project/TaskDetailSheet";
+import { TaskDetailModal } from "@/components/project/TaskDetailModal";
 import { cn } from "@/lib/cn";
 import { getMockProject, type MockTask } from "@/lib/mock/project.mock";
 import {
@@ -80,7 +80,7 @@ function ProjectDetailContent({
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // URL state for the task sheet
+  // URL state for the task modal
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTaskId = searchParams.get("taskId");
 
@@ -250,7 +250,7 @@ function ProjectDetailContent({
         />
       </div>
 
-      <TaskDetailSheet
+      <TaskDetailModal
         taskId={selectedTaskId}
         tasks={tasks}
         collectionOptions={collectionOptions}

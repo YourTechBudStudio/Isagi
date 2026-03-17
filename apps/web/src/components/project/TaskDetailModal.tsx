@@ -29,7 +29,7 @@ import { getPriorityColor } from "@/lib/utils/task-utils";
 
 // ─── Types ───────────────────────────────────────────────────
 
-type TaskDetailSheetProps = {
+type TaskDetailModalProps = {
   readonly taskId: string | null;
   readonly tasks: ReadonlyArray<MockTask>;
   readonly collectionOptions: ReadonlyArray<string>;
@@ -60,13 +60,13 @@ const PRIORITY_OPTIONS: ReadonlyArray<{
 
 // ─── Component ───────────────────────────────────────────────
 
-export function TaskDetailSheet({
+export function TaskDetailModal({
   taskId,
   tasks,
   collectionOptions,
   onClose,
   onUpdateTask,
-}: TaskDetailSheetProps) {
+}: TaskDetailModalProps) {
   const navigate = useNavigate();
   const task = tasks.find(t => t.id === taskId);
 

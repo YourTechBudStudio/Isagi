@@ -81,7 +81,7 @@ Optional fields:
 - Starting a task-backed ad-hoc session auto-creates a visible task with a generated title based on the first user message.
 - Task-linked sessions auto-close when the parent task enters a terminal `done`-bucket status.
 - Scratch sessions are a separate project-scoped exploration path with no task. They intentionally live outside the task/accountability model.
-- UI-specific prioritization guidance lives in `docs/product/screens/task-detail-sheet.md`.
+- UI-specific prioritization guidance lives in `docs/product/screens/task-detail-modal.md`.
 
 Detailed runtime behavior lives in `docs/architecture/execution-model.md`.
 

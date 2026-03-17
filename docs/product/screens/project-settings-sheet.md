@@ -1,10 +1,10 @@
-# Project Settings Screen (MVP)
+# Project Settings Sheet (MVP)
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-15
 
 ## One-liner
 
-The Project Settings screen answers: **"Where do I configure this repo-project without cluttering the daily backlog surface?"**
+The Project Settings sheet answers: **"Where do I configure this repo-project without cluttering the daily backlog surface?"**
 
 ## Primary job
 
@@ -19,10 +19,10 @@ The Project Settings screen answers: **"Where do I configure this repo-project w
 - Duplicating task or session execution controls.
 - Owning project rename, saved views, or collection-instance management.
 
-## Entry posture
+## Surface posture
 
 - Project settings are secondary to daily task and session work.
-- The screen exists for deliberate configuration, not fast re-entry or backlog scanning.
+- The surface exists as a right-side sheet for deliberate configuration, not fast re-entry or backlog scanning.
 
 ## Entry points
 
@@ -36,7 +36,7 @@ The Project Settings screen answers: **"Where do I configure this repo-project w
   - repository reference / repo-path management
   - default git mode
   - task statuses
-  - terminology (`Task label`, `Collection label`)
+  - display aliases (`Task label`, `Collection label`)
 - Keep field-level semantics consistent with the canonical project config docs.
 - Preserve a clean separation between project configuration and task/backlog manipulation.
 
@@ -49,7 +49,7 @@ Recommended section order:
 1. **Repository**
 2. **Default Git Mode**
 3. **Task Statuses**
-4. **Terminology**
+4. **Display Aliases**
 
 This keeps the screen focused on project-wide behavior and meaning rather than live backlog structure.
 
@@ -78,15 +78,15 @@ This keeps the screen focused on project-wide behavior and meaning rather than l
   - it determines grouped ordering in kanban and list views when grouped by status
 - Phase 1 does not include status automation rules or hooks.
 
-## Terminology
+## Display aliases
 
-- Terminology replaces the looser `aliases` framing in the Project Settings UI.
-- The screen should expose:
+- The sheet should keep the `Display Aliases` framing in the UI.
+- The sheet should expose:
   - **Task label**
   - **Collection label**
 - `Task label` is presentation-only.
 - `Collection label` defaults to `Milestone` in the UI.
-- The UI should treat this as terminology, even if the underlying implementation represents it through a default collection-kind definition for future compatibility.
+- These aliases are presentation-only, even if the underlying implementation represents them through a default collection-kind definition for future compatibility.
 
 ## What stays out of Project Settings
 

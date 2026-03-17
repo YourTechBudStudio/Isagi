@@ -121,7 +121,7 @@ Project Detail and the Session screen should reuse the same contextual action-ba
 
 - The shared style keeps action placement and interaction posture familiar across surfaces.
 - Project Detail uses that same style while swapping in project-specific actions such as planning, task creation, collection creation, filters, and saved-view controls.
-- The task-detail drawer is a lighter modal exception rather than a full action-bar surface.
+- The task-detail modal is a lighter modal exception rather than a full action-bar surface.
 - Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
 - The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
 - Scratch sessions stay primarily command-palette-driven so project selection remains explicit and they do not masquerade as backlog items.

@@ -74,7 +74,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
   - filter controls
   - view customization controls
 - The goal is consistency of action handling, not identical button sets across pages.
-- `Project settings` should open the Project Settings screen described in `docs/product/screens/project-settings-screen.md`.
+- `Project settings` should open the Project Settings sheet described in `docs/product/screens/project-settings-sheet.md`.
 - That settings surface owns workflow semantics and repo-level defaults rather than live backlog structure such as saved views or collection instances.
 
 ## Saved views
@@ -103,7 +103,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 
 - Each task row/card should expose lightweight metadata for quick scanning.
 - Helpful metadata may include status, priority, due date, labels, and collection when present.
-- Clicking the main body of a task row/card should open the Task Detail sheet for inspection and lightweight editing.
+- Clicking the main body of a task row/card should open the Task Detail modal for inspection and lightweight editing.
 - Each task should also show a subtle session affordance:
   - `Start session` when no session exists yet
   - `Resume` when there is an existing open session, targeting the latest open session first
@@ -111,13 +111,13 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - The task-level session affordance is the direct path into execution, while task selection itself should open the sheet first.
 - These affordances should stay visually secondary so the board does not collapse into a session list.
 
-## Task detail side sheet
+## Task detail modal
 
-- Clicking a task should open a right-side detail sheet rather than a full page.
-- The sheet should stay thin and action-oriented so the board remains the primary backlog surface.
-- Task rows/cards expose subtle session affordances, and the detail sheet expands that into task-specific action and context.
-- The detail sheet is the canonical bridge between board selection and execution on Project Detail.
-- Canonical task-sheet behavior lives in `docs/product/screens/task-detail-sheet.md`.
+- Clicking a task should open a centered detail modal rather than a full page.
+- The modal should stay compact and action-oriented so the board remains the primary backlog surface.
+- Task rows/cards expose subtle session affordances, and the modal expands that into task-specific action and context.
+- The modal is the canonical bridge between board selection and execution on Project Detail.
+- Canonical task-modal behavior lives in `docs/product/screens/task-detail-modal.md`.
 
 ## Project manager agent
 

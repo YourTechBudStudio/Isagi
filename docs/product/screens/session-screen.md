@@ -17,7 +17,7 @@ The Session screen answers: **"How do I keep talking to this agent session while
 ## Non-goals
 
 - Replacing Project Detail as the deliberate backlog-management surface.
-- Replacing the Task Detail sheet as the fast task-inspection bridge from board to execution.
+- Replacing the Task Detail modal as the fast task-inspection bridge from board to execution.
 - Introducing a standalone `Complete task` action distinct from status.
 - Turning the page into a planning dashboard, analytics surface, or backlog board.
 - Keeping rich git controls permanently expanded in a way that competes with the chat.
@@ -133,16 +133,16 @@ Canonical task and runtime semantics live in:
 
 - Home is the minimal re-entry surface that gets the user back into a session quickly.
 - Project Detail is the deliberate project-scoped backlog surface.
-- The Task Detail sheet is the thin bridge from a task on the board into execution.
+- The Task Detail modal is the compact bridge from a task on the board into execution.
 - The Session screen is where the actual agent work happens, whether the session is task-backed or scratch.
-- Project Detail and Session share the floating contextual action-bar pattern, while the Task Detail sheet remains the lighter drawer exception.
-- Scratch sessions bypass the Task Detail sheet because they are not task-backed.
+- Project Detail and Session share the floating contextual action-bar pattern, while the Task Detail modal remains the lighter modal exception.
+- Scratch sessions bypass the Task Detail modal because they are not task-backed.
 
 Related docs:
 
 - `docs/product/screens/home-screen.md`
 - `docs/product/screens/project-detail-screen.md`
-- `docs/product/screens/task-detail-sheet.md`
+- `docs/product/screens/task-detail-modal.md`
 - `docs/journeys/coding-workflow.md`
 
 ## Out of scope / future phase notes
