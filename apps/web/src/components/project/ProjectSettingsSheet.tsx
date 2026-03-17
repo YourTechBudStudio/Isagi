@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   GitBranch,
   GitFork,
-  Globe,
-  Layers,
   MessageSquareMore,
-  Save,
+  PencilLine,
   Settings2,
   TagIcon,
   Workflow,
@@ -18,10 +19,9 @@ import {
   projectSettingsSheetTransition,
 } from "@/components/project/projectSettings.constants";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/cn";
-
-// ─── Types ───────────────────────────────────────────────────
 
 type ProjectSettingsSheetProps = {
   readonly isOpen: boolean;
@@ -35,33 +35,13 @@ type GitMode =
   | "ask_each_time"
   | "global_default";
 
-// ─── Mock Data ────────────────────────────────────────────────
+type StatusBucket = "todo" | "in_progress" | "done";
 
-const MOCK_STATUSES = [
-  { id: "todo", label: "To Do", tone: "neutral" as const },
-  { id: "in_progress", label: "In Progress", tone: "blue" as const },
-  { id: "in_review", label: "In Review", tone: "amber" as const },
-  { id: "done", label: "Done", tone: "green" as const },
-];
-
-const MOCK_TERMINOLOGY_ALIASES: ReadonlyArray<{
-  term: string;
-  alias: string;
-}> = [
-  { term: "collection", alias: "Epic" },
-  { term: "task", alias: "Ticket" },
-  { term: "session", alias: "Focus Block" },
-];
-
-const MOCK_COLLECTIONS = ["Frontend", "Backend", "DevOps", "Design"];
-
-const MOCK_DEFAULT_LABELS = ["needs-review", "priority"];
-
-const MOCK_SAVED_VIEWS = [
-  { id: "v1", name: "My Active Tasks", isDefault: true },
-  { id: "v2", name: "Needs Review", isDefault: false },
-  { id: "v3", name: "High Priority Bugs", isDefault: false },
-];
+type EditableStatus = {
+  readonly id: string;
+  readonly bucket: StatusBucket;
+  readonly name: string;
+};
 
 const GIT_MODE_OPTIONS: ReadonlyArray<{
   value: GitMode;
@@ -95,68 +75,155 @@ const GIT_MODE_OPTIONS: ReadonlyArray<{
     value: "global_default",
     label: "Use global default",
     description: "Inherit from your global Isagi configuration.",
-    icon: Globe,
+    icon: Workflow,
     activeColor: "text-accent-cyan",
   },
 ];
 
-// ─── Component ───────────────────────────────────────────────
+const INITIAL_STATUSES: Array<EditableStatus> = [
+  { id: "todo", name: "To Do", bucket: "todo" },
+  { id: "in_progress", name: "In Progress", bucket: "in_progress" },
+  { id: "in_review", name: "In Review", bucket: "in_progress" },
+  { id: "done", name: "Done", bucket: "done" },
+];
+
+function getBucketTone(bucket: StatusBucket): "neutral" | "blue" | "green" {
+  if (bucket === "in_progress") {
+    return "blue";
+  }
+
+  if (bucket === "done") {
+    return "green";
+  }
+
+  return "neutral";
+}
+
+function getBucketLabel(bucket: StatusBucket): string {
+  if (bucket === "in_progress") {
+    return "In Progress";
+  }
+
+  if (bucket === "done") {
+    return "Done";
+  }
+
+  return "To Do";
+}
+
+function getInitialRepoPath(projectName: string): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return `/home/yourtechbud/work/projects/${slug.replace(/^-|-$/g, "")}`;
+}
 
 export function ProjectSettingsSheet({
   isOpen,
   onClose,
   projectName,
 }: ProjectSettingsSheetProps) {
-  // Local state for settings
   const [gitMode, setGitMode] = useState<GitMode>("global_default");
-  const [labels, setLabels] = useState<string[]>([...MOCK_DEFAULT_LABELS]);
-  const [labelInput, setLabelInput] = useState("");
+  const [repoPath, setRepoPath] = useState(() =>
+    getInitialRepoPath(projectName),
+  );
+  const [draftRepoPath, setDraftRepoPath] = useState(repoPath);
+  const [isRepoEditorOpen, setIsRepoEditorOpen] = useState(false);
+  const [statuses, setStatuses] = useState<Array<EditableStatus>>(() => [
+    ...INITIAL_STATUSES,
+  ]);
+  const [newStatusName, setNewStatusName] = useState("");
+  const [taskLabel, setTaskLabel] = useState("Task");
+  const [collectionLabel, setCollectionLabel] = useState("Milestone");
 
-  // Close on escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isOpen) {
         onClose();
       }
     };
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
-  const handleAddLabel = () => {
-    const trimmed = labelInput.trim().toLowerCase();
-    if (trimmed && !labels.includes(trimmed)) {
-      setLabels(prev => [...prev, trimmed]);
-    }
-    setLabelInput("");
+  const handleOpenRepoEditor = () => {
+    setDraftRepoPath(repoPath);
+    setIsRepoEditorOpen(true);
   };
 
-  const handleRemoveLabel = (label: string) => {
-    setLabels(prev => prev.filter(l => l !== label));
+  const handleSaveRepoPath = () => {
+    const trimmedPath = draftRepoPath.trim();
+    if (!trimmedPath) {
+      return;
+    }
+
+    setRepoPath(trimmedPath);
+    setIsRepoEditorOpen(false);
   };
 
-  const handleLabelKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleAddLabel();
-    }
-    if (e.key === "Backspace" && labelInput === "" && labels.length > 0) {
-      setLabels(prev => prev.slice(0, -1));
-    }
+  const handleStatusNameChange = (statusId: string, name: string) => {
+    setStatuses(prev =>
+      prev.map(status =>
+        status.id === statusId ? { ...status, name } : status,
+      ),
+    );
   };
 
-  // ─── Render ────────────────────────────────────────────────
+  const handleStatusBucketChange = (statusId: string, bucket: StatusBucket) => {
+    setStatuses(prev =>
+      prev.map(status =>
+        status.id === statusId ? { ...status, bucket } : status,
+      ),
+    );
+  };
+
+  const handleMoveStatus = (statusId: string, direction: "up" | "down") => {
+    setStatuses(prev => {
+      const index = prev.findIndex(status => status.id === statusId);
+      if (index === -1) {
+        return prev;
+      }
+
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) {
+        return prev;
+      }
+
+      const next = [...prev];
+      const [movedStatus] = next.splice(index, 1);
+      next.splice(targetIndex, 0, movedStatus);
+      return next;
+    });
+  };
+
+  const handleDeleteStatus = (statusId: string) => {
+    setStatuses(prev => prev.filter(status => status.id !== statusId));
+  };
+
+  const handleAddStatus = () => {
+    const trimmedName = newStatusName.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setStatuses(prev => [
+      ...prev,
+      {
+        id: `status-${Date.now()}`,
+        name: trimmedName,
+        bucket: "todo",
+      },
+    ]);
+    setNewStatusName("");
+  };
 
   return (
     <>
-      {/* Layer 1: Push spacer — always mounted, animates width */}
       <motion.div
         animate={{ width: isOpen ? PROJECT_SETTINGS_SHEET_WIDTH : 0 }}
         transition={projectSettingsSheetTransition}
         className="shrink-0"
       />
 
-      {/* Layer 2: Slide-in content panel — fixed positioned */}
       <AnimatePresence>
         {isOpen && (
           <motion.div
@@ -167,7 +234,6 @@ export function ProjectSettingsSheet({
             style={{ width: PROJECT_SETTINGS_SHEET_WIDTH }}
             className="bg-canvas-elevated/95 fixed inset-y-0 right-0 z-40 flex flex-col border-l border-white/10 shadow-2xl backdrop-blur-xl"
           >
-            {/* Header */}
             <div className="flex items-center justify-between border-b border-white/5 px-6 py-5">
               <div className="flex items-center gap-3">
                 <div className="bg-canvas-subtle flex h-8 w-8 items-center justify-center rounded-lg border border-white/5">
@@ -192,29 +258,114 @@ export function ProjectSettingsSheet({
               />
             </div>
 
-            {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto p-6">
               <div className="flex flex-col gap-8">
-                {/* ─── Section: Git Mode ─── */}
                 <section className="flex flex-col gap-4">
                   <div className="flex items-center gap-2">
-                    <Workflow className="text-accent-blue h-4 w-4" />
+                    <GitBranch className="text-accent-blue h-4 w-4" />
+                    <h3 className="text-text-primary font-display text-sm font-medium">
+                      Repository
+                    </h3>
+                  </div>
+
+                  <div className="bg-canvas-subtle/50 flex flex-col gap-4 rounded-2xl border border-white/5 p-4">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
+                        Registered Repo Path
+                      </span>
+                      <code className="text-text-primary bg-canvas/60 rounded-xl border border-white/5 px-3 py-2.5 font-mono text-[13px] leading-relaxed break-all">
+                        {repoPath}
+                      </code>
+                    </div>
+
+                    {!isRepoEditorOpen ? (
+                      <Button
+                        variant="secondary"
+                        size="md"
+                        leadingIcon={<PencilLine className="h-4 w-4" />}
+                        className="self-start"
+                        onClick={handleOpenRepoEditor}
+                      >
+                        Change repo path
+                      </Button>
+                    ) : (
+                      <div className="border-accent-red/20 bg-accent-red/8 flex flex-col gap-4 rounded-2xl border p-4">
+                        <div className="flex items-start gap-3">
+                          <AlertTriangle className="text-accent-red mt-0.5 h-4 w-4 shrink-0" />
+                          <div className="flex flex-col gap-2">
+                            <p className="text-text-primary text-sm font-medium">
+                              Changing the repo path is high risk.
+                            </p>
+                            <ul className="text-text-secondary list-disc space-y-1 pl-4 text-sm leading-relaxed">
+                              <li>Tasks stay attached to this project.</li>
+                              <li>Existing sessions are archived.</li>
+                              <li>
+                                Archived sessions can no longer be resumed.
+                              </li>
+                            </ul>
+                          </div>
+                        </div>
+
+                        <label className="flex flex-col gap-1.5">
+                          <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
+                            New Repo Path
+                          </span>
+                          <input
+                            type="text"
+                            value={draftRepoPath}
+                            onChange={event =>
+                              setDraftRepoPath(event.target.value)
+                            }
+                            className="text-text-primary placeholder:text-text-tertiary/50 bg-canvas focus:border-accent-red/40 rounded-xl border border-white/10 px-3 py-2.5 text-sm transition-colors outline-none"
+                            placeholder="/path/to/repository"
+                          />
+                        </label>
+
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            size="md"
+                            onClick={() => {
+                              setDraftRepoPath(repoPath);
+                              setIsRepoEditorOpen(false);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="primary"
+                            size="md"
+                            className="bg-accent-red text-canvas hover:bg-accent-red/90"
+                            onClick={handleSaveRepoPath}
+                          >
+                            Confirm path change
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2">
+                    <Workflow className="text-accent-cyan h-4 w-4" />
                     <h3 className="text-text-primary font-display text-sm font-medium">
                       Default Git Mode
                     </h3>
                   </div>
 
-                  <div className="bg-canvas-subtle/50 flex flex-col gap-1 rounded-xl border border-white/5 p-1">
-                    {GIT_MODE_OPTIONS.map(opt => {
-                      const isActive = gitMode === opt.value;
-                      const Icon = opt.icon;
+                  <div className="bg-canvas-subtle/50 flex flex-col gap-1 rounded-2xl border border-white/5 p-1">
+                    {GIT_MODE_OPTIONS.map(option => {
+                      const isActive = gitMode === option.value;
+                      const Icon = option.icon;
+
                       return (
                         <button
-                          key={opt.value}
+                          key={option.value}
                           type="button"
-                          onClick={() => setGitMode(opt.value)}
+                          onClick={() => setGitMode(option.value)}
                           className={cn(
-                            "flex items-start gap-3 rounded-lg px-4 py-3 text-left transition-colors",
+                            "flex items-start gap-3 rounded-xl px-4 py-3 text-left transition-colors",
                             isActive
                               ? "bg-canvas border border-white/5 shadow-sm"
                               : "border border-transparent hover:bg-white/5",
@@ -223,7 +374,9 @@ export function ProjectSettingsSheet({
                           <Icon
                             className={cn(
                               "mt-0.5 h-4 w-4 shrink-0",
-                              isActive ? opt.activeColor : "text-text-tertiary",
+                              isActive
+                                ? option.activeColor
+                                : "text-text-tertiary",
                             )}
                           />
                           <div className="flex flex-col gap-0.5">
@@ -235,10 +388,10 @@ export function ProjectSettingsSheet({
                                   : "text-text-secondary",
                               )}
                             >
-                              {opt.label}
+                              {option.label}
                             </span>
                             <span className="text-text-tertiary text-xs leading-relaxed">
-                              {opt.description}
+                              {option.description}
                             </span>
                           </div>
                         </button>
@@ -247,7 +400,6 @@ export function ProjectSettingsSheet({
                   </div>
                 </section>
 
-                {/* ─── Section: Task Statuses ─── */}
                 <section className="flex flex-col gap-4">
                   <div className="flex items-center gap-2">
                     <TagIcon className="text-accent-violet h-4 w-4" />
@@ -256,144 +408,142 @@ export function ProjectSettingsSheet({
                     </h3>
                   </div>
 
-                  <div className="bg-canvas-subtle/50 flex flex-wrap gap-2 rounded-xl border border-white/5 p-4">
-                    {MOCK_STATUSES.map(status => (
-                      <Badge
+                  <div className="bg-canvas-subtle/50 flex flex-col gap-3 rounded-2xl border border-white/5 p-4">
+                    {statuses.map((status, index) => (
+                      <div
                         key={status.id}
-                        tone={status.tone}
-                        className="px-2.5 py-1 text-xs"
+                        className="bg-canvas/50 flex items-center gap-3 rounded-2xl border border-white/5 px-3 py-3"
                       >
-                        {status.label}
-                      </Badge>
+                        <div className="flex flex-col gap-1">
+                          <IconButton
+                            icon={<ArrowUp className="h-3.5 w-3.5" />}
+                            variant="subtle"
+                            aria-label={`Move ${status.name} up`}
+                            onClick={() => handleMoveStatus(status.id, "up")}
+                            disabled={index === 0}
+                          />
+                          <IconButton
+                            icon={<ArrowDown className="h-3.5 w-3.5" />}
+                            variant="subtle"
+                            aria-label={`Move ${status.name} down`}
+                            onClick={() => handleMoveStatus(status.id, "down")}
+                            disabled={index === statuses.length - 1}
+                          />
+                        </div>
+
+                        <div className="flex min-w-0 flex-1 flex-col gap-3">
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="text"
+                              value={status.name}
+                              onChange={event =>
+                                handleStatusNameChange(
+                                  status.id,
+                                  event.target.value,
+                                )
+                              }
+                              className="text-text-primary bg-canvas focus:border-accent-blue/40 min-w-0 flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm transition-colors outline-none"
+                            />
+                            <Badge tone={getBucketTone(status.bucket)}>
+                              {getBucketLabel(status.bucket)}
+                            </Badge>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3">
+                            <label className="flex items-center gap-2 text-sm">
+                              <span className="text-text-tertiary">Bucket</span>
+                              <select
+                                value={status.bucket}
+                                onChange={event =>
+                                  handleStatusBucketChange(
+                                    status.id,
+                                    event.target.value as StatusBucket,
+                                  )
+                                }
+                                className="text-text-primary bg-canvas focus:border-accent-blue/40 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm transition-colors outline-none"
+                              >
+                                <option value="todo">To Do</option>
+                                <option value="in_progress">In Progress</option>
+                                <option value="done">Done</option>
+                              </select>
+                            </label>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteStatus(status.id)}
+                              className="text-text-tertiary hover:text-accent-red text-sm font-medium transition-colors"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     ))}
-                    <button className="text-text-tertiary hover:text-text-secondary flex items-center gap-1 rounded-md border border-dashed border-white/10 px-2.5 py-1 text-xs transition-colors hover:bg-white/5">
-                      + Add status
-                    </button>
+
+                    <div className="flex items-center gap-2 rounded-2xl border border-dashed border-white/10 px-3 py-3">
+                      <input
+                        type="text"
+                        value={newStatusName}
+                        onChange={event => setNewStatusName(event.target.value)}
+                        onKeyDown={event => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            handleAddStatus();
+                          }
+                        }}
+                        placeholder="Add status..."
+                        className="text-text-primary placeholder:text-text-tertiary/50 min-w-0 flex-1 bg-transparent text-sm outline-none"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleAddStatus}
+                      >
+                        Add status
+                      </Button>
+                    </div>
                   </div>
                 </section>
 
-                {/* ─── Section: Display Aliases ─── */}
                 <section className="flex flex-col gap-4">
                   <div className="flex items-center gap-2">
-                    <Settings2 className="text-accent-cyan h-4 w-4" />
+                    <Settings2 className="text-accent-amber h-4 w-4" />
                     <h3 className="text-text-primary font-display text-sm font-medium">
                       Display Aliases
                     </h3>
                   </div>
 
-                  <div className="bg-canvas-subtle/50 flex flex-col divide-y divide-white/5 rounded-xl border border-white/5">
-                    {MOCK_TERMINOLOGY_ALIASES.map(alias => (
-                      <div
-                        key={alias.term}
-                        className="flex items-center justify-between px-4 py-3"
-                      >
-                        <code className="text-text-tertiary font-mono text-xs">
-                          {alias.term}
-                        </code>
-                        <span className="text-text-primary bg-canvas/50 rounded-md border border-white/5 px-2.5 py-1 text-sm">
-                          {alias.alias}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-text-tertiary px-1 text-[11px] leading-relaxed">
-                    Rename how model terms appear in the UI. Aliases are
-                    presentation-only and don&apos;t affect data or behavior.
-                  </p>
-                </section>
-
-                {/* ─── Section: Collections ─── */}
-                <section className="flex flex-col gap-4">
-                  <div className="flex items-center gap-2">
-                    <Layers className="text-accent-amber h-4 w-4" />
-                    <h3 className="text-text-primary font-display text-sm font-medium">
-                      Collections
-                    </h3>
-                  </div>
-
-                  <div className="bg-canvas-subtle/50 flex flex-wrap gap-2 rounded-xl border border-white/5 p-4">
-                    {MOCK_COLLECTIONS.map(collection => (
-                      <Badge
-                        key={collection}
-                        tone="neutral"
-                        className="border-white/10 bg-white/5 px-2.5 py-1 text-xs"
-                      >
-                        {collection}
-                      </Badge>
-                    ))}
-                  </div>
-                </section>
-
-                {/* ─── Section: Default Labels ─── */}
-                <section className="flex flex-col gap-4">
-                  <div className="flex items-center gap-2">
-                    <TagIcon className="text-accent-green h-4 w-4" />
-                    <h3 className="text-text-primary font-display text-sm font-medium">
-                      Default Task Labels
-                    </h3>
-                  </div>
-
-                  <div className="bg-canvas-subtle/50 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 p-3">
-                    {labels.map(label => (
-                      <span
-                        key={label}
-                        className="text-text-primary flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs"
-                      >
-                        {label}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveLabel(label)}
-                          className="text-text-tertiary hover:text-accent-red transition-colors"
-                          aria-label={`Remove ${label}`}
-                        >
-                          <XIcon className="h-3 w-3" />
-                        </button>
+                  <div className="bg-canvas-subtle/50 flex flex-col gap-4 rounded-2xl border border-white/5 p-4">
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
+                        Task Label
                       </span>
-                    ))}
-                    <input
-                      type="text"
-                      value={labelInput}
-                      onChange={e => setLabelInput(e.target.value)}
-                      onKeyDown={handleLabelKeyDown}
-                      onBlur={handleAddLabel}
-                      placeholder="Add label..."
-                      className="text-text-secondary placeholder:text-text-tertiary/50 min-w-20 flex-1 bg-transparent py-1 text-xs outline-none"
-                    />
-                  </div>
-                  <p className="text-text-tertiary px-1 text-[11px] leading-relaxed">
-                    Labels added here are automatically applied to new tasks in
-                    this project.
-                  </p>
-                </section>
+                      <input
+                        type="text"
+                        value={taskLabel}
+                        onChange={event => setTaskLabel(event.target.value)}
+                        className="text-text-primary bg-canvas focus:border-accent-amber/40 rounded-xl border border-white/10 px-3 py-2.5 text-sm transition-colors outline-none"
+                      />
+                    </label>
 
-                {/* ─── Section: Saved Views ─── */}
-                <section className="flex flex-col gap-4">
-                  <div className="flex items-center gap-2">
-                    <Save className="text-accent-amber h-4 w-4" />
-                    <h3 className="text-text-primary font-display text-sm font-medium">
-                      Saved Views
-                    </h3>
-                  </div>
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
+                        Collection Label
+                      </span>
+                      <input
+                        type="text"
+                        value={collectionLabel}
+                        onChange={event =>
+                          setCollectionLabel(event.target.value)
+                        }
+                        className="text-text-primary bg-canvas focus:border-accent-amber/40 rounded-xl border border-white/10 px-3 py-2.5 text-sm transition-colors outline-none"
+                      />
+                    </label>
 
-                  <div className="bg-canvas-subtle/50 flex flex-col divide-y divide-white/5 rounded-xl border border-white/5">
-                    {MOCK_SAVED_VIEWS.map(view => (
-                      <div
-                        key={view.id}
-                        className="flex items-center justify-between px-4 py-3"
-                      >
-                        <span className="text-text-primary text-sm font-medium">
-                          {view.name}
-                        </span>
-                        {view.isDefault && (
-                          <Badge
-                            tone="neutral"
-                            className="bg-white/5 text-[10px]"
-                          >
-                            Default
-                          </Badge>
-                        )}
-                      </div>
-                    ))}
+                    <p className="text-text-tertiary text-sm leading-relaxed">
+                      Aliases are presentation-only. They change how the UI
+                      talks about work without changing the underlying model.
+                    </p>
                   </div>
                 </section>
               </div>
