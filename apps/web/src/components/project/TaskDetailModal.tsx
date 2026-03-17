@@ -8,12 +8,12 @@ import {
   Layers,
   Play,
   RefreshCw,
-  TagIcon,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
+import { TaskDetailModalLabels } from "@/components/project/TaskDetailModalLabels";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { CalendarPopover } from "@/components/ui/CalendarPopover";
@@ -154,6 +154,9 @@ export function TaskDetailModal({
   const openSessions = task?.openSessions ?? [];
   const primarySession = openSessions.find(s => s.isActive) ?? openSessions[0];
   const secondarySessions = openSessions.filter(s => s !== primarySession);
+  const availableLabels = Array.from(
+    new Set(tasks.flatMap(candidateTask => candidateTask.labels)),
+  ).sort((left, right) => left.localeCompare(right));
 
   // Determine CTA label from openSessions if available, else fall back to sessionState
   const getCtaConfig = () => {
@@ -240,7 +243,7 @@ export function TaskDetailModal({
               stiffness: 260,
               mass: 0.8,
             }}
-            className="bg-canvas-elevated fixed inset-0 z-50 m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl"
+            className="bg-canvas-elevated fixed inset-0 z-50 m-auto flex h-fit max-h-[85vh] w-130 max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl"
           >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
@@ -345,7 +348,7 @@ export function TaskDetailModal({
                         {secondarySessions.map(session => (
                           <div
                             key={session.id}
-                            className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-white/[0.02]"
+                            className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-white/2"
                           >
                             <span className="text-text-secondary text-sm">
                               {session.label}
@@ -513,29 +516,13 @@ export function TaskDetailModal({
                   </Popover>
                 </div>
 
-                {/* Labels (read-only for MVP) */}
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-text-tertiary flex items-center gap-1.5 text-[11px] font-medium tracking-wider uppercase">
-                    <TagIcon className="h-3 w-3" /> Labels
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {task.labels.length > 0 ? (
-                      task.labels.map(label => (
-                        <Badge
-                          key={label}
-                          tone="neutral"
-                          className="border-white/10 bg-white/5"
-                        >
-                          {label}
-                        </Badge>
-                      ))
-                    ) : (
-                      <span className="text-text-tertiary/50 px-2 py-1 text-sm">
-                        None
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <TaskDetailModalLabels
+                  selectedLabels={task.labels}
+                  availableLabels={availableLabels}
+                  onChange={newLabels => {
+                    onUpdateTask({ ...task, labels: newLabels });
+                  }}
+                />
               </div>
 
               {/* Notes */}
@@ -547,7 +534,7 @@ export function TaskDetailModal({
                   value={task.notes ?? ""}
                   onChange={handleNotesChange}
                   placeholder="Your future self will thank you. Or blame you. Either way, leave a note."
-                  className="text-text-secondary placeholder:text-text-tertiary/40 bg-canvas-subtle focus:bg-canvas min-h-[100px] w-full resize-y rounded-xl border border-white/5 px-4 py-3 text-sm leading-relaxed transition-colors outline-none focus:border-white/10 focus:ring-1 focus:ring-white/10"
+                  className="text-text-secondary placeholder:text-text-tertiary/40 bg-canvas-subtle focus:bg-canvas min-h-25 w-full resize-y rounded-xl border border-white/5 px-4 py-3 text-sm leading-relaxed transition-colors outline-none focus:border-white/10 focus:ring-1 focus:ring-white/10"
                 />
               </div>
             </div>
