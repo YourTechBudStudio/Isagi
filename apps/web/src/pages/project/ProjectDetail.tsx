@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 
 import { AppShell } from "@/components/layout/AppShell";
@@ -17,16 +17,9 @@ import {
   mockSidebarProjects,
   mockSidebarTriage,
 } from "@/lib/mock/sidebar.mock";
-import {
-  createProjectSavedViewId,
-  DEFAULT_PROJECT_VIEWS_STATE,
-  getDuplicatedProjectViewName,
-  getNextProjectViewName,
-  type ProjectSavedView,
-  readProjectViewsState,
-  writeProjectViewsState,
-} from "@/lib/project-detail-storage";
 import { filterProjectTasks, sortProjectTasks } from "@/lib/utils/task-utils";
+import { useProjectTasks } from "@/pages/project/hooks/useProjectTasks";
+import { useProjectViews } from "@/pages/project/hooks/useProjectViews";
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -46,52 +39,43 @@ export default function ProjectDetail() {
   return (
     <ProjectDetailContent
       key={projectId}
-      project={project}
       projectId={projectId}
+      projectName={project.name}
+      initialTasks={project.tasks}
     />
   );
 }
 
 type ProjectDetailContentProps = {
   readonly projectId: string;
-  readonly project: NonNullable<ReturnType<typeof getMockProject>>;
+  readonly projectName: string;
+  readonly initialTasks: ReadonlyArray<MockTask>;
 };
 
 function ProjectDetailContent({
   projectId,
-  project,
+  projectName,
+  initialTasks,
 }: ProjectDetailContentProps) {
-  const initialViewsState = readProjectViewsState(projectId);
-  const [viewsState, setViewsState] = useState(initialViewsState);
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Local state for tasks to enable inline editing
-  const [tasks, setTasks] = useState<MockTask[]>([...project.tasks]);
-
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-
-  // URL state for the task modal
   const [searchParams, setSearchParams] = useSearchParams();
+
   const selectedTaskId = searchParams.get("taskId");
-
-  const selectedView =
-    viewsState.views.find(view => view.id === viewsState.selectedViewId) ??
-    viewsState.views[0] ??
-    DEFAULT_PROJECT_VIEWS_STATE.views[0];
-
-  useEffect(() => {
-    writeProjectViewsState(projectId, viewsState);
-  }, [projectId, viewsState]);
+  const { tasks, updateTask, collectionOptions, availableLabels } =
+    useProjectTasks(initialTasks);
+  const {
+    views,
+    selectedView,
+    selectView,
+    createView,
+    renameView,
+    duplicateView,
+    deleteView,
+    updateSelectedView,
+  } = useProjectViews(projectId);
 
   const isEmpty = tasks.length === 0;
-  const collectionOptions = Array.from(
-    new Set(
-      tasks
-        .map(task => task.collection)
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ).sort((left, right) => left.localeCompare(right));
-
   const filteredTasks = sortProjectTasks(
     filterProjectTasks(tasks, {
       searchQuery,
@@ -100,125 +84,6 @@ function ProjectDetailContent({
     }),
     selectedView.sortKey,
   );
-
-  const handleTaskUpdate = (updatedTask: MockTask) => {
-    setTasks(prev =>
-      prev.map(t => (t.id === updatedTask.id ? updatedTask : t)),
-    );
-  };
-
-  const updateSelectedView = (
-    updater: (view: ProjectSavedView) => ProjectSavedView,
-  ) => {
-    setViewsState(prev => {
-      const currentView =
-        prev.views.find(view => view.id === prev.selectedViewId) ??
-        prev.views[0];
-      const safeCurrentView =
-        currentView ?? DEFAULT_PROJECT_VIEWS_STATE.views[0];
-
-      return {
-        ...prev,
-        views: prev.views.map(view =>
-          view.id === safeCurrentView.id ? updater(safeCurrentView) : view,
-        ),
-      };
-    });
-  };
-
-  const handleCreateView = ({
-    name,
-    layout,
-  }: {
-    readonly name: string;
-    readonly layout: "board" | "list";
-  }) => {
-    setViewsState(prev => {
-      const sourceView =
-        prev.views.find(view => view.id === prev.selectedViewId) ??
-        prev.views[0];
-      const safeSourceView = sourceView ?? DEFAULT_PROJECT_VIEWS_STATE.views[0];
-
-      const nextView = {
-        ...safeSourceView,
-        id: createProjectSavedViewId(),
-        name: name || getNextProjectViewName(layout, prev.views),
-        layout,
-      };
-
-      return {
-        selectedViewId: nextView.id,
-        views: [...prev.views, nextView],
-      };
-    });
-  };
-
-  const handleRenameView = (viewId: string, name: string) => {
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      return;
-    }
-
-    setViewsState(prev => ({
-      ...prev,
-      views: prev.views.map(view =>
-        view.id === viewId ? { ...view, name: trimmedName } : view,
-      ),
-    }));
-  };
-
-  const handleDuplicateView = (viewId: string) => {
-    setViewsState(prev => {
-      const sourceView = prev.views.find(view => view.id === viewId);
-      if (!sourceView) {
-        return prev;
-      }
-
-      const duplicatedView = {
-        ...sourceView,
-        id: createProjectSavedViewId(),
-        name: getDuplicatedProjectViewName(sourceView.name, prev.views),
-      };
-
-      const sourceIndex = prev.views.findIndex(view => view.id === viewId);
-      const nextViews = [...prev.views];
-      nextViews.splice(sourceIndex + 1, 0, duplicatedView);
-
-      return {
-        selectedViewId: duplicatedView.id,
-        views: nextViews,
-      };
-    });
-  };
-
-  const handleDeleteView = (viewId: string) => {
-    setViewsState(prev => {
-      if (prev.views.length <= 1) {
-        return prev;
-      }
-
-      const deletedIndex = prev.views.findIndex(view => view.id === viewId);
-      if (deletedIndex === -1) {
-        return prev;
-      }
-
-      const nextViews = prev.views.filter(view => view.id !== viewId);
-      if (nextViews.length === 0) {
-        return prev;
-      }
-
-      const nextSelectedView =
-        prev.selectedViewId === viewId
-          ? nextViews[Math.min(deletedIndex, nextViews.length - 1)]
-          : (nextViews.find(view => view.id === prev.selectedViewId) ??
-            nextViews[0]);
-
-      return {
-        selectedViewId: nextSelectedView.id,
-        views: nextViews,
-      };
-    });
-  };
 
   return (
     <AppShell
@@ -234,7 +99,6 @@ function ProjectDetailContent({
         </div>
       }
     >
-      {/* Flex wrapper for push-sheet layout */}
       <div className="flex h-screen flex-1 overflow-hidden">
         <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-y-auto">
           <ProjectActionBar
@@ -250,22 +114,17 @@ function ProjectDetailContent({
               className="mb-6 flex flex-col gap-4"
             >
               <h1 className="font-display text-text-primary text-5xl font-semibold tracking-tight">
-                {project.name}
+                {projectName}
               </h1>
 
               {!isEmpty && (
                 <div className="flex flex-col gap-4 border-b border-white/6 pb-5">
                   <div className="flex items-center justify-between gap-6">
                     <ProjectSavedViewTabs
-                      views={viewsState.views}
+                      views={views}
                       selectedViewId={selectedView.id}
-                      onSelectView={viewId =>
-                        setViewsState(prev => ({
-                          ...prev,
-                          selectedViewId: viewId,
-                        }))
-                      }
-                      onCreateView={handleCreateView}
+                      onSelectView={selectView}
+                      onCreateView={createView}
                     />
 
                     <ProjectViewContextBar
@@ -294,21 +153,12 @@ function ProjectDetailContent({
                       }
                       collectionOptions={collectionOptions}
                       resultCount={filteredTasks.length}
-                      totalCount={project.tasks.length}
-                      onReset={() => {
-                        setSearchQuery("");
-                        updateSelectedView(view => ({
-                          ...view,
-                          priorityFilter: "all",
-                          collectionFilter: "all",
-                          sortKey: "due_date",
-                        }));
-                      }}
+                      totalCount={tasks.length}
                       selectedView={selectedView}
-                      viewsCount={viewsState.views.length}
-                      onRenameView={handleRenameView}
-                      onDuplicateView={handleDuplicateView}
-                      onDeleteView={handleDeleteView}
+                      viewsCount={views.length}
+                      onRenameView={renameView}
+                      onDuplicateView={duplicateView}
+                      onDeleteView={deleteView}
                     />
                   </div>
                 </div>
@@ -349,20 +199,20 @@ function ProjectDetailContent({
           </div>
         </main>
 
-        {/* Settings sheet: spacer pushes main, content slides in */}
         <ProjectSettingsSheet
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
-          projectName={project.name}
+          projectName={projectName}
         />
       </div>
 
       <TaskDetailModal
         taskId={selectedTaskId}
         tasks={tasks}
+        availableLabels={availableLabels}
         collectionOptions={collectionOptions}
         onClose={() => setSearchParams({})}
-        onUpdateTask={handleTaskUpdate}
+        onUpdateTask={updateTask}
       />
     </AppShell>
   );

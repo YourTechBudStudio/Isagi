@@ -4,20 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/cn";
+import { normalizeLabelKey, sanitizeLabel } from "@/lib/labels";
 
 type TaskDetailModalLabelsProps = {
   readonly selectedLabels: ReadonlyArray<string>;
   readonly availableLabels?: ReadonlyArray<string>;
   readonly onChange: (labels: ReadonlyArray<string>) => void;
 };
-
-function normalizeLabelKey(label: string): string {
-  return label.trim().toLowerCase();
-}
-
-function sanitizeLabel(label: string): string {
-  return label.trim().replace(/\s+/g, " ");
-}
 
 export function TaskDetailModalLabels({
   selectedLabels,

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
+import { getPrimaryOpenSession } from "@/lib/task-session";
 import { getDueDateColor, getPriorityColor } from "@/lib/utils/task-utils";
 
 type ProjectTaskCardProps = {
@@ -21,11 +22,14 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
 
   const handleStartSession = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigate(`/session/${task.id}`);
+    const primarySession = getPrimaryOpenSession(task.openSessions);
+    navigate(`/session/${primarySession?.id ?? task.id}`);
   };
 
   const renderSessionIndicator = () => {
-    if (task.sessionState === "active") {
+    const primarySession = getPrimaryOpenSession(task.openSessions);
+
+    if (primarySession?.isActive) {
       return (
         <div
           className="flex items-center gap-1.5"
@@ -39,7 +43,8 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
         </div>
       );
     }
-    if (task.sessionState === "resume") {
+
+    if (primarySession) {
       return (
         <div
           className="text-text-tertiary hover:text-text-secondary flex items-center gap-1.5 transition-colors"
@@ -71,7 +76,7 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
     <SurfaceCard
       tone="elevated"
       interactive
-      className="group flex cursor-pointer flex-col gap-3 p-4 hover:border-white/10 hover:bg-white/[0.03]"
+      className="group flex cursor-pointer flex-col gap-3 p-4 hover:border-white/10 hover:bg-white/3"
       onClick={handleOpenSheet}
     >
       <div className="flex items-start justify-between gap-2">

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
+import { getPrimaryOpenSession } from "@/lib/task-session";
 import { getDueDateColor, getPriorityColor } from "@/lib/utils/task-utils";
 
 type ProjectTaskRowProps = {
@@ -21,11 +22,14 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
 
   const handleStartSession = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigate(`/session/${task.id}`);
+    const primarySession = getPrimaryOpenSession(task.openSessions);
+    navigate(`/session/${primarySession?.id ?? task.id}`);
   };
 
   const renderSessionAffordance = () => {
-    if (task.sessionState === "active") {
+    const primarySession = getPrimaryOpenSession(task.openSessions);
+
+    if (primarySession?.isActive) {
       return (
         <div
           className="bg-accent-violet/10 border-accent-violet/20 flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5"
@@ -37,13 +41,13 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
       );
     }
 
-    if (task.sessionState === "resume") {
+    if (primarySession) {
       return (
         <Button
           variant="secondary"
           size="sm"
           leadingIcon={<RefreshCw className="h-3.5 w-3.5" />}
-          className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/[0.08]"
+          className="border-transparent bg-white/4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white/8"
           onClick={handleStartSession}
         >
           Resume
@@ -66,7 +70,7 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
 
   return (
     <div
-      className="group flex cursor-pointer items-center justify-between border-b border-white/5 px-4 py-3 transition-colors duration-200 last:border-b-0 hover:bg-white/[0.02]"
+      className="group flex cursor-pointer items-center justify-between border-b border-white/5 px-4 py-3 transition-colors duration-200 last:border-b-0 hover:bg-white/2"
       onClick={handleOpenSheet}
     >
       <div className="flex items-center gap-5">

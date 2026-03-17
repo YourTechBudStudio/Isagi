@@ -1,16 +1,7 @@
-import {
-  Check,
-  Copy,
-  LayoutDashboard,
-  ListTodo,
-  MoreHorizontal,
-  Search,
-  SlidersHorizontal,
-  Trash2,
-  X,
-} from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Search, SlidersHorizontal, X } from "lucide-react";
+import { useRef, useState } from "react";
 
+import { ProjectViewManageMenu } from "@/components/project/ProjectViewManageMenu";
 import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/cn";
 import type { ProjectSavedView } from "@/lib/project-detail-storage";
@@ -30,7 +21,6 @@ type ProjectViewContextBarProps = {
   readonly collectionOptions: ReadonlyArray<string>;
   readonly resultCount: number;
   readonly totalCount: number;
-  readonly onReset: () => void;
   readonly selectedView: ProjectSavedView;
   readonly viewsCount: number;
   readonly onRenameView: (viewId: string, name: string) => void;
@@ -57,35 +47,10 @@ export function ProjectViewContextBar({
   onDeleteView,
 }: ProjectViewContextBarProps) {
   const [isDisplayMenuOpen, setIsDisplayMenuOpen] = useState(false);
-  const [isManageMenuOpen, setIsManageMenuOpen] = useState(false);
-  const [renameDraft, setRenameDraft] = useState("");
-
   const displayRef = useRef<HTMLButtonElement>(null);
-  const manageRef = useRef<HTMLButtonElement>(null);
-  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const hasActiveFilters =
     priorityFilter !== "all" || collectionFilter !== "all";
-
-  useEffect(() => {
-    if (!isManageMenuOpen) {
-      return;
-    }
-
-    const frameId = requestAnimationFrame(() =>
-      renameInputRef.current?.focus(),
-    );
-    return () => cancelAnimationFrame(frameId);
-  }, [isManageMenuOpen]);
-
-  const handleRenameView = () => {
-    if (!selectedView) {
-      return;
-    }
-
-    onRenameView(selectedView.id, renameDraft.trim());
-    setIsManageMenuOpen(false);
-  };
 
   return (
     <div className="flex items-center gap-4">
@@ -113,7 +78,7 @@ export function ProjectViewContextBar({
           <input
             type="search"
             value={searchQuery}
-            onChange={e => onSearchChange(e.target.value)}
+            onChange={event => onSearchChange(event.target.value)}
             placeholder="Search..."
             className="text-text-primary placeholder:text-text-tertiary w-24 min-w-0 flex-1 bg-transparent font-medium transition-all duration-300 outline-none focus:w-32"
           />
@@ -133,10 +98,7 @@ export function ProjectViewContextBar({
             <button
               ref={displayRef}
               type="button"
-              onClick={() => {
-                setIsDisplayMenuOpen(prev => !prev);
-                setIsManageMenuOpen(false);
-              }}
+              onClick={() => setIsDisplayMenuOpen(prev => !prev)}
               className={cn(
                 "flex h-8 cursor-pointer items-center gap-2 rounded-full border px-3 text-[13px] font-medium transition-all duration-300 ease-out",
                 isDisplayMenuOpen || hasActiveFilters
@@ -159,7 +121,6 @@ export function ProjectViewContextBar({
               minWidth={256}
             >
               <div className="bg-canvas-elevated/90 flex flex-col gap-1 p-2 backdrop-blur-xl">
-                {/* Group By (Read-only for now) */}
                 <div className="px-2 pt-2 pb-1">
                   <h4 className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
                     Group By
@@ -172,7 +133,6 @@ export function ProjectViewContextBar({
 
                 <div className="mx-2 my-1 h-px bg-white/5" />
 
-                {/* Sort By */}
                 <div className="px-2 pt-2 pb-1">
                   <h4 className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
                     Sort By
@@ -196,7 +156,6 @@ export function ProjectViewContextBar({
 
                 <div className="mx-2 my-1 h-px bg-white/5" />
 
-                {/* Filter: Priority */}
                 <div className="px-2 pt-2 pb-1">
                   <h4 className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
                     Filter: Priority
@@ -222,7 +181,6 @@ export function ProjectViewContextBar({
 
                 <div className="mx-2 my-1 h-px bg-white/5" />
 
-                {/* Filter: Collection */}
                 <div className="px-2 pt-2 pb-1">
                   <h4 className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
                     Filter: Collection
@@ -253,127 +211,13 @@ export function ProjectViewContextBar({
             </Popover>
           </div>
 
-          <div className="relative">
-            <button
-              ref={manageRef}
-              type="button"
-              onClick={() => {
-                if (!selectedView) {
-                  return;
-                }
-
-                setRenameDraft(selectedView.name);
-                setIsManageMenuOpen(prev => !prev);
-                setIsDisplayMenuOpen(false);
-              }}
-              className={cn(
-                "flex h-8 items-center justify-center rounded-full border px-2.5 transition-all duration-300 ease-out",
-                isManageMenuOpen
-                  ? "border-accent-blue/30 bg-accent-blue/10 text-accent-blue shadow-[0_2px_8px_rgba(138,173,244,0.15)]"
-                  : "text-text-secondary hover:text-text-primary border-transparent bg-white/4 hover:bg-white/8",
-              )}
-              aria-label="Manage selected view"
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </button>
-
-            <Popover
-              open={isManageMenuOpen}
-              onClose={() => setIsManageMenuOpen(false)}
-              anchorRef={manageRef}
-              align="end"
-              minWidth={320}
-            >
-              <div className="bg-canvas-elevated/90 flex flex-col gap-4 p-4 backdrop-blur-xl">
-                <div className="flex flex-col gap-1">
-                  <h3 className="text-text-primary font-display text-sm font-semibold">
-                    Manage view
-                  </h3>
-                  <p className="text-text-tertiary text-xs leading-relaxed">
-                    Tune the selected view without leaving the workboard.
-                  </p>
-                </div>
-
-                {selectedView ? (
-                  <>
-                    <div className="bg-canvas-subtle/60 flex items-center justify-between rounded-xl border border-white/6 px-3 py-2.5 shadow-inner inset-shadow-black/10">
-                      <div className="text-text-primary flex items-center gap-2 text-sm font-medium">
-                        {selectedView.layout === "board" ? (
-                          <LayoutDashboard className="h-4 w-4" />
-                        ) : (
-                          <ListTodo className="h-4 w-4" />
-                        )}
-                        <span className="truncate">{selectedView.name}</span>
-                      </div>
-                      <span className="text-text-tertiary text-xs tracking-wider uppercase">
-                        {selectedView.layout}
-                      </span>
-                    </div>
-
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
-                        Rename
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          ref={renameInputRef}
-                          type="text"
-                          value={renameDraft}
-                          onChange={event => setRenameDraft(event.target.value)}
-                          onKeyDown={event => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              handleRenameView();
-                            }
-                          }}
-                          className="text-text-primary bg-canvas/50 focus:bg-canvas focus:border-accent-blue/40 min-w-0 flex-1 rounded-xl border border-white/10 px-3 py-2.5 text-sm transition-all duration-300 outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleRenameView}
-                          className="text-text-primary rounded-xl border border-white/10 px-3 py-2.5 text-sm font-medium transition-colors hover:bg-white/10"
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </label>
-
-                    <div className="bg-canvas-subtle/30 flex flex-col gap-1.5 rounded-xl border border-white/6 p-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDuplicateView(selectedView.id);
-                          setIsManageMenuOpen(false);
-                        }}
-                        className="text-text-secondary hover:text-text-primary flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-white/5"
-                      >
-                        <Copy className="h-4 w-4" />
-                        Duplicate view
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDeleteView(selectedView.id);
-                          setIsManageMenuOpen(false);
-                        }}
-                        disabled={viewsCount <= 1}
-                        className="text-accent-red disabled:text-text-tertiary/40 hover:bg-accent-red/10 flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors disabled:hover:bg-transparent"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Delete view
-                      </button>
-                    </div>
-
-                    <p className="text-text-tertiary text-xs leading-relaxed">
-                      {viewsCount <= 1
-                        ? "At least one saved view has to survive. Even chaos needs a tab."
-                        : "Deleting the selected view removes only this lens, not the tasks inside it."}
-                    </p>
-                  </>
-                ) : null}
-              </div>
-            </Popover>
-          </div>
+          <ProjectViewManageMenu
+            selectedView={selectedView}
+            viewsCount={viewsCount}
+            onRenameView={onRenameView}
+            onDuplicateView={onDuplicateView}
+            onDeleteView={onDeleteView}
+          />
         </div>
       </div>
     </div>

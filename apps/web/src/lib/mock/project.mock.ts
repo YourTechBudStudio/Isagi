@@ -1,6 +1,5 @@
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
-export type SessionState = "none" | "resume" | "active";
 
 export type MockOpenSession = {
   readonly id: string;
@@ -16,9 +15,8 @@ export type MockTask = {
   readonly dueDate?: string;
   readonly labels: ReadonlyArray<string>;
   readonly collection?: string;
-  readonly sessionState: SessionState;
   readonly notes?: string;
-  readonly openSessions?: ReadonlyArray<MockOpenSession>;
+  readonly openSessions: ReadonlyArray<MockOpenSession>;
 };
 
 export type MockProjectData = {
@@ -38,7 +36,6 @@ export const mockProjectCore: MockProjectData = {
       priority: "high",
       labels: ["core", "git"],
       collection: "Q1 Milestones",
-      sessionState: "active",
       dueDate: "2026-03-15",
       notes:
         "Need to make sure we don't clobber the primary index. Look into `git worktree add` and how it handles detached HEAD states. Might need to write a custom wrapper script for the agents.",
@@ -54,9 +51,11 @@ export const mockProjectCore: MockProjectData = {
       status: "todo",
       priority: "medium",
       labels: ["ui", "bug"],
-      sessionState: "resume",
       notes:
         "The project titles are bleeding over the edge on 13-inch displays. Probably just needs a `truncate` utility class and `min-w-0` on the flex child.",
+      openSessions: [
+        { id: "s-2a", label: "Session #1 — 3h ago", isActive: false },
+      ],
     },
     {
       id: "t-3",
@@ -64,8 +63,8 @@ export const mockProjectCore: MockProjectData = {
       status: "todo",
       priority: "low",
       labels: ["maintenance"],
-      sessionState: "none",
       dueDate: "2026-03-20",
+      openSessions: [],
     },
     {
       id: "t-4",
@@ -74,7 +73,7 @@ export const mockProjectCore: MockProjectData = {
       priority: "high",
       labels: ["api", "realtime"],
       collection: "Realtime Infrastructure",
-      sessionState: "none",
+      openSessions: [],
     },
     {
       id: "t-5",
@@ -83,7 +82,7 @@ export const mockProjectCore: MockProjectData = {
       priority: "medium",
       labels: ["api", "design"],
       collection: "Realtime Infrastructure",
-      sessionState: "none",
+      openSessions: [],
     },
     {
       id: "t-6",
@@ -92,7 +91,7 @@ export const mockProjectCore: MockProjectData = {
       priority: "high",
       labels: ["core", "db"],
       collection: "Q1 Milestones",
-      sessionState: "none",
+      openSessions: [],
     },
   ],
 };

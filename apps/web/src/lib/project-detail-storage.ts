@@ -1,13 +1,11 @@
 export type ProjectViewLayout = "board" | "list";
 export type ProjectPriorityFilter = "all" | "high" | "medium" | "low";
 export type ProjectSortKey = "due_date" | "priority";
-export type ProjectGroupBy = "status";
 
 export type ProjectSavedView = {
   readonly id: string;
   readonly name: string;
   readonly layout: ProjectViewLayout;
-  readonly groupBy: ProjectGroupBy;
   readonly priorityFilter: ProjectPriorityFilter;
   readonly collectionFilter: string;
   readonly sortKey: ProjectSortKey;
@@ -31,7 +29,6 @@ function createDefaultViews(): Array<ProjectSavedView> {
       id: DEFAULT_BOARD_VIEW_ID,
       name: "Board",
       layout: "board",
-      groupBy: "status",
       priorityFilter: "all",
       collectionFilter: "all",
       sortKey: "due_date",
@@ -40,7 +37,6 @@ function createDefaultViews(): Array<ProjectSavedView> {
       id: DEFAULT_LIST_VIEW_ID,
       name: "List",
       layout: "list",
-      groupBy: "status",
       priorityFilter: "all",
       collectionFilter: "all",
       sortKey: "due_date",
@@ -67,10 +63,6 @@ function normalizeSortKey(value: unknown): ProjectSortKey {
   return value === "priority" ? "priority" : "due_date";
 }
 
-function normalizeGroupBy(_value: unknown): ProjectGroupBy {
-  return "status";
-}
-
 function normalizeSavedView(
   value: unknown,
   fallbackIndex: number,
@@ -92,7 +84,6 @@ function normalizeSavedView(
         : `view-${fallbackIndex + 1}`,
     name,
     layout: normalizeLayout(candidate.layout),
-    groupBy: normalizeGroupBy(candidate.groupBy),
     priorityFilter: normalizePriorityFilter(candidate.priorityFilter),
     collectionFilter:
       typeof candidate.collectionFilter === "string"
