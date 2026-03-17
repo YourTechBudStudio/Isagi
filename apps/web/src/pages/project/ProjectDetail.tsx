@@ -20,6 +20,7 @@ import {
 import {
   createProjectSavedViewId,
   DEFAULT_PROJECT_VIEWS_STATE,
+  getDuplicatedProjectViewName,
   getNextProjectViewName,
   type ProjectSavedView,
   readProjectViewsState,
@@ -152,6 +153,73 @@ function ProjectDetailContent({
     });
   };
 
+  const handleRenameView = (viewId: string, name: string) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setViewsState(prev => ({
+      ...prev,
+      views: prev.views.map(view =>
+        view.id === viewId ? { ...view, name: trimmedName } : view,
+      ),
+    }));
+  };
+
+  const handleDuplicateView = (viewId: string) => {
+    setViewsState(prev => {
+      const sourceView = prev.views.find(view => view.id === viewId);
+      if (!sourceView) {
+        return prev;
+      }
+
+      const duplicatedView = {
+        ...sourceView,
+        id: createProjectSavedViewId(),
+        name: getDuplicatedProjectViewName(sourceView.name, prev.views),
+      };
+
+      const sourceIndex = prev.views.findIndex(view => view.id === viewId);
+      const nextViews = [...prev.views];
+      nextViews.splice(sourceIndex + 1, 0, duplicatedView);
+
+      return {
+        selectedViewId: duplicatedView.id,
+        views: nextViews,
+      };
+    });
+  };
+
+  const handleDeleteView = (viewId: string) => {
+    setViewsState(prev => {
+      if (prev.views.length <= 1) {
+        return prev;
+      }
+
+      const deletedIndex = prev.views.findIndex(view => view.id === viewId);
+      if (deletedIndex === -1) {
+        return prev;
+      }
+
+      const nextViews = prev.views.filter(view => view.id !== viewId);
+      if (nextViews.length === 0) {
+        return prev;
+      }
+
+      const nextSelectedView =
+        prev.selectedViewId === viewId
+          ? nextViews[Math.min(deletedIndex, nextViews.length - 1)]
+          : (nextViews.find(view => view.id === prev.selectedViewId) ??
+            nextViews[0]);
+
+      return {
+        selectedViewId: nextSelectedView.id,
+        views: nextViews,
+      };
+    });
+  };
+
   return (
     <AppShell
       sidebar={
@@ -198,6 +266,9 @@ function ProjectDetailContent({
                         }))
                       }
                       onCreateView={handleCreateView}
+                      onRenameView={handleRenameView}
+                      onDuplicateView={handleDuplicateView}
+                      onDeleteView={handleDeleteView}
                     />
 
                     <ProjectViewContextBar

@@ -185,3 +185,23 @@ export function getNextProjectViewName(
 
   return `${baseName} ${suffix}`;
 }
+
+export function getDuplicatedProjectViewName(
+  sourceName: string,
+  existingViews: ReadonlyArray<ProjectSavedView>,
+): string {
+  const normalizedSourceName = sourceName.trim() || "View";
+  const usedNames = new Set(existingViews.map(view => view.name.toLowerCase()));
+  const baseName = `${normalizedSourceName} Copy`;
+
+  if (!usedNames.has(baseName.toLowerCase())) {
+    return baseName;
+  }
+
+  let suffix = 2;
+  while (usedNames.has(`${baseName.toLowerCase()} ${suffix}`)) {
+    suffix += 1;
+  }
+
+  return `${baseName} ${suffix}`;
+}
