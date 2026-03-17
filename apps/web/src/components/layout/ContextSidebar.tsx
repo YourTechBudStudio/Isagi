@@ -2,7 +2,6 @@ import { cn } from "@/lib/cn";
 import type { SidebarProject, SidebarTriage } from "@/lib/mock/sidebar.mock";
 
 import { SidebarProjectGroup } from "./sidebar/SidebarProjectGroup";
-import { SidebarTriageSection } from "./sidebar/SidebarTriageSection";
 
 type ContextSidebarProps = {
   readonly triageItems?: ReadonlyArray<SidebarTriage>;
@@ -13,7 +12,7 @@ type ContextSidebarProps = {
 };
 
 export function ContextSidebar({
-  triageItems = [],
+  triageItems: _triageItems = [],
   projects = [],
   footerLabel = "Isagi Core",
   footerInitial = "I",
@@ -27,7 +26,8 @@ export function ContextSidebar({
       )}
     >
       <div className="custom-scrollbar flex-1 overflow-x-hidden overflow-y-auto p-3">
-        <SidebarTriageSection items={triageItems} />
+        {/* TODO: We will need this section when we implement support for sparks. */}
+        {/* <SidebarTriageSection items={_triageItems} /> */}
 
         <div className="flex flex-col gap-6">
           {projects.map(project => (
