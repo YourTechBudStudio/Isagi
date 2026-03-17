@@ -69,7 +69,7 @@ export function ProjectActionBar({
           leadingIcon={<Sparkles className="h-4 w-4" />}
           className="bg-accent-violet hover:bg-accent-violet/90 text-canvas ml-1"
         >
-          Plan with PM agent
+          Shape what&apos;s next
         </Button>
 
         <div className="border-l border-white/10 pl-2">

@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-16
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -57,6 +57,16 @@ Sessions:
 - can start in the project repo or a managed worktree
 - can be rebound to a different execution root during work
 - are not the durable output themselves
+
+### Shaper agent
+
+The Shaper agent is a project-scoped backlog-shaping agent launched by actions such as `Shape what's next`.
+
+Shaper sessions:
+
+- turn fuzzy project intent into accountable backlog work
+- can propose or create tasks, collections, and backlog cleanup changes
+- run as normal task-linked sessions by creating or resuming a dedicated shaping task
 
 ### Spark
 
@@ -169,6 +179,6 @@ Focus remains task-first with session-level visibility elsewhere in the product:
 - project-local terminology for presentation (configuration details live in `docs/product/config/project-task-git-rules.md`)
 - collection-centric views and grouping behavior
 - status-change automation hooks
-- planner-assisted task creation
+- shaper-assisted task creation
 - roll-up portfolios / project-group support for multi-repo work
 - whether the deferred resources model returns as an active subsystem

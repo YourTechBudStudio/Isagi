@@ -134,12 +134,10 @@ function ProjectDetailContent({
       {/* Flex wrapper for push-sheet layout */}
       <div className="flex h-screen flex-1 overflow-hidden">
         <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-y-auto">
-          {!isEmpty && (
-            <ProjectActionBar
-              isSettingsOpen={isSettingsOpen}
-              onToggleSettings={() => setIsSettingsOpen(prev => !prev)}
-            />
-          )}
+          <ProjectActionBar
+            isSettingsOpen={isSettingsOpen}
+            onToggleSettings={() => setIsSettingsOpen(prev => !prev)}
+          />
 
           <div className="mx-auto flex h-full w-full flex-col px-8 pt-24 pb-32">
             <motion.header
@@ -210,7 +208,7 @@ function ProjectDetailContent({
 
             <div className="flex-1">
               {isEmpty ? (
-                <ProjectEmptyState />
+                <ProjectEmptyState projectId={projectId} />
               ) : (
                 <AnimatePresence mode="wait">
                   {viewMode === "board" ? (

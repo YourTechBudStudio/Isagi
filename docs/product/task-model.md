@@ -113,7 +113,7 @@ Project git rules are defined in `docs/product/config/project-task-git-rules.md`
 
 - task-status automation hooks
 - spark inbox + spark-triage backlog feeder (Phase 2)
-- planner-assisted task creation and decomposition
+- shaper-assisted task creation and decomposition
 - richer team assignment policy
 - stricter git-based completion rules
 - project-group support for multi-repo execution

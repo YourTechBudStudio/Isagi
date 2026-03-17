@@ -37,9 +37,9 @@ export const COMMANDS = [
       }),
   }),
   defineCommand({
-    id: "start-planning-session",
-    label: "Start Planning Session",
-    aliases: ["plan", "planning"],
+    id: "start-shaping-session",
+    label: "Start Project Shaping Session",
+    aliases: ["shape", "shaping", "plan"],
     createController: () =>
       defineFlowCommand({
         steps: [
@@ -49,16 +49,16 @@ export const COMMANDS = [
               id: "projectId",
               kind: "entity-search",
               entityType: "project",
-              placeholder: "Select a project to plan...",
+              placeholder: "Select a project to shape up...",
               labelPrefix: "Project:",
             },
           },
         ],
         onComplete: ({ values }) => {
-          console.log("Start planning session command invoked", values);
+          console.log("Start shaping session command invoked", values);
           return {
             variant: "message",
-            message: "Planning sessions are coming soon.",
+            message: "Shaping sessions are coming soon.",
           };
         },
       }),

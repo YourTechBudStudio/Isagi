@@ -1,6 +1,6 @@
 # Project Detail Screen (MVP)
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-16
 
 ## One-liner
 
@@ -11,7 +11,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Act as the deliberate project-scoped backlog surface for one repo project.
 - Help the user understand current work shape without turning into an analytics dashboard.
 - Make it easy to inspect, organize, and pick the next actionable task.
-- Support planning and backlog cleanup through a dedicated planning task opened with a PM agent session when needed.
+- Support shaping and backlog cleanup through a dedicated shaping task opened with a Shaper session when needed.
 
 ## Non-goals
 
@@ -42,16 +42,16 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - If the project has no tasks yet, the page should shift from backlog scanning to a clear empty state.
 - The empty state should explain that there is no actionable project work yet.
 - The empty state should expose two clear next steps:
-  - **Plan with PM agent**
+  - **Shape what's next**
   - **Start ad-hoc session**
-- `Plan with PM agent` fits projects whose backlog still needs shaping or cleanup.
+- `Shape what's next` is the user-facing entry point into the Shaper agent for projects whose backlog still needs shaping or cleanup.
 - `Start ad-hoc session` fits projects where the user wants to begin visible tracked work immediately through a task-backed ad-hoc session.
 - Manual actions such as **New task** and **New collection** still exist, but they are secondary to the empty-state CTA pair.
 
 ### Common actions first
 
 - Common project actions should stay visible and consistent with the session surface action-bar pattern.
-- The primary planning action is **Plan with PM agent**.
+- The primary shaping action is **Shape what's next**, which starts the Shaper agent.
 - These actions are persistent page-level controls, even when the project empty state presents a more specific CTA pair.
 - Secondary actions include **New task**, **New collection**, **Project settings**, and view/filter controls.
 
@@ -67,7 +67,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Canonical shared-pattern guidance lives in `docs/product/screens/session-screen.md`.
 - This shared style should keep placement, density, and interaction posture familiar across surfaces, even when the actions differ.
 - On Project Detail, that bar should emphasize project-scoped actions such as:
-  - `Plan with PM agent`
+  - `Shape what's next`
   - `New task`
   - `New collection`
   - `Project settings`
@@ -119,12 +119,13 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - The modal is the canonical bridge between board selection and execution on Project Detail.
 - Canonical task-modal behavior lives in `docs/product/screens/task-detail-modal.md`.
 
-## Project manager agent
+## Shaper agent
 
-- **Plan with PM agent** starts a normal session that uses a specialized project-manager agent.
-- This planning flow starts against the project as a whole rather than the currently selected view or filter context.
-- Launching that flow should create or resume a dedicated planning task inside the project so backlog-shaping work stays accountable and visible on the board.
-- Its main role is backlog planning, organization, cleanup, and identifying next work.
+- **Shape what's next** is the primary entry point into the Shaper agent.
+- It starts a normal session that uses the Shaper agent.
+- This shaping flow starts against the project as a whole rather than the currently selected view or filter context.
+- Launching that flow should create or resume a dedicated shaping task inside the project so backlog-shaping work stays accountable and visible on the board.
+- Its main role is backlog shaping, organization, cleanup, and identifying next work.
 - Once started, it appears in the existing session/sidebar model like any other session rather than introducing a separate concept.
 
 ## Collections on the page

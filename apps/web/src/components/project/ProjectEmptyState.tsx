@@ -1,9 +1,24 @@
 import { motion } from "framer-motion";
-import { Plus, Sparkles } from "lucide-react";
+import { Play, Sparkles } from "lucide-react";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/Button";
 
-export function ProjectEmptyState() {
+type ProjectEmptyStateProps = {
+  readonly projectId: string;
+};
+
+export function ProjectEmptyState({ projectId }: ProjectEmptyStateProps) {
+  const navigate = useNavigate();
+
+  const handleShapeWhatsNext = () => {
+    navigate(`/session/${projectId}-shaping`);
+  };
+
+  const handleStartAdHocSession = () => {
+    navigate(`/session/${projectId}-scratch-${Date.now()}`);
+  };
+
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center text-center">
       <motion.div
@@ -21,28 +36,44 @@ export function ProjectEmptyState() {
             No actionable work yet
           </h2>
           <p className="text-text-secondary font-body">
-            Suspicious. I'll allow it for now. Ready to start plotting your next
-            moves?
+            Suspicious. I&apos;ll allow it for now. Want me to shape the mess
+            into something executable, or should we skip straight to tracked
+            work?
           </p>
         </div>
 
-        <div className="mt-4 flex w-full flex-col items-center gap-3">
-          <Button
-            variant="primary"
-            size="lg"
-            leadingIcon={<Plus className="h-4 w-4" />}
-            className="w-full justify-center"
-          >
-            New Task
-          </Button>
-          <Button
-            variant="secondary"
-            size="lg"
-            leadingIcon={<Sparkles className="text-accent-violet h-4 w-4" />}
-            className="w-full justify-center"
-          >
-            Plan with PM agent
-          </Button>
+        <div className="mt-4 flex w-full flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="primary"
+              size="lg"
+              leadingIcon={<Sparkles className="h-4 w-4" />}
+              className="w-full justify-center"
+              onClick={handleShapeWhatsNext}
+            >
+              Shape what&apos;s next
+            </Button>
+            <p className="text-text-tertiary px-2 text-sm leading-relaxed">
+              Launch the Shaper to turn chaos into a backlog. I&apos;ll help
+              figure out what matters and what&apos;s noise.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="secondary"
+              size="lg"
+              leadingIcon={<Play className="h-4 w-4" />}
+              className="w-full justify-center"
+              onClick={handleStartAdHocSession}
+            >
+              Start ad-hoc session
+            </Button>
+            <p className="text-text-tertiary px-2 text-sm leading-relaxed">
+              Jump into tracked work now. The first prompt creates the task
+              &mdash; no ceremony required.
+            </p>
+          </div>
         </div>
       </motion.div>
     </div>

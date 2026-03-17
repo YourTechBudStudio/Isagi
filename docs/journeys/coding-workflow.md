@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-16
 
 ## Journey goals
 
@@ -45,13 +45,13 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 4. Task appears in the project task list with its project-defined default status.
 5. If no collection is chosen, the task lives directly under the project.
 
-## Scenario C: Plan or clean up backlog with PM agent
+## Scenario C: Shape or clean up backlog with the Project-Shaper agent
 
-1. User opens a project and chooses **Plan with PM agent**.
-2. Isagi creates or resumes a dedicated planning task for that project.
-3. A normal session starts on that planning task using a specialized PM agent.
-4. The PM session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
-5. The planning session appears in the normal session/sidebar model like any other task-linked session.
+1. User opens a project and chooses **Shape what's next**, the project's entry point into the Shaper agent.
+2. Isagi creates or resumes a dedicated shaping task for that project.
+3. A normal session starts on that shaping task using the Shaper agent.
+4. The Shaper session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
+5. The shaping session appears in the normal session/sidebar model like any other task-linked session.
 
 ## Scenario D: Start a task-backed ad-hoc session
 
@@ -120,7 +120,7 @@ Commands are available through:
 Project Detail and the Session screen should reuse the same contextual action-bar style for common actions.
 
 - The shared style keeps action placement and interaction posture familiar across surfaces.
-- Project Detail uses that same style while swapping in project-specific actions such as planning, task creation, collection creation, filters, and saved-view controls.
+- Project Detail uses that same style while swapping in project-specific actions such as shaping, task creation, collection creation, filters, and saved-view controls.
 - The task-detail modal is a lighter modal exception rather than a full action-bar surface.
 - Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
 - The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
