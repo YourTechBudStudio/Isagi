@@ -1,8 +1,8 @@
 # Agent Guidance Projections (AGENTS.md + TRIAGE.md)
 
-**Last updated:** 2026-03-06
+**Last updated:** 2026-03-17
 
-This document describes optional agent-readable guidance files that may complement the task-first MVP.
+This document describes optional agent-readable guidance files that may complement the active project/task/session core.
 
 ## One-liner
 

@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-17
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -50,9 +50,10 @@ A session is an execution surface inside a project.
 
 Sessions:
 
-- come in two MVP forms:
+- come in three MVP forms:
   - task-linked sessions for accountable tracked work
   - project-scoped scratch sessions for quick exploration or Q&A
+  - project-scoped shaping sessions for tracked backlog-shaping work without a task
 - are where agent work happens
 - can start in the project repo or a managed worktree
 - can be rebound to a different execution root during work
@@ -65,14 +66,16 @@ The Shaper agent is a project-scoped backlog-shaping agent launched by actions s
 Shaper sessions:
 
 - turn fuzzy project intent into accountable backlog work
-- can propose or create tasks, collections, and backlog cleanup changes
-- run as normal task-linked sessions by creating or resuming a dedicated shaping task
+- primarily draft task proposals in the shaping companion panel
+- may still drive collection creation or broader backlog cleanup outcomes through the conversation itself
+- run as tracked project-scoped shaping sessions rather than task-linked sessions
+- remain resumable but do not appear as tasks on project boards
 
 ### Spark
 
 A spark is a deferred Phase 2 raw global inbox capture concept.
 
-The first MVP release does not depend on sparks. They may return later as a backlog-feeding companion to the task-first core.
+The first MVP release does not depend on sparks. They may return later as a backlog-feeding companion to the active core model.
 
 ### Worktree
 
@@ -82,7 +85,7 @@ Managed worktrees are created automatically when chosen, but merge and deletion 
 
 ### Resource (deferred)
 
-`Resource` remains a deferred durable-output concept from earlier drafts. It is not part of the active task-first v0 core.
+`Resource` remains a deferred durable-output concept from earlier drafts. It is not part of the active v0 core.
 
 Reference: `docs/architecture/resources-model.md`.
 
@@ -98,24 +101,26 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 2. **Every task belongs to exactly one project.**
 3. **A task may belong to zero or one collection inside that project.**
 4. **Tasks never move between projects.** Archive and recreate instead.
-5. **Sessions come in two kinds.** A session is either task-linked or a project-scoped scratch session.
-6. **Every task-linked session belongs to exactly one task.** Ad-hoc tracked work auto-creates visible tasks, and planning flows do the same or resume a dedicated planning task.
+5. **Sessions come in three kinds.** A session is task-linked, project-scoped scratch, or project-scoped shaping.
+6. **Every task-linked session belongs to exactly one task.** Ad-hoc tracked work auto-creates visible tasks.
 7. **Scratch sessions belong to a project, not a task or collection.** They are intentionally outside backlog accountability.
-8. **Sessions never belong directly to collections.**
-9. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
-10. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
-11. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
-12. **Task closure is status-driven.** Moving a task into a `done`-bucket status closes its task-linked sessions; MVP surfaces do not expose a second completion action separate from status.
-13. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
+8. **Shaping sessions also belong to a project, not a task or collection.** They are tracked proposal workspaces rather than execution tasks.
+9. **Sessions never belong directly to collections.**
+10. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
+11. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
+12. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
+13. **Task closure is status-driven for task-linked sessions only.** Moving a task into a `done`-bucket status closes its task-linked sessions; MVP surfaces do not expose a second completion action separate from status.
+14. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
-## Task-first MVP posture
+## Active MVP posture
 
-The active MVP is task-first:
+The active MVP keeps tasks as the canonical accountable unit for execution work while also supporting a separate project-scoped shaping lane:
 
 - projects provide repo context
 - collections optionally group related tasks
-- tasks remain the canonical actionable unit for accountability and progress
-- sessions do the execution work
+- tasks remain the canonical actionable unit for accountable execution work
+- shaping sessions remain tracked project-scoped proposal workspaces rather than tasks
+- sessions do the execution and shaping work
 - sparks remain useful for backlog health, but do not gate task creation
 
 Read together:
@@ -129,7 +134,8 @@ Read together:
 
 ## Execution posture
 
-- The only guaranteed inherited execution context is the task's project repo root.
+- Task-backed sessions inherit the task's project repo root.
+- Scratch and shaping sessions inherit the selected project's repo root.
 - Sessions may rebind to managed worktrees or other valid roots while preserving the same conversation identity.
 - Project-level git mode defaults can shape how sessions start, but sessions remain user-driven.
 - The system records passive execution snapshots and surfaces collision warnings when multiple recent sessions share a directory.
@@ -153,7 +159,9 @@ Guidance projection ideas live in `docs/product/config/agent-guidance-projection
 Home is a minimal global re-entry surface.
 
 - Home prioritizes resumable sessions first.
-- Home may surface both task sessions and scratch sessions, with scratch sessions visibly marked as scratch.
+- Home may surface task sessions, scratch sessions, and shaping sessions.
+- Scratch sessions should be visibly marked as scratch.
+- Shaping sessions should be visibly marked as shaping.
 - Home may show lightweight fallback tasks only when there is no session to resume.
 - Home is not the primary place for deliberate task browsing or project management.
 
@@ -165,9 +173,10 @@ Project Detail is the deliberate project/backlog surface for one repo project.
 - Detailed Project Detail guidance lives in `docs/product/screens/project-detail-screen.md`.
 - Detailed execution-surface guidance lives in `docs/product/screens/session-screen.md`.
 
-Focus remains task-first with session-level visibility elsewhere in the product:
+Focus remains task-centered for execution work while keeping project-scoped session lanes visible elsewhere in the product:
 
-- active and idle sessions remain visible on tasks
+- active and idle task-linked sessions remain visible on tasks
+- scratch and shaping sessions remain visible from Home and the sidebar rather than on boards
 - directory-level collision warnings help avoid accidental overlap
 - review and handoff stay attached to the same task rather than spawning subtasks
 
@@ -179,6 +188,6 @@ Focus remains task-first with session-level visibility elsewhere in the product:
 - project-local terminology for presentation (configuration details live in `docs/product/config/project-task-git-rules.md`)
 - collection-centric views and grouping behavior
 - status-change automation hooks
-- shaper-assisted task creation
+- how shaping sessions materialize accepted task proposals
 - roll-up portfolios / project-group support for multi-repo work
 - whether the deferred resources model returns as an active subsystem

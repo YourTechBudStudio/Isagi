@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-17
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -18,6 +18,7 @@ Projects define the repo context and default git mode; sessions decide how work 
 - Repo path is stored separately from project identity.
 - Projects may define optional collections for grouping work, but the repo project remains the execution container.
 - Tasks inherit the project repo root as their default execution context.
+- Scratch and shaping sessions inherit the selected project's repo root directly because they are project-scoped rather than task-backed.
 - Collections do not redefine execution root.
 - Canonical registration-flow guidance lives in `docs/product/screens/project-registration-flow.md`.
 
@@ -116,6 +117,9 @@ Rules:
 - A task may end up with multiple sessions using different roots at the user's discretion.
 - Scratch sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as task-backed sessions.
 - Scratch sessions differ only in not creating or attaching to a task.
+- Shaping sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as other sessions.
+- Shaping sessions differ in being tracked and project-scoped without attaching to a task.
+- Canonical shaping-session UI behavior lives in `docs/product/screens/session-screen.md` and `docs/product/screens/project-detail-screen.md`.
 
 ## Repo-path changes
 

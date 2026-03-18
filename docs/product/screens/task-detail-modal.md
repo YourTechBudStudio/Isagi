@@ -1,6 +1,6 @@
 # Task Detail Modal (MVP)
 
-**Last updated:** 2026-03-15
+**Last updated:** 2026-03-17
 
 ## One-liner
 
@@ -84,6 +84,7 @@ The Task Detail modal answers: **"What do I need to know about this task right n
 - It relies on inline metadata editing and a primary session CTA rather than its own standalone action bar.
 - The Session screen remains the primary place where actual agent work happens.
 - Scratch sessions bypass the Task Detail modal because they are started outside task context and do not attach to tasks.
+- Shaping sessions also bypass the Task Detail modal because they are project-scoped and not task-backed.
 - Canonical parent-surface context lives in `docs/product/screens/project-detail-screen.md`.
 - Canonical execution-surface context lives in `docs/product/screens/session-screen.md`.
 

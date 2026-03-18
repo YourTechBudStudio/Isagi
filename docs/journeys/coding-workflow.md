@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-17
 
 ## Journey goals
 
@@ -13,14 +13,14 @@
 
 - **User** - creates tasks, starts sessions, and changes statuses.
 - **Desktop app (Isagi)** - project-scoped task surfaces, optional collection grouping, command surfaces, git controls, and session visibility.
-- **Execution session (OpenCode-backed)** - task-linked agent work plus project-scoped scratch exploration.
+- **Execution session (OpenCode-backed)** - task-linked execution work, project-scoped scratch exploration, and project-scoped shaping work.
 
 ## Entry posture: open app and resume work
 
 1. Home opens as a global orientation surface.
 2. The most recent resumable session is the primary jump-in target.
 3. Additional open sessions appear as compact secondary options.
-4. Those open sessions may include both task-linked and scratch sessions; scratch sessions should be visibly marked as scratch.
+4. Those open sessions may include task-linked, scratch, and shaping sessions; scratch and shaping sessions should be visibly marked.
 5. If there are no resumable sessions, the app may show lightweight candidate tasks.
 6. Global `Start a session` flows route through the command palette so project selection happens explicitly before execution begins.
 7. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
@@ -48,10 +48,13 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 ## Scenario C: Shape or clean up backlog with the Project-Shaper agent
 
 1. User opens a project and chooses **Shape what's next**, the project's entry point into the Shaper agent.
-2. Isagi creates or resumes a dedicated shaping task for that project.
-3. A normal session starts on that shaping task using the Shaper agent.
-4. The Shaper session may propose or create tasks, collections, or backlog cleanup changes inside the same project.
-5. The shaping session appears in the normal session/sidebar model like any other task-linked session.
+2. If the project has no prior shaping sessions, Isagi starts a new shaping session immediately.
+3. If prior shaping sessions exist, Isagi first shows a small chooser so the user can resume an existing shaping session or start a new one.
+4. New shaping sessions use a project-based title and begin with an empty composer.
+5. The shaping session is project-scoped, tracked, and uses the Shaper agent, but it is not backed by a task.
+6. The shaping companion panel stages draft task proposals only.
+7. Those proposals stay staged during the session and become visible backlog items only when the shaping session is finalized and closed.
+8. The shaping session appears in Home and the sidebar like any other resumable session, but it does not appear on the project board as a task.
 
 ## Scenario D: Start a task-backed ad-hoc session
 
@@ -74,6 +77,7 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 1. Session starts from:
    - the task's project repo root for a task-backed session
    - the selected project's repo root for a scratch session
+   - the selected project's repo root for a shaping session
 2. User chooses to:
    - stay on the current branch
    - create/use a managed worktree
@@ -89,6 +93,8 @@ Detailed registration-surface guidance lives in `docs/product/screens/project-re
 4. Sessions can be manually closed when they are no longer relevant.
 
 Scratch sessions can also remain open and resumable across multiple short exploration loops, but they stay outside board/task tracking.
+
+Shaping sessions can also remain open and resumable across multiple backlog-shaping loops, while staying tracked at the project level rather than appearing as board tasks.
 
 ## Scenario H: Rebind and collision-awareness
 
@@ -146,8 +152,10 @@ Examples:
 
 - Every task belongs to a project.
 - Every task may belong to zero or one collection inside that project.
+- Sessions come in three kinds: task-linked, scratch, and shaping.
 - Every task-linked session belongs to a task.
 - Scratch sessions belong to a project and do not belong to tasks or collections.
+- Shaping sessions belong to a project and do not belong to tasks or collections.
 - Sessions do not belong directly to collections.
 - No subtasks exist in v0; review and handoff stay on the same task.
 - Tasks are execution-agnostic.

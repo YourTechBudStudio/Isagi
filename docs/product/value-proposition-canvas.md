@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Legacy product name:** Spark System  
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-17
 
 This canvas is the **strategic framing source of truth**.
 
@@ -66,8 +66,9 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | **Quick capture (future phase)**   | A later low-friction capture surface for sparks or ideas outside the strict Phase 1 release path.                              |
 | **Smart triager (Phase 2)**        | Clarifies sparks and proposes project/task follow-on work when backlog help is needed.                                         |
-| **Resumable sessions**             | Each task opens a session surface that can be paused and resumed.                                                              |
+| **Resumable sessions**             | Task work, shaping work, and project-scoped exploration all open session surfaces that can be paused and resumed.              |
 | **Scratch sessions**               | A low-overhead project-scoped exploration lane for quick questions or repo inspection without creating backlog noise.          |
+| **Shaping sessions**               | A tracked project-scoped lane for turning fuzzy intent into draft task proposals before they hit the visible backlog.          |
 | **Context continuity engine**      | Every session starts pre-loaded with relevant context and a concise "where we left off" state.                                 |
 | **Command-driven execution**       | Session start behavior comes from lightweight defaults and git mode rules, not hardcoded task types.                           |
 | **Managed worktrees**              | Worktree creation becomes a fast optional workflow for isolated coding threads.                                                |
@@ -77,18 +78,18 @@ For implementation scope and MVP build decisions, `docs/product/mvp-scope.md` wi
 
 ### Pain Relievers
 
-| Pain                           | How Product Addresses It                                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Activation energy to start     | Agent primes YOU: "Last time we established X, you wanted Y, where do you want to pick up?" Boulder already rolling.         |
-| Context loading friction       | Context continuity engine handles all priming. You never explain what you're working on.                                     |
-| Running out of next actions    | Task lists keep actionable work visible in Phase 1; later spark tools may help feed backlog.                                 |
-| "What should I do next?"       | Warm-start sessions and task context reduce decision friction at start time.                                                 |
-| Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                                   |
-| Sequential execution drag      | Task-linked sessions plus optional managed worktrees support safer parallel progress.                                        |
-| High setup overhead            | Scratch sessions keep project-scoped questions and lightweight exploration cheap when a full tracked task would be overkill. |
-| Capture friction               | A future quick-capture surface can avoid early routing decisions once capture returns to the active product.                 |
-| Ideas decay                    | Phase 2 spark tools can later convert loose ideas into follow-on work when needed.                                           |
-| Context scattered              | Project-scoped tasks and session history keep decisions and outputs discoverable.                                            |
+| Pain                           | How Product Addresses It                                                                                                      |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Activation energy to start     | Agent primes YOU: "Last time we established X, you wanted Y, where do you want to pick up?" Boulder already rolling.          |
+| Context loading friction       | Context continuity engine handles all priming. You never explain what you're working on.                                      |
+| Running out of next actions    | Task lists keep actionable work visible in Phase 1, and shaping sessions help turn fuzzy intent into concrete task proposals. |
+| "What should I do next?"       | Warm-start sessions, shaping sessions, and task context reduce decision friction at start time.                               |
+| Every conversation starts cold | Resumable chats with full context. Agent summarizes state when you return.                                                    |
+| Sequential execution drag      | Task-linked sessions plus optional managed worktrees support safer parallel progress.                                         |
+| High setup overhead            | Scratch sessions keep project-scoped questions and lightweight exploration cheap when a full tracked task would be overkill.  |
+| Capture friction               | A future quick-capture surface can avoid early routing decisions once capture returns to the active product.                  |
+| Ideas decay                    | Phase 2 spark tools can later convert loose ideas into follow-on work when needed.                                            |
+| Context scattered              | Project-scoped tasks and session history keep decisions and outputs discoverable.                                             |
 
 ### Gain Creators
 

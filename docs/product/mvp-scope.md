@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Legacy product name:** Spark System  
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-17
 
 This document defines what we are building for the MVP.
 
@@ -18,7 +18,7 @@ The MVP objective is to reduce activation energy and increase throughput by maki
 
 The product remains ad-hoc: Isagi supports specialized workflows, but does not force one rigid workflow for every kind of work.
 
-Repo projects may organize work directly as tasks or through optional collections, but execution remains task- and session-driven from the project repo root.
+Repo projects may organize work directly as tasks or through optional collections, but execution remains session-driven from the project repo root, with tasks holding accountability for execution work and shaping sessions handling proposal-oriented backlog formation.
 
 ---
 
@@ -50,18 +50,22 @@ Detailed contracts: `docs/product/task-model.md` and `docs/product/collection-mo
 #### 3) Session-first execution
 
 - Sessions are the execution surfaces where agent work happens.
-- Phase 1 supports two session paths:
+- Phase 1 supports three session paths:
   - task-backed sessions for accountable tracked work
   - project-scoped scratch sessions for quick exploration or Q&A
+  - project-scoped shaping sessions for tracked backlog shaping without a task
 - Multiple task-backed sessions can exist per task.
 - Starting a task-backed ad-hoc session auto-creates a visible task with a generated title.
 - Scratch sessions do not create visible tasks and do not participate in backlog tracking.
-- Both session kinds use the same execution engine and git controls.
+- Shaping sessions are tracked, resumable, proposal-oriented workspaces that do not create visible tasks directly.
+- Accepted shaping proposals become visible backlog items only when the shaping session is finalized.
+- All three session kinds use the same execution engine and git controls.
 - Sessions remain open until manually closed, except task-backed sessions that auto-close when the task enters a terminal `done`-bucket status.
 
 #### 4) Git execution modes + managed worktrees
 
-- Sessions start from the task's project repo root.
+- Task-backed sessions start from the task's project repo root.
+- Scratch and shaping sessions start from the selected project's repo root.
 - Git execution defaults are configurable at two levels:
   - global default
   - nullable project override
@@ -93,17 +97,17 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 
 ### What's out (future phases)
 
-| Feature                                 | Why deferred                                                         |
-| --------------------------------------- | -------------------------------------------------------------------- |
-| Mobile app implementation               | Desktop-first focus for MVP velocity                                 |
-| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                         |
-| Active status-change automation hooks   | Keep task upkeep manual and predictable first                        |
-| Global spark inbox + spark triage       | Validate the task-first core before adding backlog feed workflows    |
-| Roll-up / portfolio projects            | Keep the single-repo execution model sharp before adding aggregation |
-| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow                 |
-| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                     |
-| Multi-user collaboration/permissions    | Solo workflow first                                                  |
-| Rich scheduling/reminder system         | Focus on execution continuity before planning features               |
+| Feature                                 | Why deferred                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------- |
+| Mobile app implementation               | Desktop-first focus for MVP velocity                                      |
+| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                              |
+| Active status-change automation hooks   | Keep task upkeep manual and predictable first                             |
+| Global spark inbox + spark triage       | Validate the core session/task model before adding backlog feed workflows |
+| Roll-up / portfolio projects            | Keep the single-repo execution model sharp before adding aggregation      |
+| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow                      |
+| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                          |
+| Multi-user collaboration/permissions    | Solo workflow first                                                       |
+| Rich scheduling/reminder system         | Focus on execution continuity before planning features                    |
 
 ---
 
@@ -115,7 +119,7 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 - Backend remains single-tenant/self-hosted (`SQLite + filesystem + SSE`).
 - OpenCode is the session execution engine; Isagi is orchestration/control UX.
 - Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
-- Repo projects may organize work through direct tasks or optional collections, but sessions still start from tasks in the project repo root.
+- Repo projects may organize work through direct tasks or optional collections, while scratch and shaping sessions still start from the selected project's repo root.
 
 ### Core flow
 
@@ -130,6 +134,13 @@ Project -> Start scratch session
         -> Session opens in project repo root
         -> Ask questions or do lightweight exploration
         -> Close manually when no longer needed
+
+Project -> Shape what's next
+        -> Resume a recent shaping session or start a new one
+        -> Session opens in project repo root
+        -> Draft task / collection proposals
+        -> Accept or reject proposals
+        -> Accepted proposals become visible backlog items when the shaping session is finalized
 ```
 
 ---
@@ -166,7 +177,7 @@ Qualitative validation signals:
 ## Near-term implementation priorities
 
 1. Lock project/collection/task/session contracts and status model in API + docs.
-2. Implement manual task creation, task-backed ad-hoc session auto-task creation, and project-scoped scratch sessions.
+2. Implement manual task creation, task-backed ad-hoc session auto-task creation, project-scoped scratch sessions, and project-scoped shaping sessions.
 3. Implement session execution surface with git mode selection and rebind behavior.
 4. Implement passive snapshots, collision warnings, and session closure states.
 5. Implement project registration, explicit git defaults, and read-only execution visibility.

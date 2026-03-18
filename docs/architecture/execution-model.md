@@ -1,8 +1,8 @@
 # Execution Model
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-17
 
-This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the task-first MVP.
+This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the active MVP.
 
 ## Path conventions
 
@@ -48,6 +48,8 @@ Task-linked sessions inherit one guaranteed starting context: the task's project
 
 Scratch sessions inherit one guaranteed starting context: the selected project's repo root.
 
+Shaping sessions inherit one guaranteed starting context: the selected project's repo root.
+
 Git mode selection resolves in this order:
 
 1. explicit session choice
@@ -72,6 +74,7 @@ Other task or project metadata may be shown in side panels as view-only context,
 - Session owns execution context.
 - Task-linked sessions belong to tasks.
 - Scratch sessions are project-scoped exploration sessions with no task and no backlog/accountability object.
+- Shaping sessions are tracked project-scoped backlog-shaping sessions with no task.
 - A task does not carry an immutable branch or worktree assignment.
 - Multiple sessions under the same task may operate on different branches or roots.
 - Outputs live in code, documents, and other filesystem changes, not in the session object itself.
@@ -80,11 +83,15 @@ Other task or project metadata may be shown in side panels as view-only context,
 
 - Task-linked sessions are created by opening a task or by starting a task-backed ad-hoc session that auto-creates a visible task.
 - Scratch sessions are created by explicitly starting a scratch session against a selected project.
+- Shaping sessions are created by explicitly starting or resuming a project-scoped shaping session against a selected project.
 - Task-linked sessions can remain attached to a task across multiple resumptions.
 - Scratch sessions can remain attached to their project context across multiple resumptions.
+- Shaping sessions can remain attached to their project context across multiple resumptions.
+- Shaping sessions may stage accepted and rejected backlog proposals until the session is finalized and closed.
 - Sessions can be manually closed.
 - Task-linked sessions auto-close when the parent task enters a `done`-bucket status.
 - Scratch sessions do not auto-close from task status because they have no task.
+- Shaping sessions do not auto-close from task status because they have no task.
 - Some session records may later be archived when a project-level mutation invalidates their prior repo context, such as a repo-path change.
 
 Session states:
@@ -135,7 +142,7 @@ Implementations may also store supporting fields such as:
 
 External git changes between user requests are intentionally only captured on the next interaction.
 
-These passive snapshots apply to both task-linked and scratch sessions.
+These passive snapshots apply to task-linked, scratch, and shaping sessions.
 
 ## Collision awareness
 
@@ -149,6 +156,7 @@ These passive snapshots apply to both task-linked and scratch sessions.
 - Warnings are advisory and do not hard-block user actions.
 - Task and session surfaces should expose read-only visibility such as overlapping sessions, active session counts, or last known execution roots where useful.
 - Scratch sessions participate in the same directory-level warning model as task-linked sessions.
+- Shaping sessions also participate in that same directory-level warning model.
 
 ## Task status interaction
 
@@ -157,6 +165,7 @@ These passive snapshots apply to both task-linked and scratch sessions.
 - Entering a `done`-bucket status is the terminal close event for that task's task-linked sessions.
 - Runtime closure is driven by status transition rather than a distinct `Complete task` action.
 - Scratch sessions are unaffected by task status because they are not task-backed.
+- Shaping sessions are also unaffected by task status because they are not task-backed.
 
 ## Out-of-scope for MVP
 

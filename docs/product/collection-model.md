@@ -1,6 +1,6 @@
 # Collection Model (MVP)
 
-**Last updated:** 2026-03-13
+**Last updated:** 2026-03-17
 
 ## One-liner
 
@@ -40,7 +40,8 @@ Collections do not own repo context, branch choice, worktree choice, or session 
 - A collection groups related tasks inside that project.
 - Some tasks may stay directly under the project when they do not belong to a broader grouping.
 - A task remains the smallest actionable unit and may optionally reference a `collection_id`.
-- Sessions attach to tasks only, even when those tasks are grouped under a collection.
+- Task-linked sessions attach to tasks, even when those tasks are grouped under a collection.
+- Scratch and shaping sessions remain project-scoped and never attach directly to collections.
 - Collection membership does not change task status semantics or execution-root inheritance.
 
 Related docs:

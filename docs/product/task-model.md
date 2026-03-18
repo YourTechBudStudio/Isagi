@@ -1,6 +1,6 @@
 # Task Model (MVP)
 
-**Last updated:** 2026-03-11
+**Last updated:** 2026-03-17
 
 ## One-liner
 
@@ -72,15 +72,15 @@ Optional fields:
 
 ## Session relationship
 
-- This section describes **task-linked sessions**, not the separate scratch-session path.
+- This section describes **task-linked sessions**, not the separate scratch-session or shaping-session paths.
 - Every task-linked session belongs to exactly one task.
 - Task-linked sessions are the execution surfaces where accountable tracked work happens.
 - No persistent model-level primary session exists, even if UI surfaces temporarily prioritize one open session for convenience.
-- Planning or organizing sessions still attach to tasks; project-level planning flows should create or resume a dedicated planning task rather than introducing a second planning object.
 - A task may accumulate multiple task-linked sessions for different kinds of work, such as implementation, review, or follow-up.
 - Starting a task-backed ad-hoc session auto-creates a visible task with a generated title based on the first user message.
 - Task-linked sessions auto-close when the parent task enters a terminal `done`-bucket status.
 - Scratch sessions are a separate project-scoped exploration path with no task. They intentionally live outside the task/accountability model.
+- Shaping sessions are a separate tracked project-scoped path with no task. They can feed new tasks later without being task-backed themselves.
 - UI-specific prioritization guidance lives in `docs/product/screens/task-detail-modal.md`.
 
 Detailed runtime behavior lives in `docs/architecture/execution-model.md`.

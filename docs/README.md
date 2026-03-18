@@ -57,4 +57,4 @@ Archived product docs:
 
 - Keep docs concise but explicit on invariants.
 - Avoid duplicating deep mechanics across files; link to the owning doc instead.
-- Prefer task-first terminology in active docs; use `project` for repo containers.
+- Prefer explicit session-type terminology in active docs; use `project` for repo containers.

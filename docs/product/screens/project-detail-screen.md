@@ -1,6 +1,6 @@
 # Project Detail Screen (MVP)
 
-**Last updated:** 2026-03-16
+**Last updated:** 2026-03-17
 
 ## One-liner
 
@@ -11,7 +11,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Act as the deliberate project-scoped backlog surface for one repo project.
 - Help the user understand current work shape without turning into an analytics dashboard.
 - Make it easy to inspect, organize, and pick the next actionable task.
-- Support shaping and backlog cleanup through a dedicated shaping task opened with a Shaper session when needed.
+- Support shaping and backlog cleanup through project-scoped shaping sessions when needed.
 
 ## Non-goals
 
@@ -26,7 +26,7 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 - Project Detail is **repo-scoped**, not global.
 - Project Detail is **task-centric**, not session-centric.
 - The page is a workboard for understanding backlog shape and choosing next work.
-- Sessions remain attached to tasks, even when the page includes planning or organizational actions.
+- Tasks remain the primary board unit, while shaping stays a separate tracked session lane launched from project context.
 
 ## Information hierarchy
 
@@ -45,13 +45,14 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
   - **Shape what's next**
   - **Start ad-hoc session**
 - `Shape what's next` is the user-facing entry point into the Shaper agent for projects whose backlog still needs shaping or cleanup.
+- That action opens a project-scoped shaping flow rather than creating a shaping task on the board.
 - `Start ad-hoc session` fits projects where the user wants to begin visible tracked work immediately through a task-backed ad-hoc session.
 - Manual actions such as **New task** and **New collection** still exist, but they are secondary to the empty-state CTA pair.
 
 ### Common actions first
 
 - Common project actions should stay visible and consistent with the session surface action-bar pattern.
-- The primary shaping action is **Shape what's next**, which starts the Shaper agent.
+- The primary shaping action is **Shape what's next**, which opens the project-scoped shaping flow.
 - These actions are persistent page-level controls, even when the project empty state presents a more specific CTA pair.
 - Secondary actions include **New task**, **New collection**, **Project settings**, and view/filter controls.
 
@@ -122,11 +123,20 @@ The Project Detail screen answers: **"Where is this repo-project right now, and 
 ## Shaper agent
 
 - **Shape what's next** is the primary entry point into the Shaper agent.
-- It starts a normal session that uses the Shaper agent.
-- This shaping flow starts against the project as a whole rather than the currently selected view or filter context.
-- Launching that flow should create or resume a dedicated shaping task inside the project so backlog-shaping work stays accountable and visible on the board.
+- Shaping always starts against the project as a whole rather than the currently selected view or filter context.
+- If no shaping sessions exist for the project, the action should start a new shaping session immediately.
+- If shaping sessions already exist, the action should first open a small launcher before execution begins.
+- That launcher should list recent shaping sessions sorted by recency.
+- Each launcher row should show only the session title and last interaction time.
+- The launcher should also offer **Start new shaping session**.
+- New shaping sessions should use a simple project-based default title.
+- New shaping sessions should begin with an empty composer rather than a seeded starter prompt.
+- Shaping sessions are tracked and resumable, and they appear in Home and the sidebar like other sessions.
+- Shaping sessions do not create or reuse board tasks and should not appear on the board as task rows/cards.
+- The shaping companion panel is a tasks-only proposal list of draft candidate tasks.
+- Collection creation or broader backlog cleanup may still be outcomes of shaping, but those should happen through the conversation rather than separate non-task cards in the companion panel.
+- Accepted proposals remain staged during the shaping session and become visible on the board only after the shaping session is finalized and closed.
 - Its main role is backlog shaping, organization, cleanup, and identifying next work.
-- Once started, it appears in the existing session/sidebar model like any other session rather than introducing a separate concept.
 
 ## Collections on the page
 
