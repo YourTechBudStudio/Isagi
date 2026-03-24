@@ -39,9 +39,9 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 ### Minimal identity header
 
-- The page may show a small session title as quiet identity chrome.
+- The page identity header utilizes breadcrumbs for context, presenting a quiet identity chrome.
 - This area should not become a task-metadata header.
-- Scratch sessions and shaping sessions should carry a small visible mode badge in this identity chrome.
+- Scratch sessions and shaping sessions should carry a small visible mode badge near the breadcrumbs if needed, though the action bar layout should remain the primary identity anchor.
 - Normal task-backed sessions do not require a special badge.
 - Project name, task metadata, and other supporting context belong in the right panel rather than the main canvas chrome.
 
@@ -77,9 +77,10 @@ The Session screen answers: **"How do I keep talking to this agent session while
 
 - The Session action bar should cover:
   - collapse sidebar
+  - breadcrumb context for the current session
   - open terminal
   - open VS Code
-  - reveal richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions
+  - reveal richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions (Note: branch and dirty state are moved to the execution rail)
   - close session
   - toggle right panel for task-backed and shaping sessions only
 - `Close session` is a true session-level action and is a better fit here than `Complete task`.

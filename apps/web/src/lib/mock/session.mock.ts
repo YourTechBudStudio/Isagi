@@ -1,4 +1,7 @@
+export type SessionKind = "task" | "scratch" | "shaping";
+
 export type SessionHeader = {
+  readonly kind: SessionKind;
   readonly breadcrumbs: ReadonlyArray<string>;
   readonly currentContext: string;
   readonly branchName: string;
@@ -21,6 +24,7 @@ export type SessionProposal = {
 };
 
 export const sessionHeader: SessionHeader = {
+  kind: "shaping",
   breadcrumbs: ["Frontend", "Spark System"],
   currentContext: "Triage: Dark mode toggle",
   branchName: "main",
