@@ -1,6 +1,4 @@
-import { motion, useMotionValueEvent, useScroll } from "framer-motion";
 import { FolderPlus, Plus, Settings2, Sparkles } from "lucide-react";
-import { useState } from "react";
 
 import {
   PROJECT_ACTION_BAR_EDGE_OFFSET,
@@ -8,7 +6,9 @@ import {
   projectSettingsSheetTransition,
 } from "@/components/project/projectSettings.constants";
 import { Button } from "@/components/ui/Button";
+import { FloatingActionBar } from "@/components/ui/FloatingActionBar";
 import { IconButton } from "@/components/ui/IconButton";
+import { useHideOnScrollHeader } from "@/lib/hooks/useHideOnScrollHeader";
 
 type ProjectActionBarProps = {
   readonly isSettingsOpen: boolean;
@@ -19,31 +19,16 @@ export function ProjectActionBar({
   isSettingsOpen,
   onToggleSettings,
 }: ProjectActionBarProps) {
-  const { scrollY } = useScroll();
-  const [hidden, setHidden] = useState(false);
-
-  useMotionValueEvent(scrollY, "change", latest => {
-    const previous = scrollY.getPrevious() ?? 0;
-    if (latest > previous && latest > 50) {
-      setHidden(true);
-    } else {
-      setHidden(false);
-    }
-  });
+  const hidden = useHideOnScrollHeader();
+  const rightInset = isSettingsOpen
+    ? PROJECT_SETTINGS_SHEET_WIDTH + PROJECT_ACTION_BAR_EDGE_OFFSET
+    : PROJECT_ACTION_BAR_EDGE_OFFSET;
 
   return (
-    <motion.header
-      animate={{
-        y: hidden ? "-150%" : 0,
-        right: isSettingsOpen
-          ? PROJECT_SETTINGS_SHEET_WIDTH + PROJECT_ACTION_BAR_EDGE_OFFSET
-          : PROJECT_ACTION_BAR_EDGE_OFFSET,
-      }}
-      transition={{
-        y: { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
-        right: projectSettingsSheetTransition,
-      }}
-      className="pointer-events-none fixed top-6 z-30 flex items-center justify-between"
+    <FloatingActionBar
+      hidden={hidden}
+      rightInset={rightInset}
+      rightTransition={projectSettingsSheetTransition}
     >
       <div className="bg-canvas-elevated/80 pointer-events-auto flex items-center gap-2 rounded-2xl border border-white/10 p-1.5 shadow-lg backdrop-blur-md">
         <div className="flex items-center gap-1 border-r border-white/10 px-1 pr-2">
@@ -84,6 +69,6 @@ export function ProjectActionBar({
           />
         </div>
       </div>
-    </motion.header>
+    </FloatingActionBar>
   );
 }

@@ -11,6 +11,13 @@ export type TaskSessionCtaConfig = {
   readonly iconKind: "active" | "resume" | "start";
 };
 
+export type TaskSessionState = {
+  readonly primarySession?: MockOpenSession;
+  readonly secondarySessions: ReadonlyArray<MockOpenSession>;
+  readonly activeSiblingSessions: ReadonlyArray<MockOpenSession>;
+  readonly ctaConfig: TaskSessionCtaConfig;
+};
+
 export function getPrimaryOpenSession(
   openSessions: ReadonlyArray<MockOpenSession>,
 ): MockOpenSession | undefined {
@@ -20,8 +27,17 @@ export function getPrimaryOpenSession(
 export function getSecondaryOpenSessions(
   openSessions: ReadonlyArray<MockOpenSession>,
   primarySession?: MockOpenSession,
-): Array<MockOpenSession> {
+): ReadonlyArray<MockOpenSession> {
   return openSessions.filter(session => session !== primarySession);
+}
+
+export function getActiveSiblingSessions(
+  openSessions: ReadonlyArray<MockOpenSession>,
+  primarySession?: MockOpenSession,
+): ReadonlyArray<MockOpenSession> {
+  return getSecondaryOpenSessions(openSessions, primarySession).filter(
+    session => session.isActive,
+  );
 }
 
 export function getTaskSessionCta(task: MockTask): TaskSessionCtaConfig {
@@ -54,5 +70,22 @@ export function getTaskSessionCta(task: MockTask): TaskSessionCtaConfig {
     sessionId: task.id,
     accentClass: "",
     iconKind: "start",
+  };
+}
+
+export function getTaskSessionState(task: MockTask): TaskSessionState {
+  const primarySession = getPrimaryOpenSession(task.openSessions);
+
+  return {
+    primarySession,
+    secondarySessions: getSecondaryOpenSessions(
+      task.openSessions,
+      primarySession,
+    ),
+    activeSiblingSessions: getActiveSiblingSessions(
+      task.openSessions,
+      primarySession,
+    ),
+    ctaConfig: getTaskSessionCta(task),
   };
 }

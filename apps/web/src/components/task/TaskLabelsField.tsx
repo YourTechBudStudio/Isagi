@@ -4,19 +4,23 @@ import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/cn";
-import { normalizeLabelKey, sanitizeLabel } from "@/lib/labels";
+import {
+  getSelectableLabels,
+  normalizeLabelKey,
+  sanitizeLabel,
+} from "@/lib/labels";
 
-type TaskDetailModalLabelsProps = {
+type TaskLabelsFieldProps = {
   readonly selectedLabels: ReadonlyArray<string>;
   readonly availableLabels?: ReadonlyArray<string>;
   readonly onChange: (labels: ReadonlyArray<string>) => void;
 };
 
-export function TaskDetailModalLabels({
+export function TaskLabelsField({
   selectedLabels,
   availableLabels = [],
   onChange,
-}: TaskDetailModalLabelsProps) {
+}: TaskLabelsFieldProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -25,62 +29,34 @@ export function TaskDetailModalLabels({
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
 
-  const allKnownLabels = Array.from(
-    new Set(
-      [...availableLabels, ...selectedLabels]
-        .map(sanitizeLabel)
-        .filter(Boolean),
-    ),
-  ).sort((left, right) => left.localeCompare(right));
-
-  const normalizedQuery = normalizeLabelKey(searchQuery);
-
-  // Filter out labels that are already selected, then match against the query
-  const unselectedLabels = allKnownLabels.filter(
-    label =>
-      !selectedLabels.some(
-        selected => normalizeLabelKey(selected) === normalizeLabelKey(label),
-      ),
+  const { filteredLabels, canCreate } = getSelectableLabels(
+    selectedLabels,
+    availableLabels,
+    searchQuery,
   );
-
-  const filteredLabels = unselectedLabels.filter(label =>
-    normalizeLabelKey(label).includes(normalizedQuery),
-  );
-
-  const exactMatch = allKnownLabels.find(
-    label => normalizeLabelKey(label) === normalizedQuery,
-  );
-  const canCreate = sanitizeLabel(searchQuery).length > 0 && !exactMatch;
-
-  // The total options available in the dropdown
   const optionsCount = filteredLabels.length + (canCreate ? 1 : 0);
 
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchQuery(e.target.value);
-    setActiveIndex(0);
-    setIsOpen(true);
-  };
-
-  // Scroll active item into view
   useEffect(() => {
-    if (!isOpen || optionsCount === 0 || !listboxRef.current) return;
-
-    const activeElement = listboxRef.current.children[
-      activeIndex
-    ] as HTMLElement;
-    if (activeElement) {
-      activeElement.scrollIntoView({
-        block: "nearest",
-        behavior: "smooth",
-      });
+    if (!isOpen || optionsCount === 0 || !listboxRef.current) {
+      return;
     }
+
+    const activeElement = listboxRef.current.children[activeIndex] as
+      | HTMLElement
+      | undefined;
+
+    activeElement?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
   }, [activeIndex, isOpen, optionsCount]);
 
   const handleAddLabel = (label: string) => {
     const newLabel = sanitizeLabel(label);
-    if (!newLabel) return;
+    if (!newLabel) {
+      return;
+    }
 
-    // Check if already exists (case-insensitive)
     const isSelected = selectedLabels.some(
       selected => normalizeLabelKey(selected) === normalizeLabelKey(newLabel),
     );
@@ -90,7 +66,6 @@ export function TaskDetailModalLabels({
     }
 
     setSearchQuery("");
-    // Keep focus in the input so user can keep typing more labels
     inputRef.current?.focus();
   };
 
@@ -108,11 +83,8 @@ export function TaskDetailModalLabels({
       searchQuery === "" &&
       selectedLabels.length > 0
     ) {
-      // Remove the last label when backspacing on an empty input
       e.preventDefault();
-      const newLabels = [...selectedLabels];
-      newLabels.pop();
-      onChange(newLabels);
+      onChange(selectedLabels.slice(0, -1));
       return;
     }
 
@@ -133,7 +105,9 @@ export function TaskDetailModalLabels({
         break;
       case "Enter":
         e.preventDefault();
-        if (optionsCount === 0) return;
+        if (optionsCount === 0) {
+          return;
+        }
 
         if (activeIndex < filteredLabels.length) {
           handleAddLabel(filteredLabels[activeIndex]);
@@ -146,6 +120,8 @@ export function TaskDetailModalLabels({
         setIsOpen(false);
         setSearchQuery("");
         inputRef.current?.blur();
+        break;
+      default:
         break;
     }
   };
@@ -192,7 +168,11 @@ export function TaskDetailModalLabels({
             ref={inputRef}
             type="text"
             value={searchQuery}
-            onChange={handleSearchChange}
+            onChange={e => {
+              setSearchQuery(e.target.value);
+              setActiveIndex(0);
+              setIsOpen(true);
+            }}
             onKeyDown={handleKeyDown}
             onFocus={() => setIsOpen(true)}
             placeholder={

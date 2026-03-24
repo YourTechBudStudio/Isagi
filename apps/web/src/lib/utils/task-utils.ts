@@ -1,8 +1,9 @@
-import type { MockTask } from "@/lib/mock/project.mock";
+import type { MockTask, TaskPriority } from "@/lib/mock/project.mock";
 import type {
   ProjectPriorityFilter,
   ProjectSortKey,
 } from "@/lib/project-detail-storage";
+import { getTaskPriorityTone } from "@/lib/task-ui";
 
 const priorityWeight = {
   high: 0,
@@ -10,17 +11,8 @@ const priorityWeight = {
   low: 2,
 } as const;
 
-export function getPriorityColor(priority: string) {
-  switch (priority) {
-    case "high":
-      return "red";
-    case "medium":
-      return "amber";
-    case "low":
-      return "blue";
-    default:
-      return "neutral";
-  }
+export function getPriorityColor(priority: TaskPriority) {
+  return getTaskPriorityTone(priority);
 }
 
 export function getDueDateColor(dueDate?: string) {

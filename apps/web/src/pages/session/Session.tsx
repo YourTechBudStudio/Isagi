@@ -19,11 +19,10 @@ import {
 import { SessionShapingPanel } from "@/components/session/SessionShapingPanel";
 import { SessionTaskPanel } from "@/components/session/SessionTaskPanel";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-import { mockProjectCore } from "@/lib/mock/project.mock";
+import type { MockTask } from "@/lib/mock/project.mock";
 import {
-  sessionComposerConfig,
-  sessionHeader,
-  sessionProposals,
+  mockSessionScreen,
+  sessionHasCompanionPanel,
 } from "@/lib/mock/session.mock";
 import {
   mockSidebarProjects,
@@ -31,12 +30,15 @@ import {
 } from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
-  const isScratch = sessionHeader.kind === "scratch";
-  const [rightPanelOpen, setRightPanelOpen] = useState(!isScratch);
-  const [task, setTask] = useState(mockProjectCore.tasks[0]);
+  const session = mockSessionScreen;
+  const hasCompanionPanel = sessionHasCompanionPanel(session);
+  const [rightPanelOpen, setRightPanelOpen] = useState(hasCompanionPanel);
+  const [task, setTask] = useState<MockTask | null>(
+    session.kind === "task" ? session.task : null,
+  );
 
   const contentRightInset =
-    rightPanelOpen && !isScratch
+    rightPanelOpen && hasCompanionPanel
       ? SESSION_PANEL_WIDTH + SESSION_EDGE_OFFSET
       : SESSION_EDGE_OFFSET;
 
@@ -59,10 +61,10 @@ export default function Session() {
           className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-(--layout-sidebar-width) z-20 h-24 bg-linear-to-b to-transparent"
         />
         <SessionActionBar
-          kind={sessionHeader.kind}
-          breadcrumbs={sessionHeader.breadcrumbs}
-          currentContext={sessionHeader.currentContext}
-          branchName={sessionHeader.branchName}
+          kind={session.kind}
+          breadcrumbs={session.breadcrumbs}
+          currentContext={session.currentContext}
+          execution={session.execution}
           rightInset={contentRightInset}
           isArtifactsOpen={rightPanelOpen}
           onToggleArtifacts={() => setRightPanelOpen(!rightPanelOpen)}
@@ -168,11 +170,11 @@ export default function Session() {
           className="fixed bottom-0 left-[calc(var(--layout-sidebar-width)+1.5rem)] z-30"
         >
           <Composer
-            modeLabel={sessionComposerConfig.modeLabel}
-            modelLabel={sessionComposerConfig.modelLabel}
-            speedLabel={sessionComposerConfig.speedLabel}
-            placeholder={sessionComposerConfig.placeholder}
-            disclaimer={sessionComposerConfig.disclaimer}
+            modeLabel={session.composer.modeLabel}
+            modelLabel={session.composer.modelLabel}
+            speedLabel={session.composer.speedLabel}
+            placeholder={session.composer.placeholder}
+            disclaimer={session.composer.disclaimer}
           />
         </motion.div>
       </main>
@@ -180,28 +182,28 @@ export default function Session() {
       <motion.div
         initial={false}
         animate={{
-          width: rightPanelOpen && !isScratch ? SESSION_PANEL_WIDTH : 0,
+          width: rightPanelOpen && hasCompanionPanel ? SESSION_PANEL_WIDTH : 0,
         }}
         transition={sessionPanelTransition}
         className="relative z-20 shrink-0"
       >
         <motion.aside
           initial={false}
-          animate={{ x: rightPanelOpen && !isScratch ? 0 : "100%" }}
+          animate={{ x: rightPanelOpen && hasCompanionPanel ? 0 : "100%" }}
           transition={sessionPanelTransition}
           className="bg-canvas fixed top-0 right-0 z-40 flex h-dvh w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
         >
-          {sessionHeader.kind === "shaping" && (
+          {session.kind === "shaping" && (
             <SessionShapingPanel
-              proposals={sessionProposals}
+              proposals={session.proposals}
               onClose={() => setRightPanelOpen(false)}
             />
           )}
-          {sessionHeader.kind === "task" && task && (
+          {session.kind === "task" && task && (
             <SessionTaskPanel
               task={task}
-              availableLabels={["core", "git", "ui", "bug", "api"]}
-              collectionOptions={["Q1 Milestones", "Realtime Infrastructure"]}
+              availableLabels={session.availableLabels}
+              collectionOptions={session.collectionOptions}
               onClose={() => setRightPanelOpen(false)}
               onUpdateTask={setTask}
             />

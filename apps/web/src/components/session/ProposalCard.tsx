@@ -2,11 +2,10 @@ import { CheckCircle2, CircleDashed, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-
-type ProposalStatus = "approved" | "rejected" | "pending";
+import type { SessionProposalStatus } from "@/lib/mock/session.mock";
 
 type ProposalCardProps = {
-  readonly status: ProposalStatus;
+  readonly status: SessionProposalStatus;
   readonly title: string;
   readonly subtitle: string;
   readonly dependencyLabel?: string;
@@ -18,13 +17,13 @@ export function ProposalCard({
   subtitle,
   dependencyLabel,
 }: ProposalCardProps) {
-  if (status === "approved") {
+  if (status === "accepted") {
     return (
       <SurfaceCard tone="green" className="rounded-xl p-4 transition-all">
         <div className="mb-2 flex items-start justify-between">
           <div className="text-accent-green flex items-center gap-2 text-sm font-semibold">
             <CheckCircle2 className="h-4 w-4" />
-            Approved
+            Accepted
           </div>
         </div>
         <h3 className="text-text-primary mb-1 font-medium">{title}</h3>
@@ -68,7 +67,7 @@ export function ProposalCard({
       <div className="relative z-10 mb-3 flex items-start justify-between">
         <div className="text-accent-violet flex items-center gap-2 text-sm font-semibold">
           <CircleDashed className="h-4 w-4" />
-          Pending Review
+          Open Proposal
         </div>
         <button className="text-text-tertiary hover:text-text-primary text-xs transition-colors">
           Edit
@@ -93,7 +92,7 @@ export function ProposalCard({
           size="md"
           className="bg-accent-green/10 hover:bg-accent-green/20 text-accent-green border-accent-green/20 flex-1 border"
         >
-          Approve
+          Accept
         </Button>
         <Button
           variant="ghost"
