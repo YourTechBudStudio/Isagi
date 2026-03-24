@@ -24,7 +24,7 @@ export type SessionProposal = {
 };
 
 export const sessionHeader: SessionHeader = {
-  kind: "shaping",
+  kind: "task",
   breadcrumbs: ["Frontend", "Spark System"],
   currentContext: "Triage: Dark mode toggle",
   branchName: "main",

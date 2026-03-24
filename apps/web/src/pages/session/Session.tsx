@@ -4,23 +4,22 @@ import {
   ChevronRight,
   Sparkles,
   TerminalSquare,
-  X,
 } from "lucide-react";
 import { useState } from "react";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { ContextSidebar } from "@/components/layout/ContextSidebar";
-import { ScrollableArea } from "@/components/layout/ScrollableArea";
 import { Composer } from "@/components/session/Composer";
-import { ProposalCard } from "@/components/session/ProposalCard";
 import { SessionActionBar } from "@/components/session/SessionActionBar";
 import {
   SESSION_EDGE_OFFSET,
   SESSION_PANEL_WIDTH,
   sessionPanelTransition,
 } from "@/components/session/sessionLayout.constants";
-import { IconButton } from "@/components/ui/IconButton";
+import { SessionShapingPanel } from "@/components/session/SessionShapingPanel";
+import { SessionTaskPanel } from "@/components/session/SessionTaskPanel";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { mockProjectCore } from "@/lib/mock/project.mock";
 import {
   sessionComposerConfig,
   sessionHeader,
@@ -32,10 +31,14 @@ import {
 } from "@/lib/mock/sidebar.mock";
 
 export default function Session() {
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
-  const contentRightInset = rightPanelOpen
-    ? SESSION_PANEL_WIDTH + SESSION_EDGE_OFFSET
-    : SESSION_EDGE_OFFSET;
+  const isScratch = sessionHeader.kind === "scratch";
+  const [rightPanelOpen, setRightPanelOpen] = useState(!isScratch);
+  const [task, setTask] = useState(mockProjectCore.tasks[0]);
+
+  const contentRightInset =
+    rightPanelOpen && !isScratch
+      ? SESSION_PANEL_WIDTH + SESSION_EDGE_OFFSET
+      : SESSION_EDGE_OFFSET;
 
   return (
     <AppShell
@@ -176,40 +179,33 @@ export default function Session() {
 
       <motion.div
         initial={false}
-        animate={{ width: rightPanelOpen ? SESSION_PANEL_WIDTH : 0 }}
+        animate={{
+          width: rightPanelOpen && !isScratch ? SESSION_PANEL_WIDTH : 0,
+        }}
         transition={sessionPanelTransition}
         className="relative z-20 shrink-0"
       >
         <motion.aside
           initial={false}
-          animate={{ x: rightPanelOpen ? 0 : "100%" }}
+          animate={{ x: rightPanelOpen && !isScratch ? 0 : "100%" }}
           transition={sessionPanelTransition}
           className="bg-canvas fixed top-0 right-0 z-40 flex h-dvh w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
         >
-          <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/5 px-5">
-            <h2 className="text-text-tertiary flex items-center gap-2 text-xs font-semibold tracking-wider uppercase">
-              <div className="bg-accent-blue/80 h-1.5 w-1.5 rounded-full shadow-[0_0_8px_rgba(138,173,244,0.8)]" />
-              Proposed Actions
-            </h2>
-            <IconButton
-              onClick={() => setRightPanelOpen(false)}
-              icon={<X className="h-4 w-4" />}
-              variant="subtle"
-              title="Close Panel"
+          {sessionHeader.kind === "shaping" && (
+            <SessionShapingPanel
+              proposals={sessionProposals}
+              onClose={() => setRightPanelOpen(false)}
             />
-          </div>
-
-          <ScrollableArea className="flex-1 space-y-4 p-5">
-            {sessionProposals.map(proposal => (
-              <ProposalCard
-                key={proposal.id}
-                status={proposal.status}
-                title={proposal.title}
-                subtitle={proposal.subtitle}
-                dependencyLabel={proposal.dependencyLabel}
-              />
-            ))}
-          </ScrollableArea>
+          )}
+          {sessionHeader.kind === "task" && task && (
+            <SessionTaskPanel
+              task={task}
+              availableLabels={["core", "git", "ui", "bug", "api"]}
+              collectionOptions={["Q1 Milestones", "Realtime Infrastructure"]}
+              onClose={() => setRightPanelOpen(false)}
+              onUpdateTask={setTask}
+            />
+          )}
         </motion.aside>
       </motion.div>
     </AppShell>
