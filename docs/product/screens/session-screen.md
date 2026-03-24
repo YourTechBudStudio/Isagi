@@ -58,10 +58,10 @@ The Session screen answers: **"How do I keep talking to this agent session while
 - New shaping sessions should begin with an empty composer rather than a seeded starter prompt.
 - No large checkpoint, resumability summary, or task brief should compete with the latest conversation turns by default.
 
-### Bottom execution rail
+### Action bar git controls
 
-- Live execution state should stay visible near the composer, where the user is actively working.
-- This rail shows current runtime state rather than becoming the place for every deeper git action.
+- Live execution state should stay visible in the action bar via a dedicated git indicator.
+- This indicator shows current runtime state and provides a popover for deeper git actions.
 
 ### Right companion panel
 
@@ -80,7 +80,7 @@ The Session screen answers: **"How do I keep talking to this agent session while
   - breadcrumb context for the current session
   - open terminal
   - open VS Code
-  - reveal richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions (Note: branch and dirty state are moved to the execution rail)
+  - reveal current execution state (branch, dirty state) and a popover for richer git controls such as execution-root switching, git-mode choice, and related managed-worktree or rebind actions
   - close session
   - toggle right panel for task-backed and shaping sessions only
 - `Close session` is a true session-level action and is a better fit here than `Complete task`.
@@ -88,16 +88,15 @@ The Session screen answers: **"How do I keep talking to this agent session while
 - The action bar may expose git and workspace actions, but it should avoid turning into a dense always-expanded control deck.
 - Scratch sessions should omit the right-panel toggle entirely.
 
-## Execution rail contents
+## Git controls popover contents
 
-- The bottom execution rail should stay always visible near the composer.
-- It should show the current execution state at a glance:
+- The git controls should live in a popover triggered from the action bar.
+- The trigger itself should show the current branch and a dirty or uncommitted-change indicator at a glance.
+- The popover should show the full execution state:
   - branch
   - repo-root versus managed-worktree mode
-  - dirty or uncommitted-change indicator
-- The rail should emphasize current state, while richer git actions stay discoverable from the action bar.
-- This keeps live runtime visibility near the composer and reserves the action bar for deeper execution changes.
-- Collision awareness can layer onto the rail later, but it is not part of the required day-one information set for the Session mock.
+  - richer git actions (switching roots, git-mode choice)
+- Collision awareness can layer onto this popover later, but it is not part of the required day-one information set for the Session mock.
 
 ## Right-panel contents
 

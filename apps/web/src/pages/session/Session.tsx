@@ -53,12 +53,13 @@ export default function Session() {
             right: contentRightInset,
           }}
           transition={sessionPanelTransition}
-          className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-[var(--layout-sidebar-width)] z-20 h-24 bg-linear-to-b to-transparent"
+          className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-(--layout-sidebar-width) z-20 h-24 bg-linear-to-b to-transparent"
         />
         <SessionActionBar
           kind={sessionHeader.kind}
           breadcrumbs={sessionHeader.breadcrumbs}
           currentContext={sessionHeader.currentContext}
+          branchName={sessionHeader.branchName}
           rightInset={contentRightInset}
           isArtifactsOpen={rightPanelOpen}
           onToggleArtifacts={() => setRightPanelOpen(!rightPanelOpen)}
