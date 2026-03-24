@@ -14,9 +14,13 @@ import { ScrollableArea } from "@/components/layout/ScrollableArea";
 import { Composer } from "@/components/session/Composer";
 import { ProposalCard } from "@/components/session/ProposalCard";
 import { SessionActionBar } from "@/components/session/SessionActionBar";
+import {
+  SESSION_EDGE_OFFSET,
+  SESSION_PANEL_WIDTH,
+  sessionPanelTransition,
+} from "@/components/session/sessionLayout.constants";
 import { IconButton } from "@/components/ui/IconButton";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-import { cn } from "@/lib/cn";
 import {
   sessionComposerConfig,
   sessionHeader,
@@ -29,13 +33,9 @@ import {
 
 export default function Session() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
-  const composerInsetClassName = cn(
-    "fixed bottom-0 z-30",
-    "left-[calc(var(--layout-sidebar-width)+1.5rem)]",
-    rightPanelOpen
-      ? "right-[calc(var(--layout-panel-width)+1.5rem)]"
-      : "right-6",
-  );
+  const contentRightInset = rightPanelOpen
+    ? SESSION_PANEL_WIDTH + SESSION_EDGE_OFFSET
+    : SESSION_EDGE_OFFSET;
 
   return (
     <AppShell
@@ -50,17 +50,16 @@ export default function Session() {
         <motion.div
           initial={false}
           animate={{
-            right: rightPanelOpen
-              ? "calc(var(--layout-panel-width) + var(--layout-scrollbar-size))"
-              : "var(--layout-scrollbar-size)",
+            right: contentRightInset,
           }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-          className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-(--layout-sidebar-width) z-20 h-24 bg-linear-to-b to-transparent"
+          transition={sessionPanelTransition}
+          className="from-canvas via-canvas/80 pointer-events-none fixed top-0 left-[var(--layout-sidebar-width)] z-20 h-24 bg-linear-to-b to-transparent"
         />
         <SessionActionBar
           kind={sessionHeader.kind}
           breadcrumbs={sessionHeader.breadcrumbs}
           currentContext={sessionHeader.currentContext}
+          rightInset={contentRightInset}
           isArtifactsOpen={rightPanelOpen}
           onToggleArtifacts={() => setRightPanelOpen(!rightPanelOpen)}
         />
@@ -158,26 +157,32 @@ export default function Session() {
           </div>
         </div>
 
-        <Composer
-          modeLabel={sessionComposerConfig.modeLabel}
-          modelLabel={sessionComposerConfig.modelLabel}
-          speedLabel={sessionComposerConfig.speedLabel}
-          placeholder={sessionComposerConfig.placeholder}
-          disclaimer={sessionComposerConfig.disclaimer}
-          containerClassName={composerInsetClassName}
-        />
+        <motion.div
+          initial={false}
+          animate={{ right: contentRightInset }}
+          transition={sessionPanelTransition}
+          className="fixed bottom-0 left-[calc(var(--layout-sidebar-width)+1.5rem)] z-30"
+        >
+          <Composer
+            modeLabel={sessionComposerConfig.modeLabel}
+            modelLabel={sessionComposerConfig.modelLabel}
+            speedLabel={sessionComposerConfig.speedLabel}
+            placeholder={sessionComposerConfig.placeholder}
+            disclaimer={sessionComposerConfig.disclaimer}
+          />
+        </motion.div>
       </main>
 
       <motion.div
         initial={false}
-        animate={{ width: rightPanelOpen ? 384 : 0 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        animate={{ width: rightPanelOpen ? SESSION_PANEL_WIDTH : 0 }}
+        transition={sessionPanelTransition}
         className="relative z-20 shrink-0"
       >
         <motion.aside
           initial={false}
           animate={{ x: rightPanelOpen ? 0 : "100%" }}
-          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          transition={sessionPanelTransition}
           className="bg-canvas fixed top-0 right-0 z-40 flex h-dvh w-[384px] flex-col border-l border-white/5 shadow-[-8px_0_24px_rgba(0,0,0,0.2)]"
         >
           <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/5 px-5">

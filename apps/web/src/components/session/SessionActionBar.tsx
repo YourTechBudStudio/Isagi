@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+import { sessionPanelTransition } from "@/components/session/sessionLayout.constants";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -18,6 +19,7 @@ type SessionActionBarProps = {
   readonly kind: SessionKind;
   readonly breadcrumbs: ReadonlyArray<string>;
   readonly currentContext: string;
+  readonly rightInset: number;
   readonly isArtifactsOpen: boolean;
   readonly onToggleArtifacts: () => void;
 };
@@ -26,6 +28,7 @@ export function SessionActionBar({
   kind,
   breadcrumbs,
   currentContext,
+  rightInset,
   isArtifactsOpen,
   onToggleArtifacts,
 }: SessionActionBarProps) {
@@ -44,19 +47,19 @@ export function SessionActionBar({
   const headerClassName = cn(
     "pointer-events-none fixed top-6 z-30 flex items-center justify-between",
     "left-[calc(var(--layout-sidebar-width)+1.5rem)]",
-    isArtifactsOpen
-      ? "right-[calc(var(--layout-panel-width)+1.5rem)]"
-      : "right-6",
   );
 
   return (
     <motion.header
-      variants={{
-        visible: { y: 0 },
-        hidden: { y: "-150%" },
+      initial={false}
+      animate={{
+        y: hidden ? "-150%" : 0,
+        right: rightInset,
       }}
-      animate={hidden ? "hidden" : "visible"}
-      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      transition={{
+        y: { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
+        right: sessionPanelTransition,
+      }}
       className={headerClassName}
     >
       <div className="text-text-tertiary pointer-events-auto flex items-center gap-2 text-sm font-medium">
