@@ -66,10 +66,6 @@ export type SessionScreenData =
   | ScratchSessionScreenData
   | ShapingSessionScreenData;
 
-export function sessionHasCompanionPanel(session: SessionScreenData): boolean {
-  return session.kind !== "scratch";
-}
-
 const sharedComposer: SessionComposerConfig = {
   modeLabel: "Brainstorming",
   modelLabel: "Claude 3.5 Sonnet",

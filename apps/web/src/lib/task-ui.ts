@@ -1,8 +1,4 @@
-import type {
-  MockOpenSession,
-  TaskPriority,
-  TaskStatus,
-} from "@/lib/mock/project.mock";
+import type { TaskPriority, TaskStatus } from "@/lib/mock/project.mock";
 
 export type TaskBadgeTone =
   | "blue"
@@ -46,23 +42,3 @@ export const TASK_PRIORITY_OPTIONS = Object.entries(TASK_PRIORITY_META).map(
     tone: meta.tone,
   }),
 );
-
-export function formatTaskStatus(status: TaskStatus): string {
-  return TASK_STATUS_META[status].label;
-}
-
-export function formatTaskPriority(priority: TaskPriority): string {
-  return TASK_PRIORITY_META[priority].label;
-}
-
-export function getTaskPriorityTone(priority: TaskPriority): TaskBadgeTone {
-  return TASK_PRIORITY_META[priority].tone;
-}
-
-export function getTaskStatusTone(status: TaskStatus): TaskBadgeTone {
-  return TASK_STATUS_META[status].tone;
-}
-
-export function getOpenSessionLabel(session: MockOpenSession): string {
-  return session.label;
-}

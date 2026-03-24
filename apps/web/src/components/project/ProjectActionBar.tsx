@@ -8,7 +8,6 @@ import {
 import { Button } from "@/components/ui/Button";
 import { FloatingActionBar } from "@/components/ui/FloatingActionBar";
 import { IconButton } from "@/components/ui/IconButton";
-import { useHideOnScrollHeader } from "@/lib/hooks/useHideOnScrollHeader";
 
 type ProjectActionBarProps = {
   readonly isSettingsOpen: boolean;
@@ -19,14 +18,12 @@ export function ProjectActionBar({
   isSettingsOpen,
   onToggleSettings,
 }: ProjectActionBarProps) {
-  const hidden = useHideOnScrollHeader();
   const rightInset = isSettingsOpen
     ? PROJECT_SETTINGS_SHEET_WIDTH + PROJECT_ACTION_BAR_EDGE_OFFSET
     : PROJECT_ACTION_BAR_EDGE_OFFSET;
 
   return (
     <FloatingActionBar
-      hidden={hidden}
       rightInset={rightInset}
       rightTransition={projectSettingsSheetTransition}
     >

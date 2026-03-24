@@ -1,7 +1,6 @@
 import { Play, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router";
 
-import { TaskRelatedSessions } from "@/components/task/TaskRelatedSessions";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
@@ -17,13 +16,46 @@ export function TaskSessionSection({ task, variant }: TaskSessionSectionProps) {
   const { activeSiblingSessions, ctaConfig, secondarySessions } =
     getTaskSessionState(task);
 
-  if (variant === "panel") {
+  const renderSessionList = (
+    sessions: ReadonlyArray<(typeof task.openSessions)[number]>,
+    title: string,
+  ) => {
+    if (sessions.length === 0) {
+      return null;
+    }
+
     return (
-      <TaskRelatedSessions
-        sessions={activeSiblingSessions}
-        title="Active sibling sessions"
-      />
+      <div className="flex flex-col gap-2.5">
+        <span className="text-text-tertiary text-[11px] font-medium tracking-wider uppercase">
+          {title}
+        </span>
+
+        <div className="flex flex-col gap-0.5 overflow-hidden rounded-xl border border-white/5">
+          {sessions.map(session => (
+            <div
+              key={session.id}
+              className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-white/2"
+            >
+              <span className="text-text-secondary text-sm">
+                {session.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate(`/session/${session.id}`)}
+                className="text-text-tertiary hover:text-text-primary flex items-center gap-1.5 text-xs font-medium transition-colors"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Resume
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
     );
+  };
+
+  if (variant === "panel") {
+    return renderSessionList(activeSiblingSessions, "Active sibling sessions");
   }
 
   return (
@@ -44,10 +76,7 @@ export function TaskSessionSection({ task, variant }: TaskSessionSectionProps) {
         {ctaConfig.label}
       </Button>
 
-      <TaskRelatedSessions
-        sessions={secondarySessions}
-        title="Other sessions"
-      />
+      {renderSessionList(secondarySessions, "Other sessions")}
     </div>
   );
 }

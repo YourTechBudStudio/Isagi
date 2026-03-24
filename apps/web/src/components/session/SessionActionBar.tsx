@@ -8,14 +8,13 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { GitStatusPopover } from "@/components/session/GitStatusPopover";
 import { sessionPanelTransition } from "@/components/session/sessionLayout.constants";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { FloatingActionBar } from "@/components/ui/FloatingActionBar";
 import { IconButton } from "@/components/ui/IconButton";
+import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/cn";
-import { useHideOnScrollHeader } from "@/lib/hooks/useHideOnScrollHeader";
 import type {
   SessionExecutionState,
   SessionKind,
@@ -40,13 +39,11 @@ export function SessionActionBar({
   isArtifactsOpen,
   onToggleArtifacts,
 }: SessionActionBarProps) {
-  const hidden = useHideOnScrollHeader();
   const [gitOpen, setGitOpen] = useState(false);
   const gitRef = useRef<HTMLButtonElement>(null);
 
   return (
     <FloatingActionBar
-      hidden={hidden}
       rightInset={rightInset}
       rightTransition={sessionPanelTransition}
       className="left-[calc(var(--layout-sidebar-width)+1.5rem)]"
@@ -104,12 +101,64 @@ export function SessionActionBar({
             />
           </button>
 
-          <GitStatusPopover
+          <Popover
             open={gitOpen}
             onClose={() => setGitOpen(false)}
             anchorRef={gitRef}
-            execution={execution}
-          />
+            minWidth={220}
+          >
+            <div className="p-2">
+              <div className="text-text-secondary mb-2 px-2 text-[10px] font-bold tracking-wider uppercase">
+                Execution State
+              </div>
+
+              <div className="flex flex-col gap-0.5">
+                <div className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm">
+                  <span className="text-text-secondary">Branch</span>
+                  <span className="text-text-primary font-mono text-xs">
+                    {execution.branchName}
+                  </span>
+                </div>
+                <div className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm">
+                  <span className="text-text-secondary">Mode</span>
+                  <span className="text-text-primary text-xs capitalize">
+                    {execution.mode.replaceAll("_", " ")}
+                  </span>
+                </div>
+                <div className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm">
+                  <span className="text-text-secondary">Changes</span>
+                  <span
+                    className={cn(
+                      "text-xs font-medium",
+                      execution.hasUncommittedChanges
+                        ? "text-accent-amber"
+                        : "text-accent-green",
+                    )}
+                  >
+                    {execution.hasUncommittedChanges ? "Uncommitted" : "Clean"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="my-1.5 border-t border-white/5" />
+
+              <div className="text-text-secondary mb-2 px-2 pt-1 text-[10px] font-bold tracking-wider uppercase">
+                Actions
+              </div>
+
+              <div className="flex flex-col gap-0.5">
+                {execution.actions.map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    className="text-text-primary flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-white/5"
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Popover>
         </div>
 
         <div className="flex items-center gap-1 px-1">

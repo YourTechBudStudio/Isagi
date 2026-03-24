@@ -6,7 +6,8 @@ import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
 import { getPrimaryOpenSession } from "@/lib/task-session";
-import { getDueDateColor, getPriorityColor } from "@/lib/utils/task-utils";
+import { TASK_PRIORITY_META } from "@/lib/task-ui";
+import { getDueDateColor } from "@/lib/utils/task-utils";
 
 type ProjectTaskCardProps = {
   readonly task: MockTask;
@@ -86,7 +87,9 @@ export function ProjectTaskCard({ task }: ProjectTaskCardProps) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Badge tone={getPriorityColor(task.priority)}>{task.priority}</Badge>
+        <Badge tone={TASK_PRIORITY_META[task.priority].tone}>
+          {task.priority}
+        </Badge>
         {task.labels.map(label => (
           <Badge key={label} tone="neutral">
             {label}

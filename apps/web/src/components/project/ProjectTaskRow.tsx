@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 import type { MockTask } from "@/lib/mock/project.mock";
 import { getPrimaryOpenSession } from "@/lib/task-session";
-import { getDueDateColor, getPriorityColor } from "@/lib/utils/task-utils";
+import { TASK_PRIORITY_META } from "@/lib/task-ui";
+import { getDueDateColor } from "@/lib/utils/task-utils";
 
 type ProjectTaskRowProps = {
   readonly task: MockTask;
@@ -78,7 +79,9 @@ export function ProjectTaskRow({ task }: ProjectTaskRowProps) {
           {task.title}
         </span>
         <div className="flex items-center gap-2 opacity-80 transition-opacity group-hover:opacity-100">
-          <Badge tone={getPriorityColor(task.priority)}>{task.priority}</Badge>
+          <Badge tone={TASK_PRIORITY_META[task.priority].tone}>
+            {task.priority}
+          </Badge>
           {task.labels.map(label => (
             <Badge
               key={label}

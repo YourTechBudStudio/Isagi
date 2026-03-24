@@ -1,23 +1,40 @@
-import { motion, type Transition } from "framer-motion";
-import type { ReactNode } from "react";
+import {
+  motion,
+  type Transition,
+  useMotionValueEvent,
+  useScroll,
+} from "framer-motion";
+import { type ReactNode, useState } from "react";
 
 import { cn } from "@/lib/cn";
 
 type FloatingActionBarProps = {
   readonly children: ReactNode;
-  readonly hidden: boolean;
   readonly rightInset: number;
   readonly rightTransition: Transition;
   readonly className?: string;
+  readonly hideOnScroll?: boolean;
 };
 
 export function FloatingActionBar({
   children,
-  hidden,
   rightInset,
   rightTransition,
   className,
+  hideOnScroll = true,
 }: FloatingActionBarProps) {
+  const { scrollY } = useScroll();
+  const [hidden, setHidden] = useState(false);
+
+  useMotionValueEvent(scrollY, "change", latest => {
+    if (!hideOnScroll) {
+      return;
+    }
+
+    const previous = scrollY.getPrevious() ?? 0;
+    setHidden(latest > previous && latest > 50);
+  });
+
   return (
     <motion.header
       initial={false}

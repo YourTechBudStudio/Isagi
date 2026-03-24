@@ -7,7 +7,13 @@ import {
   Layers,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { TaskLabelsField } from "@/components/task/TaskLabelsField";
 import { Badge } from "@/components/ui/Badge";
@@ -15,17 +21,15 @@ import { CalendarPopover } from "@/components/ui/CalendarPopover";
 import { IconButton } from "@/components/ui/IconButton";
 import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/cn";
-import { useAutoResizeTextarea } from "@/lib/hooks/useAutoResizeTextarea";
 import type {
   MockTask,
   TaskPriority,
   TaskStatus,
 } from "@/lib/mock/project.mock";
 import {
-  formatTaskStatus,
-  getTaskPriorityTone,
-  getTaskStatusTone,
+  TASK_PRIORITY_META,
   TASK_PRIORITY_OPTIONS,
+  TASK_STATUS_META,
   TASK_STATUS_OPTIONS,
 } from "@/lib/task-ui";
 
@@ -64,8 +68,19 @@ export function TaskEditor({
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
-  useAutoResizeTextarea(titleRef, task.title);
-  useAutoResizeTextarea(notesRef, task.notes);
+  useLayoutEffect(() => {
+    if (titleRef.current) {
+      titleRef.current.style.height = "auto";
+      titleRef.current.style.height = `${titleRef.current.scrollHeight}px`;
+    }
+  }, [task.title]);
+
+  useLayoutEffect(() => {
+    if (notesRef.current) {
+      notesRef.current.style.height = "auto";
+      notesRef.current.style.height = `${notesRef.current.scrollHeight}px`;
+    }
+  }, [task.notes]);
 
   useEffect(() => {
     if (!enableEscapeClose) {
@@ -131,13 +146,13 @@ export function TaskEditor({
             className="inline-flex cursor-pointer items-center gap-1"
           >
             <Badge
-              tone={getTaskStatusTone(task.status)}
+              tone={TASK_STATUS_META[task.status].tone}
               className={cn(
                 "transition-colors select-none",
                 task.status === "todo" && "border-white/10 bg-white/5",
               )}
             >
-              {formatTaskStatus(task.status)}
+              {TASK_STATUS_META[task.status].label}
             </Badge>
             <ChevronDown className="text-text-tertiary h-3 w-3" />
           </button>
@@ -199,7 +214,7 @@ export function TaskEditor({
               onClick={() => setPriorityOpen(open => !open)}
               className="inline-flex cursor-pointer items-center gap-1 self-start"
             >
-              <Badge tone={getTaskPriorityTone(task.priority)}>
+              <Badge tone={TASK_PRIORITY_META[task.priority].tone}>
                 {task.priority}
               </Badge>
               <ChevronDown className="text-text-tertiary h-3 w-3" />

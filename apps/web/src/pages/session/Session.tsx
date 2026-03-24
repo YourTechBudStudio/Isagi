@@ -20,10 +20,7 @@ import { SessionShapingPanel } from "@/components/session/SessionShapingPanel";
 import { SessionTaskPanel } from "@/components/session/SessionTaskPanel";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import type { MockTask } from "@/lib/mock/project.mock";
-import {
-  mockSessionScreen,
-  sessionHasCompanionPanel,
-} from "@/lib/mock/session.mock";
+import { mockSessionScreen } from "@/lib/mock/session.mock";
 import {
   mockSidebarProjects,
   mockSidebarTriage,
@@ -31,7 +28,7 @@ import {
 
 export default function Session() {
   const session = mockSessionScreen;
-  const hasCompanionPanel = sessionHasCompanionPanel(session);
+  const hasCompanionPanel = session.kind !== "scratch";
   const [rightPanelOpen, setRightPanelOpen] = useState(hasCompanionPanel);
   const [task, setTask] = useState<MockTask | null>(
     session.kind === "task" ? session.task : null,
