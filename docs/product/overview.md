@@ -1,10 +1,10 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 ## One-liner
 
-Isagi is a desktop-first task and session orchestration tool for repo-based work: keep project-scoped tasks and optional collections, run resumable agent sessions, and manage git execution without heavyweight process overhead.
+Isagi is a desktop-first task and session orchestration system for repo-based work: the Isagi UI sits over a backend-owned runtime that manages project-scoped tasks, harness-backed sessions, and git execution.
 
 ## The problem
 
@@ -24,6 +24,8 @@ Isagi is a desktop-first task and session orchestration tool for repo-based work
 ## Core principles
 
 - **Desktop-first for MVP.** Keep one primary execution surface.
+- **Backend-owned runtime.** Repo registration, session state, worktrees, and harness orchestration live in the backend rather than the UI shell.
+- **Single-user in local or remote mode.** The same product model should work whether the backend runs locally beside the desktop app or remotely in a persistent personal environment.
 - **Task-centered for execution, not workflow-first.** Use repo projects, optional collections, tasks, and sessions as the minimum stable core, while letting shaping remain a separate project-scoped lane.
 - **Execution and shaping stay separate.** Task-backed sessions do accountable work; shaping sessions turn ambiguity into backlog; scratch stays lightweight.
 - **Low-commitment exploration should stay lightweight.** Scratch sessions are project-scoped and intentionally avoid creating backlog noise when the user only needs quick answers.
@@ -38,7 +40,7 @@ Primary scenario: coding/product workflow.
 
 Typical flow:
 
-1. Register an existing local git repo as a project.
+1. Register an existing git repo path visible to the active backend as a project.
 2. Organize work directly as tasks or under optional collections, depending on the project's workflow.
 3. When backlog shape is still fuzzy, start a project-scoped shaping session to draft proposed tasks or collections.
 4. Create a task or start a task-backed ad-hoc session that auto-creates a task.

@@ -27,6 +27,7 @@ The Session screen answers: **"How do I stay in the conversation while keeping e
 - Scratch sessions should stay lightweight and avoid invented task context.
 - Shaping sessions should support proposal review and decision-making without collapsing into a project board.
 - Session closure is a session action, distinct from task completion.
+- Changing execution root creates a new session instead of preserving the same session identity.
 
 ## Key boundaries
 

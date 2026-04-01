@@ -1,6 +1,6 @@
 # Task Model (MVP)
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 ## One-liner
 
@@ -11,7 +11,7 @@ A task is the smallest accountable unit of outcome inside a project.
 - Tasks hold planning and accountability without forcing a rigid workflow.
 - Sessions do the work; tasks track what the work is, where it belongs, and how far it has moved.
 - Tasks remain the canonical actionable unit even when a project uses workflow-specific status names or UI aliases.
-- The MVP is optimized for low-overhead execution in existing local git repos, so task is the stable object around which sessions accumulate.
+- The MVP is optimized for low-overhead execution in existing git repos visible to the active backend, so task is the stable object around which sessions accumulate.
 
 ## Task definition
 
@@ -94,7 +94,7 @@ Detailed runtime behavior lives in `docs/architecture/execution-model.md`.
 
 ## Project relationship
 
-- A project is an existing local git repo registered in Isagi.
+- A project is an existing git repo registered in Isagi through a repo path visible to the active backend.
 - Tasks may live directly under the project or under an optional collection inside the project.
 - The task inherits its project repo as the default execution context.
 - Project-level git execution defaults can influence how sessions start, but they do not redefine task identity.

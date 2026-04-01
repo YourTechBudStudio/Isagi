@@ -11,6 +11,7 @@ These docs define the current MVP direction for Isagi: a desktop-first task and 
 ## Source of truth
 
 - **[docs/product/mvp-scope.md](docs/product/mvp-scope.md)** - canonical build scope and implementation priorities. For MVP decisions, this wins.
+- **[docs/architecture/system-architecture.md](docs/architecture/system-architecture.md)** - zoomed-out system boundaries, deployment modes, harness placement, and trust assumptions.
 - **[docs/product/collection-model.md](docs/product/collection-model.md)** - canonical collection definition and grouping semantics.
 - **[docs/product/task-model.md](docs/product/task-model.md)** - canonical task definition and schema-level task semantics.
 - **[docs/product/mental-model.md](docs/product/mental-model.md)** - core concepts, invariants, and lifecycle semantics.
@@ -19,20 +20,16 @@ These docs define the current MVP direction for Isagi: a desktop-first task and 
 
 ## Index
 
-Archived docs are preserved for future reference, but they are not part of the active MVP scope unless explicitly called out elsewhere.
-
 ### docs/architecture/
 
 - [docs/architecture/execution-model.md](docs/architecture/execution-model.md)
-- [docs/architecture/resources-model.md](docs/architecture/resources-model.md)
+- [docs/architecture/system-architecture.md](docs/architecture/system-architecture.md)
 
 ### docs/journeys/
 
 - [docs/journeys/coding-workflow.md](docs/journeys/coding-workflow.md)
 
 ### docs/product/
-
-Active product docs:
 
 - [docs/product/collection-model.md](docs/product/collection-model.md)
 - [docs/product/config/agent-guidance-projections.md](docs/product/config/agent-guidance-projections.md)
@@ -49,12 +46,9 @@ Active product docs:
 - [docs/product/task-model.md](docs/product/task-model.md)
 - [docs/product/value-proposition-canvas.md](docs/product/value-proposition-canvas.md)
 
-Archived product docs:
-
-- [docs/product/screens/archived/mobile-home.md](docs/product/screens/archived/mobile-home.md)
-
 ## Conventions
 
 - Keep docs concise but explicit on invariants.
 - Avoid duplicating deep mechanics across files; link to the owning doc instead.
+- Keep zoomed-out system boundaries in `docs/architecture/system-architecture.md` and runtime mechanics in `docs/architecture/execution-model.md`.
 - Prefer explicit session-type terminology in active docs; use `project` for repo containers.

@@ -1,14 +1,16 @@
 # Execution Model
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 This document defines runtime execution behavior for tasks, sessions, and git-backed environments in the active MVP.
 
+System boundaries and deployment modes are defined in `docs/architecture/system-architecture.md`.
+
 ## Path conventions
 
-`project root` means the local git repo root registered as a project in Isagi.
+`project root` means the git repo root registered as a project in Isagi and visible to the active backend filesystem.
 
-`worktree root` means the workspace-sibling root where Isagi-managed git worktrees live.
+`worktree root` means the Isagi-controlled root where managed git worktrees live.
 
 `execution root` means the filesystem root currently bound to a session process.
 
@@ -18,14 +20,14 @@ This document defines runtime execution behavior for tasks, sessions, and git-ba
 
 Conventions:
 
-- projects remain in their existing local paths; Isagi does not redefine their canonical location
+- projects remain in their existing repo locations; Isagi does not redefine their canonical location
 - managed worktrees live under `worktree root`, not inside the registered project repo
-- sessions can move between execution roots over time
+- each session is bound to one execution root for its lifetime
 - git naming/default rules are defined in `docs/product/config/project-task-git-rules.md`
 
 ## Workspace layout (v1)
 
-Isagi metadata and managed worktrees live under Isagi-controlled paths, while projects remain where they already exist on disk.
+Isagi metadata and managed worktrees live under Isagi-controlled paths, while projects remain where they already exist on disk relative to the active backend.
 
 Conceptual layout:
 
@@ -41,6 +43,7 @@ Remarks:
 - project repos themselves are not copied into `isagi-root/`
 - managed worktrees are physically created under `worktree root`
 - execution root determines the working directory for the current session process
+- the same conceptual layout applies whether the backend runs locally or remotely
 
 ## Execution root defaults
 
@@ -84,9 +87,9 @@ Other task or project metadata may be shown in side panels as view-only context,
 - Task-linked sessions are created by opening a task or by starting a task-backed ad-hoc session that auto-creates a visible task.
 - Scratch sessions are created by explicitly starting a scratch session against a selected project.
 - Shaping sessions are created by explicitly starting or resuming a project-scoped shaping session against a selected project.
-- Task-linked sessions can remain attached to a task across multiple resumptions.
-- Scratch sessions can remain attached to their project context across multiple resumptions.
-- Shaping sessions can remain attached to their project context across multiple resumptions.
+- Task-linked sessions can remain attached to a task across multiple resumptions as long as the execution directory does not change.
+- Scratch sessions can remain attached to their project context across multiple resumptions as long as the execution directory does not change.
+- Shaping sessions can remain attached to their project context across multiple resumptions as long as the execution directory does not change.
 - Shaping sessions may stage accepted and rejected backlog proposals until the session is finalized and closed.
 - Sessions can be manually closed.
 - Task-linked sessions auto-close when the parent task enters a `done`-bucket status.
@@ -100,30 +103,36 @@ Session states:
 - `idle` - the agent is waiting on the user
 - `closed` - the session is intentionally no longer active
 - `archived` - the session is retained as historical record only and cannot be resumed because its prior repo binding is no longer considered live
-- `error` - hidden technical failure state for start/rebind issues
+- `error` - hidden technical failure state for start, resume, or execution-root-change issues
 
 Notes:
 
 - `closed` and `archived` are both non-active states, but they differ in cause.
-- `closed` is the normal intentional end state for a session the user no longer wants to keep active.
+- `closed` is the normal end state for a session the user or system no longer keeps active.
 - `archived` is a non-resumable preservation state used when a higher-level change, such as a repo-path change, makes the old execution context invalid.
+- Implementations may store a `close_reason` or equivalent field to distinguish causes such as manual close, task completion, or execution-root change.
 - Repo-path-change semantics are defined canonically in `docs/product/config/project-task-git-rules.md`.
 
-## Execution root switches and rebind
+## Execution root changes
 
-- Users may change branch or switch to/from a managed worktree during a session.
-- Branch/worktree controls are user-driven and happen at the user's risk.
-- If the execution root path changes, Isagi rebinds the same session to the new root.
-- Rebind may start a new backend process, but the conversation/session identity stays the same.
-- If the user wants a separate execution thread, they should create a separate session instead of rebinding the existing one.
+- Users may change branch or switch to/from a managed worktree during work.
+- Branch and worktree controls are user-driven and happen at the user's risk.
+- A session is directory-bound for its lifetime.
+- If the execution root path changes, Isagi closes the current session and creates a new session bound to the new directory.
+- Because execution-root changes end the current session, the product should treat them as warning-worthy transitions rather than invisible rebinding.
+- For task-linked sessions, the replacement session stays under the same task.
+- For scratch sessions, the replacement session stays in the same project-scoped scratch lane.
+- For shaping sessions, the replacement session stays in the same project-scoped shaping lane.
+- If the user wants a separate execution thread without closing the current session, they should create a separate session directly.
 
 ## Managed worktree behavior
 
 - Worktree creation is automated when `managed_worktree` is chosen.
 - Managed worktrees live under `worktree root`.
+- Switching from a repo root into a managed worktree, or between worktrees, creates a new session because the execution directory changes.
 - Merge remains a manual activity assisted by UI/actions, not an automatic side effect of task or session completion.
 - Worktree deletion also remains manual in v0.
-- If worktree creation or rebind fails, the session may enter `error` until the user retries or selects a different execution root.
+- If worktree creation or execution-root change fails, the session may enter `error` until the user retries or selects a different execution root.
 
 ## Passive execution snapshots
 

@@ -2,7 +2,7 @@
 
 **Codename:** Isagi  
 **Legacy product name:** Spark System  
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 This document defines what we are building for the MVP.
 
@@ -18,7 +18,7 @@ The MVP objective is to reduce activation energy and increase throughput by maki
 
 The product remains ad-hoc: Isagi supports specialized workflows, but does not force one rigid workflow for every kind of work.
 
-Repo projects may organize work directly as tasks or through optional collections, but execution remains session-driven from the project repo root, with tasks holding accountability for execution work and shaping sessions handling proposal-oriented backlog formation.
+Repo projects may organize work directly as tasks or through optional collections, but execution remains session-driven from backend-visible project repo roots, with tasks holding accountability for execution work and shaping sessions handling proposal-oriented backlog formation.
 
 ---
 
@@ -26,9 +26,9 @@ Repo projects may organize work directly as tasks or through optional collection
 
 ### What's in
 
-#### 1) Project registry of existing local git repos
+#### 1) Project registry of existing git repos
 
-- A project is an existing local git repo already present on the machine.
+- A project is an existing git repo accessible to the active backend filesystem.
 - Projects are the containers that own tasks and optional collections.
 - Projects can define customizable task statuses and optional git execution defaults.
 - Projects may also define project-local terminology for presentation, such as a `Task label` or `Collection label`, without changing the underlying model.
@@ -59,7 +59,8 @@ Detailed contracts: `docs/product/task-model.md` and `docs/product/collection-mo
 - Scratch sessions do not create visible tasks and do not participate in backlog tracking.
 - Shaping sessions are tracked, resumable, proposal-oriented workspaces that do not create visible tasks directly.
 - Accepted shaping proposals become visible backlog items only when the shaping session is finalized.
-- All three session kinds use the same execution engine and git controls.
+- All three session kinds use the same Isagi session model, harness adapter boundary, and git controls.
+- Sessions are directory-bound; switching to a different execution directory closes the current session and creates a new one.
 - Sessions remain open until manually closed, except task-backed sessions that auto-close when the task enters a terminal `done`-bucket status.
 
 #### 4) Git execution modes + managed worktrees
@@ -116,8 +117,9 @@ Detailed runtime semantics are canonical in `docs/architecture/execution-model.m
 ### Platform strategy
 
 - **Desktop is the only active product surface for MVP.**
-- Backend remains single-tenant/self-hosted (`SQLite + filesystem + SSE`).
-- OpenCode is the session execution engine; Isagi is orchestration/control UX.
+- Backend remains single-user and self-hosted (`SQLite + filesystem + SSE`) whether run locally or remotely.
+- Isagi owns the primary UI and orchestration layer; harness support is adapter-based, with OpenCode as the first supported harness.
+- A desktop shell may package the web UI and start the backend in local mode, while remote mode connects the same UI to a separately hosted backend.
 - Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
 - Repo projects may organize work through direct tasks or optional collections, while scratch and shaping sessions still start from the selected project's repo root.
 
@@ -176,8 +178,8 @@ Qualitative validation signals:
 
 ## Near-term implementation priorities
 
-1. Lock project/collection/task/session contracts and status model in API + docs.
+1. Lock project/collection/task/session contracts, status model, and system architecture boundaries in API + docs.
 2. Implement manual task creation, task-backed ad-hoc session auto-task creation, project-scoped scratch sessions, and project-scoped shaping sessions.
-3. Implement session execution surface with git mode selection and rebind behavior.
+3. Implement session execution surface with git mode selection, directory-bound session behavior, and harness-adapter integration.
 4. Implement passive snapshots, collision warnings, and session closure states.
 5. Implement project registration, explicit git defaults, and read-only execution visibility.

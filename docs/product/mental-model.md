@@ -1,6 +1,6 @@
 # Isagi - mental model
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 This document defines the core concepts and invariants for the active MVP.
 
@@ -8,7 +8,7 @@ This document defines the core concepts and invariants for the active MVP.
 
 ### Project
 
-A project is an existing local git repo registered in Isagi.
+A project is an existing git repo registered in Isagi through a repo path visible to the active backend.
 
 Projects:
 
@@ -56,7 +56,8 @@ Sessions:
   - project-scoped shaping sessions for tracked backlog-shaping work without a task
 - are where agent work happens
 - can start in the project repo or a managed worktree
-- can be rebound to a different execution root during work
+- are bound to one execution directory for their lifetime
+- map 1:1 to one underlying harness session
 - are not the durable output themselves
 
 ### Shaper agent
@@ -83,12 +84,6 @@ A worktree is an optional git execution environment used by a session.
 
 Managed worktrees are created automatically when chosen, but merge and deletion remain manual in v0.
 
-### Resource (deferred)
-
-`Resource` remains a deferred durable-output concept from earlier drafts. It is not part of the active v0 core.
-
-Reference: `docs/architecture/resources-model.md`.
-
 ### Legacy term: Area
 
 Earlier drafts used `Area` as a core primitive. The active MVP no longer depends on area-first modeling.
@@ -97,7 +92,7 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 
 ## Core invariants
 
-1. **Every project is an existing local git repo.**
+1. **Every project is an existing git repo visible to the active backend.**
 2. **Every task belongs to exactly one project.**
 3. **A task may belong to zero or one collection inside that project.**
 4. **Tasks never move between projects.** Archive and recreate instead.
@@ -108,9 +103,10 @@ Earlier drafts used `Area` as a core primitive. The active MVP no longer depends
 9. **Sessions never belong directly to collections.**
 10. **Tasks are execution-agnostic.** Branch and worktree choices are execution strategy, not task identity.
 11. **Task status is manual and intrinsic to the task.** Project-specific statuses map to global buckets: `todo`, `in_progress`, `done`.
-12. **Sessions may change execution root during work.** Git controls are user-driven and warning-based, not hard-locked.
-13. **Task closure is status-driven for task-linked sessions only.** Moving a task into a `done`-bucket status closes its task-linked sessions; MVP surfaces do not expose a second completion action separate from status.
-14. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
+12. **Every Isagi session maps 1:1 to one harness session.** Isagi owns the product abstraction, but the underlying execution session remains singular.
+13. **Sessions are directory-bound.** If execution moves to a different directory, the current session closes and a new session is created instead of rebinding the same session.
+14. **Task closure is status-driven for task-linked sessions only.** Moving a task into a `done`-bucket status closes its task-linked sessions; MVP surfaces do not expose a second completion action separate from status.
+15. **No subtasks in v0.** Review and handoff stay on the same task via status or assignment changes.
 
 ## Active MVP posture
 
@@ -136,7 +132,7 @@ Read together:
 
 - Task-backed sessions inherit the task's project repo root.
 - Scratch and shaping sessions inherit the selected project's repo root.
-- Sessions may rebind to managed worktrees or other valid roots while preserving the same conversation identity.
+- Sessions may move work to a different valid execution root, but doing so closes the current session and creates a new one.
 - Project-level git mode defaults can shape how sessions start, but sessions remain user-driven.
 - The system records passive execution snapshots and surfaces collision warnings when multiple recent sessions share a directory.
 
@@ -190,4 +186,4 @@ Focus remains task-centered for execution work while keeping project-scoped sess
 - status-change automation hooks
 - how shaping sessions materialize accepted task proposals
 - roll-up portfolios / project-group support for multi-repo work
-- whether the deferred resources model returns as an active subsystem
+- whether a separate durable artifact subsystem returns later

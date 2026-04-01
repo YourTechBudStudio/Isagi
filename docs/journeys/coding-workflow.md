@@ -1,6 +1,6 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 ## Journey goals
 
@@ -13,7 +13,7 @@
 
 - **User** - creates tasks, starts sessions, and changes statuses.
 - **Desktop app (Isagi)** - project-scoped task surfaces, optional collection grouping, command surfaces, git controls, and session visibility.
-- **Execution session (OpenCode-backed)** - task-linked execution work, project-scoped scratch exploration, and project-scoped shaping work.
+- **Harness-backed execution session** - task-linked execution work, project-scoped scratch exploration, and project-scoped shaping work behind the Isagi backend.
 
 ## Entry posture: open app and resume work
 
@@ -28,12 +28,14 @@
 ## Scenario A: Register a project
 
 1. User runs an `Add project` command from the command palette.
-2. User provides a local repo directory either by pasting a path or using a folder picker helper.
-3. Isagi validates that the selected directory is an existing local git repo.
-4. Isagi preloads an inferred editable project name based on the selected folder.
-5. User confirms the inferred name or edits it before submitting registration.
-6. The project is registered without requiring statuses, aliases, or git defaults up front.
-7. Success feedback offers `Open project` and `Open settings` as follow-up actions.
+2. User provides a repo directory visible to the active backend.
+3. In local mode, this may use a folder picker helper as a convenience.
+4. In remote mode, this may require directly entering a backend-visible path instead.
+5. Isagi validates that the selected directory is an existing git repo.
+6. Isagi preloads an inferred editable project name based on the selected folder.
+7. User confirms the inferred name or edits it before submitting registration.
+8. The project is registered without requiring statuses, aliases, or git defaults up front.
+9. Success feedback offers `Open project` and `Open settings` as follow-up actions.
 
 Detailed registration-surface guidance lives in `docs/product/screens/project-registration-flow.md`.
 
@@ -96,13 +98,15 @@ Scratch sessions can also remain open and resumable across multiple short explor
 
 Shaping sessions can also remain open and resumable across multiple backlog-shaping loops, while staying tracked at the project level rather than appearing as board tasks.
 
-## Scenario H: Rebind and collision-awareness
+## Scenario H: Change execution root and collision-awareness
 
 1. During a session, the user may switch branches or move to/from a managed worktree.
-2. If the execution root path changes, Isagi rebinds the same session to the new root.
-3. Isagi warns when other active or idle-but-recent sessions share that directory.
-4. Task and session UI can show overlapping sessions or active session counts for that directory.
-5. The warning helps the user inspect overlapping sessions without hard-blocking work.
+2. If the execution root path changes, Isagi closes the current session and creates a new session bound to the new directory.
+3. Because this ends the current session, Isagi should treat the transition as warning-worthy rather than as an invisible rebind.
+4. For task-linked sessions, the replacement session stays under the same task.
+5. Isagi warns when other active or idle-but-recent sessions share that directory.
+6. Task and session UI can show overlapping sessions or active session counts for that directory.
+7. The warning helps the user inspect overlapping sessions without hard-blocking work.
 
 ## Scenario I: Update task status
 
@@ -145,7 +149,7 @@ Examples:
 
 - **Ad-hoc session title is poor:** keep the auto-generated task, but allow quick rename.
 - **Worktree creation failure:** keep the session in `error` and let the user retry or choose a different execution root.
-- **Rebind failure:** preserve the same session identity, surface the error, and wait for manual correction.
+- **Execution-root change failure:** surface the error and let the user retry or choose a different execution root.
 - **Collision warning ignored:** do not block work; keep directory/session visibility available so the user can self-correct.
 
 ## Invariants checklist
@@ -160,5 +164,5 @@ Examples:
 - No subtasks exist in v0; review and handoff stay on the same task.
 - Tasks are execution-agnostic.
 - Task status is manual and project-customizable.
-- Sessions can change execution root during work.
+- Sessions are directory-bound; changing execution root closes the current session and creates a new one.
 - Collision warnings are advisory, not blocking.

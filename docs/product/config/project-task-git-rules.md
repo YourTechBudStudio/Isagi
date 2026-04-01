@@ -1,6 +1,6 @@
 # Project/Task Git Rules
 
-**Last updated:** 2026-03-17
+**Last updated:** 2026-03-31
 
 This document defines configuration-level git defaults for project-scoped tasks and sessions.
 
@@ -10,9 +10,9 @@ Projects define the repo context and default git mode; sessions decide how work 
 
 ## Project model
 
-- A project points at an existing local git repo.
+- A project points at an existing git repo visible to the active backend filesystem.
 - Project registration should validate that the configured path is already a git repo.
-- Project registration is repo-first: the user selects or pastes a local repo directory, then confirms an inferred editable project name.
+- Project registration is repo-first: the user selects or pastes a backend-visible repo directory, then confirms an inferred editable project name.
 - Other project configuration remains optional after registration.
 - Project IDs should be stable and filesystem-safe.
 - Repo path is stored separately from project identity.
@@ -113,8 +113,9 @@ Rules:
 
 - Sessions may stay on the current branch or move to a managed worktree.
 - Sessions may switch execution root during work.
-- If execution root changes, the same session is rebound rather than replaced.
+- Sessions are directory-bound; if execution root changes, the current session is closed and a new session is created.
 - A task may end up with multiple sessions using different roots at the user's discretion.
+- For task-linked sessions, a replacement session created by an execution-root change stays under the same task.
 - Scratch sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as task-backed sessions.
 - Scratch sessions differ only in not creating or attaching to a task.
 - Shaping sessions use the same project/global git-mode resolver, git controls, and execution-root switching behavior as other sessions.
@@ -129,6 +130,7 @@ Rules:
   - existing sessions tied to the prior repo path are archived
   - archived sessions cannot be resumed
   - tasks remain project-owned and are not deleted by the repo-path change
+- This archive behavior is distinct from normal user-driven session closure such as changing execution roots during work.
 
 ## Collision warnings
 
