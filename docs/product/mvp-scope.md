@@ -1,185 +1,121 @@
 # MVP Scope (Phase 1)
 
 **Codename:** Isagi  
-**Legacy product name:** Spark System  
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-28
 
 This document defines what we are building for the MVP.
 
-If anything else in `docs/` conflicts with this scope, **this document wins for MVP decisions**.
-
----
+If anything else in `docs/` conflicts with this scope, this document wins for MVP decisions.
 
 ## Overview
 
-Phase 1 is a **desktop-first task and session orchestration system for repo-based coding/product work**.
+Phase 1 is a desktop-first continuation system for one-repo projects.
 
-The MVP objective is to reduce activation energy and increase throughput by making project-scoped work easy to start, resume, and run in parallel with agent sessions.
+The MVP objective is to keep project momentum moving by combining Git-backed planning artifacts with backend-owned runtime sessions.
 
-The product remains ad-hoc: Isagi supports specialized workflows, but does not force one rigid workflow for every kind of work.
-
-Repo projects may organize work directly as tasks or through optional collections, but execution remains session-driven from backend-visible project repo roots, with tasks holding accountability for execution work and shaping sessions handling proposal-oriented backlog formation.
-
----
+For Phase 1, one project maps to one existing git repo visible to the active backend. Milestones are the primary continuation unit, tasks are reviewable agentic work chunks, sparks are lightweight memory inputs, and sessions are where live agent work happens.
 
 ## Phase 1 scope
 
-### What's in
+### 1. Project registry of existing git repos
 
-#### 1) Project registry of existing git repos
+- A project is registered from an existing git repo visible to the active backend filesystem.
+- Multi-repo projects are out of scope for Phase 1.
+- Project registration should stay low-ceremony.
 
-- A project is an existing git repo accessible to the active backend filesystem.
-- Projects are the containers that own tasks and optional collections.
-- Projects can define customizable task statuses and optional git execution defaults.
-- Projects may also define project-local terminology for presentation, such as a `Task label` or `Collection label`, without changing the underlying model.
+### 2. Git-backed planning artifacts
 
-#### 2) Task model
+- Durable planning state lives under `.isagi/` in the project repo.
+- `.isagi/` belongs in Git by default.
+- Planning files are the source of truth.
+- The backend may index `.isagi/`, but indexing is optional and rebuildable.
+- Recommended artifact areas are milestones, tasks, sparks, and config.
 
-- Tasks are created manually first.
-- Every task belongs to exactly one project.
-- Tasks may optionally belong to one collection inside that project.
-- Tasks track status, priority, labels, and related sessions.
+Canonical guidance: `docs/product/planning-artifacts.md`.
+
+### 3. Milestone-centered continuation
+
+- Milestone is the canonical planning and continuation unit.
+- Collection is no longer a canonical product concept.
+- Discovery helps find or confirm the next milestone.
+- Shaping turns a chosen milestone into reviewable agentic tasks.
+- Discovery and Shaping propose in chat first and write files only after user confirmation.
+
+### 4. Task-backed execution
+
+- Tasks are reviewable agentic work chunks, not micro-todos.
+- Tasks can be linked to milestones but remain execution-agnostic.
+- Task-linked sessions attach live execution work to a task.
 - No subtasks in v0.
-- Project-specific statuses map into global buckets: `todo`, `in_progress`, `done`.
-- Collections remain grouping-only in Phase 1; task closure still happens through task status rather than collection state.
+- Task status is manual and project-defined.
 
-Collections are optional grouping containers inside a project. They do not receive sessions directly and do not redefine execution context.
+### 5. Session-first runtime
 
-Detailed contracts: `docs/product/task-model.md` and `docs/product/collection-model.md`.
+- Sessions are live agent conversation surfaces.
+- Runtime/session state is backend-owned.
+- Sessions may support task execution, scratch exploration, Discovery, or Shaping.
+- Sessions are directory-bound; changing execution root creates a new session rather than rebinding the old one.
 
-#### 3) Session-first execution
+Detailed runtime semantics: `docs/architecture/execution-model.md`.
 
-- Sessions are the execution surfaces where agent work happens.
-- Phase 1 supports three session paths:
-  - task-backed sessions for accountable tracked work
-  - project-scoped scratch sessions for quick exploration or Q&A
-  - project-scoped shaping sessions for tracked backlog shaping without a task
-- Multiple task-backed sessions can exist per task.
-- Starting a task-backed ad-hoc session auto-creates a visible task with a generated title.
-- Scratch sessions do not create visible tasks and do not participate in backlog tracking.
-- Shaping sessions are tracked, resumable, proposal-oriented workspaces that do not create visible tasks directly.
-- Accepted shaping proposals become visible backlog items only when the shaping session is finalized.
-- All three session kinds use the same Isagi session model, harness adapter boundary, and git controls.
-- Sessions are directory-bound; switching to a different execution directory closes the current session and creates a new one.
-- Sessions remain open until manually closed, except task-backed sessions that auto-close when the task enters a terminal `done`-bucket status.
+### 6. Git execution modes and managed worktrees
 
-#### 4) Git execution modes + managed worktrees
+- Supported modes remain `same_branch`, `managed_worktree`, and `ask_each_time`.
+- Explicit session choice overrides project/default behavior.
+- Managed worktree creation may be automated when selected.
+- Merge and worktree deletion remain manual in v0.
 
-- Task-backed sessions start from the task's project repo root.
-- Scratch and shaping sessions start from the selected project's repo root.
-- Git execution defaults are configurable at two levels:
-  - global default
-  - nullable project override
-- Supported modes:
-  - `same_branch`
-  - `managed_worktree`
-  - `ask_each_time`
-- Explicit session choice can override those defaults at session start.
-- Managed worktree creation is automated when chosen.
-- Merge remains manual.
-- Worktree deletion remains manual for now.
+### 7. Project-defined statuses
 
-Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
+- Projects define their own statuses.
+- Each status maps into `To-do`, `In progress`, or `Done`.
+- Status configuration should be Git-backed where practical, likely under `.isagi/config/`.
+- Status automation hooks are out of scope for Phase 1.
 
-#### 5) Passive execution tracking + collision warnings
+### 8. Passive execution tracking and collision warnings
 
-- Isagi records passive execution snapshots on user requests when the observed execution root or branch changes.
-- Collision warnings surface when multiple active or idle-but-recent sessions share a directory.
-- Git controls remain user-driven; warnings are advisory rather than blocking.
+- Isagi records enough runtime state to surface session/execution context.
+- Collision warnings remain advisory.
+- Git controls remain user-driven rather than hard locks.
 
-#### 6) Manual task workflow controls
-
-- Status changes are manual in v0.
-- There is no standalone `Complete task` action in the MVP; moving a task into a `done`-bucket status is how the product treats it as complete/closed.
-- Tasks can carry nullable `priority` and nullable `labels`.
-- Statuses are designed to become future automation hooks, but hooks are deferred.
-
----
-
-### What's out (future phases)
-
-| Feature                                 | Why deferred                                                              |
-| --------------------------------------- | ------------------------------------------------------------------------- |
-| Mobile app implementation               | Desktop-first focus for MVP velocity                                      |
-| In-app full PR/merge orchestration      | Keep merge/release workflows external in MVP                              |
-| Active status-change automation hooks   | Keep task upkeep manual and predictable first                             |
-| Global spark inbox + spark triage       | Validate the core session/task model before adding backlog feed workflows |
-| Roll-up / portfolio projects            | Keep the single-repo execution model sharp before adding aggregation      |
-| Project groups / multi-repo execution   | Single-repo projects cover the current real workflow                      |
-| Hardcoded YouTube/social deep pipelines | Keep the product generic and repo-centered first                          |
-| Multi-user collaboration/permissions    | Solo workflow first                                                       |
-| Rich scheduling/reminder system         | Focus on execution continuity before planning features                    |
-
----
-
-## Technical direction (MVP)
-
-### Platform strategy
-
-- **Desktop is the only active product surface for MVP.**
-- Backend remains single-user and self-hosted (`SQLite + filesystem + SSE`) whether run locally or remotely.
-- Isagi owns the primary UI and orchestration layer; harness support is adapter-based, with OpenCode as the first supported harness.
-- A desktop shell may package the web UI and start the backend in local mode, while remote mode connects the same UI to a separately hosted backend.
-- Detailed runtime semantics are canonical in `docs/architecture/execution-model.md`.
-- Repo projects may organize work through direct tasks or optional collections, while scratch and shaping sessions still start from the selected project's repo root.
-
-### Core flow
+## Core flow
 
 ```txt
-Project -> Create task or start task-backed ad-hoc session
-        -> Session opens in project repo root
-        -> Stay on current branch or switch to managed worktree
-        -> Continue/resume across one or more sessions
-        -> Move task through project-defined statuses until done
-
-Project -> Start scratch session
-        -> Session opens in project repo root
-        -> Ask questions or do lightweight exploration
-        -> Close manually when no longer needed
-
-Project -> Shape what's next
-        -> Resume a recent shaping session or start a new one
-        -> Session opens in project repo root
-        -> Draft task / collection proposals
-        -> Accept or reject proposals
-        -> Accepted proposals become visible backlog items when the shaping session is finalized
+Project repo
+  -> .isagi/ planning artifacts
+  -> Discovery when the next milestone is unclear
+  -> confirmed milestone artifact
+  -> Shaping into confirmed task artifacts
+  -> task-linked or scratch sessions
+  -> git/worktree execution as needed
+  -> status changes through project-defined statuses
 ```
 
----
+## What's out
 
-## Success criteria (initial)
+- Multi-repo projects.
+- Portfolio-level orchestration.
+- Heavy spark triage or global spark routing.
+- Multi-user permissions for sparks or planning artifacts.
+- Over-engineered workflow state machines.
+- Exact final schemas for `.isagi/` files.
+- Automatic merge or worktree cleanup.
+- Full in-app PR/release orchestration.
+- Mobile app execution surface.
 
-| Metric                | Target                                                              |
-| --------------------- | ------------------------------------------------------------------- |
-| Task resume rate      | Most active tasks are resumed at least once rather than abandoned   |
-| Time-to-first-session | Opening work to first meaningful agent turn is low-friction         |
-| Parallel throughput   | Multiple tasks can progress concurrently without context collisions |
-| Low-overhead upkeep   | Tasks stay useful without feeling like admin overhead               |
-| Collision visibility  | Overlapping directory activity is visible before it causes mistakes |
+## Success criteria
 
-Qualitative validation signals:
-
-- "I can start work without ceremony."
-- "I can keep 2-3 threads going without the tool becoming overhead."
-- "I can see when another session is about to stomp this directory."
-
----
-
-## Risks and mitigations
-
-| Risk                                     | Mitigation                                                                  |
-| ---------------------------------------- | --------------------------------------------------------------------------- |
-| Git mode choices create startup friction | Limit to three modes and allow project/global defaults                      |
-| Stale sessions make warnings noisy       | Add manual session close and use a recent-activity window                   |
-| Managed worktrees create cleanup debt    | Automate creation, keep merge/delete manual, surface cleanup later          |
-| Runtime context expectations drift       | Document project repo root as the only guaranteed inherited runtime context |
-
----
+- The user can recover what matters next without reconstructing everything from memory.
+- The next milestone can be discovered or confirmed without heavyweight planning ceremony.
+- Shaping produces tasks that are large enough for agents and small enough for human review.
+- Planning state moves with the project through Git.
+- Runtime sessions remain resumable and clear enough to avoid context collisions.
 
 ## Near-term implementation priorities
 
-1. Lock project/collection/task/session contracts, status model, and system architecture boundaries in API + docs.
-2. Implement manual task creation, task-backed ad-hoc session auto-task creation, project-scoped scratch sessions, and project-scoped shaping sessions.
-3. Implement session execution surface with git mode selection, directory-bound session behavior, and harness-adapter integration.
-4. Implement passive snapshots, collision warnings, and session closure states.
-5. Implement project registration, explicit git defaults, and read-only execution visibility.
+1. Lock the `.isagi/` planning artifact conventions at a seed level.
+2. Preserve backend ownership of runtime/session state.
+3. Implement project registration for existing git repos.
+4. Support milestone, task, spark, and config artifacts as Git-backed planning state.
+5. Support Discovery and Shaping prompt-template modes with confirmation before file writes.
+6. Keep git/worktree execution controls and collision warnings focused and advisory.

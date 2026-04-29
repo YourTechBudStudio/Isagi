@@ -1,168 +1,116 @@
 # Coding Workflow Journey (MVP)
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-28
 
 ## Journey goals
 
-- Make execution feel resumable, not restart-heavy.
-- Keep task upkeep lightweight.
-- Support parallel coding threads without context collisions.
-- Keep review and handoff on the same task instead of creating subtask overhead.
+- Help the user recover project momentum when direction is unclear.
+- Keep execution resumable once the work is concrete.
+- Preserve planning context in Git-backed `.isagi/` artifacts.
+- Support parallel coding threads without hiding runtime collisions.
 
 ## Actors and surfaces
 
-- **User** - creates tasks, starts sessions, and changes statuses.
-- **Desktop app (Isagi)** - project-scoped task surfaces, optional collection grouping, command surfaces, git controls, and session visibility.
-- **Harness-backed execution session** - task-linked execution work, project-scoped scratch exploration, and project-scoped shaping work behind the Isagi backend.
+- **User** - confirms direction, asks for Discovery/Shaping, starts sessions, and changes statuses.
+- **Isagi UI** - shows project momentum, planning artifacts, sessions, and execution controls.
+- **Backend runtime** - owns session state, harness bindings, execution roots, worktrees, and collision visibility.
+- **Agent session** - performs Discovery, Shaping, scratch exploration, or task execution.
 
 ## Entry posture: open app and resume work
 
-1. Home opens as a global orientation surface.
-2. The most recent resumable session is the primary jump-in target.
-3. Additional open sessions appear as compact secondary options.
-4. Those open sessions may include task-linked, scratch, and shaping sessions; scratch and shaping sessions should be visibly marked.
-5. If there are no resumable sessions, the app may show lightweight candidate tasks.
-6. Global `Start a session` flows route through the command palette so project selection happens explicitly before execution begins.
-7. The command palette remains the fast path for opening a specific project when the user wants deliberate project selection.
+1. Home opens as a resume-first orientation surface.
+2. Recent resumable sessions are the primary jump-in targets.
+3. Sessions may include task execution, scratch exploration, Discovery, or Shaping.
+4. If nothing is resumable, the user can open a project and ask what to continue next.
 
 ## Scenario A: Register a project
 
-1. User runs an `Add project` command from the command palette.
-2. User provides a repo directory visible to the active backend.
-3. In local mode, this may use a folder picker helper as a convenience.
-4. In remote mode, this may require directly entering a backend-visible path instead.
-5. Isagi validates that the selected directory is an existing git repo.
-6. Isagi preloads an inferred editable project name based on the selected folder.
-7. User confirms the inferred name or edits it before submitting registration.
-8. The project is registered without requiring statuses, aliases, or git defaults up front.
-9. Success feedback offers `Open project` and `Open settings` as follow-up actions.
+1. User runs an `Add project` command.
+2. User provides an existing git repo path visible to the active backend.
+3. Isagi validates that the directory is a git repo.
+4. User confirms or edits the project name.
+5. The project is available for sessions and `.isagi/` planning artifacts.
 
-Detailed registration-surface guidance lives in `docs/product/screens/project-registration-flow.md`.
+Detailed registration guidance: `docs/product/screens/project-registration-flow.md`.
 
-## Scenario B: Create a task from command palette
+## Scenario B: Discover the next milestone
 
-1. User runs a command such as `Create task`.
-2. User selects a project explicitly.
-3. User enters task details such as title, optional priority, labels, and optionally a collection.
-4. Task appears in the project task list with its project-defined default status.
-5. If no collection is chosen, the task lives directly under the project.
+1. User opens a project and asks what to work on next.
+2. Discovery grounds itself in project context, existing milestones, tasks, sparks, and relevant files.
+3. Discovery decides whether to continue the current milestone or propose a new one.
+4. Discovery proposes milestone direction in chat first.
+5. User confirms, rejects, or redirects the proposal.
+6. Only after confirmation does the agent create or update milestone artifacts under `.isagi/`.
 
-## Scenario C: Shape or clean up backlog with the Project-Shaper agent
+## Scenario C: Shape a milestone into tasks
 
-1. User opens a project and chooses **Shape what's next**, the project's entry point into the Shaper agent.
-2. If the project has no prior shaping sessions, Isagi starts a new shaping session immediately.
-3. If prior shaping sessions exist, Isagi first shows a small chooser so the user can resume an existing shaping session or start a new one.
-4. New shaping sessions use a project-based title and begin with an empty composer.
-5. The shaping session is project-scoped, tracked, and uses the Shaper agent, but it is not backed by a task.
-6. The shaping companion panel stages draft task proposals only.
-7. Those proposals stay staged during the session and become visible backlog items only when the shaping session is finalized and closed.
-8. The shaping session appears in Home and the sidebar like any other resumable session, but it does not appear on the project board as a task.
+1. User chooses or confirms a milestone.
+2. Shaping uses that milestone as the center of gravity.
+3. Shaping proposes a few reviewable agentic task chunks in chat.
+4. User confirms, rejects, or redirects the task shape.
+5. Only after confirmation does the agent create or update task artifacts under `.isagi/`.
 
-## Scenario D: Start a task-backed ad-hoc session
+Task quality guidance lives in `docs/product/planning-artifacts.md`.
 
-1. User starts a session from project context without creating a task first.
-2. Isagi creates a visible task automatically.
-3. The task title is generated from the first user message and can be renamed later.
-4. The session is attached to that task and opens in the project repo root.
-5. The auto-created task is a normal project task and may remain ungrouped until the user later assigns it to a collection.
+## Scenario D: Start task-backed execution
 
-## Scenario E: Start a scratch session
+1. User opens or creates a milestone-linked or project-level task artifact.
+2. User starts a task-linked session.
+3. Session opens from the project repo root or selected execution root.
+4. Agent work begins with task and project context available.
+5. Task status moves through project-defined statuses grouped into `To-do`, `In progress`, and `Done`.
 
-1. User runs a `Start scratch session` command from the command palette.
-2. User selects a project explicitly.
-3. Isagi opens a session in that project's repo root without creating a task.
-4. The session uses the same conversation shell, git controls, and execution behavior as normal sessions.
-5. The scratch session stays visible in Home and the sidebar like any other session, but it is visibly marked as scratch.
+## Scenario E: Start scratch exploration
 
-## Scenario F: Choose execution mode and begin work
+1. User starts a scratch session against a project.
+2. Isagi opens a session without requiring a task.
+3. The session can answer questions, inspect context, or explore ideas without creating backlog noise.
+4. Useful outcomes may later become sparks, milestones, or tasks after user confirmation.
 
-1. Session starts from:
-   - the task's project repo root for a task-backed session
-   - the selected project's repo root for a scratch session
-   - the selected project's repo root for a shaping session
-2. User chooses to:
-   - stay on the current branch
-   - create/use a managed worktree
-   - decide interactively when the project/global default is `ask_each_time`
-3. If a managed worktree is selected, Isagi creates it automatically.
-4. Agent work begins in the chosen execution root.
+## Scenario F: Choose execution mode
 
-## Scenario G: Continue across one or more sessions
+1. Session starts from the project repo or selected execution root.
+2. User chooses to stay on the current branch, create/use a managed worktree, or decide interactively.
+3. If a managed worktree is selected, Isagi may create it automatically.
+4. Merge and worktree cleanup remain manual in v0.
 
-1. User can open additional sessions on the same task.
+## Scenario G: Continue across sessions
+
+1. A task or project may accumulate multiple sessions.
 2. Sessions are peers; none is primary by default.
-3. One session may implement while another reviews or follows up.
-4. Sessions can be manually closed when they are no longer relevant.
+3. One session may implement while another reviews or explores follow-up direction.
+4. Sessions can be manually closed when no longer relevant.
 
-Scratch sessions can also remain open and resumable across multiple short exploration loops, but they stay outside board/task tracking.
-
-Shaping sessions can also remain open and resumable across multiple backlog-shaping loops, while staying tracked at the project level rather than appearing as board tasks.
-
-## Scenario H: Change execution root and collision-awareness
+## Scenario H: Execution root and collision awareness
 
 1. During a session, the user may switch branches or move to/from a managed worktree.
-2. If the execution root path changes, Isagi closes the current session and creates a new session bound to the new directory.
-3. Because this ends the current session, Isagi should treat the transition as warning-worthy rather than as an invisible rebind.
-4. For task-linked sessions, the replacement session stays under the same task.
-5. Isagi warns when other active or idle-but-recent sessions share that directory.
-6. Task and session UI can show overlapping sessions or active session counts for that directory.
-7. The warning helps the user inspect overlapping sessions without hard-blocking work.
+2. If the execution root path changes, Isagi closes the current session and creates a new one bound to the new directory.
+3. Isagi warns when another active or recent idle session shares the same execution directory.
+4. Warnings are advisory, not blocking.
 
-## Scenario I: Update task status
+## Command surfaces
 
-1. User changes task status manually.
-2. Status labels are project-specific but map to global buckets.
-3. There is no separate `Complete task` mutation in the MVP UI; task closure happens through status change.
-4. Moving the task into a `done`-bucket status closes its sessions.
-5. Git merge and worktree cleanup remain separate manual actions.
-
-## Future phase note
-
-Spark capture and spark triage are deferred to Phase 2. They are not part of the first MVP release path documented here.
-
-## Command surfaces (top bar + command palette)
-
-Commands are available through:
-
-- top-bar contextual actions in project and session surfaces
-- global command palette
-
-Project Detail and the Session screen should reuse the same contextual action-bar style for common actions.
-
-- The shared style keeps action placement and interaction posture familiar across surfaces.
-- Project Detail uses that same style while swapping in project-specific actions such as shaping, task creation, collection creation, filters, and saved-view controls.
-- The task-detail modal is a lighter modal exception rather than a full action-bar surface.
-- Detailed session-surface guidance lives in `docs/product/screens/session-screen.md`.
-- The command palette remains the global command surface when the user wants to jump context or trigger actions from anywhere.
-- Scratch sessions stay primarily command-palette-driven so project selection remains explicit and they do not masquerade as backlog items.
+Commands are available through contextual actions and the global command palette.
 
 Examples:
 
-- create task
-- start task-backed ad-hoc session
+- discover next milestone
+- shape milestone into tasks
+- create spark
+- start task session
 - start scratch session
-- start new task session
 - change task status
 - switch execution root / create worktree
 
-## Error and recovery paths
-
-- **Ad-hoc session title is poor:** keep the auto-generated task, but allow quick rename.
-- **Worktree creation failure:** keep the session in `error` and let the user retry or choose a different execution root.
-- **Execution-root change failure:** surface the error and let the user retry or choose a different execution root.
-- **Collision warning ignored:** do not block work; keep directory/session visibility available so the user can self-correct.
-
 ## Invariants checklist
 
-- Every task belongs to a project.
-- Every task may belong to zero or one collection inside that project.
-- Sessions come in three kinds: task-linked, scratch, and shaping.
-- Every task-linked session belongs to a task.
-- Scratch sessions belong to a project and do not belong to tasks or collections.
-- Shaping sessions belong to a project and do not belong to tasks or collections.
-- Sessions do not belong directly to collections.
-- No subtasks exist in v0; review and handoff stay on the same task.
+- MVP projects map to existing git repos.
+- Durable planning artifacts live under `.isagi/`.
+- Files are the source of truth for planning state.
+- Backend owns runtime/session state.
+- Milestone is the primary continuation object.
+- Discovery and Shaping are prompt-template modes.
+- Discovery and Shaping do not write files until user confirmation.
 - Tasks are execution-agnostic.
-- Task status is manual and project-customizable.
-- Sessions are directory-bound; changing execution root closes the current session and creates a new one.
-- Collision warnings are advisory, not blocking.
+- Sessions are directory-bound.
+- Collision warnings are advisory.

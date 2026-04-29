@@ -1,6 +1,6 @@
 # Home Screen (MVP)
 
-**Last updated:** 2026-03-23
+**Last updated:** 2026-04-28
 
 ## One-liner
 
@@ -16,22 +16,22 @@ The Home screen answers: **"What should I resume right now?"**
 
 - Home is global, not project-scoped.
 - Home is resume-first, not backlog-first.
-- Home is a lightweight orientation surface, not a dashboard.
+- Home is a lightweight orientation surface, not a planning dashboard.
 
 ## Core principles
 
 - Resumable sessions come first.
-- Recency and resumability are the default signals for what deserves the most emphasis.
-- When no projects exist yet, Home should guide the user into lightweight project registration.
-- When no session can be resumed, Home may offer a lightweight path back into motion, but it should not become a full task browser.
-- Home should show enough context to distinguish work threads, including non-task session types, without turning into a management surface.
-- Starting new work from Home should keep project selection explicit rather than guessing hidden context.
+- Resumable sessions may include task execution, scratch exploration, Discovery, or Shaping.
+- Recency and resumability are the default signals for what deserves emphasis.
+- When no projects exist, Home should guide the user into lightweight project registration.
+- When no session can be resumed, Home may point the user toward a project or Discovery, but should not become a full planning surface.
+- Starting new work from Home should keep project selection explicit.
 
 ## Key boundaries
 
-- Deliberate backlog management belongs to `docs/product/screens/project-detail-screen.md`.
-- Execution belongs to `docs/product/screens/session-screen.md`.
-- Home should not become a global planning, prioritization, or analytics surface.
+- Deliberate project momentum and milestone work belongs to `docs/product/screens/project-detail-screen.md`.
+- Execution conversations belong to `docs/product/screens/session-screen.md`.
+- Home should not become global prioritization, analytics, or portfolio planning.
 
 ## Canonical references
 

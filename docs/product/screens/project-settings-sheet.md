@@ -1,6 +1,6 @@
 # Project Settings Sheet (MVP)
 
-**Last updated:** 2026-03-23
+**Last updated:** 2026-04-28
 
 ## One-liner
 
@@ -10,29 +10,30 @@ The Project Settings sheet answers: **"Where do I configure project behavior wit
 
 - Provide a secondary configuration surface for one project.
 - Hold project-level settings that shape task and session behavior.
-- Keep durable project semantics separate from daily backlog manipulation.
+- Keep durable project configuration separate from daily continuation work.
 
 ## Surface posture
 
 - Project Settings is project-scoped and deliberate.
-- Project Settings is for infrequent configuration, not rapid execution or backlog scanning.
-- The sheet should feel tighter and calmer than the main work surfaces.
+- It is for infrequent configuration, not rapid execution or milestone browsing.
+- The sheet should feel tighter than the main work surfaces.
 
 ## Core principles
 
-- Settings owns project-wide behavior, not live backlog structure.
-- Repository reference changes are high-risk and should make their consequences explicit before confirmation.
+- Settings owns project-wide behavior, not live milestone/task structure.
+- Durable project configuration should be Git-backed where practical, likely under `.isagi/config/`.
+- Repository reference changes are high-risk and should make consequences explicit.
 - Task-status configuration belongs here because it changes workflow semantics for the whole project.
-- Display aliases may change UI wording without changing the underlying model.
-- The sheet should stay narrow enough that opening it feels like configuration, not a second workspace.
+- The sheet should not grow into cross-project administration or analytics.
 
 ## Key boundaries
 
-- Project name, saved views, and collection instances belong to `docs/product/screens/project-detail-screen.md`.
-- Execution conversation and task-by-task work do not belong here.
-- This surface should not grow into cross-project administration or analytics.
+- Milestones, tasks, sparks, and project momentum belong to `docs/product/screens/project-detail-screen.md`.
+- Execution conversation does not belong here.
+- Exact `.isagi/config/` files are intentionally deferred.
 
 ## Canonical references
 
+- `docs/product/planning-artifacts.md`
 - `docs/product/config/project-task-git-rules.md`
 - `docs/product/screens/project-detail-screen.md`

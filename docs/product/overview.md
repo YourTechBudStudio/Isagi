@@ -1,85 +1,75 @@
 # Isagi - product overview (codename)
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-28
 
 ## One-liner
 
-Isagi is a desktop-first task and session orchestration system for repo-based work: the Isagi UI sits over a backend-owned runtime that manages project-scoped tasks, harness-backed sessions, and git execution.
+Isagi is a continuation system for project momentum. In the MVP, a project maps to an existing git repo; durable planning state lives as Git-backed artifacts under `.isagi/`, while runtime/session state lives in the backend.
 
 ## The problem
 
-- Starting is harder than doing.
-- Context loading is expensive and repetitive.
-- Parallel coding threads collide without clear visibility into shared execution roots.
-- Backlogs decay when there is too much overhead between capture, planning, and execution.
+- Execution stalls when the next task is known but context has gone cold.
+- Planning stalls when the current milestone is done, stale, or unclear.
+- Backlogs decay when they do not preserve enough reasoning to restart momentum.
+- Heavy PM ceremony creates more friction than it removes.
 
 ## Value proposition
 
-1. **Start quickly** - create a task, jump into a task-backed ad-hoc session, open a scratch session for quick repo context, or open a shaping session when the backlog itself still needs form.
-2. **Warm starts** - sessions resume inside the right project context instead of from zero.
-3. **Parallel safely enough** - optional managed worktrees plus collision warnings reduce accidental overlap.
-4. **Low-overhead tracking** - tasks hold accountability and progress without becoming a heavyweight workflow system.
-5. **Flexible git execution** - stay on the current branch by default or spin up managed worktrees when needed.
+1. **Milestone-centered continuation** - help the user recover the next meaningful direction when momentum breaks.
+2. **Warm execution starts** - keep tasks and sessions close enough that work resumes without reloading all context manually.
+3. **Git-backed planning memory** - keep milestones, tasks, sparks, and project config in project files that move with the repo.
+4. **Lightweight discovery and shaping** - use prompt-template modes to discover the next milestone and shape it into agent-era tasks.
+5. **Backend-owned runtime** - keep sessions, harness bindings, execution roots, and collision state in the backend.
 
 ## Core principles
 
-- **Desktop-first for MVP.** Keep one primary execution surface.
-- **Backend-owned runtime.** Repo registration, session state, worktrees, and harness orchestration live in the backend rather than the UI shell.
-- **Single-user in local or remote mode.** The same product model should work whether the backend runs locally beside the desktop app or remotely in a persistent personal environment.
-- **Task-centered for execution, not workflow-first.** Use repo projects, optional collections, tasks, and sessions as the minimum stable core, while letting shaping remain a separate project-scoped lane.
-- **Execution and shaping stay separate.** Task-backed sessions do accountable work; shaping sessions turn ambiguity into backlog; scratch stays lightweight.
-- **Low-commitment exploration should stay lightweight.** Scratch sessions are project-scoped and intentionally avoid creating backlog noise when the user only needs quick answers.
-- **Grouping should not redefine execution.** Collections may organize work, but repo projects remain the execution containers.
-- **User sovereignty over git.** Branch and worktree controls remain user-driven, with warnings instead of hard locks.
-- **Backlog tooling can wait.** Spark capture and triage can return in Phase 2 if the core project/task/session model proves worthwhile.
-- **Continuity over novelty.** Resume and focus are more important than feed-style discovery.
+- **Action first.** Planning exists to restore confidence and enable execution, not to become a workflow ceremony.
+- **Milestones are the current continuation center.** Future versions may let projects choose another center of gravity, but the MVP is milestone-centered.
+- **Files own durable planning state.** The backend may index `.isagi/`, but files remain the source of truth.
+- **Sessions own live work.** Runtime state belongs to the backend and harness layer.
+- **Sparks stay lightweight.** A spark is memory context, not a proto-task or mandatory triage item.
+- **Tasks fit the agent era.** A task should be a reviewable chunk of agentic work, not a micro-todo.
+- **Repo is the MVP container, not the permanent philosophy.** For the MVP, one project maps to one existing git repo.
 
 ## Active MVP scenario
 
-Primary scenario: coding/product workflow.
+Primary scenario: coding/product workflow in one existing git repo.
 
 Typical flow:
 
 1. Register an existing git repo path visible to the active backend as a project.
-2. Organize work directly as tasks or under optional collections, depending on the project's workflow.
-3. When backlog shape is still fuzzy, start a project-scoped shaping session to draft proposed tasks or collections.
-4. Create a task or start a task-backed ad-hoc session that auto-creates a task.
-5. Run one or more sessions against that task.
-6. Stay on the current branch or switch to a managed worktree when needed.
-7. Move the task through project-defined statuses until done.
-8. Keep backlog planning lightweight; richer spark tooling is deferred until after the first MVP release.
-
-When the user only needs quick project-scoped exploration or Q&A, they may instead start a scratch session. Scratch sessions reuse the same execution shell and git controls, but they do not create tasks or appear on project boards.
-
-When the user needs to shape the backlog itself, they may instead start a shaping session. Shaping sessions are tracked and resumable like other sessions, but they remain project-scoped and stage proposed backlog items until the shaping session is finalized.
+2. Capture or maintain planning artifacts under `.isagi/`.
+3. Use Discovery when the next milestone is unclear.
+4. Confirm a milestone before writing or updating milestone files.
+5. Use Shaping to turn that milestone into a few reviewable agentic tasks.
+6. Confirm task artifacts before writing them.
+7. Run task-linked sessions, scratch sessions, or Discovery or Shaping sessions as needed.
+8. Use project-defined statuses grouped into `To-do`, `In progress`, and `Done`.
+9. Use git/worktree execution controls when isolation is useful.
 
 Detailed journey: `docs/journeys/coding-workflow.md`.
 
-## Derivative workflows
+## References
 
-Outcome-centric workflows such as content or video work are expected to fit inside the same repo-project model by using optional collections plus project-defined task statuses, without changing execution-root semantics.
-
-## Architecture references
-
-- Collection model: `docs/product/collection-model.md`
-- Task model: `docs/product/task-model.md`
+- Mental model: `docs/product/mental-model.md`
+- Planning artifacts: `docs/product/planning-artifacts.md`
+- MVP scope: `docs/product/mvp-scope.md`
 - Execution mechanics: `docs/architecture/execution-model.md`
-- Project/task git rules: `docs/product/config/project-task-git-rules.md`
-- Agent guidance projections: `docs/product/config/agent-guidance-projections.md`
+- System architecture: `docs/architecture/system-architecture.md`
 
 ## Non-goals (current MVP)
 
-- Mobile app execution surface.
-- Fully automated merge and cleanup workflows.
-- Strict workflow enforcement for all work.
-- Global spark inbox + spark triage in the first MVP release.
-- Project-group / multi-repo execution as an active MVP feature.
+- Multi-repo project orchestration.
+- Heavy workflow state machines.
+- Full global spark routing or multi-user spark permissions.
+- Strict schema design for every planning artifact field.
+- Replacing normal Git review for planning artifact changes.
 - Full in-app PR/merge/release orchestration.
-- Rich multi-user collaboration and permissions.
+- Mobile app execution surface.
 
 ## What remains open
 
-- What the Phase 2 spark inbox + spark-triage backlog feeder should look like.
-- When git-safety behavior should become stricter than warnings/manual cleanup.
-- How much passive context assembly should happen automatically on session resume.
-- Which team-oriented features matter first after solo workflow stability.
+- Exact `.isagi/` file schemas and config files.
+- How much optional indexing the backend needs.
+- Which side-panel affordances Discovery and Shaping should get.
+- When projects should support continuation centers beyond milestones.
