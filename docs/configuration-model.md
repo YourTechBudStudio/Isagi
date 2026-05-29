@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Configuration in eSiggy exists to make worktree environments easy to recreate.
+Configuration in Isagi exists to make worktree environments easy to recreate.
 
 It should capture useful defaults without turning setup into toil. Users should not need to fill out tedious forms or hand-edit complex files for common workflows.
 
@@ -49,15 +49,15 @@ Examples:
 - main/secondary window layout
 - attention state
 
-Worktree environment state is partly durable and partly runtime-derived. eSiggy should preserve what helps restoration while rediscovering Git and filesystem facts where possible.
+Worktree environment state is partly durable and partly runtime-derived. Isagi should preserve what helps restoration while rediscovering Git and filesystem facts where possible.
 
 ## Commands
 
 Commands are terminal commands.
 
-eSiggy should not require users to classify commands as dev servers, test watchers, databases, or short-running scripts. A command can exit quickly, run indefinitely, bind a port, produce logs, or fail.
+Isagi should not require users to classify commands as dev servers, test watchers, databases, or short-running scripts. A command can exit quickly, run indefinitely, bind a port, produce logs, or fail.
 
-Configuration can describe how eSiggy should treat the command, but the base noun stays simple.
+Configuration can describe how Isagi should treat the command, but the base noun stays simple.
 
 Possible command-level concepts:
 
@@ -73,15 +73,15 @@ These are conceptual dimensions, not a committed schema.
 
 Commands should be non-persistent by default.
 
-A non-persistent command is safe and conservative: eSiggy can stop or recreate it as the active worktree changes.
+A non-persistent command is safe and conservative: Isagi can stop or recreate it as the active worktree changes.
 
-A persistent command is explicit. It tells eSiggy the user/project expects that command to keep running across worktree switches where possible.
+A persistent command is explicit. It tells Isagi the user/project expects that command to keep running across worktree switches where possible.
 
 This principle matters:
 
-> eSiggy starts conservative, but lets power users make environments feel alive.
+> Isagi starts conservative, but lets power users make environments feel alive.
 
-If a command is marked persistent but fails because of fixed ports, global files, or other shared resources, eSiggy should surface the failure. It should not try to magically fix project-level configuration.
+If a command is marked persistent but fails because of fixed ports, global files, or other shared resources, Isagi should surface the failure. It should not try to magically fix project-level configuration.
 
 ## Worktree initialization templates
 
@@ -99,7 +99,7 @@ Commands define reusable actions. Templates decide which actions happen when a w
 
 ## Agent presets
 
-Agent sessions are first-class in eSiggy, even if they share process/PTY machinery internally with commands.
+Agent sessions are first-class in Isagi, even if they share process/PTY machinery internally with commands.
 
 Agent presets describe how to launch a harness in a useful mode.
 
@@ -112,15 +112,15 @@ Possible preset dimensions:
 - session/resume behavior where supported
 - future tool, MCP, or skill context
 
-Deep context control can evolve over time. The foundational requirement is that eSiggy can launch the right harness in the right worktree and attach the resulting session to that worktree's environment.
+Deep context control can evolve over time. The foundational requirement is that Isagi can launch the right harness in the right worktree and attach the resulting session to that worktree's environment.
 
 ## Agent-assisted configuration
 
-A future-friendly configuration model should allow eSiggy to be configured through an agent or skill.
+A future-friendly configuration model should allow Isagi to be configured through an agent or skill.
 
 The user should be able to ask for configuration changes in normal language, review the proposed changes, and let the agent update the relevant project or user config.
 
-This keeps configuration aligned with how eSiggy is used: as an agent-centered workbench rather than a form-heavy settings app.
+This keeps configuration aligned with how Isagi is used: as an agent-centered workbench rather than a form-heavy settings app.
 
 ## Schema stability
 

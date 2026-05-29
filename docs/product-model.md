@@ -2,7 +2,7 @@
 
 ## Overview
 
-eSiggy is organized around projects, worktrees, and the environments attached to those worktrees.
+Isagi is organized around projects, worktrees, and the environments attached to those worktrees.
 
 The main idea is simple: a worktree should not be treated as only a path on disk. It should have an environment around it: agent sessions, commands, surfaces, layout, and attention state.
 
@@ -28,7 +28,7 @@ A project owns project-specific defaults such as commands, worktree initializati
 
 ### Worktree
 
-The primary continuity unit in eSiggy.
+The primary continuity unit in Isagi.
 
 A worktree represents a concrete place where work happens. The main/root checkout is treated as a first-class worktree for product purposes, even though Git distinguishes it from additional worktrees.
 
@@ -50,7 +50,7 @@ An environment is what makes a worktree feel resumable rather than like a plain 
 
 A terminal command that can be run inside a worktree environment.
 
-eSiggy should not require rigid command types such as `devServer`, `testWatcher`, or `database`. A command is just a command. It may exit quickly, run for a long time, print logs, bind a port, or fail.
+Isagi should not require rigid command types such as `devServer`, `testWatcher`, or `database`. A command is just a command. It may exit quickly, run for a long time, print logs, bind a port, or fail.
 
 ### Surface / panel
 
@@ -98,20 +98,20 @@ This is a product model, not a required database schema.
 - Use **command** for project-defined terminal commands.
 - Use **agent session** for first-class coding-agent processes.
 - Use **surface** or **panel** for visible UI containers.
-- Avoid using **task** as a core eSiggy primitive. A task may exist in the user's head or planning system, but eSiggy's durable product model revolves around worktrees.
+- Avoid using **task** as a core Isagi primitive. A task may exist in the user's head or planning system, but Isagi's durable product model revolves around worktrees.
 - Use **checkout** mostly as a verb or Git action, not as a parallel product noun.
 
 ## Root/main worktree behavior
 
-The main/root checkout should appear as a first-class worktree in eSiggy.
+The main/root checkout should appear as a first-class worktree in Isagi.
 
-It is special only because it is the root checkout and should not be closed or deleted from eSiggy like an additional worktree might be. Otherwise, it should participate in the same environment model.
+It is special only because it is the root checkout and should not be closed or deleted from Isagi like an additional worktree might be. Otherwise, it should participate in the same environment model.
 
 ## Worktree continuity behavior
 
 ### Existing worktree
 
-When the user switches into an existing worktree, eSiggy should restore that worktree's previous environment state where possible.
+When the user switches into an existing worktree, Isagi should restore that worktree's previous environment state where possible.
 
 That may include:
 
@@ -124,10 +124,10 @@ That may include:
 
 ### New worktree
 
-When the user creates a new worktree, eSiggy should initialize it from project-level defaults or an equivalent template concept.
+When the user creates a new worktree, Isagi should initialize it from project-level defaults or an equivalent template concept.
 
 A new worktree does not need to inherit the currently active worktree's exact layout by default. The project should define the default room shape.
 
 ### Missing artifacts
 
-If a restored file or artifact path does not exist in the active worktree, eSiggy should show a missing state rather than silently closing the panel.
+If a restored file or artifact path does not exist in the active worktree, Isagi should show a missing state rather than silently closing the panel.

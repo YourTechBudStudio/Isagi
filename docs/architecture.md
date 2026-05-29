@@ -2,7 +2,7 @@
 
 ## Architectural shape
 
-eSiggy is a desktop app with a server/client architecture.
+Isagi is a desktop app with a server/client architecture.
 
 Electron is the client. The core runtime is a server-style process that owns the worktree, process, PTY, agent-session, and persistence responsibilities.
 
@@ -25,7 +25,7 @@ The client should frame the work, not become the source of truth for runtime sta
 
 ## Server/runtime
 
-The server/runtime owns the operational side of eSiggy:
+The server/runtime owns the operational side of Isagi:
 
 - Git and worktree operations
 - project/worktree discovery
@@ -38,11 +38,11 @@ The server/runtime owns the operational side of eSiggy:
 - integration boundaries with harnesses and future tool systems
 - future remote execution path
 
-The runtime is the place where eSiggy understands what is running, where it is running, and which worktree it belongs to.
+The runtime is the place where Isagi understands what is running, where it is running, and which worktree it belongs to.
 
 ## Why server/client
 
-A server/client architecture gives eSiggy a cleaner boundary between UI and execution.
+A server/client architecture gives Isagi a cleaner boundary between UI and execution.
 
 Benefits:
 
@@ -54,9 +54,9 @@ Benefits:
 
 ## Source-of-truth principle
 
-eSiggy should not over-own facts that already have a better source of truth.
+Isagi should not over-own facts that already have a better source of truth.
 
-In particular, Git should remain the source of truth for repository and worktree facts where possible. eSiggy can remember projects, preferences, layout, and environment state, but it should rediscover real worktree state from Git instead of trusting stale app records blindly.
+In particular, Git should remain the source of truth for repository and worktree facts where possible. Isagi can remember projects, preferences, layout, and environment state, but it should rediscover real worktree state from Git instead of trusting stale app records blindly.
 
 ## State categories
 
@@ -94,7 +94,7 @@ Examples:
 - active agent processes
 - dynamically discovered local URLs
 
-If eSiggy or the machine restarts, this state may be gone. Restoration means recreating or reopening the environment, not pretending child processes survived.
+If Isagi or the machine restarts, this state may be gone. Restoration means recreating or reopening the environment, not pretending child processes survived.
 
 ### Restorable environment/UI state
 
@@ -111,7 +111,7 @@ Examples:
 
 ## Integration posture
 
-eSiggy should integrate with existing harnesses rather than replacing them.
+Isagi should integrate with existing harnesses rather than replacing them.
 
 The baseline integration should be able to launch a harness in the right worktree and show it as an agent session. Deeper integration can be harness-specific:
 
@@ -120,7 +120,7 @@ The baseline integration should be able to launch a harness in the right worktre
 - richer lifecycle events
 - hooks or status signals
 
-When a harness does not expose deeper metadata, eSiggy should degrade gracefully instead of making the whole product depend on perfect integration.
+When a harness does not expose deeper metadata, Isagi should degrade gracefully instead of making the whole product depend on perfect integration.
 
 ## Non-goals for this document
 
