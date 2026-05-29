@@ -1,17 +1,10 @@
-scratch/*
-
-.isagi/
-
-# Javascript stuff
-node_modules
-
-# Todo files
-TODO.md
-
-# Env files
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+*.tsbuildinfo
+.DS_Store
 .env
-.env.local
-.env.prod
-
-# Build outputs
-**/dist/*
+.env.*
+!.env.example

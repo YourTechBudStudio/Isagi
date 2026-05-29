@@ -2,37 +2,24 @@
   "name": "isagi",
   "version": "0.0.1",
   "private": true,
+  "description": "",
+  "keywords": [],
+  "license": "ISC",
+  "author": "YourTechBud",
   "type": "module",
-  "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
   "scripts": {
-    "api": "pnpm --filter @isagi/api",
-    "mobile": "pnpm --filter @isagi/mobile",
-    "web": "pnpm --filter @isagi/web",
-    "lint": "pnpm run -r --parallel lint",
-    "format": "pnpm run -r --parallel format",
-    "typecheck": "pnpm run -r --parallel typecheck",
-    "test": "pnpm run -r --parallel --if-present test"
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint . --deny-warnings --no-error-on-unmatched-pattern",
+    "lint:fix": "oxlint . --fix --no-error-on-unmatched-pattern",
+    "typecheck": "tsc --build"
   },
   "devDependencies": {
-    "@isagi/tooling": "workspace:*",
-    "eslint": "^9.39.2",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.4",
-    "eslint-plugin-simple-import-sort": "^12.1.1",
-    "prettier": "^3.7.4",
-    "prettier-plugin-tailwindcss": "^0.7.2",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.50.1"
+    "oxfmt": "^0.52.0",
+    "oxlint": "^1.67.0",
+    "oxlint-tailwindcss": "^1.0.0",
+    "typescript": "^6.0.3"
   },
-  "pnpm": {
-    "overrides": {
-      "lightningcss": "1.30.1",
-      "lightningcss@1.31.1": "1.30.1",
-      "react-native-css>lightningcss": "1.30.1"
-    },
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "unrs-resolver"
-    ]
-  }
+  "packageManager": "pnpm@11.4.0"
 }

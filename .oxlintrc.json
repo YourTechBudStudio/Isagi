@@ -1,0 +1,58 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "plugins": ["eslint", "typescript", "oxc"],
+  "jsPlugins": ["oxlint-tailwindcss"],
+  "ignorePatterns": ["node_modules", "dist", "out", "build", ".turbo", ".opencode", "coverage"],
+  "rules": {
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "varsIgnorePattern": "^_",
+        "argsIgnorePattern": "^_"
+      }
+    ],
+    "tailwindcss/enforce-canonical": "error"
+  },
+  "overrides": [
+    {
+      "files": ["apps/**/*", "packages/**/*"],
+      "env": {
+        "es2024": true
+      }
+    },
+    {
+      "files": ["apps/**/*.tsx", "packages/**/*.tsx"],
+      "plugins": ["eslint", "typescript", "oxc", "react"],
+      "env": {
+        "browser": true,
+        "es2024": true
+      },
+      "rules": {
+        "react/react-in-jsx-scope": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/vitest.config.ts"
+      ],
+      "plugins": ["eslint", "typescript", "oxc", "react", "vitest"],
+      "env": {
+        "browser": true,
+        "node": true,
+        "vitest": true,
+        "es2024": true
+      },
+      "rules": {
+        "react/react-in-jsx-scope": "off"
+      }
+    }
+  ]
+}

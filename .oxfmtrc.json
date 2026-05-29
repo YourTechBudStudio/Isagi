@@ -1,0 +1,11 @@
+{
+  "ignorePatterns": ["node_modules", "dist", "out", "build", ".turbo", ".opencode", "coverage"],
+  "semi": true,
+  "singleQuote": true,
+  "sortImports": {
+    "internalPattern": ["@isagi/"]
+  },
+  "sortPackageJson": {
+    "sortScripts": true
+  }
+}
