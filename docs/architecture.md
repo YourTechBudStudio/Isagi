@@ -1,0 +1,136 @@
+# Architecture
+
+## Architectural shape
+
+eSiggy is a desktop app with a server/client architecture.
+
+Electron is the client. The core runtime is a server-style process that owns the worktree, process, PTY, agent-session, and persistence responsibilities.
+
+This separation keeps the desktop experience local and direct while leaving room for remote execution later.
+
+## Client
+
+The Electron client owns the interactive workbench experience:
+
+- project/worktree navigation
+- command palette
+- main and secondary windows
+- panels and tabs
+- terminal rendering
+- browser/code/artifact surfaces
+- attention badges and status UI
+- user interaction flows
+
+The client should frame the work, not become the source of truth for runtime state.
+
+## Server/runtime
+
+The server/runtime owns the operational side of eSiggy:
+
+- Git and worktree operations
+- project/worktree discovery
+- process management
+- PTY management
+- command execution
+- agent session lifecycle
+- runtime status
+- state persistence
+- integration boundaries with harnesses and future tool systems
+- future remote execution path
+
+The runtime is the place where eSiggy understands what is running, where it is running, and which worktree it belongs to.
+
+## Why server/client
+
+A server/client architecture gives eSiggy a cleaner boundary between UI and execution.
+
+Benefits:
+
+- Electron can remain focused on the desktop experience.
+- Process and PTY handling can live outside UI concerns.
+- Remote execution becomes possible without redesigning the product model.
+- The same runtime concepts can support local and remote work later.
+- Harness integrations can be isolated from the UI shell.
+
+## Source-of-truth principle
+
+eSiggy should not over-own facts that already have a better source of truth.
+
+In particular, Git should remain the source of truth for repository and worktree facts where possible. eSiggy can remember projects, preferences, layout, and environment state, but it should rediscover real worktree state from Git instead of trusting stale app records blindly.
+
+## State categories
+
+### Durable configuration
+
+User and project preferences that should survive restarts.
+
+Examples:
+
+- global harness presets
+- project command definitions
+- project default worktree initialization behavior
+- user preferences
+
+### Rediscoverable repository state
+
+Facts that should be read from Git or the filesystem where possible.
+
+Examples:
+
+- worktrees
+- branches
+- repository paths
+- file existence
+
+### Runtime process state
+
+State that exists only while processes are alive.
+
+Examples:
+
+- running commands
+- active PTYs
+- live logs
+- active agent processes
+- dynamically discovered local URLs
+
+If eSiggy or the machine restarts, this state may be gone. Restoration means recreating or reopening the environment, not pretending child processes survived.
+
+### Restorable environment/UI state
+
+State that helps recreate the user's room.
+
+Examples:
+
+- last active worktree
+- last active agent session metadata, where available
+- panel/window layout
+- open surfaces
+- remembered artifact paths
+- command history needed for restoration
+
+## Integration posture
+
+eSiggy should integrate with existing harnesses rather than replacing them.
+
+The baseline integration should be able to launch a harness in the right worktree and show it as an agent session. Deeper integration can be harness-specific:
+
+- resume/session IDs
+- waiting-for-user detection
+- richer lifecycle events
+- hooks or status signals
+
+When a harness does not expose deeper metadata, eSiggy should degrade gracefully instead of making the whole product depend on perfect integration.
+
+## Non-goals for this document
+
+This document does not define:
+
+- exact package/module layout
+- database schema
+- IPC protocol
+- process supervisor implementation
+- terminal rendering library
+- final harness adapter API
+
+Those details should emerge through implementation while preserving the architecture boundary described here.
