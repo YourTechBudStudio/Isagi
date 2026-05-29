@@ -1,0 +1,23 @@
+{
+  "name": "@isagi/contracts",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "check": "pnpm typecheck && pnpm build",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@orpc/contract": "^1.14.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "vite": "^8.0.14",
+    "vite-plugin-dts": "^4.5.4"
+  }
+}

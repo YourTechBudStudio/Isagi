@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Starting Isagi</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: #24273a;
+        color: #cad3f5;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 18% 18%, rgb(138 173 244 / 14%), transparent 32rem),
+          radial-gradient(circle at 82% 12%, rgb(198 160 246 / 12%), transparent 34rem),
+          radial-gradient(circle at 50% 92%, rgb(145 215 227 / 10%), transparent 30rem), #24273a;
+      }
+
+      main {
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        padding: 48px;
+      }
+
+      section {
+        width: min(520px, 100%);
+        border: 1px solid rgb(91 96 120 / 50%);
+        border-radius: 28px;
+        background: rgb(54 58 79 / 72%);
+        box-shadow: 0 16px 48px rgb(0 0 0 / 35%);
+        padding: 32px;
+      }
+
+      .eyebrow {
+        margin: 0 0 12px;
+        color: #6e738d;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        color: #cad3f5;
+        font-size: 48px;
+        letter-spacing: -0.04em;
+        line-height: 1;
+      }
+
+      #boot-status {
+        margin: 28px 0 0;
+        color: #a5adcb;
+        font-size: 16px;
+      }
+
+      #boot-detail {
+        margin: 10px 0 0;
+        color: #6e738d;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+
+      body[data-state='failed'] #boot-status {
+        color: #ed8796;
+      }
+    </style>
+  </head>
+  <body data-state="booting">
+    <main>
+      <section>
+        <p class="eyebrow">Isagi boot</p>
+        <h1>Isagi</h1>
+        <p id="boot-status">Starting...</p>
+        <p id="boot-detail">Preparing the room.</p>
+      </section>
+    </main>
+    <script>
+      window.setBootStatus = (payload) => {
+        document.body.dataset.state = payload.state ?? 'booting';
+        document.querySelector('#boot-status').textContent = payload.message ?? 'Starting...';
+        document.querySelector('#boot-detail').textContent = payload.detail ?? '';
+      };
+    </script>
+  </body>
+</html>

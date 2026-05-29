@@ -1,0 +1,32 @@
+appId: works.earendil.isagi
+productName: Isagi
+asar: true
+
+directories:
+  output: release
+
+files:
+  - from: dist-electron
+    to: dist-electron
+    filter:
+      - '**/*'
+  - from: static
+    to: static
+    filter:
+      - '**/*'
+  - package.json
+
+extraResources:
+  - from: ../web/dist
+    to: web
+  - from: ../runtime/dist
+    to: runtime
+  - from: ../runtime/package.json
+    to: runtime/package.json
+
+mac:
+  category: public.app-category.developer-tools
+  identity: null
+  target:
+    - dmg
+    - zip

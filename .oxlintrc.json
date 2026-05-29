@@ -6,7 +6,22 @@
   },
   "plugins": ["eslint", "typescript", "oxc"],
   "jsPlugins": ["oxlint-tailwindcss"],
-  "ignorePatterns": ["node_modules", "dist", "out", "build", ".turbo", ".opencode", "coverage"],
+  "settings": {
+    "tailwindcss": {
+      "entryPoint": "apps/web/src/styles.css"
+    }
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "dist-electron",
+    "out",
+    "build",
+    "release",
+    ".turbo",
+    ".opencode",
+    "coverage"
+  ],
   "rules": {
     "eslint/no-unused-vars": [
       "error",

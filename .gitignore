@@ -1,6 +1,8 @@
 node_modules/
 dist/
+dist-electron/
 build/
+release/
 .turbo/
 coverage/
 *.tsbuildinfo

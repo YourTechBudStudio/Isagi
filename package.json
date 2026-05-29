@@ -8,18 +8,28 @@
   "author": "YourTechBud",
   "type": "module",
   "scripts": {
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check",
+    "build": "pnpm -r --if-present build",
+    "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm format:check",
+    "dev": "concurrently -k -n runtime,web,desktop -c cyan,magenta,blue \"pnpm --filter @isagi/runtime dev:fixed\" \"pnpm --filter @isagi/web dev:desktop\" \"pnpm --filter @isagi/desktop dev:connected\"",
+    "fix": "pnpm lint:fix && pnpm format",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint . --deny-warnings --no-error-on-unmatched-pattern",
     "lint:fix": "oxlint . --fix --no-error-on-unmatched-pattern",
-    "typecheck": "tsc --build"
+    "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
+    "package:desktop": "pnpm build && pnpm --filter @isagi/desktop dist",
+    "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
+    "concurrently": "^10.0.0",
+    "cross-env": "^10.1.0",
     "oxfmt": "^0.52.0",
     "oxlint": "^1.67.0",
     "oxlint-tailwindcss": "^1.0.0",
     "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": "22.22.3"
   },
   "packageManager": "pnpm@11.4.0"
 }

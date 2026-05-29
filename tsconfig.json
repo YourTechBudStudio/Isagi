@@ -2,5 +2,10 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "extends": "./tsconfig.base.json",
   "files": [],
-  "references": []
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./apps/runtime" },
+    { "path": "./apps/web" },
+    { "path": "./apps/desktop" }
+  ]
 }

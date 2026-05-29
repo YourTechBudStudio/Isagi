@@ -1,0 +1,22 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+  font-family: 'Source Sans 3', ui-sans-serif, system-ui, sans-serif;
+  background: #24273a;
+}
+
+body {
+  margin: 0;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    radial-gradient(circle at 18% 18%, rgb(138 173 244 / 14%), transparent 32rem),
+    radial-gradient(circle at 82% 12%, rgb(198 160 246 / 12%), transparent 34rem),
+    radial-gradient(circle at 50% 92%, rgb(145 215 227 / 10%), transparent 30rem);
+}

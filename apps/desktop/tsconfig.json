@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["DOM", "ES2024"],
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src", "vite.config.ts"]
+}

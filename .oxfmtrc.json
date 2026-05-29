@@ -1,5 +1,17 @@
 {
-  "ignorePatterns": ["node_modules", "dist", "out", "build", ".turbo", ".opencode", "coverage"],
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "dist-electron",
+    "out",
+    "build",
+    "release",
+    ".turbo",
+    ".opencode",
+    "coverage",
+    ".agents",
+    ".pi"
+  ],
   "semi": true,
   "singleQuote": true,
   "sortImports": {

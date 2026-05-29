@@ -1,0 +1,24 @@
+{
+  "name": "@isagi/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The Electron desktop shell for Isagi.",
+  "author": "YourTechBud",
+  "type": "module",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "build": "vite build",
+    "check": "pnpm typecheck && pnpm build",
+    "dev": "pnpm build && electron .",
+    "dev:connected": "cross-env ISAGI_RUNTIME_URL=http://127.0.0.1:17373 ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm dev",
+    "dist": "electron-builder",
+    "pack:dir": "electron-builder --dir",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1",
+    "vite": "^8.0.14"
+  }
+}
