@@ -13,5 +13,11 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 
 ## Rules
 
+- Always start by reading:
+  - docs/engineering-guidance/README.md
+  - docs/engineering-guidance/core-principles.md
+  - docs/engineering-guidance/how-to-use.md
+  - Additionally, make sure to read any relevant engineering guidance files before starting to code.
 - After code changes, run `pnpm check`. Each package has its own `check` command.
 - Never start long running processes like servers or run pnpm run dev or pnpm run start. Instead suggest the user to run those commands instead.
+- We haven't launched yet, so prefer bold refactors for better maitainability and correctness over backwards compatibility.

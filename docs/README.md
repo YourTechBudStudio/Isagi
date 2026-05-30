@@ -25,6 +25,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 2. [`product-model.md`](./product-model.md) — the shared nouns and mental model
 3. [`architecture.md`](./architecture.md) — the high-level server/client architecture
 4. [`configuration-model.md`](./configuration-model.md) — how configuration is conceptually organized
+5. [`engineering-guidance/README.md`](./engineering-guidance/README.md) — coding and review guidance for keeping the repo maintainable
 
 ## Docs map
 
@@ -32,3 +33,4 @@ These docs should explain the shape of Isagi without becoming a running transcri
 - **Product Model**: the seven primary primitives: global config, project, worktree, environment, command, surface/panel, and attention signal.
 - **Architecture**: Electron client plus server/runtime architecture, source-of-truth principles, and integration posture.
 - **Configuration Model**: global/project/worktree configuration layers, command persistence, templates, presets, and agent-assisted configuration direction.
+- **Engineering Guidance**: principles and review lenses for boundaries, module shape, drift prevention, runtime diagnostics, product behavior, and verification.
