@@ -1,3 +1,5 @@
+import { Duration, Effect, Schedule } from 'effect';
+
 export interface WaitOptions {
   attempts?: number;
   intervalMs?: number;
@@ -10,85 +12,90 @@ const defaultWaitOptions = {
   timeoutMs: 1_000,
 };
 
-export async function waitForRuntimeHealth(runtimeUrl: string, options?: WaitOptions) {
+export function waitForRuntimeHealth(runtimeUrl: string, options?: WaitOptions) {
   const healthUrl = new URL('/rpc/health', runtimeUrl).toString();
-  await waitForRpcHealth(healthUrl, options);
+  return waitForRpcHealth(healthUrl, options);
 }
 
-export async function waitForWebServer(webUrl: string, options?: WaitOptions) {
-  await waitForHttpOk(webUrl, options);
+export function waitForWebServer(webUrl: string, options?: WaitOptions) {
+  return waitForHttpOk(webUrl, options);
 }
 
-async function waitForRpcHealth(url: string, options: WaitOptions = {}) {
-  await waitForOk(url, options, async () => {
-    const response = await fetchWithTimeout(
-      url,
-      options.timeoutMs ?? defaultWaitOptions.timeoutMs,
-      {
-        method: 'POST',
-      },
-    );
+function waitForRpcHealth(url: string, options: WaitOptions = {}) {
+  return waitForOk(
+    url,
+    options,
+    Effect.gen(function* () {
+      const response = yield* fetchWithTimeout(
+        url,
+        options.timeoutMs ?? defaultWaitOptions.timeoutMs,
+        {
+          method: 'POST',
+        },
+      );
 
-    if (!response.ok) {
-      throw new Error(`${url} responded with ${response.status}`);
-    }
+      if (!response.ok) {
+        return yield* Effect.fail(new Error(`${url} responded with ${response.status}`));
+      }
 
-    const payload = (await response.json()) as { json?: { ok?: unknown } };
+      const payload = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<{ json?: { ok?: unknown } }>,
+        catch: toError,
+      });
 
-    if (payload.json?.ok !== true) {
-      throw new Error(`${url} did not return a healthy oRPC payload`);
-    }
-  });
-}
-
-async function waitForHttpOk(url: string, options: WaitOptions = {}) {
-  await waitForOk(url, options, async () => {
-    const response = await fetchWithTimeout(url, options.timeoutMs ?? defaultWaitOptions.timeoutMs);
-
-    if (!response.ok) {
-      throw new Error(`${url} responded with ${response.status}`);
-    }
-  });
-}
-
-async function waitForOk(url: string, options: WaitOptions, check: () => Promise<void>) {
-  const attempts = options.attempts ?? defaultWaitOptions.attempts;
-  const intervalMs = options.intervalMs ?? defaultWaitOptions.intervalMs;
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      await check();
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-
-    if (attempt < attempts) {
-      await delay(intervalMs);
-    }
-  }
-
-  throw new Error(
-    `Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ''}`,
+      if (payload.json?.ok !== true) {
+        return yield* Effect.fail(new Error(`${url} did not return a healthy oRPC payload`));
+      }
+    }),
   );
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestInit) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+function waitForHttpOk(url: string, options: WaitOptions = {}) {
+  return waitForOk(
+    url,
+    options,
+    Effect.gen(function* () {
+      const response = yield* fetchWithTimeout(
+        url,
+        options.timeoutMs ?? defaultWaitOptions.timeoutMs,
+      );
 
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+      if (!response.ok) {
+        return yield* Effect.fail(new Error(`${url} responded with ${response.status}`));
+      }
+    }),
+  );
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function waitForOk(url: string, options: WaitOptions, check: Effect.Effect<void, Error>) {
+  const attempts = options.attempts ?? defaultWaitOptions.attempts;
+  const intervalMs = options.intervalMs ?? defaultWaitOptions.intervalMs;
+
+  if (attempts <= 0) {
+    return Effect.fail(new Error(`Timed out waiting for ${url}`));
+  }
+
+  return check.pipe(
+    Effect.retry({
+      schedule: Schedule.spaced(Duration.millis(intervalMs)),
+      times: attempts - 1,
+    }),
+    Effect.mapError((error) => new Error(`Timed out waiting for ${url}: ${error.message}`)),
+  );
+}
+
+function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestInit) {
+  return Effect.tryPromise({
+    try: (signal) => fetch(url, { ...init, signal }),
+    catch: toError,
+  }).pipe(
+    Effect.timeoutFail({
+      duration: Duration.millis(timeoutMs),
+      onTimeout: () => new Error(`${url} request timed out after ${timeoutMs}ms`),
+    }),
+  );
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error));
 }

@@ -15,6 +15,7 @@
     "@isagi/contracts": "workspace:*",
     "@orpc/client": "^1.14.4",
     "@orpc/contract": "^1.14.4",
+    "effect": "^3.21.2",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-router": "^7.16.0"

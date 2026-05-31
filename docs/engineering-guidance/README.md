@@ -14,12 +14,12 @@ Use it during implementation and review. It is a review aid, not a style manual.
 
 The lenses are equal-priority review tools. A change does not need to touch every lens equally, but reviewers should not treat any relevant lens as optional.
 
-- [`boundaries-and-contracts.md`](./lenses/boundaries-and-contracts.md) - package ownership, source-of-truth boundaries, contracts, and interface evolution.
+- [`boundaries-and-contracts.md`](./lenses/boundaries-and-contracts.md) - package ownership, source-of-truth boundaries, contracts, trust boundaries, and interface evolution.
 - [`module-shape-and-navigability.md`](./lenses/module-shape-and-navigability.md) - deep modules, narrow public surfaces, file grouping, and human-readable flow.
 - [`reuse-refactoring-and-drift-prevention.md`](./lenses/reuse-refactoring-and-drift-prevention.md) - shared behavior, refactoring pressure, and drift prevention.
-- [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - runtime truth, process/session lifecycles, failure semantics, logging, and supportability.
+- [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, lifecycle ownership, failure semantics, logging, and supportability.
 - [`product-behavior-and-ux.md`](./lenses/product-behavior-and-ux.md) - honest product behavior, restoration, attention signals, and user-visible engineering quality.
-- [`reviewability-and-verification.md`](./lenses/reviewability-and-verification.md) - verification depth, review evidence, and completed-work trust.
+- [`reviewability-and-verification.md`](./lenses/reviewability-and-verification.md) - verification depth, dependency justification, review evidence, and completed-work trust.
 
 ## Severity Ladder
 
@@ -35,6 +35,7 @@ Each lens defines its own `Blocker`, `Concern`, and `Nit` calibration.
 - Arbitrary file-size limits.
 - Personal naming preferences beyond clarity and navigability.
 - Abstraction for its own sake.
+- Effect wrappers around pure code just to make it look architectural.
 - Exhaustive logging in every function.
 - Speculative compatibility for private internals.
 - Generic best-practice checklists not tied to Isagi's risks.

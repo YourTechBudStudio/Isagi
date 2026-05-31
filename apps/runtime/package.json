@@ -18,6 +18,7 @@
     "@fastify/cors": "^11.2.0",
     "@isagi/contracts": "workspace:*",
     "@orpc/server": "^1.14.4",
+    "effect": "^3.21.2",
     "fastify": "^5.8.5"
   },
   "devDependencies": {

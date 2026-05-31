@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { useEffect, useState } from 'react';
 import { Route, Routes } from 'react-router';
 
@@ -17,30 +18,11 @@ function HomePage() {
   useEffect(() => {
     let cancelled = false;
 
-    const connect = async () => {
-      try {
-        const url = await resolveRuntimeUrl();
-        const client = createIsagiClient(url);
-        const health = await client.health();
-
-        if (!cancelled) {
-          setRuntimeState({
-            message: `${health.name} v${health.version} responded at ${health.timestamp}`,
-            status: 'connected',
-            url,
-          });
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setRuntimeState({
-            error: error instanceof Error ? error.message : 'Unknown runtime error',
-            status: 'disconnected',
-          });
-        }
+    void Effect.runPromise(connectToRuntime()).then((state) => {
+      if (!cancelled) {
+        setRuntimeState(state);
       }
-    };
-
-    void connect();
+    });
 
     return () => {
       cancelled = true;
@@ -60,6 +42,30 @@ function HomePage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function connectToRuntime() {
+  return Effect.gen(function* () {
+    const url = yield* resolveRuntimeUrl();
+    const client = createIsagiClient(url);
+    const health = yield* Effect.tryPromise({
+      try: () => client.health(),
+      catch: toError,
+    });
+
+    return {
+      message: `${health.name} v${health.version} responded at ${health.timestamp}`,
+      status: 'connected' as const,
+      url,
+    };
+  }).pipe(
+    Effect.catchAll((error) =>
+      Effect.succeed({
+        error: error.message,
+        status: 'disconnected' as const,
+      }),
+    ),
   );
 }
 
@@ -87,4 +93,8 @@ export function App() {
       <Route element={<HomePage />} path="*" />
     </Routes>
   );
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error));
 }

@@ -8,6 +8,8 @@ Before editing, identify which lenses are relevant to the change. During impleme
 
 Prefer the smallest correct change that preserves the product model and keeps the code easy to follow. If a cleaner internal interface requires migrating callers, migrate them rather than adding compatibility shims, unless a real external boundary depends on the old behavior.
 
+For operational implementation code, prefer Effect-shaped internals and run them at framework or process boundaries. Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent.
+
 When the change is complete, report what changed, what was verified, and any known risk or follow-up. Do not claim confidence that the evidence does not support.
 
 ## For Review Agents
@@ -17,6 +19,19 @@ Review the change against each relevant lens. The lenses are equal priority; do 
 Prefer findings that explain consequence. A good finding says what could break, drift, become hard to debug, or become hard to change.
 
 Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material.
+
+## Effect Adoption Posture
+
+Effect is Isagi's substrate for operational work, not its universal programming style.
+
+Use this maturity model as review orientation, not as a checklist:
+
+- **Tier 0: Plain TypeScript** - pure helpers, constants, schemas, contracts, and presentational rendering.
+- **Tier 1: Local Effect** - a contained async, failure, retry, timeout, or parsing flow that runs at a nearby boundary.
+- **Tier 2: Effect services/layers** - operational domains with dependencies that should be testable, replaceable, and explicit, such as Git, config, persistence, runtime clients, or process adapters.
+- **Tier 3: Scoped runtime systems** - long-lived resources or concurrent systems that need scopes, fibers, queues, streams, supervisors, interruption, or structured shutdown.
+
+Isagi should aim for **Tier 2 by default in operational code** and move to **Tier 3 where lifecycle complexity justifies it**. Runtime orchestration, PTYs, commands, agent sessions, restoration, and process supervision are likely Tier 3 territory. Pure schemas, contracts, and presentational rendering are not.
 
 ## Severity Semantics
 

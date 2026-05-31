@@ -10,6 +10,10 @@ Prefer designs that keep the next product slice easy to add without freezing arc
 
 Keep ownership clear. The runtime owns operational state. Git remains the source of truth for repository and worktree facts where practical. The web app owns React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior without implementation.
 
+## Make Operational Work Explicit
+
+Work that can fail, block, retry, allocate resources, depend on services, spawn processes, or outlive a single call should make those facts visible in its type, boundary, and lifecycle. Use Effect as Isagi's operational substrate, not as a universal style for pure code.
+
 ## Prefer Deep Modules With Narrow Public Surfaces
 
 Concentrate complexity behind clear interfaces. A deep module may contain multiple focused internal files; depth means callers see a small, stable surface, not that everything lives in one huge file.

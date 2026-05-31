@@ -19,5 +19,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
   - docs/engineering-guidance/how-to-use.md
   - Additionally, make sure to read any relevant engineering guidance files before starting to code.
 - After code changes, run `pnpm check`. Each package has its own `check` command.
-- Never start long running processes like servers or run pnpm run dev or pnpm run start. Instead suggest the user to run those commands instead.
+- Do not run the `engineering-guidance-review` subagent when debugging, create mockups or just helping the user brainstorm.
+- Use the Effect library (`effect`) for operational implementation code where async work, failure, retries, dependencies, resources, or lifecycle matter. Follow package-specific `AGENTS.md` files for local Effect scope.
+- Never start long running processes like servers or run `pnpm run dev` or `pnpm run start`. Instead suggest the user to run those commands instead.
 - We haven't launched yet, so prefer bold refactors for better maitainability and correctness over backwards compatibility.

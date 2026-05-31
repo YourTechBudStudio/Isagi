@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { Effect } from 'effect';
 import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { waitForRuntimeHealth, waitForWebServer } from './boot.js';
@@ -10,74 +11,94 @@ import { getRuntimeUrl, stopRuntime } from './runtime.js';
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 let runtimeUrl = '';
 
-async function createWindow() {
-  const window = new BrowserWindow({
-    backgroundColor: '#24273a',
-    height: 900,
-    minHeight: 600,
-    minWidth: 900,
-    show: false,
-    title: 'Isagi',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: join(currentDirectory, '../preload/index.js'),
-    },
-    width: 1280,
-  });
-
-  window.once('ready-to-show', () => {
-    window.show();
-  });
-
-  await window.loadFile(getSplashPath());
-  await runBootSequence(window);
+function createWindow() {
+  return Effect.runPromise(createWindowEffect());
 }
 
-async function runBootSequence(window: BrowserWindow) {
-  try {
-    await setBootStatus(window, 'Starting runtime...', 'Resolving local or remote runtime.');
-    runtimeUrl = await getRuntimeUrl();
+function createWindowEffect() {
+  return Effect.gen(function* () {
+    const window = new BrowserWindow({
+      backgroundColor: '#24273a',
+      height: 900,
+      minHeight: 600,
+      minWidth: 900,
+      show: false,
+      title: 'Isagi',
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        preload: join(currentDirectory, '../preload/index.js'),
+      },
+      width: 1280,
+    });
 
-    await setBootStatus(window, 'Checking runtime...', runtimeUrl);
-    await waitForRuntimeHealth(runtimeUrl);
+    window.once('ready-to-show', () => {
+      window.show();
+    });
+
+    yield* loadFile(window, getSplashPath());
+    yield* runBootSequence(window);
+  });
+}
+
+function runBootSequence(window: BrowserWindow) {
+  return Effect.gen(function* () {
+    yield* setBootStatus(window, 'Starting runtime...', 'Resolving local or remote runtime.');
+    runtimeUrl = yield* getRuntimeUrl();
+
+    yield* setBootStatus(window, 'Checking runtime...', runtimeUrl);
+    yield* waitForRuntimeHealth(runtimeUrl);
 
     if (app.isPackaged) {
-      await setBootStatus(window, 'Loading app...', 'Opening packaged renderer.');
-      await window.loadFile(join(process.resourcesPath, 'web/index.html'));
+      yield* setBootStatus(window, 'Loading app...', 'Opening packaged renderer.');
+      yield* loadFile(window, join(process.resourcesPath, 'web/index.html'));
       return;
     }
 
     const webUrl = process.env.ISAGI_WEB_URL ?? 'http://127.0.0.1:5173';
 
-    await setBootStatus(window, 'Waiting for web renderer...', webUrl);
-    await waitForWebServer(webUrl);
+    yield* setBootStatus(window, 'Waiting for web renderer...', webUrl);
+    yield* waitForWebServer(webUrl);
 
-    await setBootStatus(window, 'Loading app...', webUrl);
-    await window.loadURL(webUrl);
-  } catch (error) {
-    await setBootStatus(
-      window,
-      'Could not start Isagi.',
-      error instanceof Error ? error.message : 'Unknown boot error',
-      'failed',
-    );
-  }
+    yield* setBootStatus(window, 'Loading app...', webUrl);
+    yield* tryPromise(() => window.loadURL(webUrl));
+  }).pipe(
+    Effect.catchAll((error) =>
+      setBootStatus(window, 'Could not start Isagi.', error.message, 'failed'),
+    ),
+  );
 }
 
-async function setBootStatus(
+function setBootStatus(
   window: BrowserWindow,
   message: string,
   detail?: string,
   state: 'booting' | 'failed' = 'booting',
 ) {
-  await window.webContents.executeJavaScript(
-    `window.setBootStatus?.(${JSON.stringify({ detail, message, state })})`,
+  return tryPromise(() =>
+    window.webContents.executeJavaScript(
+      `window.setBootStatus?.(${JSON.stringify({ detail, message, state })})`,
+    ),
   );
+}
+
+function loadFile(window: BrowserWindow, path: string) {
+  return tryPromise(() => window.loadFile(path));
 }
 
 function getSplashPath() {
   return join(currentDirectory, '../../static/splash.html');
+}
+
+function tryPromise<T>(run: () => Promise<T>) {
+  return Effect.tryPromise({
+    try: run,
+    catch: toError,
+  });
+}
+
+function toError(error: unknown) {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 ipcMain.handle('isagi:runtime-url', () => runtimeUrl);

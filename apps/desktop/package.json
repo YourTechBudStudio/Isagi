@@ -15,6 +15,9 @@
     "pack:dir": "electron-builder --dir",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "effect": "^3.21.2"
+  },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "electron": "^42.3.0",
