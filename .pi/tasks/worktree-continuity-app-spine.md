@@ -1,9 +1,9 @@
 ---
 title: Worktree Continuity app spine
-status: todo
+status: completed
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-05-31
 depends_on: [worktree-continuity-mockups]
 ---
 
