@@ -19,7 +19,7 @@ New worktrees should initialize from a project default template or equivalent de
 
 # Done condition
 
-Done when a user can create a new worktree from the UI, the worktree appears in navigation, Isagi switches into it, and the initialized room is ready for agent/session/command work.
+Done when a user can create a new worktree from the UI, the worktree appears in navigation, Isagi switches into it, and the initialized room is ready for agent sessions and command work.
 
 # Notes
 
@@ -28,17 +28,18 @@ Keep project inference simple at first: default to the current project context, 
 ## Palette wizard (decided during the Phase 1–7 shell build)
 
 Worktree creation rides the **morphing command-palette wizard** (built
-presentationally in the shell). "New session" and "new worktree" are unified:
+presentationally in the shell). Worktree creation and launch setup are unified:
 
 - Steps: **project → worktree → harness**. The worktree step is a **combo**:
   pick an existing worktree *or type a name to create* `wt/<name>` (created via
   Git). Harness defaults to **Skip** (then Pi / Claude Code / Codex / OpenCode).
 - Every step is **pre-defaulted**, so the common path is `Mod+N` then
-  enter-enter-enter. Defaults are **session-optimized**: default project = the
-  current project, default worktree = the current branch (zero-typing "new
-  session in the same worktree"); a brand-new project defaults to `main`.
+  enter-enter-enter. Defaults are **worktree-optimized**: default project = the
+  current project, default worktree = the current branch/current worktree
+  (zero-typing to stay in the same worktree); a brand-new project should derive
+  its default from Git/project context rather than assuming a `main` branch.
 - The palette's **Global** commands are a config-driven, append-only registry;
-  New session is the flagship multi-arg command. Arg `options`/`default`
+  New worktree is the flagship multi-arg command. Arg `options`/`default`
   functions read a context snapshot from the workspace store. All defaults are
   overridable via project config.
 - New worktrees initialize from project defaults (commands that auto-run, default

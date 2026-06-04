@@ -35,19 +35,20 @@ The Agents tab lays harnesses out in (at most) two columns. The layout is **user
 
 This arrangement (column assignment + ordering + gutter sizes) is **per-worktree layout state and must persist** (DB/store), so returning to a worktree restores the same agent layout. Default when no saved layout exists = balanced auto-distribution. Decided during the Phase 3 canvas mockup; see the split-layout task and the staged split surface shell.
 
-## One agent surface per session (holds multiple harnesses)
+## One agent surface per worktree (holds multiple harnesses)
 
-A session has **at most one agent surface** — its home. That single agent surface
-can hold **one or more harness sessions**, laid out via the two-column split above.
-Harnesses split *within* the one agent surface; a session never has more than one
-agent surface. Non-agent surfaces (browser/editor/file) may still be multiple. A
-Skip session has zero surfaces and shows the no-agent empty state. (Re-tightened
-2026-06-02 after briefly allowing multiple agent surfaces.)
+A worktree has **at most one agent surface** — its agent home. That single agent
+surface can hold **one or more agent sessions**, laid out via the two-column split
+above. Harnesses split *within* the one agent surface; a worktree never has more
+than one agent surface. Non-agent surfaces (browser/editor/file) may still be
+multiple. A worktree with no launched harness has zero agent panes and shows the
+no-agent empty state. (Re-tightened 2026-06-02 after briefly allowing multiple
+agent surfaces.)
 
 ## Shared split mechanism with terminal surfaces
 
 The agent surface and the **terminal surface** are sibling *split-PTY surfaces*: both
 lay panes out in a split grid (agent panes = harnesses, terminal panes = shells) and
 should share **one** split/drag/resize/persist mechanism. Build it once and apply it
-to both. A session has ≤ 1 agent surface but may have several terminal surfaces, and a
+to both. A worktree has ≤ 1 agent surface but may have several terminal surfaces, and a
 terminal surface may split multiple shells (tmux/Ghostty-style). Decided Phase 4.

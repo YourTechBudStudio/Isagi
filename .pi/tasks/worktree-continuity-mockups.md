@@ -44,11 +44,11 @@ tabbed-less canvas** of surfaces, a **floating action bar**, a **morphing
 command palette**, and **zen mode**. Built component areas:
 
 - Design tokens (Tailwind `@theme`), fonts, atmosphere; frameless rail-spine shell.
-- Rail (nested sessions → surfaces, accent-spine hierarchy, attention dots, tooltips).
+- Rail (nested worktrees → surfaces, accent-spine hierarchy, attention dots, tooltips).
 - Canvas (agent + terminal split-PTY surfaces, surface placeholders, empty states).
-- Status strip + commands drawer; floating action bar (shared session-action source).
+- Status strip + commands drawer; floating action bar (shared worktree-action source).
 - **Command palette**: a config-driven, append-only **Global registry** + internal
-  groups (this-session actions / surfaces / switch-session), per-group recents,
+  groups (this-worktree actions / surfaces / switch-worktree), per-group recents,
   a generic select/combo/text **wizard runner**, context snapshot from the store.
   The **action bar is a curated subset of the same source** (palette = source of
   truth); action-bar customization is deferred to a later milestone.
@@ -66,8 +66,8 @@ Static verification: `pnpm check` from the repo root.
 Manual smoke pass (because this slice intentionally has no runtime/test harness yet):
 
 - `Mod+K` opens/closes the palette; empty-query recents remain grouped.
-- `Mod+N` starts the new-session wizard; default project/worktree/harness values prefill correctly.
-- Palette actions add/select session surfaces and toggle command run/stop labels.
+- `Mod+N` starts the new-worktree wizard; default project/worktree/harness values prefill correctly.
+- Palette actions add/select worktree surfaces and toggle command run/stop labels.
 - Failed commands remain visible in the status strip as command attention, not as “running”.
 - Drawer command rows are keyboard-reachable: run/stop and select-log actions are separate controls.
 - Zen mode enters/exits with `Mod+.`/`Esc` and keeps the palette usable.

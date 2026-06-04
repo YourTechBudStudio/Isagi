@@ -39,8 +39,7 @@ So this slice owns the command lifecycle, logs, ports, and the drawer/status-str
 The UI is built presentationally; this slice wires real processes behind it.
 
 - **Commands are worktree-scoped** (project-configured; some auto-run on new
-  worktree). Modeled per session as the worktree's command view until a worktree
-  entity exists.
+  worktree). Modeled as the worktree's command view.
 - **Status strip** (always-on, bottom): the worktree's running/failed commands
   sit beside each other — dot + name + **port chips (no port names)** — with the
   branch on the right. Clicking the strip opens the commands drawer; clicking a

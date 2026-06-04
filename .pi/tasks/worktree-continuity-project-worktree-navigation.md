@@ -30,16 +30,16 @@ Git/worktree truth should be rediscovered from Git where practical instead of tr
 The presentational shell (in `apps/web`) settled the navigation model. See the
 built rail components and the slice notes below.
 
-- **Nested rail, not top-level tabs.** Sessions are grouped by project; the
-  **active Isagi session expands inline** to show its surfaces as indented rows.
-  Clicking a surface row swaps the canvas. Only the active session expands.
+- **Nested rail, not top-level tabs.** Worktrees are grouped by project; the
+  **active worktree expands inline** to show its surfaces as indented rows.
+  Clicking a surface row swaps the canvas. Only the active worktree expands.
 - **Hierarchy = accent spine + neutral lift**: one blue spine marks the active
-  session's path (hue), the active surface gets a neutral light lift (lightness)
+  worktree's path (hue), the active surface gets a neutral light lift (lightness)
   — not two colored pills.
-- **The Isagi session is the navigable unit** (a worktree is *not* a UI entity).
-  Sessions carry a calm **attention dot**; **parked** sessions dim in place;
-  grouping is always shown (even for a single project).
-- **`activeSurfaceId` is remembered per session** and restored on switch-back —
+- **The worktree is the navigable unit.** Worktrees carry a calm **attention dot**;
+  **parked** worktrees dim in place; grouping is always shown (even for a single
+  project).
+- **`activeSurfaceId` is remembered per worktree** and restored on switch-back —
   this is the resumable-room promise in miniature.
-- New session lives at the **rail top** (`Mod+N`) plus a per-project `+`.
-- Rail membership is curated (active + parked); `done` sessions leave the rail.
+- New worktree lives at the **rail top** (`Mod+N`) plus a per-project `+`.
+- Rail membership is curated (active + parked); `done` worktrees leave the rail.

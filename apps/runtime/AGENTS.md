@@ -8,6 +8,7 @@ The local-or-remote Isagi runtime. It will own Git, worktrees, PTYs, commands, a
 
 - `src/` contains the Fastify server and oRPC router implementation.
 - `dist/` is generated build output.
+- `drizzle/` contains Drizzle Kit-generated migration artifacts. Do not edit generated migration files by hand; change the Drizzle schema and regenerate migrations instead.
 
 ## Effect scope
 

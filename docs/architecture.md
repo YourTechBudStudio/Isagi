@@ -60,6 +60,8 @@ Isagi should not over-own facts that already have a better source of truth.
 
 In particular, Git should remain the source of truth for repository and worktree facts where possible. Isagi can remember projects, preferences, layout, and environment state, but it should rediscover real worktree state from Git instead of trusting stale app records blindly.
 
+Users may create, move, or delete worktrees outside Isagi. The runtime should reconcile against those external facts rather than assuming Isagi is the only actor changing a repository.
+
 ## State categories
 
 ### Durable configuration

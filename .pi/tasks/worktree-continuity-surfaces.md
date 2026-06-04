@@ -27,11 +27,10 @@ Do not silently close missing artifacts. Show a clear missing/not-found state an
 
 ## Surface model (decided during the Phase 1–7 shell build)
 
-- **Surfaces are Isagi-session view-state.** The agent surface is owned by the
-  session; non-agent surfaces (browser, code-server/editor, file/markdown,
-  terminal) are *sourced from the worktree* but tracked per session as "what the
-  user wants to look at here." Two sessions on one worktree may show different
-  surfaces.
+- **Surfaces are worktree view-state.** The agent surface is owned by the
+  worktree; non-agent surfaces (browser, code-server/editor, file/markdown,
+  terminal) are tracked as part of that worktree's environment: "what the user
+  wants to look at here."
 - **Surface kinds**: `agent`, `terminal`, `browser`, `editor` (code-server),
   `file`. `agent` and `terminal` are sibling **split-PTY surfaces** sharing one
   split/drag/resize mechanism (see the split-layout task + agent-sessions).

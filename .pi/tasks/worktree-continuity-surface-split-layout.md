@@ -33,7 +33,7 @@ Done when, inside a split-PTY surface, the user can:
 
 # Notes
 
-- Max two columns (per the experience design). A session has ≤ 1 agent surface
+- Max two columns (per the experience design). A worktree has ≤ 1 agent surface
   but may have several terminal surfaces; a terminal surface may split multiple
   shells (tmux/Ghostty-style).
 - Likely libraries: `react-resizable-panels` for gutters, `@dnd-kit` for drag —

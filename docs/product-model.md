@@ -103,7 +103,7 @@ This is a product model, not a required database schema. User-facing navigation 
 
 - Prefer **worktree** as the primary user-facing noun.
 - Use **worktree environment** for the hidden resumable state associated with one worktree.
-- Do not use **Isagi session** as a product noun.
+- Do not use **Isagi session** as a product noun. Older planning notes that use it for navigation should be read as **worktree** unless they explicitly mean an agent harness process.
 - Use **agent session** for first-class coding-agent harness processes.
 - Use **agent surface** for the visible surface that contains one or more agent sessions/panes.
 - Use **command** for project-defined terminal commands/processes.
