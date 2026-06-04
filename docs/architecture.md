@@ -4,7 +4,7 @@
 
 Isagi is a desktop app with a server/client architecture.
 
-Electron is the client. The core runtime is a server-style process that owns the worktree, process, PTY, agent-session, and persistence responsibilities.
+Electron is the client. The core runtime is a server-style process that owns worktree, worktree-environment, process, PTY, agent-session, and persistence responsibilities.
 
 This separation keeps the desktop experience local and direct while leaving room for remote execution later.
 
@@ -12,12 +12,13 @@ This separation keeps the desktop experience local and direct while leaving room
 
 The Electron client owns the interactive workbench experience:
 
-- project/worktree navigation
+- project/worktree/surface navigation
 - command palette
 - main and secondary windows
 - panels and tabs
 - terminal rendering
-- browser/code/artifact surfaces
+- agent, terminal, browser, editor, and artifact surfaces
+- command status and logs UI
 - attention badges and status UI
 - user interaction flows
 
@@ -29,6 +30,7 @@ The server/runtime owns the operational side of Isagi:
 
 - Git and worktree operations
 - project/worktree discovery
+- worktree environment restoration state
 - process management
 - PTY management
 - command execution
@@ -38,7 +40,7 @@ The server/runtime owns the operational side of Isagi:
 - integration boundaries with harnesses and future tool systems
 - future remote execution path
 
-The runtime is the place where Isagi understands what is running, where it is running, and which worktree it belongs to.
+The runtime is the place where Isagi understands what is running, where it is running, and which worktree/worktree environment it belongs to.
 
 ## Why server/client
 
@@ -103,6 +105,7 @@ State that helps recreate the user's room.
 Examples:
 
 - last active worktree
+- last active surface within each worktree
 - last active agent session metadata, where available
 - panel/window layout
 - open surfaces

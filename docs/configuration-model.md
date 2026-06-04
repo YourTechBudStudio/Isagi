@@ -38,18 +38,20 @@ Examples:
 
 ### Worktree environment state
 
-Remembered state for a specific worktree.
+Remembered state associated one-to-one with a specific worktree.
 
 Examples:
 
+- last active surface
 - last active agent session
-- sessions associated with the worktree
+- agent sessions associated with the worktree's agent surface
 - command processes or restorable command intent
-- open browser/code/artifact surfaces
+- open terminal/browser/editor/artifact surfaces
 - main/secondary window layout
 - attention state
+- parked state
 
-Worktree environment state is partly durable and partly runtime-derived. Isagi should preserve what helps restoration while rediscovering Git and filesystem facts where possible.
+Worktree environment state is partly durable and partly runtime-derived. Isagi should preserve what helps restoration while rediscovering Git and filesystem facts where possible. Users navigate worktrees and surfaces; the environment object is an internal restoration concept.
 
 ## Commands
 
@@ -90,8 +92,8 @@ A worktree initialization template describes the default room shape for a new wo
 It may include:
 
 - commands to start
-- agent sessions or presets to open
-- browser/code/artifact surfaces to create
+- agent sessions or presets to open in the worktree's agent surface
+- terminal/browser/editor/artifact surfaces to create
 - default layout
 - other environment setup behavior
 
@@ -99,7 +101,7 @@ Commands define reusable actions. Templates decide which actions happen when a w
 
 ## Agent presets
 
-Agent sessions are first-class in Isagi, even if they share process/PTY machinery internally with commands.
+Agent sessions are first-class runtime entities in Isagi, even if they share process/PTY machinery internally with commands. They are displayed through the worktree's agent surface rather than being the top-level navigation unit.
 
 Agent presets describe how to launch a harness in a useful mode.
 
@@ -112,7 +114,7 @@ Possible preset dimensions:
 - session/resume behavior where supported
 - future tool, MCP, or skill context
 
-Deep context control can evolve over time. The foundational requirement is that Isagi can launch the right harness in the right worktree and attach the resulting session to that worktree's environment.
+Deep context control can evolve over time. The foundational requirement is that Isagi can launch the right harness in the right worktree and attach the resulting agent session to that worktree's agent surface and environment.
 
 ## Agent-assisted configuration
 

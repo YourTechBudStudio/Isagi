@@ -24,3 +24,7 @@ Done when Isagi supports a practical secondary window/work surface, the secondar
 # Notes
 
 Prefer a simple, understandable two-window model over a complex window manager.
+
+## Per-surface popping (rollback of the binary auto-move model)
+
+Earlier we considered a binary model where turning on the secondary window moved **all** non-agent surfaces there at once. **That is reverted.** Instead, the user **pops surfaces to the secondary window one at a time**, choosing which go where — and this includes the **agent surface**, not just browser/code/file surfaces. There is no automatic bulk move. Keep it a single secondary window (not arbitrary multi-window), but surface placement within it is per-surface and user-driven. Decided 2026-06-01 during Phase 3.

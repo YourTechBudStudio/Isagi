@@ -9,9 +9,10 @@ The React frontend for Isagi. Electron loads this app, and it can later be hoste
 - **React 19** for the UI layer.
 - **React Router 7** using simple declarative routing (`<Routes>` / `<Route>`), not the data/loader router APIs.
 - **Effect** for runtime client calls and effectful workflows (see Effect scope below).
-- **Tailwind CSS 4** for styling.
+- **Tailwind CSS 4** for styling, themed with Isagi's design tokens (see Styling conventions).
 - **Base UI** (`@base-ui/react`) for unstyled, accessible UI primitives that we style with Tailwind.
-- **lucide-react** for icons.
+- **lucide-react** for icons. Prefer Lucide icons over text/emoji glyphs in chrome.
+- **Framer Motion** (`motion`, imported from `motion/react`) for animation. It is the default for transitions, the morphing command palette, and any orchestrated entrance. Use the design system's easing/duration tokens rather than ad-hoc values.
 - **TypeScript 6** for type safety.
 
 ## Structure
@@ -68,6 +69,26 @@ Nested routes are declared in `App.tsx` and the parent renders an `<Outlet />`:
 ```
 
 Keep this flat and grow it only when a folder earns its place.
+
+## Styling conventions
+
+All color, type, motion, and depth come from the design tokens defined in `src/styles.css`
+(`@theme`). Treat them as the single source of truth.
+
+- **Use token-backed utilities, never hardcoded hex.** `bg-canvas`, `text-fg-muted`,
+  `border-line`, `ease-expo`, `shadow-soft`, `rounded-md`, `font-mono` — not `#24273a` or
+  arbitrary `cubic-bezier(...)`.
+- **Express meaning with the attention semantics, not raw accents.** When a color
+  communicates agent/process state, use `working` / `waiting` / `idle` / `error`
+  (e.g. `bg-working`, `text-waiting`) instead of `violet` / `cyan` / `red`. Raw accent
+  tokens (`blue`, `violet`, `amber`, `green`, `red`, `cyan`) are for decoration and brand
+  use, not for encoding state. This keeps state meaning in one place if a color is
+  ever re-tuned.
+- **One easing curve.** Animate with `ease-expo` and the `duration-micro` / `duration-ui`
+  / `duration-surface` / `duration-room` ladder. Fast start, soft landing; never
+  spring-bouncy overshoot.
+- Follow the Isagi design system skill for everything else (voice, spatial composition,
+  atmosphere, where humour does and doesn't belong).
 
 ## Effect scope
 

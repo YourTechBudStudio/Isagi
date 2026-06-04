@@ -30,7 +30,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 ## Docs map
 
 - **Product Foundation**: the core problem, value proposition, promise, and product principles.
-- **Product Model**: the seven primary primitives: global config, project, worktree, environment, command, surface/panel, and attention signal.
+- **Product Model**: the seven primary primitives: global config, project, worktree, worktree environment, command, surface/panel, and attention signal.
 - **Architecture**: Electron client plus server/runtime architecture, source-of-truth principles, and integration posture.
 - **Configuration Model**: global/project/worktree configuration layers, command persistence, templates, presets, and agent-assisted configuration direction.
 - **Engineering Guidance**: principles and review lenses for boundaries, module shape, drift prevention, runtime diagnostics, product behavior, and verification.

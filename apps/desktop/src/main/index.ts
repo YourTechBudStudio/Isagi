@@ -9,7 +9,14 @@ import { waitForRuntimeHealth, waitForWebServer } from './boot.js';
 import { getRuntimeUrl, stopRuntime } from './runtime.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
+const APP_ID = 'studio.yourtechbud.isagi';
+const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
+const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
+const isMac = process.platform === 'darwin';
+const isDev = !app.isPackaged;
 let runtimeUrl = '';
+
+app.setAppUserModelId(APP_ID);
 
 function createWindow() {
   return Effect.runPromise(createWindowEffect());
@@ -17,13 +24,28 @@ function createWindow() {
 
 function createWindowEffect() {
   return Effect.gen(function* () {
+    console.info(
+      `[desktop] creating Isagi window: mode=${isDev ? 'dev' : 'packaged'} chrome=${
+        isMac ? 'mac-hiddenInset@18,18' : 'native'
+      }`,
+    );
+
     const window = new BrowserWindow({
       backgroundColor: '#24273a',
       height: 900,
       minHeight: 600,
       minWidth: 900,
       show: false,
-      title: 'Isagi',
+      title: isDev ? 'Isagi · dev' : 'Isagi',
+      // Frameless: Isagi paints the whole window. On macOS the traffic lights
+      // stay (inset), positioned to land inside the Rail's reserved top inset.
+      ...(isMac
+        ? {
+            frame: false,
+            titleBarStyle: 'hiddenInset' as const,
+            trafficLightPosition: TRAFFIC_LIGHT_POSITION,
+          }
+        : {}),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -103,8 +125,27 @@ function toError(error: unknown) {
 
 ipcMain.handle('isagi:runtime-url', () => runtimeUrl);
 
+// Focus mode asks the host shell to quiet native chrome around the work surface.
+ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
+  console.info(`[desktop] host-chrome visible=${String(visible)} (mac=${String(isMac)})`);
+  if (!isMac) {
+    return;
+  }
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) {
+    console.warn('[desktop] host-chrome ignored: sender has no BrowserWindow');
+    return;
+  }
+
+  const shouldShow = visible === true;
+  window.setWindowButtonVisibility(shouldShow);
+  window.setWindowButtonPosition(
+    shouldShow ? TRAFFIC_LIGHT_POSITION : HIDDEN_TRAFFIC_LIGHT_POSITION,
+  );
+});
+
 app.once('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (isDev || process.platform !== 'darwin') {
     app.quit();
   }
 });

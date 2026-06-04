@@ -24,3 +24,12 @@ Done when there is a usable path for reviewing the active worktree's code from I
 # Notes
 
 This may be implemented as command + browser surface, a first-class code-server integration, or another pragmatic approach discovered during the task.
+
+## Shape (decided during the Phase 1–7 shell build)
+
+- code-server is modeled as an **`editor` surface** (one of the surface kinds),
+  opened via the action bar's **"Open code-server"** verb (also in the palette).
+- It appears as a **full-canvas surface** in the nested rail like any other;
+  tear-off and zen apply.
+- Restoring the **same open files** on return is resume priority #2 (after exact
+  agent scrollback) — see agent-sessions / the resume test.

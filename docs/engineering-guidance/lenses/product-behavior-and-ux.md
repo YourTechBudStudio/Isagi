@@ -8,7 +8,7 @@ This lens protects user-visible honesty, continuity, attention, and product trus
 
 - Does the change preserve the idea that a worktree is a resumable room?
 - Does the product honestly show what was restored, recreated, missing, failed, or degraded?
-- Are missing files, artifacts, sessions, surfaces, or commands visible rather than silently removed?
+- Are missing files, artifacts, agent sessions, surfaces, or commands visible rather than silently removed?
 - Does attention state reflect real user action needed, or could it create false confidence/noise?
 - Does the UI help the user understand what happened without exposing implementation noise?
 - Are errors and empty states useful for the user's next action?

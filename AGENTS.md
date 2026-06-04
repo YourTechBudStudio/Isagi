@@ -18,6 +18,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
   - docs/engineering-guidance/principles.md
   - docs/engineering-guidance/how-to-use.md
   - Additionally, make sure to read any relevant engineering guidance files before starting to code.
+- Never modify `CLAUDE.md` files directly; they are symlinks to `AGENTS.md` files, so edit the corresponding `AGENTS.md` instead.
 - After code changes, run `pnpm check`. Each package has its own `check` command.
 - Do not run the `engineering-guidance-review` subagent when debugging, create mockups or just helping the user brainstorm.
 - Use the Effect library (`effect`) for operational implementation code where async work, failure, retries, dependencies, resources, or lifecycle matter. Follow package-specific `AGENTS.md` files for local Effect scope.

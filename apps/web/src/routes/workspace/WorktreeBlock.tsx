@@ -1,0 +1,116 @@
+import { AnimatePresence, motion } from 'motion/react';
+
+import { AttentionDot } from '../../components/AttentionDot.js';
+import { EASE_EXPO, surfaceTransition, uiTransition } from '../../lib/motion.js';
+import { worktreeSubtitle } from '../../lib/workspace/selectors.js';
+import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
+import type { Worktree, Surface } from '../../lib/workspace/types.js';
+
+/**
+ * One worktree in the rail. When active it expands to show its surfaces as
+ * indented rows. Hierarchy = accent spine + neutral lift: a single blue spine
+ * (the indent guide) marks the active worktree's path; the active surface gets a
+ * neutral light lift. The active worktree itself carries no pill — expansion and
+ * a brighter title are signal enough.
+ */
+export function WorktreeBlock({
+  worktree,
+  active,
+  onSelectWorktree,
+  onSelectSurface,
+}: {
+  worktree: Worktree;
+  active: boolean;
+  onSelectWorktree: (worktreeId: string) => void;
+  onSelectSurface: (worktreeId: string, surfaceId: string) => void;
+}) {
+  return (
+    <div className={worktree.parked ? 'opacity-50 hover:opacity-80' : ''}>
+      <button
+        type="button"
+        onClick={() => onSelectWorktree(worktree.id)}
+        aria-current={active ? 'true' : undefined}
+        className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left transition duration-micro ease-expo hover:bg-line/14"
+      >
+        <AttentionDot state={worktree.attention} />
+        <span className="min-w-0 flex-1">
+          <span
+            className={`block truncate text-[13px] ${active ? 'font-semibold text-fg' : 'font-medium text-fg-muted'}`}
+          >
+            {worktree.title}
+          </span>
+          <span className="mt-0.5 block truncate font-mono text-[10.5px] text-fg-subtle">
+            {worktreeSubtitle(worktree)}
+          </span>
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {active && (
+          <motion.div
+            key="surfaces"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={surfaceTransition}
+            className="overflow-hidden"
+          >
+            {worktree.surfaces.length > 0 ? (
+              <div className="my-1 ml-5 flex flex-col gap-0.5 border-l-2 border-blue/50 pl-2.75">
+                {worktree.surfaces.map((surface) => (
+                  <SurfaceRow
+                    key={surface.id}
+                    surface={surface}
+                    active={surface.id === worktree.activeSurfaceId}
+                    pillId={`surface-pill-${worktree.id}`}
+                    onSelect={() => onSelectSurface(worktree.id, surface.id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="my-1 ml-5 border-l-2 border-blue/50 py-1 pl-3.75 font-mono text-[10.5px] text-fg-subtle opacity-60">
+                {'// no surfaces yet'}
+              </p>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function SurfaceRow({
+  surface,
+  active,
+  pillId,
+  onSelect,
+}: {
+  surface: Surface;
+  active: boolean;
+  pillId: string;
+  onSelect: () => void;
+}) {
+  const Icon = surfaceIcon(surface.kind);
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+      className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-micro ease-expo ${
+        active ? 'text-fg' : 'text-fg-muted hover:bg-white/5 hover:text-fg'
+      }`}
+    >
+      {/* the neutral lift slides between rows via shared layout */}
+      {active && (
+        <motion.span
+          layoutId={pillId}
+          transition={{ ...uiTransition, ease: EASE_EXPO }}
+          className="absolute inset-0 rounded-lg bg-white/8"
+        />
+      )}
+      <Icon size={14} className={`relative z-10 ${active ? 'text-fg' : 'text-fg-subtle'}`} />
+      <span className="relative z-10 truncate">{surface.title}</span>
+    </button>
+  );
+}

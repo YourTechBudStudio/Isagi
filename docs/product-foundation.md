@@ -8,14 +8,11 @@ It does not replace existing terminal coding agents. It wraps around them, launc
 
 ## Core value proposition
 
-Isagi preserves momentum by making the environment around a worktree move with it:
+Isagi preserves momentum by making the environment associated with a worktree move with it:
 
-- agent sessions
-- project commands
-- command logs
-- browser previews
-- code review surfaces
-- file and Markdown artifacts
+- agent sessions inside the worktree's agent surface
+- project commands and command logs
+- terminal, browser, editor, and artifact surfaces
 - panel/window layout
 - attention state
 
@@ -31,7 +28,7 @@ That means switching worktrees is not just changing directories. It often means 
 
 Each worktree should feel like a room the user can leave and return to.
 
-When the user returns, Isagi should restore as much of the room as it reasonably can: the active agent, running or restorable commands, supporting surfaces, layout, and signals about what needs attention.
+When the user returns, Isagi should restore as much of the room as it reasonably can: the active agent surface, agent sessions where possible, running or restorable commands, supporting surfaces, layout, and signals about what needs attention.
 
 ## What Isagi is not
 
@@ -46,15 +43,15 @@ When the user returns, Isagi should restore as much of the room as it reasonably
 
 ### Worktrees are first-class
 
-The worktree is the primary continuity unit. Projects contain worktrees, and each worktree can have its own environment.
+The worktree is the primary continuity unit. Projects contain worktrees, and each worktree has one associated worktree environment. The main/root checkout is the default worktree and should appear alongside linked worktrees.
 
 ### Tasks stay user-owned
 
-A task may be the user's intent, but Isagi does not need to model tasks as a first-class primitive at the product foundation level. The concrete thing Isagi can reliably manage is the worktree environment.
+A task may be the user's intent, but Isagi does not need to model tasks as a first-class primitive at the product foundation level. The concrete thing Isagi can reliably manage is the worktree and its associated environment.
 
 ### Existing harnesses remain useful
 
-Isagi should orchestrate around existing agent harnesses instead of replacing them. It should launch them, frame them, and restore their surrounding environment where possible.
+Isagi should orchestrate around existing agent harnesses instead of replacing them. It should launch them as agent sessions in the right worktree, frame them through the agent surface, and restore their surrounding environment where possible.
 
 ### Start conservative, then let power users make rooms feel alive
 
