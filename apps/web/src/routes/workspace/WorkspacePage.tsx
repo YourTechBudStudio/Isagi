@@ -19,7 +19,12 @@ import { WorkArea } from './WorkArea.js';
 export function WorkspacePage() {
   const zen = useWorkspaceStore((state) => state.zen);
   const setZen = useWorkspaceStore((state) => state.setZen);
+  const loadWorkspace = useWorkspaceStore((state) => state.loadWorkspace);
   const paletteOpen = usePaletteStore((state) => state.open);
+
+  useEffect(() => {
+    loadWorkspace();
+  }, [loadWorkspace]);
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.

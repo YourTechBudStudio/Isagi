@@ -1,31 +1,22 @@
-import type { Worktree, Surface } from './types.js';
+import type { Surface, Worktree } from './types.js';
 
-/** All agent sessions across a worktree's agent surface. */
-export function agentSessionCount(worktree: Worktree): number {
-  return worktree.surfaces.reduce(
-    (total, surface) => total + (surface.agentSessions?.length ?? 0),
-    0,
-  );
+export function worktreeSubtitle(worktree: Worktree): string {
+  const branch = worktree.branch ?? shortHead(worktree.head) ?? 'detached';
+  return `${compactHomePath(worktree.path)} · ${branch}`;
 }
 
-/**
- * The rail meta line under a worktree title: worktree address plus a short
- * agent summary (the single harness name, `N agents`, or an empty/no-agent hint).
- */
-export function worktreeSubtitle(worktree: Worktree): string {
-  const count = agentSessionCount(worktree);
-  if (count === 0) {
-    return `${worktree.branch} · ${worktree.surfaces.length === 0 ? 'empty' : 'no agents'}`;
-  }
-
-  if (count === 1) {
-    const only = worktree.surfaces.flatMap((surface) => surface.agentSessions ?? [])[0];
-    return `${worktree.branch} · ${only?.harness ?? '1 agent'}`;
-  }
-
-  return `${worktree.branch} · ${count} agents`;
+export function branchLabel(worktree: Worktree): string {
+  return worktree.branch ?? shortHead(worktree.head) ?? 'detached';
 }
 
 export function findActiveSurface(worktree: Worktree): Surface | null {
   return worktree.surfaces.find((surface) => surface.id === worktree.activeSurfaceId) ?? null;
+}
+
+export function compactHomePath(path: string): string {
+  return path;
+}
+
+function shortHead(head: string | null | undefined) {
+  return head ? head.slice(0, 7) : null;
 }

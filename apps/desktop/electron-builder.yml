@@ -1,6 +1,8 @@
 appId: studio.yourtechbud.isagi
 productName: Isagi
 asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
 
 directories:
   output: release
@@ -14,15 +16,15 @@ files:
     to: static
     filter:
       - '**/*'
+  - from: ../runtime/dist
+    to: runtime
+  - from: ../runtime/drizzle
+    to: runtime/drizzle
   - package.json
 
 extraResources:
   - from: ../web/dist
     to: web
-  - from: ../runtime/dist
-    to: runtime
-  - from: ../runtime/package.json
-    to: runtime/package.json
 
 mac:
   category: public.app-category.developer-tools

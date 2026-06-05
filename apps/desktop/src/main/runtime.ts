@@ -164,7 +164,7 @@ function spawnRuntimeProcess() {
   }
 
   if (app.isPackaged) {
-    return spawn(process.execPath, [join(process.resourcesPath, 'runtime/index.js')], {
+    return spawn(process.execPath, [join(process.resourcesPath, 'app.asar/runtime/index.js')], {
       detached: useDetachedRuntimeProcess(),
       env: {
         ...process.env,

@@ -1,8 +1,12 @@
+import { Plus, Unlink } from 'lucide-react';
+
+import { Button } from '../../components/Button.js';
+import { EmptyState } from '../../components/EmptyState.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace, useWorkspaceStore } from '../../lib/workspace/store.js';
 import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
-import type { Surface } from '../../lib/workspace/types.js';
+import type { Project, Surface, Worktree } from '../../lib/workspace/types.js';
 import { AgentSurface } from './AgentSurface.js';
 import { TerminalSurface } from './TerminalSurface.js';
 
@@ -12,14 +16,26 @@ import { TerminalSurface } from './TerminalSurface.js';
  * the canvas carries no tab chrome.
  */
 export function Canvas() {
-  const { activeWorktree, activeSurface } = useWorkspace();
+  const { activeWorktree, activeMissingProject, activeSurface, loading, error } = useWorkspace();
+
+  if (activeMissingProject) {
+    return <MissingProjectState project={activeMissingProject} />;
+  }
+
+  if (!activeWorktree && loading) {
+    return <LoadingState />;
+  }
+
+  if (!activeWorktree && error) {
+    return <RuntimeErrorState error={error} />;
+  }
 
   if (!activeWorktree) {
     return <FreshEmptyState />;
   }
 
   if (!activeSurface) {
-    return <NoAgentState worktreeId={activeWorktree.id} />;
+    return <NoSurfaceState worktree={activeWorktree} />;
   }
 
   if (activeSurface.kind === 'agent') {
@@ -77,69 +93,95 @@ function surfacePlaceholderCopy(surface: Surface): string {
   }
 }
 
+function LoadingState() {
+  return (
+    <EmptyState
+      title="Checking the runtime."
+      body="Isagi is asking the runtime for registered projects and Git worktrees."
+      aside="// no spinner; just the boring handshake"
+    />
+  );
+}
+
+function RuntimeErrorState({ error }: { error: string }) {
+  return (
+    <EmptyState
+      halo="error"
+      title="Runtime connection failed."
+      body="Isagi could not load projects from the runtime. Check the runtime process and try again."
+    >
+      <p className="mt-0.5 max-w-full rounded-sm border border-error/24 bg-error/8 px-3 py-2 font-mono text-[12px] text-error">
+        {error}
+      </p>
+    </EmptyState>
+  );
+}
+
 function FreshEmptyState() {
   const openPalette = usePaletteStore((state) => state.openPalette);
 
   return (
-    <CanvasEmpty>
-      <h1 className="font-display text-[27px] font-semibold tracking-[-0.03em] text-fg">
-        Nothing&apos;s running yet.
-      </h1>
-      <p className="text-[14.5px] leading-relaxed text-fg-muted">
-        Isagi keeps a worktree&apos;s whole room warm — agents, dev servers, the diff you were
-        staring at. Start a worktree and it picks up exactly where you left off.
-      </p>
-      <button
-        type="button"
-        onClick={() => openPalette('new-worktree')}
-        className="mt-1 inline-flex items-center gap-2.5 rounded-xl border border-blue/32 bg-blue/15 px-4 py-2.5 text-[13px] font-medium text-fg transition-colors duration-micro ease-expo hover:bg-blue/22"
-      >
-        <span>+ New worktree</span>
-        <span className="rounded-md border border-line/40 px-1.5 py-px font-mono text-[11px] text-fg-subtle">
-          {modKey}N
-        </span>
-      </button>
-      <p className="mt-0.5 font-mono text-[12px] text-fg-subtle opacity-55">
-        {'// '}
-        {modKey}
-        N. that&apos;s the entire tutorial.
-      </p>
-    </CanvasEmpty>
+    <EmptyState
+      title="No worktrees on the canvas."
+      body="Point Isagi at a repo root. It'll find the worktrees you forgot you made."
+      actions={
+        <Button
+          icon={Plus}
+          shortcut={`${modKey}N`}
+          onClick={() => openPalette('add-project')}
+        >
+          Add project
+        </Button>
+      }
+      aside="// git already knows; Isagi remembers where you were"
+    />
   );
 }
 
-function NoAgentState({ worktreeId }: { worktreeId: string }) {
-  const addAgentSession = useWorkspaceStore((state) => state.addAgentSession);
-
+function NoSurfaceState({ worktree }: { worktree: Worktree }) {
   return (
-    <CanvasEmpty>
-      <h1 className="font-display text-[27px] font-semibold tracking-[-0.03em] text-fg">
-        No agent here yet.
-      </h1>
-      <p className="text-[14.5px] leading-relaxed text-fg-muted">
-        Just you and an empty worktree, staring at each other.
-      </p>
-      <button
-        type="button"
-        onClick={() => addAgentSession(worktreeId)}
-        className="mt-1 inline-flex items-center gap-2.5 rounded-xl border border-blue/32 bg-blue/15 px-4 py-2.5 text-[13px] font-medium text-fg transition-colors duration-micro ease-expo hover:bg-blue/22"
-      >
-        + Start an agent
-      </button>
-      <p className="mt-0.5 font-mono text-[12px] text-fg-subtle opacity-55">
-        {'// somebody has to make the first move'}
-      </p>
-    </CanvasEmpty>
+    <EmptyState
+      title="No surfaces here yet."
+      body={`Isagi found ${worktree.title}. Agents, terminals, commands, and restored surfaces land in the next slices.`}
+      aside="// navigation first; room furniture later"
+    />
   );
 }
 
-function CanvasEmpty({ children }: { children: React.ReactNode }) {
+function MissingProjectState({ project }: { project: Project }) {
   return (
-    <div className="relative grid h-full place-items-center overflow-hidden">
-      <div className="pointer-events-none absolute size-160 rounded-full bg-radial from-blue/10 to-transparent to-60%" />
-      <div className="relative flex max-w-[44ch] flex-col items-center gap-3.5 text-center">
-        {children}
-      </div>
-    </div>
+    <EmptyState
+      halo="error"
+      wide
+      eyebrow="Project unavailable"
+      icon={
+        <div className="grid size-14 place-items-center rounded-2xl border border-error/30 bg-error/8 text-error shadow-soft">
+          <Unlink size={26} strokeWidth={1.6} />
+        </div>
+      }
+      title="Can't use this project right now."
+      body={
+        <>
+          Isagi expected{' '}
+          <span className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
+            {project.rootPath ?? project.name}
+          </span>{' '}
+          but the runtime cannot use it right now.{' '}
+          {project.missingReason ??
+            'The path may be missing, moved, or no longer readable as a Git worktree.'}
+        </>
+      }
+      actions={
+        <>
+          <Button disabled title="Project relocation lands in the next phase">
+            Set new path… <span className="ml-1 font-mono text-[10px] text-fg-subtle">soon</span>
+          </Button>
+          <Button variant="secondary" disabled>
+            Remove project <span className="ml-1 font-mono text-[10px] text-fg-subtle">soon</span>
+          </Button>
+        </>
+      }
+      aside="// relocate & remove land in the next phase"
+    />
   );
 }

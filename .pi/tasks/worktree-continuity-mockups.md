@@ -66,7 +66,7 @@ Static verification: `pnpm check` from the repo root.
 Manual smoke pass (because this slice intentionally has no runtime/test harness yet):
 
 - `Mod+K` opens/closes the palette; empty-query recents remain grouped.
-- `Mod+N` starts the new-worktree wizard; default project/worktree/harness values prefill correctly.
+- In the first functional navigation slice, `Mod+N` opens Add project; the new-worktree wizard moves to the create-worktree slice.
 - Palette actions add/select worktree surfaces and toggle command run/stop labels.
 - Failed commands remain visible in the status strip as command attention, not as “running”.
 - Drawer command rows are keyboard-reachable: run/stop and select-log actions are separate controls.

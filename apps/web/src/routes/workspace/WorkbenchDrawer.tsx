@@ -17,6 +17,49 @@ import type { Command } from '../../lib/workspace/types.js';
 
 const MIN_WIDTH = 380;
 
+const mockCommands: readonly Command[] = [
+  {
+    id: 'mock-web',
+    label: 'pnpm dev:web',
+    status: 'running',
+    attention: 'working',
+    ports: [5173],
+    log: [
+      '$ pnpm --filter @isagi/web dev',
+      'vite v8.0.14 ready in 184 ms',
+      '➜  Local:   http://127.0.0.1:5173/',
+      'watching for file changes...',
+    ],
+  },
+  {
+    id: 'mock-runtime',
+    label: 'runtime server',
+    status: 'running',
+    attention: 'idle',
+    ports: [17373],
+    log: [
+      '$ pnpm --filter @isagi/runtime dev:fixed',
+      'ISAGI_RUNTIME_READY {"url":"http://127.0.0.1:17373"}',
+      'workspace.get completed in 12ms',
+      'workspace.setActiveContext completed in 8ms',
+    ],
+  },
+  {
+    id: 'mock-tests',
+    label: 'pnpm check',
+    status: 'exited',
+    attention: 'error',
+    ports: [],
+    log: [
+      '$ pnpm check',
+      'lint passed',
+      'typecheck passed',
+      'build passed',
+      'format:check failed: scratch/review/index.html',
+    ],
+  },
+];
+
 /**
  * The workbench drawer — a dedicated monitor for the worktree's commands. Slides
  * in from the right at full height; master-detail (command list + live log).
@@ -122,10 +165,31 @@ function CommandsView() {
   const worktree = useActiveWorktree();
   const selectedId = useWorkspaceStore((state) => state.drawer.selectedCommandId);
   const selectCommand = useWorkspaceStore((state) => state.selectCommand);
-  const toggleCommand = useWorkspaceStore((state) => state.toggleCommand);
+  const [commands, setCommands] = useState<readonly Command[]>(mockCommands);
 
-  const commands = worktree?.commands ?? [];
+  useEffect(() => {
+    setCommands(worktree ? mockCommands : []);
+  }, [worktree]);
+
   const selected = commands.find((command) => command.id === selectedId) ?? commands[0] ?? null;
+
+  const toggleCommand = (commandId: string) => {
+    setCommands((current) =>
+      current.map((command) => {
+        if (command.id !== commandId) {
+          return command;
+        }
+
+        const running = command.status === 'running';
+        return {
+          ...command,
+          status: running ? 'stopped' : 'running',
+          attention: running ? 'idle' : 'working',
+          log: [...command.log, running ? 'mock: stopped command' : 'mock: started command'],
+        };
+      }),
+    );
+  };
 
   return (
     <>
@@ -146,11 +210,7 @@ function CommandsView() {
                 type="button"
                 title={command.status === 'running' ? 'Stop' : 'Run'}
                 aria-label={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.label}`}
-                onClick={() => {
-                  if (worktree) {
-                    toggleCommand(worktree.id, command.id);
-                  }
-                }}
+                onClick={() => toggleCommand(command.id)}
                 className="grid size-5 flex-none place-items-center rounded-md border border-line/30 text-fg-subtle hover:border-green/50 hover:text-green"
               >
                 {command.status === 'running' ? <Square size={9} /> : <Play size={9} />}
@@ -188,7 +248,9 @@ function CommandsView() {
 
 function CommandDetail({ command }: { command: Command }) {
   const worktree = useActiveWorktree();
-  const restartCommand = useWorkspaceStore((state) => state.restartCommand);
+  const restartCommand = (commandId: string) => {
+    console.info('[mock command] restart', { worktreeId: worktree?.id, commandId });
+  };
 
   return (
     <>
@@ -210,7 +272,7 @@ function CommandDetail({ command }: { command: Command }) {
             title="Restart"
             onClick={() => {
               if (worktree) {
-                restartCommand(worktree.id, command.id);
+                restartCommand(command.id);
               }
             }}
             className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"

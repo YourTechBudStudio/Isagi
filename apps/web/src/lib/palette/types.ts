@@ -50,6 +50,12 @@ export type ArgSpec =
       readonly label: string;
       readonly placeholder?: string;
       readonly default?: (ctx: PaletteContext, values: ArgValues) => string;
+    }
+  | {
+      readonly kind: 'path';
+      readonly key: string;
+      readonly label: string;
+      readonly placeholder?: string;
     };
 
 /**
@@ -64,7 +70,7 @@ export interface PaletteCommand {
   readonly group: PaletteGroup;
   readonly available?: (ctx: PaletteContext) => boolean;
   readonly args?: readonly ArgSpec[];
-  readonly run: (values: ArgValues, ctx: PaletteContext) => void;
+  readonly run: (values: ArgValues, ctx: PaletteContext) => void | Promise<void>;
 }
 
 /** A resolved, runnable item shown in the palette list. */

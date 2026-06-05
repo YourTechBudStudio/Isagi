@@ -1,0 +1,70 @@
+import { basename } from 'node:path';
+
+import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
+
+import type { ProjectRow, WorktreeRow } from './types.js';
+
+export function buildWorkspaceSnapshot(
+  projects: readonly ProjectRow[],
+  worktrees: readonly WorktreeRow[],
+  activeContext: WorkspaceSnapshot['activeContext'],
+): WorkspaceSnapshot {
+  return {
+    projects: projects.map((project) => buildProjectSnapshot(project, worktrees)),
+    activeContext,
+  };
+}
+
+function buildProjectSnapshot(project: ProjectRow, worktrees: readonly WorktreeRow[]): Project {
+  const base = {
+    id: project.id,
+    name: project.name,
+    rootPath: project.rootPath,
+    worktrees:
+      project.status === 'present'
+        ? worktrees
+            .filter(
+              (worktree) => worktree.projectId === project.id && worktree.status === 'present',
+            )
+            .map(buildWorktreeSnapshot)
+        : [],
+  };
+
+  if (project.status === 'missing') {
+    return {
+      ...base,
+      status: 'missing',
+      missingReason: project.missingReason ?? `Project unavailable: ${project.rootPath}`,
+    };
+  }
+
+  return {
+    ...base,
+    status: 'present',
+  };
+}
+
+function buildWorktreeSnapshot(worktree: WorktreeRow): Worktree {
+  return {
+    id: worktree.id,
+    projectId: worktree.projectId,
+    title: worktreeTitle(worktree),
+    path: worktree.path,
+    branch: worktree.branch,
+    head: worktree.head,
+    isRoot: worktree.isRoot === 1,
+    status: 'present',
+    attention: 'idle',
+    parked: false,
+    surfaces: [],
+    activeSurfaceId: null,
+    commands: [],
+  };
+}
+
+function worktreeTitle(worktree: WorktreeRow) {
+  if (worktree.branch) {
+    return worktree.branch;
+  }
+  return basename(worktree.path) || worktree.path;
+}

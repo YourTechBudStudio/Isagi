@@ -3,6 +3,10 @@ import { builtinModules } from 'node:module';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  ssr: {
+    external: ['better-sqlite3'],
+    noExternal: true,
+  },
   build: {
     lib: {
       entry: 'src/index.ts',
@@ -10,7 +14,11 @@ export default defineConfig({
       formats: ['es'],
     },
     rollupOptions: {
-      external: [...builtinModules, ...builtinModules.map((moduleName) => `node:${moduleName}`)],
+      external: [
+        ...builtinModules,
+        ...builtinModules.map((moduleName) => `node:${moduleName}`),
+        'better-sqlite3',
+      ],
     },
     ssr: true,
     target: 'node22',

@@ -11,13 +11,14 @@ function findWorktreeProject(
   return projects.find((project) => project.worktrees.some((s) => s.id === worktree.id)) ?? null;
 }
 
-/** Build the palette context snapshot from workspace state. */
 export function buildPaletteContext(
   projects: readonly Project[],
-  activeWorktreeId: string | null,
+  activeWorktreeId: number | null,
 ): PaletteContext {
   const activeWorktree =
-    projects.flatMap((project) => project.worktrees).find((s) => s.id === activeWorktreeId) ?? null;
+    projects
+      .flatMap((project) => project.worktrees)
+      .find((worktree) => worktree.id === activeWorktreeId) ?? null;
   return {
     projects,
     activeWorktree,

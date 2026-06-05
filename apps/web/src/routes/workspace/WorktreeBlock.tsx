@@ -21,8 +21,8 @@ export function WorktreeBlock({
 }: {
   worktree: Worktree;
   active: boolean;
-  onSelectWorktree: (worktreeId: string) => void;
-  onSelectSurface: (worktreeId: string, surfaceId: string) => void;
+  onSelectWorktree: (worktreeId: number) => void;
+  onSelectSurface: (worktreeId: number, surfaceId: string) => void;
 }) {
   return (
     <div className={worktree.parked ? 'opacity-50 hover:opacity-80' : ''}>

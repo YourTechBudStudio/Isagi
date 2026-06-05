@@ -19,7 +19,7 @@ Switching between worktrees in the same project and worktrees in different proje
 
 # Done condition
 
-Done when Isagi can register or discover projects, discover the main checkout and existing worktrees, show them in navigation, switch active worktree context, and remember the last active context directionally.
+Done when Isagi can register projects from a typed root-checkout path, discover the main checkout and existing linked Git worktrees, show them in navigation, switch active worktree context, and remember the last active context directionally.
 
 # Notes
 
@@ -41,5 +41,5 @@ built rail components and the slice notes below.
   project).
 - **`activeSurfaceId` is remembered per worktree** and restored on switch-back —
   this is the resumable-room promise in miniature.
-- New worktree lives at the **rail top** (`Mod+N`) plus a per-project `+`.
-- Rail membership is curated (active + parked); `done` worktrees leave the rail.
+- Add project lives at the **rail top** (`Mod+N`) for this slice; New worktree moves to the create-worktree slice.
+- Linked worktree membership is reconciled from Git; gone linked worktrees leave the normal rail, while a missing project root remains visible as a config-error project.

@@ -99,3 +99,4 @@ All color, type, motion, and depth come from the design tokens defined in `src/s
 ## Rules
 
 - Keep Electron-specific logic out of this package.
+- We dont need to preserve backward compatiblity for mocked data. Once we have binding with the backend runtime, feel free to remove the mock data we dont need anymore.

@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { branchLabel } from '../../lib/workspace/selectors.js';
 import { useActiveWorktree, useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { Command } from '../../lib/workspace/types.js';
 
@@ -54,7 +55,7 @@ export function StatusStrip() {
 
       {worktree && (
         <span className="ml-auto flex-none font-mono text-[11.5px] text-green">
-          {worktree.branch}
+          {branchLabel(worktree)}
         </span>
       )}
     </div>

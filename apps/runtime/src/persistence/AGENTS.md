@@ -7,7 +7,7 @@ Persistence support for runtime-owned project, worktree, and worktree-environmen
 ## Rules
 
 - Runtime owns persistence and Git/worktree reconciliation.
-- Use Drizzle ORM with SQLite through `node:sqlite` unless a concrete limitation forces a different driver.
+- Use Drizzle ORM with SQLite through `better-sqlite3`; prefer Drizzle-supported drivers over hand-written SQL driver adapters.
 - Use Drizzle Kit-generated migrations from the start.
 - Do not edit generated migration artifacts by hand; change the Drizzle schema and regenerate migrations instead.
 - Prefer incremental integer primary keys.
