@@ -9,6 +9,10 @@ Isagi has several moving pieces that must stay distinct: Electron shell, React w
 ## Review Questions
 
 - Does the change preserve the intended owner of the behavior?
+- Is each durable or user-visible state fact owned by a clear package, process, or product concept?
+- Is persistence, caching, or frontend state tooling being mistaken for ownership?
+- Could a persisted or cached value become hidden input to unrelated operational behavior?
+- Do state-changing APIs make the target and source of truth explicit enough for both clients and runtimes to reason about the transition?
 - Is the runtime still the owner of operational state and lifecycle facts?
 - Does the web app remain free of Electron-specific assumptions?
 - Does desktop code stay focused on native shell, windowing, and runtime bootstrapping concerns?
@@ -41,6 +45,7 @@ Isagi has several moving pieces that must stay distinct: Electron shell, React w
 - Contracts include implementation concerns or fail to model meaningful client/runtime behavior explicitly.
 - A runtime API route that crosses the client/runtime boundary bypasses shared contracts, the versioned API surface, or explicit error modeling.
 - Runtime, desktop, web, and contracts ownership becomes materially unclear.
+- A persisted, cached, or frontend-owned state value becomes hidden input to operational runtime behavior that should accept an explicit target.
 - A change makes future remote-runtime separation materially harder without an explicit tradeoff.
 - Command execution, filesystem access, process control, or privilege exposure expands without deliberate handling.
 - A compatibility shim or dual path is introduced for private internals where callers can safely be migrated.
@@ -48,6 +53,7 @@ Isagi has several moving pieces that must stay distinct: Electron shell, React w
 ### Concern
 
 - Ownership is mostly clear, but the boundary is becoming harder to explain or maintain.
+- Persistence, caching, or frontend state tooling obscures who owns an important state fact.
 - An interface is implicit where an explicit boundary would improve safety or reviewability.
 - A contract shape is technically usable but weakly communicates behavior, failure semantics, or client obligations.
 - API error handling exists but is too generic for clients to distinguish validation, domain, internal, or degraded-runtime cases that matter.

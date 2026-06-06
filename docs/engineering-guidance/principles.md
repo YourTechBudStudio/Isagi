@@ -10,6 +10,10 @@ Prefer designs that keep the next product slice easy to add without freezing arc
 
 Keep ownership clear. The runtime owns operational state. Git remains the source of truth for repository and worktree facts where practical. The web app owns React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior and wire shapes without implementation.
 
+## Make State Ownership Explicit
+
+Every durable or user-visible state fact should have a clear owner. Persistence location, cache mechanism, and UI state tooling should follow that ownership rather than obscure it.
+
 ## Make Operational Work Explicit
 
 Work that can fail, block, retry, allocate resources, depend on services, spawn processes, or outlive a single call should make those facts visible in its type, boundary, and lifecycle. Use Effect as Isagi's operational substrate, not as a universal style for pure code.

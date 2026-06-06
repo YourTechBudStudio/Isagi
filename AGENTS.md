@@ -17,6 +17,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
   - docs/engineering-guidance/README.md
   - docs/engineering-guidance/principles.md
   - docs/engineering-guidance/how-to-use.md
+  - docs/adrs/README.md (use it as an index; read only ADRs relevant to the task)
   - Additionally, make sure to read any relevant engineering guidance files before starting to code.
 - Never modify `CLAUDE.md` files directly; they are symlinks to `AGENTS.md` files, so edit the corresponding `AGENTS.md` instead.
 - After code changes, run `pnpm check`. Each package has its own `check` command.
