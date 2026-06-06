@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 import type { PathSuggestOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
+import { showToast } from '../toast/index.js';
 import {
   addProject,
   fetchWorkspace,
@@ -10,7 +11,7 @@ import {
   suggestProjectPaths,
   updateActiveContext,
 } from './runtime-data.js';
-import { findActiveSurface } from './selectors.js';
+import { findActiveSurface, worktreeSubtitle } from './selectors.js';
 import type { AccentColor, Project, Surface, Worktree } from './types.js';
 
 interface DrawerState {
@@ -111,6 +112,50 @@ function stateFromSnapshot(snapshot: WorkspaceSnapshot) {
   };
 }
 
+export function maybeToastActiveWorktreeRecovery(
+  state: WorkspaceStore,
+  snapshot: WorkspaceSnapshot,
+) {
+  const previousWorktreeId = state.activeWorktreeId;
+  const nextWorktreeId = snapshot.activeContext.worktreeId;
+
+  if (!previousWorktreeId || previousWorktreeId === nextWorktreeId) {
+    return;
+  }
+
+  const previousWorktree = findWorktree(state.projects, previousWorktreeId);
+  if (!previousWorktree) {
+    return;
+  }
+
+  const previousProject = snapshot.projects.find(
+    (project) => project.id === previousWorktree.projectId && project.status === 'present',
+  );
+  if (!previousProject) {
+    return;
+  }
+
+  const previousStillExists = previousProject.worktrees.some(
+    (worktree) => worktree.id === previousWorktreeId,
+  );
+  if (previousStillExists) {
+    return;
+  }
+
+  const nextWorktree = previousProject.worktrees.find((worktree) => worktree.id === nextWorktreeId);
+  if (!nextWorktree?.isRoot) {
+    return;
+  }
+
+  showToast({
+    id: `active-worktree-recovered:${previousWorktreeId}`,
+    kind: 'warning',
+    title: 'Active worktree is no longer available. Switched to the root checkout.',
+    subtitle: `${worktreeSubtitle(previousWorktree)} — no longer reported by Git`,
+    lifetime: { autoDismiss: false },
+  });
+}
+
 function projectGlyph(name: string) {
   return (
     name
@@ -139,7 +184,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   loadWorkspace: () => {
     set({ loading: true, error: null });
     void Effect.runPromise(fetchWorkspace()).then(
-      (snapshot) => set({ ...stateFromSnapshot(snapshot), loading: false }),
+      (snapshot) => {
+        maybeToastActiveWorktreeRecovery(get(), snapshot);
+        set({ ...stateFromSnapshot(snapshot), loading: false });
+      },
       (error: unknown) => set({ loading: false, error: formatRuntimeError(error) }),
     );
   },
@@ -147,7 +195,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   addProjectPath: async (path) => {
     set({ loading: true, error: null });
     await Effect.runPromise(addProject(path)).then(
-      (snapshot) => set({ ...stateFromSnapshot(snapshot), loading: false }),
+      (snapshot) => {
+        maybeToastActiveWorktreeRecovery(get(), snapshot);
+        set({ ...stateFromSnapshot(snapshot), loading: false });
+      },
       (error: unknown) => {
         set({ loading: false, error: formatRuntimeError(error) });
         throw error;
@@ -160,18 +211,24 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   selectWorktree: (worktreeId) => {
     const requestId = ++activeSelectionRequest;
     const selectedWorktree = findWorktree(get().projects, worktreeId);
+    if (!selectedWorktree) {
+      set({ error: 'Worktree is not present.' });
+      return;
+    }
+
     const previous = {
       activeWorktreeId: get().activeWorktreeId,
       selectedProjectId: get().selectedProjectId,
     };
     set({
       activeWorktreeId: worktreeId,
-      selectedProjectId: selectedWorktree?.projectId ?? get().selectedProjectId,
+      selectedProjectId: selectedWorktree.projectId,
       error: null,
     });
     void Effect.runPromise(updateActiveContext(worktreeId)).then(
       (snapshot) => {
         if (requestId === activeSelectionRequest) {
+          maybeToastActiveWorktreeRecovery(get(), snapshot);
           set(stateFromSnapshot(snapshot));
         }
       },

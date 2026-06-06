@@ -54,10 +54,11 @@ function spawnRuntimeAndWaitForUrl() {
     };
 
     const resetSpawnState = () => {
-      if (runtimeProcess === childProcess) {
-        runtimeProcess = undefined;
+      if (runtimeProcess !== childProcess) {
+        return;
       }
 
+      runtimeProcess = undefined;
       runtimeUrlFiber = undefined;
     };
 
@@ -79,7 +80,6 @@ function spawnRuntimeAndWaitForUrl() {
       }
 
       settled = true;
-      cleanup();
       resume(Effect.succeed(url));
     };
 
@@ -128,15 +128,37 @@ function spawnRuntimeAndWaitForUrl() {
     };
 
     const onError = (error: Error) => {
-      fail(error);
+      if (!settled) {
+        fail(error);
+        return;
+      }
+
+      if (runtimeProcess === childProcess) {
+        console.error(`[runtime] Runtime process error after readiness: ${error.message}`);
+      }
+      resetSpawnState();
+      cleanup();
     };
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      fail(
-        new Error(
-          `Runtime exited before readiness: code=${code ?? 'null'} signal=${signal ?? 'null'}`,
-        ),
-      );
+      if (!settled) {
+        fail(
+          new Error(
+            `Runtime exited before readiness: code=${code ?? 'null'} signal=${signal ?? 'null'}`,
+          ),
+        );
+        return;
+      }
+
+      if (runtimeProcess === childProcess) {
+        console.error(
+          `[runtime] Runtime exited after readiness: code=${code ?? 'null'} signal=${
+            signal ?? 'null'
+          }`,
+        );
+      }
+      resetSpawnState();
+      cleanup();
     };
 
     childProcess.stdout.on('data', onStdout);

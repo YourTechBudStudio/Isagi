@@ -17,7 +17,6 @@ CREATE TABLE `worktrees` (
 	`branch` text,
 	`head` text,
 	`is_root` integer NOT NULL,
-	`status` text NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	`first_seen_at` text NOT NULL,
@@ -25,5 +24,4 @@ CREATE TABLE `worktrees` (
 	FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `worktrees_project_path_unique` ON `worktrees` (`project_id`,`path`);--> statement-breakpoint
-CREATE INDEX `worktrees_project_status_idx` ON `worktrees` (`project_id`,`status`);
+CREATE UNIQUE INDEX `worktrees_project_path_unique` ON `worktrees` (`project_id`,`path`);

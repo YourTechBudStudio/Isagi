@@ -1,7 +1,6 @@
 import type { WorkspaceSnapshot } from '@isagi/contracts';
 
 export type ProjectStatus = 'present' | 'missing';
-export type PersistedWorktreeStatus = 'present' | 'gone';
 
 export interface ProjectRow {
   readonly id: number;
@@ -21,7 +20,6 @@ export interface WorktreeRow {
   readonly branch: string | null;
   readonly head: string | null;
   readonly isRoot: number;
-  readonly status: PersistedWorktreeStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly firstSeenAt: string;

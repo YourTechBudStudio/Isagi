@@ -82,7 +82,6 @@ export const WorkspaceRepositoryLive = Layer.effect(
       reconcileProjectWorktrees: (input) =>
         database.transaction('reconcile_project_worktrees', (db) => {
           const now = timestamp();
-          const discoveredPaths = new Set(input.discovered.map((worktree) => worktree.path));
 
           for (const worktree of input.discovered) {
             const existing =
@@ -100,7 +99,6 @@ export const WorkspaceRepositoryLive = Layer.effect(
                   branch: worktree.branch,
                   head: worktree.head,
                   isRoot: worktree.isRoot ? 1 : 0,
-                  status: 'present',
                   updatedAt: now,
                   lastSeenAt: now,
                 })
@@ -114,7 +112,6 @@ export const WorkspaceRepositoryLive = Layer.effect(
                   branch: worktree.branch,
                   head: worktree.head,
                   isRoot: worktree.isRoot ? 1 : 0,
-                  status: 'present',
                   createdAt: now,
                   updatedAt: now,
                   firstSeenAt: now,
@@ -130,13 +127,11 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .where(eq(worktrees.projectId, input.projectId))
             .all();
 
-          for (const existing of existingWorktrees) {
-            if (!discoveredPaths.has(existing.path) && existing.status !== 'gone') {
-              db.update(worktrees)
-                .set({ status: 'gone', updatedAt: now })
-                .where(eq(worktrees.id, existing.id))
-                .run();
-            }
+          for (const id of prunedWorktreeIds({
+            discovered: input.discovered,
+            existing: existingWorktrees,
+          })) {
+            db.delete(worktrees).where(eq(worktrees.id, id)).run();
           }
         }),
       setProjectStatus: (input) =>
@@ -155,6 +150,16 @@ export const WorkspaceRepositoryLive = Layer.effect(
     } satisfies WorkspaceRepositoryService;
   }),
 );
+
+export function prunedWorktreeIds(input: {
+  readonly discovered: readonly Pick<DiscoveredWorktree, 'path'>[];
+  readonly existing: readonly Pick<WorktreeRow, 'id' | 'isRoot' | 'path'>[];
+}): readonly number[] {
+  const discoveredPaths = new Set(input.discovered.map((worktree) => worktree.path));
+  return input.existing
+    .filter((worktree) => !discoveredPaths.has(worktree.path) && worktree.isRoot !== 1)
+    .map((worktree) => worktree.id);
+}
 
 function projectRow(row: ProjectRecord): ProjectRow {
   return {
@@ -177,7 +182,6 @@ function worktreeRow(row: WorktreeRecord): WorktreeRow {
     branch: row.branch,
     head: row.head,
     isRoot: row.isRoot,
-    status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     firstSeenAt: row.firstSeenAt,

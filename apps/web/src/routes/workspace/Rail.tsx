@@ -1,7 +1,6 @@
 import { Plus } from 'lucide-react';
 
 import { Button } from '../../components/Button.js';
-import { MonoAside } from '../../components/MonoAside.js';
 import { Overline } from '../../components/Overline.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
@@ -27,7 +26,6 @@ export function Rail() {
     selectSurface,
   } = useWorkspace();
   const openPalette = usePaletteStore((state) => state.openPalette);
-  const hasProjects = projects.length > 0;
 
   return (
     <aside className="flex min-h-0 flex-col border-r border-line/20 bg-linear-to-b from-elevated/55 to-canvas/30 backdrop-blur-md">
@@ -40,25 +38,19 @@ export function Rail() {
       <AddProjectButton onOpen={() => openPalette('add-project')} />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pt-1 pb-2.5">
-        {hasProjects ? (
-          <>
-            <Overline className="mx-2 mt-2 mb-1">Active</Overline>
-            {projects.map((project) => (
-              <ProjectGroup
-                key={project.id}
-                project={project}
-                activeWorktreeId={activeWorktreeId}
-                selectedProjectId={selectedProjectId}
-                onSelectWorktree={selectWorktree}
-                onSelectMissingProject={selectMissingProject}
-                onSelectSurface={selectSurface}
-                onAddProject={() => openPalette('add-project')}
-              />
-            ))}
-          </>
-        ) : (
-          <RailEmptyState />
-        )}
+        <Overline className="mx-2 mt-2 mb-1">Active</Overline>
+        {projects.map((project) => (
+          <ProjectGroup
+            key={project.id}
+            project={project}
+            activeWorktreeId={activeWorktreeId}
+            selectedProjectId={selectedProjectId}
+            onSelectWorktree={selectWorktree}
+            onSelectMissingProject={selectMissingProject}
+            onSelectSurface={selectSurface}
+            onAddProject={() => openPalette('add-project')}
+          />
+        ))}
       </div>
 
       <div className="px-4 pt-2.5 pb-3.5">
@@ -81,14 +73,6 @@ function AddProjectButton({ onOpen }: { onOpen: () => void }) {
       >
         Add project
       </Button>
-    </div>
-  );
-}
-
-function RailEmptyState() {
-  return (
-    <div className="px-3 pt-8">
-      <MonoAside>{'// worktrees show up here'}</MonoAside>
     </div>
   );
 }

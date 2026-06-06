@@ -26,7 +26,6 @@ export {
   surfaceSchema,
   workspaceSnapshotSchema,
   worktreeSchema,
-  worktreeStatusSchema,
 } from './workspace/types.js';
 export type {
   ActiveContext,

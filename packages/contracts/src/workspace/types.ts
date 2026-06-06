@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 export const attentionStateSchema = z.enum(['idle', 'working', 'waiting', 'error']);
 export const projectStatusSchema = z.enum(['present', 'missing']);
-export const worktreeStatusSchema = z.literal('present');
 export const surfaceSchema = z.object({
   id: z.string(),
   kind: z.enum(['agent', 'terminal', 'browser', 'editor', 'artifact']),
@@ -28,7 +27,6 @@ export const worktreeSchema = z.object({
   branch: z.string().nullable(),
   head: z.string().nullable(),
   isRoot: z.boolean(),
-  status: worktreeStatusSchema,
   attention: attentionStateSchema,
   parked: z.boolean(),
   surfaces: z.array(surfaceSchema),

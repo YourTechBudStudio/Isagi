@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "52eb8eb2-468b-4912-a6bf-20e47a574a58",
+  "id": "710382a7-bc62-40d1-8cb4-21e4fc318d28",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "projects": {
@@ -67,7 +67,9 @@
       "indexes": {
         "projects_root_path_unique": {
           "name": "projects_root_path_unique",
-          "columns": ["root_path"],
+          "columns": [
+            "root_path"
+          ],
           "isUnique": true
         }
       },
@@ -121,13 +123,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -160,13 +155,11 @@
       "indexes": {
         "worktrees_project_path_unique": {
           "name": "worktrees_project_path_unique",
-          "columns": ["project_id", "path"],
+          "columns": [
+            "project_id",
+            "path"
+          ],
           "isUnique": true
-        },
-        "worktrees_project_status_idx": {
-          "name": "worktrees_project_status_idx",
-          "columns": ["project_id", "status"],
-          "isUnique": false
         }
       },
       "foreignKeys": {
@@ -174,8 +167,12 @@
           "name": "worktrees_project_id_projects_id_fk",
           "tableFrom": "worktrees",
           "tableTo": "projects",
-          "columnsFrom": ["project_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }

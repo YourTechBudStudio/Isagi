@@ -8,10 +8,11 @@
   },
   "scripts": {
     "build": "vite build",
-    "check": "pnpm typecheck && pnpm build",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "cross-env ISAGI_DATA_DIR=../../.isagi tsx src/index.ts",
     "dev:fixed": "cross-env ISAGI_DATA_DIR=../../.isagi PORT=17373 tsx src/index.ts",
     "start": "node dist/index.js",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

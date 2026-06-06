@@ -18,12 +18,8 @@ export class StateFileError extends Data.TaggedError('StateFileError')<{
   readonly operation: string;
 }> {}
 
-export interface WorkspaceStateRead extends WorkspaceState {
-  readonly recoveryNotice?: string | undefined;
-}
-
 export interface StateFileService {
-  readonly read: Effect.Effect<WorkspaceStateRead, StateFileError>;
+  readonly read: Effect.Effect<WorkspaceState, StateFileError>;
   readonly write: (state: WorkspaceState) => Effect.Effect<void, StateFileError>;
 }
 
@@ -55,10 +51,12 @@ export const StateFileLive = Layer.effect(
           } catch {
             const backupPath = `${directory.paths.statePath}.malformed-${Date.now()}`;
             renameSync(directory.paths.statePath, backupPath);
-            const recoveryNotice = `Recovered malformed Isagi state file by moving it to ${backupPath}. Active workspace context was reset.`;
-            console.warn(recoveryNotice);
+            const recoveryMessage = `Recovered malformed Isagi state file by moving it to ${backupPath}. Active workspace context was reset.`;
+            // This is intentionally a runtime-only diagnostic for now. The workspace
+            // snapshot stays declarative and does not carry transient recovery messages.
+            console.warn(recoveryMessage);
             writeStateFile(directory.paths.statePath, defaultState);
-            return { ...defaultState, recoveryNotice };
+            return defaultState;
           }
         },
         catch: (cause) => new StateFileError({ operation: 'read_state_file', cause }),

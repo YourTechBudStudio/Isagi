@@ -17,7 +17,6 @@ import { TerminalSurface } from './TerminalSurface.js';
  */
 export function Canvas() {
   const { activeWorktree, activeMissingProject, activeSurface, loading, error } = useWorkspace();
-
   if (activeMissingProject) {
     return <MissingProjectState project={activeMissingProject} />;
   }
@@ -125,11 +124,7 @@ function FreshEmptyState() {
       title="No worktrees on the canvas."
       body="Point Isagi at a repo root. It'll find the worktrees you forgot you made."
       actions={
-        <Button
-          icon={Plus}
-          shortcut={`${modKey}N`}
-          onClick={() => openPalette('add-project')}
-        >
+        <Button icon={Plus} shortcut={`${modKey}N`} onClick={() => openPalette('add-project')}>
           Add project
         </Button>
       }

@@ -23,7 +23,7 @@ import { WorkspaceRepository } from './workspace-repository.js';
 import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
-  readonly code: 'worktree_not_found' | 'worktree_not_present';
+  readonly code: 'worktree_not_found' | 'project_not_present';
   readonly message: string;
 }> {}
 
@@ -115,21 +115,12 @@ export const WorkspaceServiceLive = Layer.effect(
               }),
             );
           }
-          if (worktree.status !== 'present') {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'worktree_not_present',
-                message: `Worktree ${input.worktreeId} is not present.`,
-              }),
-            );
-          }
-
           const projects = yield* repository.listProjects;
           const project = projects.find((candidate) => candidate.id === worktree.projectId);
           if (!project || project.status !== 'present') {
             return yield* Effect.fail(
               new WorkspaceError({
-                code: 'worktree_not_present',
+                code: 'project_not_present',
                 message: `Worktree ${input.worktreeId} belongs to a project that is not present.`,
               }),
             );
@@ -158,20 +149,27 @@ function reconcileWorkspaceWithGit(repository: WorkspaceRepositoryService) {
 
       yield* repository.setProjectStatus({ id: project.id, status: 'present' });
 
-      const discovered = yield* discoverWorktrees(project).pipe(
-        Effect.catchAll(() => Effect.succeed(null)),
+      const discovery = yield* discoverWorktrees(project).pipe(
+        Effect.match({
+          onFailure: (error) => ({
+            status: 'failed' as const,
+            missingReason: describeWorktreeDiscoveryFailure(project.rootPath, error),
+          }),
+          onSuccess: (discovered) => ({ status: 'succeeded' as const, discovered }),
+        }),
       );
-      if (!discovered) {
+      if (discovery.status === 'failed') {
+        yield* Effect.sync(() => console.error(`[workspace] ${discovery.missingReason}`));
         yield* repository.setProjectStatus({
           id: project.id,
-          missingReason: `Could not read Git worktrees for ${project.rootPath}.`,
+          missingReason: discovery.missingReason,
           status: 'missing',
         });
         continue;
       }
       yield* repository.reconcileProjectWorktrees({
         projectId: project.id,
-        discovered,
+        discovered: discovery.discovered,
       });
     }
   });
@@ -201,6 +199,14 @@ function loadWorkspaceRows(repository: WorkspaceRepositoryService) {
       worktrees: WorktreeRow[];
     };
   });
+}
+
+function describeWorktreeDiscoveryFailure(rootPath: string, error: GitCommandError) {
+  const command = ['git', ...error.args].join(' ');
+  const cwd = error.cwd ?? rootPath;
+  const stderr = error.stderr.trim();
+  const detail = stderr ? ` stderr: ${stderr}` : '';
+  return `Could not read Git worktrees for ${rootPath} using ${command} in ${cwd}.${detail}`;
 }
 
 function pathIsDirectory(path: string) {

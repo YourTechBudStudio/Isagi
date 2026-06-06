@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const projects = sqliteTable(
   'projects',
@@ -26,14 +26,10 @@ export const worktrees = sqliteTable(
     branch: text('branch'),
     head: text('head'),
     isRoot: integer('is_root').notNull(),
-    status: text('status', { enum: ['present', 'gone'] }).notNull(),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     firstSeenAt: text('first_seen_at').notNull(),
     lastSeenAt: text('last_seen_at'),
   },
-  (table) => [
-    uniqueIndex('worktrees_project_path_unique').on(table.projectId, table.path),
-    index('worktrees_project_status_idx').on(table.projectId, table.status),
-  ],
+  (table) => [uniqueIndex('worktrees_project_path_unique').on(table.projectId, table.path)],
 );

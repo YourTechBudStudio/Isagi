@@ -13,9 +13,7 @@ export function Overline({
   className?: string;
 }) {
   return (
-    <p
-      className={`font-mono text-[10px] tracking-widest text-fg-subtle uppercase ${className}`}
-    >
+    <p className={`font-mono text-[10px] tracking-widest text-fg-subtle uppercase ${className}`}>
       {children}
     </p>
   );

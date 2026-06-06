@@ -14,8 +14,6 @@ const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
 const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
 const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
-let runtimeUrl = '';
-
 app.setAppUserModelId(APP_ID);
 
 function createWindow() {
@@ -66,7 +64,7 @@ function createWindowEffect() {
 function runBootSequence(window: BrowserWindow) {
   return Effect.gen(function* () {
     yield* setBootStatus(window, 'Starting runtime...', 'Resolving local or remote runtime.');
-    runtimeUrl = yield* getRuntimeUrl();
+    const runtimeUrl = yield* getRuntimeUrl();
 
     yield* setBootStatus(window, 'Checking runtime...', runtimeUrl);
     yield* waitForRuntimeHealth(runtimeUrl);
@@ -123,7 +121,7 @@ function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-ipcMain.handle('isagi:runtime-url', () => runtimeUrl);
+ipcMain.handle('isagi:runtime-url', () => Effect.runPromise(getRuntimeUrl()));
 
 // Focus mode asks the host shell to quiet native chrome around the work surface.
 ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {

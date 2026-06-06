@@ -23,9 +23,7 @@ function buildProjectSnapshot(project: ProjectRow, worktrees: readonly WorktreeR
     worktrees:
       project.status === 'present'
         ? worktrees
-            .filter(
-              (worktree) => worktree.projectId === project.id && worktree.status === 'present',
-            )
+            .filter((worktree) => worktree.projectId === project.id)
             .map(buildWorktreeSnapshot)
         : [],
   };
@@ -53,12 +51,11 @@ function buildWorktreeSnapshot(worktree: WorktreeRow): Worktree {
     branch: worktree.branch,
     head: worktree.head,
     isRoot: worktree.isRoot === 1,
-    status: 'present',
-    attention: 'idle',
     parked: false,
     surfaces: [],
     activeSurfaceId: null,
     commands: [],
+    attention: 'idle',
   };
 }
 

@@ -12,12 +12,11 @@ export function chooseActiveContext(
   projects: readonly ProjectRow[],
   worktrees: readonly WorktreeRow[],
 ): ActiveContext {
-  const presentWorktrees = worktrees.filter((worktree) => worktree.status === 'present');
   const presentProjectIds = new Set(
     projects.filter((project) => project.status === 'present').map((project) => project.id),
   );
 
-  const requestedWorktree = presentWorktrees.find(
+  const requestedWorktree = worktrees.find(
     (worktree) =>
       worktree.id === requested.worktreeId &&
       presentProjectIds.has(worktree.projectId) &&
@@ -28,7 +27,7 @@ export function chooseActiveContext(
   }
 
   if (requested.projectId && presentProjectIds.has(requested.projectId)) {
-    const rootWorktree = presentWorktrees.find(
+    const rootWorktree = worktrees.find(
       (worktree) => worktree.projectId === requested.projectId && worktree.isRoot === 1,
     );
     if (rootWorktree) {
@@ -39,17 +38,13 @@ export function chooseActiveContext(
   const firstProjectRoot = projects
     .filter((project) => presentProjectIds.has(project.id))
     .flatMap((project) =>
-      presentWorktrees.filter(
-        (worktree) => worktree.projectId === project.id && worktree.isRoot === 1,
-      ),
+      worktrees.filter((worktree) => worktree.projectId === project.id && worktree.isRoot === 1),
     )[0];
   if (firstProjectRoot) {
     return { projectId: firstProjectRoot.projectId, worktreeId: firstProjectRoot.id };
   }
 
-  const firstPresent = presentWorktrees.find((worktree) =>
-    presentProjectIds.has(worktree.projectId),
-  );
+  const firstPresent = worktrees.find((worktree) => presentProjectIds.has(worktree.projectId));
   if (firstPresent) {
     return { projectId: firstPresent.projectId, worktreeId: firstPresent.id };
   }
