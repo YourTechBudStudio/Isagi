@@ -19,6 +19,8 @@ Effect is the substrate for this operational work. That does not mean Effect eve
 - Is the code at the right Effect maturity tier for its complexity: local Effect, service/layer, or scoped concurrent system?
 - Are scoped resources, interruption, shutdown, and cleanup explicit for long-lived processes, streams, queues, sessions, and supervisors?
 - Are failures surfaced instead of silently swallowed?
+- Are domain failures mapped into explicit API errors at runtime boundaries rather than leaking implementation errors?
+- Are validation failures, domain failures, internal failures, and degraded-runtime behavior distinguishable where clients or users need different handling?
 - Does degraded behavior remain honest about what did and did not work?
 - Would a user be able to report enough information for remote debugging?
 - Do logs or error payloads include useful context without dumping noise or sensitive data unnecessarily?
@@ -44,6 +46,7 @@ Effect is the substrate for this operational work. That does not mean Effect eve
 - Long-lived resources or concurrent runtime systems lack explicit ownership, interruption, cleanup, or shutdown behavior.
 - Internal operational code runs Effects so early that cancellation, retry, resource ownership, or composition is materially broken.
 - Description-only contracts or schemas expose implementation-layer Effect concepts.
+- Runtime API responses expose domain, framework, or operational implementation errors instead of stable client-facing error shapes.
 - Restoration failure is hidden or presented as success.
 - Runtime errors that affect users lack any visible path to diagnosis.
 - The UI becomes authoritative for runtime state that the runtime should own.
@@ -57,6 +60,7 @@ Effect is the substrate for this operational work. That does not mean Effect eve
 - A growing integration lacks a service boundary or layer and is becoming hard to test, replace, or diagnose.
 - Background work exists without clear cancellation, shutdown, or ownership semantics.
 - Failure handling exists but does not expose enough context for support.
+- Runtime API errors are explicit but too coarse for clients to handle important failure categories deliberately.
 - Logs are present but too vague, noisy, or disconnected from user-visible errors.
 - Lifecycle cleanup is plausible but not easy to verify.
 - Runtime behavior handles the happy path but not likely degraded paths.

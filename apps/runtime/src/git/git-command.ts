@@ -24,11 +24,12 @@ export const Git = Context.GenericTag<GitService>('isagi/Git');
 export const GitLive = Layer.succeed(Git, {
   run: (args, options = {}) =>
     Effect.tryPromise({
-      try: async () => {
+      try: async (signal) => {
         const { stdout, stderr } = await execFileAsync('git', [...args], {
           cwd: options.cwd,
           encoding: 'utf8',
           maxBuffer: 1024 * 1024,
+          signal,
         });
         return { stdout, stderr };
       },

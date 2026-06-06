@@ -1,4 +1,6 @@
-import { Duration, Effect, Schedule } from 'effect';
+import { Duration, Effect, Schedule, Schema } from 'effect';
+
+import { apiBasePath, apiEndpoints, apiSuccessResponseSchema } from '@isagi/contracts';
 
 export interface WaitOptions {
   attempts?: number;
@@ -13,15 +15,15 @@ const defaultWaitOptions = {
 };
 
 export function waitForRuntimeHealth(runtimeUrl: string, options?: WaitOptions) {
-  const healthUrl = new URL('/rpc/health', runtimeUrl).toString();
-  return waitForRpcHealth(healthUrl, options);
+  const healthUrl = new URL(`${apiBasePath}${apiEndpoints.health.path}`, runtimeUrl).toString();
+  return waitForApiHealth(healthUrl, options);
 }
 
 export function waitForWebServer(webUrl: string, options?: WaitOptions) {
   return waitForHttpOk(webUrl, options);
 }
 
-function waitForRpcHealth(url: string, options: WaitOptions = {}) {
+function waitForApiHealth(url: string, options: WaitOptions = {}) {
   return waitForOk(
     url,
     options,
@@ -29,22 +31,26 @@ function waitForRpcHealth(url: string, options: WaitOptions = {}) {
       const response = yield* fetchWithTimeout(
         url,
         options.timeoutMs ?? defaultWaitOptions.timeoutMs,
-        {
-          method: 'POST',
-        },
       );
 
       if (!response.ok) {
         return yield* Effect.fail(new Error(`${url} responded with ${response.status}`));
       }
 
-      const payload = yield* Effect.tryPromise({
-        try: () => response.json() as Promise<{ json?: { ok?: unknown } }>,
+      const rawPayload = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<unknown>,
+        catch: toError,
+      });
+      const payload = yield* Effect.try({
+        try: () =>
+          Schema.decodeUnknownSync(apiSuccessResponseSchema(apiEndpoints.health.output))(
+            rawPayload,
+          ),
         catch: toError,
       });
 
-      if (payload.json?.ok !== true) {
-        return yield* Effect.fail(new Error(`${url} did not return a healthy oRPC payload`));
+      if (payload.data.ok !== true) {
+        return yield* Effect.fail(new Error(`${url} did not return a healthy runtime API payload`));
       }
     }),
   );

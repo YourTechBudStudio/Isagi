@@ -1,23 +1,25 @@
-import { z } from 'zod';
+import { Schema } from 'effect';
 
-export const pathSuggestInputSchema = z.object({
-  input: z.string(),
-  limit: z.number().int().positive().max(100).optional(),
+export const pathSuggestInputSchema = Schema.Struct({
+  input: Schema.String,
+  limit: Schema.optional(
+    Schema.Number.pipe(Schema.int(), Schema.positive(), Schema.lessThanOrEqualTo(100)),
+  ),
 });
 
-export const pathSuggestionSchema = z.object({
-  path: z.string(),
-  label: z.string(),
-  kind: z.literal('directory'),
-  hidden: z.boolean(),
+export const pathSuggestionSchema = Schema.Struct({
+  path: Schema.String,
+  label: Schema.String,
+  kind: Schema.Literal('directory'),
+  hidden: Schema.Boolean,
 });
 
-export const pathSuggestOutputSchema = z.object({
-  basePath: z.string(),
-  input: z.string(),
-  suggestions: z.array(pathSuggestionSchema),
+export const pathSuggestOutputSchema = Schema.Struct({
+  basePath: Schema.String,
+  input: Schema.String,
+  suggestions: Schema.Array(pathSuggestionSchema),
 });
 
-export type PathSuggestInput = z.infer<typeof pathSuggestInputSchema>;
-export type PathSuggestOutput = z.infer<typeof pathSuggestOutputSchema>;
-export type PathSuggestion = z.infer<typeof pathSuggestionSchema>;
+export type PathSuggestInput = Schema.Schema.Type<typeof pathSuggestInputSchema>;
+export type PathSuggestOutput = Schema.Schema.Type<typeof pathSuggestOutputSchema>;
+export type PathSuggestion = Schema.Schema.Type<typeof pathSuggestionSchema>;

@@ -1,16 +1,16 @@
-import { z } from 'zod';
+import { Schema } from 'effect';
 
-export const healthOutputSchema = z.object({
-  context: z.object({
-    arch: z.string(),
-    node: z.string(),
-    pid: z.number().int().positive(),
-    platform: z.string(),
+export const healthOutputSchema = Schema.Struct({
+  context: Schema.Struct({
+    arch: Schema.String,
+    node: Schema.String,
+    pid: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    platform: Schema.String,
   }),
-  name: z.literal('isagi-runtime'),
-  ok: z.literal(true),
-  timestamp: z.string(),
-  version: z.string(),
+  name: Schema.Literal('isagi-runtime'),
+  ok: Schema.Literal(true),
+  timestamp: Schema.String,
+  version: Schema.String,
 });
 
-export type HealthOutput = z.infer<typeof healthOutputSchema>;
+export type HealthOutput = Schema.Schema.Type<typeof healthOutputSchema>;

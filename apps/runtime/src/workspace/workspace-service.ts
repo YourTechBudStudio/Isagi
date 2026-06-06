@@ -25,6 +25,7 @@ import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly code: 'worktree_not_found' | 'project_not_present';
   readonly message: string;
+  readonly worktreeId: number;
 }> {}
 
 export type WorkspaceServiceError =
@@ -112,6 +113,7 @@ export const WorkspaceServiceLive = Layer.effect(
               new WorkspaceError({
                 code: 'worktree_not_found',
                 message: `Worktree ${input.worktreeId} was not found.`,
+                worktreeId: input.worktreeId,
               }),
             );
           }
@@ -122,6 +124,7 @@ export const WorkspaceServiceLive = Layer.effect(
               new WorkspaceError({
                 code: 'project_not_present',
                 message: `Worktree ${input.worktreeId} belongs to a project that is not present.`,
+                worktreeId: input.worktreeId,
               }),
             );
           }

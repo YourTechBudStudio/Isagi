@@ -8,7 +8,7 @@ Prefer designs that keep the next product slice easy to add without freezing arc
 
 ## Preserve Source-Of-Truth Boundaries
 
-Keep ownership clear. The runtime owns operational state. Git remains the source of truth for repository and worktree facts where practical. The web app owns React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior without implementation.
+Keep ownership clear. The runtime owns operational state. Git remains the source of truth for repository and worktree facts where practical. The web app owns React UI without Electron assumptions. Desktop owns native shell concerns. Contracts describe shared behavior and wire shapes without implementation.
 
 ## Make Operational Work Explicit
 
@@ -24,7 +24,7 @@ Code should be easy for a human to trace. Group related files by concept, respon
 
 ## Make Real Boundaries Explicit
 
-Use explicit contracts and interfaces where behavior crosses packages, runtime/client boundaries, platform variants, persisted data, public APIs, integrations, or user-visible expectations. Avoid interface ceremony for tiny local helpers or one-off implementation details.
+Use explicit contracts and interfaces where behavior crosses packages, runtime/client boundaries, platform variants, persisted data, public APIs, integrations, or user-visible expectations. Runtime API contracts should make request, response, and error shapes explicit enough for clients to reason about success and failure. Avoid interface ceremony for tiny local helpers or one-off implementation details.
 
 ## Reuse To Prevent Drift
 
@@ -36,7 +36,7 @@ Do not present uncertain, partial, failed, or degraded behavior as success. Rest
 
 ## Make Runtime Failures Diagnosable
 
-Early users need to report problems that can be debugged remotely. Runtime errors, process failures, Git/worktree problems, and integration degradation should expose enough context through UI, logs, or structured state to understand what failed and where.
+Early users need to report problems that can be debugged remotely. Runtime errors, process failures, Git/worktree problems, API failures, and integration degradation should expose enough context through UI, logs, structured API errors, or structured state to understand what failed and where.
 
 ## Treat User-Visible Behavior As Engineering Behavior
 

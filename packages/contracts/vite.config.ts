@@ -9,7 +9,7 @@ export default defineConfig({
       formats: ['es'],
     },
     rollupOptions: {
-      external: ['@orpc/contract', 'zod'],
+      external: ['effect'],
     },
   },
   plugins: [dts({ tsconfigPath: './tsconfig.json' })],

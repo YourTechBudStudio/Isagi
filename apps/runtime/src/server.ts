@@ -1,13 +1,14 @@
 import process from 'node:process';
 
 import cors from '@fastify/cors';
-import { onError } from '@orpc/server';
-import { RPCHandler } from '@orpc/server/fastify';
 import { Effect, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { createRouter } from './router.js';
+import { registerHealthApi } from './health/api.js';
+import { sendApiError } from './lib/api/index.js';
+import { registerPathsApi } from './paths/api.js';
 import { RuntimeLayer } from './runtime-layer.js';
+import { registerWorkspaceApi } from './workspace/api.js';
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';
 
@@ -28,17 +29,28 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
 
       const fastify = Fastify({ logger: false });
       startupFastify = fastify;
+      fastify.setNotFoundHandler((request, reply) =>
+        sendApiError(reply, {
+          code: 'api_route_not_found',
+          status: 404,
+          message: `Route not found: ${request.method} ${request.url}`,
+          requestId: String(request.id),
+          data: { method: request.method, url: request.url },
+        }),
+      );
+      fastify.setErrorHandler((error, request, reply) => {
+        const status = errorStatusCode(error);
+        return sendApiError(reply, {
+          code: status === 400 ? 'api_request_parsing_failed' : 'api_unhandled_error',
+          status,
+          message: errorMessage(error),
+          requestId: String(request.id),
+          data: { method: request.method, url: request.url },
+        });
+      });
       fastify.addHook('onClose', async () => {
         await runtime.dispose();
         runtimeDisposed = true;
-      });
-
-      const handler = new RPCHandler(createRouter(runtime), {
-        interceptors: [
-          onError((error) => {
-            fastify.log.error(error);
-          }),
-        ],
       });
 
       yield* tryPromise(() =>
@@ -49,26 +61,9 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         }),
       );
 
-      fastify.addContentTypeParser('*', (_request, _payload, done) => {
-        done(null, undefined);
-      });
-
-      fastify.all('/rpc/*', async (request, reply) =>
-        Effect.runPromise(
-          Effect.gen(function* () {
-            const { matched } = yield* tryPromise(() =>
-              handler.handle(request, reply, {
-                context: {},
-                prefix: '/rpc',
-              }),
-            );
-
-            if (!matched) {
-              reply.status(404).send('Not found');
-            }
-          }),
-        ),
-      );
+      registerHealthApi(fastify);
+      registerWorkspaceApi(fastify, runtime);
+      registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>
         fastify.listen({
@@ -148,6 +143,26 @@ function tryPromise<T>(run: () => PromiseLike<T>) {
     try: run,
     catch: toError,
   });
+}
+
+function errorStatusCode(error: unknown) {
+  if (error && typeof error === 'object' && 'statusCode' in error) {
+    const statusCode = (error as { readonly statusCode?: unknown }).statusCode;
+    if (typeof statusCode === 'number' && statusCode >= 400 && statusCode <= 599) {
+      return statusCode;
+    }
+  }
+  return 500;
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error) {
+    return error;
+  }
+  return 'Unhandled runtime API error';
 }
 
 function toError(error: unknown) {

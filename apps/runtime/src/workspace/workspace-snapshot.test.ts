@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Schema } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
@@ -51,7 +51,7 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   });
 
   assert.equal(snapshot.projects[0]?.worktrees[0]?.id, worktreeBase.id);
-  assert.doesNotThrow(() => workspaceSnapshotSchema.parse(snapshot));
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
 test('active context falls back to the project root when the requested worktree was pruned', () => {

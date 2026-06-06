@@ -9,7 +9,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 - `apps/desktop` is the Electron shell.
 - `apps/web` is the React frontend.
 - `apps/runtime` is the local-or-remote runtime server.
-- `packages/contracts` contains shared oRPC contracts and schemas.
+- `packages/contracts` contains shared versioned API contracts and schemas.
 
 ## Rules
 

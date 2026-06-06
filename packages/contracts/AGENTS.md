@@ -2,7 +2,7 @@
 
 ## What this is
 
-Shared oRPC contracts and schemas for Isagi clients and the runtime.
+Shared versioned API contracts and schemas for Isagi clients and the runtime.
 
 ## Structure
 
@@ -11,9 +11,18 @@ Shared oRPC contracts and schemas for Isagi clients and the runtime.
 
 ## Effect scope
 
-- Do not import Effect in this package.
-- Do not expose Effect errors, services, layers, runtime dependencies, or implementation concepts from contracts.
+- Use `effect/Schema` through the `Schema` export from `effect` for serializable API schemas and inferred DTO types.
+- Do not expose Effect errors, services, layers, fibers, runtime dependencies, domain implementation errors, or operational concepts from contracts.
 - Keep schemas and contracts descriptive and implementation-free.
+
+## API rules
+
+- Runtime routes use the versioned `/api/v1` prefix.
+- Success responses are enveloped as `{ data, meta: { requestId } }`.
+- Error responses are enveloped as `{ error: { code, status, message, requestId, data? } }`.
+- Use `camelCase` for JSON field names, including protocol metadata and structured error data.
+- Use `snake_case` for string literal values such as error codes, error reasons, and enum-like protocol literals.
+- Keep error codes descriptive enough to identify the subsystem and operation, but put nuanced causes in structured fields such as `data.reason` instead of exploding code variants.
 
 ## Rules
 

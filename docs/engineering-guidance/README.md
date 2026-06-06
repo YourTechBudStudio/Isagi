@@ -1,6 +1,6 @@
 # Engineering Guidance
 
-This guidance helps humans and coding agents keep Isagi maintainable as the product grows across Electron, React, runtime orchestration, Git/worktree state, process lifecycles, contracts, and user-facing recovery behavior.
+This guidance helps humans and coding agents keep Isagi maintainable as the product grows across Electron, React, runtime orchestration, Git/worktree state, process lifecycles, runtime API contracts, and user-facing recovery behavior.
 
 Use it during implementation and review. It is a review aid, not a style manual.
 
@@ -14,7 +14,7 @@ Use it during implementation and review. It is a review aid, not a style manual.
 
 The lenses are equal-priority review tools. A change does not need to touch every lens equally, but reviewers should not treat any relevant lens as optional.
 
-- [`boundaries-and-contracts.md`](./lenses/boundaries-and-contracts.md) - package ownership, source-of-truth boundaries, contracts, trust boundaries, and interface evolution.
+- [`boundaries-and-contracts.md`](./lenses/boundaries-and-contracts.md) - package ownership, source-of-truth boundaries, runtime API shape, error contracts, trust boundaries, and interface evolution.
 - [`module-shape-and-navigability.md`](./lenses/module-shape-and-navigability.md) - deep modules, narrow public surfaces, file grouping, and human-readable flow.
 - [`reuse-refactoring-and-drift-prevention.md`](./lenses/reuse-refactoring-and-drift-prevention.md) - shared behavior, refactoring pressure, and drift prevention.
 - [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, lifecycle ownership, failure semantics, logging, and supportability.
@@ -39,3 +39,4 @@ Each lens defines its own `Blocker`, `Concern`, and `Nit` calibration.
 - Exhaustive logging in every function.
 - Speculative compatibility for private internals.
 - Generic best-practice checklists not tied to Isagi's risks.
+- Full API style guides, HTTP trivia, or endpoint naming rules beyond durable boundary and failure-semantics risks.
