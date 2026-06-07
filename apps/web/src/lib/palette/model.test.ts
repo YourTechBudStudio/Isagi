@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { defaultOptionIndex } from './model.js';
+import { computeStepOptions, defaultOptionIndex } from './model.js';
 import type { ArgSpec } from './types.js';
 
 const options = [
@@ -30,4 +30,18 @@ test('wizard select steps default to explicit defaults when allowed', () => {
   };
 
   assert.equal(defaultOptionIndex(spec, options), 1);
+});
+
+test('combo create options use command-specific copy', () => {
+  const spec: ArgSpec = {
+    kind: 'combo',
+    key: 'branch',
+    label: 'Worktree',
+    createHint: 'create branch',
+    options: () => [],
+  };
+
+  assert.deepEqual(computeStepOptions(spec, [], 'feature/new'), [
+    { value: 'feature/new', create: true, hint: 'create branch' },
+  ]);
 });

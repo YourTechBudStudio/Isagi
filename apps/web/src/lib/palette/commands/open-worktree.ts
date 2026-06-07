@@ -30,7 +30,7 @@ type WorktreeStepPayload = ExistingWorktreePayload | ExistingBranchPayload;
 
 export const openWorktreeCommand: PaletteCommand = {
   id: 'open-worktree',
-  label: 'Open Worktree',
+  label: 'Open worktree',
   icon: GitBranch,
   group: 'global',
   available: (ctx) => presentProjects(ctx.projects).length > 0,
@@ -52,7 +52,7 @@ export const openWorktreeCommand: PaletteCommand = {
       key: 'branch',
       label: 'Worktree',
       defaultSelection: 'none',
-      emptyHint: 'Type a branch name or choose a worktree.',
+      emptyHint: 'Type a branch name, or choose a worktree.',
       createHint: 'create branch',
       finishOnAccept: (_value, payload) =>
         isExistingWorktreePayload(payload) || isExistingBranchPayload(payload),
@@ -69,7 +69,7 @@ export const openWorktreeCommand: PaletteCommand = {
         const worktreeOptions = [...project.worktrees].map((worktree) => ({
           value: worktree.branch ?? String(worktree.id),
           label: worktreeOptionLabel(worktree),
-          hint: worktree.branch ? 'branch · already open' : 'commit · already open',
+          hint: worktree.branch ? 'already open · branch' : 'already open · detached commit',
           payload: {
             kind: 'existing_worktree' as const,
             projectId: project.id,
@@ -86,7 +86,7 @@ export const openWorktreeCommand: PaletteCommand = {
           .map((branch) => ({
             value: branch.name,
             label: branch.name,
-            hint: 'checkout branch',
+            hint: 'local branch · checkout',
             payload: {
               kind: 'existing_branch' as const,
               branch: branch.name,
@@ -116,7 +116,7 @@ export const openWorktreeCommand: PaletteCommand = {
         const branchOptions = branchList.branches.map((branch) => ({
           value: `branch:${branch.name}`,
           label: branch.name,
-          hint: 'branch',
+          hint: 'base branch',
           isDefault:
             ctx.activeProject?.id === project.id && branch.name === ctx.activeWorktree?.branch,
           payload: {
@@ -134,9 +134,9 @@ export const openWorktreeCommand: PaletteCommand = {
           activeDetachedCommit && activeWorktree
             ? [
                 {
-                  value: `commit:${activeDetachedCommit}`,
-                  label: `Current commit ${shortHead(activeDetachedCommit)}`,
-                  hint: 'commit',
+                  value: `detached-worktree:${activeWorktree.id}`,
+                  label: `Current detached commit ${shortHead(activeDetachedCommit)}`,
+                  hint: 'base commit',
                   isDefault: true,
                   payload: {
                     kind: 'base_ref' as const,

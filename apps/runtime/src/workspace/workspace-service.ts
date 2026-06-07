@@ -188,7 +188,7 @@ export const WorkspaceServiceLive = Layer.effect(
                 new WorkspaceError({
                   branch,
                   code: 'new_branch_requires_base',
-                  message: `Branch ${branch} does not exist. Choose a base to create it.`,
+                  message: `Branch ${branch} does not exist. Choose what to create it from.`,
                   projectId: project.id,
                 }),
               );
@@ -576,7 +576,7 @@ function validateBranchName(git: GitServiceShape, project: ProjectRow, branch: s
         new WorkspaceError({
           branch,
           code: 'invalid_branch_name',
-          message: `Branch name ${branch} is not valid for Git.`,
+          message: `Branch name "${branch}" is not valid for Git.`,
           projectId: project.id,
         }),
       ),
@@ -600,7 +600,7 @@ function validateBaseRef(
               new WorkspaceError({
                 branch: base.ref,
                 code: 'base_ref_not_found',
-                message: `Base branch ${base.ref} was not found in project ${project.id}.`,
+                message: `Base branch "${base.ref}" was not found in project ${project.id}.`,
                 projectId: project.id,
               }),
             ),
@@ -694,7 +694,7 @@ function prepareCheckoutParent(project: ProjectRow, branch: string, checkoutPath
       new WorkspaceError({
         branch,
         code: 'checkout_parent_unavailable',
-        message: `Could not prepare worktree checkout parent for project ${project.id}.`,
+        message: `Could not prepare the worktree checkout directory for project ${project.id}.`,
         path: checkoutPath,
         projectId: project.id,
       }),

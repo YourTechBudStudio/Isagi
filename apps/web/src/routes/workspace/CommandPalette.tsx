@@ -37,7 +37,7 @@ import type {
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import { suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
+import { formatRuntimeError, suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
 
 export function CommandPalette() {
   const open = usePaletteStore((state) => state.open);
@@ -339,7 +339,7 @@ export function CommandPalette() {
             finish();
           },
           (error: unknown) => {
-            setCommandError(error instanceof Error ? error.message : String(error));
+            setCommandError(formatRuntimeError(error));
           },
         );
       } else {
