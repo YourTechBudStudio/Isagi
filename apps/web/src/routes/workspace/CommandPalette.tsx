@@ -28,6 +28,7 @@ import {
 import { GLOBAL_COMMANDS } from '../../lib/palette/registry.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type {
+  ArgPayloads,
   ArgSpec,
   ArgValues,
   Option,
@@ -58,8 +59,9 @@ export function CommandPalette() {
   const [command, setCommand] = useState<PaletteCommand | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [values, setValues] = useState<ArgValues>({});
+  const [payloads, setPayloads] = useState<ArgPayloads>({});
   const [labels, setLabels] = useState<Record<string, string>>({});
-  const [sel, setSel] = useState(0);
+  const [sel, setSel] = useState<number | null>(0);
   const [pathSuggestions, setPathSuggestions] = useState<readonly PathSuggestion[]>([]);
   const [pathError, setPathError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -106,6 +108,7 @@ export function CommandPalette() {
 
     if (!autostart?.args?.length) {
       setValues({});
+      setPayloads({});
       setLabels({});
       setStepIndex(0);
       setCommand(null);
@@ -123,6 +126,7 @@ export function CommandPalette() {
     );
 
     setValues(initialValues);
+    setPayloads({});
     setLabels(initialLabels);
     setStepIndex(firstUnfilledStep(autostart.args, initialValues));
     setCommand(autostart);
@@ -152,7 +156,7 @@ export function CommandPalette() {
       }
 
       const options = computeStepOptions(spec, spec.options(ctx, values), query);
-      return { kind: 'wizard' as const, options };
+      return { kind: 'wizard' as const, hint: spec.emptyHint, options };
     }
     const items = query ? filterEntries(allEntries, query) : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
@@ -198,12 +202,12 @@ export function CommandPalette() {
           ? view.suggestions.length
           : 0;
   const viewKey = command ? `wizard-${stepIndex}` : query ? 'search' : 'recent';
-  const defaultIndex = view.kind === 'wizard' ? defaultOptionIndex(view.options) : 0;
+  const defaultIndex = view.kind === 'wizard' && spec ? defaultOptionIndex(spec, view.options) : 0;
 
   // Snap the selection to the default whenever the view changes shape.
   useEffect(() => {
-    setSel(query === '' ? defaultIndex : 0);
-  }, [viewKey, query, defaultIndex]);
+    setSel(query === '' ? defaultIndex : length > 0 ? 0 : null);
+  }, [viewKey, query, defaultIndex, length]);
 
   useEffect(() => {
     if (open) {
@@ -215,6 +219,7 @@ export function CommandPalette() {
     setCommand(next);
     setStepIndex(0);
     setValues({});
+    setPayloads({});
     setLabels({});
     setQuery('');
   };
@@ -233,14 +238,15 @@ export function CommandPalette() {
     }
   };
 
-  const acceptValue = (value: string, label: string) => {
+  const acceptValue = (value: string, label: string, payload?: unknown) => {
     if (!command || !spec || !value) {
       return;
     }
     const nextValues = { ...values, [spec.key]: value };
+    const nextPayloads = { ...payloads, [spec.key]: payload };
     const nextLabels = { ...labels, [spec.key]: label };
     if (stepIndex === args.length - 1) {
-      const result = command.run(nextValues, ctx);
+      const result = command.run(nextValues, ctx, nextPayloads);
       if (result instanceof Promise) {
         void result.then(
           () => {
@@ -257,6 +263,7 @@ export function CommandPalette() {
       }
     } else {
       setValues(nextValues);
+      setPayloads(nextPayloads);
       setLabels(nextLabels);
       setQuery('');
       setStepIndex(stepIndex + 1);
@@ -264,7 +271,7 @@ export function CommandPalette() {
   };
 
   const acceptOption = (option: Option) => {
-    acceptValue(option.value, option.label ?? option.value);
+    acceptValue(option.value, option.label ?? option.value, option.payload);
   };
 
   const acceptText = () => {
@@ -284,7 +291,7 @@ export function CommandPalette() {
       acceptValue(view.value, view.value);
       return;
     }
-    const highlighted = view.suggestions[sel];
+    const highlighted = sel === null ? undefined : view.suggestions[sel];
     if (highlighted && highlighted.path !== view.value) {
       lastFilledPath.current = highlighted.path;
       setQuery(highlighted.path);
@@ -297,12 +304,12 @@ export function CommandPalette() {
 
   const activate = () => {
     if (view.kind === 'list') {
-      const entry = view.items[sel];
+      const entry = sel === null ? undefined : view.items[sel];
       if (entry) {
         runEntry(entry);
       }
     } else if (view.kind === 'wizard') {
-      const option = view.options[sel];
+      const option = sel === null ? undefined : view.options[sel];
       if (option) {
         acceptOption(option);
       }
@@ -326,6 +333,11 @@ export function CommandPalette() {
           delete next[previousKey];
           return next;
         });
+        setPayloads((current) => {
+          const next = { ...current };
+          delete next[previousKey];
+          return next;
+        });
         setLabels((current) => {
           const next = { ...current };
           delete next[previousKey];
@@ -341,7 +353,15 @@ export function CommandPalette() {
   };
 
   const cycleSel = (delta: number) => {
-    setSel((current) => (length === 0 ? 0 : (current + delta + length) % length));
+    setSel((current) => {
+      if (length === 0) {
+        return null;
+      }
+      if (current === null) {
+        return delta < 0 ? length - 1 : 0;
+      }
+      return (current + delta + length) % length;
+    });
   };
 
   // Tab fills the buffer with the highlighted directory without submitting, so
@@ -350,7 +370,7 @@ export function CommandPalette() {
     if (view.kind !== 'path') {
       return;
     }
-    const highlighted = view.suggestions[sel];
+    const highlighted = sel === null ? undefined : view.suggestions[sel];
     if (highlighted) {
       lastFilledPath.current = highlighted.path;
       setQuery(highlighted.path);
@@ -463,6 +483,7 @@ export function CommandPalette() {
                 <WizardOptions
                   options={view.options}
                   sel={sel}
+                  hint={view.hint}
                   onPick={(index) => {
                     const option = view.options[index];
                     if (option) {
@@ -513,7 +534,7 @@ function EntryList({
   onPick,
 }: {
   items: readonly PaletteEntry[];
-  sel: number;
+  sel: number | null;
   onPick: (index: number) => void;
 }) {
   if (items.length === 0) {
@@ -589,7 +610,7 @@ function PathOptions({
   suggestions: readonly PathSuggestion[];
   value: string;
   error: string | null;
-  sel: number;
+  sel: number | null;
   onPick: (index: number) => void;
 }) {
   if (error) {
@@ -643,14 +664,17 @@ function PathOptions({
 function WizardOptions({
   options,
   sel,
+  hint,
   onPick,
 }: {
   options: readonly Option[];
-  sel: number;
+  sel: number | null;
+  hint?: string | undefined;
   onPick: (index: number) => void;
 }) {
   return (
     <>
+      {hint && <p className="px-3 py-2 font-mono text-[11px] text-fg-subtle">{hint}</p>}
       {options.map((option, index) =>
         option.create ? (
           <button

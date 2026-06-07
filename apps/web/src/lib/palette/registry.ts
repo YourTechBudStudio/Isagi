@@ -1,4 +1,5 @@
 import { addProjectCommand } from './commands/add-project.js';
+import { openWorktreeCommand } from './commands/open-worktree.js';
 import { relocateProjectCommand } from './commands/relocate-project.js';
 import type { PaletteCommand } from './types.js';
 
@@ -9,6 +10,7 @@ import type { PaletteCommand } from './types.js';
  * commands register this way; the other palette groups are internal features.
  */
 export const GLOBAL_COMMANDS: readonly PaletteCommand[] = [
+  openWorktreeCommand,
   addProjectCommand,
   relocateProjectCommand,
 ];

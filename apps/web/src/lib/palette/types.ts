@@ -19,16 +19,19 @@ export interface PaletteContext {
   readonly activeProject: Project | null;
 }
 
-export interface Option {
+export interface Option<Payload = unknown> {
   readonly value: string;
   readonly label?: string;
   readonly hint?: string;
   readonly isDefault?: boolean;
   /** A synthetic "create new" option (combo steps). */
   readonly create?: boolean;
+  /** Command-specific metadata for dynamic wizard decisions. */
+  readonly payload?: Payload;
 }
 
 export type ArgValues = Record<string, string>;
+export type ArgPayloads = Record<string, unknown>;
 
 export type ArgSpec =
   | {
@@ -36,6 +39,9 @@ export type ArgSpec =
       readonly key: string;
       readonly label: string;
       readonly options: (ctx: PaletteContext, values: ArgValues) => readonly Option[];
+      /** Empty-query selection behavior. Defaults to selecting the first/default option. */
+      readonly defaultSelection?: 'first' | 'none';
+      readonly emptyHint?: string;
     }
   | {
       readonly kind: 'combo';
@@ -43,6 +49,9 @@ export type ArgSpec =
       readonly label: string;
       readonly prefix?: string;
       readonly options: (ctx: PaletteContext, values: ArgValues) => readonly Option[];
+      /** Empty-query selection behavior. Defaults to selecting the first/default option. */
+      readonly defaultSelection?: 'first' | 'none';
+      readonly emptyHint?: string;
     }
   | {
       readonly kind: 'text';
@@ -70,7 +79,11 @@ export interface PaletteCommand {
   readonly group: PaletteGroup;
   readonly available?: (ctx: PaletteContext) => boolean;
   readonly args?: readonly ArgSpec[];
-  readonly run: (values: ArgValues, ctx: PaletteContext) => void | Promise<void>;
+  readonly run: (
+    values: ArgValues,
+    ctx: PaletteContext,
+    payloads?: ArgPayloads,
+  ) => void | Promise<void>;
 }
 
 /** A resolved, runnable item shown in the palette list. */

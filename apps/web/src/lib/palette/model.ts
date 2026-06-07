@@ -56,9 +56,13 @@ export function computeStepOptions(
   return result;
 }
 
-export function defaultOptionIndex(options: readonly Option[]): number {
+export function defaultOptionIndex(spec: ArgSpec, options: readonly Option[]): number | null {
+  if ((spec.kind === 'select' || spec.kind === 'combo') && spec.defaultSelection === 'none') {
+    return null;
+  }
+
   const index = options.findIndex((option) => option.isDefault);
-  return index >= 0 ? index : 0;
+  return index >= 0 ? index : options.length > 0 ? 0 : null;
 }
 
 export function firstUnfilledStep(args: readonly ArgSpec[], values: ArgValues): number {
