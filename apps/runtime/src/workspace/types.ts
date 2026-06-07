@@ -19,7 +19,6 @@ export interface WorktreeRow {
   readonly path: string;
   readonly branch: string | null;
   readonly head: string | null;
-  readonly isRoot: number;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly firstSeenAt: string;
@@ -30,7 +29,6 @@ export interface DiscoveredWorktree {
   readonly path: string;
   readonly branch: string | null;
   readonly head: string | null;
-  readonly isRoot: boolean;
 }
 
 export type WorkspaceServiceSnapshot = WorkspaceSnapshot;

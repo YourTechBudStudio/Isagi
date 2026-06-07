@@ -36,7 +36,6 @@ const worktreeBase = {
   path: '/repo/isagi',
   branch: 'main',
   head: 'abc123456789',
-  isRoot: 1,
   createdAt: '2026-06-04T00:00:00.000Z',
   updatedAt: '2026-06-04T00:00:00.000Z',
   firstSeenAt: '2026-06-04T00:00:00.000Z',
@@ -50,17 +49,17 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
-test('workspace reconciliation prunes undiscovered linked worktree rows, not roots', () => {
+test('workspace reconciliation prunes every undiscovered worktree row', () => {
   assert.deepEqual(
     prunedWorktreeIds({
       discovered: [{ path: '/repo/isagi' }],
       existing: [
-        { id: 10, path: '/repo/isagi', isRoot: 1 },
-        { id: 11, path: '/repo/isagi-feature', isRoot: 0 },
-        { id: 12, path: '/repo/isagi-stale-root', isRoot: 1 },
+        { id: 10, path: '/repo/isagi' },
+        { id: 11, path: '/repo/isagi-feature' },
+        { id: 12, path: '/repo/isagi-stale-root' },
       ],
     }),
-    [11],
+    [11, 12],
   );
 });
 
@@ -76,7 +75,6 @@ test('workspace reads known rows without reconciling Git state', async () => {
       id: 11,
       path: join(projectRoot, '../isagi-feature'),
       branch: 'feature/kept',
-      isRoot: 0,
     },
   ];
 
@@ -86,12 +84,18 @@ test('workspace reads known rows without reconciling Git state', async () => {
     findProjectByRootPath: () => Effect.succeed(currentProject),
     findWorktree: (worktreeId) =>
       Effect.succeed(worktrees.find((worktree) => worktree.id === worktreeId) ?? null),
+    deleteProject: () => Effect.succeed(false),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
     reconcileProjectWorktrees: () =>
       Effect.sync(() => {
         reconcileCalls += 1;
+        return { added: [], missing: [] };
+      }),
+    restoreProjectAtRootPath: (input) =>
+      Effect.sync(() => {
+        currentProject = { ...currentProject, rootPath: input.rootPath, status: 'present' };
         return { added: [], missing: [] };
       }),
     setProjectStatus: (input) =>

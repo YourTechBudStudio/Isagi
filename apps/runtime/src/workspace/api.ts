@@ -72,6 +72,37 @@ export function registerWorkspaceApi(
     mapError: (error, context) => toWorkspaceApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.projects.relocate, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.relocateProject({ projectId: params.projectId, path: input.path });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.projects.delete, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteProject(params.projectId);
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+}
+
+function relocationRejectionReason(error: WorkspaceError) {
+  switch (error.code) {
+    case 'project_not_found':
+    case 'project_not_missing':
+    case 'project_path_already_registered':
+      return error.code;
+    default:
+      return 'project_not_found';
+  }
 }
 
 function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError {
@@ -86,6 +117,23 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
   }
 
   if (error instanceof WorkspaceError) {
+    if (context.endpointId === 'projects.relocate' && error.projectId) {
+      return {
+        code: 'project_relocation_rejected',
+        status: error.code === 'project_path_already_registered' ? 409 : 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: relocationRejectionReason(error),
+          projectId: error.projectId,
+          ...(error.path ? { path: error.path } : {}),
+          ...(error.conflictingProjectId
+            ? { conflictingProjectId: error.conflictingProjectId }
+            : {}),
+        },
+      };
+    }
+
     if (
       context.endpointId === 'workspace.reconcile' &&
       error.code === 'project_not_found' &&

@@ -112,11 +112,7 @@ export function CommandPalette() {
       return;
     }
 
-    const initialValues = Object.fromEntries(
-      autostart.args
-        .filter((arg) => autostartValues[arg.key] !== undefined)
-        .map((arg) => [arg.key, autostartValues[arg.key] as string]),
-    );
+    const initialValues = { ...autostartValues };
     const initialLabels = Object.fromEntries(
       autostart.args
         .filter((arg) => initialValues[arg.key] !== undefined)

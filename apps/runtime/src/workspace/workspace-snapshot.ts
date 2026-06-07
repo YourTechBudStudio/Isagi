@@ -25,7 +25,7 @@ export function buildProjectSnapshot(
       project.status === 'present'
         ? worktrees
             .filter((worktree) => worktree.projectId === project.id)
-            .map(buildWorktreeSnapshot)
+            .map((worktree) => buildWorktreeSnapshot(project, worktree))
         : [],
   };
 
@@ -43,7 +43,7 @@ export function buildProjectSnapshot(
   };
 }
 
-function buildWorktreeSnapshot(worktree: WorktreeRow): Worktree {
+function buildWorktreeSnapshot(project: ProjectRow, worktree: WorktreeRow): Worktree {
   return {
     id: worktree.id,
     projectId: worktree.projectId,
@@ -51,7 +51,10 @@ function buildWorktreeSnapshot(worktree: WorktreeRow): Worktree {
     path: worktree.path,
     branch: worktree.branch,
     head: worktree.head,
-    isRoot: worktree.isRoot === 1,
+    // Root-ness is derived, not persisted. Git reports worktrees by checkout
+    // path; the root checkout is the discovered worktree whose path equals the
+    // current project root path. Persisting this separately creates drift.
+    isRoot: worktree.path === project.rootPath,
     parked: false,
     surfaces: [],
     activeSurfaceId: null,

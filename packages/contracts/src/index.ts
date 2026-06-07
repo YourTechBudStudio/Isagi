@@ -34,14 +34,20 @@ export type {
   ApiEndpointBody,
   ApiEndpointError,
   ApiEndpointOutput,
+  ApiEndpointParams,
+  ApiEndpointRequestArgs,
   ApiMethod,
 } from './api/types.js';
 
 export {
   gitCommandFailedErrorSchema,
   projectApiErrorSchema,
+  projectDeleteApiErrorSchema,
   projectPathRejectedErrorSchema,
   projectPathRejectionReasonSchema,
+  projectRelocateApiErrorSchema,
+  projectRelocationRejectedErrorSchema,
+  projectRelocationRejectionReasonSchema,
   runtimeDataDirectoryFailedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
   runtimeStateFileFailedErrorSchema,
@@ -56,6 +62,8 @@ export {
 export type {
   ProjectPathRejectedError,
   ProjectPathRejectionReason,
+  ProjectRelocationRejectedError,
+  ProjectRelocationRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,
   WorkspaceReconcileRejectedError,
@@ -75,8 +83,22 @@ export {
 export type { PathSuggestInput, PathSuggestOutput, PathSuggestion } from './paths/types.js';
 
 export { projectsEndpoints } from './projects/api.js';
-export { addProjectInputSchema, addProjectOutputSchema } from './projects/types.js';
-export type { AddProjectInput, AddProjectOutput } from './projects/types.js';
+export {
+  addProjectInputSchema,
+  addProjectOutputSchema,
+  deleteProjectOutputSchema,
+  projectRouteParamsSchema,
+  relocateProjectInputSchema,
+  relocateProjectOutputSchema,
+} from './projects/types.js';
+export type {
+  AddProjectInput,
+  AddProjectOutput,
+  DeleteProjectOutput,
+  ProjectRouteParams,
+  RelocateProjectInput,
+  RelocateProjectOutput,
+} from './projects/types.js';
 export { workspaceEndpoints } from './workspace/api.js';
 export {
   activeContextOutputSchema,

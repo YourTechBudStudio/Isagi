@@ -7,9 +7,11 @@ import type {
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   AddProjectOutput,
+  DeleteProjectOutput,
   ReconciliationFinding,
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
+  RelocateProjectOutput,
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -22,12 +24,22 @@ import {
 } from '../git/index.js';
 import { type DatabaseError, StateFile, type StateFileError } from '../persistence/index.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
-import { WorkspaceRepository } from './workspace-repository.js';
+import {
+  WorkspaceRepository,
+  type WorkspaceReconcileProjectWorktreesResult,
+} from './workspace-repository.js';
 import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
-  readonly code: 'project_not_found' | 'project_not_present' | 'worktree_not_found';
+  readonly code:
+    | 'project_not_found'
+    | 'project_not_missing'
+    | 'project_not_present'
+    | 'project_path_already_registered'
+    | 'worktree_not_found';
   readonly message: string;
+  readonly conflictingProjectId?: number | undefined;
+  readonly path?: string | undefined;
   readonly projectId?: number | undefined;
   readonly worktreeId?: number | undefined;
 }> {}
@@ -41,10 +53,17 @@ export type WorkspaceServiceError =
 
 export interface WorkspaceService {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
+  readonly deleteProject: (
+    projectId: number,
+  ) => Effect.Effect<DeleteProjectOutput, WorkspaceServiceError>;
   readonly getActiveContext: Effect.Effect<ActiveContextOutput, WorkspaceServiceError>;
   readonly registerProject: (input: {
     readonly path: string;
   }) => Effect.Effect<AddProjectOutput, WorkspaceServiceError>;
+  readonly relocateProject: (input: {
+    readonly path: string;
+    readonly projectId: number;
+  }) => Effect.Effect<RelocateProjectOutput, WorkspaceServiceError>;
   readonly reconcileWorkspace: (
     input: ReconcileWorkspaceInput,
   ) => Effect.Effect<ReconcileWorkspaceOutput, WorkspaceServiceError>;
@@ -73,6 +92,15 @@ export const WorkspaceServiceLive = Layer.effect(
 
     return {
       get,
+      deleteProject: (projectId) =>
+        Effect.gen(function* () {
+          // Do not clear persisted active context here. Active context is
+          // frontend-owned restoration state; stale project/worktree references
+          // are intentionally reconciled by the frontend during startup and
+          // workspace refresh.
+          const deleted = yield* repository.deleteProject(projectId);
+          return { projectId, deleted };
+        }),
       getActiveContext,
       registerProject: (input) =>
         Effect.gen(function* () {
@@ -96,6 +124,53 @@ export const WorkspaceServiceLive = Layer.effect(
           }
 
           return { projectId, alreadyExisted };
+        }),
+      relocateProject: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requireProject(repository, input.projectId);
+          if (project.status !== 'missing') {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'project_not_missing',
+                message: `Project ${input.projectId} is not missing.`,
+                projectId: input.projectId,
+              }),
+            );
+          }
+
+          const projectRoot = yield* validateProjectRoot(input.path).pipe(
+            Effect.provideService(Git, git),
+          );
+          const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
+          if (existing && existing.id !== input.projectId) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'project_path_already_registered',
+                message: `Project path ${projectRoot.rootPath} is already registered.`,
+                conflictingProjectId: existing.id,
+                path: projectRoot.rootPath,
+                projectId: input.projectId,
+              }),
+            );
+          }
+
+          const discovered = yield* discoverWorktrees({
+            ...project,
+            rootPath: projectRoot.rootPath,
+          }).pipe(Effect.provideService(Git, git));
+          const worktrees = yield* repository.restoreProjectAtRootPath({
+            discovered,
+            projectId: input.projectId,
+            rootPath: projectRoot.rootPath,
+          });
+
+          return {
+            projectId: input.projectId,
+            findings: [
+              { kind: 'project_restored', projectId: input.projectId, path: projectRoot.rootPath },
+              ...reconciliationFindingsFromWorktreeResult(input.projectId, worktrees),
+            ],
+          };
         }),
       reconcileWorkspace: (input) =>
         Effect.gen(function* () {
@@ -264,23 +339,30 @@ function reconcileProjectWithGit(repository: WorkspaceRepositoryService, project
       discovered: discovery.discovered,
     });
 
-    findings.push(
-      ...worktrees.added.map((worktree) => ({
-        kind: 'worktree_added' as const,
-        projectId: project.id,
-        worktreeId: worktree.id,
-        path: worktree.path,
-      })),
-      ...worktrees.missing.map((worktree) => ({
-        kind: 'worktree_missing' as const,
-        projectId: project.id,
-        worktreeId: worktree.id,
-        path: worktree.path,
-      })),
-    );
+    findings.push(...reconciliationFindingsFromWorktreeResult(project.id, worktrees));
 
     return findings;
   });
+}
+
+function reconciliationFindingsFromWorktreeResult(
+  projectId: number,
+  worktrees: WorkspaceReconcileProjectWorktreesResult,
+): ReconciliationFinding[] {
+  return [
+    ...worktrees.added.map((worktree) => ({
+      kind: 'worktree_added' as const,
+      projectId,
+      worktreeId: worktree.id,
+      path: worktree.path,
+    })),
+    ...worktrees.missing.map((worktree) => ({
+      kind: 'worktree_missing' as const,
+      projectId,
+      worktreeId: worktree.id,
+      path: worktree.path,
+    })),
+  ];
 }
 
 function discoverWorktrees(project: ProjectRow) {
@@ -292,7 +374,6 @@ function discoverWorktrees(project: ProjectRow) {
           path: record.path,
           branch: record.branch,
           head: record.head,
-          isRoot: record.path === project.rootPath,
         })),
     ),
   );

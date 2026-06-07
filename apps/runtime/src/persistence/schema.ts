@@ -25,7 +25,6 @@ export const worktrees = sqliteTable(
     path: text('path').notNull(),
     branch: text('branch'),
     head: text('head'),
-    isRoot: integer('is_root').notNull(),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     firstSeenAt: text('first_seen_at').notNull(),

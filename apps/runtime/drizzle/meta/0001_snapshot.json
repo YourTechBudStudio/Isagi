@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "710382a7-bc62-40d1-8cb4-21e4fc318d28",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "9edbe9d2-5176-413e-acbf-efb4900697bc",
+  "prevId": "710382a7-bc62-40d1-8cb4-21e4fc318d28",
   "tables": {
     "projects": {
       "name": "projects",
@@ -112,13 +112,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
-        },
-        "is_root": {
-          "name": "is_root",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
           "autoincrement": false
         },
         "created_at": {

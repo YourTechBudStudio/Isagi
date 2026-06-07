@@ -74,6 +74,30 @@ test('API endpoint sends mapped domain errors through the endpoint error contrac
   }
 });
 
+test('API endpoint decodes route params before running handlers', async () => {
+  const fastify = Fastify({ logger: false });
+  let decodedProjectId: number | null = null;
+  registerApiEndpoint(fastify, apiEndpoints.projects.delete, {
+    handle: (_input, _context, params) =>
+      Effect.sync(() => {
+        decodedProjectId = params.projectId;
+        return { projectId: params.projectId, deleted: true };
+      }),
+    run: Effect.runPromise,
+  });
+
+  try {
+    const response = await fastify.inject({ method: 'DELETE', url: '/api/v1/projects/42' });
+    const payload = response.json() as { data?: unknown };
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(decodedProjectId, 42);
+    assert.deepEqual(payload.data, { projectId: 42, deleted: true });
+  } finally {
+    await fastify.close();
+  }
+});
+
 test('API endpoint interrupts handlers when the client disconnects', async () => {
   const fastify = Fastify({ logger: false });
   let resolveStarted!: () => void;

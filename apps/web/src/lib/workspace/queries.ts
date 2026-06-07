@@ -12,10 +12,12 @@ import { showToast } from '../toast/index.js';
 import { workspaceDataFromSnapshot } from './model.js';
 import {
   addProject,
+  deleteProject,
   fetchActiveContext,
   fetchWorkspace,
   formatRuntimeError,
   reconcileWorkspace,
+  relocateProject,
   updateActiveContext,
 } from './runtime-data.js';
 
@@ -51,9 +53,31 @@ export function useAddProjectMutation() {
   });
 }
 
+export function useDeleteProjectMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: number) => Effect.runPromise(deleteProject(projectId)),
+    onError: (error, projectId) => {
+      showToast({
+        id: `delete-project-failed:${projectId}`,
+        kind: 'warning',
+        title: 'Could not remove the project.',
+        subtitle: formatRuntimeError(error),
+      });
+      console.error('[workspace] project deletion failed', error);
+    },
+    onSuccess: () => commitDeleteProjectSuccess(client),
+  });
+}
+
 export async function addProjectPath(path: string) {
   const output = await Effect.runPromise(addProject(path));
   await commitAddProjectSuccess(queryClient, { projectId: output.projectId });
+}
+
+export async function relocateProjectPath(projectId: number, path: string) {
+  const output = await Effect.runPromise(relocateProject(projectId, path));
+  await commitRelocateProjectSuccess(queryClient, output.findings);
 }
 
 export async function commitAddProjectSuccess(
@@ -64,6 +88,18 @@ export async function commitAddProjectSuccess(
   if (options.reconcile ?? true) {
     scheduleWorkspaceReconcile(client, { projectId: options.projectId ?? null });
   }
+}
+
+export async function commitRelocateProjectSuccess(
+  client: QueryClient,
+  findings: readonly ReconciliationFinding[],
+) {
+  handleReconciliationFindings(findings);
+  await client.invalidateQueries({ queryKey: workspaceQueryKey });
+}
+
+export async function commitDeleteProjectSuccess(client: QueryClient) {
+  await client.invalidateQueries({ queryKey: workspaceQueryKey });
 }
 
 export function scheduleActiveContextPersistence(activeContext: SetActiveContextInput) {

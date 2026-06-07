@@ -3,7 +3,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import type { IconType } from '../lib/icon.js';
 import { Kbd } from './Kbd.js';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md';
 
 const VARIANT: Record<ButtonVariant, string> = {
@@ -11,6 +11,7 @@ const VARIANT: Record<ButtonVariant, string> = {
   secondary:
     'border border-line/40 bg-transparent text-fg-muted hover:border-line/60 hover:text-fg',
   ghost: 'border border-transparent bg-transparent text-fg-subtle hover:bg-white/6 hover:text-fg',
+  danger: 'border border-error/38 bg-error/12 text-fg hover:border-error/55 hover:bg-error/18',
 };
 
 const SIZE: Record<ButtonSize, string> = {

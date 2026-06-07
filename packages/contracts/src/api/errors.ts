@@ -41,6 +41,12 @@ export const workspaceActiveContextRejectedErrorSchema = Schema.Struct({
 
 export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_not_found');
 
+export const projectRelocationRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_missing',
+  'project_path_already_registered',
+);
+
 export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('workspace_reconcile_rejected'),
   status: Schema.Literal(400),
@@ -49,6 +55,19 @@ export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: workspaceReconcileRejectionReasonSchema,
     projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  }),
+});
+
+export const projectRelocationRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('project_relocation_rejected'),
+  status: Schema.Union(Schema.Literal(400), Schema.Literal(409)),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: projectRelocationRejectionReasonSchema,
+    projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    path: Schema.optional(Schema.String),
+    conflictingProjectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 
@@ -120,6 +139,19 @@ export const projectApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const projectRelocateApiErrorSchema = Schema.Union(
+  projectRelocationRejectedErrorSchema,
+  projectPathRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const projectDeleteApiErrorSchema = Schema.Union(
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export type ProjectPathRejectionReason = Schema.Schema.Type<
   typeof projectPathRejectionReasonSchema
 >;
@@ -129,10 +161,16 @@ export type WorkspaceActiveContextRejectionReason = Schema.Schema.Type<
 export type WorkspaceReconcileRejectionReason = Schema.Schema.Type<
   typeof workspaceReconcileRejectionReasonSchema
 >;
+export type ProjectRelocationRejectionReason = Schema.Schema.Type<
+  typeof projectRelocationRejectionReasonSchema
+>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema
 >;
 export type WorkspaceReconcileRejectedError = Schema.Schema.Type<
   typeof workspaceReconcileRejectedErrorSchema
+>;
+export type ProjectRelocationRejectedError = Schema.Schema.Type<
+  typeof projectRelocationRejectedErrorSchema
 >;

@@ -78,6 +78,29 @@ test('runtime client decodes minimal mutation success envelopes', async () => {
   assert.deepEqual(output, addProjectOutput);
 });
 
+test('runtime client interpolates path params', async () => {
+  let requestedUrl = '';
+  globalThis.fetch = ((input) => {
+    requestedUrl = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          data: { projectId: 42, deleted: true },
+          meta: { requestId: 'req-delete' },
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').deleteProject(42),
+  );
+
+  assert.equal(requestedUrl, 'http://runtime.test/api/v1/projects/42');
+  assert.deepEqual(output, { projectId: 42, deleted: true });
+});
+
 test('runtime client decodes endpoint API errors before base API errors', async () => {
   const apiError = {
     code: 'project_path_rejected',

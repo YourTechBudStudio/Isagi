@@ -1,4 +1,5 @@
 import { addProjectCommand } from './commands/add-project.js';
+import { relocateProjectCommand } from './commands/relocate-project.js';
 import type { PaletteCommand } from './types.js';
 
 /**
@@ -7,4 +8,7 @@ import type { PaletteCommand } from './types.js';
  * command never edits a shared structure (merge-conflict-friendly). Only global
  * commands register this way; the other palette groups are internal features.
  */
-export const GLOBAL_COMMANDS: readonly PaletteCommand[] = [addProjectCommand];
+export const GLOBAL_COMMANDS: readonly PaletteCommand[] = [
+  addProjectCommand,
+  relocateProjectCommand,
+];

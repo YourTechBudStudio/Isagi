@@ -7,16 +7,19 @@ import {
   apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
   type ApiEndpoint,
-  type ApiEndpointBody,
   type ApiEndpointError,
   type ApiEndpointOutput,
+  type ApiEndpointParams,
+  type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
   type ActiveContextOutput,
   type ActiveContextPersistenceInput,
   type AddProjectOutput,
+  type DeleteProjectOutput,
   type PathSuggestOutput,
   type ReconcileWorkspaceInput,
   type ReconcileWorkspaceOutput,
+  type RelocateProjectOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -51,6 +54,19 @@ export interface RuntimeClient {
   readonly addProject: (
     path: string,
   ) => Effect.Effect<AddProjectOutput, RuntimeEndpointError<typeof apiEndpoints.projects.add>>;
+  readonly relocateProject: (
+    projectId: number,
+    path: string,
+  ) => Effect.Effect<
+    RelocateProjectOutput,
+    RuntimeEndpointError<typeof apiEndpoints.projects.relocate>
+  >;
+  readonly deleteProject: (
+    projectId: number,
+  ) => Effect.Effect<
+    DeleteProjectOutput,
+    RuntimeEndpointError<typeof apiEndpoints.projects.delete>
+  >;
   readonly suggestProjectPaths: (
     input: string,
     limit?: number,
@@ -69,6 +85,9 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
     reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),
     addProject: (path) => request(apiEndpoints.projects.add, { path }),
+    relocateProject: (projectId, path) =>
+      request(apiEndpoints.projects.relocate, { projectId }, { path }),
+    deleteProject: (projectId) => request(apiEndpoints.projects.delete, { projectId }),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),
   };
@@ -79,21 +98,27 @@ function createEndpointRequester(runtimeUrl: string) {
     Endpoint extends ApiEndpoint<
       Schema.Schema.AnyNoContext | undefined,
       Schema.Schema.AnyNoContext,
-      Schema.Schema.AnyNoContext
+      Schema.Schema.AnyNoContext,
+      Schema.Schema.AnyNoContext | undefined
     >,
   >(
     endpoint: Endpoint,
-    ...args: ApiEndpointBody<Endpoint> extends undefined ? [] : [body: ApiEndpointBody<Endpoint>]
+    ...args: ApiEndpointRequestArgs<Endpoint>
   ): Effect.Effect<ApiEndpointOutput<Endpoint>, RuntimeEndpointError<Endpoint>> {
     return Effect.gen(function* () {
       const response = yield* Effect.tryPromise({
         try: (signal) => {
           const init: RequestInit = { method: endpoint.method, signal };
+          const params = endpoint.params ? (args[0] as ApiEndpointParams<Endpoint>) : undefined;
+          const body = endpoint.body ? args[endpoint.params ? 1 : 0] : undefined;
           if (endpoint.body) {
             init.headers = { 'Content-Type': 'application/json' };
-            init.body = JSON.stringify(args[0]);
+            init.body = JSON.stringify(body);
           }
-          return fetch(new URL(`${apiBasePath}${endpoint.path}`, runtimeUrl), init);
+          return fetch(
+            new URL(`${apiBasePath}${interpolatePath(endpoint.path, params)}`, runtimeUrl),
+            init,
+          );
         },
         catch: (cause) =>
           new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
@@ -125,6 +150,17 @@ function createEndpointRequester(runtimeUrl: string) {
       return decoded.data as ApiEndpointOutput<Endpoint>;
     });
   };
+}
+
+function interpolatePath(path: string, params: unknown) {
+  if (!params || typeof params !== 'object') {
+    return path;
+  }
+
+  return Object.entries(params).reduce(
+    (nextPath, [key, value]) => nextPath.replace(`:${key}`, encodeURIComponent(String(value))),
+    path,
+  );
 }
 
 function decode<Decoded, Encoded>(

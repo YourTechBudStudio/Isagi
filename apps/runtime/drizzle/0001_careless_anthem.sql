@@ -1,0 +1,1 @@
+ALTER TABLE `worktrees` DROP COLUMN `is_root`;

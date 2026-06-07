@@ -4,9 +4,11 @@ import type {
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   AddProjectOutput,
+  DeleteProjectOutput,
   PathSuggestOutput,
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
+  RelocateProjectOutput,
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -38,6 +40,17 @@ export function reconcileWorkspace(
 
 export function addProject(path: string): Effect.Effect<AddProjectOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.addProject(path)));
+}
+
+export function relocateProject(
+  projectId: number,
+  path: string,
+): Effect.Effect<RelocateProjectOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.relocateProject(projectId, path)));
+}
+
+export function deleteProject(projectId: number): Effect.Effect<DeleteProjectOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.deleteProject(projectId)));
 }
 
 export function suggestProjectPaths(

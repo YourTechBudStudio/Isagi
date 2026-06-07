@@ -8,6 +8,7 @@ import {
   type ApiEndpoint,
   type ApiEndpointBody,
   type ApiEndpointOutput,
+  type ApiEndpointParams,
   type ApiError,
 } from '@isagi/contracts';
 
@@ -23,13 +24,15 @@ export interface RegisterApiEndpointOptions<
   Endpoint extends ApiEndpoint<
     Schema.Schema.AnyNoContext | undefined,
     Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext | undefined
   >,
   R,
 > {
   readonly handle: (
     input: ApiEndpointBody<Endpoint>,
     context: ApiRouteContext,
+    params: ApiEndpointParams<Endpoint>,
   ) => Effect.Effect<ApiEndpointOutput<Endpoint>, unknown, R>;
   readonly mapError?: (error: unknown, context: ApiRouteContext) => ApiError;
   readonly run: <A>(
@@ -42,7 +45,8 @@ export function registerApiEndpoint<
   Endpoint extends ApiEndpoint<
     Schema.Schema.AnyNoContext | undefined,
     Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext | undefined
   >,
   R = never,
 >(fastify: FastifyInstance, endpoint: Endpoint, options: RegisterApiEndpointOptions<Endpoint, R>) {
@@ -59,11 +63,15 @@ export function registerApiEndpoint<
       if (input.status === 'failed') {
         return sendApiError(reply, input.error);
       }
+      const params = decodeParams(endpoint, request.params, context);
+      if (params.status === 'failed') {
+        return sendApiError(reply, params.error);
+      }
 
       const interrupt = requestInterruptSignal(request, reply);
       let output: ApiEndpointOutput<Endpoint>;
       try {
-        output = await options.run(options.handle(input.value, context), {
+        output = await options.run(options.handle(input.value, context, params.value), {
           signal: interrupt.signal,
         });
       } catch (error: unknown) {
@@ -92,6 +100,45 @@ export function registerApiEndpoint<
       }
     },
   });
+}
+
+function decodeParams<
+  Endpoint extends ApiEndpoint<
+    Schema.Schema.AnyNoContext | undefined,
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext | undefined
+  >,
+>(endpoint: Endpoint, params: unknown, context: ApiRouteContext) {
+  const paramsSchema = endpoint.params as Schema.Schema.AnyNoContext | undefined;
+
+  if (!paramsSchema) {
+    return { status: 'succeeded' as const, value: undefined as ApiEndpointParams<Endpoint> };
+  }
+
+  try {
+    return {
+      status: 'succeeded' as const,
+      value: Schema.decodeUnknownSync(paramsSchema)(
+        coerceRouteParams(params),
+      ) as ApiEndpointParams<Endpoint>,
+    };
+  } catch (error: unknown) {
+    return { status: 'failed' as const, error: requestDecodingFailed(context, error) };
+  }
+}
+
+function coerceRouteParams(params: unknown) {
+  if (!params || typeof params !== 'object') {
+    return params;
+  }
+
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => {
+      const numeric = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+      return [key, numeric];
+    }),
+  );
 }
 
 function requestInterruptSignal(request: FastifyRequest, reply: FastifyReply) {
@@ -127,7 +174,8 @@ function sendRouteApiError<
   Endpoint extends ApiEndpoint<
     Schema.Schema.AnyNoContext | undefined,
     Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext | undefined
   >,
 >(
   request: FastifyRequest,
@@ -153,7 +201,8 @@ function decodeInput<
   Endpoint extends ApiEndpoint<
     Schema.Schema.AnyNoContext | undefined,
     Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext
+    Schema.Schema.AnyNoContext,
+    Schema.Schema.AnyNoContext | undefined
   >,
 >(endpoint: Endpoint, body: unknown, context: ApiRouteContext) {
   const bodySchema = endpoint.body as Schema.Schema.AnyNoContext | undefined;
