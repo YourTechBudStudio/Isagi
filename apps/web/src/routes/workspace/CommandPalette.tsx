@@ -326,7 +326,11 @@ export function CommandPalette() {
     const nextValues = { ...values, [spec.key]: value };
     const nextPayloads = { ...payloads, [spec.key]: payload };
     const nextLabels = { ...labels, [spec.key]: label };
-    if (stepIndex === args.length - 1) {
+    const shouldFinish =
+      stepIndex === args.length - 1 ||
+      ((spec.kind === 'select' || spec.kind === 'combo') &&
+        (spec.finishOnAccept?.(value, payload, ctx, nextValues) ?? false));
+    if (shouldFinish) {
       const result = command.run(nextValues, ctx, nextPayloads);
       if (result instanceof Promise) {
         void result.then(

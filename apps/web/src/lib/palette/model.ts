@@ -50,7 +50,10 @@ export function computeStepOptions(
         option.value.toLowerCase() === proposed.toLowerCase() || option.value.toLowerCase() === q,
     );
     if (!exists) {
-      result = [{ value: proposed, create: true, hint: 'new worktree' }, ...result];
+      result = [
+        { value: proposed, create: true, hint: spec.createHint ?? 'new worktree' },
+        ...result,
+      ];
     }
   }
   return result;

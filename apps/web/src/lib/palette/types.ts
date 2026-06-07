@@ -43,6 +43,12 @@ export type ArgSpec =
       /** Empty-query selection behavior. Defaults to selecting the first/default option. */
       readonly defaultSelection?: 'first' | 'none';
       readonly emptyHint?: string;
+      readonly finishOnAccept?: (
+        value: string,
+        payload: unknown,
+        ctx: PaletteContext,
+        values: ArgValues,
+      ) => boolean;
     }
   | {
       readonly kind: 'combo';
@@ -53,6 +59,13 @@ export type ArgSpec =
       /** Empty-query selection behavior. Defaults to selecting the first/default option. */
       readonly defaultSelection?: 'first' | 'none';
       readonly emptyHint?: string;
+      readonly createHint?: string;
+      readonly finishOnAccept?: (
+        value: string,
+        payload: unknown,
+        ctx: PaletteContext,
+        values: ArgValues,
+      ) => boolean;
     }
   | {
       readonly kind: 'text';

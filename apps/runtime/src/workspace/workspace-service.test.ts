@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { branchPathHash, Git, type GitService } from '../git/index.js';
+import { branchPathHash, Git, GitCommandError, type GitService } from '../git/index.js';
 import {
   DataDirectory,
   StateFile,
@@ -432,6 +432,432 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
   }
 });
 
+test('opening a worktree rejects invalid branch names before branch lookup', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-invalid-branch-project-'));
+  const branch = 'not a branch';
+  const repository = repositoryWith({
+    project: { ...project, rootPath: projectRoot },
+    worktree: { ...worktree, path: projectRoot },
+  });
+  const stateFile = stateFileWithWriteCounter(() => {});
+  let branchListCalls = 0;
+  const invalidGit = {
+    run: (args: readonly string[], options: { readonly cwd?: string | undefined } = {}) => {
+      const command = args.join(' ');
+      if (command.endsWith('worktree list --porcelain')) {
+        return Effect.succeed({
+          stdout: `worktree ${projectRoot}\nHEAD abc123456789\nbranch refs/heads/main\n`,
+          stderr: '',
+        });
+      }
+      if (command.endsWith(`check-ref-format --branch ${branch}`)) {
+        return Effect.fail(
+          new GitCommandError({
+            args,
+            cause: new Error('invalid branch'),
+            cwd: options.cwd,
+            stderr: 'fatal: invalid branch name',
+          }),
+        );
+      }
+      if (command.endsWith('branch --format=%(refname:short)')) {
+        branchListCalls += 1;
+      }
+      return Effect.succeed({ stdout: '', stderr: '' });
+    },
+  } satisfies GitService;
+
+  try {
+    const error = await Effect.runPromise(
+      Effect.flip(
+        Effect.gen(function* () {
+          const workspace = yield* WorkspaceService;
+          return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
+        }).pipe(
+          Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(StateFile, stateFile),
+          Effect.provideService(Git, invalidGit),
+          Effect.provideService(DataDirectory, testDataDirectory),
+        ),
+      ),
+    );
+
+    assert.ok(error instanceof WorkspaceError);
+    assert.equal(error.code, 'invalid_branch_name');
+    assert.equal(error.branch, branch);
+    assert.equal(branchListCalls, 0);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('opening a missing branch without a base asks the client for base selection', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-missing-base-project-'));
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-missing-base-data-'));
+  const branch = 'feature/new';
+  const repository = repositoryWith({
+    project: { ...project, rootPath: projectRoot },
+    worktree: { ...worktree, path: projectRoot },
+  });
+  const stateFile = stateFileWithWriteCounter(() => {});
+  let addCalls = 0;
+  const missingBaseGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        const command = args.join(' ');
+        if (command.endsWith('worktree list --porcelain')) {
+          return {
+            stdout: `worktree ${projectRoot}\nHEAD abc123456789\nbranch refs/heads/main\n`,
+            stderr: '',
+          };
+        }
+        if (command.endsWith('branch --format=%(refname:short)')) {
+          return { stdout: 'main\n', stderr: '' };
+        }
+        if (command.endsWith(`check-ref-format --branch ${branch}`)) {
+          return { stdout: `${branch}\n`, stderr: '' };
+        }
+        if (args[2] === 'worktree' && args[3] === 'add') {
+          addCalls += 1;
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+
+  try {
+    const error = await Effect.runPromise(
+      Effect.flip(
+        Effect.gen(function* () {
+          const workspace = yield* WorkspaceService;
+          return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
+        }).pipe(
+          Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(StateFile, stateFile),
+          Effect.provideService(Git, missingBaseGit),
+          Effect.provideService(DataDirectory, {
+            paths: {
+              root: dataRoot,
+              databasePath: join(dataRoot, 'isagi.db'),
+              statePath: join(dataRoot, 'state.json'),
+              worktreesPath: join(dataRoot, 'worktrees'),
+            },
+          } satisfies DataDirectoryService),
+        ),
+      ),
+    );
+
+    assert.ok(error instanceof WorkspaceError);
+    assert.equal(error.code, 'new_branch_requires_base');
+    assert.equal(error.branch, branch);
+    assert.equal(addCalls, 0);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('opening a missing branch creates it from a local branch base', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-new-branch-project-'));
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-new-branch-data-'));
+  const checkoutParent = join(dataRoot, 'worktrees');
+  const branch = 'feature/from-main';
+  let created = false;
+  let createdPath: string | null = null;
+  let worktreeRows: WorktreeRow[] = [{ ...worktree, path: projectRoot }];
+  const repository = {
+    ...repositoryWith({ project: { ...project, rootPath: projectRoot }, worktree: null }),
+    findProjectWorktreeByBranch: (lookup) =>
+      Effect.succeed(
+        worktreeRows.find(
+          (row) => row.projectId === lookup.projectId && row.branch === lookup.branch,
+        ) ?? null,
+      ),
+    listWorktrees: Effect.sync(() => [...worktreeRows]),
+    reconcileProjectWorktrees: (input) =>
+      Effect.sync(() => {
+        const added: { id: number; path: string }[] = [];
+        for (const discovered of input.discovered) {
+          if (worktreeRows.some((row) => row.path === discovered.path)) {
+            continue;
+          }
+          const row = {
+            ...worktree,
+            id: 11,
+            path: discovered.path,
+            branch: discovered.branch,
+            head: discovered.head,
+          } satisfies WorktreeRow;
+          worktreeRows = [...worktreeRows, row];
+          added.push({ id: row.id, path: row.path });
+        }
+        return { added, missing: [] };
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const stateFile = stateFileWithWriteCounter(() => {});
+  const openGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        const command = args.join(' ');
+        if (command.endsWith('worktree list --porcelain')) {
+          return {
+            stdout: `worktree ${projectRoot}\nHEAD abc123456789\nbranch refs/heads/main\n${
+              created && createdPath
+                ? `\nworktree ${createdPath}\nHEAD def456789012\nbranch refs/heads/${branch}\n`
+                : ''
+            }`,
+            stderr: '',
+          };
+        }
+        if (command.endsWith('branch --format=%(refname:short)')) {
+          return { stdout: 'main\n', stderr: '' };
+        }
+        if (command.endsWith(`check-ref-format --branch ${branch}`)) {
+          return { stdout: `${branch}\n`, stderr: '' };
+        }
+        if (args[2] === 'worktree' && args[3] === 'add') {
+          created = true;
+          createdPath = args[6] ?? null;
+          assert.deepEqual(args.slice(4, 8), ['-b', branch, createdPath, 'main']);
+          if (createdPath) {
+            mkdirSync(createdPath, { recursive: true });
+          }
+          return { stdout: '', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.openWorktree({
+          projectId: project.id,
+          request: { branch, base: { kind: 'branch', ref: 'main' } },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(StateFile, stateFile),
+        Effect.provideService(Git, openGit),
+        Effect.provideService(DataDirectory, {
+          paths: {
+            root: dataRoot,
+            databasePath: join(dataRoot, 'isagi.db'),
+            statePath: join(dataRoot, 'state.json'),
+            worktreesPath: checkoutParent,
+          },
+        } satisfies DataDirectoryService),
+      ),
+    );
+
+    assert.deepEqual(output, { projectId: project.id, worktreeId: 11, branch });
+    assert.equal(createdPath, join(checkoutParent, String(project.id), branchPathHash(branch)));
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('opening a missing branch can create it from the current detached worktree', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-new-commit-branch-project-'));
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-new-commit-branch-data-'));
+  const branch = 'feature/from-commit';
+  const commit = 'abc123456789';
+  const detachedPath = join(projectRoot, '../isagi-detached');
+  const detachedWorktree = {
+    ...worktree,
+    id: 12,
+    path: detachedPath,
+    branch: null,
+    head: commit,
+  } satisfies WorktreeRow;
+  let addArgs: readonly string[] | null = null;
+  const repository = {
+    ...repositoryWith({ project: { ...project, rootPath: projectRoot }, worktree: null }),
+    findWorktree: (worktreeId: number) =>
+      Effect.succeed(worktreeId === detachedWorktree.id ? detachedWorktree : null),
+    findProjectWorktreeByBranch: () =>
+      Effect.succeed(
+        addArgs
+          ? {
+              ...worktree,
+              id: 11,
+              path: join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch)),
+              branch,
+              head: commit,
+            }
+          : null,
+      ),
+  } satisfies WorkspaceRepositoryService;
+  const stateFile = stateFileWithWriteCounter(() => {});
+  const openGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        const command = args.join(' ');
+        if (command.endsWith('worktree list --porcelain')) {
+          return {
+            stdout: `worktree ${projectRoot}\nHEAD def456789012\nbranch refs/heads/main\n\nworktree ${detachedPath}\nHEAD ${commit}\n`,
+            stderr: '',
+          };
+        }
+        if (command.endsWith('branch --format=%(refname:short)')) {
+          return { stdout: 'main\n', stderr: '' };
+        }
+        if (command.endsWith(`check-ref-format --branch ${branch}`)) {
+          return { stdout: `${branch}\n`, stderr: '' };
+        }
+        if (args[2] === 'worktree' && args[3] === 'add') {
+          addArgs = args;
+          const checkoutPath = args[6];
+          if (checkoutPath) {
+            mkdirSync(checkoutPath, { recursive: true });
+          }
+          return { stdout: '', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.openWorktree({
+          projectId: project.id,
+          request: { branch, base: { kind: 'detached_worktree', worktreeId: detachedWorktree.id } },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(StateFile, stateFile),
+        Effect.provideService(Git, openGit),
+        Effect.provideService(DataDirectory, {
+          paths: {
+            root: dataRoot,
+            databasePath: join(dataRoot, 'isagi.db'),
+            statePath: join(dataRoot, 'state.json'),
+            worktreesPath: join(dataRoot, 'worktrees'),
+          },
+        } satisfies DataDirectoryService),
+      ),
+    );
+
+    assert.ok(addArgs);
+    assert.deepEqual((addArgs as readonly string[]).slice(4, 8), [
+      '-b',
+      branch,
+      join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch)),
+      commit,
+    ]);
+    assert.deepEqual(output, { projectId: project.id, worktreeId: 11, branch });
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('opening a missing branch rejects invalid detached worktree bases before checkout', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-invalid-detached-base-project-'));
+  const branch = 'feature/from-invalid-detached';
+  const commit = 'abc123456789';
+  const detachedPath = join(projectRoot, '../isagi-detached-invalid');
+  const cases = [
+    {
+      name: 'wrong project',
+      baseWorktree: {
+        ...worktree,
+        id: 12,
+        projectId: 99,
+        path: detachedPath,
+        branch: null,
+        head: commit,
+      },
+      discovered: `worktree ${projectRoot}\nHEAD def456789012\nbranch refs/heads/main\n\nworktree ${detachedPath}\nHEAD ${commit}\n`,
+    },
+    {
+      name: 'branch-backed worktree',
+      baseWorktree: { ...worktree, id: 12, path: detachedPath, branch: 'main', head: commit },
+      discovered: `worktree ${projectRoot}\nHEAD def456789012\nbranch refs/heads/main\n\nworktree ${detachedPath}\nHEAD ${commit}\nbranch refs/heads/main\n`,
+    },
+    {
+      name: 'missing head',
+      baseWorktree: { ...worktree, id: 12, path: detachedPath, branch: null, head: null },
+      discovered: `worktree ${projectRoot}\nHEAD def456789012\nbranch refs/heads/main\n\nworktree ${detachedPath}\n`,
+    },
+    {
+      name: 'no longer detached in Git',
+      baseWorktree: { ...worktree, id: 12, path: detachedPath, branch: null, head: commit },
+      discovered: `worktree ${projectRoot}\nHEAD def456789012\nbranch refs/heads/main\n\nworktree ${detachedPath}\nHEAD ${commit}\nbranch refs/heads/other\n`,
+    },
+  ] satisfies readonly {
+    readonly name: string;
+    readonly baseWorktree: WorktreeRow;
+    readonly discovered: string;
+  }[];
+
+  try {
+    for (const scenario of cases) {
+      let addCalls = 0;
+      const repository = {
+        ...repositoryWith({ project: { ...project, rootPath: projectRoot }, worktree: null }),
+        findWorktree: (worktreeId: number) =>
+          Effect.succeed(worktreeId === scenario.baseWorktree.id ? scenario.baseWorktree : null),
+      } satisfies WorkspaceRepositoryService;
+      const stateFile = stateFileWithWriteCounter(() => {});
+      const invalidBaseGit = {
+        run: (args: readonly string[]) =>
+          Effect.sync(() => {
+            const command = args.join(' ');
+            if (command.endsWith('worktree list --porcelain')) {
+              return { stdout: scenario.discovered, stderr: '' };
+            }
+            if (command.endsWith('branch --format=%(refname:short)')) {
+              return { stdout: 'main\n', stderr: '' };
+            }
+            if (command.endsWith(`check-ref-format --branch ${branch}`)) {
+              return { stdout: `${branch}\n`, stderr: '' };
+            }
+            if (args[2] === 'worktree' && args[3] === 'add') {
+              addCalls += 1;
+            }
+            return { stdout: '', stderr: '' };
+          }),
+      } satisfies GitService;
+
+      const error = await Effect.runPromise(
+        Effect.flip(
+          Effect.gen(function* () {
+            const workspace = yield* WorkspaceService;
+            return yield* workspace.openWorktree({
+              projectId: project.id,
+              request: {
+                branch,
+                base: { kind: 'detached_worktree', worktreeId: scenario.baseWorktree.id },
+              },
+            });
+          }).pipe(
+            Effect.provide(WorkspaceServiceLive),
+            Effect.provideService(WorkspaceRepository, repository),
+            Effect.provideService(StateFile, stateFile),
+            Effect.provideService(Git, invalidBaseGit),
+            Effect.provideService(DataDirectory, testDataDirectory),
+          ),
+        ),
+      );
+
+      assert.ok(error instanceof WorkspaceError, scenario.name);
+      assert.equal(error.code, 'base_ref_not_found', scenario.name);
+      assert.equal(error.worktreeId, scenario.baseWorktree.id, scenario.name);
+      assert.equal(addCalls, 0, scenario.name);
+    }
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('opening an existing local branch rejects an occupied deterministic checkout path', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-dirty-worktree-project-'));
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-dirty-worktree-data-'));
@@ -491,6 +917,72 @@ test('opening an existing local branch rejects an occupied deterministic checkou
 
     assert.ok(error instanceof WorkspaceError);
     assert.equal(error.code, 'checkout_path_exists');
+    assert.equal(error.path, checkoutPath);
+    assert.equal(addCalls, 0);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('opening an existing local branch rejects a stale registered deterministic checkout path', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-registered-worktree-project-'));
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-registered-worktree-data-'));
+  const branch = 'main';
+  const checkoutPath = join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch));
+  const testProject = { ...project, rootPath: projectRoot };
+  const repository = repositoryWith({
+    project: testProject,
+    worktree: { ...worktree, path: projectRoot, branch: 'other' },
+  });
+  const stateFile = stateFileWithWriteCounter(() => {});
+  let addCalls = 0;
+  const registeredPathGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        const command = args.join(' ');
+        if (command.endsWith('worktree list --porcelain')) {
+          return {
+            stdout: `worktree ${projectRoot}\nHEAD abc123456789\nbranch refs/heads/other\n\nworktree ${checkoutPath}\nHEAD def456789012\nbranch refs/heads/${branch}\nprunable gitdir file points to non-existent location\n`,
+            stderr: '',
+          };
+        }
+        if (command.endsWith('branch --format=%(refname:short)')) {
+          return { stdout: `other\n${branch}\n`, stderr: '' };
+        }
+        if (args[2] === 'worktree' && args[3] === 'add') {
+          addCalls += 1;
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+  const dataDirectory = {
+    paths: {
+      root: dataRoot,
+      databasePath: join(dataRoot, 'isagi.db'),
+      statePath: join(dataRoot, 'state.json'),
+      worktreesPath: join(dataRoot, 'worktrees'),
+    },
+  } satisfies DataDirectoryService;
+
+  try {
+    const error = await Effect.runPromise(
+      Effect.flip(
+        Effect.gen(function* () {
+          const workspace = yield* WorkspaceService;
+          return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
+        }).pipe(
+          Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(StateFile, stateFile),
+          Effect.provideService(Git, registeredPathGit),
+          Effect.provideService(DataDirectory, dataDirectory),
+        ),
+      ),
+    );
+
+    assert.ok(error instanceof WorkspaceError);
+    assert.equal(error.code, 'checkout_path_registered');
     assert.equal(error.path, checkoutPath);
     assert.equal(addCalls, 0);
   } finally {

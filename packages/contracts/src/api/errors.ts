@@ -51,7 +51,11 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_present',
   'branch_not_found',
+  'new_branch_requires_base',
+  'invalid_branch_name',
+  'base_ref_not_found',
   'checkout_path_exists',
+  'checkout_path_registered',
   'checkout_parent_unavailable',
   'worktree_not_found',
 );
@@ -75,6 +79,7 @@ export const worktreeOpenRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: worktreeOperationRejectionReasonSchema,
     projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     branch: Schema.optional(Schema.String),
     path: Schema.optional(Schema.String),
   }),

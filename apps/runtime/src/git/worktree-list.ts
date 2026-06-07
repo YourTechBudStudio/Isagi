@@ -13,14 +13,14 @@ export function parseGitWorktreeListPorcelain(output: string): GitWorktreeRecord
     .filter((record): record is GitWorktreeRecord => record !== null);
 }
 
-export function displayBranch(ref: string | null, head: string | null): string | null {
+export function displayBranch(ref: string | null, _head: string | null): string | null {
   if (ref?.startsWith('refs/heads/')) {
     return ref.slice('refs/heads/'.length);
   }
   if (ref) {
     return ref;
   }
-  return head ? `detached ${head.slice(0, 7)}` : null;
+  return null;
 }
 
 function parseRecord(record: string): GitWorktreeRecord | null {

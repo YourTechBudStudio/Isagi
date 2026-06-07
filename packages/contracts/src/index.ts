@@ -148,6 +148,7 @@ export {
   openWorktreeInputSchema,
   openWorktreeOutputSchema,
   projectWorktreeRouteParamsSchema,
+  worktreeBaseRefSchema,
   worktreeBranchSchema,
 } from './worktrees/types.js';
 export type {
@@ -155,5 +156,6 @@ export type {
   OpenWorktreeInput,
   OpenWorktreeOutput,
   ProjectWorktreeRouteParams,
+  WorktreeBaseRef,
   WorktreeBranch,
 } from './worktrees/types.js';

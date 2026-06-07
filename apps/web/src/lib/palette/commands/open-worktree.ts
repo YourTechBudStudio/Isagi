@@ -1,6 +1,8 @@
 import { Effect } from 'effect';
 import { GitBranch } from 'lucide-react';
 
+import type { WorktreeBaseRef } from '@isagi/contracts';
+
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
 import { listProjectBranches } from '../../workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../workspace/store.js';
@@ -17,6 +19,11 @@ interface ExistingBranchPayload {
   readonly kind: 'existing_branch';
   readonly branch: string;
   readonly projectId: number;
+}
+
+interface BaseRefPayload {
+  readonly kind: 'base_ref';
+  readonly base: WorktreeBaseRef;
 }
 
 type WorktreeStepPayload = ExistingWorktreePayload | ExistingBranchPayload;
@@ -41,11 +48,14 @@ export const openWorktreeCommand: PaletteCommand = {
         })),
     },
     {
-      kind: 'select',
-      key: 'worktreeId',
+      kind: 'combo',
+      key: 'branch',
       label: 'Worktree',
       defaultSelection: 'none',
       emptyHint: 'Type a branch name or choose a worktree.',
+      createHint: 'create branch',
+      finishOnAccept: (_value, payload) =>
+        isExistingWorktreePayload(payload) || isExistingBranchPayload(payload),
       options: async (ctx, values): Promise<readonly Option<WorktreeStepPayload>[]> => {
         const projectId = Number(values.projectId);
         const project = presentProjects(ctx.projects).find(
@@ -89,9 +99,64 @@ export const openWorktreeCommand: PaletteCommand = {
         );
       },
     },
+    {
+      kind: 'select',
+      key: 'base',
+      label: 'Create from',
+      options: async (ctx, values): Promise<readonly Option<BaseRefPayload>[]> => {
+        const projectId = Number(values.projectId);
+        const project = presentProjects(ctx.projects).find(
+          (candidate) => candidate.id === projectId,
+        );
+        if (!project) {
+          return [];
+        }
+
+        const branchList = await Effect.runPromise(listProjectBranches(project.id));
+        const branchOptions = branchList.branches.map((branch) => ({
+          value: `branch:${branch.name}`,
+          label: branch.name,
+          hint: 'branch',
+          isDefault:
+            ctx.activeProject?.id === project.id && branch.name === ctx.activeWorktree?.branch,
+          payload: {
+            kind: 'base_ref' as const,
+            base: { kind: 'branch' as const, ref: branch.name },
+          },
+        }));
+
+        const activeWorktree = ctx.activeProject?.id === project.id ? ctx.activeWorktree : null;
+        const activeDetachedCommit =
+          activeWorktree && !activeWorktree.branch && activeWorktree.head
+            ? activeWorktree.head
+            : null;
+        const commitOption =
+          activeDetachedCommit && activeWorktree
+            ? [
+                {
+                  value: `commit:${activeDetachedCommit}`,
+                  label: `Current commit ${shortHead(activeDetachedCommit)}`,
+                  hint: 'commit',
+                  isDefault: true,
+                  payload: {
+                    kind: 'base_ref' as const,
+                    base: {
+                      kind: 'detached_worktree' as const,
+                      worktreeId: activeWorktree.id,
+                    },
+                  },
+                },
+              ]
+            : [];
+
+        return [...commitOption, ...branchOptions].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        );
+      },
+    },
   ],
   run: (values, ctx, payloads) => {
-    const selected = payloads?.worktreeId;
+    const selected = payloads?.branch;
     if (isExistingWorktreePayload(selected)) {
       useWorkspaceStore.getState().selectWorktree(selected.projectId, selected.worktreeId);
       return;
@@ -106,16 +171,16 @@ export const openWorktreeCommand: PaletteCommand = {
     const projectId = Number(values.projectId);
     const project = presentProjects(ctx.projects).find((candidate) => candidate.id === projectId);
     const worktree = project?.worktrees.find(
-      (candidate) =>
-        candidate.branch === values.worktreeId || String(candidate.id) === values.worktreeId,
+      (candidate) => candidate.branch === values.branch || String(candidate.id) === values.branch,
     );
     if (project && worktree) {
       useWorkspaceStore.getState().selectWorktree(project.id, worktree.id);
       return;
     }
 
-    if (project && values.worktreeId) {
-      return openWorktreeFromPalette(project.id, { branch: values.worktreeId }).then(
+    const base = payloads?.base;
+    if (project && values.branch && isBaseRefPayload(base)) {
+      return openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base }).then(
         () => undefined,
       );
     }
@@ -154,5 +219,21 @@ function isExistingBranchPayload(value: unknown): value is ExistingBranchPayload
     (value as ExistingBranchPayload).kind === 'existing_branch' &&
     typeof (value as ExistingBranchPayload).branch === 'string' &&
     typeof (value as ExistingBranchPayload).projectId === 'number'
+  );
+}
+
+function isBaseRefPayload(value: unknown): value is BaseRefPayload {
+  if (!value || typeof value !== 'object' || (value as BaseRefPayload).kind !== 'base_ref') {
+    return false;
+  }
+
+  const base = (value as BaseRefPayload).base;
+  if (!base || typeof base !== 'object') {
+    return false;
+  }
+
+  return (
+    (base.kind === 'branch' && typeof base.ref === 'string') ||
+    (base.kind === 'detached_worktree' && typeof base.worktreeId === 'number')
   );
 }

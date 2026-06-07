@@ -130,7 +130,11 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'project_not_found':
     case 'project_not_present':
     case 'branch_not_found':
+    case 'new_branch_requires_base':
+    case 'invalid_branch_name':
+    case 'base_ref_not_found':
     case 'checkout_path_exists':
+    case 'checkout_path_registered':
     case 'checkout_parent_unavailable':
     case 'worktree_not_found':
       return error.code;
@@ -199,7 +203,7 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
       return {
         code: 'worktree_open_rejected',
         status:
-          error.code === 'checkout_path_exists'
+          error.code === 'checkout_path_exists' || error.code === 'checkout_path_registered'
             ? 409
             : error.code === 'checkout_parent_unavailable'
               ? 500
@@ -209,6 +213,7 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
         data: {
           reason: worktreeRejectionReason(error),
           ...(error.projectId ? { projectId: error.projectId } : {}),
+          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.branch ? { branch: error.branch } : {}),
           ...(error.path ? { path: error.path } : {}),
         },

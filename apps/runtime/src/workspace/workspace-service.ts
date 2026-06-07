@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
@@ -17,6 +17,7 @@ import type {
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
+  WorktreeBaseRef,
 } from '@isagi/contracts';
 
 import {
@@ -48,7 +49,11 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'project_not_present'
     | 'project_path_already_registered'
     | 'branch_not_found'
+    | 'new_branch_requires_base'
+    | 'invalid_branch_name'
+    | 'base_ref_not_found'
     | 'checkout_path_exists'
+    | 'checkout_path_registered'
     | 'checkout_parent_unavailable'
     | 'worktree_not_found';
   readonly message: string;
@@ -160,6 +165,8 @@ export const WorkspaceServiceLive = Layer.effect(
             );
           }
 
+          yield* ensureProjectPathAvailable(repository, project);
+          yield* validateBranchName(git, project, branch);
           yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
           const existing = yield* repository.findProjectWorktreeByBranch({
             projectId: project.id,
@@ -172,50 +179,48 @@ export const WorkspaceServiceLive = Layer.effect(
           const branches = yield* listLocalBranches(project.rootPath).pipe(
             Effect.provideService(Git, git),
           );
-          if (!branches.includes(branch)) {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'branch_not_found',
-                branch,
-                message: `Branch ${branch} was not found in project ${project.id}.`,
-                projectId: project.id,
-              }),
-            );
+          const branchExists = branches.includes(branch);
+          let baseRef: string | null = null;
+          if (!branchExists) {
+            const base = input.request.base;
+            if (!base) {
+              return yield* Effect.fail(
+                new WorkspaceError({
+                  branch,
+                  code: 'new_branch_requires_base',
+                  message: `Branch ${branch} does not exist. Choose a base to create it.`,
+                  projectId: project.id,
+                }),
+              );
+            }
+            baseRef = yield* validateBaseRef(repository, git, project, base);
           }
 
-          const checkoutPath = join(
+          const checkoutPath = checkoutPathForBranch(
             dataDirectory.paths.worktreesPath,
-            String(project.id),
-            branchPathHash(branch),
+            project.id,
+            branch,
           );
-          if (pathExists(checkoutPath)) {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                branch,
-                code: 'checkout_path_exists',
-                message: `Worktree checkout path already exists: ${checkoutPath}`,
-                path: checkoutPath,
-                projectId: project.id,
-              }),
-            );
+          yield* ensureCheckoutPathAvailable(git, project, branch, checkoutPath);
+          yield* prepareCheckoutParent(project, branch, checkoutPath);
+
+          if (branchExists) {
+            yield* git.run(['-C', project.rootPath, 'worktree', 'add', checkoutPath, branch]);
+          } else {
+            if (!baseRef) {
+              return yield* Effect.die('Base ref was validated but not available.');
+            }
+            yield* git.run([
+              '-C',
+              project.rootPath,
+              'worktree',
+              'add',
+              '-b',
+              branch,
+              checkoutPath,
+              baseRef,
+            ]);
           }
-
-          yield* Effect.try({
-            try: () =>
-              mkdirSync(join(dataDirectory.paths.worktreesPath, String(project.id)), {
-                recursive: true,
-              }),
-            catch: () =>
-              new WorkspaceError({
-                branch,
-                code: 'checkout_parent_unavailable',
-                message: `Could not prepare worktree checkout parent for project ${project.id}.`,
-                path: checkoutPath,
-                projectId: project.id,
-              }),
-          });
-
-          yield* git.run(['-C', project.rootPath, 'worktree', 'add', checkoutPath, branch]);
           yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
           const created = yield* repository.findProjectWorktreeByBranch({
             projectId: project.id,
@@ -563,6 +568,139 @@ function describeWorktreeDiscoveryFailure(rootPath: string, error: GitCommandErr
   return `Could not read Git worktrees for ${rootPath} using ${command} in ${cwd}.${detail}`;
 }
 
+function validateBranchName(git: GitServiceShape, project: ProjectRow, branch: string) {
+  return git.run(['-C', project.rootPath, 'check-ref-format', '--branch', branch]).pipe(
+    Effect.asVoid,
+    Effect.catchAll(() =>
+      Effect.fail(
+        new WorkspaceError({
+          branch,
+          code: 'invalid_branch_name',
+          message: `Branch name ${branch} is not valid for Git.`,
+          projectId: project.id,
+        }),
+      ),
+    ),
+  );
+}
+
+function validateBaseRef(
+  repository: WorkspaceRepositoryService,
+  git: GitServiceShape,
+  project: ProjectRow,
+  base: WorktreeBaseRef,
+) {
+  if (base.kind === 'branch') {
+    return listLocalBranches(project.rootPath).pipe(
+      Effect.provideService(Git, git),
+      Effect.flatMap((branches) =>
+        branches.includes(base.ref)
+          ? Effect.succeed(base.ref)
+          : Effect.fail(
+              new WorkspaceError({
+                branch: base.ref,
+                code: 'base_ref_not_found',
+                message: `Base branch ${base.ref} was not found in project ${project.id}.`,
+                projectId: project.id,
+              }),
+            ),
+      ),
+    );
+  }
+
+  return Effect.gen(function* () {
+    const worktree = yield* repository.findWorktree(base.worktreeId);
+    if (!worktree || worktree.projectId !== project.id || worktree.branch || !worktree.head) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'base_ref_not_found',
+          message: `Detached worktree ${base.worktreeId} was not found for project ${project.id}.`,
+          projectId: project.id,
+          worktreeId: base.worktreeId,
+        }),
+      );
+    }
+
+    const discovered = yield* listGitWorktrees(project.rootPath).pipe(
+      Effect.provideService(Git, git),
+    );
+    const stillDetached = discovered.some(
+      (candidate) =>
+        candidate.path === worktree.path &&
+        candidate.head === worktree.head &&
+        candidate.branch === null &&
+        !candidate.bare &&
+        !candidate.prunable,
+    );
+    if (!stillDetached) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'base_ref_not_found',
+          message: `Detached worktree ${base.worktreeId} is no longer available as a base for project ${project.id}.`,
+          projectId: project.id,
+          worktreeId: base.worktreeId,
+        }),
+      );
+    }
+
+    return worktree.head;
+  });
+}
+
+function checkoutPathForBranch(worktreesPath: string, projectId: number, branch: string) {
+  return join(worktreesPath, String(projectId), branchPathHash(branch));
+}
+
+function ensureCheckoutPathAvailable(
+  git: GitServiceShape,
+  project: ProjectRow,
+  branch: string,
+  checkoutPath: string,
+) {
+  return Effect.gen(function* () {
+    if (pathExists(checkoutPath)) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          branch,
+          code: 'checkout_path_exists',
+          message: `Worktree checkout path already exists: ${checkoutPath}`,
+          path: checkoutPath,
+          projectId: project.id,
+        }),
+      );
+    }
+
+    const registered = yield* listGitWorktrees(project.rootPath).pipe(
+      Effect.provideService(Git, git),
+    );
+    if (registered.some((worktree) => worktree.path === checkoutPath)) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          branch,
+          code: 'checkout_path_registered',
+          message: `Worktree checkout path is still registered by Git: ${checkoutPath}. Run git worktree prune or remove the stale worktree, then try again.`,
+          path: checkoutPath,
+          projectId: project.id,
+        }),
+      );
+    }
+  });
+}
+
+function prepareCheckoutParent(project: ProjectRow, branch: string, checkoutPath: string) {
+  return Effect.try({
+    try: () => mkdirSync(dirname(checkoutPath), { recursive: true }),
+    catch: () =>
+      new WorkspaceError({
+        branch,
+        code: 'checkout_parent_unavailable',
+        message: `Could not prepare worktree checkout parent for project ${project.id}.`,
+        path: checkoutPath,
+        projectId: project.id,
+      }),
+  });
+}
+
 function pathIsDirectory(path: string) {
   try {
     return existsSync(path) && statSync(path).isDirectory();
@@ -580,3 +718,4 @@ function pathExists(path: string) {
 }
 
 type WorkspaceRepositoryService = Context.Tag.Service<typeof WorkspaceRepository>;
+type GitServiceShape = Context.Tag.Service<typeof Git>;
