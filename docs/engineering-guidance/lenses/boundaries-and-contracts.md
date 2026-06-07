@@ -6,6 +6,8 @@ This lens protects package ownership, source-of-truth boundaries, runtime API cl
 
 Isagi has several moving pieces that must stay distinct: Electron shell, React web app, local-or-remote runtime, Git/worktree truth, process/session lifecycles, and shared runtime API contracts.
 
+This lens decides who owns a fact, behavior, API, source of truth, or trust boundary. Once ownership is clear, use `state-flow-causality-and-operational-cost.md` to judge whether the transition is caused by the right action and carries appropriate scope and cost.
+
 ## Review Questions
 
 - Does the change preserve the intended owner of the behavior?

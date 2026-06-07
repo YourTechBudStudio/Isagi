@@ -6,6 +6,8 @@ Use this guidance as a question set during coding and review. It should help cat
 
 Before editing, identify which lenses are relevant to the change. During implementation, keep the relevant lens questions nearby instead of treating them as a final checklist.
 
+Several lenses intentionally meet around stateful runtime/client work. Keep their jobs distinct: use `boundaries-and-contracts.md` to decide who owns a fact or API boundary, `state-flow-causality-and-operational-cost.md` to decide whether the transition is caused by the right action with appropriate scope and cost, and `runtime-behavior-and-diagnostics.md` to review lifecycle, failure, cancellation, and diagnosability once operational work exists.
+
 Prefer the smallest correct change that preserves the product model and keeps the code easy to follow. If a cleaner internal interface requires migrating callers, migrate them rather than adding compatibility shims, unless a real external boundary depends on the old behavior.
 
 For operational implementation code, prefer Effect-shaped internals and run them at framework or process boundaries. Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent. Schema-backed contracts remain descriptive boundary artifacts even when they use Effect Schema; do not treat them as a reason to expose operational Effect concepts across the API boundary.
@@ -18,7 +20,7 @@ Review the change against each relevant lens. The lenses are equal priority; do 
 
 Prefer findings that explain consequence. A good finding says what could break, drift, become hard to debug, or become hard to change.
 
-Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material.
+Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material. If a finding could fit multiple lenses, report it under the lens that best describes the primary failure rather than duplicating it.
 
 ## Effect Adoption Posture
 

@@ -14,6 +14,10 @@ Keep ownership clear. The runtime owns operational state. Git remains the source
 
 Every durable or user-visible state fact should have a clear owner. Persistence location, cache mechanism, and UI state tooling should follow that ownership rather than obscure it.
 
+## Keep State Flow Causal And Proportionate
+
+State changes should have clear causes, bounded effects, and operational cost that matches the triggering action. Avoid hidden transitions, broad side effects, and expensive work attached to APIs that appear lightweight.
+
 ## Make Operational Work Explicit
 
 Work that can fail, block, retry, allocate resources, depend on services, spawn processes, or outlive a single call should make those facts visible in its type, boundary, and lifecycle. Use Effect as Isagi's operational substrate, not as a universal style for pure code.

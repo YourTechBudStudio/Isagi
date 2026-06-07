@@ -8,6 +8,8 @@ Isagi will launch and manage Git worktrees, commands, PTYs, agent sessions, surf
 
 Effect is the substrate for this operational work. That does not mean Effect everywhere; it means async work, failure, retries, dependencies, cancellation, long-lived resources, and shutdown behavior should be explicit where they matter.
 
+This lens reviews operational work once it exists: lifecycle, failure behavior, cancellation, resource ownership, and diagnostics. Use `state-flow-causality-and-operational-cost.md` when the primary question is whether that work is attached to the right trigger or hidden behind an action that should be lightweight.
+
 ## Review Questions
 
 - Is runtime state owned by the runtime rather than inferred or over-owned by the UI?

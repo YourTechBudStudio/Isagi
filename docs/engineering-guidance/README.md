@@ -15,6 +15,7 @@ Use it during implementation and review. It is a review aid, not a style manual.
 The lenses are equal-priority review tools. A change does not need to touch every lens equally, but reviewers should not treat any relevant lens as optional.
 
 - [`boundaries-and-contracts.md`](./lenses/boundaries-and-contracts.md) - package ownership, source-of-truth boundaries, runtime API shape, error contracts, trust boundaries, and interface evolution.
+- [`state-flow-causality-and-operational-cost.md`](./lenses/state-flow-causality-and-operational-cost.md) - explicit state transitions, mutation shape, cache flow, hidden side effects, and operation cost.
 - [`module-shape-and-navigability.md`](./lenses/module-shape-and-navigability.md) - deep modules, narrow public surfaces, file grouping, and human-readable flow.
 - [`reuse-refactoring-and-drift-prevention.md`](./lenses/reuse-refactoring-and-drift-prevention.md) - shared behavior, refactoring pressure, and drift prevention.
 - [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, lifecycle ownership, failure semantics, logging, and supportability.
@@ -35,6 +36,7 @@ Each lens defines its own `Blocker`, `Concern`, and `Nit` calibration.
 - Arbitrary file-size limits.
 - Personal naming preferences beyond clarity and navigability.
 - Abstraction for its own sake.
+- Subjective simplicity preferences not tied to ownership, state flow, operational cost, navigability, or reviewability.
 - Effect wrappers around pure code just to make it look architectural.
 - Exhaustive logging in every function.
 - Speculative compatibility for private internals.
