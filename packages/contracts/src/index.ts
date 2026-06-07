@@ -2,11 +2,13 @@ import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
 import { workspaceEndpoints } from './workspace/api.js';
+import { worktreesEndpoints } from './worktrees/api.js';
 
 export const apiEndpoints = {
   health: healthEndpoint,
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
+  worktrees: worktreesEndpoints,
   paths: pathsEndpoints,
 } as const;
 
@@ -58,6 +60,11 @@ export {
   workspaceReconcileApiErrorSchema,
   workspaceReconcileRejectedErrorSchema,
   workspaceReconcileRejectionReasonSchema,
+  worktreeBranchListApiErrorSchema,
+  worktreeBranchListRejectedErrorSchema,
+  worktreeOpenApiErrorSchema,
+  worktreeOpenRejectedErrorSchema,
+  worktreeOperationRejectionReasonSchema,
 } from './api/errors.js';
 export type {
   ProjectPathRejectedError,
@@ -68,6 +75,9 @@ export type {
   WorkspaceActiveContextRejectionReason,
   WorkspaceReconcileRejectedError,
   WorkspaceReconcileRejectionReason,
+  WorktreeBranchListRejectedError,
+  WorktreeOpenRejectedError,
+  WorktreeOperationRejectionReason,
 } from './api/errors.js';
 
 export { healthEndpoint } from './health/api.js';
@@ -131,3 +141,19 @@ export type {
   WorkspaceSnapshot,
   Worktree,
 } from './workspace/types.js';
+
+export { worktreesEndpoints } from './worktrees/api.js';
+export {
+  listProjectBranchesOutputSchema,
+  openWorktreeInputSchema,
+  openWorktreeOutputSchema,
+  projectWorktreeRouteParamsSchema,
+  worktreeBranchSchema,
+} from './worktrees/types.js';
+export type {
+  ListProjectBranchesOutput,
+  OpenWorktreeInput,
+  OpenWorktreeOutput,
+  ProjectWorktreeRouteParams,
+  WorktreeBranch,
+} from './worktrees/types.js';

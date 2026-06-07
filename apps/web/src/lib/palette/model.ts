@@ -80,6 +80,11 @@ export function labelForValue(
     return value;
   }
 
-  const option = spec.options(ctx, values).find((candidate) => candidate.value === value);
+  const options = spec.options(ctx, values);
+  if (options instanceof Promise) {
+    return value;
+  }
+
+  const option = options.find((candidate) => candidate.value === value);
   return option?.label ?? value;
 }

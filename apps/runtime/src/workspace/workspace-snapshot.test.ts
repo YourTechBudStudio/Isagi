@@ -9,7 +9,13 @@ import { Effect, Schema } from 'effect';
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { Git, GitCommandError } from '../git/index.js';
-import { StateFile, stateFromActiveContext, type WorkspaceState } from '../persistence/index.js';
+import {
+  DataDirectory,
+  StateFile,
+  stateFromActiveContext,
+  type DataDirectoryService,
+  type WorkspaceState,
+} from '../persistence/index.js';
 import type { ProjectRow, WorktreeRow } from './types.js';
 import {
   prunedWorktreeIds,
@@ -29,6 +35,15 @@ const project: ProjectRow = {
   lastSeenAt: '2026-06-04T00:00:00.000Z',
   missingReason: null,
 };
+
+const testDataDirectory = {
+  paths: {
+    root: '/tmp/isagi-test',
+    databasePath: '/tmp/isagi-test/isagi.db',
+    statePath: '/tmp/isagi-test/state.json',
+    worktreesPath: '/tmp/isagi-test/worktrees',
+  },
+} satisfies DataDirectoryService;
 
 const worktreeBase = {
   id: 10,
@@ -84,6 +99,13 @@ test('workspace reads known rows without reconciling Git state', async () => {
     findProjectByRootPath: () => Effect.succeed(currentProject),
     findWorktree: (worktreeId) =>
       Effect.succeed(worktrees.find((worktree) => worktree.id === worktreeId) ?? null),
+    findProjectWorktreeByBranch: (lookup) =>
+      Effect.succeed(
+        worktrees.find(
+          (worktree) =>
+            worktree.projectId === lookup.projectId && worktree.branch === lookup.branch,
+        ) ?? null,
+      ),
     deleteProject: () => Effect.succeed(false),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.sync(() => [currentProject]),
@@ -156,6 +178,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
+        Effect.provideService(DataDirectory, testDataDirectory),
       ),
     );
 

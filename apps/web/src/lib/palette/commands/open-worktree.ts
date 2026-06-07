@@ -1,5 +1,8 @@
+import { Effect } from 'effect';
 import { GitBranch } from 'lucide-react';
 
+import { openWorktreeFromPalette } from '../../workspace/queries.js';
+import { listProjectBranches } from '../../workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../workspace/store.js';
 import type { Project, Worktree } from '../../workspace/types.js';
 import type { Option, PaletteCommand } from '../types.js';
@@ -10,12 +13,20 @@ interface ExistingWorktreePayload {
   readonly worktreeId: number;
 }
 
+interface ExistingBranchPayload {
+  readonly kind: 'existing_branch';
+  readonly branch: string;
+  readonly projectId: number;
+}
+
+type WorktreeStepPayload = ExistingWorktreePayload | ExistingBranchPayload;
+
 export const openWorktreeCommand: PaletteCommand = {
   id: 'open-worktree',
   label: 'Open Worktree',
   icon: GitBranch,
   group: 'global',
-  available: (ctx) => presentProjects(ctx.projects).some((project) => project.worktrees.length > 0),
+  available: (ctx) => presentProjects(ctx.projects).length > 0,
   args: [
     {
       kind: 'select',
@@ -34,8 +45,8 @@ export const openWorktreeCommand: PaletteCommand = {
       key: 'worktreeId',
       label: 'Worktree',
       defaultSelection: 'none',
-      emptyHint: 'Type to filter existing worktrees, then choose one.',
-      options: (ctx, values): readonly Option<ExistingWorktreePayload>[] => {
+      emptyHint: 'Type a branch name or choose a worktree.',
+      options: async (ctx, values): Promise<readonly Option<WorktreeStepPayload>[]> => {
         const projectId = Number(values.projectId);
         const project = presentProjects(ctx.projects).find(
           (candidate) => candidate.id === projectId,
@@ -44,20 +55,38 @@ export const openWorktreeCommand: PaletteCommand = {
           return [];
         }
 
-        return [...project.worktrees]
-          .sort((left, right) =>
-            worktreeOptionLabel(left).localeCompare(worktreeOptionLabel(right)),
-          )
-          .map((worktree) => ({
-            value: String(worktree.id),
-            label: worktreeOptionLabel(worktree),
-            hint: worktree.branch ? 'branch · already open' : 'commit · already open',
+        const branchList = await Effect.runPromise(listProjectBranches(project.id));
+        const worktreeOptions = [...project.worktrees].map((worktree) => ({
+          value: worktree.branch ?? String(worktree.id),
+          label: worktreeOptionLabel(worktree),
+          hint: worktree.branch ? 'branch · already open' : 'commit · already open',
+          payload: {
+            kind: 'existing_worktree' as const,
+            projectId: project.id,
+            worktreeId: worktree.id,
+          },
+        }));
+        const worktreeBranches = new Set(
+          project.worktrees
+            .map((worktree) => worktree.branch)
+            .filter((branch): branch is string => Boolean(branch)),
+        );
+        const branchOptions = branchList.branches
+          .filter((branch) => !worktreeBranches.has(branch.name))
+          .map((branch) => ({
+            value: branch.name,
+            label: branch.name,
+            hint: 'checkout branch',
             payload: {
-              kind: 'existing_worktree',
+              kind: 'existing_branch' as const,
+              branch: branch.name,
               projectId: project.id,
-              worktreeId: worktree.id,
             },
           }));
+
+        return [...worktreeOptions, ...branchOptions].sort((left, right) =>
+          left.label.localeCompare(right.label),
+        );
       },
     },
   ],
@@ -68,12 +97,27 @@ export const openWorktreeCommand: PaletteCommand = {
       return;
     }
 
+    if (isExistingBranchPayload(selected)) {
+      return openWorktreeFromPalette(selected.projectId, { branch: selected.branch }).then(
+        () => undefined,
+      );
+    }
+
     const projectId = Number(values.projectId);
-    const worktreeId = Number(values.worktreeId);
     const project = presentProjects(ctx.projects).find((candidate) => candidate.id === projectId);
-    const worktree = project?.worktrees.find((candidate) => candidate.id === worktreeId);
+    const worktree = project?.worktrees.find(
+      (candidate) =>
+        candidate.branch === values.worktreeId || String(candidate.id) === values.worktreeId,
+    );
     if (project && worktree) {
       useWorkspaceStore.getState().selectWorktree(project.id, worktree.id);
+      return;
+    }
+
+    if (project && values.worktreeId) {
+      return openWorktreeFromPalette(project.id, { branch: values.worktreeId }).then(
+        () => undefined,
+      );
     }
   },
 };
@@ -100,5 +144,15 @@ function isExistingWorktreePayload(value: unknown): value is ExistingWorktreePay
     (value as ExistingWorktreePayload).kind === 'existing_worktree' &&
     typeof (value as ExistingWorktreePayload).projectId === 'number' &&
     typeof (value as ExistingWorktreePayload).worktreeId === 'number'
+  );
+}
+
+function isExistingBranchPayload(value: unknown): value is ExistingBranchPayload {
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    (value as ExistingBranchPayload).kind === 'existing_branch' &&
+    typeof (value as ExistingBranchPayload).branch === 'string' &&
+    typeof (value as ExistingBranchPayload).projectId === 'number'
   );
 }

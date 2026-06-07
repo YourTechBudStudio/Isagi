@@ -16,6 +16,9 @@ import {
   type ActiveContextPersistenceInput,
   type AddProjectOutput,
   type DeleteProjectOutput,
+  type ListProjectBranchesOutput,
+  type OpenWorktreeInput,
+  type OpenWorktreeOutput,
   type PathSuggestOutput,
   type ReconcileWorkspaceInput,
   type ReconcileWorkspaceOutput,
@@ -67,6 +70,16 @@ export interface RuntimeClient {
     DeleteProjectOutput,
     RuntimeEndpointError<typeof apiEndpoints.projects.delete>
   >;
+  readonly listProjectBranches: (
+    projectId: number,
+  ) => Effect.Effect<
+    ListProjectBranchesOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.branches>
+  >;
+  readonly openWorktree: (
+    projectId: number,
+    input: OpenWorktreeInput,
+  ) => Effect.Effect<OpenWorktreeOutput, RuntimeEndpointError<typeof apiEndpoints.worktrees.open>>;
   readonly suggestProjectPaths: (
     input: string,
     limit?: number,
@@ -88,6 +101,8 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     relocateProject: (projectId, path) =>
       request(apiEndpoints.projects.relocate, { projectId }, { path }),
     deleteProject: (projectId) => request(apiEndpoints.projects.delete, { projectId }),
+    listProjectBranches: (projectId) => request(apiEndpoints.worktrees.branches, { projectId }),
+    openWorktree: (projectId, input) => request(apiEndpoints.worktrees.open, { projectId }, input),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),
   };

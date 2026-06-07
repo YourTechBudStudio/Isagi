@@ -5,6 +5,9 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   DeleteProjectOutput,
+  ListProjectBranchesOutput,
+  OpenWorktreeInput,
+  OpenWorktreeOutput,
   PathSuggestOutput,
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
@@ -51,6 +54,19 @@ export function relocateProject(
 
 export function deleteProject(projectId: number): Effect.Effect<DeleteProjectOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.deleteProject(projectId)));
+}
+
+export function listProjectBranches(
+  projectId: number,
+): Effect.Effect<ListProjectBranchesOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listProjectBranches(projectId)));
+}
+
+export function openWorktree(
+  projectId: number,
+  input: OpenWorktreeInput,
+): Effect.Effect<OpenWorktreeOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.openWorktree(projectId, input)));
 }
 
 export function suggestProjectPaths(

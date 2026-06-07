@@ -15,5 +15,5 @@ const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive))
 export type RuntimeServices = WorkspaceServiceShape;
 
 export const RuntimeLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(Layer.mergeAll(RepositoryLive, StateLive, GitLive)),
+  Layer.provide(Layer.mergeAll(RepositoryLive, StateLive, GitLive, DataDirectoryLive)),
 );

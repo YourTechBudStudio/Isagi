@@ -62,6 +62,9 @@ export function CommandPalette() {
   const [payloads, setPayloads] = useState<ArgPayloads>({});
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [sel, setSel] = useState<number | null>(0);
+  const [stepOptions, setStepOptions] = useState<readonly Option[]>([]);
+  const [stepOptionsLoading, setStepOptionsLoading] = useState(false);
+  const [stepOptionsError, setStepOptionsError] = useState<string | null>(null);
   const [pathSuggestions, setPathSuggestions] = useState<readonly PathSuggestion[]>([]);
   const [pathError, setPathError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -110,6 +113,9 @@ export function CommandPalette() {
       setValues({});
       setPayloads({});
       setLabels({});
+      setStepOptions([]);
+      setStepOptionsError(null);
+      setStepOptionsLoading(false);
       setStepIndex(0);
       setCommand(null);
       return;
@@ -128,6 +134,9 @@ export function CommandPalette() {
     setValues(initialValues);
     setPayloads({});
     setLabels(initialLabels);
+    setStepOptions([]);
+    setStepOptionsError(null);
+    setStepOptionsLoading(false);
     setStepIndex(firstUnfilledStep(autostart.args, initialValues));
     setCommand(autostart);
   }, [open, autostartCommandId, autostartValues, ctx]);
@@ -155,12 +164,81 @@ export function CommandPalette() {
         };
       }
 
-      const options = computeStepOptions(spec, spec.options(ctx, values), query);
-      return { kind: 'wizard' as const, hint: spec.emptyHint, options };
+      const options = computeStepOptions(spec, stepOptions, query);
+      return {
+        kind: 'wizard' as const,
+        error: stepOptionsError,
+        hint: spec.emptyHint,
+        loading: stepOptionsLoading,
+        options,
+      };
     }
     const items = query ? filterEntries(allEntries, query) : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
-  }, [command, spec, ctx, values, query, allEntries, recents, pathSuggestions, pathError]);
+  }, [
+    command,
+    spec,
+    ctx,
+    values,
+    query,
+    allEntries,
+    recents,
+    pathSuggestions,
+    pathError,
+    stepOptions,
+    stepOptionsError,
+    stepOptionsLoading,
+  ]);
+
+  useEffect(() => {
+    if (!open || !command || (spec?.kind !== 'select' && spec?.kind !== 'combo')) {
+      setStepOptions([]);
+      setStepOptionsError(null);
+      setStepOptionsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setStepOptionsError(null);
+
+    try {
+      const loaded = spec.options(ctx, values);
+      if (loaded instanceof Promise) {
+        setStepOptionsLoading(true);
+        void loaded
+          .then(
+            (options) => {
+              if (!cancelled) {
+                setStepOptions(options);
+                setStepOptionsError(null);
+              }
+            },
+            (error: unknown) => {
+              if (!cancelled) {
+                setStepOptions([]);
+                setStepOptionsError(error instanceof Error ? error.message : String(error));
+              }
+            },
+          )
+          .finally(() => {
+            if (!cancelled) {
+              setStepOptionsLoading(false);
+            }
+          });
+      } else {
+        setStepOptions(loaded);
+        setStepOptionsLoading(false);
+      }
+    } catch (error) {
+      setStepOptions([]);
+      setStepOptionsLoading(false);
+      setStepOptionsError(error instanceof Error ? error.message : String(error));
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, command, spec, ctx, values]);
 
   useEffect(() => {
     if (!open || !command || spec?.kind !== 'path') {
@@ -221,6 +299,9 @@ export function CommandPalette() {
     setValues({});
     setPayloads({});
     setLabels({});
+    setStepOptions([]);
+    setStepOptionsError(null);
+    setStepOptionsLoading(false);
     setQuery('');
   };
 
@@ -265,6 +346,9 @@ export function CommandPalette() {
       setValues(nextValues);
       setPayloads(nextPayloads);
       setLabels(nextLabels);
+      setStepOptions([]);
+      setStepOptionsError(null);
+      setStepOptionsLoading(false);
       setQuery('');
       setStepIndex(stepIndex + 1);
     }
@@ -344,10 +428,16 @@ export function CommandPalette() {
           return next;
         });
       }
+      setStepOptions([]);
+      setStepOptionsError(null);
+      setStepOptionsLoading(false);
       setQuery('');
       setStepIndex(stepIndex - 1);
     } else {
       setCommand(null);
+      setStepOptions([]);
+      setStepOptionsError(null);
+      setStepOptionsLoading(false);
       setQuery('');
     }
   };
@@ -483,7 +573,9 @@ export function CommandPalette() {
                 <WizardOptions
                   options={view.options}
                   sel={sel}
+                  error={view.error}
                   hint={view.hint}
+                  loading={view.loading}
                   onPick={(index) => {
                     const option = view.options[index];
                     if (option) {
@@ -664,17 +756,26 @@ function PathOptions({
 function WizardOptions({
   options,
   sel,
+  error,
   hint,
+  loading,
   onPick,
 }: {
   options: readonly Option[];
   sel: number | null;
+  error?: string | null | undefined;
   hint?: string | undefined;
+  loading?: boolean | undefined;
   onPick: (index: number) => void;
 }) {
+  if (error) {
+    return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
+  }
+
   return (
     <>
       {hint && <p className="px-3 py-2 font-mono text-[11px] text-fg-subtle">{hint}</p>}
+      {loading && <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">Loading…</p>}
       {options.map((option, index) =>
         option.create ? (
           <button

@@ -1,4 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
@@ -8,6 +9,9 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   DeleteProjectOutput,
+  ListProjectBranchesOutput,
+  OpenWorktreeInput,
+  OpenWorktreeOutput,
   ReconciliationFinding,
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
@@ -16,13 +20,20 @@ import type {
 } from '@isagi/contracts';
 
 import {
+  branchPathHash,
   Git,
   type GitCommandError,
   listGitWorktrees,
+  listLocalBranches,
   type ProjectPathValidationError,
   validateProjectRoot,
 } from '../git/index.js';
-import { type DatabaseError, StateFile, type StateFileError } from '../persistence/index.js';
+import {
+  DataDirectory,
+  type DatabaseError,
+  StateFile,
+  type StateFileError,
+} from '../persistence/index.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import {
   WorkspaceRepository,
@@ -36,8 +47,12 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'project_not_missing'
     | 'project_not_present'
     | 'project_path_already_registered'
+    | 'branch_not_found'
+    | 'checkout_path_exists'
+    | 'checkout_parent_unavailable'
     | 'worktree_not_found';
   readonly message: string;
+  readonly branch?: string | undefined;
   readonly conflictingProjectId?: number | undefined;
   readonly path?: string | undefined;
   readonly projectId?: number | undefined;
@@ -57,6 +72,13 @@ export interface WorkspaceService {
     projectId: number,
   ) => Effect.Effect<DeleteProjectOutput, WorkspaceServiceError>;
   readonly getActiveContext: Effect.Effect<ActiveContextOutput, WorkspaceServiceError>;
+  readonly listProjectBranches: (input: {
+    readonly projectId: number;
+  }) => Effect.Effect<ListProjectBranchesOutput, WorkspaceServiceError>;
+  readonly openWorktree: (input: {
+    readonly projectId: number;
+    readonly request: OpenWorktreeInput;
+  }) => Effect.Effect<OpenWorktreeOutput, WorkspaceServiceError>;
   readonly registerProject: (input: {
     readonly path: string;
   }) => Effect.Effect<AddProjectOutput, WorkspaceServiceError>;
@@ -80,6 +102,7 @@ export const WorkspaceServiceLive = Layer.effect(
     const repository = yield* WorkspaceRepository;
     const stateFile = yield* StateFile;
     const git = yield* Git;
+    const dataDirectory = yield* DataDirectory;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -102,6 +125,115 @@ export const WorkspaceServiceLive = Layer.effect(
           return { projectId, deleted };
         }),
       getActiveContext,
+      listProjectBranches: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* ensureProjectPathAvailable(repository, project);
+          const branches = yield* listLocalBranches(project.rootPath).pipe(
+            Effect.provideService(Git, git),
+          );
+          const worktrees = yield* repository.listWorktrees;
+          const worktreeIdByBranch = new Map(
+            worktrees
+              .filter((worktree) => worktree.projectId === project.id && worktree.branch)
+              .map((worktree) => [worktree.branch as string, worktree.id] as const),
+          );
+
+          return {
+            branches: branches.map((branch) => ({
+              name: branch,
+              worktreeId: worktreeIdByBranch.get(branch) ?? null,
+            })),
+          } satisfies ListProjectBranchesOutput;
+        }),
+      openWorktree: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          const branch = input.request.branch.trim();
+          if (!branch) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'branch_not_found',
+                message: 'A branch name is required to open a worktree.',
+                projectId: input.projectId,
+              }),
+            );
+          }
+
+          yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
+          const existing = yield* repository.findProjectWorktreeByBranch({
+            projectId: project.id,
+            branch,
+          });
+          if (existing) {
+            return { projectId: project.id, worktreeId: existing.id, branch };
+          }
+
+          const branches = yield* listLocalBranches(project.rootPath).pipe(
+            Effect.provideService(Git, git),
+          );
+          if (!branches.includes(branch)) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'branch_not_found',
+                branch,
+                message: `Branch ${branch} was not found in project ${project.id}.`,
+                projectId: project.id,
+              }),
+            );
+          }
+
+          const checkoutPath = join(
+            dataDirectory.paths.worktreesPath,
+            String(project.id),
+            branchPathHash(branch),
+          );
+          if (pathExists(checkoutPath)) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'checkout_path_exists',
+                message: `Worktree checkout path already exists: ${checkoutPath}`,
+                path: checkoutPath,
+                projectId: project.id,
+              }),
+            );
+          }
+
+          yield* Effect.try({
+            try: () =>
+              mkdirSync(join(dataDirectory.paths.worktreesPath, String(project.id)), {
+                recursive: true,
+              }),
+            catch: () =>
+              new WorkspaceError({
+                branch,
+                code: 'checkout_parent_unavailable',
+                message: `Could not prepare worktree checkout parent for project ${project.id}.`,
+                path: checkoutPath,
+                projectId: project.id,
+              }),
+          });
+
+          yield* git.run(['-C', project.rootPath, 'worktree', 'add', checkoutPath, branch]);
+          yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
+          const created = yield* repository.findProjectWorktreeByBranch({
+            projectId: project.id,
+            branch,
+          });
+          if (!created) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                branch,
+                code: 'worktree_not_found',
+                message: `Git created branch ${branch}, but Isagi could not find the new worktree after reconciliation.`,
+                projectId: project.id,
+              }),
+            );
+          }
+
+          return { projectId: project.id, worktreeId: created.id, branch };
+        }),
       registerProject: (input) =>
         Effect.gen(function* () {
           const projectRoot = yield* validateProjectRoot(input.path).pipe(
@@ -225,6 +357,39 @@ function requireProject(repository: WorkspaceRepositoryService, projectId: numbe
       );
     }
     return project;
+  });
+}
+
+function requirePresentProject(repository: WorkspaceRepositoryService, projectId: number) {
+  return Effect.gen(function* () {
+    const project = yield* requireProject(repository, projectId);
+    if (project.status !== 'present') {
+      return yield* Effect.fail(projectNotPresent(projectId));
+    }
+    return project;
+  });
+}
+
+function ensureProjectPathAvailable(repository: WorkspaceRepositoryService, project: ProjectRow) {
+  return Effect.gen(function* () {
+    if (pathIsDirectory(project.rootPath)) {
+      return;
+    }
+
+    yield* repository.setProjectStatus({
+      id: project.id,
+      missingReason: `Project path not found: ${project.rootPath}`,
+      status: 'missing',
+    });
+    return yield* Effect.fail(projectNotPresent(project.id));
+  });
+}
+
+function projectNotPresent(projectId: number) {
+  return new WorkspaceError({
+    code: 'project_not_present',
+    message: `Project ${projectId} is not present.`,
+    projectId,
   });
 }
 
@@ -403,6 +568,14 @@ function pathIsDirectory(path: string) {
     return existsSync(path) && statSync(path).isDirectory();
   } catch {
     return false;
+  }
+}
+
+function pathExists(path: string) {
+  try {
+    return existsSync(path);
+  } catch {
+    return true;
   }
 }
 

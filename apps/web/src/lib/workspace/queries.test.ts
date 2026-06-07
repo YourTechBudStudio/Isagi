@@ -4,7 +4,39 @@ import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
 
 import type { WorkspaceData } from './model.js';
-import { commitAddProjectSuccess, workspaceQueryKey } from './queries.js';
+import {
+  commitAddProjectSuccess,
+  commitOpenWorktreeSuccess,
+  workspaceQueryKey,
+} from './queries.js';
+import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
+
+test('open-worktree success refetches workspace before selecting returned worktree', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, {
+    projects: [project({ id: 1, name: 'stale-but-fresh' })],
+  });
+  const events: string[] = [];
+  useWorkspaceStore.getState().setSelection(emptyWorkspaceSelection);
+
+  await commitOpenWorktreeSuccess(
+    client,
+    { projectId: 2, worktreeId: 22, branch: 'feature/new' },
+    async () => {
+      events.push(`fetch:${useWorkspaceStore.getState().selection.kind}`);
+      return { projects: [project({ id: 2, name: 'next' })] };
+    },
+  );
+
+  events.push(`select:${useWorkspaceStore.getState().selection.kind}`);
+  assert.deepEqual(events, ['fetch:empty', 'select:worktree']);
+  assert.deepEqual(useWorkspaceStore.getState().selection, {
+    kind: 'worktree',
+    projectId: 2,
+    worktreeId: 22,
+  });
+  assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.id, 2);
+});
 
 test('add-project success invalidates the workspace query without cache surgery', async () => {
   const client = new QueryClient();

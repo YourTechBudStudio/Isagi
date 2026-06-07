@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -65,6 +66,25 @@ export function listGitWorktrees(rootPath: string) {
         Effect.map(({ stdout }) => normalizeWorktreeRecords(parseGitWorktreeListPorcelain(stdout))),
       );
   });
+}
+
+export function listLocalBranches(rootPath: string) {
+  return Effect.gen(function* () {
+    const git = yield* Git;
+    return yield* git.run(['-C', rootPath, 'branch', '--format=%(refname:short)']).pipe(
+      Effect.map(({ stdout }) =>
+        stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+          .sort((left, right) => left.localeCompare(right)),
+      ),
+    );
+  });
+}
+
+export function branchPathHash(branch: string) {
+  return createHash('sha256').update(branch).digest('hex').slice(0, 16);
 }
 
 function validateDirectory(path: string) {

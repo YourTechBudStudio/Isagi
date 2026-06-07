@@ -32,13 +32,14 @@ export interface Option<Payload = unknown> {
 
 export type ArgValues = Record<string, string>;
 export type ArgPayloads = Record<string, unknown>;
+export type MaybePromise<T> = T | Promise<T>;
 
 export type ArgSpec =
   | {
       readonly kind: 'select';
       readonly key: string;
       readonly label: string;
-      readonly options: (ctx: PaletteContext, values: ArgValues) => readonly Option[];
+      readonly options: (ctx: PaletteContext, values: ArgValues) => MaybePromise<readonly Option[]>;
       /** Empty-query selection behavior. Defaults to selecting the first/default option. */
       readonly defaultSelection?: 'first' | 'none';
       readonly emptyHint?: string;
@@ -48,7 +49,7 @@ export type ArgSpec =
       readonly key: string;
       readonly label: string;
       readonly prefix?: string;
-      readonly options: (ctx: PaletteContext, values: ArgValues) => readonly Option[];
+      readonly options: (ctx: PaletteContext, values: ArgValues) => MaybePromise<readonly Option[]>;
       /** Empty-query selection behavior. Defaults to selecting the first/default option. */
       readonly defaultSelection?: 'first' | 'none';
       readonly emptyHint?: string;

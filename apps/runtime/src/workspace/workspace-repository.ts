@@ -23,6 +23,10 @@ export interface WorkspaceRepositoryService {
     rootPath: string,
   ) => Effect.Effect<ProjectRow | null, DatabaseError>;
   readonly findWorktree: (worktreeId: number) => Effect.Effect<WorktreeRow | null, DatabaseError>;
+  readonly findProjectWorktreeByBranch: (input: {
+    readonly projectId: number;
+    readonly branch: string;
+  }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
   readonly deleteProject: (projectId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly insertProject: (input: {
     readonly name: string;
@@ -69,6 +73,17 @@ export const WorkspaceRepositoryLive = Layer.effect(
       findWorktree: (worktreeId) =>
         database.use<WorktreeRow | null>('find_worktree', (db) => {
           const row = db.select().from(worktrees).where(eq(worktrees.id, worktreeId)).get();
+          return row ? worktreeRow(row) : null;
+        }),
+      findProjectWorktreeByBranch: (input) =>
+        database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(
+              and(eq(worktrees.projectId, input.projectId), eq(worktrees.branch, input.branch)),
+            )
+            .get();
           return row ? worktreeRow(row) : null;
         }),
       deleteProject: (projectId) =>

@@ -3,23 +3,27 @@ import { Duration, Effect } from 'effect';
 
 import type {
   ActiveContextPersistenceInput,
+  OpenWorktreeInput,
+  OpenWorktreeOutput,
   ReconciliationFinding,
   SetActiveContextInput,
 } from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
-import { workspaceDataFromSnapshot } from './model.js';
+import { workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
 import {
   addProject,
   deleteProject,
   fetchActiveContext,
   fetchWorkspace,
   formatRuntimeError,
+  openWorktree,
   reconcileWorkspace,
   relocateProject,
   updateActiveContext,
 } from './runtime-data.js';
+import { useWorkspaceStore } from './store.js';
 
 export const workspaceQueryKey = ['workspace'] as const;
 export const activeContextQueryKey = ['workspace', 'active-context'] as const;
@@ -78,6 +82,26 @@ export async function addProjectPath(path: string) {
 export async function relocateProjectPath(projectId: number, path: string) {
   const output = await Effect.runPromise(relocateProject(projectId, path));
   await commitRelocateProjectSuccess(queryClient, output.findings);
+}
+
+export async function openWorktreeFromPalette(projectId: number, input: OpenWorktreeInput) {
+  const output = await Effect.runPromise(openWorktree(projectId, input));
+  await commitOpenWorktreeSuccess(queryClient, output);
+  return output;
+}
+
+export async function commitOpenWorktreeSuccess(
+  client: QueryClient,
+  output: OpenWorktreeOutput,
+  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
+    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+) {
+  await client.fetchQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceData(signal),
+    staleTime: 0,
+  });
+  useWorkspaceStore.getState().selectWorktree(output.projectId, output.worktreeId);
 }
 
 export async function commitAddProjectSuccess(

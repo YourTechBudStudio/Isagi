@@ -92,6 +92,26 @@ export function registerWorkspaceApi(
     mapError: (error, context) => toWorkspaceApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.branches, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.listProjectBranches({ projectId: params.projectId });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.open, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.openWorktree({ projectId: params.projectId, request: input });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
 }
 
 function relocationRejectionReason(error: WorkspaceError) {
@@ -99,6 +119,20 @@ function relocationRejectionReason(error: WorkspaceError) {
     case 'project_not_found':
     case 'project_not_missing':
     case 'project_path_already_registered':
+      return error.code;
+    default:
+      return 'project_not_found';
+  }
+}
+
+function worktreeRejectionReason(error: WorkspaceError) {
+  switch (error.code) {
+    case 'project_not_found':
+    case 'project_not_present':
+    case 'branch_not_found':
+    case 'checkout_path_exists':
+    case 'checkout_parent_unavailable':
+    case 'worktree_not_found':
       return error.code;
     default:
       return 'project_not_found';
@@ -145,6 +179,39 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
         message: error.message,
         requestId: context.requestId,
         data: { reason: 'project_not_found', projectId: error.projectId },
+      };
+    }
+
+    if (context.endpointId === 'worktrees.branches') {
+      return {
+        code: 'worktree_branch_list_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: worktreeRejectionReason(error),
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+        },
+      };
+    }
+
+    if (context.endpointId === 'worktrees.open') {
+      return {
+        code: 'worktree_open_rejected',
+        status:
+          error.code === 'checkout_path_exists'
+            ? 409
+            : error.code === 'checkout_parent_unavailable'
+              ? 500
+              : 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: worktreeRejectionReason(error),
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+          ...(error.branch ? { branch: error.branch } : {}),
+          ...(error.path ? { path: error.path } : {}),
+        },
       };
     }
 

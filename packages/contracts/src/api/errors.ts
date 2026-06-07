@@ -47,6 +47,39 @@ export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_path_already_registered',
 );
 
+export const worktreeOperationRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_present',
+  'branch_not_found',
+  'checkout_path_exists',
+  'checkout_parent_unavailable',
+  'worktree_not_found',
+);
+
+export const worktreeBranchListRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_branch_list_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeOperationRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const worktreeOpenRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_open_rejected'),
+  status: Schema.Union(Schema.Literal(400), Schema.Literal(409), Schema.Literal(500)),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeOperationRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    branch: Schema.optional(Schema.String),
+    path: Schema.optional(Schema.String),
+  }),
+});
+
 export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('workspace_reconcile_rejected'),
   status: Schema.Literal(400),
@@ -152,6 +185,20 @@ export const projectDeleteApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const worktreeBranchListApiErrorSchema = Schema.Union(
+  worktreeBranchListRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const worktreeOpenApiErrorSchema = Schema.Union(
+  worktreeOpenRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export type ProjectPathRejectionReason = Schema.Schema.Type<
   typeof projectPathRejectionReasonSchema
 >;
@@ -164,6 +211,9 @@ export type WorkspaceReconcileRejectionReason = Schema.Schema.Type<
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;
+export type WorktreeOperationRejectionReason = Schema.Schema.Type<
+  typeof worktreeOperationRejectionReasonSchema
+>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema
@@ -174,3 +224,7 @@ export type WorkspaceReconcileRejectedError = Schema.Schema.Type<
 export type ProjectRelocationRejectedError = Schema.Schema.Type<
   typeof projectRelocationRejectedErrorSchema
 >;
+export type WorktreeBranchListRejectedError = Schema.Schema.Type<
+  typeof worktreeBranchListRejectedErrorSchema
+>;
+export type WorktreeOpenRejectedError = Schema.Schema.Type<typeof worktreeOpenRejectedErrorSchema>;
