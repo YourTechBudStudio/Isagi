@@ -6,7 +6,14 @@ import type {
 } from '@isagi/contracts';
 
 import { findActiveSurface } from './selectors.js';
-import type { AccentColor, Project, Surface, Worktree, WorkspaceSelection } from './types.js';
+import type {
+  AccentColor,
+  MissingProject,
+  Project,
+  Surface,
+  Worktree,
+  WorkspaceSelection,
+} from './types.js';
 
 export interface WorkspaceData {
   readonly projects: readonly Project[];
@@ -166,12 +173,15 @@ export function findWorktree(
 export function findMissingProject(
   projects: readonly Project[],
   projectId: number | null,
-): Project | null {
+): MissingProject | null {
   if (!projectId) {
     return null;
   }
   return (
-    projects.find((project) => project.id === projectId && project.status === 'missing') ?? null
+    projects.find(
+      (project): project is MissingProject =>
+        project.id === projectId && project.status === 'missing',
+    ) ?? null
   );
 }
 

@@ -7,7 +7,7 @@ import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
-import type { Project, Surface, Worktree } from '../../lib/workspace/types.js';
+import type { MissingProject, Surface, Worktree } from '../../lib/workspace/types.js';
 import { AgentSurface } from './AgentSurface.js';
 import { TerminalSurface } from './TerminalSurface.js';
 
@@ -112,7 +112,7 @@ function NoSurfaceState({ worktree }: { worktree: Worktree }) {
   );
 }
 
-function MissingProjectState({ project }: { project: Project }) {
+function MissingProjectState({ project }: { project: MissingProject }) {
   return (
     <EmptyState
       halo="error"
@@ -128,11 +128,9 @@ function MissingProjectState({ project }: { project: Project }) {
         <>
           Isagi expected{' '}
           <span className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
-            {project.rootPath ?? project.name}
+            {project.rootPath}
           </span>{' '}
-          but the runtime cannot use it right now.{' '}
-          {project.missingReason ??
-            'The path may be missing, moved, or no longer readable as a Git worktree.'}
+          but it isn&apos;t there anymore. {project.missingReason}
         </>
       }
       actions={
@@ -145,7 +143,7 @@ function MissingProjectState({ project }: { project: Project }) {
           </Button>
         </>
       }
-      aside="// relocate & remove land in the next phase"
+      aside="// it was here a minute ago"
     />
   );
 }

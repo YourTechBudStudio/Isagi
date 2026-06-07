@@ -47,32 +47,36 @@ function project(input: {
   readonly name: string;
   readonly status: 'present' | 'missing';
 }): Project {
-  return {
+  const base = {
     id: input.id,
     name: input.name,
     rootPath: `/repo/${input.name}`,
-    status: input.status,
     glyph: input.name.slice(0, 2).toUpperCase(),
-    accent: 'blue',
-    worktrees:
-      input.status === 'present'
-        ? [
-            {
-              id: input.id * 10,
-              projectId: input.id,
-              title: 'main',
-              path: `/repo/${input.name}`,
-              branch: 'main',
-              head: 'abcdef0',
-              isRoot: true,
-              attention: 'idle',
-              parked: false,
-              surfaces: [],
-              activeSurfaceId: null,
-              commands: [],
-            },
-          ]
-        : [],
-    ...(input.status === 'missing' ? { missingReason: 'Project path not found.' } : {}),
+    accent: 'blue' as const,
+  };
+
+  if (input.status === 'missing') {
+    return { ...base, status: 'missing', missingReason: 'Project path not found.', worktrees: [] };
+  }
+
+  return {
+    ...base,
+    status: 'present',
+    worktrees: [
+      {
+        id: input.id * 10,
+        projectId: input.id,
+        title: 'main',
+        path: `/repo/${input.name}`,
+        branch: 'main',
+        head: 'abcdef0',
+        isRoot: true,
+        attention: 'idle',
+        parked: false,
+        surfaces: [],
+        activeSurfaceId: null,
+        commands: [],
+      },
+    ],
   };
 }
