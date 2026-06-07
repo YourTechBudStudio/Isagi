@@ -1,6 +1,14 @@
 import { Effect } from 'effect';
 
-import type { PathSuggestOutput, WorkspaceSnapshot } from '@isagi/contracts';
+import type {
+  ActiveContextOutput,
+  ActiveContextPersistenceInput,
+  AddProjectOutput,
+  PathSuggestOutput,
+  ReconcileWorkspaceInput,
+  ReconcileWorkspaceOutput,
+  WorkspaceSnapshot,
+} from '@isagi/contracts';
 
 import { createRuntimeClient, RuntimeApiError, type RuntimeClient } from '../runtime/client.js';
 import { resolveRuntimeUrl } from '../runtime/resolve.js';
@@ -12,11 +20,23 @@ export function fetchWorkspace() {
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorkspace()));
 }
 
-export function updateActiveContext(worktreeId: number) {
-  return getClient().pipe(Effect.flatMap((client) => client.updateActiveContext(worktreeId)));
+export function fetchActiveContext(): Effect.Effect<ActiveContextOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.fetchActiveContext()));
 }
 
-export function addProject(path: string) {
+export function updateActiveContext(
+  input: ActiveContextPersistenceInput,
+): Effect.Effect<ActiveContextOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.updateActiveContext(input)));
+}
+
+export function reconcileWorkspace(
+  input: ReconcileWorkspaceInput,
+): Effect.Effect<ReconcileWorkspaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.reconcileWorkspace(input)));
+}
+
+export function addProject(path: string): Effect.Effect<AddProjectOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.addProject(path)));
 }
 

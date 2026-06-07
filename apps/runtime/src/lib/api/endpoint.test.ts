@@ -187,7 +187,7 @@ test('API endpoint returns explicit request decoding errors before running handl
 
   try {
     const response = await fastify.inject({
-      method: 'PATCH',
+      method: 'PUT',
       url: '/api/v1/workspace/active-context',
       payload: { worktreeId: 0 },
     });

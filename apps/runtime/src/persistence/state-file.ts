@@ -10,6 +10,7 @@ export interface WorkspaceState {
   readonly workspace: {
     readonly activeProjectId: number | null;
     readonly activeWorktreeId: number | null;
+    readonly activeContextRevision: number;
   };
 }
 
@@ -21,6 +22,11 @@ export class StateFileError extends Data.TaggedError('StateFileError')<{
 export interface StateFileService {
   readonly read: Effect.Effect<WorkspaceState, StateFileError>;
   readonly write: (state: WorkspaceState) => Effect.Effect<void, StateFileError>;
+  readonly writeActiveContextIfFresh: (input: {
+    readonly activeProjectId: number | null;
+    readonly activeWorktreeId: number | null;
+    readonly revision: number;
+  }) => Effect.Effect<WorkspaceState, StateFileError>;
 }
 
 export const StateFile = Context.GenericTag<StateFileService>('isagi/StateFile');
@@ -30,6 +36,7 @@ const defaultState: WorkspaceState = {
   workspace: {
     activeProjectId: null,
     activeWorktreeId: null,
+    activeContextRevision: 0,
   },
 };
 
@@ -66,6 +73,24 @@ export const StateFileLive = Layer.effect(
           try: () => writeStateFile(directory.paths.statePath, state),
           catch: (cause) => new StateFileError({ operation: 'write_state_file', cause }),
         }),
+      writeActiveContextIfFresh: (input) =>
+        Effect.try({
+          try: () => {
+            const current = readStateFile(directory.paths.statePath);
+            if (input.revision <= current.workspace.activeContextRevision) {
+              return current;
+            }
+            const next = stateFromActiveContext(
+              input.activeProjectId,
+              input.activeWorktreeId,
+              input.revision,
+            );
+            writeStateFile(directory.paths.statePath, next);
+            return next;
+          },
+          catch: (cause) =>
+            new StateFileError({ operation: 'write_active_context_state_file', cause }),
+        }),
     } satisfies StateFileService;
   }),
 );
@@ -73,11 +98,20 @@ export const StateFileLive = Layer.effect(
 export function stateFromActiveContext(
   activeProjectId: number | null,
   activeWorktreeId: number | null,
+  activeContextRevision = 0,
 ): WorkspaceState {
   return {
     version: 1,
-    workspace: { activeProjectId, activeWorktreeId },
+    workspace: { activeProjectId, activeWorktreeId, activeContextRevision },
   };
+}
+
+function readStateFile(path: string): WorkspaceState {
+  if (!existsSync(path)) {
+    writeStateFile(path, defaultState);
+    return defaultState;
+  }
+  return parseState(JSON.parse(readFileSync(path, 'utf8')));
 }
 
 function parseState(value: unknown): WorkspaceState {
@@ -93,6 +127,7 @@ function parseState(value: unknown): WorkspaceState {
   const workspace = candidate.workspace as {
     activeProjectId?: unknown;
     activeWorktreeId?: unknown;
+    activeContextRevision?: unknown;
   };
 
   return {
@@ -100,8 +135,19 @@ function parseState(value: unknown): WorkspaceState {
     workspace: {
       activeProjectId: nullablePositiveInteger(workspace.activeProjectId),
       activeWorktreeId: nullablePositiveInteger(workspace.activeWorktreeId),
+      activeContextRevision: nonNegativeInteger(workspace.activeContextRevision),
     },
   };
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (Number.isInteger(value) && typeof value === 'number' && value >= 0) {
+    return value;
+  }
+  throw new Error('state.json active context revision must be a non-negative integer');
 }
 
 function nullablePositiveInteger(value: unknown): number | null {

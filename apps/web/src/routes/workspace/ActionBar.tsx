@@ -3,7 +3,8 @@ import { Fragment, useEffect, useState } from 'react';
 
 import { Tooltip } from '../../components/Tooltip.js';
 import type { IconType } from '../../lib/icon.js';
-import { useActiveWorktree, useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useActiveWorktree } from '../../lib/workspace/hooks.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 
 interface MockWorktreeAction {
   readonly id: string;

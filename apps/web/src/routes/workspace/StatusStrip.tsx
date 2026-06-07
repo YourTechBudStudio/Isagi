@@ -1,8 +1,9 @@
 import { Fragment } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { branchLabel } from '../../lib/workspace/selectors.js';
-import { useActiveWorktree, useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { Command } from '../../lib/workspace/types.js';
 
 /**

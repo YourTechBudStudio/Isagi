@@ -8,6 +8,11 @@ export type { AttentionState };
 
 export type AccentColor = 'blue' | 'violet' | 'amber' | 'green' | 'cyan' | 'red';
 
+export type WorkspaceSelection =
+  | { readonly kind: 'worktree'; readonly projectId: number; readonly worktreeId: number }
+  | { readonly kind: 'missingProject'; readonly projectId: number }
+  | { readonly kind: 'empty' };
+
 export type SurfaceKind = 'agent' | 'terminal' | 'browser' | 'editor' | 'artifact';
 
 export interface AgentSession {

@@ -11,7 +11,12 @@ import {
   type ApiEndpointError,
   type ApiEndpointOutput,
   type ApiInfrastructureError,
+  type ActiveContextOutput,
+  type ActiveContextPersistenceInput,
+  type AddProjectOutput,
   type PathSuggestOutput,
+  type ReconcileWorkspaceInput,
+  type ReconcileWorkspaceOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -27,15 +32,25 @@ export interface RuntimeClient {
     WorkspaceSnapshot,
     RuntimeEndpointError<typeof apiEndpoints.workspace.get>
   >;
+  readonly fetchActiveContext: () => Effect.Effect<
+    ActiveContextOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workspace.getActiveContext>
+  >;
   readonly updateActiveContext: (
-    worktreeId: number,
+    input: ActiveContextPersistenceInput,
   ) => Effect.Effect<
-    WorkspaceSnapshot,
+    ActiveContextOutput,
     RuntimeEndpointError<typeof apiEndpoints.workspace.setActiveContext>
+  >;
+  readonly reconcileWorkspace: (
+    input: ReconcileWorkspaceInput,
+  ) => Effect.Effect<
+    ReconcileWorkspaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workspace.reconcile>
   >;
   readonly addProject: (
     path: string,
-  ) => Effect.Effect<WorkspaceSnapshot, RuntimeEndpointError<typeof apiEndpoints.projects.add>>;
+  ) => Effect.Effect<AddProjectOutput, RuntimeEndpointError<typeof apiEndpoints.projects.add>>;
   readonly suggestProjectPaths: (
     input: string,
     limit?: number,
@@ -50,8 +65,9 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
 
   return {
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
-    updateActiveContext: (worktreeId) =>
-      request(apiEndpoints.workspace.setActiveContext, { worktreeId }),
+    fetchActiveContext: () => request(apiEndpoints.workspace.getActiveContext),
+    updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
+    reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),
     addProject: (path) => request(apiEndpoints.projects.add, { path }),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),

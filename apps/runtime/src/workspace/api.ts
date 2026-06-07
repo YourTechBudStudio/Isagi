@@ -33,11 +33,31 @@ export function registerWorkspaceApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.workspace.getActiveContext, {
+    handle: () =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.getActiveContext;
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.workspace.setActiveContext, {
     handle: (input) =>
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.setActiveContext(input);
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.workspace.reconcile, {
+    handle: (input) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.reconcileWorkspace(input);
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
     run,
@@ -66,12 +86,30 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
   }
 
   if (error instanceof WorkspaceError) {
+    if (
+      context.endpointId === 'workspace.reconcile' &&
+      error.code === 'project_not_found' &&
+      error.projectId
+    ) {
+      return {
+        code: 'workspace_reconcile_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: { reason: 'project_not_found', projectId: error.projectId },
+      };
+    }
+
     return {
       code: 'workspace_active_context_rejected',
       status: 400,
       message: error.message,
       requestId: context.requestId,
-      data: { reason: error.code, worktreeId: error.worktreeId },
+      data: {
+        reason: error.code,
+        ...(error.projectId ? { projectId: error.projectId } : {}),
+        ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+      },
     };
   }
 

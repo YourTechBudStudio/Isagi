@@ -1,7 +1,6 @@
 import { projectApiErrorSchema } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
-import { workspaceSnapshotSchema } from '../workspace/types.js';
-import { addProjectInputSchema } from './types.js';
+import { addProjectInputSchema, addProjectOutputSchema } from './types.js';
 
 export const projectsEndpoints = {
   add: {
@@ -9,13 +8,13 @@ export const projectsEndpoints = {
     method: 'POST',
     path: '/projects',
     body: addProjectInputSchema,
-    output: workspaceSnapshotSchema,
+    output: addProjectOutputSchema,
     errors: projectApiErrorSchema,
   },
 } as const satisfies {
   readonly add: ApiEndpoint<
     typeof addProjectInputSchema,
-    typeof workspaceSnapshotSchema,
+    typeof addProjectOutputSchema,
     typeof projectApiErrorSchema
   >;
 };

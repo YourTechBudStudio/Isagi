@@ -7,15 +7,16 @@ import type { ProjectRow, WorktreeRow } from './types.js';
 export function buildWorkspaceSnapshot(
   projects: readonly ProjectRow[],
   worktrees: readonly WorktreeRow[],
-  activeContext: WorkspaceSnapshot['activeContext'],
 ): WorkspaceSnapshot {
   return {
     projects: projects.map((project) => buildProjectSnapshot(project, worktrees)),
-    activeContext,
   };
 }
 
-function buildProjectSnapshot(project: ProjectRow, worktrees: readonly WorktreeRow[]): Project {
+export function buildProjectSnapshot(
+  project: ProjectRow,
+  worktrees: readonly WorktreeRow[],
+): Project {
   const base = {
     id: project.id,
     name: project.name,

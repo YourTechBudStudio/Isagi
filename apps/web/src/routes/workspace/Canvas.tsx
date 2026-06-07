@@ -4,7 +4,8 @@ import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
-import { useWorkspace, useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useWorkspace } from '../../lib/workspace/hooks.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Project, Surface, Worktree } from '../../lib/workspace/types.js';
 import { AgentSurface } from './AgentSurface.js';
@@ -16,17 +17,9 @@ import { TerminalSurface } from './TerminalSurface.js';
  * the canvas carries no tab chrome.
  */
 export function Canvas() {
-  const { activeWorktree, activeMissingProject, activeSurface, loading, error } = useWorkspace();
+  const { activeWorktree, activeMissingProject, activeSurface } = useWorkspace();
   if (activeMissingProject) {
     return <MissingProjectState project={activeMissingProject} />;
-  }
-
-  if (!activeWorktree && loading) {
-    return <LoadingState />;
-  }
-
-  if (!activeWorktree && error) {
-    return <RuntimeErrorState error={error} />;
   }
 
   if (!activeWorktree) {
@@ -90,30 +83,6 @@ function surfacePlaceholderCopy(surface: Surface): string {
     default:
       return `// ${surface.title}`;
   }
-}
-
-function LoadingState() {
-  return (
-    <EmptyState
-      title="Checking the runtime."
-      body="Isagi is asking the runtime for registered projects and Git worktrees."
-      aside="// no spinner; just the boring handshake"
-    />
-  );
-}
-
-function RuntimeErrorState({ error }: { error: string }) {
-  return (
-    <EmptyState
-      halo="error"
-      title="Runtime connection failed."
-      body="Isagi could not load projects from the runtime. Check the runtime process and try again."
-    >
-      <p className="mt-0.5 max-w-full rounded-sm border border-error/24 bg-error/8 px-3 py-2 font-mono text-[12px] text-error">
-        {error}
-      </p>
-    </EmptyState>
-  );
 }
 
 function FreshEmptyState() {

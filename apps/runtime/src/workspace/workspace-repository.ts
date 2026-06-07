@@ -8,7 +8,13 @@ import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 type ProjectRecord = InferSelectModel<typeof projects>;
 type WorktreeRecord = InferSelectModel<typeof worktrees>;
 
+export interface WorkspaceReconcileProjectWorktreesResult {
+  readonly added: readonly Pick<WorktreeRow, 'id' | 'path'>[];
+  readonly missing: readonly Pick<WorktreeRow, 'id' | 'path'>[];
+}
+
 export interface WorkspaceRepositoryService {
+  readonly findProject: (projectId: number) => Effect.Effect<ProjectRow | null, DatabaseError>;
   readonly findProjectByRootPath: (
     rootPath: string,
   ) => Effect.Effect<ProjectRow | null, DatabaseError>;
@@ -22,7 +28,7 @@ export interface WorkspaceRepositoryService {
   readonly reconcileProjectWorktrees: (input: {
     readonly projectId: number;
     readonly discovered: readonly DiscoveredWorktree[];
-  }) => Effect.Effect<void, DatabaseError>;
+  }) => Effect.Effect<WorkspaceReconcileProjectWorktreesResult, DatabaseError>;
   readonly setProjectStatus: (input: {
     readonly id: number;
     readonly missingReason?: string | undefined;
@@ -40,6 +46,11 @@ export const WorkspaceRepositoryLive = Layer.effect(
     const database = yield* RuntimeDatabase;
 
     return {
+      findProject: (projectId) =>
+        database.use<ProjectRow | null>('find_project', (db) => {
+          const row = db.select().from(projects).where(eq(projects.id, projectId)).get();
+          return row ? projectRow(row) : null;
+        }),
       findProjectByRootPath: (rootPath) =>
         database.use<ProjectRow | null>('find_project_by_root_path', (db) => {
           const row = db.select().from(projects).where(eq(projects.rootPath, rootPath)).get();
@@ -82,6 +93,7 @@ export const WorkspaceRepositoryLive = Layer.effect(
       reconcileProjectWorktrees: (input) =>
         database.transaction('reconcile_project_worktrees', (db) => {
           const now = timestamp();
+          const added: Pick<WorktreeRow, 'id' | 'path'>[] = [];
 
           for (const worktree of input.discovered) {
             const existing =
@@ -105,7 +117,8 @@ export const WorkspaceRepositoryLive = Layer.effect(
                 .where(eq(worktrees.id, existing.id))
                 .run();
             } else {
-              db.insert(worktrees)
+              const inserted = db
+                .insert(worktrees)
                 .values({
                   projectId: input.projectId,
                   path: worktree.path,
@@ -117,7 +130,9 @@ export const WorkspaceRepositoryLive = Layer.effect(
                   firstSeenAt: now,
                   lastSeenAt: now,
                 })
-                .run();
+                .returning({ id: worktrees.id, path: worktrees.path })
+                .get();
+              added.push(inserted);
             }
           }
 
@@ -127,12 +142,19 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .where(eq(worktrees.projectId, input.projectId))
             .all();
 
-          for (const id of prunedWorktreeIds({
+          const missing = prunedWorktreeIds({
             discovered: input.discovered,
             existing: existingWorktrees,
-          })) {
-            db.delete(worktrees).where(eq(worktrees.id, id)).run();
+          })
+            .map((id) => existingWorktrees.find((worktree) => worktree.id === id))
+            .filter((worktree): worktree is WorktreeRecord => Boolean(worktree))
+            .map((worktree) => ({ id: worktree.id, path: worktree.path }));
+
+          for (const worktree of missing) {
+            db.delete(worktrees).where(eq(worktrees.id, worktree.id)).run();
           }
+
+          return { added, missing };
         }),
       setProjectStatus: (input) =>
         database.use('set_project_status', (db) => {

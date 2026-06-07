@@ -1,6 +1,6 @@
 import type { Schema } from 'effect';
 
-export type ApiMethod = 'GET' | 'PATCH' | 'POST';
+export type ApiMethod = 'GET' | 'PATCH' | 'POST' | 'PUT';
 
 export interface ApiEndpoint<
   Body extends Schema.Schema.AnyNoContext | undefined,

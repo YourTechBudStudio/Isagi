@@ -4,7 +4,7 @@ import { Button } from '../../components/Button.js';
 import { Overline } from '../../components/Overline.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
-import { useWorkspace } from '../../lib/workspace/store.js';
+import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { ProjectGroup } from './ProjectGroup.js';
 
 const APP_VERSION = '0.0.1';
@@ -24,6 +24,7 @@ export function Rail() {
     selectWorktree,
     selectMissingProject,
     selectSurface,
+    activeSurfaceByWorktreeId,
   } = useWorkspace();
   const openPalette = usePaletteStore((state) => state.openPalette);
 
@@ -47,6 +48,7 @@ export function Rail() {
             selectedProjectId={selectedProjectId}
             onSelectWorktree={selectWorktree}
             onSelectMissingProject={selectMissingProject}
+            activeSurfaceByWorktreeId={activeSurfaceByWorktreeId}
             onSelectSurface={selectSurface}
             onAddProject={() => openPalette('add-project')}
           />

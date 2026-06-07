@@ -55,6 +55,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
 
       yield* tryPromise(() =>
         fastify.register(cors, {
+          methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
           origin: (origin, callback) => {
             callback(null, isAllowedRuntimeOrigin(origin));
           },

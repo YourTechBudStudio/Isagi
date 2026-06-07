@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { Plus } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -34,7 +35,8 @@ import type {
   PaletteEntry,
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useWorkspace } from '../../lib/workspace/hooks.js';
+import { suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
 
 export function CommandPalette() {
   const open = usePaletteStore((state) => state.open);
@@ -45,9 +47,7 @@ export function CommandPalette() {
   const closePalette = usePaletteStore((state) => state.closePalette);
   const pushRecent = usePaletteStore((state) => state.pushRecent);
 
-  const projects = useWorkspaceStore((state) => state.projects);
-  const activeWorktreeId = useWorkspaceStore((state) => state.activeWorktreeId);
-  const suggestPaths = useWorkspaceStore((state) => state.suggestPaths);
+  const { projects, activeWorktreeId } = useWorkspace();
   const ctx = useMemo(
     () => buildPaletteContext(projects, activeWorktreeId),
     [projects, activeWorktreeId],
@@ -171,7 +171,7 @@ export function CommandPalette() {
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void suggestPaths(query).then(
+      void Effect.runPromise(suggestProjectPaths(query)).then(
         (output) => {
           if (!cancelled) {
             setPathSuggestions(output.suggestions);
@@ -191,7 +191,7 @@ export function CommandPalette() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [open, command, spec?.kind, query, suggestPaths]);
+  }, [open, command, spec?.kind, query]);
 
   const length =
     view.kind === 'wizard'

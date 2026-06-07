@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 
 import { uiTransition, zenTransition } from '../../lib/motion.js';
+import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { ActionBar } from './ActionBar.js';
 import { Canvas } from './Canvas.js';
@@ -19,7 +20,7 @@ import { WorkbenchDrawer } from './WorkbenchDrawer.js';
  */
 export function WorkArea() {
   const zen = useWorkspaceStore((state) => state.zen);
-  const error = useWorkspaceStore((state) => state.error);
+  const { error } = useWorkspace();
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -51,7 +52,7 @@ export function WorkArea() {
 function RuntimeErrorBanner({ error }: { error: string }) {
   return (
     <div className="pointer-events-none absolute top-3 left-1/2 z-20 max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-error/28 bg-canvas/88 px-3.5 py-2 font-mono text-[11.5px] text-error shadow-soft backdrop-blur-md">
-      runtime error · {error}
+      runtime refresh failed · {error}
     </div>
   );
 }

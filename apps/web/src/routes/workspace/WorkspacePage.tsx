@@ -1,9 +1,15 @@
 import { MotionConfig } from 'motion/react';
 import { useEffect } from 'react';
 
+import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
+import {
+  usePersistActiveContextSelection,
+  useWorkspaceSelectionSync,
+} from '../../lib/workspace/hooks.js';
+import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
@@ -26,16 +32,45 @@ function FirstRunDragRegion() {
  * left; the work area fills the rest. Before then, the work area owns the full
  * window so the first-run empty state is visually centered.
  */
+function WorkspaceBootSurface() {
+  return (
+    <main className="canvas-atmosphere grid h-screen place-items-center p-6">
+      <EmptyState
+        title="Restoring the workspace."
+        body="Isagi is asking the runtime for projects, worktrees, and the last room you had open."
+        aside="// no empty-state snap; wait for the facts"
+      />
+    </main>
+  );
+}
+
+function WorkspaceRuntimeError({ error }: { error: string }) {
+  return (
+    <main className="canvas-atmosphere grid h-screen place-items-center p-6">
+      <EmptyState
+        halo="error"
+        title="Runtime connection failed."
+        body="Isagi could not load the workspace snapshot. Check the runtime process and try again."
+      >
+        <p className="mt-0.5 max-w-full rounded-sm border border-error/24 bg-error/8 px-3 py-2 font-mono text-[12px] text-error">
+          {error}
+        </p>
+      </EmptyState>
+    </main>
+  );
+}
+
 export function WorkspacePage() {
   const zen = useWorkspaceStore((state) => state.zen);
   const setZen = useWorkspaceStore((state) => state.setZen);
-  const loadWorkspace = useWorkspaceStore((state) => state.loadWorkspace);
-  const hasConfiguredProjects = useWorkspaceStore((state) => state.projects.length > 0);
+  const workspace = useWorkspaceQuery();
+  const workspaceErrorIsFatal = Boolean(workspace.error && !workspace.data);
+  const hasConfiguredProjects =
+    !workspaceErrorIsFatal && (workspace.data?.projects.length ?? 0) > 0;
   const paletteOpen = usePaletteStore((state) => state.open);
 
-  useEffect(() => {
-    loadWorkspace();
-  }, [loadWorkspace]);
+  useWorkspaceSelectionSync();
+  usePersistActiveContextSelection();
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.
@@ -70,8 +105,16 @@ export function WorkspacePage() {
             }`}
           >
             {!hasConfiguredProjects && <FirstRunDragRegion />}
-            {hasConfiguredProjects && <Rail />}
-            <WorkArea />
+            {workspace.isPending && !workspace.data ? (
+              <WorkspaceBootSurface />
+            ) : workspaceErrorIsFatal ? (
+              <WorkspaceRuntimeError error={formatRuntimeError(workspace.error)} />
+            ) : (
+              <>
+                {hasConfiguredProjects && <Rail />}
+                <WorkArea />
+              </>
+            )}
           </div>
           <CommandPalette />
         </>

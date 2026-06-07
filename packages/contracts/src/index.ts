@@ -49,12 +49,17 @@ export {
   workspaceActiveContextRejectedErrorSchema,
   workspaceActiveContextRejectionReasonSchema,
   workspaceGetApiErrorSchema,
+  workspaceReconcileApiErrorSchema,
+  workspaceReconcileRejectedErrorSchema,
+  workspaceReconcileRejectionReasonSchema,
 } from './api/errors.js';
 export type {
   ProjectPathRejectedError,
   ProjectPathRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,
+  WorkspaceReconcileRejectedError,
+  WorkspaceReconcileRejectionReason,
 } from './api/errors.js';
 
 export { healthEndpoint } from './health/api.js';
@@ -70,15 +75,20 @@ export {
 export type { PathSuggestInput, PathSuggestOutput, PathSuggestion } from './paths/types.js';
 
 export { projectsEndpoints } from './projects/api.js';
-export { addProjectInputSchema } from './projects/types.js';
-export type { AddProjectInput } from './projects/types.js';
+export { addProjectInputSchema, addProjectOutputSchema } from './projects/types.js';
+export type { AddProjectInput, AddProjectOutput } from './projects/types.js';
 export { workspaceEndpoints } from './workspace/api.js';
 export {
+  activeContextOutputSchema,
+  activeContextPersistenceInputSchema,
   activeContextSchema,
   attentionStateSchema,
   commandSchema,
   projectSchema,
   projectStatusSchema,
+  reconcileWorkspaceInputSchema,
+  reconcileWorkspaceOutputSchema,
+  reconciliationFindingSchema,
   setActiveContextInputSchema,
   surfaceSchema,
   workspaceSnapshotSchema,
@@ -86,10 +96,16 @@ export {
 } from './workspace/types.js';
 export type {
   ActiveContext,
+  ActiveContextOutput,
+  ActiveContextPersistenceInput,
   AttentionState,
   Project,
   ProjectStatus,
+  ReconcileWorkspaceInput,
+  ReconcileWorkspaceOutput,
+  ReconciliationFinding,
   SetActiveContextInput,
+  SetActiveContextOutput,
   WorkspaceSnapshot,
   Worktree,
 } from './workspace/types.js';

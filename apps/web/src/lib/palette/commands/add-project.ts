@@ -1,6 +1,6 @@
 import { FolderPlus } from 'lucide-react';
 
-import { useWorkspaceStore } from '../../workspace/store.js';
+import { addProjectPath } from '../../workspace/queries.js';
 import type { PaletteCommand } from '../types.js';
 
 export const addProjectCommand: PaletteCommand = {
@@ -19,7 +19,7 @@ export const addProjectCommand: PaletteCommand = {
   run: (values) => {
     const path = values.path?.trim();
     if (path) {
-      return useWorkspaceStore.getState().addProjectPath(path);
+      return addProjectPath(path);
     }
     return undefined;
   },

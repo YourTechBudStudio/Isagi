@@ -2,7 +2,16 @@ import { existsSync, statSync } from 'node:fs';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type {
+  ActiveContext,
+  ActiveContextOutput,
+  ActiveContextPersistenceInput,
+  AddProjectOutput,
+  ReconciliationFinding,
+  ReconcileWorkspaceInput,
+  ReconcileWorkspaceOutput,
+  WorkspaceSnapshot,
+} from '@isagi/contracts';
 
 import {
   Git,
@@ -11,21 +20,16 @@ import {
   type ProjectPathValidationError,
   validateProjectRoot,
 } from '../git/index.js';
-import {
-  type DatabaseError,
-  StateFile,
-  type StateFileError,
-  stateFromActiveContext,
-} from '../persistence/index.js';
-import { activeContextsEqual, chooseActiveContext } from './active-context.js';
+import { type DatabaseError, StateFile, type StateFileError } from '../persistence/index.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import { WorkspaceRepository } from './workspace-repository.js';
 import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
-  readonly code: 'worktree_not_found' | 'project_not_present';
+  readonly code: 'project_not_found' | 'project_not_present' | 'worktree_not_found';
   readonly message: string;
-  readonly worktreeId: number;
+  readonly projectId?: number | undefined;
+  readonly worktreeId?: number | undefined;
 }> {}
 
 export type WorkspaceServiceError =
@@ -37,12 +41,16 @@ export type WorkspaceServiceError =
 
 export interface WorkspaceService {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
+  readonly getActiveContext: Effect.Effect<ActiveContextOutput, WorkspaceServiceError>;
   readonly registerProject: (input: {
     readonly path: string;
-  }) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
-  readonly setActiveContext: (input: {
-    readonly worktreeId: number;
-  }) => Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
+  }) => Effect.Effect<AddProjectOutput, WorkspaceServiceError>;
+  readonly reconcileWorkspace: (
+    input: ReconcileWorkspaceInput,
+  ) => Effect.Effect<ReconcileWorkspaceOutput, WorkspaceServiceError>;
+  readonly setActiveContext: (
+    input: ActiveContextPersistenceInput,
+  ) => Effect.Effect<ActiveContextOutput, WorkspaceServiceError>;
 }
 
 export const WorkspaceService = Context.GenericTag<WorkspaceService>('isagi/WorkspaceService');
@@ -55,126 +63,223 @@ export const WorkspaceServiceLive = Layer.effect(
     const git = yield* Git;
 
     const get = Effect.gen(function* () {
-      yield* reconcileWorkspaceWithGit(repository).pipe(Effect.provideService(Git, git));
-
       const rows = yield* loadWorkspaceRows(repository);
-      const state = yield* stateFile.read;
-      const requested = {
-        projectId: state.workspace.activeProjectId,
-        worktreeId: state.workspace.activeWorktreeId,
-      };
-      const activeContext = chooseActiveContext(requested, rows.projects, rows.worktrees);
-
-      if (!activeContextsEqual(requested, activeContext)) {
-        yield* stateFile.write(
-          stateFromActiveContext(activeContext.projectId, activeContext.worktreeId),
-        );
-      }
-
-      return buildWorkspaceSnapshot(rows.projects, rows.worktrees, activeContext);
+      return buildWorkspaceSnapshot(rows.projects, rows.worktrees);
     });
+
+    const getActiveContext = stateFile.read.pipe(
+      Effect.map((state) => ({ activeContext: activeContextFromState(state) })),
+    );
 
     return {
       get,
+      getActiveContext,
       registerProject: (input) =>
         Effect.gen(function* () {
           const projectRoot = yield* validateProjectRoot(input.path).pipe(
             Effect.provideService(Git, git),
           );
           const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
+          const alreadyExisted = Boolean(existing);
           const projectId =
             existing?.id ??
             (yield* repository.insertProject({
               name: projectRoot.name,
               rootPath: projectRoot.rootPath,
             }));
+          const project = existing ?? (yield* repository.findProject(projectId));
 
-          yield* reconcileWorkspaceWithGit(repository).pipe(Effect.provideService(Git, git));
-          const rows = yield* loadWorkspaceRows(repository);
-          const project = rows.projects.find((candidate) => candidate.id === projectId);
-          const worktree =
-            rows.worktrees.find(
-              (candidate) => candidate.projectId === projectId && candidate.isRoot === 1,
-            ) ?? rows.worktrees.find((candidate) => candidate.projectId === projectId);
-
-          if (project && worktree) {
-            yield* stateFile.write(stateFromActiveContext(project.id, worktree.id));
+          if (project) {
+            yield* reconcileProjectWithGit(repository, project).pipe(
+              Effect.provideService(Git, git),
+            );
           }
 
-          return yield* get;
+          return { projectId, alreadyExisted };
+        }),
+      reconcileWorkspace: (input) =>
+        Effect.gen(function* () {
+          const projects = input.projectId
+            ? [yield* requireProject(repository, input.projectId)]
+            : yield* repository.listProjects;
+          const findings: ReconciliationFinding[] = [];
+
+          for (const project of projects) {
+            findings.push(
+              ...(yield* reconcileProjectWithGit(repository, project).pipe(
+                Effect.provideService(Git, git),
+              )),
+            );
+          }
+
+          return { findings };
         }),
       setActiveContext: (input) =>
         Effect.gen(function* () {
-          yield* reconcileWorkspaceWithGit(repository).pipe(Effect.provideService(Git, git));
-          const worktree = yield* repository.findWorktree(input.worktreeId);
-
-          if (!worktree) {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'worktree_not_found',
-                message: `Worktree ${input.worktreeId} was not found.`,
-                worktreeId: input.worktreeId,
-              }),
-            );
-          }
-          const projects = yield* repository.listProjects;
-          const project = projects.find((candidate) => candidate.id === worktree.projectId);
-          if (!project || project.status !== 'present') {
-            return yield* Effect.fail(
-              new WorkspaceError({
-                code: 'project_not_present',
-                message: `Worktree ${input.worktreeId} belongs to a project that is not present.`,
-                worktreeId: input.worktreeId,
-              }),
-            );
+          const state = yield* stateFile.read;
+          if (input.revision <= state.workspace.activeContextRevision) {
+            return { activeContext: activeContextFromState(state) };
           }
 
-          yield* stateFile.write(stateFromActiveContext(worktree.projectId, worktree.id));
-          return yield* get;
+          const accepted = yield* validateActiveContextPersistenceTarget(
+            repository,
+            input.activeContext,
+          );
+
+          const nextState = yield* stateFile.writeActiveContextIfFresh({
+            activeProjectId: accepted.projectId,
+            activeWorktreeId: accepted.worktreeId,
+            revision: input.revision,
+          });
+          return { activeContext: activeContextFromState(nextState) };
         }),
     } satisfies WorkspaceService;
   }),
 );
 
-function reconcileWorkspaceWithGit(repository: WorkspaceRepositoryService) {
+function requireProject(repository: WorkspaceRepositoryService, projectId: number) {
   return Effect.gen(function* () {
-    const projects = yield* repository.listProjects;
-
-    for (const project of projects) {
-      if (!pathIsDirectory(project.rootPath)) {
-        yield* repository.setProjectStatus({
-          id: project.id,
-          missingReason: `Project path not found: ${project.rootPath}`,
-          status: 'missing',
-        });
-        continue;
-      }
-
-      yield* repository.setProjectStatus({ id: project.id, status: 'present' });
-
-      const discovery = yield* discoverWorktrees(project).pipe(
-        Effect.match({
-          onFailure: (error) => ({
-            status: 'failed' as const,
-            missingReason: describeWorktreeDiscoveryFailure(project.rootPath, error),
-          }),
-          onSuccess: (discovered) => ({ status: 'succeeded' as const, discovered }),
+    const project = yield* repository.findProject(projectId);
+    if (!project) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'project_not_found',
+          message: `Project ${projectId} was not found.`,
+          projectId,
         }),
       );
-      if (discovery.status === 'failed') {
-        yield* Effect.sync(() => console.error(`[workspace] ${discovery.missingReason}`));
-        yield* repository.setProjectStatus({
-          id: project.id,
-          missingReason: discovery.missingReason,
-          status: 'missing',
-        });
-        continue;
-      }
-      yield* repository.reconcileProjectWorktrees({
-        projectId: project.id,
-        discovered: discovery.discovered,
-      });
     }
+    return project;
+  });
+}
+
+function activeContextFromState(state: {
+  readonly workspace: {
+    readonly activeProjectId: number | null;
+    readonly activeWorktreeId: number | null;
+  };
+}): ActiveContext {
+  if (state.workspace.activeProjectId === null) {
+    return { projectId: null, worktreeId: null };
+  }
+  if (state.workspace.activeWorktreeId === null) {
+    return { projectId: state.workspace.activeProjectId, worktreeId: null };
+  }
+  return {
+    projectId: state.workspace.activeProjectId,
+    worktreeId: state.workspace.activeWorktreeId,
+  };
+}
+
+function validateActiveContextPersistenceTarget(
+  repository: WorkspaceRepositoryService,
+  requested: ActiveContextPersistenceInput['activeContext'],
+) {
+  return Effect.gen(function* () {
+    if (requested.projectId === null) {
+      return { projectId: null, worktreeId: null } satisfies ActiveContext;
+    }
+
+    const project = yield* repository.findProject(requested.projectId);
+    if (!project) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'project_not_found',
+          message: `Project ${requested.projectId} was not found.`,
+          projectId: requested.projectId,
+        }),
+      );
+    }
+    if (project.status !== 'present') {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'project_not_present',
+          message: `Project ${requested.projectId} is not present.`,
+          projectId: requested.projectId,
+        }),
+      );
+    }
+
+    const worktree = yield* repository.findWorktree(requested.worktreeId);
+    if (!worktree || worktree.projectId !== requested.projectId) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'worktree_not_found',
+          message: `Worktree ${requested.worktreeId} was not found for project ${requested.projectId}.`,
+          projectId: requested.projectId,
+          worktreeId: requested.worktreeId,
+        }),
+      );
+    }
+
+    return requested;
+  });
+}
+
+function reconcileProjectWithGit(repository: WorkspaceRepositoryService, project: ProjectRow) {
+  return Effect.gen(function* () {
+    const findings: ReconciliationFinding[] = [];
+
+    if (!pathIsDirectory(project.rootPath)) {
+      if (project.status !== 'missing') {
+        findings.push({ kind: 'project_missing', projectId: project.id, path: project.rootPath });
+      }
+      yield* repository.setProjectStatus({
+        id: project.id,
+        missingReason: `Project path not found: ${project.rootPath}`,
+        status: 'missing',
+      });
+      return findings;
+    }
+
+    const discovery = yield* discoverWorktrees(project).pipe(
+      Effect.match({
+        onFailure: (error) => ({
+          status: 'failed' as const,
+          missingReason: describeWorktreeDiscoveryFailure(project.rootPath, error),
+        }),
+        onSuccess: (discovered) => ({ status: 'succeeded' as const, discovered }),
+      }),
+    );
+    if (discovery.status === 'failed') {
+      if (project.status !== 'missing') {
+        findings.push({ kind: 'project_missing', projectId: project.id, path: project.rootPath });
+      }
+      yield* Effect.sync(() => console.error(`[workspace] ${discovery.missingReason}`));
+      yield* repository.setProjectStatus({
+        id: project.id,
+        missingReason: discovery.missingReason,
+        status: 'missing',
+      });
+      return findings;
+    }
+
+    if (project.status === 'missing') {
+      findings.push({ kind: 'project_restored', projectId: project.id, path: project.rootPath });
+    }
+    yield* repository.setProjectStatus({ id: project.id, status: 'present' });
+
+    const worktrees = yield* repository.reconcileProjectWorktrees({
+      projectId: project.id,
+      discovered: discovery.discovered,
+    });
+
+    findings.push(
+      ...worktrees.added.map((worktree) => ({
+        kind: 'worktree_added' as const,
+        projectId: project.id,
+        worktreeId: worktree.id,
+        path: worktree.path,
+      })),
+      ...worktrees.missing.map((worktree) => ({
+        kind: 'worktree_missing' as const,
+        projectId: project.id,
+        worktreeId: worktree.id,
+        path: worktree.path,
+      })),
+    );
+
+    return findings;
   });
 }
 

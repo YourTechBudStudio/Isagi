@@ -12,7 +12,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { surfaceTransition } from '../../lib/motion.js';
-import { useActiveWorktree, useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useActiveWorktree } from '../../lib/workspace/hooks.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { Command } from '../../lib/workspace/types.js';
 
 const MIN_WIDTH = 380;
@@ -41,7 +42,7 @@ const mockCommands: readonly Command[] = [
       '$ pnpm --filter @isagi/runtime dev:fixed',
       'ISAGI_RUNTIME_READY {"url":"http://127.0.0.1:17373"}',
       'workspace.get completed in 12ms',
-      'workspace.setActiveContext completed in 8ms',
+      'workspace.setActiveContext persisted in 8ms',
     ],
   },
   {

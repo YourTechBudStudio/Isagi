@@ -47,7 +47,7 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: ArrowRight,
         group: 'switch-worktree',
         sub: `${project.name} · ${candidate.branch ?? 'detached'}`,
-        run: () => useWorkspaceStore.getState().selectWorktree(candidate.id),
+        run: () => useWorkspaceStore.getState().selectWorktree(project.id, candidate.id),
       });
     }
   }

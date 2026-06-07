@@ -10,7 +10,6 @@ import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { Git, GitCommandError } from '../git/index.js';
 import { StateFile, stateFromActiveContext, type WorkspaceState } from '../persistence/index.js';
-import { chooseActiveContext } from './active-context.js';
 import type { ProjectRow, WorktreeRow } from './types.js';
 import {
   prunedWorktreeIds,
@@ -45,23 +44,10 @@ const worktreeBase = {
 } satisfies WorktreeRow;
 
 test('workspace snapshots serialize worktrees for present projects', () => {
-  const snapshot = buildWorkspaceSnapshot([project], [worktreeBase], {
-    projectId: project.id,
-    worktreeId: worktreeBase.id,
-  });
+  const snapshot = buildWorkspaceSnapshot([project], [worktreeBase]);
 
   assert.equal(snapshot.projects[0]?.worktrees[0]?.id, worktreeBase.id);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
-});
-
-test('active context falls back to the project root when the requested worktree was pruned', () => {
-  const activeContext = chooseActiveContext(
-    { projectId: project.id, worktreeId: 999 },
-    [project],
-    [worktreeBase],
-  );
-
-  assert.deepEqual(activeContext, { projectId: project.id, worktreeId: worktreeBase.id });
 });
 
 test('workspace reconciliation prunes undiscovered linked worktree rows, not roots', () => {
@@ -78,7 +64,7 @@ test('workspace reconciliation prunes undiscovered linked worktree rows, not roo
   );
 });
 
-test('workspace reconciliation keeps rows when Git discovery fails', async () => {
+test('workspace reads known rows without reconciling Git state', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-project-'));
   let currentProject: ProjectRow = { ...project, rootPath: projectRoot };
   let reconcileCalls = 0;
@@ -95,6 +81,8 @@ test('workspace reconciliation keeps rows when Git discovery fails', async () =>
   ];
 
   const repository = {
+    findProject: (projectId) =>
+      Effect.succeed(projectId === currentProject.id ? currentProject : null),
     findProjectByRootPath: () => Effect.succeed(currentProject),
     findWorktree: (worktreeId) =>
       Effect.succeed(worktrees.find((worktree) => worktree.id === worktreeId) ?? null),
@@ -104,6 +92,7 @@ test('workspace reconciliation keeps rows when Git discovery fails', async () =>
     reconcileProjectWorktrees: () =>
       Effect.sync(() => {
         reconcileCalls += 1;
+        return { added: [], missing: [] };
       }),
     setProjectStatus: (input) =>
       Effect.sync(() => {
@@ -133,6 +122,21 @@ test('workspace reconciliation keeps rows when Git discovery fails', async () =>
       Effect.sync(() => {
         state = nextState;
       }),
+    writeActiveContextIfFresh: (input: {
+      readonly activeProjectId: number | null;
+      readonly activeWorktreeId: number | null;
+      readonly revision: number;
+    }) =>
+      Effect.sync(() => {
+        if (input.revision > state.workspace.activeContextRevision) {
+          state = stateFromActiveContext(
+            input.activeProjectId,
+            input.activeWorktreeId,
+            input.revision,
+          );
+        }
+        return state;
+      }),
   };
 
   const originalConsoleError = console.error;
@@ -152,7 +156,7 @@ test('workspace reconciliation keeps rows when Git discovery fails', async () =>
     );
 
     assert.equal(reconcileCalls, 0);
-    assert.equal(snapshot.projects[0]?.status, 'missing');
+    assert.equal(snapshot.projects[0]?.status, 'present');
     assert.equal(worktrees.length, 2);
   } finally {
     console.error = originalConsoleError;

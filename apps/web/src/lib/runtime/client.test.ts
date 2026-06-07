@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { ApiError, WorkspaceSnapshot } from '@isagi/contracts';
+import type { AddProjectOutput, ApiError, Project, WorkspaceSnapshot } from '@isagi/contracts';
 
 import {
   createRuntimeClient,
@@ -14,8 +14,35 @@ import {
 
 const workspace = {
   projects: [],
-  activeContext: { projectId: null, worktreeId: null },
 } satisfies WorkspaceSnapshot;
+
+const project = {
+  id: 1,
+  name: 'isagi',
+  rootPath: '/repo/isagi',
+  status: 'present',
+  worktrees: [
+    {
+      id: 1,
+      projectId: 1,
+      title: 'main',
+      path: '/repo/isagi',
+      branch: 'main',
+      head: 'abcdef0',
+      isRoot: true,
+      attention: 'idle',
+      parked: false,
+      surfaces: [],
+      activeSurfaceId: null,
+      commands: [],
+    },
+  ],
+} satisfies Project;
+
+const addProjectOutput = {
+  projectId: project.id,
+  alreadyExisted: false,
+} satisfies AddProjectOutput;
 
 const originalFetch = globalThis.fetch;
 
@@ -35,6 +62,20 @@ test('runtime client decodes success envelopes', async () => {
   );
 
   assert.deepEqual(snapshot, workspace);
+});
+
+test('runtime client decodes minimal mutation success envelopes', async () => {
+  globalThis.fetch = mockFetch(
+    new Response(JSON.stringify({ data: addProjectOutput, meta: { requestId: 'req-add' } }), {
+      status: 200,
+    }),
+  );
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').addProject('/repo/isagi'),
+  );
+
+  assert.deepEqual(output, addProjectOutput);
 });
 
 test('runtime client decodes endpoint API errors before base API errors', async () => {

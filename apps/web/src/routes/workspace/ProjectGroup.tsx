@@ -25,14 +25,16 @@ export function ProjectGroup({
   selectedProjectId,
   onSelectWorktree,
   onSelectMissingProject,
+  activeSurfaceByWorktreeId,
   onSelectSurface,
   onAddProject,
 }: {
   project: Project;
   activeWorktreeId: number | null;
   selectedProjectId: number | null;
-  onSelectWorktree: (worktreeId: number) => void;
+  onSelectWorktree: (projectId: number, worktreeId: number) => void;
   onSelectMissingProject: (projectId: number) => void;
+  activeSurfaceByWorktreeId: Readonly<Record<number, string>>;
   onSelectSurface: (worktreeId: number, surfaceId: string) => void;
   onAddProject: () => void;
 }) {
@@ -77,7 +79,8 @@ export function ProjectGroup({
             key={worktree.id}
             worktree={worktree}
             active={worktree.id === activeWorktreeId}
-            onSelectWorktree={onSelectWorktree}
+            activeSurfaceId={activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId}
+            onSelectWorktree={(worktreeId) => onSelectWorktree(project.id, worktreeId)}
             onSelectSurface={onSelectSurface}
           />
         ))

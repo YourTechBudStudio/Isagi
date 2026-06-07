@@ -11,6 +11,7 @@ export const projectPathRejectionReasonSchema = Schema.Literal(
 );
 
 export const workspaceActiveContextRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
   'worktree_not_found',
   'project_not_present',
 );
@@ -33,7 +34,21 @@ export const workspaceActiveContextRejectedErrorSchema = Schema.Struct({
   requestId: Schema.String,
   data: Schema.Struct({
     reason: workspaceActiveContextRejectionReasonSchema,
-    worktreeId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_not_found');
+
+export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('workspace_reconcile_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: workspaceReconcileRejectionReasonSchema,
+    projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   }),
 });
 
@@ -90,6 +105,13 @@ export const workspaceActiveContextApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const workspaceReconcileApiErrorSchema = Schema.Union(
+  workspaceReconcileRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export const projectApiErrorSchema = Schema.Union(
   projectPathRejectedErrorSchema,
   gitCommandFailedErrorSchema,
@@ -104,7 +126,13 @@ export type ProjectPathRejectionReason = Schema.Schema.Type<
 export type WorkspaceActiveContextRejectionReason = Schema.Schema.Type<
   typeof workspaceActiveContextRejectionReasonSchema
 >;
+export type WorkspaceReconcileRejectionReason = Schema.Schema.Type<
+  typeof workspaceReconcileRejectionReasonSchema
+>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema
+>;
+export type WorkspaceReconcileRejectedError = Schema.Schema.Type<
+  typeof workspaceReconcileRejectedErrorSchema
 >;

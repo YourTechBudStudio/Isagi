@@ -16,11 +16,13 @@ import type { Worktree, Surface } from '../../lib/workspace/types.js';
 export function WorktreeBlock({
   worktree,
   active,
+  activeSurfaceId,
   onSelectWorktree,
   onSelectSurface,
 }: {
   worktree: Worktree;
   active: boolean;
+  activeSurfaceId: string | null;
   onSelectWorktree: (worktreeId: number) => void;
   onSelectSurface: (worktreeId: number, surfaceId: string) => void;
 }) {
@@ -61,7 +63,7 @@ export function WorktreeBlock({
                   <SurfaceRow
                     key={surface.id}
                     surface={surface}
-                    active={surface.id === worktree.activeSurfaceId}
+                    active={surface.id === activeSurfaceId}
                     pillId={`surface-pill-${worktree.id}`}
                     onSelect={() => onSelectSurface(worktree.id, surface.id)}
                   />
