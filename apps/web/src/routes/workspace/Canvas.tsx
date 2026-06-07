@@ -1,16 +1,15 @@
-import { Popover as BasePopover } from '@base-ui/react/popover';
-import { Plus, Unlink } from 'lucide-react';
+import { Plus } from 'lucide-react';
 
 import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import { useDeleteProjectMutation } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
-import type { MissingProject, Surface, Worktree } from '../../lib/workspace/types.js';
+import type { Surface, Worktree } from '../../lib/workspace/types.js';
 import { AgentSurface } from './AgentSurface.js';
+import { MissingProjectState } from './MissingProjectState.js';
 import { TerminalSurface } from './TerminalSurface.js';
 
 /**
@@ -111,90 +110,5 @@ function NoSurfaceState({ worktree }: { worktree: Worktree }) {
       body={`Isagi found ${worktree.title}. Agents, terminals, commands, and restored surfaces land in the next slices.`}
       aside="// navigation first; room furniture later"
     />
-  );
-}
-
-function MissingProjectState({ project }: { project: MissingProject }) {
-  const openPalette = usePaletteStore((state) => state.openPalette);
-
-  return (
-    <EmptyState
-      halo="error"
-      wide
-      eyebrow="Project unavailable"
-      icon={
-        <div className="grid size-14 place-items-center rounded-2xl border border-error/30 bg-error/8 text-error shadow-soft">
-          <Unlink size={26} strokeWidth={1.6} />
-        </div>
-      }
-      title="Can't use this project right now."
-      body={
-        <>
-          Isagi expected{' '}
-          <span className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
-            {project.rootPath}
-          </span>{' '}
-          but it isn&apos;t there anymore. {project.missingReason}
-        </>
-      }
-      actions={
-        <>
-          <Button
-            onClick={() => openPalette('relocate-project', { projectId: String(project.id) })}
-          >
-            Set new path…
-          </Button>
-          <RemoveProjectPopover project={project} />
-        </>
-      }
-      aside="// it was here a minute ago"
-    />
-  );
-}
-
-function RemoveProjectPopover({ project }: { project: MissingProject }) {
-  const deleteProject = useDeleteProjectMutation();
-
-  return (
-    <BasePopover.Root>
-      <BasePopover.Trigger
-        render={
-          <Button variant="secondary" className="hover:border-error/35 hover:text-fg">
-            Remove project
-          </Button>
-        }
-      />
-      <BasePopover.Portal>
-        <BasePopover.Positioner className="z-50" side="top" align="center" sideOffset={10}>
-          <BasePopover.Popup className="origin-(--transform-origin) rounded-md border border-line/35 bg-canvas/92 p-2.5 text-left shadow-soft backdrop-blur-md transition-[opacity,transform] duration-ui ease-expo data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
-            <div className="grid max-w-70 gap-2">
-              <div>
-                <div className="text-[13px] font-semibold text-fg">Remove project?</div>
-                <p className="mt-0.5 text-[12px] leading-snug text-fg-muted">
-                  Isagi forgets it. Files on disk are left alone.
-                </p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <BasePopover.Close
-                  render={
-                    <Button variant="ghost" size="sm" disabled={deleteProject.isPending}>
-                      Cancel
-                    </Button>
-                  }
-                />
-                <Button
-                  variant="danger"
-                  size="sm"
-                  disabled={deleteProject.isPending}
-                  onClick={() => deleteProject.mutate(project.id)}
-                >
-                  {deleteProject.isPending ? 'Removing…' : 'Remove from Isagi'}
-                </Button>
-              </div>
-            </div>
-          </BasePopover.Popup>
-        </BasePopover.Positioner>
-      </BasePopover.Portal>
-    </BasePopover.Root>
   );
 }
