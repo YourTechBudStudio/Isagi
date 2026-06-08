@@ -6,8 +6,8 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { DataDirectory, type IsagiDataDirectory } from './data-directory.js';
-import { StateFile, StateFileLive, stateFromActiveContext } from './state-file.js';
+import { DataDirectory, type IsagiDataDirectory } from './data-directory.service.js';
+import { StateFile, StateFileLive, stateFromActiveContext } from './state-file.service.js';
 
 test('malformed state file recovery is logged and stays out of the returned state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-state-'));

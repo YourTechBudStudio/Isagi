@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-import { DataDirectory } from './data-directory.js';
+import { DataDirectory } from './data-directory.service.js';
 
 export interface WorkspaceState {
   readonly version: 1;

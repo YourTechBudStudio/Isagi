@@ -5,9 +5,9 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
-import { normalizeHomePath } from '../paths/path-utils.js';
-import { Git, GitCommandError } from './git-command.js';
-import { parseGitWorktreeListPorcelain, type GitWorktreeRecord } from './worktree-list.js';
+import { normalizeHomePath } from '../paths/path.utils.js';
+import { Git, GitCommandError } from './git.command.js';
+import { parseGitWorktreeListPorcelain, type GitWorktreeRecord } from './worktree.list.js';
 
 export type ProjectPathValidationCode =
   | 'path_not_found'

@@ -3,7 +3,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { Context, Data, Effect, Layer } from 'effect';
 
-import { DataDirectory } from './data-directory.js';
+import { DataDirectory } from './data-directory.service.js';
 import { migrationsDirectory } from './migrations.js';
 import * as schema from './schema.js';
 

@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { Effect } from 'effect';
 
-import { normalizeHomePath } from './path-utils.js';
+import { normalizeHomePath } from './path.utils.js';
 
 export interface PathSuggestInput {
   readonly input: string;

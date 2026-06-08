@@ -27,9 +27,9 @@ import {
   prunedWorktreeIds,
   WorkspaceRepository,
   type WorkspaceRepositoryService,
-} from './workspace-repository.js';
-import { WorkspaceService, WorkspaceServiceLive } from './workspace-service.js';
-import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
+} from './workspace.repository.js';
+import { WorkspaceService, WorkspaceServiceLive } from './workspace.service.js';
+import { buildWorkspaceSnapshot } from './workspace.snapshot.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>

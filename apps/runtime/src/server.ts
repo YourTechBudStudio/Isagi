@@ -7,7 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
 import { registerPathsApi } from './paths/api.js';
-import { RuntimeLayer } from './runtime-layer.js';
+import { RuntimeLayer } from './runtime.layer.js';
 import { registerWorkspaceApi } from './workspace/api.js';
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';

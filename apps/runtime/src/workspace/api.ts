@@ -7,7 +7,7 @@ import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
 import { DataDirectoryError, DatabaseError, StateFileError } from '../persistence/index.js';
 import { ProjectConfigError } from '../project-config/project-config.service.js';
-import type { RuntimeServices } from '../runtime-layer.js';
+import type { RuntimeServices } from '../runtime.layer.js';
 import { WorktreeSetupError } from '../worktree-setup/index.js';
 import { WorkspaceError, WorkspaceService } from './index.js';
 

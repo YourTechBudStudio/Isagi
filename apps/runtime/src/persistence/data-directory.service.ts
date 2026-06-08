@@ -4,7 +4,7 @@ import process from 'node:process';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
-import { normalizeHomePath } from '../paths/path-utils.js';
+import { normalizeHomePath } from '../paths/path.utils.js';
 
 export class DataDirectoryError extends Data.TaggedError('DataDirectoryError')<{
   readonly cause: unknown;

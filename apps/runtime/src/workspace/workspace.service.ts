@@ -50,8 +50,8 @@ import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import {
   WorkspaceRepository,
   type WorkspaceReconcileProjectWorktreesResult,
-} from './workspace-repository.js';
-import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
+} from './workspace.repository.js';
+import { buildWorkspaceSnapshot } from './workspace.snapshot.js';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly code:

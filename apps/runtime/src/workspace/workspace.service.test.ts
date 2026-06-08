@@ -21,8 +21,8 @@ import {
   type WorktreeSetupService as WorktreeSetupServiceShape,
 } from '../worktree-setup/index.js';
 import type { ProjectRow, WorktreeRow } from './types.js';
-import { WorkspaceRepository, type WorkspaceRepositoryService } from './workspace-repository.js';
-import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from './workspace-service.js';
+import { WorkspaceRepository, type WorkspaceRepositoryService } from './workspace.repository.js';
+import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from './workspace.service.js';
 
 const project: ProjectRow = {
   id: 1,
