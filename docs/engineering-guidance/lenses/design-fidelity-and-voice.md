@@ -33,6 +33,8 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 
 - The skill's anti-pattern list is a hard ban, not a preference. Treat a listed anti-pattern on an in-scope surface as a real finding, not a nit.
 - Voice is the most identifiable thing about Isagi. Wrong register on a user-facing string is a fidelity failure even when the string is accurate.
+- Isagi's default is personality, not neutrality. When a user-facing string is harmless — no accuracy, honesty, clarity, or wrong-location consequence — leaning into Isagi's voice (vivid, plain, a little dry) is correct and is **not** a finding. Do not flag copy merely for being more colourful than a flatter, neutral alternative; "name the thing plainly" includes naming the real stakes vividly.
+- The relaxation above is tied to *harmless*. It does not extend to the forbidden locations below (destructive confirmations, validation errors, agent status lines, primary CTAs, constantly-seen chrome), where seriousness or restraint is the point. Trust/approval prompts that are consequential but not destructive (e.g. approving project setup hooks) may carry vivid-plain voice; reserve the strict bar for genuinely destructive or irreversible confirmations.
 - This lens and `product-behavior-and-ux.md` split copy by what is wrong with it: copy that is inaccurate or too vague to support belongs to that lens; copy that is off-voice, marketing-speak, or cute in the wrong place belongs here.
 
 ## Severity Mapping
@@ -48,10 +50,9 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 
 - Visual drift that is not a hard ban: accent overload, the timid-middle spacing default, motion off the expo-out curve, or a spinner on an operation that takes real time.
 - A new visual or copy pattern is invented where an existing house pattern fits.
-- Copy register is slightly off — close to the voice but not quite deadpan or plain.
+- Copy register drifts toward generic or marketing-flavoured — reads like a template, hedges, or trades plainness for polish. (Drift toward *more* Isagi personality on a harmless string is not a finding; see Isagi-Specific Notes.)
 
 ### Nit
 
 - Minor visual polish: a halo, gradient, or shadow that could be tuned; overline letter-spacing.
 - An empty or edge state that is fine but could better match Isagi's warmth.
-- A near-miss copy choice with no register or honesty consequence.
