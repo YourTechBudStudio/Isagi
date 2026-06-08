@@ -48,7 +48,7 @@ Early users need to report problems that can be debugged remotely. Runtime error
 
 ## Treat User-Visible Behavior As Engineering Behavior
 
-When a change affects what the user sees, trusts, resumes, or acts on, review it as engineering correctness, not as cosmetic polish.
+When a change affects what the user sees, trusts, resumes, or acts on, review it as engineering correctness, not as cosmetic polish. This includes look-and-feel and voice: on user-facing surfaces, adherence to Isagi's design language is part of the product, not decoration.
 
 ## Let Verification Match Risk
 

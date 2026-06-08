@@ -8,6 +8,8 @@ Before editing, identify which lenses are relevant to the change. During impleme
 
 Several lenses intentionally meet around stateful runtime/client work. Keep their jobs distinct: use `boundaries-and-contracts.md` to decide who owns a fact or API boundary, `state-flow-causality-and-operational-cost.md` to decide whether the transition is caused by the right action with appropriate scope and cost, and `runtime-behavior-and-diagnostics.md` to review lifecycle, failure, cancellation, and diagnosability once operational work exists.
 
+`product-behavior-and-ux.md` and `design-fidelity-and-voice.md` also meet on user-facing surfaces. Keep them distinct: product-behavior asks whether the surface is honest and useful for the user's next action; design-fidelity asks whether it looks and sounds like Isagi. When a change touches user-facing UI, marketing surfaces, or user-facing message strings, load the `design-system` skill and review against it.
+
 Prefer the smallest correct change that preserves the product model and keeps the code easy to follow. If a cleaner internal interface requires migrating callers, migrate them rather than adding compatibility shims, unless a real external boundary depends on the old behavior.
 
 For operational implementation code, prefer Effect-shaped internals and run them at framework or process boundaries. Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent. Schema-backed contracts remain descriptive boundary artifacts even when they use Effect Schema; do not treat them as a reason to expose operational Effect concepts across the API boundary.

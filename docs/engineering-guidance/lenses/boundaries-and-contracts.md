@@ -35,7 +35,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - `apps/desktop` owns Electron lifecycle, windows, preload boundaries, and runtime bootstrapping.
 - `packages/contracts` should stay implementation-free: it may describe serializable API schemas and wire types, but not runtime services, layers, domain internals, fibers, or operational dependencies.
 - Runtime HTTP APIs should be explicit rather than hidden behind framework dispatch: routes, methods, request decoding, response encoding, and error envelopes should be reviewable at the boundary.
-- Runtime/client API contracts should use versioned routes, schema-backed success and error envelopes, `camelCase` field names, and `snake_case` literal error codes/reasons.
+- Runtime/client API contracts should use versioned routes, schema-backed success and error envelopes, `camelCase` field names, and `snake_case` literal error codes/reasons. This lens owns error shape, codes, and envelopes; the voice of any user-facing message string those errors carry is reviewed by `design-fidelity-and-voice.md`.
 - Pre-MVP internal interfaces should evolve cleanly. Avoid internal compatibility theater when callers can be migrated safely.
 
 ## Severity Mapping

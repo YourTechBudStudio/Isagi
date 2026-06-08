@@ -14,8 +14,9 @@ This lens protects user-visible honesty, continuity, attention, and product trus
 - Are errors and empty states useful for the user's next action?
 - Does the change keep the work surface as the hero instead of letting chrome compete with it?
 - Does behavior remain keyboard-reachable for primary workbench actions where relevant?
-- Does copy stay plain, calm, and supportable instead of cute or vague?
-- Does the implementation preserve Isagi's design-system direction when UI is affected?
+- Is copy accurate and useful for the user's next action or for support, regardless of styling?
+
+Visual and voice adherence to Isagi's design language is reviewed by `design-fidelity-and-voice.md`. This lens owns whether copy is honest and useful; that lens owns whether it is on-voice.
 
 ## Isagi-Specific Notes
 
@@ -23,7 +24,6 @@ This lens protects user-visible honesty, continuity, attention, and product trus
 - The main/root checkout should behave as a first-class worktree, except where root-specific behavior matters.
 - A restored missing artifact should show a missing state instead of silently closing the surface.
 - Waiting-for-user state is part of momentum, not decoration.
-- Status copy should be dry and informative. Personality belongs in low-risk empty or edge surfaces, not critical runtime states.
 
 ## Severity Mapping
 
@@ -45,7 +45,5 @@ This lens protects user-visible honesty, continuity, attention, and product trus
 
 ### Nit
 
-- Copy can be clearer or calmer.
+- Copy could state the user-facing situation more clearly.
 - A status label could better match the actual state.
-- An empty or edge state could better align with Isagi's voice.
-- Minor visual consistency issue with low behavioral risk.

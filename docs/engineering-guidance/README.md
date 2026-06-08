@@ -20,6 +20,7 @@ The lenses are equal-priority review tools. A change does not need to touch ever
 - [`reuse-refactoring-and-drift-prevention.md`](./lenses/reuse-refactoring-and-drift-prevention.md) - shared behavior, refactoring pressure, and drift prevention.
 - [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, lifecycle ownership, failure semantics, logging, and supportability.
 - [`product-behavior-and-ux.md`](./lenses/product-behavior-and-ux.md) - honest product behavior, restoration, attention signals, and user-visible engineering quality.
+- [`design-fidelity-and-voice.md`](./lenses/design-fidelity-and-voice.md) - visual and voice adherence to Isagi's design language on user-facing surfaces, reviewed against the `design-system` skill.
 - [`reviewability-and-verification.md`](./lenses/reviewability-and-verification.md) - verification depth, dependency justification, review evidence, and completed-work trust.
 
 ## Severity Ladder
