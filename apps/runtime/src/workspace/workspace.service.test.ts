@@ -198,7 +198,7 @@ test('project relocation restores the same project id and reconciles discovered 
       Effect.sync(() => {
         restoredProjectId = input.projectId;
         restoredRootPath = input.rootPath;
-        return { added: [{ id: worktree.id, path: input.rootPath }], missing: [] };
+        return { added: [{ id: worktree.id, path: input.rootPath, branch: 'main' }], missing: [] };
       }),
   } satisfies WorkspaceRepositoryService;
   const stateFile = stateFileWithWriteCounter(() => {});
@@ -249,6 +249,7 @@ test('project relocation restores the same project id and reconciles discovered 
           projectId: project.id,
           worktreeId: worktree.id,
           path: projectRoot,
+          branch: 'main',
         },
       ],
     });
@@ -388,7 +389,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
     listWorktrees: Effect.sync(() => [...worktreeRows]),
     reconcileProjectWorktrees: (input) =>
       Effect.sync(() => {
-        const added: { id: number; path: string }[] = [];
+        const added: { id: number; path: string; branch: string | null }[] = [];
         for (const discovered of input.discovered) {
           const existing = worktreeRows.find((row) => row.path === discovered.path);
           if (existing) {
@@ -406,7 +407,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
               head: discovered.head,
             } satisfies WorktreeRow;
             worktreeRows = [...worktreeRows, row];
-            added.push({ id: row.id, path: row.path });
+            added.push({ id: row.id, path: row.path, branch: row.branch });
           }
         }
         return { added, missing: [] };
@@ -621,7 +622,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
     listWorktrees: Effect.sync(() => [...worktreeRows]),
     reconcileProjectWorktrees: (input) =>
       Effect.sync(() => {
-        const added: { id: number; path: string }[] = [];
+        const added: { id: number; path: string; branch: string | null }[] = [];
         for (const discovered of input.discovered) {
           if (worktreeRows.some((row) => row.path === discovered.path)) {
             continue;
@@ -634,7 +635,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
             head: discovered.head,
           } satisfies WorktreeRow;
           worktreeRows = [...worktreeRows, row];
-          added.push({ id: row.id, path: row.path });
+          added.push({ id: row.id, path: row.path, branch: row.branch });
         }
         return { added, missing: [] };
       }),

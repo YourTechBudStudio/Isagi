@@ -12,9 +12,11 @@ import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 type ProjectRecord = InferSelectModel<typeof projects>;
 type WorktreeRecord = InferSelectModel<typeof worktrees>;
 
+type ReconciledWorktreeSummary = Pick<WorktreeRow, 'id' | 'path' | 'branch'>;
+
 export interface WorkspaceReconcileProjectWorktreesResult {
-  readonly added: readonly Pick<WorktreeRow, 'id' | 'path'>[];
-  readonly missing: readonly Pick<WorktreeRow, 'id' | 'path'>[];
+  readonly added: readonly ReconciledWorktreeSummary[];
+  readonly missing: readonly ReconciledWorktreeSummary[];
 }
 
 export interface WorkspaceRepositoryService {
@@ -165,7 +167,7 @@ function reconcileProjectWorktreesInTransaction(
   },
 ) {
   const now = timestamp();
-  const added: Pick<WorktreeRow, 'id' | 'path'>[] = [];
+  const added: ReconciledWorktreeSummary[] = [];
 
   for (const worktree of input.discovered) {
     const existing =
@@ -198,7 +200,7 @@ function reconcileProjectWorktreesInTransaction(
           firstSeenAt: now,
           lastSeenAt: now,
         })
-        .returning({ id: worktrees.id, path: worktrees.path })
+        .returning({ id: worktrees.id, path: worktrees.path, branch: worktrees.branch })
         .get();
       added.push(inserted);
     }
@@ -216,7 +218,7 @@ function reconcileProjectWorktreesInTransaction(
   })
     .map((id) => existingWorktrees.find((worktree) => worktree.id === id))
     .filter((worktree): worktree is WorktreeRecord => Boolean(worktree))
-    .map((worktree) => ({ id: worktree.id, path: worktree.path }));
+    .map((worktree) => ({ id: worktree.id, path: worktree.path, branch: worktree.branch }));
 
   for (const worktree of missing) {
     db.delete(worktrees).where(eq(worktrees.id, worktree.id)).run();

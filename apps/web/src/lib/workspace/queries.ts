@@ -241,25 +241,73 @@ function handleReconciliationFindings(findings: readonly ReconciliationFinding[]
     return;
   }
 
-  if (findings.some((finding) => finding.kind === 'project_missing')) {
+  const missingProjects = findings.filter((finding) => finding.kind === 'project_missing');
+  if (missingProjects.length > 0) {
     showToast({
       id: 'workspace-project-missing',
       kind: 'warning',
-      title: 'A project is unavailable.',
-      subtitle: 'Open the project row to update or remove it.',
+      title: missingProjectsTitle(missingProjects),
+      subtitle: missingProjectsSubtitle(missingProjects),
       lifetime: { autoDismiss: false },
     });
   }
 
-  if (findings.some((finding) => finding.kind === 'worktree_missing')) {
+  const missingWorktrees = findings.filter((finding) => finding.kind === 'worktree_missing');
+  if (missingWorktrees.length > 0) {
     showToast({
       id: 'workspace-worktree-missing',
       kind: 'warning',
-      title: 'A worktree is no longer available.',
-      subtitle: 'Workspace state was refreshed from Git.',
+      title: missingWorktreesTitle(missingWorktrees),
+      subtitle: missingWorktreesSubtitle(missingWorktrees),
       lifetime: { autoDismiss: false },
     });
   }
+}
+
+type MissingProjectFinding = Extract<ReconciliationFinding, { readonly kind: 'project_missing' }>;
+type MissingWorktreeFinding = Extract<ReconciliationFinding, { readonly kind: 'worktree_missing' }>;
+
+function missingProjectsTitle(findings: readonly MissingProjectFinding[]) {
+  if (findings.length === 1) {
+    return 'Project unavailable.';
+  }
+  return `${findings.length} projects unavailable.`;
+}
+
+function missingProjectsSubtitle(findings: readonly MissingProjectFinding[]) {
+  return `${summarizeFindings(findings, (finding) => finding.path)} — open the row to fix or remove it.`;
+}
+
+function missingWorktreesTitle(findings: readonly MissingWorktreeFinding[]) {
+  if (findings.length === 1 && findings[0]?.branch) {
+    return `Worktree missing: ${findings[0].branch}.`;
+  }
+  if (findings.length === 1) {
+    return 'Worktree missing.';
+  }
+  return `${findings.length} worktrees missing.`;
+}
+
+function missingWorktreesSubtitle(findings: readonly MissingWorktreeFinding[]) {
+  return `${summarizeFindings(findings, describeWorktreeFinding)} — gone from Git.`;
+}
+
+function describeWorktreeFinding(finding: MissingWorktreeFinding) {
+  return finding.branch ? `${finding.branch} at ${finding.path}` : finding.path;
+}
+
+function summarizeFindings<Finding>(
+  findings: readonly Finding[],
+  describeFinding: (finding: Finding) => string,
+) {
+  const first = findings[0];
+  if (!first) {
+    return 'nothing';
+  }
+
+  const summary = describeFinding(first);
+  const remaining = findings.length - 1;
+  return remaining > 0 ? `${summary} (+${remaining} more)` : summary;
 }
 
 export { formatRuntimeError };

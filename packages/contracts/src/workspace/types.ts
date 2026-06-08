@@ -115,12 +115,14 @@ export const reconciliationFindingSchema = Schema.Union(
     projectId: positiveIntegerSchema,
     worktreeId: positiveIntegerSchema,
     path: Schema.String,
+    branch: Schema.NullOr(Schema.String),
   }),
   Schema.Struct({
     kind: Schema.Literal('worktree_missing'),
     projectId: positiveIntegerSchema,
     worktreeId: positiveIntegerSchema,
     path: Schema.String,
+    branch: Schema.NullOr(Schema.String),
   }),
 );
 

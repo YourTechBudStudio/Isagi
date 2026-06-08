@@ -615,12 +615,14 @@ function reconciliationFindingsFromWorktreeResult(
       projectId,
       worktreeId: worktree.id,
       path: worktree.path,
+      branch: worktree.branch,
     })),
     ...worktrees.missing.map((worktree) => ({
       kind: 'worktree_missing' as const,
       projectId,
       worktreeId: worktree.id,
       path: worktree.path,
+      branch: worktree.branch,
     })),
   ];
 }
