@@ -65,6 +65,9 @@ export {
   worktreeOpenApiErrorSchema,
   worktreeOpenRejectedErrorSchema,
   worktreeOperationRejectionReasonSchema,
+  worktreeSetupApiErrorSchema,
+  worktreeSetupRejectedErrorSchema,
+  worktreeSetupRejectionReasonSchema,
 } from './api/errors.js';
 export type {
   ProjectPathRejectedError,
@@ -78,6 +81,8 @@ export type {
   WorktreeBranchListRejectedError,
   WorktreeOpenRejectedError,
   WorktreeOperationRejectionReason,
+  WorktreeSetupRejectedError,
+  WorktreeSetupRejectionReason,
 } from './api/errors.js';
 
 export { healthEndpoint } from './health/api.js';
@@ -147,15 +152,33 @@ export {
   listProjectBranchesOutputSchema,
   openWorktreeInputSchema,
   openWorktreeOutputSchema,
+  openWorktreeStatusSchema,
   projectWorktreeRouteParamsSchema,
   worktreeBaseRefSchema,
   worktreeBranchSchema,
+  worktreeSetupHookTypeSchema,
+  worktreeSetupLifecycleSchema,
+  worktreeSetupPreflightOutputSchema,
+  worktreeSetupPreflightStatusSchema,
+  worktreeSetupResultSchema,
+  worktreeSetupSummarySchema,
+  worktreeSetupTrustInputSchema,
+  worktreeSetupTrustOutputSchema,
 } from './worktrees/types.js';
 export type {
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
+  OpenWorktreeStatus,
   ProjectWorktreeRouteParams,
   WorktreeBaseRef,
   WorktreeBranch,
+  WorktreeSetupHookType,
+  WorktreeSetupLifecycle,
+  WorktreeSetupPreflightOutput,
+  WorktreeSetupPreflightStatus,
+  WorktreeSetupResult,
+  WorktreeSetupSummary,
+  WorktreeSetupTrustInput,
+  WorktreeSetupTrustOutput,
 } from './worktrees/types.js';

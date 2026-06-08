@@ -1,6 +1,7 @@
 import { MotionConfig } from 'motion/react';
 import { useEffect } from 'react';
 
+import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
@@ -10,6 +11,10 @@ import {
   useWorkspaceSelectionSync,
 } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
+import {
+  useWorktreeSetupFailureStore,
+  type WorktreeSetupFailure,
+} from '../../lib/workspace/setup-failure.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
@@ -42,6 +47,56 @@ function WorkspaceBootSurface() {
       />
     </main>
   );
+}
+
+function WorktreeSetupFailureModal() {
+  const failure = useWorktreeSetupFailureStore((state) => state.failure);
+  const clearFailure = useWorktreeSetupFailureStore((state) => state.clearFailure);
+  if (!failure) {
+    return null;
+  }
+
+  const setup = failure.setup;
+  const details = setupFailureDetails(setup);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-scrim/55 px-4 backdrop-blur-sm">
+      <section className="w-150 max-w-full rounded-lg border border-error/28 bg-elevated/92 p-5 shadow-lift backdrop-blur-2xl">
+        <p className="text-[15px] font-semibold text-fg">Worktree created, setup failed.</p>
+        <p className="mt-2 text-[13px] leading-snug text-fg-muted">
+          Isagi created <span className="font-mono text-fg">{failure.branch}</span>, but hook{' '}
+          <span className="font-mono text-fg">{setup.failedHookIndex}</span> failed while running{' '}
+          <span className="font-mono text-fg">{setup.failedHookType}</span>.
+        </p>
+        <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-error/24 bg-error/8 px-3 py-2 font-mono text-[12px] leading-snug text-error">
+          {details}
+        </pre>
+        <p className="mt-2 font-mono text-[10.5px] text-fg-subtle">
+          setup run {setup.runId} · worktree {failure.worktreeId}
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => void navigator.clipboard?.writeText(details)}>
+            Copy error
+          </Button>
+          <Button onClick={clearFailure}>Open worktree anyway</Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function setupFailureDetails(setup: Extract<WorktreeSetupFailure['setup'], { status: 'failed' }>) {
+  return [
+    setup.message,
+    setup.command ? `command: ${setup.command}` : null,
+    setup.src ? `src: ${setup.src}` : null,
+    setup.dest ? `dest: ${setup.dest}` : null,
+    setup.exitCode !== undefined && setup.exitCode !== null ? `exit code: ${setup.exitCode}` : null,
+    setup.signal ? `signal: ${setup.signal}` : null,
+    setup.stderrExcerpt ? `\nstderr:\n${setup.stderrExcerpt}` : null,
+    setup.stdoutExcerpt ? `\nstdout:\n${setup.stdoutExcerpt}` : null,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join('\n');
 }
 
 function WorkspaceRuntimeError({ error }: { error: string }) {
@@ -117,6 +172,7 @@ export function WorkspacePage() {
             )}
           </div>
           <CommandPalette />
+          <WorktreeSetupFailureModal />
         </>
       </TooltipDelayProvider>
     </MotionConfig>

@@ -7,13 +7,25 @@ import {
   WorkspaceServiceLive,
   type WorkspaceServiceShape,
 } from './workspace/index.js';
+import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktree-setup/index.js';
 
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 
 export type RuntimeServices = WorkspaceServiceShape;
 
 export const RuntimeLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(Layer.mergeAll(RepositoryLive, StateLive, GitLive, DataDirectoryLive)),
+  Layer.provide(
+    Layer.mergeAll(
+      RepositoryLive,
+      SetupRepositoryLive,
+      SetupServiceLive,
+      StateLive,
+      GitLive,
+      DataDirectoryLive,
+    ),
+  ),
 );

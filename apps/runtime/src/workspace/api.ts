@@ -6,7 +6,9 @@ import { apiEndpoints, type ApiError } from '@isagi/contracts';
 import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
 import { DataDirectoryError, DatabaseError, StateFileError } from '../persistence/index.js';
+import { ProjectConfigError } from '../project-config/project-config.service.js';
 import type { RuntimeServices } from '../runtime-layer.js';
+import { WorktreeSetupError } from '../worktree-setup/index.js';
 import { WorkspaceError, WorkspaceService } from './index.js';
 
 const runWithRuntime =
@@ -103,6 +105,26 @@ export function registerWorkspaceApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupPreflight, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.preflightWorktreeSetup({ projectId: params.projectId });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.setupTrust, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.trustWorktreeSetup({ projectId: params.projectId, request: input });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.worktrees.open, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
@@ -125,6 +147,17 @@ function relocationRejectionReason(error: WorkspaceError) {
   }
 }
 
+function setupRejectionReason(error: WorktreeSetupError) {
+  switch (error.code) {
+    case 'setup_not_configured':
+    case 'setup_config_invalid':
+    case 'setup_trust_mismatch':
+      return error.code;
+    case 'setup_trust_required':
+      return 'setup_trust_mismatch';
+  }
+}
+
 function worktreeRejectionReason(error: WorkspaceError) {
   switch (error.code) {
     case 'project_not_found':
@@ -137,6 +170,9 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'checkout_path_registered':
     case 'checkout_parent_unavailable':
     case 'worktree_not_found':
+    case 'setup_config_invalid':
+    case 'setup_trust_required':
+    case 'setup_trust_mismatch':
       return error.code;
     default:
       return 'project_not_found';
@@ -151,6 +187,54 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
       message: error.message,
       requestId: context.requestId,
       data: { reason: error.code, path: error.path },
+    };
+  }
+
+  if (error instanceof ProjectConfigError) {
+    if (context.endpointId === 'worktrees.open') {
+      return {
+        code: 'worktree_open_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: 'setup_config_invalid',
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+        },
+      };
+    }
+    return {
+      code: 'worktree_setup_rejected',
+      status: 400,
+      message: error.message,
+      requestId: context.requestId,
+      data: {
+        reason: 'setup_config_invalid',
+        ...(error.projectId ? { projectId: error.projectId } : {}),
+      },
+    };
+  }
+
+  if (error instanceof WorktreeSetupError) {
+    if (context.endpointId === 'worktrees.open') {
+      return {
+        code: 'worktree_open_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: { reason: error.code, ...(error.projectId ? { projectId: error.projectId } : {}) },
+      };
+    }
+    return {
+      code: 'worktree_setup_rejected',
+      status: 400,
+      message: error.message,
+      requestId: context.requestId,
+      data: {
+        reason: setupRejectionReason(error),
+        ...(error.projectId ? { projectId: error.projectId } : {}),
+        ...(error.hash ? { hash: error.hash } : {}),
+      },
     };
   }
 
@@ -183,6 +267,23 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
         message: error.message,
         requestId: context.requestId,
         data: { reason: 'project_not_found', projectId: error.projectId },
+      };
+    }
+
+    if (
+      context.endpointId === 'worktrees.setupPreflight' ||
+      context.endpointId === 'worktrees.setupTrust'
+    ) {
+      return {
+        code: 'worktree_setup_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason:
+            error.code === 'project_not_present' ? 'project_not_present' : 'project_not_found',
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+        },
       };
     }
 

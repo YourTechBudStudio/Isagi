@@ -14,6 +14,12 @@ import {
   type DataDirectoryService,
   type StateFileService,
 } from '../persistence/index.js';
+import {
+  WorktreeSetupRepository,
+  WorktreeSetupService,
+  type WorktreeSetupRepositoryService,
+  type WorktreeSetupService as WorktreeSetupServiceShape,
+} from '../worktree-setup/index.js';
 import type { ProjectRow, WorktreeRow } from './types.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from './workspace-repository.js';
 import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from './workspace-service.js';
@@ -54,6 +60,26 @@ const testDataDirectory = {
   },
 } satisfies DataDirectoryService;
 
+const testWorktreeSetup = {
+  preflight: (candidate) =>
+    Effect.succeed({ projectId: candidate.id, status: 'not_configured', summary: [] }),
+  updateTrust: (input) =>
+    Effect.succeed({
+      projectId: input.project.id,
+      status: input.request.action === 'disable_hooks' ? 'disabled' : 'trusted',
+      ...(input.request.action === 'disable_hooks' ? {} : { hash: input.request.hash }),
+    }),
+  validateTrustForOpen: () => Effect.succeed({ status: 'not_configured' as const }),
+} satisfies WorktreeSetupServiceShape;
+
+const testWorktreeSetupRepository = {
+  findTrust: () => Effect.succeed(null),
+  setTrustedHash: () => Effect.void,
+  disableHooks: () => Effect.void,
+  createRunWithSteps: () => Effect.succeed(1),
+  listRunSteps: () => Effect.succeed([]),
+} satisfies WorktreeSetupRepositoryService;
+
 test('active context persistence validates before writing state', async () => {
   let writeCalls = 0;
   const stateFile = stateFileWithWriteCounter(() => {
@@ -75,6 +101,8 @@ test('active context persistence validates before writing state', async () => {
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     ),
   );
@@ -107,6 +135,8 @@ test('project deletion does not touch frontend-owned active context persistence'
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
     ),
   );
 
@@ -138,6 +168,8 @@ test('project relocation rejects projects that are not missing before touching g
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, quietGit),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     ),
   );
@@ -201,6 +233,8 @@ test('project relocation restores the same project id and reconciles discovered 
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, relocationGit),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 
@@ -267,6 +301,8 @@ test('project branch listing rejects a present project whose path disappeared be
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     ),
   );
@@ -307,6 +343,8 @@ test('project branch listing combines local branches with known open worktrees',
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 
@@ -420,6 +458,8 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, dataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 
@@ -479,6 +519,8 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, invalidGit),
           Effect.provideService(DataDirectory, testDataDirectory),
+          Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+          Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
         ),
       ),
     );
@@ -544,6 +586,8 @@ test('opening a missing branch without a base asks the client for base selection
               worktreesPath: join(dataRoot, 'worktrees'),
             },
           } satisfies DataDirectoryService),
+          Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+          Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
         ),
       ),
     );
@@ -650,10 +694,18 @@ test('opening a missing branch creates it from a local branch base', async () =>
             worktreesPath: checkoutParent,
           },
         } satisfies DataDirectoryService),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 
-    assert.deepEqual(output, { projectId: project.id, worktreeId: 11, branch });
+    assert.deepEqual(output, {
+      projectId: project.id,
+      worktreeId: 11,
+      branch,
+      status: 'created',
+      setup: { status: 'skipped', reason: 'not_configured' },
+    });
     assert.equal(createdPath, join(checkoutParent, String(project.id), branchPathHash(branch)));
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -742,6 +794,8 @@ test('opening a missing branch can create it from the current detached worktree'
             worktreesPath: join(dataRoot, 'worktrees'),
           },
         } satisfies DataDirectoryService),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 
@@ -752,7 +806,13 @@ test('opening a missing branch can create it from the current detached worktree'
       join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch)),
       commit,
     ]);
-    assert.deepEqual(output, { projectId: project.id, worktreeId: 11, branch });
+    assert.deepEqual(output, {
+      projectId: project.id,
+      worktreeId: 11,
+      branch,
+      status: 'created',
+      setup: { status: 'skipped', reason: 'not_configured' },
+    });
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
     rmSync(dataRoot, { recursive: true, force: true });
@@ -844,6 +904,8 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             Effect.provideService(StateFile, stateFile),
             Effect.provideService(Git, invalidBaseGit),
             Effect.provideService(DataDirectory, testDataDirectory),
+            Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+            Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
           ),
         ),
       );
@@ -911,6 +973,8 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, dirtyPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
+          Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+          Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
         ),
       ),
     );
@@ -977,6 +1041,8 @@ test('opening an existing local branch rejects a stale registered deterministic 
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, registeredPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
+          Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+          Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
         ),
       ),
     );
@@ -1039,6 +1105,8 @@ test('opening an existing local branch distinguishes checkout parent preparation
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, parentFailureGit),
           Effect.provideService(DataDirectory, dataDirectory),
+          Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+          Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
         ),
       ),
     );
@@ -1071,6 +1139,8 @@ test('valid active context persistence writes after validation', async () => {
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
     ),
   );
 

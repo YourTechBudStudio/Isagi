@@ -13,6 +13,9 @@ import type {
   OpenWorktreeInput,
   OpenWorktreeOutput,
   ReconciliationFinding,
+  WorktreeSetupPreflightOutput,
+  WorktreeSetupTrustInput,
+  WorktreeSetupTrustOutput,
   ReconcileWorkspaceInput,
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
@@ -35,6 +38,14 @@ import {
   StateFile,
   type StateFileError,
 } from '../persistence/index.js';
+import { ProjectConfigError } from '../project-config/project-config.service.js';
+import {
+  runPostCreateSetup,
+  WorktreeSetupError,
+  WorktreeSetupRepository,
+  WorktreeSetupRunError,
+  WorktreeSetupService,
+} from '../worktree-setup/index.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import {
   WorkspaceRepository,
@@ -55,7 +66,10 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'checkout_path_exists'
     | 'checkout_path_registered'
     | 'checkout_parent_unavailable'
-    | 'worktree_not_found';
+    | 'worktree_not_found'
+    | 'setup_config_invalid'
+    | 'setup_trust_required'
+    | 'setup_trust_mismatch';
   readonly message: string;
   readonly branch?: string | undefined;
   readonly conflictingProjectId?: number | undefined;
@@ -67,8 +81,11 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
 export type WorkspaceServiceError =
   | DatabaseError
   | GitCommandError
+  | ProjectConfigError
   | ProjectPathValidationError
   | StateFileError
+  | WorktreeSetupError
+  | WorktreeSetupRunError
   | WorkspaceError;
 
 export interface WorkspaceService {
@@ -80,6 +97,13 @@ export interface WorkspaceService {
   readonly listProjectBranches: (input: {
     readonly projectId: number;
   }) => Effect.Effect<ListProjectBranchesOutput, WorkspaceServiceError>;
+  readonly preflightWorktreeSetup: (input: {
+    readonly projectId: number;
+  }) => Effect.Effect<WorktreeSetupPreflightOutput, WorkspaceServiceError>;
+  readonly trustWorktreeSetup: (input: {
+    readonly projectId: number;
+    readonly request: WorktreeSetupTrustInput;
+  }) => Effect.Effect<WorktreeSetupTrustOutput, WorkspaceServiceError>;
   readonly openWorktree: (input: {
     readonly projectId: number;
     readonly request: OpenWorktreeInput;
@@ -108,6 +132,8 @@ export const WorkspaceServiceLive = Layer.effect(
     const stateFile = yield* StateFile;
     const git = yield* Git;
     const dataDirectory = yield* DataDirectory;
+    const worktreeSetup = yield* WorktreeSetupService;
+    const worktreeSetupRepository = yield* WorktreeSetupRepository;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -151,6 +177,18 @@ export const WorkspaceServiceLive = Layer.effect(
             })),
           } satisfies ListProjectBranchesOutput;
         }),
+      preflightWorktreeSetup: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* ensureProjectPathAvailable(repository, project);
+          return yield* worktreeSetup.preflight(project);
+        }),
+      trustWorktreeSetup: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* ensureProjectPathAvailable(repository, project);
+          return yield* worktreeSetup.updateTrust({ project, request: input.request });
+        }),
       openWorktree: (input) =>
         Effect.gen(function* () {
           const project = yield* requirePresentProject(repository, input.projectId);
@@ -173,7 +211,13 @@ export const WorkspaceServiceLive = Layer.effect(
             branch,
           });
           if (existing) {
-            return { projectId: project.id, worktreeId: existing.id, branch };
+            return {
+              projectId: project.id,
+              worktreeId: existing.id,
+              branch,
+              status: 'opened_existing',
+              setup: { status: 'not_run', reason: 'existing_worktree' },
+            } satisfies OpenWorktreeOutput;
           }
 
           const branches = yield* listLocalBranches(project.rootPath).pipe(
@@ -195,6 +239,8 @@ export const WorkspaceServiceLive = Layer.effect(
             }
             baseRef = yield* validateBaseRef(repository, git, project, base);
           }
+
+          const setupPlan = yield* worktreeSetup.validateTrustForOpen(project);
 
           const checkoutPath = checkoutPathForBranch(
             dataDirectory.paths.worktreesPath,
@@ -237,7 +283,51 @@ export const WorkspaceServiceLive = Layer.effect(
             );
           }
 
-          return { projectId: project.id, worktreeId: created.id, branch };
+          if (setupPlan.status === 'disabled') {
+            return {
+              projectId: project.id,
+              worktreeId: created.id,
+              branch,
+              status: 'created',
+              setup: { status: 'skipped', reason: 'hooks_disabled' },
+            } satisfies OpenWorktreeOutput;
+          }
+
+          if (setupPlan.status === 'not_configured') {
+            return {
+              projectId: project.id,
+              worktreeId: created.id,
+              branch,
+              status: 'created',
+              setup: { status: 'skipped', reason: 'not_configured' },
+            } satisfies OpenWorktreeOutput;
+          }
+
+          const setup = yield* runPostCreateSetup({
+            config: setupPlan.config,
+            hash: setupPlan.hash,
+            projectRootPath: project.rootPath,
+            worktreeId: created.id,
+            worktreePath: created.path,
+          }).pipe(Effect.provideService(WorktreeSetupRepository, worktreeSetupRepository));
+
+          if (setup.status === 'failed') {
+            return {
+              projectId: project.id,
+              worktreeId: created.id,
+              branch,
+              status: 'created_setup_failed',
+              setup,
+            } satisfies OpenWorktreeOutput;
+          }
+
+          return {
+            projectId: project.id,
+            worktreeId: created.id,
+            branch,
+            status: 'created',
+            setup,
+          } satisfies OpenWorktreeOutput;
         }),
       registerProject: (input) =>
         Effect.gen(function* () {

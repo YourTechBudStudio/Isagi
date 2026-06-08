@@ -10,6 +10,9 @@ import type {
   OpenWorktreeOutput,
   PathSuggestOutput,
   ReconcileWorkspaceInput,
+  WorktreeSetupPreflightOutput,
+  WorktreeSetupTrustInput,
+  WorktreeSetupTrustOutput,
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
@@ -60,6 +63,19 @@ export function listProjectBranches(
   projectId: number,
 ): Effect.Effect<ListProjectBranchesOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.listProjectBranches(projectId)));
+}
+
+export function preflightWorktreeSetup(
+  projectId: number,
+): Effect.Effect<WorktreeSetupPreflightOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.preflightWorktreeSetup(projectId)));
+}
+
+export function trustWorktreeSetup(
+  projectId: number,
+  input: WorktreeSetupTrustInput,
+): Effect.Effect<WorktreeSetupTrustOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.trustWorktreeSetup(projectId, input)));
 }
 
 export function openWorktree(

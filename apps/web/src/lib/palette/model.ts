@@ -79,7 +79,7 @@ export function labelForValue(
   ctx: PaletteContext,
   values: ArgValues,
 ): string {
-  if (spec.kind === 'text' || spec.kind === 'path') {
+  if (spec.kind === 'text' || spec.kind === 'path' || spec.kind === 'review') {
     return value;
   }
 

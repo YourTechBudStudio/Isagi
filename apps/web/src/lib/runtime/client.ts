@@ -20,6 +20,9 @@ import {
   type OpenWorktreeInput,
   type OpenWorktreeOutput,
   type PathSuggestOutput,
+  type WorktreeSetupPreflightOutput,
+  type WorktreeSetupTrustInput,
+  type WorktreeSetupTrustOutput,
   type ReconcileWorkspaceInput,
   type ReconcileWorkspaceOutput,
   type RelocateProjectOutput,
@@ -76,6 +79,19 @@ export interface RuntimeClient {
     ListProjectBranchesOutput,
     RuntimeEndpointError<typeof apiEndpoints.worktrees.branches>
   >;
+  readonly preflightWorktreeSetup: (
+    projectId: number,
+  ) => Effect.Effect<
+    WorktreeSetupPreflightOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.setupPreflight>
+  >;
+  readonly trustWorktreeSetup: (
+    projectId: number,
+    input: WorktreeSetupTrustInput,
+  ) => Effect.Effect<
+    WorktreeSetupTrustOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.setupTrust>
+  >;
   readonly openWorktree: (
     projectId: number,
     input: OpenWorktreeInput,
@@ -102,6 +118,10 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.projects.relocate, { projectId }, { path }),
     deleteProject: (projectId) => request(apiEndpoints.projects.delete, { projectId }),
     listProjectBranches: (projectId) => request(apiEndpoints.worktrees.branches, { projectId }),
+    preflightWorktreeSetup: (projectId) =>
+      request(apiEndpoints.worktrees.setupPreflight, { projectId }),
+    trustWorktreeSetup: (projectId, input) =>
+      request(apiEndpoints.worktrees.setupTrust, { projectId }, input),
     openWorktree: (projectId, input) => request(apiEndpoints.worktrees.open, { projectId }, input),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),

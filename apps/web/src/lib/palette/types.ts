@@ -34,6 +34,24 @@ export type ArgValues = Record<string, string>;
 export type ArgPayloads = Record<string, unknown>;
 export type MaybePromise<T> = T | Promise<T>;
 
+export interface ReviewChoice<Payload = unknown> {
+  readonly value: string;
+  readonly label: string;
+  readonly hint?: string;
+  readonly payload?: Payload;
+}
+
+export interface ReviewContent<Payload = unknown> {
+  readonly title: string;
+  readonly body: string;
+  readonly items: readonly {
+    readonly label: string;
+    readonly detail?: string | undefined;
+    readonly envKeys?: readonly string[] | undefined;
+  }[];
+  readonly choices: readonly ReviewChoice<Payload>[];
+}
+
 export type ArgSpec =
   | {
       readonly kind: 'select';
@@ -66,6 +84,12 @@ export type ArgSpec =
         ctx: PaletteContext,
         values: ArgValues,
       ) => boolean;
+    }
+  | {
+      readonly kind: 'review';
+      readonly key: string;
+      readonly label: string;
+      readonly load: (ctx: PaletteContext, values: ArgValues) => MaybePromise<ReviewContent>;
     }
   | {
       readonly kind: 'text';

@@ -58,6 +58,17 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
   'checkout_path_registered',
   'checkout_parent_unavailable',
   'worktree_not_found',
+  'setup_config_invalid',
+  'setup_trust_required',
+  'setup_trust_mismatch',
+);
+
+export const worktreeSetupRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_present',
+  'setup_not_configured',
+  'setup_config_invalid',
+  'setup_trust_mismatch',
 );
 
 export const worktreeBranchListRejectedErrorSchema = Schema.Struct({
@@ -82,6 +93,18 @@ export const worktreeOpenRejectedErrorSchema = Schema.Struct({
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     branch: Schema.optional(Schema.String),
     path: Schema.optional(Schema.String),
+  }),
+});
+
+export const worktreeSetupRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_setup_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeSetupRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    hash: Schema.optional(Schema.String),
   }),
 });
 
@@ -204,6 +227,12 @@ export const worktreeOpenApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const worktreeSetupApiErrorSchema = Schema.Union(
+  worktreeSetupRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export type ProjectPathRejectionReason = Schema.Schema.Type<
   typeof projectPathRejectionReasonSchema
 >;
@@ -219,6 +248,9 @@ export type ProjectRelocationRejectionReason = Schema.Schema.Type<
 export type WorktreeOperationRejectionReason = Schema.Schema.Type<
   typeof worktreeOperationRejectionReasonSchema
 >;
+export type WorktreeSetupRejectionReason = Schema.Schema.Type<
+  typeof worktreeSetupRejectionReasonSchema
+>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema
@@ -233,3 +265,6 @@ export type WorktreeBranchListRejectedError = Schema.Schema.Type<
   typeof worktreeBranchListRejectedErrorSchema
 >;
 export type WorktreeOpenRejectedError = Schema.Schema.Type<typeof worktreeOpenRejectedErrorSchema>;
+export type WorktreeSetupRejectedError = Schema.Schema.Type<
+  typeof worktreeSetupRejectedErrorSchema
+>;

@@ -16,6 +16,12 @@ import {
   type DataDirectoryService,
   type WorkspaceState,
 } from '../persistence/index.js';
+import {
+  WorktreeSetupRepository,
+  WorktreeSetupService,
+  type WorktreeSetupRepositoryService,
+  type WorktreeSetupService as WorktreeSetupServiceShape,
+} from '../worktree-setup/index.js';
 import type { ProjectRow, WorktreeRow } from './types.js';
 import {
   prunedWorktreeIds,
@@ -24,6 +30,30 @@ import {
 } from './workspace-repository.js';
 import { WorkspaceService, WorkspaceServiceLive } from './workspace-service.js';
 import { buildWorkspaceSnapshot } from './workspace-snapshot.js';
+
+const testWorktreeSetup = {
+  preflight: (candidate: ProjectRow) =>
+    Effect.succeed({ projectId: candidate.id, status: 'not_configured' as const, summary: [] }),
+  updateTrust: (input: {
+    readonly project: ProjectRow;
+    readonly request: { readonly action: string; readonly hash?: string };
+  }) =>
+    Effect.succeed({
+      projectId: input.project.id,
+      status:
+        input.request.action === 'disable_hooks' ? ('disabled' as const) : ('trusted' as const),
+      ...(input.request.action === 'disable_hooks' ? {} : { hash: input.request.hash ?? '' }),
+    }),
+  validateTrustForOpen: () => Effect.succeed({ status: 'not_configured' as const }),
+} satisfies WorktreeSetupServiceShape;
+
+const testWorktreeSetupRepository = {
+  findTrust: () => Effect.succeed(null),
+  setTrustedHash: () => Effect.void,
+  disableHooks: () => Effect.void,
+  createRunWithSteps: () => Effect.succeed(1),
+  listRunSteps: () => Effect.succeed([]),
+} satisfies WorktreeSetupRepositoryService;
 
 const project: ProjectRow = {
   id: 1,
@@ -179,6 +209,8 @@ test('workspace reads known rows without reconciling Git state', async () => {
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
       ),
     );
 

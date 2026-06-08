@@ -23,6 +23,7 @@ import {
   relocateProject,
   updateActiveContext,
 } from './runtime-data.js';
+import { showWorktreeSetupFailure } from './setup-failure.js';
 import { useWorkspaceStore } from './store.js';
 
 export const workspaceQueryKey = ['workspace'] as const;
@@ -102,6 +103,9 @@ export async function commitOpenWorktreeSuccess(
     staleTime: 0,
   });
   useWorkspaceStore.getState().selectWorktree(output.projectId, output.worktreeId);
+  if (output.status === 'created_setup_failed') {
+    showWorktreeSetupFailure(output);
+  }
 }
 
 export async function commitAddProjectSuccess(

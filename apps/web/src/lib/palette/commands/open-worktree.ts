@@ -1,10 +1,14 @@
 import { Effect } from 'effect';
 import { GitBranch } from 'lucide-react';
 
-import type { WorktreeBaseRef } from '@isagi/contracts';
+import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
 
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
-import { listProjectBranches } from '../../workspace/runtime-data.js';
+import {
+  listProjectBranches,
+  preflightWorktreeSetup,
+  trustWorktreeSetup,
+} from '../../workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../workspace/store.js';
 import type { Project, Worktree } from '../../workspace/types.js';
 import type { Option, PaletteCommand } from '../types.js';
@@ -24,6 +28,15 @@ interface ExistingBranchPayload {
 interface BaseRefPayload {
   readonly kind: 'base_ref';
   readonly base: WorktreeBaseRef;
+}
+
+interface ExistingBranchBasePayload {
+  readonly kind: 'existing_branch_base';
+}
+
+interface SetupReviewPayload {
+  readonly kind: 'setup_review';
+  readonly trust?: WorktreeSetupTrustInput | undefined;
 }
 
 type WorktreeStepPayload = ExistingWorktreePayload | ExistingBranchPayload;
@@ -54,8 +67,7 @@ export const openWorktreeCommand: PaletteCommand = {
       defaultSelection: 'none',
       emptyHint: 'Type a branch name, or choose a worktree.',
       createHint: 'create branch',
-      finishOnAccept: (_value, payload) =>
-        isExistingWorktreePayload(payload) || isExistingBranchPayload(payload),
+      finishOnAccept: (_value, payload) => isExistingWorktreePayload(payload),
       options: async (ctx, values): Promise<readonly Option<WorktreeStepPayload>[]> => {
         const projectId = Number(values.projectId);
         const project = presentProjects(ctx.projects).find(
@@ -103,7 +115,10 @@ export const openWorktreeCommand: PaletteCommand = {
       kind: 'select',
       key: 'base',
       label: 'Create from',
-      options: async (ctx, values): Promise<readonly Option<BaseRefPayload>[]> => {
+      options: async (
+        ctx,
+        values,
+      ): Promise<readonly Option<BaseRefPayload | ExistingBranchBasePayload>[]> => {
         const projectId = Number(values.projectId);
         const project = presentProjects(ctx.projects).find(
           (candidate) => candidate.id === projectId,
@@ -113,6 +128,18 @@ export const openWorktreeCommand: PaletteCommand = {
         }
 
         const branchList = await Effect.runPromise(listProjectBranches(project.id));
+        const existingBranch = branchList.branches.find((branch) => branch.name === values.branch);
+        if (existingBranch) {
+          return [
+            {
+              value: 'existing-branch',
+              label: `Use existing branch ${existingBranch.name}`,
+              hint: 'checkout branch',
+              payload: { kind: 'existing_branch_base' as const },
+            },
+          ];
+        }
+
         const branchOptions = branchList.branches.map((branch) => ({
           value: `branch:${branch.name}`,
           label: branch.name,
@@ -154,18 +181,69 @@ export const openWorktreeCommand: PaletteCommand = {
         );
       },
     },
+    {
+      kind: 'review',
+      key: 'setupTrust',
+      label: 'Setup hooks',
+      load: async (_ctx, values) => {
+        const projectId = Number(values.projectId);
+        const preflight = await Effect.runPromise(preflightWorktreeSetup(projectId));
+        if (preflight.status === 'needs_approval' && preflight.hash) {
+          return {
+            title: 'This project wants to run setup hooks.',
+            body: 'Review the project-scoped .isagi/config.yaml hooks before Isagi creates the worktree.',
+            items: preflight.summary,
+            choices: [
+              {
+                value: 'trust-hook-config',
+                label: 'Trust this hook config',
+                hint: 'Ask again when the hooks change.',
+                payload: {
+                  kind: 'setup_review' as const,
+                  trust: { action: 'trust_hook_config' as const, hash: preflight.hash },
+                },
+              },
+              {
+                value: 'always-trust-project',
+                label: 'Always trust this project',
+                hint: 'Future hook changes will run without another prompt.',
+                payload: {
+                  kind: 'setup_review' as const,
+                  trust: { action: 'always_trust_project' as const, hash: preflight.hash },
+                },
+              },
+              {
+                value: 'disable-hooks',
+                label: 'Disable hooks for this project',
+                hint: 'Create worktrees, but never run project setup hooks.',
+                payload: {
+                  kind: 'setup_review' as const,
+                  trust: { action: 'disable_hooks' as const },
+                },
+              },
+            ],
+          };
+        }
+        return {
+          title: 'Worktree setup is ready.',
+          body: setupPreflightBody(preflight.status),
+          items: preflight.summary,
+          choices: [
+            {
+              value: 'continue',
+              label: 'Create worktree',
+              payload: { kind: 'setup_review' as const },
+            },
+          ],
+        };
+      },
+    },
   ],
-  run: (values, ctx, payloads) => {
+  run: async (values, ctx, payloads) => {
     const selected = payloads?.branch;
     if (isExistingWorktreePayload(selected)) {
       useWorkspaceStore.getState().selectWorktree(selected.projectId, selected.worktreeId);
       return;
-    }
-
-    if (isExistingBranchPayload(selected)) {
-      return openWorktreeFromPalette(selected.projectId, { branch: selected.branch }).then(
-        () => undefined,
-      );
     }
 
     const projectId = Number(values.projectId);
@@ -178,12 +256,22 @@ export const openWorktreeCommand: PaletteCommand = {
       return;
     }
 
-    const base = payloads?.base;
-    if (project && values.branch && isBaseRefPayload(base)) {
-      return openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base }).then(
-        () => undefined,
-      );
+    if (!project || !values.branch) {
+      return;
     }
+
+    const review = payloads?.setupTrust;
+    if (isSetupReviewPayload(review) && review.trust) {
+      await Effect.runPromise(trustWorktreeSetup(project.id, review.trust));
+    }
+
+    const base = payloads?.base;
+    if (isBaseRefPayload(base)) {
+      await openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base });
+      return;
+    }
+
+    await openWorktreeFromPalette(project.id, { branch: values.branch });
   },
 };
 
@@ -212,13 +300,26 @@ function isExistingWorktreePayload(value: unknown): value is ExistingWorktreePay
   );
 }
 
-function isExistingBranchPayload(value: unknown): value is ExistingBranchPayload {
+function setupPreflightBody(status: string) {
+  switch (status) {
+    case 'not_configured':
+      return 'No project setup hooks are configured. Isagi will create the worktree without bootstrap steps.';
+    case 'trusted':
+      return 'This hook config is already trusted. Isagi will run setup after creating the worktree.';
+    case 'always_trusted':
+      return 'This project is always trusted. Isagi will run setup after creating the worktree.';
+    case 'disabled':
+      return 'Setup hooks are disabled for this project. Isagi will skip them.';
+    default:
+      return 'Isagi is ready to create the worktree.';
+  }
+}
+
+function isSetupReviewPayload(value: unknown): value is SetupReviewPayload {
   return (
     Boolean(value) &&
     typeof value === 'object' &&
-    (value as ExistingBranchPayload).kind === 'existing_branch' &&
-    typeof (value as ExistingBranchPayload).branch === 'string' &&
-    typeof (value as ExistingBranchPayload).projectId === 'number'
+    (value as SetupReviewPayload).kind === 'setup_review'
   );
 }
 

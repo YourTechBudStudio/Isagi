@@ -34,6 +34,8 @@ import type {
   Option,
   PaletteCommand,
   PaletteEntry,
+  ReviewContent,
+  ReviewChoice,
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -68,6 +70,9 @@ export function CommandPalette() {
   const [pathSuggestions, setPathSuggestions] = useState<readonly PathSuggestion[]>([]);
   const [pathError, setPathError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [reviewContent, setReviewContent] = useState<ReviewContent | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // The path value the last Enter filled into the buffer. Pressing Enter again
   // with no edits since (buffer still equals it) commits — robust to the async
@@ -116,6 +121,9 @@ export function CommandPalette() {
       setStepOptions([]);
       setStepOptionsError(null);
       setStepOptionsLoading(false);
+      setReviewContent(null);
+      setReviewError(null);
+      setReviewLoading(false);
       setStepIndex(0);
       setCommand(null);
       return;
@@ -137,6 +145,9 @@ export function CommandPalette() {
     setStepOptions([]);
     setStepOptionsError(null);
     setStepOptionsLoading(false);
+    setReviewContent(null);
+    setReviewError(null);
+    setReviewLoading(false);
     setStepIndex(firstUnfilledStep(autostart.args, initialValues));
     setCommand(autostart);
   }, [open, autostartCommandId, autostartValues, ctx]);
@@ -164,6 +175,15 @@ export function CommandPalette() {
         };
       }
 
+      if (spec.kind === 'review') {
+        return {
+          kind: 'review' as const,
+          content: reviewContent,
+          error: reviewError,
+          loading: reviewLoading,
+        };
+      }
+
       const options = computeStepOptions(spec, stepOptions, query);
       return {
         kind: 'wizard' as const,
@@ -188,6 +208,9 @@ export function CommandPalette() {
     stepOptions,
     stepOptionsError,
     stepOptionsLoading,
+    reviewContent,
+    reviewError,
+    reviewLoading,
   ]);
 
   useEffect(() => {
@@ -241,6 +264,56 @@ export function CommandPalette() {
   }, [open, command, spec, ctx, values]);
 
   useEffect(() => {
+    if (!open || !command || spec?.kind !== 'review') {
+      setReviewContent(null);
+      setReviewError(null);
+      setReviewLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setReviewError(null);
+
+    try {
+      const loaded = spec.load(ctx, values);
+      if (loaded instanceof Promise) {
+        setReviewLoading(true);
+        void loaded
+          .then(
+            (content) => {
+              if (!cancelled) {
+                setReviewContent(content);
+                setReviewError(null);
+              }
+            },
+            (error: unknown) => {
+              if (!cancelled) {
+                setReviewContent(null);
+                setReviewError(error instanceof Error ? error.message : String(error));
+              }
+            },
+          )
+          .finally(() => {
+            if (!cancelled) {
+              setReviewLoading(false);
+            }
+          });
+      } else {
+        setReviewContent(loaded);
+        setReviewLoading(false);
+      }
+    } catch (error) {
+      setReviewContent(null);
+      setReviewLoading(false);
+      setReviewError(error instanceof Error ? error.message : String(error));
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, command, spec, ctx, values]);
+
+  useEffect(() => {
     if (!open || !command || spec?.kind !== 'path') {
       setPathSuggestions([]);
       setPathError(null);
@@ -278,7 +351,9 @@ export function CommandPalette() {
         ? view.items.length
         : view.kind === 'path'
           ? view.suggestions.length
-          : 0;
+          : view.kind === 'review'
+            ? (view.content?.choices.length ?? 0)
+            : 0;
   const viewKey = command ? `wizard-${stepIndex}` : query ? 'search' : 'recent';
   const defaultIndex = view.kind === 'wizard' && spec ? defaultOptionIndex(spec, view.options) : 0;
 
@@ -302,6 +377,9 @@ export function CommandPalette() {
     setStepOptions([]);
     setStepOptionsError(null);
     setStepOptionsLoading(false);
+    setReviewContent(null);
+    setReviewError(null);
+    setReviewLoading(false);
     setQuery('');
   };
 
@@ -353,6 +431,9 @@ export function CommandPalette() {
       setStepOptions([]);
       setStepOptionsError(null);
       setStepOptionsLoading(false);
+      setReviewContent(null);
+      setReviewError(null);
+      setReviewLoading(false);
       setQuery('');
       setStepIndex(stepIndex + 1);
     }
@@ -360,6 +441,10 @@ export function CommandPalette() {
 
   const acceptOption = (option: Option) => {
     acceptValue(option.value, option.label ?? option.value, option.payload);
+  };
+
+  const acceptReviewChoice = (choice: ReviewChoice) => {
+    acceptValue(choice.value, choice.label, choice.payload);
   };
 
   const acceptText = () => {
@@ -403,6 +488,11 @@ export function CommandPalette() {
       }
     } else if (view.kind === 'path') {
       acceptPath();
+    } else if (view.kind === 'review') {
+      const choice = sel === null ? undefined : view.content?.choices[sel];
+      if (choice) {
+        acceptReviewChoice(choice);
+      }
     } else {
       acceptText();
     }
@@ -600,6 +690,19 @@ export function CommandPalette() {
                     }
                   }}
                 />
+              ) : view.kind === 'review' ? (
+                <ReviewStep
+                  content={view.content}
+                  error={view.error}
+                  loading={view.loading}
+                  sel={sel}
+                  onPick={(index) => {
+                    const choice = view.content?.choices[index];
+                    if (choice) {
+                      acceptReviewChoice(choice);
+                    }
+                  }}
+                />
               ) : view.kind === 'text' ? (
                 <TextStep value={view.value} placeholder={view.placeholder} />
               ) : (
@@ -754,6 +857,77 @@ function PathOptions({
         </button>
       ))}
     </>
+  );
+}
+
+function ReviewStep({
+  content,
+  error,
+  loading,
+  sel,
+  onPick,
+}: {
+  content: ReviewContent | null;
+  error: string | null;
+  loading: boolean;
+  sel: number | null;
+  onPick: (index: number) => void;
+}) {
+  if (error) {
+    return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
+  }
+  if (loading || !content) {
+    return <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">Reading setup hooks…</p>;
+  }
+
+  return (
+    <div className="px-3 py-3">
+      <p className="text-[13.5px] font-medium text-fg">{content.title}</p>
+      <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{content.body}</p>
+      {content.items.length > 0 && (
+        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-white/5 p-2">
+          {content.items.map((item, index) => (
+            <div key={`${item.label}-${index}`} className="rounded-sm px-2 py-1.5">
+              <p className="font-mono text-[11.5px] text-fg">
+                {index + 1}. {item.label}
+              </p>
+              {item.detail && (
+                <p className="mt-0.5 font-mono text-[10.5px] text-fg-subtle">{item.detail}</p>
+              )}
+              {item.envKeys && item.envKeys.length > 0 && (
+                <p className="mt-0.5 font-mono text-[10.5px] text-fg-subtle">
+                  env: {item.envKeys.join(', ')}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-3 space-y-1">
+        {content.choices.map((choice, index) => (
+          <button
+            type="button"
+            key={choice.value}
+            onClick={() => onPick(index)}
+            className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
+              index === sel ? 'bg-white/8' : 'hover:bg-white/4'
+            }`}
+          >
+            <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
+              {index === sel ? '●' : '○'}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13.5px] text-fg">{choice.label}</span>
+              {choice.hint && (
+                <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
+                  {choice.hint}
+                </span>
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

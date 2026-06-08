@@ -21,7 +21,13 @@ test('open-worktree success refetches workspace before selecting returned worktr
 
   await commitOpenWorktreeSuccess(
     client,
-    { projectId: 2, worktreeId: 22, branch: 'feature/new' },
+    {
+      projectId: 2,
+      worktreeId: 22,
+      branch: 'feature/new',
+      status: 'created',
+      setup: { status: 'skipped', reason: 'not_configured' },
+    },
     async () => {
       events.push(`fetch:${useWorkspaceStore.getState().selection.kind}`);
       return { projects: [project({ id: 2, name: 'next' })] };
