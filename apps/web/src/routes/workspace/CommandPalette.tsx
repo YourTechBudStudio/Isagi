@@ -23,6 +23,8 @@ import {
   filterEntries,
   firstUnfilledStep,
   labelForValue,
+  nextVisibleStep,
+  prevVisibleStep,
   recencyView,
 } from '../../lib/palette/model.js';
 import { GLOBAL_COMMANDS } from '../../lib/palette/registry.js';
@@ -74,6 +76,12 @@ export function CommandPalette() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Guards `command.run` to one invocation per wizard run. `command.run` can be
+  // a non-idempotent runtime mutation (e.g. open-worktree creates a worktree),
+  // and the review auto-finish path fires it from an effect — under StrictMode's
+  // double-invoke (or a synchronous review loader) that could run twice. Reset
+  // whenever a wizard (re)starts; cleared on failure so the user can retry.
+  const finishedRef = useRef(false);
   // The path value the last Enter filled into the buffer. Pressing Enter again
   // with no edits since (buffer still equals it) commits — robust to the async
   // suggestion refresh, which the live highlight is not. Typing clears it.
@@ -108,6 +116,7 @@ export function CommandPalette() {
     if (!open) {
       return;
     }
+    finishedRef.current = false;
     setQuery('');
     setCommandError(null);
     const autostart = autostartCommandId
@@ -274,33 +283,39 @@ export function CommandPalette() {
     let cancelled = false;
     setReviewError(null);
 
+    // A review step whose load resolves to `null` has nothing to ask: finish the
+    // wizard and run the command directly (the review is always the terminal step).
+    const settle = (content: ReviewContent | null) => {
+      if (cancelled) {
+        return;
+      }
+      if (content === null) {
+        finishCommandRun(command, values, payloads);
+        return;
+      }
+      setReviewContent(content);
+      setReviewError(null);
+    };
+
     try {
       const loaded = spec.load(ctx, values);
       if (loaded instanceof Promise) {
         setReviewLoading(true);
         void loaded
-          .then(
-            (content) => {
-              if (!cancelled) {
-                setReviewContent(content);
-                setReviewError(null);
-              }
-            },
-            (error: unknown) => {
-              if (!cancelled) {
-                setReviewContent(null);
-                setReviewError(error instanceof Error ? error.message : String(error));
-              }
-            },
-          )
+          .then(settle, (error: unknown) => {
+            if (!cancelled) {
+              setReviewContent(null);
+              setReviewError(error instanceof Error ? error.message : String(error));
+            }
+          })
           .finally(() => {
             if (!cancelled) {
               setReviewLoading(false);
             }
           });
       } else {
-        setReviewContent(loaded);
         setReviewLoading(false);
+        settle(loaded);
       }
     } catch (error) {
       setReviewContent(null);
@@ -311,7 +326,11 @@ export function CommandPalette() {
     return () => {
       cancelled = true;
     };
-  }, [open, command, spec, ctx, values]);
+    // `finishCommandRun` is intentionally excluded: it is re-created every render,
+    // so including it would re-fire `spec.load` (and preflight) on every render.
+    // It is stable for a given wizard run and guarded against double-invocation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, command, spec, ctx, values, payloads]);
 
   useEffect(() => {
     if (!open || !command || spec?.kind !== 'path') {
@@ -369,6 +388,7 @@ export function CommandPalette() {
   }, [open, viewKey]);
 
   const enterWizard = (next: PaletteCommand) => {
+    finishedRef.current = false;
     setCommand(next);
     setStepIndex(0);
     setValues({});
@@ -385,6 +405,33 @@ export function CommandPalette() {
 
   const finish = () => {
     closePalette();
+  };
+
+  // Run a command to completion and close the palette, surfacing any failure as
+  // the inline command error. Shared by the wizard's accept path and the review
+  // step's auto-finish (when a review resolves to `null`, i.e. nothing to ask).
+  const finishCommandRun = (cmd: PaletteCommand, runValues: ArgValues, runPayloads: ArgPayloads) => {
+    if (finishedRef.current) {
+      return;
+    }
+    finishedRef.current = true;
+    const result = cmd.run(runValues, ctx, runPayloads);
+    if (result instanceof Promise) {
+      void result.then(
+        () => {
+          pushRecent(cmd.id);
+          finish();
+        },
+        (error: unknown) => {
+          // Let the user retry from the same step.
+          finishedRef.current = false;
+          setCommandError(formatRuntimeError(error));
+        },
+      );
+    } else {
+      pushRecent(cmd.id);
+      finish();
+    }
   };
 
   const runEntry = (entry: PaletteEntry) => {
@@ -404,26 +451,13 @@ export function CommandPalette() {
     const nextValues = { ...values, [spec.key]: value };
     const nextPayloads = { ...payloads, [spec.key]: payload };
     const nextLabels = { ...labels, [spec.key]: label };
-    const shouldFinish =
-      stepIndex === args.length - 1 ||
-      ((spec.kind === 'select' || spec.kind === 'combo') &&
-        (spec.finishOnAccept?.(value, payload, ctx, nextValues) ?? false));
-    if (shouldFinish) {
-      const result = command.run(nextValues, ctx, nextPayloads);
-      if (result instanceof Promise) {
-        void result.then(
-          () => {
-            pushRecent(command.id);
-            finish();
-          },
-          (error: unknown) => {
-            setCommandError(formatRuntimeError(error));
-          },
-        );
-      } else {
-        pushRecent(command.id);
-        finish();
-      }
+    const finishOnAccept =
+      (spec.kind === 'select' || spec.kind === 'combo') &&
+      (spec.finishOnAccept?.(value, payload, ctx, nextValues) ?? false);
+    // Skip any now-irrelevant steps; if none remain, the wizard is done.
+    const next = nextVisibleStep(args, stepIndex + 1, ctx, nextValues, nextPayloads);
+    if (finishOnAccept || next >= args.length) {
+      finishCommandRun(command, nextValues, nextPayloads);
     } else {
       setValues(nextValues);
       setPayloads(nextPayloads);
@@ -435,7 +469,7 @@ export function CommandPalette() {
       setReviewError(null);
       setReviewLoading(false);
       setQuery('');
-      setStepIndex(stepIndex + 1);
+      setStepIndex(next);
     }
   };
 
@@ -503,8 +537,9 @@ export function CommandPalette() {
       closePalette();
       return;
     }
-    if (stepIndex > 0) {
-      const previousKey = args[stepIndex - 1]?.key;
+    const previous = prevVisibleStep(args, stepIndex, ctx, values, payloads);
+    if (previous !== null) {
+      const previousKey = args[previous]?.key;
       if (previousKey) {
         setValues((current) => {
           const next = { ...current };
@@ -526,7 +561,7 @@ export function CommandPalette() {
       setStepOptionsError(null);
       setStepOptionsLoading(false);
       setQuery('');
-      setStepIndex(stepIndex - 1);
+      setStepIndex(previous);
     } else {
       setCommand(null);
       setStepOptions([]);
@@ -583,7 +618,12 @@ export function CommandPalette() {
     }
   };
 
-  const crumbLabels = command ? args.slice(0, stepIndex).map((arg) => labels[arg.key] ?? '') : [];
+  const crumbLabels = command
+    ? args
+        .slice(0, stepIndex)
+        .filter((arg) => !(arg.kind === 'select' && (arg.skip?.(ctx, values, payloads) ?? false)))
+        .map((arg) => labels[arg.key] ?? '')
+    : [];
 
   return (
     <AnimatePresence>

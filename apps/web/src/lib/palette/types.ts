@@ -67,6 +67,12 @@ export type ArgSpec =
         ctx: PaletteContext,
         values: ArgValues,
       ) => boolean;
+      /**
+       * Skip this step entirely when the prior steps make it irrelevant (e.g. an
+       * existing branch needs no "create from" base). Evaluated synchronously
+       * from the values/payloads gathered so far.
+       */
+      readonly skip?: (ctx: PaletteContext, values: ArgValues, payloads: ArgPayloads) => boolean;
     }
   | {
       readonly kind: 'combo';
@@ -89,7 +95,12 @@ export type ArgSpec =
       readonly kind: 'review';
       readonly key: string;
       readonly label: string;
-      readonly load: (ctx: PaletteContext, values: ArgValues) => MaybePromise<ReviewContent>;
+      /**
+       * Loads the review screen. Returning `null` means there is nothing to
+       * review — the wizard skips the screen and finishes immediately (e.g. an
+       * open-worktree with no setup hooks to approve).
+       */
+      readonly load: (ctx: PaletteContext, values: ArgValues) => MaybePromise<ReviewContent | null>;
     }
   | {
       readonly kind: 'text';

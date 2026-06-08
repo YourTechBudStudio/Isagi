@@ -1,5 +1,12 @@
 import { GROUP_ORDER } from './groups.js';
-import type { ArgSpec, ArgValues, Option, PaletteContext, PaletteEntry } from './types.js';
+import type {
+  ArgPayloads,
+  ArgSpec,
+  ArgValues,
+  Option,
+  PaletteContext,
+  PaletteEntry,
+} from './types.js';
 
 /**
  * Empty-query view: show the most-recent few entries **per group** (not one flat
@@ -71,6 +78,49 @@ export function defaultOptionIndex(spec: ArgSpec, options: readonly Option[]): n
 export function firstUnfilledStep(args: readonly ArgSpec[], values: ArgValues): number {
   const index = args.findIndex((arg) => values[arg.key] === undefined);
   return index >= 0 ? index : Math.max(args.length - 1, 0);
+}
+
+function isSkipped(
+  arg: ArgSpec | undefined,
+  ctx: PaletteContext,
+  values: ArgValues,
+  payloads: ArgPayloads,
+): boolean {
+  return arg?.kind === 'select' ? (arg.skip?.(ctx, values, payloads) ?? false) : false;
+}
+
+/**
+ * The next step index at or after `from` that isn't skipped given the current
+ * values/payloads. Returns `args.length` when every remaining step is skipped
+ * (meaning the wizard should finish).
+ */
+export function nextVisibleStep(
+  args: readonly ArgSpec[],
+  from: number,
+  ctx: PaletteContext,
+  values: ArgValues,
+  payloads: ArgPayloads,
+): number {
+  let index = from;
+  while (index < args.length && isSkipped(args[index], ctx, values, payloads)) {
+    index += 1;
+  }
+  return index;
+}
+
+/** The previous visible step index before `from`, or `null` if there is none. */
+export function prevVisibleStep(
+  args: readonly ArgSpec[],
+  from: number,
+  ctx: PaletteContext,
+  values: ArgValues,
+  payloads: ArgPayloads,
+): number | null {
+  let index = from - 1;
+  while (index >= 0 && isSkipped(args[index], ctx, values, payloads)) {
+    index -= 1;
+  }
+  return index >= 0 ? index : null;
 }
 
 export function labelForValue(
