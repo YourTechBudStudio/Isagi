@@ -18,7 +18,7 @@ The lenses are equal-priority review tools. A change does not need to touch ever
 - [`state-flow-causality-and-operational-cost.md`](./lenses/state-flow-causality-and-operational-cost.md) - explicit state transitions, mutation shape, cache flow, hidden side effects, and operation cost.
 - [`module-shape-and-navigability.md`](./lenses/module-shape-and-navigability.md) - deep modules, narrow public surfaces, file grouping, and human-readable flow.
 - [`reuse-refactoring-and-drift-prevention.md`](./lenses/reuse-refactoring-and-drift-prevention.md) - shared behavior, refactoring pressure, and drift prevention.
-- [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, lifecycle ownership, failure semantics, logging, and supportability.
+- [`runtime-behavior-and-diagnostics.md`](./lenses/runtime-behavior-and-diagnostics.md) - operational work, Effect usage, services/layers, tagged failures, lifecycle ownership, diagnostics, and supportability.
 - [`product-behavior-and-ux.md`](./lenses/product-behavior-and-ux.md) - honest product behavior, restoration, attention signals, and user-visible engineering quality.
 - [`design-fidelity-and-voice.md`](./lenses/design-fidelity-and-voice.md) - visual and voice adherence to Isagi's design language on user-facing surfaces, reviewed against the `design-system` skill.
 - [`reviewability-and-verification.md`](./lenses/reviewability-and-verification.md) - verification depth, dependency justification, review evidence, and completed-work trust.
@@ -39,6 +39,7 @@ Each lens defines its own `Blocker`, `Concern`, and `Nit` calibration.
 - Abstraction for its own sake.
 - Subjective simplicity preferences not tied to ownership, state flow, operational cost, navigability, or reviewability.
 - Effect wrappers around pure code just to make it look architectural.
+- Branding every primitive or turning every helper into a service.
 - Exhaustive logging in every function.
 - Speculative compatibility for private internals.
 - Generic best-practice checklists not tied to Isagi's risks.

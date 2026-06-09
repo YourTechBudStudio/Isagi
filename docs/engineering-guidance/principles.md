@@ -22,6 +22,14 @@ State changes should have clear causes, bounded effects, and operational cost th
 
 Work that can fail, block, retry, allocate resources, depend on services, spawn processes, or outlive a single call should make those facts visible in its type, boundary, and lifecycle. Use Effect as Isagi's operational substrate, not as a universal style for pure code.
 
+## Model Expected Failures Explicitly
+
+Expected domain and operational failures should be named, tagged, and structured. Prefer tagged Effect data/errors for failures callers are meant to handle, keep reason/code surfaces small and stable, carry useful context, and map runtime failures into contract errors at API boundaries. Use native or thrown errors for unexpected defects and third-party causes, not as the primary shape of expected behavior.
+
+## Prefer Strong Domain Shapes Where Mixups Matter
+
+Use branded, opaque, or otherwise narrow domain types when plain strings or numbers would make important identifiers, refs, paths, tokens, or state variants easy to confuse. Do not brand every primitive by default; use stronger shapes where they protect boundaries, operational targeting, or local reasoning.
+
 ## Prefer Deep Modules With Narrow Public Surfaces
 
 Concentrate complexity behind clear interfaces. A deep module may contain multiple focused internal files; depth means callers see a small, stable surface, not that everything lives in one huge file.

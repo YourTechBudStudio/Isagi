@@ -19,9 +19,14 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Does operational code compose Effects internally and run them at framework or process boundaries?
 - Are `Effect.runPromise`, `Effect.runSync`, or `Effect.runFork` used deliberately at boundaries rather than deep inside reusable operational modules?
 - Is the code at the right Effect maturity tier for its complexity: local Effect, service/layer, or scoped concurrent system?
+- Do operational domains with IO, config, persistence, Git, process, runtime-client, or adapter dependencies expose those dependencies through services/layers once the domain needs replacement, testing, or lifecycle clarity?
 - Are scoped resources, interruption, shutdown, and cleanup explicit for long-lived processes, streams, queues, sessions, and supervisors?
+- Are expected domain and operational failures represented as tagged, structured data/errors rather than generic `Error` values or stringly status messages?
+- Are expected messages, findings, events, and state variants tagged where callers need to distinguish them deliberately?
+- Are branded, opaque, or otherwise narrow domain types used where plain strings/numbers would make important project, worktree, session, path, ref, or token mixups likely?
+- Are unexpected defects distinguishable from expected domain failures?
 - Are failures surfaced instead of silently swallowed?
-- Are domain failures mapped into explicit API errors at runtime boundaries rather than leaking implementation errors?
+- Are tagged domain failures mapped into explicit API errors at runtime boundaries rather than leaking implementation errors?
 - Are validation failures, domain failures, internal failures, and degraded-runtime behavior distinguishable where clients or users need different handling?
 - Does degraded behavior remain honest about what did and did not work?
 - Would a user be able to report enough information for remote debugging?
@@ -33,6 +38,8 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 
 - Package-scoped `AGENTS.md` files define the local Effect scope for each package. Keep this lens focused on operational review questions rather than package policy.
 - Isagi aims for Tier 2 by default in operational code and Tier 3 when lifecycle complexity justifies scopes, fibers, queues, streams, supervisors, or structured shutdown.
+- New or touched expected operational failures should generally be tagged and structured. Existing generic errors can be improved opportunistically when the surrounding code is already changing.
+- Branded or opaque types are most valuable for operational targets and boundary-crossing values: project/worktree IDs, session IDs, refs, paths, tokens, and similar domain primitives. Avoid branding every primitive if it makes local code harder to read without reducing risk.
 - Commands are terminal commands. Do not force rigid command categories unless the product proves the need.
 - Commands are non-persistent by default. Persistent commands are explicit.
 - If a persistent command fails because of fixed ports or shared resources, surface the failure rather than magically fixing project configuration.
@@ -47,6 +54,7 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Process, PTY, command, agent-session, background fiber, or resource lifecycle can silently orphan, leak, mis-associate, or misrepresent state.
 - Long-lived resources or concurrent runtime systems lack explicit ownership, interruption, cleanup, or shutdown behavior.
 - Internal operational code runs Effects so early that cancellation, retry, resource ownership, or composition is materially broken.
+- A cross-boundary or user-impacting expected failure is modeled generically enough that clients cannot distinguish, recover from, or accurately present it.
 - Description-only contracts or schemas expose implementation-layer Effect concepts.
 - Runtime API responses expose domain, framework, or operational implementation errors instead of stable client-facing error shapes.
 - Restoration failure is hidden or presented as success.
@@ -60,6 +68,8 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 - Operational modules mix Promise and Effect in a way that weakens composition, testability, cancellation, or failure handling.
 - Effect is used ceremonially around pure logic where plain TypeScript would be easier to reason about.
 - A growing integration lacks a service boundary or layer and is becoming hard to test, replace, or diagnose.
+- An expected domain or operational failure is still generic/stringly in a way that creates real handling, diagnosability, or reviewability cost.
+- Important operational targets use interchangeable primitive types where a mixup is plausible and consequential.
 - Background work exists without clear cancellation, shutdown, or ownership semantics.
 - Failure handling exists but does not expose enough context for support.
 - Runtime API errors are explicit but too coarse for clients to handle important failure categories deliberately.
@@ -72,6 +82,7 @@ This lens reviews operational work once it exists: lifecycle, failure behavior, 
 
 - A helper could return an Effect directly instead of adding an extra boundary wrapper.
 - A local pure helper does not need Effect.
+- A tag, reason, or branded type name could be clearer.
 - A log message could include a clearer operation or identifier.
 - Error wording or error naming could be more specific.
 - A small helper name could better reflect lifecycle intent.

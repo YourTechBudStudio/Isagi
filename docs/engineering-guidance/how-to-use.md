@@ -12,7 +12,9 @@ Several lenses intentionally meet around stateful runtime/client work. Keep thei
 
 Prefer the smallest correct change that preserves the product model and keeps the code easy to follow. If a cleaner internal interface requires migrating callers, migrate them rather than adding compatibility shims, unless a real external boundary depends on the old behavior.
 
-For operational implementation code, prefer Effect-shaped internals and run them at framework or process boundaries. Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent. Schema-backed contracts remain descriptive boundary artifacts even when they use Effect Schema; do not treat them as a reason to expose operational Effect concepts across the API boundary.
+For operational implementation code, prefer Effect-shaped internals and run them at framework or process boundaries. Expected domain and operational failures should usually be tagged and structured rather than thrown as generic errors. As an operational domain grows, prefer explicit services and layers for IO, config, persistence, Git, process, runtime-client, or adapter dependencies. Use branded or otherwise narrow domain types where plain primitives make important targets easy to mix up.
+
+Do not wrap pure helpers, schemas, or presentational code in Effect just to make the code look consistent. Schema-backed contracts remain descriptive boundary artifacts even when they use Effect Schema; do not expose operational Effect concepts, services, layers, fibers, or runtime error classes across the API boundary.
 
 When the change is complete, report what changed, what was verified, and any known risk or follow-up. Do not claim confidence that the evidence does not support.
 
@@ -26,16 +28,25 @@ Use the lens-specific severity mapping. When two severities seem plausible, choo
 
 ## Effect Adoption Posture
 
-Effect is Isagi's substrate for operational work, not its universal programming style.
+Effect is Isagi's substrate for operational work, not its universal programming style. Use Effect primitives to make operational facts visible: failure, dependencies, lifecycle, resources, cancellation, concurrency, and domain identity.
 
 Use this maturity model as review orientation, not as a checklist:
 
-- **Tier 0: Non-operational code** - pure helpers, constants, schemas, descriptive contracts, and presentational rendering.
-- **Tier 1: Local Effect** - a contained async, failure, retry, timeout, or parsing flow that runs at a nearby boundary.
-- **Tier 2: Effect services/layers** - operational domains with dependencies that should be testable, replaceable, and explicit, such as Git, config, persistence, runtime clients, or process adapters.
+- **Tier 0: Non-operational code** - pure helpers, constants, schemas, descriptive contracts, and presentational rendering. Keep this plain TypeScript or React.
+- **Tier 1: Local Effect** - a contained async, failure, retry, timeout, validation, or parsing flow that runs at a nearby boundary.
+- **Tier 2: Effect services/layers** - operational domains with dependencies that should be testable, replaceable, and explicit, such as Git, config, persistence, runtime clients, process adapters, or harness integrations.
 - **Tier 3: Scoped runtime systems** - long-lived resources or concurrent systems that need scopes, fibers, queues, streams, supervisors, interruption, or structured shutdown.
 
-Isagi should aim for **Tier 2 by default in operational code** and move to **Tier 3 where lifecycle complexity justifies it**. Runtime orchestration, PTYs, commands, agent sessions, restoration, and process supervision are likely Tier 3 territory. Pure schemas, descriptive contracts, and presentational rendering are not.
+Isagi should aim for **Tier 2 by default in operational code** and move to **Tier 3 where lifecycle complexity justifies it**. Runtime orchestration, PTYs, commands, agent sessions, restoration, and process supervision are likely Tier 3 territory. Pure schemas, descriptive contracts, presentational rendering, and tiny local helpers are not.
+
+Use these primitives where they protect real reasoning:
+
+- **Tagged data/errors** for expected failures, messages, findings, events, or state variants that callers are meant to distinguish.
+- **Services and layers** for operational dependencies, not for every group of functions.
+- **Scopes, fibers, queues, streams, supervisors, and interruption** when work can outlive one request or component interaction.
+- **Branded or opaque domain types** for identifiers, refs, paths, tokens, or other primitives that cross boundaries or could be confused in dangerous ways.
+
+Contracts are the exception boundary: they may use Effect Schema for serializable DTOs, but they must not expose runtime services, layers, fibers, Effect error classes, or domain implementation internals.
 
 ## Severity Semantics
 
