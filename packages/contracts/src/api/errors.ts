@@ -41,6 +41,16 @@ export const workspaceActiveContextRejectedErrorSchema = Schema.Struct({
 
 export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_not_found');
 
+export const surfaceRejectionReasonSchema = Schema.Literal('surface_not_found');
+
+export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
+  'worktree_not_found',
+  'surface_not_found',
+  'pane_not_found',
+);
+
+export const sessionLaunchRejectionReasonSchema = Schema.Literal('worktree_not_found');
+
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_missing',
@@ -119,6 +129,41 @@ export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
   }),
 });
 
+export const surfaceRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('surface_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: surfaceRejectionReasonSchema,
+    surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const worktreeEnvironmentFocusRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_environment_focus_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeEnvironmentFocusRejectionReasonSchema,
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const sessionLaunchRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('session_launch_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: sessionLaunchRejectionReasonSchema,
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
 export const projectRelocationRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('project_relocation_rejected'),
   status: Schema.Union(Schema.Literal(400), Schema.Literal(409)),
@@ -192,6 +237,24 @@ export const workspaceReconcileApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const surfaceApiErrorSchema = Schema.Union(
+  surfaceRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const worktreeEnvironmentFocusApiErrorSchema = Schema.Union(
+  worktreeEnvironmentFocusRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const sessionLaunchApiErrorSchema = Schema.Union(
+  sessionLaunchRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export const projectApiErrorSchema = Schema.Union(
   projectPathRejectedErrorSchema,
   gitCommandFailedErrorSchema,
@@ -242,6 +305,13 @@ export type WorkspaceActiveContextRejectionReason = Schema.Schema.Type<
 export type WorkspaceReconcileRejectionReason = Schema.Schema.Type<
   typeof workspaceReconcileRejectionReasonSchema
 >;
+export type SurfaceRejectionReason = Schema.Schema.Type<typeof surfaceRejectionReasonSchema>;
+export type WorktreeEnvironmentFocusRejectionReason = Schema.Schema.Type<
+  typeof worktreeEnvironmentFocusRejectionReasonSchema
+>;
+export type SessionLaunchRejectionReason = Schema.Schema.Type<
+  typeof sessionLaunchRejectionReasonSchema
+>;
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;
@@ -257,6 +327,13 @@ export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
 >;
 export type WorkspaceReconcileRejectedError = Schema.Schema.Type<
   typeof workspaceReconcileRejectedErrorSchema
+>;
+export type SurfaceRejectedError = Schema.Schema.Type<typeof surfaceRejectedErrorSchema>;
+export type WorktreeEnvironmentFocusRejectedError = Schema.Schema.Type<
+  typeof worktreeEnvironmentFocusRejectedErrorSchema
+>;
+export type SessionLaunchRejectedError = Schema.Schema.Type<
+  typeof sessionLaunchRejectedErrorSchema
 >;
 export type ProjectRelocationRejectedError = Schema.Schema.Type<
   typeof projectRelocationRejectedErrorSchema

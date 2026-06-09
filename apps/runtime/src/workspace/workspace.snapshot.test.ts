@@ -16,6 +16,7 @@ import {
   type DataDirectoryService,
   type WorkspaceState,
 } from '../persistence/index.js';
+import { SurfaceRepository, type SurfaceRepositoryService } from '../surfaces/index.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -55,6 +56,20 @@ const testWorktreeSetupRepository = {
   listRunSteps: () => Effect.succeed([]),
 } satisfies WorktreeSetupRepositoryService;
 
+const testSurfaceRepository = {
+  worktreeExists: () => Effect.succeed(false),
+  findSurface: () => Effect.succeed(null),
+  findPane: () => Effect.succeed(null),
+  findEnvironmentFocus: () => Effect.succeed(null),
+  listWorkspaceSurfaceMetadata: Effect.succeed([]),
+  listEnvironmentFocusStates: Effect.succeed([]),
+  listPanesForSurface: () => Effect.succeed([]),
+  listPtySessionsForPanes: () => Effect.succeed([]),
+  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
+  setEnvironmentFocus: (input) => Effect.succeed(input),
+} satisfies SurfaceRepositoryService;
+
 const project: ProjectRow = {
   id: 1,
   name: 'Isagi',
@@ -91,6 +106,30 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   const snapshot = buildWorkspaceSnapshot([project], [worktreeBase]);
 
   assert.equal(snapshot.projects[0]?.worktrees[0]?.id, worktreeBase.id);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+test('workspace snapshots include persisted surface rail metadata and active surface id', () => {
+  const snapshot = buildWorkspaceSnapshot(
+    [project],
+    [worktreeBase],
+    [
+      {
+        id: 101,
+        worktreeId: worktreeBase.id,
+        kind: 'agent',
+        title: 'Pi',
+        attention: 'waiting',
+        sortOrder: 0,
+      },
+    ],
+    [{ worktreeId: worktreeBase.id, activeSurfaceId: 101, activePaneId: 1001 }],
+  );
+
+  assert.deepEqual(snapshot.projects[0]?.worktrees[0]?.surfaces, [
+    { id: 101, kind: 'agent', title: 'Pi', attention: 'waiting' },
+  ]);
+  assert.equal(snapshot.projects[0]?.worktrees[0]?.activeSurfaceId, 101);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
@@ -206,6 +245,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),

@@ -410,7 +410,11 @@ export function CommandPalette() {
   // Run a command to completion and close the palette, surfacing any failure as
   // the inline command error. Shared by the wizard's accept path and the review
   // step's auto-finish (when a review resolves to `null`, i.e. nothing to ask).
-  const finishCommandRun = (cmd: PaletteCommand, runValues: ArgValues, runPayloads: ArgPayloads) => {
+  const finishCommandRun = (
+    cmd: PaletteCommand,
+    runValues: ArgValues,
+    runPayloads: ArgPayloads,
+  ) => {
     if (finishedRef.current) {
       return;
     }

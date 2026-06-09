@@ -12,6 +12,7 @@ import {
 } from './model.js';
 import {
   formatRuntimeError,
+  selectSurfaceAndPersistFocus,
   scheduleActiveContextPersistence,
   scheduleWorkspaceReconcileForProject,
   useActiveContextQuery,
@@ -111,7 +112,6 @@ export function useWorkspace() {
   const activeSurfaceByWorktreeId = useWorkspaceStore((state) => state.activeSurfaceByWorktreeId);
   const selectWorktree = useWorkspaceStore((state) => state.selectWorktree);
   const selectMissingProject = useWorkspaceStore((state) => state.selectMissingProject);
-  const selectSurface = useWorkspaceStore((state) => state.selectSurface);
 
   const projects = workspace.data?.projects ?? [];
   const currentActiveWorktreeId = activeWorktreeId(selection);
@@ -138,7 +138,7 @@ export function useWorkspace() {
     error: workspace.error ? formatRuntimeError(workspace.error) : null,
     selectWorktree,
     selectMissingProject,
-    selectSurface,
+    selectSurface: selectSurfaceAndPersistFocus,
     activeSurfaceByWorktreeId,
   };
 }
@@ -155,7 +155,7 @@ export function workspaceSelectionIsEmpty(selection: WorkspaceSelection) {
 
 function findWorkspaceActiveSurface(
   worktree: Worktree | null,
-  activeSurfaceByWorktreeId: Readonly<Record<number, string>>,
+  activeSurfaceByWorktreeId: Readonly<Record<number, number>>,
 ): Surface | null {
   if (!worktree) {
     return null;

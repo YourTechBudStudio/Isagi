@@ -12,6 +12,9 @@ import {
   type ApiEndpointParams,
   type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
+  type SetWorktreeEnvironmentFocusInput,
+  type SurfaceDetail,
+  type WorktreeEnvironmentFocusOutput,
   type ActiveContextOutput,
   type ActiveContextPersistenceInput,
   type AddProjectOutput,
@@ -56,6 +59,16 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     ReconcileWorkspaceOutput,
     RuntimeEndpointError<typeof apiEndpoints.workspace.reconcile>
+  >;
+  readonly getSurfaceDetail: (
+    surfaceId: number,
+  ) => Effect.Effect<SurfaceDetail, RuntimeEndpointError<typeof apiEndpoints.surfaces.get>>;
+  readonly setWorktreeEnvironmentFocus: (
+    worktreeId: number,
+    input: SetWorktreeEnvironmentFocusInput,
+  ) => Effect.Effect<
+    WorktreeEnvironmentFocusOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.setWorktreeEnvironmentFocus>
   >;
   readonly addProject: (
     path: string,
@@ -113,6 +126,9 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     fetchActiveContext: () => request(apiEndpoints.workspace.getActiveContext),
     updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
     reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),
+    getSurfaceDetail: (surfaceId) => request(apiEndpoints.surfaces.get, { surfaceId }),
+    setWorktreeEnvironmentFocus: (worktreeId, input) =>
+      request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
     addProject: (path) => request(apiEndpoints.projects.add, { path }),
     relocateProject: (projectId, path) =>
       request(apiEndpoints.projects.relocate, { projectId }, { path }),

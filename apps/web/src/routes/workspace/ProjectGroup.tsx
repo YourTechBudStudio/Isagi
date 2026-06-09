@@ -23,8 +23,8 @@ export function ProjectGroup({
   project: PresentProject;
   activeWorktreeId: number | null;
   onSelectWorktree: (projectId: number, worktreeId: number) => void;
-  activeSurfaceByWorktreeId: Readonly<Record<number, string>>;
-  onSelectSurface: (worktreeId: number, surfaceId: string) => void;
+  activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
+  onSelectSurface: (worktreeId: number, surfaceId: number) => void;
 }) {
   const openPalette = usePaletteStore((state) => state.openPalette);
 

@@ -5,11 +5,10 @@ const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive()
 export const attentionStateSchema = Schema.Literal('idle', 'working', 'waiting', 'error');
 export const projectStatusSchema = Schema.Literal('present', 'missing');
 export const surfaceSchema = Schema.Struct({
-  id: Schema.String,
-  kind: Schema.Literal('agent', 'terminal', 'browser', 'editor', 'artifact'),
+  id: positiveIntegerSchema,
+  kind: Schema.Literal('agent', 'terminal'),
   title: Schema.String,
-  attention: Schema.optional(attentionStateSchema),
-  source: Schema.optional(Schema.String),
+  attention: attentionStateSchema,
 });
 
 export const commandSchema = Schema.Struct({
@@ -32,7 +31,7 @@ export const worktreeSchema = Schema.Struct({
   attention: attentionStateSchema,
   parked: Schema.Boolean,
   surfaces: Schema.Array(surfaceSchema),
-  activeSurfaceId: Schema.NullOr(Schema.String),
+  activeSurfaceId: Schema.NullOr(positiveIntegerSchema),
   commands: Schema.Array(commandSchema),
 });
 
@@ -145,3 +144,4 @@ export type ReconciliationFinding = Schema.Schema.Type<typeof reconciliationFind
 export type Project = Schema.Schema.Type<typeof projectSchema>;
 export type Worktree = Schema.Schema.Type<typeof worktreeSchema>;
 export type ActiveContext = Schema.Schema.Type<typeof activeContextSchema>;
+export type WorkspaceSurfaceMetadata = Schema.Schema.Type<typeof surfaceSchema>;

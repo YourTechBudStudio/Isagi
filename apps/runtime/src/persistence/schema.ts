@@ -83,3 +83,75 @@ export const worktreeSetupSteps = sqliteTable('worktree_setup_steps', {
   stdoutExcerpt: text('stdout_excerpt'),
   stderrExcerpt: text('stderr_excerpt'),
 });
+
+export const worktreeSurfaces = sqliteTable('worktree_surfaces', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  worktreeId: integer('worktree_id')
+    .notNull()
+    .references(() => worktrees.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['agent', 'terminal'] }).notNull(),
+  title: text('title').notNull(),
+  attention: text('attention', { enum: ['idle', 'working', 'waiting', 'error'] }).notNull(),
+  layoutJson: text('layout_json').notNull(),
+  sortOrder: integer('sort_order').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const surfacePanes = sqliteTable('surface_panes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  surfaceId: integer('surface_id')
+    .notNull()
+    .references(() => worktreeSurfaces.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  attention: text('attention', { enum: ['idle', 'working', 'waiting', 'error'] }).notNull(),
+  sortOrder: integer('sort_order').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const ptySessions = sqliteTable(
+  'pty_sessions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    paneId: integer('pane_id')
+      .notNull()
+      .references(() => surfacePanes.id, { onDelete: 'cascade' }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    adapter: text('adapter', { enum: ['node_pty'] }).notNull(),
+    purpose: text('purpose', { enum: ['agent', 'terminal'] }).notNull(),
+    harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }),
+    command: text('command').notNull(),
+    cwd: text('cwd').notNull(),
+    status: text('status', { enum: ['starting', 'running', 'exited', 'failed'] }).notNull(),
+    exitCode: integer('exit_code'),
+    signal: text('signal'),
+    logPath: text('log_path').notNull(),
+    logBytes: integer('log_bytes').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    exitedAt: text('exited_at'),
+  },
+  (table) => [uniqueIndex('pty_sessions_pane_id_unique').on(table.paneId)],
+);
+
+export const worktreeEnvironmentStates = sqliteTable(
+  'worktree_environment_states',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    activeSurfaceId: integer('active_surface_id').references(() => worktreeSurfaces.id, {
+      onDelete: 'set null',
+    }),
+    activePaneId: integer('active_pane_id').references(() => surfacePanes.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('worktree_environment_states_worktree_id_unique').on(table.worktreeId)],
+);

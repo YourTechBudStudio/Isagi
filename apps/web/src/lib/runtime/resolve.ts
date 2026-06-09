@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 
 export function resolveRuntimeUrl(): Effect.Effect<string, Error> {
-  const viteRuntimeUrl = import.meta.env.VITE_ISAGI_RUNTIME_URL;
+  const viteRuntimeUrl = import.meta.env?.VITE_ISAGI_RUNTIME_URL;
 
   if (viteRuntimeUrl) {
     return Effect.succeed(viteRuntimeUrl);

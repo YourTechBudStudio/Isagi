@@ -22,6 +22,13 @@
       "when": 1780903771928,
       "tag": "0002_daffy_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781023762531,
+      "tag": "0003_freezing_lockheed",
+      "breakpoints": true
     }
   ]
 }

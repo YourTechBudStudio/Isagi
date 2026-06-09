@@ -8,6 +8,7 @@ import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
 import { registerPathsApi } from './paths/api.js';
 import { RuntimeLayer } from './runtime.layer.js';
+import { registerSurfacesApi } from './surfaces/index.js';
 import { registerWorkspaceApi } from './workspace/api.js';
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';
@@ -64,6 +65,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
 
       registerHealthApi(fastify);
       registerWorkspaceApi(fastify, runtime);
+      registerSurfacesApi(fastify, runtime);
       registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>

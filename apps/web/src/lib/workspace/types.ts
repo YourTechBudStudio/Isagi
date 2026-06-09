@@ -29,7 +29,7 @@ export interface ShellPane {
 }
 
 export interface Surface {
-  readonly id: string;
+  readonly id: number;
   readonly kind: SurfaceKind;
   readonly title: string;
   readonly attention?: AttentionState | undefined;

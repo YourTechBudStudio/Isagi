@@ -1,5 +1,9 @@
 import type { WorkspaceSnapshot } from '@isagi/contracts';
 
+import type { EnvironmentFocusRow, SurfaceMetadataRow } from '../surfaces/index.js';
+
+export type { EnvironmentFocusRow, SurfaceMetadataRow };
+
 export type ProjectStatus = 'present' | 'missing';
 
 export interface ProjectRow {

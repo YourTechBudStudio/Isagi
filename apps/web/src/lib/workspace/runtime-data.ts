@@ -10,6 +10,9 @@ import type {
   OpenWorktreeOutput,
   PathSuggestOutput,
   ReconcileWorkspaceInput,
+  SetWorktreeEnvironmentFocusInput,
+  SurfaceDetail,
+  WorktreeEnvironmentFocusOutput,
   WorktreeSetupPreflightOutput,
   WorktreeSetupTrustInput,
   WorktreeSetupTrustOutput,
@@ -42,6 +45,19 @@ export function reconcileWorkspace(
   input: ReconcileWorkspaceInput,
 ): Effect.Effect<ReconcileWorkspaceOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.reconcileWorkspace(input)));
+}
+
+export function getSurfaceDetail(surfaceId: number): Effect.Effect<SurfaceDetail, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getSurfaceDetail(surfaceId)));
+}
+
+export function setWorktreeEnvironmentFocus(
+  worktreeId: number,
+  input: SetWorktreeEnvironmentFocusInput,
+): Effect.Effect<WorktreeEnvironmentFocusOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.setWorktreeEnvironmentFocus(worktreeId, input)),
+  );
 }
 
 export function addProject(path: string): Effect.Effect<AddProjectOutput, Error> {

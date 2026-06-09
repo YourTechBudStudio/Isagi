@@ -39,6 +39,7 @@ import {
   type StateFileError,
 } from '../persistence/index.js';
 import { ProjectConfigError } from '../project-config/project-config.service.js';
+import { SurfaceRepository } from '../surfaces/index.js';
 import {
   runPostCreateSetup,
   WorktreeSetupError,
@@ -134,10 +135,13 @@ export const WorkspaceServiceLive = Layer.effect(
     const dataDirectory = yield* DataDirectory;
     const worktreeSetup = yield* WorktreeSetupService;
     const worktreeSetupRepository = yield* WorktreeSetupRepository;
+    const surfaceRepository = yield* SurfaceRepository;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
-      return buildWorkspaceSnapshot(rows.projects, rows.worktrees);
+      const surfaces = yield* surfaceRepository.listWorkspaceSurfaceMetadata;
+      const environmentFocus = yield* surfaceRepository.listEnvironmentFocusStates;
+      return buildWorkspaceSnapshot(rows.projects, rows.worktrees, surfaces, environmentFocus);
     });
 
     const getActiveContext = stateFile.read.pipe(

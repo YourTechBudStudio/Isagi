@@ -2,20 +2,26 @@ import { basename } from 'node:path';
 
 import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
 
-import type { ProjectRow, WorktreeRow } from './types.js';
+import type { EnvironmentFocusRow, ProjectRow, SurfaceMetadataRow, WorktreeRow } from './types.js';
 
 export function buildWorkspaceSnapshot(
   projects: readonly ProjectRow[],
   worktrees: readonly WorktreeRow[],
+  surfaces: readonly SurfaceMetadataRow[] = [],
+  environmentFocus: readonly EnvironmentFocusRow[] = [],
 ): WorkspaceSnapshot {
   return {
-    projects: projects.map((project) => buildProjectSnapshot(project, worktrees)),
+    projects: projects.map((project) =>
+      buildProjectSnapshot(project, worktrees, surfaces, environmentFocus),
+    ),
   };
 }
 
 export function buildProjectSnapshot(
   project: ProjectRow,
   worktrees: readonly WorktreeRow[],
+  surfaces: readonly SurfaceMetadataRow[] = [],
+  environmentFocus: readonly EnvironmentFocusRow[] = [],
 ): Project {
   const base = {
     id: project.id,
@@ -25,7 +31,7 @@ export function buildProjectSnapshot(
       project.status === 'present'
         ? worktrees
             .filter((worktree) => worktree.projectId === project.id)
-            .map((worktree) => buildWorktreeSnapshot(project, worktree))
+            .map((worktree) => buildWorktreeSnapshot(project, worktree, surfaces, environmentFocus))
         : [],
   };
 
@@ -43,7 +49,14 @@ export function buildProjectSnapshot(
   };
 }
 
-function buildWorktreeSnapshot(project: ProjectRow, worktree: WorktreeRow): Worktree {
+function buildWorktreeSnapshot(
+  project: ProjectRow,
+  worktree: WorktreeRow,
+  surfaces: readonly SurfaceMetadataRow[],
+  environmentFocus: readonly EnvironmentFocusRow[],
+): Worktree {
+  const worktreeSurfaces = surfaces.filter((surface) => surface.worktreeId === worktree.id);
+  const focus = environmentFocus.find((candidate) => candidate.worktreeId === worktree.id);
   return {
     id: worktree.id,
     projectId: worktree.projectId,
@@ -56,8 +69,15 @@ function buildWorktreeSnapshot(project: ProjectRow, worktree: WorktreeRow): Work
     // current project root path. Persisting this separately creates drift.
     isRoot: worktree.path === project.rootPath,
     parked: false,
-    surfaces: [],
-    activeSurfaceId: null,
+    surfaces: worktreeSurfaces.map((surface) => ({
+      id: surface.id,
+      kind: surface.kind,
+      title: surface.title,
+      attention: surface.attention,
+    })),
+    activeSurfaceId: worktreeSurfaces.some((surface) => surface.id === focus?.activeSurfaceId)
+      ? (focus?.activeSurfaceId ?? null)
+      : null,
     commands: [],
     attention: 'idle',
   };

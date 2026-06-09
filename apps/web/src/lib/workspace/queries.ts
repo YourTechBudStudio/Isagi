@@ -21,6 +21,7 @@ import {
   openWorktree,
   reconcileWorkspace,
   relocateProject,
+  setWorktreeEnvironmentFocus,
   updateActiveContext,
 } from './runtime-data.js';
 import { showWorktreeSetupFailure } from './setup-failure.js';
@@ -34,6 +35,7 @@ let activeContextInFlight: ActiveContextPersistenceInput | null = null;
 let activeContextAbortController: AbortController | null = null;
 let activeContextTimer: number | null = null;
 const workspaceReconcileInFlightProjectIds = new Set<number | null>();
+const surfaceFocusRevisionByWorktreeId = new Map<number, number>();
 
 export function useWorkspaceQuery() {
   return useQuery({
@@ -89,6 +91,74 @@ export async function openWorktreeFromPalette(projectId: number, input: OpenWork
   const output = await Effect.runPromise(openWorktree(projectId, input));
   await commitOpenWorktreeSuccess(queryClient, output);
   return output;
+}
+
+export function selectSurfaceAndPersistFocus(worktreeId: number, surfaceId: number) {
+  const revision = nextSurfaceFocusRevision(worktreeId);
+  useWorkspaceStore.getState().selectSurface(worktreeId, surfaceId);
+
+  void Effect.runPromise(
+    setWorktreeEnvironmentFocus(worktreeId, {
+      activeSurfaceId: surfaceId,
+      activePaneId: null,
+    }).pipe(
+      Effect.timeoutFail({
+        duration: Duration.seconds(5),
+        onTimeout: () => new Error('Surface focus persistence timed out.'),
+      }),
+    ),
+  ).then(
+    () => {
+      if (surfaceFocusRevisionByWorktreeId.get(worktreeId) !== revision) {
+        return;
+      }
+      commitPersistedSurfaceFocus(queryClient, { worktreeId, surfaceId });
+    },
+    (error: unknown) => {
+      if (surfaceFocusRevisionByWorktreeId.get(worktreeId) !== revision) {
+        return;
+      }
+      showToast({
+        id: `surface-focus-persist-failed:${worktreeId}`,
+        kind: 'warning',
+        title: 'Could not save the active surface.',
+        subtitle: 'This switch is local; restart may reopen another surface.',
+      });
+      console.error('[workspace] surface focus persistence failed', error);
+    },
+  );
+}
+
+function nextSurfaceFocusRevision(worktreeId: number) {
+  const revision = (surfaceFocusRevisionByWorktreeId.get(worktreeId) ?? 0) + 1;
+  surfaceFocusRevisionByWorktreeId.set(worktreeId, revision);
+  return revision;
+}
+
+function commitPersistedSurfaceFocus(
+  client: QueryClient,
+  input: { readonly worktreeId: number; readonly surfaceId: number },
+) {
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, (data) => {
+    if (!data) {
+      return data;
+    }
+    return {
+      projects: data.projects.map((project) => {
+        if (project.status !== 'present') {
+          return project;
+        }
+        return {
+          ...project,
+          worktrees: project.worktrees.map((worktree) =>
+            worktree.id === input.worktreeId
+              ? { ...worktree, activeSurfaceId: input.surfaceId }
+              : worktree,
+          ),
+        };
+      }),
+    };
+  });
 }
 
 export async function commitOpenWorktreeSuccess(

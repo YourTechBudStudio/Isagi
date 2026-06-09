@@ -5,12 +5,14 @@ import { QueryClient } from '@tanstack/react-query';
 
 import type { ReconciliationFinding } from '@isagi/contracts';
 
+import { queryClient } from '../query/client.js';
 import { clearToasts, useToastStore } from '../toast/index.js';
 import type { WorkspaceData } from './model.js';
 import {
   commitAddProjectSuccess,
   commitOpenWorktreeSuccess,
   commitRelocateProjectSuccess,
+  selectSurfaceAndPersistFocus,
   workspaceQueryKey,
 } from './queries.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
@@ -64,6 +66,84 @@ test('add-project success invalidates the workspace query without cache surgery'
   assert.equal(client.getQueryState(workspaceQueryKey)?.isInvalidated, true);
 });
 
+test('surface focus persistence ignores stale success responses', async () => {
+  const originalFetch = globalThis.fetch;
+  const hadWindow = 'window' in globalThis;
+  const originalWindow = globalThis.window;
+  const requests: SurfaceFocusRequest[] = [];
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      isagi: {
+        getRuntimeUrl: () => Promise.resolve('http://runtime.test'),
+      },
+    },
+  });
+
+  globalThis.fetch = ((_input, init) =>
+    new Promise<Response>((resolve) => {
+      const body = JSON.parse(String(init?.body)) as { readonly activeSurfaceId: number };
+      requests.push({
+        surfaceId: body.activeSurfaceId,
+        resolve: () =>
+          resolve(
+            new Response(
+              JSON.stringify({
+                data: {
+                  worktreeId: 10,
+                  activeSurfaceId: body.activeSurfaceId,
+                  activePaneId: null,
+                },
+                meta: { requestId: `focus-${body.activeSurfaceId}` },
+              }),
+              { status: 200 },
+            ),
+          ),
+      });
+    })) as typeof fetch;
+
+  try {
+    queryClient.clear();
+    queryClient.setQueryData<WorkspaceData>(workspaceQueryKey, {
+      projects: [
+        project({
+          id: 1,
+          name: 'existing',
+          surfaces: [
+            { id: 101, kind: 'agent', title: 'Pi', attention: 'idle' },
+            { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
+          ],
+        }),
+      ],
+    });
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
+
+    selectSurfaceAndPersistFocus(10, 101);
+    selectSurfaceAndPersistFocus(10, 102);
+    await waitFor(() => requests.length === 2);
+
+    requests[1]!.resolve();
+    await waitFor(() => activeSurfaceIdFromCache() === 102);
+
+    requests[0]!.resolve();
+    await Promise.resolve();
+    assert.equal(activeSurfaceIdFromCache(), 102);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (hadWindow) {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: originalWindow,
+      });
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+    queryClient.clear();
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
+  }
+});
+
 test('reconciliation warning names the missing project path', async () => {
   clearToasts();
   const client = new QueryClient();
@@ -84,10 +164,7 @@ test('reconciliation warning names the missing project path', async () => {
     .getState()
     .toasts.find((candidate) => candidate.id === 'workspace-project-missing');
   assert.equal(toast?.title, 'Project unavailable.');
-  assert.equal(
-    toast?.subtitle,
-    '/repo/missing-project — open the row to fix or remove it.',
-  );
+  assert.equal(toast?.subtitle, '/repo/missing-project — open the row to fix or remove it.');
   assert.equal(client.getQueryState(workspaceQueryKey)?.isInvalidated, true);
   clearToasts();
 });
@@ -122,9 +199,30 @@ test('reconciliation warning names the missing worktree branch and path', async 
   clearToasts();
 });
 
+function activeSurfaceIdFromCache() {
+  return queryClient.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.worktrees[0]
+    ?.activeSurfaceId;
+}
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error('Timed out waiting for condition.');
+}
+
+interface SurfaceFocusRequest {
+  readonly surfaceId: number;
+  readonly resolve: () => void;
+}
+
 function project(input: {
   readonly id: number;
   readonly name: string;
+  readonly surfaces?: WorkspaceData['projects'][number]['worktrees'][number]['surfaces'];
 }): WorkspaceData['projects'][number] {
   return {
     id: input.id,
@@ -144,7 +242,7 @@ function project(input: {
         isRoot: true,
         attention: 'idle',
         parked: false,
-        surfaces: [],
+        surfaces: input.surfaces ?? [],
         activeSurfaceId: null,
         commands: [],
       },

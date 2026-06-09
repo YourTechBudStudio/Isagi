@@ -179,7 +179,7 @@ export const openWorktreeCommand: PaletteCommand = {
               {
                 value: 'trust-hook-config',
                 label: 'Trust these hooks',
-                hint: "Isagi runs them now, and asks again only if they change.",
+                hint: 'Isagi runs them now, and asks again only if they change.',
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'trust_hook_config' as const, hash: preflight.hash },
@@ -188,7 +188,7 @@ export const openWorktreeCommand: PaletteCommand = {
               {
                 value: 'always-trust-project',
                 label: 'Always trust this project',
-                hint: "Isagi runs these and any future changes, no more prompts.",
+                hint: 'Isagi runs these and any future changes, no more prompts.',
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'always_trust_project' as const, hash: preflight.hash },
@@ -197,7 +197,7 @@ export const openWorktreeCommand: PaletteCommand = {
               {
                 value: 'disable-hooks',
                 label: 'Skip hooks for this project',
-                hint: "Isagi keeps creating worktrees, just never runs the hooks.",
+                hint: 'Isagi keeps creating worktrees, just never runs the hooks.',
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'disable_hooks' as const },

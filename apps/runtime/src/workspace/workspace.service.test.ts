@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -14,6 +14,7 @@ import {
   type DataDirectoryService,
   type StateFileService,
 } from '../persistence/index.js';
+import { SurfaceRepository, type SurfaceRepositoryService } from '../surfaces/index.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -80,6 +81,20 @@ const testWorktreeSetupRepository = {
   listRunSteps: () => Effect.succeed([]),
 } satisfies WorktreeSetupRepositoryService;
 
+const testSurfaceRepository = {
+  worktreeExists: () => Effect.succeed(false),
+  findSurface: () => Effect.succeed(null),
+  findPane: () => Effect.succeed(null),
+  findEnvironmentFocus: () => Effect.succeed(null),
+  listWorkspaceSurfaceMetadata: Effect.succeed([]),
+  listEnvironmentFocusStates: Effect.succeed([]),
+  listPanesForSurface: () => Effect.succeed([]),
+  listPtySessionsForPanes: () => Effect.succeed([]),
+  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
+  setEnvironmentFocus: (input) => Effect.succeed(input),
+} satisfies SurfaceRepositoryService;
+
 test('active context persistence validates before writing state', async () => {
   let writeCalls = 0;
   const stateFile = stateFileWithWriteCounter(() => {
@@ -98,6 +113,7 @@ test('active context persistence validates before writing state', async () => {
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -132,6 +148,7 @@ test('project deletion does not touch frontend-owned active context persistence'
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
@@ -165,6 +182,7 @@ test('project relocation rejects projects that are not missing before touching g
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, quietGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -180,7 +198,7 @@ test('project relocation rejects projects that are not missing before touching g
 });
 
 test('project relocation restores the same project id and reconciles discovered worktrees', async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-relocated-project-'));
+  const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-relocated-project-')));
   mkdirSync(join(projectRoot, '.git'));
   const missingProject: ProjectRow = {
     ...project,
@@ -230,6 +248,7 @@ test('project relocation restores the same project id and reconciles discovered 
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, relocationGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -299,6 +318,7 @@ test('project branch listing rejects a present project whose path disappeared be
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -341,6 +361,7 @@ test('project branch listing combines local branches with known open worktrees',
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -359,7 +380,7 @@ test('project branch listing combines local branches with known open worktrees',
 });
 
 test('opening an existing local branch creates an Isagi-managed checkout and returns its worktree', async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-open-worktree-project-'));
+  const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-open-worktree-project-')));
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-open-worktree-data-'));
   const checkoutParent = join(dataRoot, 'worktrees');
   const branch = 'feature/new';
@@ -456,6 +477,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, dataDirectory),
@@ -517,6 +539,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, invalidGit),
           Effect.provideService(DataDirectory, testDataDirectory),
@@ -577,6 +600,7 @@ test('opening a missing branch without a base asks the client for base selection
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, missingBaseGit),
           Effect.provideService(DataDirectory, {
@@ -685,6 +709,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, {
@@ -785,6 +810,7 @@ test('opening a missing branch can create it from the current detached worktree'
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, {
@@ -902,6 +928,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
           }).pipe(
             Effect.provide(WorkspaceServiceLive),
             Effect.provideService(WorkspaceRepository, repository),
+            Effect.provideService(SurfaceRepository, testSurfaceRepository),
             Effect.provideService(StateFile, stateFile),
             Effect.provideService(Git, invalidBaseGit),
             Effect.provideService(DataDirectory, testDataDirectory),
@@ -971,6 +998,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, dirtyPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1039,6 +1067,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, registeredPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1103,6 +1132,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
+          Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, parentFailureGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1137,6 +1167,7 @@ test('valid active context persistence writes after validation', async () => {
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),

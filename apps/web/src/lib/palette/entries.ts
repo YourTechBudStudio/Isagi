@@ -1,5 +1,6 @@
 import { ArrowRight } from 'lucide-react';
 
+import { selectSurfaceAndPersistFocus } from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
 import { GLOBAL_COMMANDS } from './registry.js';
@@ -31,7 +32,7 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: surfaceIcon(surface.kind),
         group: 'worktree-surfaces',
         sub: 'go to surface',
-        run: () => useWorkspaceStore.getState().selectSurface(worktree.id, surface.id),
+        run: () => selectSurfaceAndPersistFocus(worktree.id, surface.id),
       });
     }
   }

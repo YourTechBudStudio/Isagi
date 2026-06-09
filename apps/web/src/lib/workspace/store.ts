@@ -9,14 +9,14 @@ interface DrawerState {
 
 interface WorkspaceStore {
   selection: WorkspaceSelection;
-  activeSurfaceByWorktreeId: Readonly<Record<number, string>>;
+  activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
   drawer: DrawerState;
   zen: boolean;
 
   setSelection: (selection: WorkspaceSelection) => void;
   selectWorktree: (projectId: number, worktreeId: number) => void;
   selectMissingProject: (projectId: number) => void;
-  selectSurface: (worktreeId: number, surfaceId: string) => void;
+  selectSurface: (worktreeId: number, surfaceId: number) => void;
   setZen: (zen: boolean) => void;
   toggleZen: () => void;
   openDrawer: (commandId?: string) => void;

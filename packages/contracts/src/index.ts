@@ -1,6 +1,7 @@
 import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
+import { surfacesEndpoints } from './surfaces/api.js';
 import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
 
@@ -9,6 +10,7 @@ export const apiEndpoints = {
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
   worktrees: worktreesEndpoints,
+  surfaces: surfacesEndpoints,
   paths: pathsEndpoints,
 } as const;
 
@@ -53,6 +55,12 @@ export {
   runtimeDataDirectoryFailedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
   runtimeStateFileFailedErrorSchema,
+  sessionLaunchApiErrorSchema,
+  sessionLaunchRejectedErrorSchema,
+  sessionLaunchRejectionReasonSchema,
+  surfaceApiErrorSchema,
+  surfaceRejectedErrorSchema,
+  surfaceRejectionReasonSchema,
   workspaceActiveContextApiErrorSchema,
   workspaceActiveContextRejectedErrorSchema,
   workspaceActiveContextRejectionReasonSchema,
@@ -60,6 +68,9 @@ export {
   workspaceReconcileApiErrorSchema,
   workspaceReconcileRejectedErrorSchema,
   workspaceReconcileRejectionReasonSchema,
+  worktreeEnvironmentFocusApiErrorSchema,
+  worktreeEnvironmentFocusRejectedErrorSchema,
+  worktreeEnvironmentFocusRejectionReasonSchema,
   worktreeBranchListApiErrorSchema,
   worktreeBranchListRejectedErrorSchema,
   worktreeOpenApiErrorSchema,
@@ -74,10 +85,16 @@ export type {
   ProjectPathRejectionReason,
   ProjectRelocationRejectedError,
   ProjectRelocationRejectionReason,
+  SessionLaunchRejectedError,
+  SessionLaunchRejectionReason,
+  SurfaceRejectedError,
+  SurfaceRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,
   WorkspaceReconcileRejectedError,
   WorkspaceReconcileRejectionReason,
+  WorktreeEnvironmentFocusRejectedError,
+  WorktreeEnvironmentFocusRejectionReason,
   WorktreeBranchListRejectedError,
   WorktreeOpenRejectedError,
   WorktreeOperationRejectionReason,
@@ -114,6 +131,45 @@ export type {
   RelocateProjectInput,
   RelocateProjectOutput,
 } from './projects/types.js';
+export { surfacesEndpoints } from './surfaces/api.js';
+export {
+  agentHarnessSchema,
+  launchAgentSessionInputSchema,
+  launchSessionOutputSchema,
+  ptySessionAdapterSchema,
+  ptySessionMetadataSchema,
+  ptySessionPurposeSchema,
+  ptySessionStatusSchema,
+  runtimeSurfaceKindSchema,
+  setWorktreeEnvironmentFocusInputSchema,
+  surfaceDetailSchema,
+  surfaceLayoutAxisSchema,
+  surfaceLayoutNodeSchema,
+  surfaceLayoutSizingSchema,
+  surfacePaneSchema,
+  surfaceRouteParamsSchema,
+  worktreeEnvironmentFocusOutputSchema,
+  worktreeEnvironmentFocusRouteParamsSchema,
+} from './surfaces/types.js';
+export type {
+  AgentHarness,
+  LaunchAgentSessionInput,
+  LaunchSessionOutput,
+  PtySessionAdapter,
+  PtySessionMetadata,
+  PtySessionPurpose,
+  PtySessionStatus,
+  RuntimeSurfaceKind,
+  SetWorktreeEnvironmentFocusInput,
+  SurfaceDetail,
+  SurfaceLayoutLeaf,
+  SurfaceLayoutNode,
+  SurfaceLayoutSplit,
+  SurfacePane,
+  SurfaceRouteParams,
+  WorktreeEnvironmentFocusOutput,
+  WorktreeEnvironmentFocusRouteParams,
+} from './surfaces/types.js';
 export { workspaceEndpoints } from './workspace/api.js';
 export {
   activeContextOutputSchema,
@@ -143,6 +199,7 @@ export type {
   ReconciliationFinding,
   SetActiveContextInput,
   SetActiveContextOutput,
+  WorkspaceSurfaceMetadata,
   WorkspaceSnapshot,
   Worktree,
 } from './workspace/types.js';
