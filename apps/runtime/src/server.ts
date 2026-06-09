@@ -1,12 +1,13 @@
-import process from 'node:process';
-
 import cors from '@fastify/cors';
+import websocket from '@fastify/websocket';
 import { Effect, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
+import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
+import { registerPtyApi } from './pty/index.js';
 import { RuntimeLayer } from './runtime.layer.js';
 import { registerSurfacesApi } from './surfaces/index.js';
 import { registerWorkspaceApi } from './workspace/api.js';
@@ -63,9 +64,12 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         }),
       );
 
+      yield* tryPromise(() => fastify.register(websocket));
+
       registerHealthApi(fastify);
       registerWorkspaceApi(fastify, runtime);
       registerSurfacesApi(fastify, runtime);
+      registerPtyApi(fastify, runtime);
       registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>
@@ -114,23 +118,6 @@ export function parsePort(value: string | undefined) {
   }
 
   return Effect.succeed(port);
-}
-
-function isAllowedRuntimeOrigin(origin: string | undefined) {
-  if (!origin || origin === 'null') {
-    return true;
-  }
-
-  return allowedRuntimeOrigins().has(origin);
-}
-
-function allowedRuntimeOrigins() {
-  const configured = process.env.ISAGI_ALLOWED_ORIGINS?.split(',') ?? [];
-  return new Set(
-    ['http://127.0.0.1:5173', 'http://localhost:5173', 'http://[::1]:5173', ...configured]
-      .map((origin) => origin.trim())
-      .filter(Boolean),
-  );
 }
 
 function closeFastify(server: FastifyInstance) {

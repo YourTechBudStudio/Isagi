@@ -154,13 +154,17 @@ function testLayer(dataRoot: string) {
       databasePath: join(dataRoot, 'isagi.db'),
       statePath: join(dataRoot, 'state.json'),
       worktreesPath: join(dataRoot, 'worktrees'),
+      sessionsPath: join(dataRoot, 'sessions'),
     },
   } satisfies DataDirectoryService;
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
-  const surfaceRepository = SurfaceRepositoryLive.pipe(Layer.provide(database));
+  const surfaceRepository = SurfaceRepositoryLive.pipe(
+    Layer.provide(database),
+    Layer.provide(dataDirectoryLayer),
+  );
   const surfaceService = SurfaceServiceLive.pipe(Layer.provide(surfaceRepository));
   return Layer.mergeAll(workspaceRepository, surfaceRepository, surfaceService);
 }

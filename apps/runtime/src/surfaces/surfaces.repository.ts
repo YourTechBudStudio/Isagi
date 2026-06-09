@@ -1,7 +1,14 @@
+import { join } from 'node:path';
+
 import { eq, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
+import {
+  DataDirectory,
+  DatabaseError,
+  RuntimeDatabase,
+  type RuntimeDatabaseService,
+} from '../persistence/index.js';
 import {
   ptySessions,
   surfacePanes,
@@ -11,6 +18,8 @@ import {
 } from '../persistence/schema.js';
 import type {
   CreatePtySessionMetadataInput,
+  CreateSinglePanePtySessionSurfaceInput,
+  CreateSinglePanePtySessionSurfaceOutput,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
   EnvironmentFocusRow,
@@ -46,9 +55,18 @@ export interface SurfaceRepositoryService {
   readonly createPtySessionMetadata: (
     input: CreatePtySessionMetadataInput,
   ) => Effect.Effect<number, DatabaseError>;
+  readonly createSinglePanePtySessionSurface: (
+    input: CreateSinglePanePtySessionSurfaceInput,
+  ) => Effect.Effect<CreateSinglePanePtySessionSurfaceOutput, DatabaseError>;
   readonly setEnvironmentFocus: (
     input: EnvironmentFocusRow,
   ) => Effect.Effect<EnvironmentFocusRow, DatabaseError>;
+}
+
+export class SurfaceRepositoryWorktreeMissing extends Error {
+  constructor(readonly worktreeId: number) {
+    super(`Worktree ${worktreeId} was not found.`);
+  }
 }
 
 export const SurfaceRepository =
@@ -58,6 +76,7 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
+    const directory = yield* DataDirectory;
 
     return {
       worktreeExists: (worktreeId) =>
@@ -127,58 +146,80 @@ export const SurfaceRepositoryLive = Layer.effect(
             .map(ptySessionRow);
         }),
       createSinglePaneSurface: (input) =>
-        database.transaction('create_single_pane_surface', (db) => {
+        database.transaction('create_single_pane_surface', (db) =>
+          createSinglePaneSurfaceRows(db, input),
+        ),
+      createSinglePanePtySessionSurface: (input) =>
+        database.transaction('create_single_pane_pty_session_surface', (db) => {
+          const worktree = db
+            .select()
+            .from(worktrees)
+            .where(eq(worktrees.id, input.worktreeId))
+            .get();
+          if (!worktree) {
+            throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
+          }
+
           const now = timestamp();
-          const existingSurfaces = db
-            .select({ title: worktreeSurfaces.title, sortOrder: worktreeSurfaces.sortOrder })
-            .from(worktreeSurfaces)
-            .where(eq(worktreeSurfaces.worktreeId, input.worktreeId))
-            .all();
-          const title = duplicateSafeTitle(
-            input.titleBase,
-            existingSurfaces.map((surface) => surface.title),
-          );
-          const sortOrder =
-            existingSurfaces.reduce((max, surface) => Math.max(max, surface.sortOrder), -1) + 1;
-          const surface = db
-            .insert(worktreeSurfaces)
+          const surface = createSinglePaneSurfaceRows(db, input);
+
+          const session = db
+            .insert(ptySessions)
             .values({
+              paneId: surface.paneId,
               worktreeId: input.worktreeId,
-              kind: input.kind,
-              title,
-              attention: 'idle',
-              layoutJson: '{}',
-              sortOrder,
+              adapter: 'node_pty',
+              purpose: input.purpose,
+              harness: input.harness,
+              command: input.command,
+              cwd: worktree.path,
+              status: 'starting',
+              exitCode: null,
+              signal: null,
+              logPath: '',
+              logBytes: 0,
               createdAt: now,
               updatedAt: now,
+              exitedAt: null,
             })
-            .returning({ id: worktreeSurfaces.id })
+            .returning({ id: ptySessions.id })
             .get();
-          const pane = db
-            .insert(surfacePanes)
-            .values({
-              surfaceId: surface.id,
-              title,
-              attention: 'idle',
-              sortOrder: 0,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .returning({ id: surfacePanes.id })
-            .get();
-          db.update(worktreeSurfaces)
-            .set({
-              layoutJson: JSON.stringify({
-                kind: 'leaf',
-                nodeId: `pane-${pane.id}`,
-                paneId: pane.id,
-                collapsed: false,
-              }),
-              updatedAt: now,
-            })
-            .where(eq(worktreeSurfaces.id, surface.id))
+          const logPath = join(directory.paths.sessionsPath, `${session.id}.ptylog`);
+          db.update(ptySessions)
+            .set({ logPath, updatedAt: now })
+            .where(eq(ptySessions.id, session.id))
             .run();
-          return { surfaceId: surface.id, paneId: pane.id, title };
+
+          const focus = db
+            .select({ id: worktreeEnvironmentStates.id })
+            .from(worktreeEnvironmentStates)
+            .where(eq(worktreeEnvironmentStates.worktreeId, input.worktreeId))
+            .get();
+          const focusValues = {
+            activeSurfaceId: surface.surfaceId,
+            activePaneId: surface.paneId,
+            updatedAt: now,
+          };
+          if (focus) {
+            db.update(worktreeEnvironmentStates)
+              .set(focusValues)
+              .where(eq(worktreeEnvironmentStates.id, focus.id))
+              .run();
+          } else {
+            db.insert(worktreeEnvironmentStates)
+              .values({ worktreeId: input.worktreeId, ...focusValues, createdAt: now })
+              .run();
+          }
+
+          return {
+            worktreeId: input.worktreeId,
+            surfaceId: surface.surfaceId,
+            paneId: surface.paneId,
+            ptySessionId: session.id,
+            command: input.command,
+            cwd: worktree.path,
+            logPath,
+          } satisfies CreateSinglePanePtySessionSurfaceOutput;
         }),
       createPtySessionMetadata: (input) =>
         database.use('create_pty_session_metadata', (db) => {
@@ -262,6 +303,63 @@ export function duplicateSafeTitle(titleBase: string, existingTitles: readonly s
   return `${titleBase} ${suffix}`;
 }
 
+function createSinglePaneSurfaceRows(
+  db: RuntimeDatabaseConnection,
+  input: CreateSinglePaneSurfaceInput,
+): CreateSinglePaneSurfaceOutput {
+  const now = timestamp();
+  const existingSurfaces = db
+    .select({ title: worktreeSurfaces.title, sortOrder: worktreeSurfaces.sortOrder })
+    .from(worktreeSurfaces)
+    .where(eq(worktreeSurfaces.worktreeId, input.worktreeId))
+    .all();
+  const title = duplicateSafeTitle(
+    input.titleBase,
+    existingSurfaces.map((surface) => surface.title),
+  );
+  const sortOrder =
+    existingSurfaces.reduce((max, surface) => Math.max(max, surface.sortOrder), -1) + 1;
+  const surface = db
+    .insert(worktreeSurfaces)
+    .values({
+      worktreeId: input.worktreeId,
+      kind: input.kind,
+      title,
+      attention: 'idle',
+      layoutJson: '{}',
+      sortOrder,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: worktreeSurfaces.id })
+    .get();
+  const pane = db
+    .insert(surfacePanes)
+    .values({
+      surfaceId: surface.id,
+      title,
+      attention: 'idle',
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: surfacePanes.id })
+    .get();
+  db.update(worktreeSurfaces)
+    .set({
+      layoutJson: JSON.stringify({
+        kind: 'leaf',
+        nodeId: `pane-${pane.id}`,
+        paneId: pane.id,
+        collapsed: false,
+      }),
+      updatedAt: now,
+    })
+    .where(eq(worktreeSurfaces.id, surface.id))
+    .run();
+  return { surfaceId: surface.id, paneId: pane.id, title };
+}
+
 function surfaceMetadataRow(row: WorktreeSurfaceRecord): SurfaceMetadataRow {
   return {
     id: row.id,
@@ -326,3 +424,7 @@ function focusRow(row: EnvironmentFocusRecord): EnvironmentFocusRow {
 function timestamp() {
   return new Date().toISOString();
 }
+
+type RuntimeDatabaseConnection = Parameters<
+  Parameters<RuntimeDatabaseService['transaction']>[1]
+>[0];

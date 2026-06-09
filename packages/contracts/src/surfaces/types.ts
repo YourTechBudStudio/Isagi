@@ -54,6 +54,10 @@ export const worktreeEnvironmentFocusRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
 });
 
+export const ptySessionRouteParamsSchema = Schema.Struct({
+  ptySessionId: positiveIntegerSchema,
+});
+
 export const ptySessionStatusSchema = Schema.Literal('starting', 'running', 'exited', 'failed');
 export const ptySessionAdapterSchema = Schema.Literal('node_pty');
 export const ptySessionPurposeSchema = Schema.Literal('agent', 'terminal');
@@ -119,11 +123,54 @@ export const launchSessionOutputSchema = Schema.Struct({
   ptySessionId: positiveIntegerSchema,
 });
 
+export const ptyWebSocketInputMessageSchema = Schema.Union(
+  Schema.Struct({
+    type: Schema.Literal('input'),
+    data: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('resize'),
+    cols: positiveIntegerSchema,
+    rows: positiveIntegerSchema,
+  }),
+);
+
+export const ptyWebSocketOutputMessageSchema = Schema.Union(
+  Schema.Struct({
+    type: Schema.Literal('session'),
+    status: ptySessionStatusSchema,
+    exitCode: Schema.optional(Schema.NullOr(nonNegativeIntegerSchema)),
+    signal: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('replay_start'),
+    bytes: nonNegativeIntegerSchema,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('output'),
+    data: Schema.String,
+    replay: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('replay_end'),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('exit'),
+    exitCode: Schema.NullOr(nonNegativeIntegerSchema),
+    signal: Schema.NullOr(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('error'),
+    message: Schema.String,
+  }),
+);
+
 export type RuntimeSurfaceKind = Schema.Schema.Type<typeof runtimeSurfaceKindSchema>;
 export type SurfaceRouteParams = Schema.Schema.Type<typeof surfaceRouteParamsSchema>;
 export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRouteParamsSchema
 >;
+export type PtySessionRouteParams = Schema.Schema.Type<typeof ptySessionRouteParamsSchema>;
 export type PtySessionStatus = Schema.Schema.Type<typeof ptySessionStatusSchema>;
 export type PtySessionAdapter = Schema.Schema.Type<typeof ptySessionAdapterSchema>;
 export type PtySessionPurpose = Schema.Schema.Type<typeof ptySessionPurposeSchema>;
@@ -139,3 +186,5 @@ export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
 >;
 export type LaunchAgentSessionInput = Schema.Schema.Type<typeof launchAgentSessionInputSchema>;
 export type LaunchSessionOutput = Schema.Schema.Type<typeof launchSessionOutputSchema>;
+export type PtyWebSocketInputMessage = Schema.Schema.Type<typeof ptyWebSocketInputMessageSchema>;
+export type PtyWebSocketOutputMessage = Schema.Schema.Type<typeof ptyWebSocketOutputMessageSchema>;

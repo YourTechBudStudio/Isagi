@@ -58,6 +58,7 @@ const testDataDirectory = {
     databasePath: '/tmp/isagi-test/isagi.db',
     statePath: '/tmp/isagi-test/state.json',
     worktreesPath: '/tmp/isagi-test/worktrees',
+    sessionsPath: '/tmp/isagi-test/sessions',
   },
 } satisfies DataDirectoryService;
 
@@ -92,6 +93,8 @@ const testSurfaceRepository = {
   listPtySessionsForPanes: () => Effect.succeed([]),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
+  createSinglePanePtySessionSurface: () =>
+    Effect.die('pty session surface creation is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
 
@@ -395,6 +398,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
       databasePath: join(dataRoot, 'isagi.db'),
       statePath: join(dataRoot, 'state.json'),
       worktreesPath: checkoutParent,
+      sessionsPath: join(dataRoot, 'sessions'),
     },
   } satisfies DataDirectoryService;
   const repository = {
@@ -609,6 +613,7 @@ test('opening a missing branch without a base asks the client for base selection
               databasePath: join(dataRoot, 'isagi.db'),
               statePath: join(dataRoot, 'state.json'),
               worktreesPath: join(dataRoot, 'worktrees'),
+              sessionsPath: join(dataRoot, 'sessions'),
             },
           } satisfies DataDirectoryService),
           Effect.provideService(WorktreeSetupService, testWorktreeSetup),
@@ -718,6 +723,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
             databasePath: join(dataRoot, 'isagi.db'),
             statePath: join(dataRoot, 'state.json'),
             worktreesPath: checkoutParent,
+            sessionsPath: join(dataRoot, 'sessions'),
           },
         } satisfies DataDirectoryService),
         Effect.provideService(WorktreeSetupService, testWorktreeSetup),
@@ -819,6 +825,7 @@ test('opening a missing branch can create it from the current detached worktree'
             databasePath: join(dataRoot, 'isagi.db'),
             statePath: join(dataRoot, 'state.json'),
             worktreesPath: join(dataRoot, 'worktrees'),
+            sessionsPath: join(dataRoot, 'sessions'),
           },
         } satisfies DataDirectoryService),
         Effect.provideService(WorktreeSetupService, testWorktreeSetup),
@@ -986,6 +993,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
       databasePath: join(dataRoot, 'isagi.db'),
       statePath: join(dataRoot, 'state.json'),
       worktreesPath: join(dataRoot, 'worktrees'),
+      sessionsPath: join(dataRoot, 'sessions'),
     },
   } satisfies DataDirectoryService;
 
@@ -1055,6 +1063,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
       databasePath: join(dataRoot, 'isagi.db'),
       statePath: join(dataRoot, 'state.json'),
       worktreesPath: join(dataRoot, 'worktrees'),
+      sessionsPath: join(dataRoot, 'sessions'),
     },
   } satisfies DataDirectoryService;
 
@@ -1120,6 +1129,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
       databasePath: join(dataRoot, 'isagi.db'),
       statePath: join(dataRoot, 'state.json'),
       worktreesPath: join(dataRoot, 'worktrees'),
+      sessionsPath: join(dataRoot, 'sessions'),
     },
   } satisfies DataDirectoryService;
 

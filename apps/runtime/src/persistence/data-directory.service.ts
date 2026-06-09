@@ -15,6 +15,7 @@ export interface IsagiDataDirectory {
   readonly databasePath: string;
   readonly statePath: string;
   readonly worktreesPath: string;
+  readonly sessionsPath: string;
 }
 
 export interface DataDirectoryService {
@@ -35,10 +36,12 @@ export const DataDirectoryLive = Layer.effect(
         databasePath: resolve(root, 'isagi.db'),
         statePath: resolve(root, 'state.json'),
         worktreesPath: resolve(root, 'worktrees'),
+        sessionsPath: resolve(root, 'sessions'),
       } satisfies IsagiDataDirectory;
 
       mkdirSync(paths.root, { recursive: true });
       mkdirSync(paths.worktreesPath, { recursive: true });
+      mkdirSync(paths.sessionsPath, { recursive: true });
 
       return { paths } satisfies DataDirectoryService;
     },

@@ -69,6 +69,25 @@ export interface CreateSinglePaneSurfaceOutput {
   readonly title: string;
 }
 
+export interface CreateSinglePanePtySessionSurfaceInput {
+  readonly worktreeId: number;
+  readonly kind: RuntimeSurfaceKind;
+  readonly titleBase: string;
+  readonly purpose: PtySessionPurpose;
+  readonly harness: AgentHarness | null;
+  readonly command: string;
+}
+
+export interface CreateSinglePanePtySessionSurfaceOutput {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly paneId: number;
+  readonly ptySessionId: number;
+  readonly command: string;
+  readonly cwd: string;
+  readonly logPath: string;
+}
+
 export interface CreatePtySessionMetadataInput {
   readonly paneId: number;
   readonly adapter: PtySessionAdapter;

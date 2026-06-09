@@ -2,6 +2,7 @@ export { registerSurfacesApi } from './api.js';
 export {
   SurfaceRepository,
   SurfaceRepositoryLive,
+  SurfaceRepositoryWorktreeMissing,
   duplicateSafeTitle,
 } from './surfaces.repository.js';
 export type { SurfaceRepositoryService } from './surfaces.repository.js';
@@ -9,6 +10,8 @@ export { SurfaceError, SurfaceService, SurfaceServiceLive } from './surfaces.ser
 export type { SurfaceService as SurfaceServiceShape } from './surfaces.service.js';
 export type {
   CreatePtySessionMetadataInput,
+  CreateSinglePanePtySessionSurfaceInput,
+  CreateSinglePanePtySessionSurfaceOutput,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
   EnvironmentFocusRow,

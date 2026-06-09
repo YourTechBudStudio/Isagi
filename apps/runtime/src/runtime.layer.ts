@@ -3,6 +3,12 @@ import { Layer } from 'effect';
 import { GitLive } from './git/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import {
+  NodePtyAdapterLive,
+  PtyRepositoryLive,
+  PtyServiceLive,
+  type PtyServiceShape,
+} from './pty/index.js';
+import {
   SurfaceRepositoryLive,
   SurfaceServiceLive,
   type SurfaceServiceShape,
@@ -17,13 +23,29 @@ import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktre
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(DataDirectoryLive),
+);
 const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
+const PtyRepositoryLayer = PtyRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(SurfaceRepositoryLayer),
+);
+const PtyServiceLayer = PtyServiceLive.pipe(
+  Layer.provide(PtyRepositoryLayer),
+  Layer.provide(NodePtyAdapterLive),
+  Layer.provide(DataDirectoryLive),
+);
 
-export type RuntimeServices = WorkspaceServiceShape | SurfaceServiceShape;
+export type RuntimeServices = WorkspaceServiceShape | SurfaceServiceShape | PtyServiceShape;
 
-export const RuntimeLayer = Layer.mergeAll(WorkspaceServiceLive, SurfaceServiceLive).pipe(
+export const RuntimeLayer = Layer.mergeAll(
+  WorkspaceServiceLive,
+  SurfaceServiceLive,
+  PtyServiceLayer,
+).pipe(
   Layer.provide(
     Layer.mergeAll(
       RepositoryLive,

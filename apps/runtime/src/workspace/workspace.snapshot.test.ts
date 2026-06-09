@@ -67,6 +67,8 @@ const testSurfaceRepository = {
   listPtySessionsForPanes: () => Effect.succeed([]),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
+  createSinglePanePtySessionSurface: () =>
+    Effect.die('pty session surface creation is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
 
@@ -87,6 +89,7 @@ const testDataDirectory = {
     databasePath: '/tmp/isagi-test/isagi.db',
     statePath: '/tmp/isagi-test/state.json',
     worktreesPath: '/tmp/isagi-test/worktrees',
+    sessionsPath: '/tmp/isagi-test/sessions',
   },
 } satisfies DataDirectoryService;
 

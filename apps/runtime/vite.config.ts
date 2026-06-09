@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   ssr: {
-    external: ['better-sqlite3'],
+    external: ['better-sqlite3', 'node-pty', '@fastify/websocket'],
     noExternal: true,
   },
   build: {
@@ -18,6 +18,8 @@ export default defineConfig({
         ...builtinModules,
         ...builtinModules.map((moduleName) => `node:${moduleName}`),
         'better-sqlite3',
+        'node-pty',
+        '@fastify/websocket',
       ],
     },
     ssr: true,

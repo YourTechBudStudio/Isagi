@@ -131,15 +131,18 @@ export type {
   RelocateProjectInput,
   RelocateProjectOutput,
 } from './projects/types.js';
-export { surfacesEndpoints } from './surfaces/api.js';
+export { ptySessionWebSocketEndpoint, surfacesEndpoints } from './surfaces/api.js';
 export {
   agentHarnessSchema,
   launchAgentSessionInputSchema,
   launchSessionOutputSchema,
   ptySessionAdapterSchema,
+  ptySessionRouteParamsSchema,
   ptySessionMetadataSchema,
   ptySessionPurposeSchema,
   ptySessionStatusSchema,
+  ptyWebSocketInputMessageSchema,
+  ptyWebSocketOutputMessageSchema,
   runtimeSurfaceKindSchema,
   setWorktreeEnvironmentFocusInputSchema,
   surfaceDetailSchema,
@@ -156,9 +159,12 @@ export type {
   LaunchAgentSessionInput,
   LaunchSessionOutput,
   PtySessionAdapter,
+  PtySessionRouteParams,
   PtySessionMetadata,
   PtySessionPurpose,
   PtySessionStatus,
+  PtyWebSocketInputMessage,
+  PtyWebSocketOutputMessage,
   RuntimeSurfaceKind,
   SetWorktreeEnvironmentFocusInput,
   SurfaceDetail,

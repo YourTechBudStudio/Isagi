@@ -6,6 +6,9 @@ import {
 import type { ApiEndpoint } from '../api/types.js';
 import {
   launchAgentSessionInputSchema,
+  ptySessionRouteParamsSchema,
+  ptyWebSocketInputMessageSchema,
+  ptyWebSocketOutputMessageSchema,
   launchSessionOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
   surfaceDetailSchema,
@@ -13,6 +16,14 @@ import {
   worktreeEnvironmentFocusOutputSchema,
   worktreeEnvironmentFocusRouteParamsSchema,
 } from './types.js';
+
+export const ptySessionWebSocketEndpoint = {
+  id: 'ptySessions.attach',
+  path: '/pty-sessions/:ptySessionId',
+  params: ptySessionRouteParamsSchema,
+  clientMessages: ptyWebSocketInputMessageSchema,
+  serverMessages: ptyWebSocketOutputMessageSchema,
+} as const;
 
 export const surfacesEndpoints = {
   get: {
