@@ -95,7 +95,7 @@ Use vertical slices rather than layer-first implementation tasks. Each slice sho
 Suggested sequence:
 
 1. Experience mockups / interaction validation
-   - Explore the project/worktree sidebar, main agent surface, side panels, secondary window, command palette, and attention badges.
+   - Explore the project/worktree sidebar, agent surfaces, side panels, secondary window, command palette, and attention badges.
    - Validate the feel before building functionality.
 
 2. Project/worktree navigation slice

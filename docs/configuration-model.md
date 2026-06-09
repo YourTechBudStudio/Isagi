@@ -18,8 +18,9 @@ Examples:
 
 - known agent harnesses
 - global agent presets
+- default shell/runtime launch preferences
+- default launch commands and flags for agent harnesses
 - user preferences
-- default shell/runtime behavior
 - reusable command or surface patterns
 - future tool/MCP preset defaults
 
@@ -44,7 +45,7 @@ Examples:
 
 - last active surface
 - last active agent session
-- agent sessions associated with the worktree's agent surface
+- agent sessions associated with the worktree's agent surfaces and panes
 - command processes or restorable command intent
 - open terminal/browser/editor/artifact surfaces
 - main/secondary window layout
@@ -92,7 +93,7 @@ A worktree initialization template describes the default room shape for a new wo
 It may include:
 
 - commands to start
-- agent sessions or presets to open in the worktree's agent surface
+- agent sessions or presets to open in agent surfaces
 - terminal/browser/editor/artifact surfaces to create
 - default layout
 - other environment setup behavior
@@ -101,7 +102,7 @@ Commands define reusable actions. Templates decide which actions happen when a w
 
 ## Agent presets
 
-Agent sessions are first-class runtime entities in Isagi, even if they share process/PTY machinery internally with commands. They are displayed through the worktree's agent surface rather than being the top-level navigation unit.
+Agent sessions are first-class runtime entities in Isagi, even if they share process/PTY machinery internally with terminals. They are displayed through agent surfaces rather than being the top-level navigation unit.
 
 Agent presets describe how to launch a harness in a useful mode.
 
@@ -114,7 +115,7 @@ Possible preset dimensions:
 - session/resume behavior where supported
 - future tool, MCP, or skill context
 
-Deep context control can evolve over time. The foundational requirement is that Isagi can launch the right harness in the right worktree and attach the resulting agent session to that worktree's agent surface and environment.
+Deep context control can evolve over time. The foundational requirement is that Isagi can launch the right harness in the right worktree and attach the resulting agent session to an agent surface in that worktree's agent surface and environment.
 
 ## Agent-assisted configuration
 

@@ -2,7 +2,7 @@
 title: Project Settings
 status: candidate
 created: 2026-06-08
-updated: 2026-06-08
+updated: 2026-06-09
 tags: [candidate, settings, projects, trust, config]
 ---
 
@@ -35,6 +35,10 @@ Initial setting areas may include:
   - reset/revoke trust decisions
 - worktree bootstrap hook summary
 - future project commands/defaults once those exist
+- future default shell/runtime launch preferences, likely with global defaults
+  and project overrides only where projects prove they need them
+- future agent harness launch commands/flags for Pi, OpenCode, Claude, Codex,
+  and any later harnesses
 
 For the worktree hook trust model, settings should complement the command-palette approval flow. The palette can ask at the moment of worktree creation; the settings page should let the user inspect and change that decision later.
 
@@ -71,3 +75,8 @@ After worktree bootstrap hooks exist or are close to implementation, run discove
 # Notes
 
 Created during the worktree bootstrap hooks brainstorm. The immediate hook feature needs command-palette trust approval; this milestone preserves the follow-up need for a settings page where those decisions can be reviewed and changed.
+
+During the agent/terminal PTY brainstorm, default shell selection and harness
+launch commands were parked as settings follow-ups. The first PTY slice should
+use `$SHELL` with `bash` fallback for terminals and built-in harness commands
+(`pi`, `opencode`, `claude`, `codex`) for agents.

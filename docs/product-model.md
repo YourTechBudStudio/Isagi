@@ -34,7 +34,7 @@ A worktree represents a concrete place where work happens. It is backed by a bra
 
 A worktree may have an associated environment with:
 
-- one agent surface containing one or more agent sessions/panes
+- agent surfaces containing agent session panes
 - terminal, browser, editor, and artifact surfaces
 - command processes
 - remembered layout state
@@ -63,7 +63,7 @@ A visible work surface attached to a worktree environment and shown under a work
 
 Initial/foundation surface kinds:
 
-- agent surface - the fixed agent surface for a worktree; it contains one or more agent sessions/panes
+- agent surface - a visible agent work surface; it contains one or more agent session panes
 - terminal surface - an interactive shell/PTY surface
 - browser surface - a preview or browser context
 - editor surface - an editor/code-server context
@@ -89,7 +89,7 @@ Global/user config
     -> Worktrees
       <-> Worktree environments
             -> Surfaces/panels
-                 -> Agent surface
+                 -> Agent surfaces
                       -> Agent sessions/panes
                  -> Terminal/browser/editor/artifact surfaces
             -> Commands/processes
@@ -105,7 +105,7 @@ This is a product model, not a required database schema. User-facing navigation 
 - Use **worktree environment** for the hidden resumable state associated with one worktree.
 - Do not use **Isagi session** as a product noun. Older planning notes that use it for navigation should be read as **worktree** unless they explicitly mean an agent harness process.
 - Use **agent session** for first-class coding-agent harness processes.
-- Use **agent surface** for the visible surface that contains one or more agent sessions/panes.
+- Use **agent surface** for a visible surface that contains one or more agent sessions/panes.
 - Use **command** for project-defined terminal commands/processes.
 - Use **surface** or **panel** for visible UI containers.
 - Avoid using **task** as a core Isagi primitive. A task may exist in the user's head or planning system, but Isagi's durable product model revolves around worktrees.

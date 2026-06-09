@@ -10,7 +10,7 @@ It does not replace existing terminal coding agents. It wraps around them, launc
 
 Isagi preserves momentum by making the environment associated with a worktree move with it:
 
-- agent sessions inside the worktree's agent surface
+- agent sessions inside the worktree's agent surfaces
 - project commands and command logs
 - terminal, browser, editor, and artifact surfaces
 - panel/window layout
@@ -51,7 +51,9 @@ A task may be the user's intent, but Isagi does not need to model tasks as a fir
 
 ### Existing harnesses remain useful
 
-Isagi should orchestrate around existing agent harnesses instead of replacing them. It should launch them as agent sessions in the right worktree, frame them through the agent surface, and restore their surrounding environment where possible.
+Isagi should orchestrate around existing agent harnesses instead of replacing them. It should launch them as agent sessions in the right worktree, frame them through agent surfaces, and restore their surrounding environment where possible.
+
+Agent surfaces are not limited to one per worktree. A user-started agent session creates a new agent surface by default; orchestrated child agents may later share the originating surface as additional panes.
 
 ### Start conservative, then let power users make rooms feel alive
 

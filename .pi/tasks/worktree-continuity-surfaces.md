@@ -3,7 +3,7 @@ title: Browser and artifact surfaces slice
 status: todo
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-09
 depends_on: [worktree-continuity-command-runner]
 ---
 
@@ -27,13 +27,14 @@ Do not silently close missing artifacts. Show a clear missing/not-found state an
 
 ## Surface model (decided during the Phase 1–7 shell build)
 
-- **Surfaces are worktree view-state.** The agent surface is owned by the
-  worktree; non-agent surfaces (browser, code-server/editor, file/markdown,
-  terminal) are tracked as part of that worktree's environment: "what the user
-  wants to look at here."
+- **Surfaces are worktree view-state.** Agent and terminal surfaces are owned by
+  the worktree environment: "what the user wants to look at here." A worktree
+  may have multiple agent surfaces and multiple terminal surfaces.
 - **Surface kinds**: `agent`, `terminal`, `browser`, `editor` (code-server),
   `file`. `agent` and `terminal` are sibling **split-PTY surfaces** sharing one
-  split/drag/resize mechanism (see the split-layout task + agent-sessions).
+  split/drag/resize mechanism (see the split-layout task + agent-sessions). The
+  first PTY persistence slice may store only `agent` and `terminal`; add the
+  other kinds when their runtime support lands.
 - **One surface fills the whole canvas** (no side panel); switching surfaces is
   instant. Navigation to a surface happens from the **nested rail** row.
 - **Zen / full-screen per surface** hides app chrome and asks the host shell to

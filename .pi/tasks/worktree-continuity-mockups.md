@@ -18,7 +18,7 @@ Isagi's first milestone is about making each project checkout/worktree feel like
 Mockups should cover:
 
 - project/worktree sidebar
-- main agent surface
+- agent surfaces
 - side panel for browser/artifact/code surfaces
 - secondary work surface for two-monitor workflows
 - command palette flows such as new worktree, run command, open surface
