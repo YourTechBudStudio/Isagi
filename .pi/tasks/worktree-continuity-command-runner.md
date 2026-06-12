@@ -3,7 +3,7 @@ title: Command runner slice
 status: todo
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-12
 depends_on: [worktree-continuity-project-worktree-navigation]
 ---
 
@@ -49,3 +49,9 @@ The UI is built presentationally; this slice wires real processes behind it.
   Esc / click-outside dismiss (no close button). Run/stop/restart per command;
   **exited/crashed logs are retained**.
 - Openers will be the action bar + palette ("Open commands").
+
+## Relationship to the PTY session substrate
+
+The first agent/terminal slice introduced runtime-owned PTY sessions and file-backed logs for interactive work surfaces. Command runner should reuse the lessons and possibly some low-level process/logging primitives where appropriate, but should not turn commands into terminal surfaces by default.
+
+Commands remain monitor-oriented: run/stop/restart, retained logs, ports, status strip, and drawer presentation. Interactive shells remain terminal surfaces.

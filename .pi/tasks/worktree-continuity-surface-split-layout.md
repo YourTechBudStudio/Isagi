@@ -30,6 +30,9 @@ Done when, inside a split-PTY surface, the user can:
 - Have new panes **auto-distribute** (balanced) as a starting point.
 - **Collapse panes** without deleting the pane or its session; collapsed panes
   restore when expanded.
+- Persist the active pane when the user focuses a pane, not only the active
+  surface. The first PTY slice stores `activePaneId`, but the frontend currently
+  only persists surface selection because every surface has one pane.
 - And the arrangement (layout tree + ordering + gutter sizes + collapsed state)
   **persists per worktree environment** and restores on return. Default when none
   saved = single leaf for the first pane or balanced auto-distribution when new
@@ -49,3 +52,7 @@ Done when, inside a split-PTY surface, the user can:
   decide during implementation.
 - Reference the staged `SplitPtySurface` auto-split shell as the current shared
   seam, plus the persistence note in the agent-sessions task.
+- Current runtime persistence already stores one-leaf layout JSON for each PTY
+  surface. This task should extend that model rather than replacing it.
+- Closing/deleting panes is deliberately separate from collapsing panes; use the
+  PTY close/delete lifecycle task for destructive cleanup semantics.

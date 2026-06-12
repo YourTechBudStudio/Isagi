@@ -3,7 +3,7 @@ title: Browser and artifact surfaces slice
 status: todo
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-06-09
+updated: 2026-06-12
 depends_on: [worktree-continuity-command-runner]
 ---
 
@@ -44,3 +44,7 @@ Do not silently close missing artifacts. Show a clear missing/not-found state an
   browser from a command's bound port — but the **port→browser-surface binding
   is parked** for now (port chips are display-only). File/Markdown peek later.
 - Surfaces restore per worktree on return; missing artifact → clear missing state.
+- The PTY baseline currently persists only `agent` and `terminal` surface kinds.
+  This slice should extend the runtime surface model for browser/editor/file
+  surfaces when those become real, rather than relying on mock-only frontend
+  surface fields.

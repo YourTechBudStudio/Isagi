@@ -1,29 +1,33 @@
 # Worktree Continuity Task Order
 
-Generated: 2026-06-07
+Updated: 2026-06-12
 
 ## Completed
 
 - [x] Worktree Continuity mockups — `.pi/tasks/worktree-continuity-mockups.md`
 - [x] Worktree Continuity app spine — `.pi/tasks/worktree-continuity-app-spine.md`
 - [x] Project and worktree navigation slice — `.pi/tasks/worktree-continuity-project-worktree-navigation.md`
+- [x] Create new worktree slice — `.pi/tasks/worktree-continuity-create-worktree.md`
+- [x] First-class agent sessions / PTY baseline — `.pi/tasks/worktree-continuity-agent-sessions.md`
+  - Runtime-owned PTY sessions with node-pty adapter.
+  - Agent and terminal launch from the worktree-scoped palette.
+  - xterm rendering, log replay, persisted surfaces/panes/sessions/focus.
 
 ## Recommended next order
 
-1. [x] Create new worktree slice — `.pi/tasks/worktree-continuity-create-worktree.md`
-   - Command palette flow for creating a Git worktree.
-   - Runtime/API support for `git worktree add`.
-   - Land in the new initialized worktree room.
+1. [ ] PTY session close/delete lifecycle — `.pi/tasks/worktree-continuity-pty-session-close-delete.md`
+   - Add explicit stop/kill/close/delete actions for PTY-backed panes/surfaces.
+   - Remove DB rows and `.ptylog` files only on user-caused deletion.
+   - Keep failed/exited evidence visible until the user cleans it up.
 
-2. [ ] First-class agent sessions slice — `.pi/tasks/worktree-continuity-agent-sessions.md`
-   - Launch an agent harness in the active worktree.
-   - Stream output.
-   - Associate sessions with worktrees.
-   - Restore last active session association on switch-back.
+2. [ ] Attention signals slice — `.pi/tasks/worktree-continuity-attention-signals.md`
+   - First tighten rail honesty: aggregate PTY lifecycle state to worktree rows and show surface-row attention dots.
+   - Refresh/patch rail metadata when visible PTY sessions exit or fail.
+   - Then explore reliable waiting-for-user detection per harness.
 
 3. [ ] Command runner slice — `.pi/tasks/worktree-continuity-command-runner.md`
    - Define/run named project commands in the active worktree.
-   - Show logs/output.
+   - Show logs/output in the commands drawer/status strip.
    - Prototype persistent vs non-persistent lifecycle.
 
 4. [ ] Browser and artifact surfaces slice — `.pi/tasks/worktree-continuity-surfaces.md`
@@ -38,28 +42,23 @@ Generated: 2026-06-07
 
 6. [ ] Secondary work surface slice — `.pi/tasks/worktree-continuity-secondary-surface.md`
    - Add practical secondary window/work surface support.
-   - Persist/restores per-worktree surface placement.
+   - Persist/restore per-surface placement, including agent and terminal surfaces.
 
-7. [ ] Attention signals slice — `.pi/tasks/worktree-continuity-attention-signals.md`
-   - Detect at least one reliable waiting-for-user path.
-   - Surface attention in sidebar/worktree/agent UI.
-   - Refine attention state model based on harness reality.
-
-8. [ ] Surface split / drag / resize layout — `.pi/tasks/worktree-continuity-surface-split-layout.md`
+7. [ ] Surface split / drag / resize layout — `.pi/tasks/worktree-continuity-surface-split-layout.md`
    - Shared split-PTY layout for agent and terminal surfaces.
-   - Drag panes between columns.
-   - Resize gutters.
-   - Persist layout per worktree.
+   - Split panes horizontally/vertically, resize gutters, collapse panes.
+   - Persist layout tree, gutter weights, collapsed state, and active pane focus.
 
-9. [ ] Dogfood and tighten Worktree Continuity — `.pi/tasks/worktree-continuity-dogfood-tighten.md`
+8. [ ] Dogfood and tighten Worktree Continuity — `.pi/tasks/worktree-continuity-dogfood-tighten.md`
    - Use Isagi on real multi-project/worktree work.
-   - Capture friction.
-   - Decide next milestone direction.
+   - Validate real Pi/OpenCode/Claude/Codex TUI behavior and long replay.
+   - Capture friction and decide next milestone direction.
 
 ## Notes
 
-- `surface-split-layout` depends on both agent sessions and surfaces, so it is placed after those exist. It can move earlier if split ergonomics become painful during agent/session implementation.
-- `attention-signals` depends on agent sessions, but can be explored in parallel once harness output/status exists.
+- `attention-signals` can now move earlier because the PTY baseline exists. The first attention pass should separate lifecycle honesty from harder waiting-for-user detection.
+- `surface-split-layout` can move earlier if orchestrator/child-agent workflows become the next pressure point. The runtime already persists one-leaf layout JSON, so this task extends the existing model.
+- `pty-session-close-delete` is intentionally separate from split-layout collapse: collapse preserves panes/sessions; delete removes them and cleans logs.
 - Candidate milestones remain parked until Worktree Continuity is dogfoodable:
   - `.pi/milestones/project-home-whats-next.md`
   - `.pi/milestones/context-preset-control.md`

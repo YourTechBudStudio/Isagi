@@ -1,9 +1,9 @@
 ---
 title: First-class agent sessions slice
-status: todo
+status: done
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-12
 depends_on: [worktree-continuity-project-worktree-navigation]
 ---
 
@@ -13,42 +13,63 @@ Launch and view first-class agent sessions inside worktrees.
 
 # Context
 
-An agent session is process-backed, but product-modeled separately from generic commands. A worktree can have multiple agent sessions, with one remembered as last active.
+An agent session is process-backed, but product-modeled separately from generic commands. A worktree can have multiple agent sessions, each backed by a PTY pane in an agent surface.
 
-Basic launch support should target Pi, OpenCode, Claude Code, and Codex. Deep resume/status behavior can be adapter-specific and exploratory.
+Basic launch support targets Pi, OpenCode, Claude Code, and Codex. Deep resume/status behavior can be adapter-specific and exploratory.
 
 # Done condition
 
 Done when Isagi can launch an agent harness in the active worktree, stream terminal output, associate the session with that worktree, represent multiple sessions per worktree, and restore the last active session association when switching back.
 
+# Completion notes
+
+Implemented in the first PTY session slice:
+
+- Runtime-owned PTY substrate using `node-pty` behind an adapter boundary.
+- Agent launch support for `pi`, `opencode`, `claude`, and `codex`.
+- Terminal launch support using `$SHELL` with `bash` fallback.
+- Runtime DB persistence for worktree surfaces, panes, PTY sessions, and per-worktree active surface/pane focus.
+- File-backed raw PTY logs under the runtime data directory's `sessions/` folder.
+- Per-visible-session WebSocket attach with full log replay and live streaming.
+- Frontend xterm rendering with WebGL fallback.
+- Worktree-scoped palette actions: `Start agent session` and `Start terminal`.
+
 # Notes
 
-Agent session resume should degrade gracefully. Resume specific sessions when a harness supports it, but do not make the whole milestone depend on perfect session resume across all harnesses.
+Agent session resume should degrade gracefully. Runtime restart survival is not part of this completed baseline: if the runtime restarts, persisted running sessions are marked failed with an honest synthetic log note. A future tmux/supervisor adapter can revisit runtime-restart survival.
 
-## Agents-tab layout is persistent worktree state
+## Multiple agent surfaces per worktree
 
-The Agents tab lays harnesses out in (at most) two columns. The layout is **user-arrangeable**, not just auto-derived from harness count:
+The earlier "one agent surface per worktree" rule has been reverted. A worktree may have multiple agent surfaces and multiple terminal surfaces.
 
-- Harnesses can be **dragged between columns** (e.g. 1 in column A, 3 stacked in column B).
-- Column widths and the heights of stacked harnesses are **resizable via draggable gutters**.
-- New harnesses auto-distribute (balanced) as a starting point; the user can then rearrange.
+Current user-started behavior:
 
-This arrangement (column assignment + ordering + gutter sizes) is **per-worktree layout state and must persist** (DB/store), so returning to a worktree restores the same agent layout. Default when no saved layout exists = balanced auto-distribution. Decided during the Phase 3 canvas mockup; see the split-layout task and the staged split surface shell.
+- `Start agent session` always creates a new agent surface with one pane.
+- `Start terminal` always creates a new terminal surface with one pane.
 
-## One agent surface per worktree (holds multiple harnesses)
+Future orchestrator-spawned child agents may insert panes into the originating agent surface instead of creating new surfaces; that belongs with child-agent visibility and split-layout work.
 
-A worktree has **at most one agent surface** — its agent home. That single agent
-surface can hold **one or more agent sessions**, laid out via the two-column split
-above. Harnesses split *within* the one agent surface; a worktree never has more
-than one agent surface. Non-agent surfaces (browser/editor/file) may still be
-multiple. A worktree with no launched harness has zero agent panes and shows the
-no-agent empty state. (Re-tightened 2026-06-02 after briefly allowing multiple
-agent surfaces.)
+## Pane-aware surface model
+
+Sessions bind to panes, not directly to surfaces:
+
+```txt
+worktree
+  -> worktree_surfaces
+      -> surface_panes
+          -> pty_sessions
+```
+
+This keeps the completed single-pane baseline compatible with future split surfaces.
 
 ## Shared split mechanism with terminal surfaces
 
-The agent surface and the **terminal surface** are sibling *split-PTY surfaces*: both
-lay panes out in a split grid (agent panes = harnesses, terminal panes = shells) and
-should share **one** split/drag/resize/persist mechanism. Build it once and apply it
-to both. A worktree has ≤ 1 agent surface but may have several terminal surfaces, and a
-terminal surface may split multiple shells (tmux/Ghostty-style). Decided Phase 4.
+Agent surfaces and terminal surfaces are sibling split-PTY surfaces. The completed baseline renders one pane per newly created surface. Split, drag, resize, collapse, active-pane persistence, and multi-pane arrangement belong to the split-layout task.
+
+## Follow-ups intentionally left out
+
+- Close/kill/delete lifecycle for PTY-backed panes and their log files.
+- Waiting-for-user detection and rail/worktree attention aggregation.
+- Split/drag/resize/collapse UI.
+- tmux-backed or supervisor-backed adapter POC.
+- Harness launch command/flag customization.

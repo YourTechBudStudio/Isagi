@@ -3,7 +3,7 @@ title: Attention signals slice
 status: todo
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-12
 depends_on: [worktree-continuity-agent-sessions]
 ---
 
@@ -38,3 +38,12 @@ The visual language is built; this slice supplies the real detection behind it.
   attention should **aggregate** from its harnesses/processes.
 - **Never auto-switch** the user. The "a worktree is now waiting → click to jump"
   **toast is deprioritized** (the rail dots are the primary signal) — defer it.
+
+## PTY baseline follow-ups
+
+The first PTY session slice persists surface/pane/session attention and renders pane-level dots, but the next attention pass should make the rail honest and useful:
+
+- Aggregate PTY session lifecycle state into worktree-level attention instead of leaving worktrees effectively idle.
+- Show surface-level attention on rail surface rows so running/error agent and terminal surfaces are visible before opening them.
+- Refresh or patch workspace surface metadata when a visible PTY exits/fails so rail state does not stay stale until an unrelated refetch.
+- Keep lifecycle attention (`working`, `idle`, `error`) separate from harness-specific waiting-for-user detection; waiting detection remains the product-critical part of this task.
