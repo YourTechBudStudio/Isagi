@@ -3,15 +3,18 @@ import { Effect, Schema } from 'effect';
 import {
   apiBasePath,
   apiEndpoints,
+  ptySessionWebSocketEndpoint,
   apiErrorResponseSchema,
   apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
+  type AgentHarness,
   type ApiEndpoint,
   type ApiEndpointError,
   type ApiEndpointOutput,
   type ApiEndpointParams,
   type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
+  type LaunchSessionOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
   type WorktreeEnvironmentFocusOutput,
@@ -70,6 +73,20 @@ export interface RuntimeClient {
     WorktreeEnvironmentFocusOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.setWorktreeEnvironmentFocus>
   >;
+  readonly launchAgentSession: (
+    worktreeId: number,
+    harness: AgentHarness,
+  ) => Effect.Effect<
+    LaunchSessionOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.launchAgentSession>
+  >;
+  readonly launchTerminalSession: (
+    worktreeId: number,
+  ) => Effect.Effect<
+    LaunchSessionOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.launchTerminalSession>
+  >;
+  readonly resolvePtyWebSocketUrl: (ptySessionId: number) => string;
   readonly addProject: (
     path: string,
   ) => Effect.Effect<AddProjectOutput, RuntimeEndpointError<typeof apiEndpoints.projects.add>>;
@@ -129,6 +146,18 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     getSurfaceDetail: (surfaceId) => request(apiEndpoints.surfaces.get, { surfaceId }),
     setWorktreeEnvironmentFocus: (worktreeId, input) =>
       request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
+    launchAgentSession: (worktreeId, harness) =>
+      request(apiEndpoints.surfaces.launchAgentSession, { worktreeId }, { harness }),
+    launchTerminalSession: (worktreeId) =>
+      request(apiEndpoints.surfaces.launchTerminalSession, { worktreeId }),
+    resolvePtyWebSocketUrl: (ptySessionId) => {
+      const httpUrl = new URL(
+        `${apiBasePath}${interpolatePath(ptySessionWebSocketEndpoint.path, { ptySessionId })}`,
+        runtimeUrl,
+      );
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      return httpUrl.toString();
+    },
     addProject: (path) => request(apiEndpoints.projects.add, { path }),
     relocateProject: (projectId, path) =>
       request(apiEndpoints.projects.relocate, { projectId }, { path }),

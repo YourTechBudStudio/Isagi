@@ -1,10 +1,16 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Bot, SquareTerminal } from 'lucide-react';
 
-import { selectSurfaceAndPersistFocus } from '../workspace/queries.js';
+import type { AgentHarness } from '@isagi/contracts';
+
+import {
+  selectSurfaceAndPersistFocus,
+  startAgentSessionFromPalette,
+  startTerminalSessionFromPalette,
+} from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
 import { GLOBAL_COMMANDS } from './registry.js';
-import type { PaletteContext, PaletteEntry } from './types.js';
+import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
 export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
@@ -25,6 +31,51 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
 
   const worktree = ctx.activeWorktree;
   if (worktree) {
+    const startAgentCommand: PaletteCommand = {
+      id: `worktree:${worktree.id}:start-agent-session`,
+      label: 'Start agent session',
+      icon: Bot,
+      group: 'worktree-actions',
+      args: [
+        {
+          kind: 'select',
+          key: 'harness',
+          label: 'Harness',
+          options: () => [
+            { value: 'pi', label: 'Pi' },
+            { value: 'opencode', label: 'OpenCode' },
+            { value: 'claude', label: 'Claude' },
+            { value: 'codex', label: 'Codex' },
+          ],
+        },
+      ],
+      run: async (values) => {
+        await startAgentSessionFromPalette(worktree.id, values.harness as AgentHarness);
+      },
+    };
+
+    entries.push(
+      {
+        id: startAgentCommand.id,
+        label: startAgentCommand.label,
+        icon: startAgentCommand.icon,
+        group: 'worktree-actions',
+        sub: 'choose a harness',
+        command: startAgentCommand,
+        run: () => startAgentCommand.run({}, ctx),
+      },
+      {
+        id: `worktree:${worktree.id}:start-terminal`,
+        label: 'Start terminal',
+        icon: SquareTerminal,
+        group: 'worktree-actions',
+        sub: 'open shell',
+        run: async () => {
+          await startTerminalSessionFromPalette(worktree.id);
+        },
+      },
+    );
+
     for (const surface of worktree.surfaces) {
       entries.push({
         id: `surface:${surface.id}`,

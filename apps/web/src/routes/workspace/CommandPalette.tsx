@@ -442,9 +442,26 @@ export function CommandPalette() {
     if (entry.command) {
       enterWizard(entry.command);
     } else {
-      entry.run();
-      pushRecent(entry.id);
-      finish();
+      if (finishedRef.current) {
+        return;
+      }
+      finishedRef.current = true;
+      const result = entry.run();
+      if (result instanceof Promise) {
+        void result.then(
+          () => {
+            pushRecent(entry.id);
+            finish();
+          },
+          (error: unknown) => {
+            finishedRef.current = false;
+            setCommandError(formatRuntimeError(error));
+          },
+        );
+      } else {
+        pushRecent(entry.id);
+        finish();
+      }
     }
   };
 

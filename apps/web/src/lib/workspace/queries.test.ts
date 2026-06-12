@@ -10,6 +10,7 @@ import { clearToasts, useToastStore } from '../toast/index.js';
 import type { WorkspaceData } from './model.js';
 import {
   commitAddProjectSuccess,
+  commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
   commitRelocateProjectSuccess,
   selectSurfaceAndPersistFocus,
@@ -64,6 +65,50 @@ test('add-project success invalidates the workspace query without cache surgery'
     [1],
   );
   assert.equal(client.getQueryState(workspaceQueryKey)?.isInvalidated, true);
+});
+
+test('launch success refetches workspace and selects the new surface locally', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, {
+    projects: [
+      project({
+        id: 1,
+        name: 'stale',
+        surfaces: [{ id: 100, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+      }),
+    ],
+  });
+  const events: string[] = [];
+  useWorkspaceStore.setState({
+    selection: emptyWorkspaceSelection,
+    activeSurfaceByWorktreeId: {},
+  });
+
+  await commitLaunchSessionSuccess(
+    client,
+    {
+      worktreeId: 10,
+      surfaceId: 501,
+      paneId: 601,
+      ptySessionId: 701,
+    },
+    async () => {
+      events.push(`fetch:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
+      return {
+        projects: [
+          project({
+            id: 1,
+            name: 'fresh',
+            surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal 2', attention: 'working' }],
+          }),
+        ],
+      };
+    },
+  );
+
+  events.push(`select:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
+  assert.deepEqual(events, ['fetch:none', 'select:501']);
+  assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
 });
 
 test('surface focus persistence ignores stale success responses', async () => {

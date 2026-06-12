@@ -3,6 +3,8 @@ import { Duration, Effect } from 'effect';
 
 import type {
   ActiveContextPersistenceInput,
+  AgentHarness,
+  LaunchSessionOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
   ReconciliationFinding,
@@ -18,6 +20,9 @@ import {
   fetchActiveContext,
   fetchWorkspace,
   formatRuntimeError,
+  getSurfaceDetail,
+  launchAgentSession,
+  launchTerminalSession,
   openWorktree,
   reconcileWorkspace,
   relocateProject,
@@ -29,6 +34,7 @@ import { useWorkspaceStore } from './store.js';
 
 export const workspaceQueryKey = ['workspace'] as const;
 export const activeContextQueryKey = ['workspace', 'active-context'] as const;
+export const surfaceDetailQueryKey = (surfaceId: number) => ['surface', surfaceId] as const;
 
 let scheduledActiveContext: ActiveContextPersistenceInput | null = null;
 let activeContextInFlight: ActiveContextPersistenceInput | null = null;
@@ -49,6 +55,13 @@ export function useActiveContextQuery() {
   return useQuery({
     queryKey: activeContextQueryKey,
     queryFn: ({ signal }) => Effect.runPromise(fetchActiveContext(), { signal }),
+  });
+}
+
+export function useSurfaceDetailQuery(surfaceId: number) {
+  return useQuery({
+    queryKey: surfaceDetailQueryKey(surfaceId),
+    queryFn: ({ signal }) => Effect.runPromise(getSurfaceDetail(surfaceId), { signal }),
   });
 }
 
@@ -90,6 +103,18 @@ export async function relocateProjectPath(projectId: number, path: string) {
 export async function openWorktreeFromPalette(projectId: number, input: OpenWorktreeInput) {
   const output = await Effect.runPromise(openWorktree(projectId, input));
   await commitOpenWorktreeSuccess(queryClient, output);
+  return output;
+}
+
+export async function startAgentSessionFromPalette(worktreeId: number, harness: AgentHarness) {
+  const output = await Effect.runPromise(launchAgentSession(worktreeId, harness));
+  await commitLaunchSessionSuccess(queryClient, output);
+  return output;
+}
+
+export async function startTerminalSessionFromPalette(worktreeId: number) {
+  const output = await Effect.runPromise(launchTerminalSession(worktreeId));
+  await commitLaunchSessionSuccess(queryClient, output);
   return output;
 }
 
@@ -176,6 +201,20 @@ export async function commitOpenWorktreeSuccess(
   if (output.status === 'created_setup_failed') {
     showWorktreeSetupFailure(output);
   }
+}
+
+export async function commitLaunchSessionSuccess(
+  client: QueryClient,
+  output: LaunchSessionOutput,
+  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
+    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+) {
+  await client.fetchQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceData(signal),
+    staleTime: 0,
+  });
+  useWorkspaceStore.getState().selectSurface(output.worktreeId, output.surfaceId);
 }
 
 export async function commitAddProjectSuccess(

@@ -148,3 +148,16 @@ body::after {
   background: rgb(91 96 120 / 35%);
   border-radius: 999px;
 }
+
+.isagi-xterm .xterm {
+  height: 100%;
+}
+
+.isagi-xterm .xterm-viewport,
+.isagi-xterm .xterm-screen {
+  background: transparent !important;
+}
+
+.isagi-xterm .xterm-viewport {
+  scrollbar-color: rgb(91 96 120 / 35%) transparent;
+}

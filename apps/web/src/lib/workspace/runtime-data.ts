@@ -4,7 +4,9 @@ import type {
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   AddProjectOutput,
+  AgentHarness,
   DeleteProjectOutput,
+  LaunchSessionOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -58,6 +60,25 @@ export function setWorktreeEnvironmentFocus(
   return getClient().pipe(
     Effect.flatMap((client) => client.setWorktreeEnvironmentFocus(worktreeId, input)),
   );
+}
+
+export function launchAgentSession(
+  worktreeId: number,
+  harness: AgentHarness,
+): Effect.Effect<LaunchSessionOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.launchAgentSession(worktreeId, harness)),
+  );
+}
+
+export function launchTerminalSession(
+  worktreeId: number,
+): Effect.Effect<LaunchSessionOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.launchTerminalSession(worktreeId)));
+}
+
+export function resolvePtyWebSocketUrl(ptySessionId: number): Effect.Effect<string, Error> {
+  return getClient().pipe(Effect.map((client) => client.resolvePtyWebSocketUrl(ptySessionId)));
 }
 
 export function addProject(path: string): Effect.Effect<AddProjectOutput, Error> {

@@ -145,5 +145,5 @@ export interface PaletteEntry {
   readonly accent?: boolean;
   /** Global commands with args open the wizard instead of running immediately. */
   readonly command?: PaletteCommand;
-  readonly run: () => void;
+  readonly run: () => MaybePromise<void>;
 }

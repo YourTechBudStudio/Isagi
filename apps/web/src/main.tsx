@@ -7,6 +7,7 @@ import { App } from './App.js';
 import { queryClient } from './lib/query/client.js';
 import { ToastProvider } from './lib/toast/index.js';
 
+import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 
 const rootElement = document.querySelector('#root');
