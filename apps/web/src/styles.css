@@ -153,11 +153,33 @@ body::after {
   height: 100%;
 }
 
-.isagi-xterm .xterm-viewport,
-.isagi-xterm .xterm-screen {
-  background: transparent !important;
+.isagi-xterm {
+  background: color-mix(in srgb, var(--color-elevated) 50%, var(--color-canvas));
+}
+
+.isagi-xterm-edge {
+  overflow: hidden;
 }
 
 .isagi-xterm .xterm-viewport {
-  scrollbar-color: rgb(91 96 120 / 35%) transparent;
+  scrollbar-color: rgb(91 96 120 / 32%) transparent;
+  scrollbar-width: thin;
+}
+
+.isagi-xterm .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.isagi-xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.isagi-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  min-height: 2rem;
+  background: rgb(91 96 120 / 26%);
+  border-radius: 999px;
+}
+
+.isagi-xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgb(91 96 120 / 42%);
 }
