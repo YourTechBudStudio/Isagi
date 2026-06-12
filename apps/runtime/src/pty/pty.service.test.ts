@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
@@ -13,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
@@ -22,10 +23,16 @@ import type { SurfaceDetail } from '@isagi/contracts';
 
 import {
   DataDirectory,
+  DatabaseError,
   RuntimeDatabaseLive,
   type DataDirectoryService,
 } from '../persistence/index.js';
-import { SurfaceRepositoryLive, SurfaceService, SurfaceServiceLive } from '../surfaces/index.js';
+import {
+  SurfaceRepositoryLive,
+  SurfaceService,
+  SurfaceServiceLive,
+  type PtySessionRow,
+} from '../surfaces/index.js';
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/index.js';
 import {
   PtyBackendRegistry,
@@ -34,12 +41,14 @@ import {
   PtyService,
   PtyServiceError,
   PtyServiceLive,
+  PtyKillError,
   PtyStartError,
   type LaunchBackendSessionInput,
   type PtyBackendShape,
   type PtyBackendRegistryShape,
+  type PtyRepositoryService,
 } from './index.js';
-import { detectOrphanPtyLogs } from './pty.service.js';
+import { detectOrphanPtyLogs, runTmuxOrphanGc } from './pty.service.js';
 
 test('launch creates metadata, writes output to the log, and marks running attention', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-launch-'));
@@ -437,8 +446,301 @@ test('startup reconciliation keeps tmux sessions recoverable when backend is una
   }
 });
 
+test('tmux orphan GC kills current-hash sessions without DB rows only', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-orphan-'));
+  const killedSessionNames: string[] = [];
+  const backend = fakeTmuxBackend('alive', {
+    sessionNames: ['isagi_current_42', 'isagi_other_43', 'isagi_current_not-a-number'],
+    killedSessionNames,
+  });
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        yield* runTmuxOrphanGc(repository, fakeRegistry(backend), 'current');
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(killedSessionNames, ['isagi_current_42']);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC kills terminal-status tmux rows and keeps live rows', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-terminal-'));
+  const killedSessionNames: string[] = [];
+  try {
+    const sessions = await Effect.runPromise(
+      Effect.gen(function* () {
+        const failed = yield* createPersistedTmuxSession('/repo/isagi-failed', dataRoot, {
+          status: 'failed',
+          statusReason: 'backend_session_missing',
+        });
+        const running = yield* createPersistedTmuxSession('/repo/isagi-running', dataRoot, {
+          status: 'running',
+          statusReason: null,
+        });
+        const repository = yield* PtyRepository;
+        const backend = fakeTmuxBackend('alive', {
+          sessionNames: [
+            `isagi_current_${failed.ptySessionId}`,
+            `isagi_current_${running.ptySessionId}`,
+          ],
+          killedSessionNames,
+        });
+        yield* runTmuxOrphanGc(repository, fakeRegistry(backend), 'current');
+        return { failed, running };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(killedSessionNames, [`isagi_current_${sessions.failed.ptySessionId}`]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC skips matching rows that are not tmux backend', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-backend-skip-'));
+  const killedSessionNames: string[] = [];
+  try {
+    const ptySessionId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const repository = yield* PtyRepository;
+        const metadata = yield* repository.createLaunchMetadata({
+          worktreeId,
+          kind: 'terminal',
+          titleBase: 'Terminal',
+          purpose: 'terminal',
+          harness: null,
+          command: process.env.SHELL || 'bash',
+        });
+        yield* repository.updateBackendMetadata({
+          ptySessionId: metadata.ptySessionId,
+          backend: 'node_pty',
+          backendRefJson: JSON.stringify({
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptySessionId: metadata.ptySessionId,
+            pid: null,
+          }),
+          logMode: 'backend_file',
+          logPath: join(dataRoot, 'sessions', `${metadata.ptySessionId}.ptylog`),
+        });
+        yield* repository.transitionSession({
+          ptySessionId: metadata.ptySessionId,
+          status: 'failed',
+          statusReason: 'runtime_ephemeral_lost',
+          exitCode: null,
+          signal: null,
+        });
+        const backend = fakeTmuxBackend('alive', {
+          sessionNames: [`isagi_current_${metadata.ptySessionId}`],
+          killedSessionNames,
+        });
+        yield* runTmuxOrphanGc(repository, fakeRegistry(backend), 'current');
+        return metadata.ptySessionId;
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.equal(ptySessionId > 0, true);
+    assert.deepEqual(killedSessionNames, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC skips killing when DB lookup fails', async () => {
+  const killedSessionNames: string[] = [];
+  const backend = fakeTmuxBackend('alive', {
+    sessionNames: ['isagi_current_42'],
+    killedSessionNames,
+  });
+  const repository = {
+    createLaunchMetadata: () => Effect.die('createLaunchMetadata is not used by GC tests'),
+    findSession: () =>
+      Effect.fail(
+        new DatabaseError({
+          operation: 'find_pty_session',
+          cause: new Error('database unavailable'),
+        }),
+      ),
+    listSessionLogPaths: Effect.succeed([]),
+    listLivePersistedSessions: Effect.succeed([]),
+    updateBackendRef: () => Effect.void,
+    updateBackendMetadata: () => Effect.void,
+    transitionSession: () => Effect.void,
+  } satisfies PtyRepositoryService;
+
+  await Effect.runPromise(runTmuxOrphanGc(repository, fakeRegistry(backend), 'current'));
+
+  assert.deepEqual(killedSessionNames, []);
+});
+
+test('kill service terminates tmux session and marks it user killed', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-kill-tmux-'));
+  const killedSessionNames: string[] = [];
+  const backend = fakeTmuxBackend('alive', { killedSessionNames });
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+        yield* pty.kill({ ptySessionId: launched.ptySessionId, reason: 'user_killed' });
+        const surfaces = yield* SurfaceService;
+        return { launched, detail: yield* surfaces.getSurfaceDetail(launched.surfaceId) };
+      }).pipe(Effect.provide(testLayer(dataRoot, backend))),
+    );
+
+    assert.deepEqual(killedSessionNames, [
+      `isagi_${dataDirectoryHashForTest(dataRoot)}_${output.launched.ptySessionId}`,
+    ]);
+    assert.equal(output.detail.panes[0]?.ptySession?.status, 'failed');
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_killed');
+    assert.equal(output.detail.panes[0]?.ptySession?.exitCode, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.signal, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('kill service terminates node-pty session and marks it user killed', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-kill-node-'));
+  const fake = fakeBackend();
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+        yield* pty.kill({ ptySessionId: launched.ptySessionId, reason: 'user_killed' });
+        const surfaces = yield* SurfaceService;
+        return { launched, detail: yield* surfaces.getSurfaceDetail(launched.surfaceId) };
+      }).pipe(Effect.provide(testLayer(dataRoot, fake.backend))),
+    );
+
+    assert.equal(fake.kills.has(output.launched.ptySessionId), true);
+    assert.equal(output.detail.panes[0]?.ptySession?.status, 'failed');
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_killed');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('kill service keeps user-killed reason when node-pty exit fires during kill', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-kill-node-exit-'));
+  const fake = fakeBackend({ exitOnKill: { exitCode: null, signal: 'SIGTERM' } });
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+        yield* pty.kill({ ptySessionId: launched.ptySessionId, reason: 'user_killed' });
+        yield* Effect.sleep('20 millis');
+        const surfaces = yield* SurfaceService;
+        return { launched, detail: yield* surfaces.getSurfaceDetail(launched.surfaceId) };
+      }).pipe(Effect.provide(testLayer(dataRoot, fake.backend))),
+    );
+
+    assert.equal(fake.kills.has(output.launched.ptySessionId), true);
+    assert.equal(output.detail.panes[0]?.ptySession?.status, 'failed');
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_killed');
+    assert.equal(output.detail.panes[0]?.ptySession?.exitCode, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.signal, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('failed kill service persists captured node-pty exit normally', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-kill-node-fails-'));
+  const fake = fakeBackend({
+    failKill: true,
+    exitOnKill: { exitCode: 7, signal: null },
+  });
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+        const killResult = yield* pty
+          .kill({ ptySessionId: launched.ptySessionId, reason: 'user_killed' })
+          .pipe(Effect.either);
+        const surfaces = yield* SurfaceService;
+        return {
+          launched,
+          killResult,
+          detail: yield* surfaces.getSurfaceDetail(launched.surfaceId),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot, fake.backend))),
+    );
+
+    assert.ok(Either.isLeft(output.killResult));
+    assert.ok(output.killResult.left instanceof PtyKillError);
+    assert.equal(fake.kills.has(output.launched.ptySessionId), true);
+    assert.equal(output.detail.panes[0]?.ptySession?.status, 'failed');
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.exitCode, 7);
+    assert.equal(output.detail.panes[0]?.ptySession?.signal, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('kill retry keeps user-killed reason when node-pty exit arrives after retry', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-kill-retry-exit-'));
+  const fake = fakeBackend({
+    exitOnKill: { exitCode: 9, signal: null },
+    exitOnKillDelayMs: 1_200,
+  });
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({
+          worktreeId: 1,
+          purpose: 'terminal',
+          harness: null,
+        });
+        const killResult = yield* pty
+          .kill({ ptySessionId: launched.ptySessionId, reason: 'user_killed' })
+          .pipe(Effect.either);
+        yield* Effect.sleep('1400 millis');
+        return { killResult, session: retrySession };
+      }).pipe(Effect.provide(killRetryLayer(dataRoot, fake.backend))),
+    );
+
+    assert.ok(Either.isLeft(output.killResult));
+    assert.ok(output.killResult.left instanceof DatabaseError);
+    assert.equal(output.session?.status, 'failed');
+    assert.equal(output.session?.statusReason, 'user_killed');
+    assert.equal(output.session?.exitCode, null);
+    assert.equal(output.session?.signal, null);
+  } finally {
+    retrySession = null;
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+let retrySession: PtySessionRow | null = null;
+
 function fakeBackend(
-  options: { readonly failStart?: boolean; readonly failAttach?: boolean } = {},
+  options: {
+    readonly failStart?: boolean;
+    readonly failAttach?: boolean;
+    readonly failKill?: boolean;
+    readonly exitOnKill?:
+      | {
+          readonly exitCode: number | null;
+          readonly signal: string | null;
+        }
+      | undefined;
+    readonly exitOnKillDelayMs?: number | undefined;
+  } = {},
 ) {
   let nextPid = 100;
   const outputs = new Map<number, (data: string) => void>();
@@ -447,6 +749,7 @@ function fakeBackend(
     (exit: { readonly exitCode: number | null; readonly signal: string | null }) => void
   >();
   const logPaths = new Map<number, string | null>();
+  const kills = new Set<number>();
   const backend = {
     name: 'node_pty',
     available: Effect.succeed(true),
@@ -512,12 +815,53 @@ function fakeBackend(
       }),
     replay: (input) => replayFakeLog(input.logPath, input.bytes, input.send),
     inspect: () => Effect.succeed({ status: 'alive' as const }),
-    kill: () => Effect.void,
+    listSessions: Effect.sync(() =>
+      [...logPaths.keys()].map(
+        (ptySessionId) =>
+          ({
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptySessionId,
+            pid: null,
+          }) as const,
+      ),
+    ),
+    kill: (ref) =>
+      Effect.gen(function* () {
+        if (ref.backend === 'node_pty') {
+          kills.add(ref.ptySessionId);
+          if (options.exitOnKill) {
+            if (options.exitOnKillDelayMs !== undefined) {
+              setTimeout(
+                () => exits.get(ref.ptySessionId)?.(options.exitOnKill!),
+                options.exitOnKillDelayMs,
+              );
+            } else {
+              exits.get(ref.ptySessionId)?.(options.exitOnKill);
+              yield* Effect.sleep('10 millis');
+            }
+          }
+          if (options.failKill) {
+            return yield* Effect.fail(
+              new PtyKillError({
+                ptySessionId: ref.ptySessionId,
+                cause: new Error('kill failed'),
+              }),
+            );
+          }
+        }
+      }),
   } satisfies PtyBackendShape;
-  return { backend, outputs, exits };
+  return { backend, outputs, exits, kills };
 }
 
-function fakeTmuxBackend(inspection: 'alive' | 'missing' | 'unavailable') {
+function fakeTmuxBackend(
+  inspection: 'alive' | 'missing' | 'unavailable',
+  options: {
+    readonly sessionNames?: readonly string[];
+    readonly killedSessionNames?: string[];
+  } = {},
+) {
   return {
     name: 'tmux',
     available: Effect.succeed(true),
@@ -544,14 +888,32 @@ function fakeTmuxBackend(inspection: 'alive' | 'missing' | 'unavailable') {
           ? { status: 'unavailable' as const }
           : { status: inspection as 'alive' | 'missing' },
       ),
-    kill: () => Effect.void,
+    listSessions: Effect.succeed(
+      (options.sessionNames ?? []).map(
+        (sessionName) =>
+          ({
+            schemaVersion: 1,
+            backend: 'tmux',
+            sessionName,
+          }) as const,
+      ),
+    ),
+    kill: (ref) =>
+      Effect.sync(() => {
+        if (ref.backend === 'tmux') {
+          options.killedSessionNames?.push(ref.sessionName);
+        }
+      }),
   } satisfies PtyBackendShape;
 }
 
 function createPersistedTmuxSession(
   rootPath: string,
   dataRoot: string,
-  input: { readonly statusReason: import('@isagi/contracts').PtySessionStatusReason | null },
+  input: {
+    readonly status?: import('@isagi/contracts').PtySessionStatus | undefined;
+    readonly statusReason: import('@isagi/contracts').PtySessionStatusReason | null;
+  },
 ) {
   return Effect.gen(function* () {
     const worktreeId = yield* insertWorktree(rootPath);
@@ -578,7 +940,7 @@ function createPersistedTmuxSession(
     });
     yield* repository.transitionSession({
       ptySessionId: metadata.ptySessionId,
-      status: 'running',
+      status: input.status ?? 'running',
       statusReason: input.statusReason,
       exitCode: null,
       signal: null,
@@ -703,14 +1065,118 @@ function testLayer(dataRoot: string, backend: PtyBackendShape) {
   );
 }
 
+function killRetryLayer(dataRoot: string, backend: PtyBackendShape) {
+  const dataDirectory = dataDirectoryService(dataRoot);
+  const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
+  const ptyRepository = Layer.succeed(PtyRepository, retryRepository());
+  const ptyService = PtyServiceLive.pipe(
+    Layer.provide(ptyRepository),
+    Layer.provide(Layer.succeed(PtyBackendRegistry, fakeRegistry(backend))),
+    Layer.provide(dataDirectoryLayer),
+  );
+  return ptyService;
+}
+
+function retryRepository() {
+  let userKilledTransitionFailed = false;
+  return {
+    createLaunchMetadata: () =>
+      Effect.sync(() => {
+        retrySession = {
+          id: 1,
+          paneId: 1,
+          worktreeId: 1,
+          backend: 'node_pty',
+          backendRefJson: JSON.stringify({
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptySessionId: 1,
+            pid: null,
+          }),
+          purpose: 'terminal',
+          harness: null,
+          command: process.env.SHELL || 'bash',
+          cwd: '/repo/isagi',
+          status: 'starting',
+          statusReason: null,
+          exitCode: null,
+          signal: null,
+          logMode: 'none',
+          logPath: null,
+          createdAt: '2026-06-12T00:00:00.000Z',
+          updatedAt: '2026-06-12T00:00:00.000Z',
+          exitedAt: null,
+          lastSeenAt: null,
+        };
+        return {
+          worktreeId: 1,
+          surfaceId: 1,
+          paneId: 1,
+          ptySessionId: 1,
+          command: retrySession.command,
+          cwd: retrySession.cwd,
+          logPath: retrySession.logPath,
+        };
+      }),
+    findSession: () => Effect.succeed(retrySession),
+    listSessionLogPaths: Effect.succeed([]),
+    listLivePersistedSessions: Effect.succeed([]),
+    updateBackendRef: (input) =>
+      Effect.sync(() => {
+        if (retrySession) {
+          retrySession = { ...retrySession, backendRefJson: input.backendRefJson };
+        }
+      }),
+    updateBackendMetadata: (input) =>
+      Effect.sync(() => {
+        if (retrySession) {
+          retrySession = {
+            ...retrySession,
+            backend: input.backend,
+            backendRefJson: input.backendRefJson,
+            logMode: input.logMode,
+            logPath: input.logPath,
+          };
+        }
+      }),
+    transitionSession: (input) =>
+      Effect.gen(function* () {
+        if (input.statusReason === 'user_killed' && !userKilledTransitionFailed) {
+          userKilledTransitionFailed = true;
+          return yield* Effect.fail(
+            new DatabaseError({
+              operation: 'transition_pty_session',
+              cause: new Error('transient transition failure'),
+            }),
+          );
+        }
+        if (retrySession) {
+          retrySession = {
+            ...retrySession,
+            status: input.status,
+            statusReason: input.statusReason ?? null,
+            exitCode: input.exitCode ?? null,
+            signal: input.signal ?? null,
+          };
+        }
+      }),
+  } satisfies PtyRepositoryService;
+}
+
 function fakeRegistry(backend: PtyBackendShape) {
   return {
     selectForLaunch: () => Effect.succeed(backend),
     get: (name) =>
       name === backend.name
         ? Effect.succeed(backend)
-        : Effect.die(`Unsupported fake backend ${name}`),
+        : name === 'tmux'
+          ? Effect.succeed(fakeTmuxBackend('alive'))
+          : Effect.die(`Unsupported fake backend ${name}`),
   } satisfies PtyBackendRegistryShape;
+}
+
+function dataDirectoryHashForTest(path: string) {
+  return createHash('sha256').update(resolve(path)).digest('hex').slice(0, 8);
 }
 
 function dataDirectoryService(dataRoot: string) {

@@ -157,6 +157,20 @@ export const NodePtyBackendLive = Layer.effect(
             ? { status: 'alive' as const }
             : { status: 'missing' as const },
         ),
+      listSessions: Effect.sync(() =>
+        [...liveSessions.values()].flatMap((session) =>
+          session.running
+            ? [
+                {
+                  schemaVersion: 1,
+                  backend: 'node_pty' as const,
+                  ptySessionId: session.ptySessionId,
+                  pid: session.process.pid,
+                },
+              ]
+            : [],
+        ),
+      ),
       kill: (ref) =>
         Effect.try({
           try: () => {

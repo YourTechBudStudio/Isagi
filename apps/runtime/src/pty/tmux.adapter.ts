@@ -5,7 +5,13 @@ import { Context, Effect, Layer } from 'effect';
 import * as nodePty from 'node-pty';
 
 import type { BackendAttachment, PtyBackend as PtyBackendShape, TmuxBackendRef } from './types.js';
-import { PtyKillError, PtyResizeError, PtyStartError, PtyWriteError } from './types.js';
+import {
+  PtyInspectError,
+  PtyKillError,
+  PtyResizeError,
+  PtyStartError,
+  PtyWriteError,
+} from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +109,25 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       Effect.as({ status: 'alive' as const }),
       Effect.catchAll((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
     ),
+  listSessions: runTmux(['list-sessions', '-F', '#S']).pipe(
+    Effect.map(({ stdout }) =>
+      stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((sessionName) => sessionName.length > 0)
+        .map(
+          (sessionName) =>
+            ({
+              schemaVersion: 1,
+              backend: 'tmux',
+              sessionName,
+            }) satisfies TmuxBackendRef,
+        ),
+    ),
+    Effect.catchAll((cause) =>
+      isTmuxServerMissing(cause) ? Effect.succeed([]) : Effect.fail(new PtyInspectError({ cause })),
+    ),
+  ),
   kill: (ref) =>
     runTmux(['kill-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
       Effect.asVoid,
@@ -144,4 +169,15 @@ function isTmuxUnavailable(cause: unknown) {
   }
   const stderr = 'stderr' in cause ? (cause as { readonly stderr?: unknown }).stderr : null;
   return typeof stderr === 'string' && stderr.includes('no server running');
+}
+
+function isTmuxServerMissing(cause: unknown) {
+  if (!cause || typeof cause !== 'object') {
+    return false;
+  }
+  const stderr = 'stderr' in cause ? (cause as { readonly stderr?: unknown }).stderr : null;
+  return (
+    typeof stderr === 'string' &&
+    (stderr.includes('no server running') || stderr.includes('error connecting'))
+  );
 }

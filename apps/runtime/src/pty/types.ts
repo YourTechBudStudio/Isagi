@@ -128,6 +128,10 @@ export interface PtyBackend {
   readonly inspect: (
     ref: BackendSessionRef,
   ) => import('effect').Effect.Effect<BackendInspection, PtyInspectError>;
+  readonly listSessions: import('effect').Effect.Effect<
+    readonly BackendSessionRef[],
+    PtyInspectError
+  >;
   readonly kill: (ref: BackendSessionRef) => import('effect').Effect.Effect<void, PtyKillError>;
 }
 

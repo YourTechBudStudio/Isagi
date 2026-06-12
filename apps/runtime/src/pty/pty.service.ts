@@ -17,6 +17,7 @@ import {
   type PtyRepositoryService,
 } from './pty.repository.js';
 import {
+  PtyKillError,
   PtyResizeError,
   PtyServiceError,
   PtyWriteError,
@@ -33,6 +34,7 @@ const defaultCols = 100;
 const defaultRows = 30;
 const orphanLogSampleSize = 5;
 const statusPollIntervalMs = 10_000;
+const tmuxOrphanGcIntervalMs = 5 * 60_000;
 
 const nodePtyBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -50,11 +52,18 @@ const tmuxBackendRefSchema = Schema.Struct({
 export type PtyLaunchError = DatabaseError | PtyServiceError;
 export type PtyAttachError = DatabaseError | PtyServiceError;
 export type PtyInputError = DatabaseError | PtyServiceError | PtyWriteError | PtyResizeError;
+export type PtyKillSessionError = DatabaseError | PtyServiceError | PtyKillError;
 
 interface ActiveAttachment {
   readonly ptySessionId: number;
   readonly attachmentId: symbol;
   readonly attachment: BackendAttachment;
+}
+
+interface IntentionalKillState {
+  readonly reason: 'user_killed';
+  completed: boolean;
+  exit: PtyExit | null;
 }
 
 export interface PtyAttachment {
@@ -89,6 +98,10 @@ export interface PtyService {
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyInputError>;
+  readonly kill: (input: {
+    readonly ptySessionId: number;
+    readonly reason: 'user_killed';
+  }) => Effect.Effect<void, PtyKillSessionError>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyService');
@@ -100,12 +113,15 @@ export const PtyServiceLive = Layer.scoped(
     const registry = yield* PtyBackendRegistry;
     const directory = yield* DataDirectory;
     const activeAttachments = new Map<number, ActiveAttachment>();
+    const intentionalKills = new Map<number, IntentionalKillState>();
     const dataDirHash = dataDirectoryHash(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
     yield* reconcilePersistedSessions(repository, registry, { startup: true });
+    yield* runTmuxOrphanGc(repository, registry, dataDirHash);
     const pollTimer = startStatusPolling(repository, registry);
+    const tmuxOrphanGcTimer = startTmuxOrphanGc(repository, registry, dataDirHash);
 
     const service = {
       launch: (input) =>
@@ -151,6 +167,7 @@ export const PtyServiceLive = Layer.scoped(
             activeAttachments,
             dataDirHash,
             sessionsPath: directory.paths.sessionsPath,
+            intentionalKills,
           }).pipe(Effect.either);
           const startResult =
             Either.isLeft(launchResult) && selectedBackend.name === 'tmux'
@@ -178,6 +195,7 @@ export const PtyServiceLive = Layer.scoped(
                     activeAttachments,
                     dataDirHash,
                     sessionsPath: directory.paths.sessionsPath,
+                    intentionalKills,
                   }).pipe(Effect.either);
                 })
               : launchResult;
@@ -372,11 +390,79 @@ export const PtyServiceLive = Layer.scoped(
           }
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
+      kill: (input) =>
+        Effect.gen(function* () {
+          const session = yield* repository.findSession(input.ptySessionId);
+          if (!session) {
+            return yield* Effect.fail(
+              new PtyServiceError({
+                code: 'session_not_found',
+                message: `PTY session ${input.ptySessionId} was not found.`,
+                ptySessionId: input.ptySessionId,
+              }),
+            );
+          }
+          const ref = yield* decodeBackendRef(session);
+          const backend = yield* registry.get(session.backend).pipe(
+            Effect.mapError(
+              (error) =>
+                new PtyServiceError({
+                  code: 'backend_unavailable',
+                  message: `PTY backend ${error.backend} is not supported.`,
+                  ptySessionId: session.id,
+                  cause: error,
+                }),
+            ),
+          );
+          const killState: IntentionalKillState = {
+            reason: input.reason,
+            completed: false,
+            exit: null,
+          };
+          intentionalKills.set(session.id, killState);
+          yield* detachActiveAttachment(activeAttachments, session.id);
+          const killResult = yield* backend.kill(ref).pipe(Effect.either);
+          if (Either.isLeft(killResult)) {
+            intentionalKills.delete(session.id);
+            if (killState.exit) {
+              yield* persistExit(repository, activeAttachments, session.id, killState.exit);
+            }
+            return yield* Effect.fail(killResult.left);
+          }
+          const transitionResult = yield* repository
+            .transitionSession({
+              ptySessionId: session.id,
+              status: 'failed',
+              statusReason: input.reason,
+              exitCode: null,
+              signal: null,
+            })
+            .pipe(Effect.either);
+          if (Either.isLeft(transitionResult)) {
+            scheduleIntentionalKillPersistenceRetry(
+              repository,
+              intentionalKills,
+              killState,
+              session.backend,
+              session.id,
+              input.reason,
+            );
+            return yield* Effect.fail(transitionResult.left);
+          }
+          killState.completed = true;
+          if (session.backend === 'tmux' || killState.exit) {
+            intentionalKills.delete(session.id);
+          }
+          console.info(
+            `[runtime] PTY session killed ptySessionId=${session.id} reason=${input.reason}`,
+          );
+        }),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
         clearInterval(pollTimer);
+        clearInterval(tmuxOrphanGcTimer);
         const sessions = yield* repository.listLivePersistedSessions.pipe(
           Effect.orElseSucceed(() => []),
         );
@@ -425,6 +511,26 @@ function startStatusPolling(repository: PtyRepositoryService, registry: PtyBacke
       ),
     );
   }, statusPollIntervalMs);
+  timer.unref();
+  return timer;
+}
+
+function startTmuxOrphanGc(
+  repository: PtyRepositoryService,
+  registry: PtyBackendRegistryService,
+  dataDirHash: string,
+) {
+  const timer = setInterval(() => {
+    void Effect.runPromise(
+      runTmuxOrphanGc(repository, registry, dataDirHash).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() => {
+            console.warn('[runtime] PTY tmux orphan GC failed', error);
+          }),
+        ),
+      ),
+    );
+  }, tmuxOrphanGcIntervalMs);
   timer.unref();
   return timer;
 }
@@ -539,6 +645,87 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
   });
 }
 
+export function runTmuxOrphanGc(
+  repository: PtyRepositoryService,
+  registry: PtyBackendRegistryService,
+  dataDirHash: string,
+) {
+  return Effect.gen(function* () {
+    const backend = yield* registry.get('tmux').pipe(Effect.orElseSucceed(() => null));
+    if (!backend) {
+      return;
+    }
+    const sessions = yield* backend.listSessions.pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          console.warn('[runtime] Could not list tmux sessions for orphan GC', error);
+          return [];
+        }),
+      ),
+    );
+    for (const ref of sessions) {
+      if (ref.backend !== 'tmux') {
+        continue;
+      }
+      const parsed = parseRuntimeTmuxSessionName(ref.sessionName, dataDirHash);
+      if (!parsed) {
+        continue;
+      }
+      const sessionResult = yield* repository.findSession(parsed.ptySessionId).pipe(Effect.either);
+      if (Either.isLeft(sessionResult)) {
+        console.warn(
+          `[runtime] Skipping tmux orphan GC for sessionName=${ref.sessionName} ptySessionId=${parsed.ptySessionId} because DB lookup failed`,
+          sessionResult.left,
+        );
+        continue;
+      }
+      const session = sessionResult.right;
+      if (!session) {
+        console.warn(
+          `[runtime] Killing orphan tmux session with no DB row sessionName=${ref.sessionName} ptySessionId=${parsed.ptySessionId}`,
+        );
+        yield* killTmuxGcSession(backend, ref);
+        continue;
+      }
+      if (session.backend !== 'tmux') {
+        console.warn(
+          `[runtime] Skipping tmux session whose DB row uses backend=${session.backend} sessionName=${ref.sessionName} ptySessionId=${session.id}`,
+        );
+        continue;
+      }
+      if (session.status === 'failed' || session.status === 'exited') {
+        console.warn(
+          `[runtime] Killing tmux session for terminal-status PTY row sessionName=${ref.sessionName} ptySessionId=${session.id} status=${session.status}`,
+        );
+        yield* killTmuxGcSession(backend, ref);
+      }
+    }
+  });
+}
+
+function killTmuxGcSession(backend: PtyBackend, ref: BackendSessionRef) {
+  return backend.kill(ref).pipe(
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        const sessionName = ref.backend === 'tmux' ? ref.sessionName : 'unknown';
+        console.warn(
+          `[runtime] Failed to kill tmux session during orphan GC ${sessionName}`,
+          error,
+        );
+      }),
+    ),
+  );
+}
+
+function parseRuntimeTmuxSessionName(sessionName: string, dataDirHash: string) {
+  const match = new RegExp(`^isagi_${escapeRegExp(dataDirHash)}_(\\d+)$`).exec(sessionName);
+  if (!match?.[1]) {
+    return null;
+  }
+  const ptySessionId = Number(match[1]);
+  return Number.isSafeInteger(ptySessionId) && ptySessionId > 0 ? { ptySessionId } : null;
+}
+
 function launchWithBackend(input: {
   readonly backend: PtyBackend;
   readonly metadata: PtySessionLaunchMetadata;
@@ -546,6 +733,7 @@ function launchWithBackend(input: {
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly dataDirHash: string;
   readonly sessionsPath: string;
+  readonly intentionalKills: Map<number, IntentionalKillState>;
 }) {
   return Effect.gen(function* () {
     const backendMetadata = backendMetadataForLaunch(
@@ -575,7 +763,13 @@ function launchWithBackend(input: {
       logPath: backendMetadata.logPath,
       onExit: (exit) =>
         void Effect.runPromise(
-          handleExit(input.repository, input.activeAttachments, input.metadata.ptySessionId, exit),
+          handleExit(
+            input.repository,
+            input.activeAttachments,
+            input.intentionalKills,
+            input.metadata.ptySessionId,
+            exit,
+          ),
         ),
     });
     return startResult;
@@ -759,12 +953,38 @@ function normalizePath(path: string) {
   return relative(process.cwd(), path);
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function relativeSessionLogPath(sessionsPath: string, path: string) {
   const relativePath = relative(sessionsPath, path);
   return relativePath.startsWith('..') ? basename(path) : `sessions/${relativePath}`;
 }
 
 function handleExit(
+  repository: PtyRepositoryService,
+  activeAttachments: Map<number, ActiveAttachment>,
+  intentionalKills: Map<number, IntentionalKillState>,
+  ptySessionId: number,
+  exit: PtyExit,
+) {
+  return Effect.gen(function* () {
+    const killState = intentionalKills.get(ptySessionId);
+    if (killState) {
+      killState.exit = exit;
+      activeAttachments.delete(ptySessionId);
+      console.info(`[runtime] Ignoring backend exit for intentionally killed PTY ${ptySessionId}`);
+      if (killState.completed) {
+        intentionalKills.delete(ptySessionId);
+      }
+      return;
+    }
+    yield* persistExit(repository, activeAttachments, ptySessionId, exit);
+  });
+}
+
+function persistExit(
   repository: PtyRepositoryService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
@@ -822,6 +1042,49 @@ function scheduleExitPersistenceRetry(
           }),
         ),
       ),
+    );
+  };
+
+  setTimeout(retry, 1_000);
+}
+
+function scheduleIntentionalKillPersistenceRetry(
+  repository: PtyRepositoryService,
+  intentionalKills: Map<number, IntentionalKillState>,
+  killState: IntentionalKillState,
+  backend: PtySessionRow['backend'],
+  ptySessionId: number,
+  reason: 'user_killed',
+) {
+  const retry = () => {
+    void Effect.runPromise(
+      repository
+        .transitionSession({
+          ptySessionId,
+          status: 'failed',
+          statusReason: reason,
+          exitCode: null,
+          signal: null,
+        })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              killState.completed = true;
+              if (backend === 'tmux' || killState.exit) {
+                intentionalKills.delete(ptySessionId);
+              }
+            }),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              console.error(
+                `[runtime] Failed to retry intentional PTY kill persistence for session ${ptySessionId}`,
+                error,
+              );
+              setTimeout(retry, 1_000);
+            }),
+          ),
+        ),
     );
   };
 

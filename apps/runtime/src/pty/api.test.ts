@@ -181,6 +181,7 @@ function fakePtyService(
             }),
           ),
     resize: () => Effect.void,
+    kill: () => Effect.void,
   } satisfies PtyServiceShape;
 }
 
