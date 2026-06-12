@@ -11,6 +11,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { workbenchCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -186,7 +187,10 @@ function CommandsView() {
           ...command,
           status: running ? 'stopped' : 'running',
           attention: running ? 'idle' : 'working',
-          log: [...command.log, running ? 'mock: stopped command' : 'mock: started command'],
+          log: [
+            ...command.log,
+            running ? workbenchCopy.mockLog.stopped : workbenchCopy.mockLog.started,
+          ],
         };
       }),
     );
@@ -197,7 +201,7 @@ function CommandsView() {
       <div className="flex w-52 flex-none flex-col overflow-auto border-r border-line/12 p-2">
         {commands.length === 0 ? (
           <p className="px-2 pt-1 font-mono text-[11px] text-fg-subtle opacity-55">
-            {'// no commands yet'}
+            {workbenchCopy.emptyCommands}
           </p>
         ) : (
           commands.map((command) => (
@@ -232,7 +236,7 @@ function CommandsView() {
         <button
           type="button"
           disabled
-          title="Command authoring lands in the command-runner slice"
+          title={workbenchCopy.commandAuthoringTitle}
           className="mt-0.5 flex w-full cursor-not-allowed items-center gap-2 rounded-lg px-2 py-2 font-mono text-[11.5px] text-fg-subtle opacity-55"
         >
           <Plus size={13} />

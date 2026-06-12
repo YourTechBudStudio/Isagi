@@ -3,6 +3,7 @@ import { GitBranch } from 'lucide-react';
 
 import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
 
+import { worktreeSetupReviewCopy } from '../../../copy/index.js';
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
 import {
   listProjectBranches,
@@ -172,14 +173,14 @@ export const openWorktreeCommand: PaletteCommand = {
         const preflight = await Effect.runPromise(preflightWorktreeSetup(projectId));
         if (preflight.status === 'needs_approval' && preflight.hash) {
           return {
-            title: "This project has setup hooks Isagi hasn't run yet.",
-            body: "They're defined in .isagi/config.yaml and run right after the worktree is created. Worth a look before you let them touch your machine.",
+            title: worktreeSetupReviewCopy.title,
+            body: worktreeSetupReviewCopy.body,
             items: preflight.summary,
             choices: [
               {
                 value: 'trust-hook-config',
-                label: 'Trust these hooks',
-                hint: 'Isagi runs them now, and asks again only if they change.',
+                label: worktreeSetupReviewCopy.choices.trustHookConfig.label,
+                hint: worktreeSetupReviewCopy.choices.trustHookConfig.hint,
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'trust_hook_config' as const, hash: preflight.hash },
@@ -187,8 +188,8 @@ export const openWorktreeCommand: PaletteCommand = {
               },
               {
                 value: 'always-trust-project',
-                label: 'Always trust this project',
-                hint: 'Isagi runs these and any future changes, no more prompts.',
+                label: worktreeSetupReviewCopy.choices.alwaysTrustProject.label,
+                hint: worktreeSetupReviewCopy.choices.alwaysTrustProject.hint,
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'always_trust_project' as const, hash: preflight.hash },
@@ -196,8 +197,8 @@ export const openWorktreeCommand: PaletteCommand = {
               },
               {
                 value: 'disable-hooks',
-                label: 'Skip hooks for this project',
-                hint: 'Isagi keeps creating worktrees, just never runs the hooks.',
+                label: worktreeSetupReviewCopy.choices.disableHooks.label,
+                hint: worktreeSetupReviewCopy.choices.disableHooks.hint,
                 payload: {
                   kind: 'setup_review' as const,
                   trust: { action: 'disable_hooks' as const },

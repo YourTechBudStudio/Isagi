@@ -1,5 +1,6 @@
 import { SquareTerminal } from 'lucide-react';
 
+import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
 import type { Surface } from '../../lib/workspace/types.js';
 import { PtySurface } from './PtySurface.js';
@@ -10,7 +11,11 @@ export function TerminalSurface({ surface }: { surface: Surface }) {
 
   if (detail.isPending) {
     return (
-      <SurfaceFrameState icon={SquareTerminal} title={surface.title} body="Loading terminal..." />
+      <SurfaceFrameState
+        icon={SquareTerminal}
+        title={surface.title}
+        body={surfaceDetailCopy.terminal.loading}
+      />
     );
   }
 
@@ -19,7 +24,7 @@ export function TerminalSurface({ surface }: { surface: Surface }) {
       <SurfaceFrameState
         icon={SquareTerminal}
         title={surface.title}
-        body={`Could not load this terminal. ${formatRuntimeError(detail.error)}`}
+        body={surfaceDetailCopy.terminal.loadFailed(formatRuntimeError(detail.error))}
         tone="error"
       />
     );

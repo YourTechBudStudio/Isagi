@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 
+import { workAreaCopy } from '../../copy/index.js';
 import { uiTransition, zenTransition } from '../../lib/motion.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -52,7 +53,7 @@ export function WorkArea() {
 function RuntimeErrorBanner({ error }: { error: string }) {
   return (
     <div className="pointer-events-none absolute top-3 left-1/2 z-20 max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 rounded-xl border border-error/28 bg-canvas/88 px-3.5 py-2 font-mono text-[11.5px] text-error shadow-soft backdrop-blur-md">
-      runtime refresh failed · {error}
+      {workAreaCopy.runtimeRefreshFailed(error)}
     </div>
   );
 }
@@ -72,7 +73,7 @@ function ZenExitHint() {
       transition={uiTransition}
       className="pointer-events-none absolute top-3 right-4 rounded-md border border-line/24 bg-elevated/70 px-3 py-1.5 font-mono text-[11px] text-fg-subtle backdrop-blur-md"
     >
-      exit · esc
+      {workAreaCopy.zenExitHint}
     </motion.span>
   );
 }

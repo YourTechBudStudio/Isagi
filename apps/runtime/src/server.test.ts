@@ -25,10 +25,9 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
       await waitForSocketOpen(socket);
       const message = await waitForSocketMessage(socket);
 
-      assert.deepEqual(message, {
-        type: 'error',
-        message: "That session's gone — looks like it already wrapped up.",
-      } satisfies PtyWebSocketOutputMessage);
+      // The runtime emits a stable error code; user-facing wording lives in web copy.
+      assert.equal(message.type, 'error');
+      assert.equal(message.type === 'error' ? message.code : undefined, 'session_not_found');
     } finally {
       socket.close();
     }

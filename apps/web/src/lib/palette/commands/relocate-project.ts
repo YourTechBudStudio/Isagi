@@ -1,5 +1,6 @@
 import { FolderSymlink } from 'lucide-react';
 
+import { paletteCopy } from '../../../copy/index.js';
 import { relocateProjectPath } from '../../workspace/queries.js';
 import type { PaletteCommand } from '../types.js';
 
@@ -27,7 +28,7 @@ export const relocateProjectCommand: PaletteCommand = {
       kind: 'path',
       key: 'path',
       label: 'New project root path',
-      placeholder: 'Type the repository root path…',
+      placeholder: paletteCopy.placeholders.repositoryRootPath,
     },
   ],
   run: (values) => {

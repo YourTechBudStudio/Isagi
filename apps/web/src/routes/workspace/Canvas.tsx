@@ -2,6 +2,7 @@ import { Plus } from 'lucide-react';
 
 import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
+import { canvasCopy } from '../../copy/index.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -68,22 +69,11 @@ function SurfacePlaceholder({ surface }: { surface: Surface }) {
       </div>
       <div className="grid flex-1 place-items-center">
         <span className="font-mono text-[12px] text-fg-subtle opacity-55">
-          {surfacePlaceholderCopy(surface)}
+          {canvasCopy.surfacePlaceholder(surface)}
         </span>
       </div>
     </div>
   );
-}
-
-function surfacePlaceholderCopy(surface: Surface): string {
-  switch (surface.kind) {
-    case 'browser':
-      return '// a live browser surface — auto-detected from a running command';
-    case 'editor':
-      return '// VS Code in the browser — restores the artifacts you had open';
-    default:
-      return `// ${surface.title}`;
-  }
 }
 
 function FreshEmptyState() {
@@ -91,14 +81,14 @@ function FreshEmptyState() {
 
   return (
     <EmptyState
-      title="No worktrees on the canvas."
-      body="Point Isagi at a repo root. It'll find the worktrees you forgot you made."
+      title={canvasCopy.freshEmpty.title}
+      body={canvasCopy.freshEmpty.body}
       actions={
         <Button icon={Plus} shortcut={`${modKey}N`} onClick={() => openPalette('add-project')}>
           Add project
         </Button>
       }
-      aside="// git already knows; Isagi remembers where you were"
+      aside={canvasCopy.freshEmpty.aside}
     />
   );
 }
@@ -106,9 +96,9 @@ function FreshEmptyState() {
 function NoSurfaceState({ worktree }: { worktree: Worktree }) {
   return (
     <EmptyState
-      title="No surfaces here yet."
-      body={`Isagi found ${worktree.title}. Agents, terminals, commands, and restored surfaces land in the next slices.`}
-      aside="// navigation first; room furniture later"
+      title={canvasCopy.noSurface.title}
+      body={canvasCopy.noSurface.body(worktree)}
+      aside={canvasCopy.noSurface.aside}
     />
   );
 }

@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 
 import { Button } from '../../components/Button.js';
+import { missingProjectCopy } from '../../copy/index.js';
 import { uiTransition } from '../../lib/motion.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { formatRuntimeError, useDeleteProjectMutation } from '../../lib/workspace/queries.js';
@@ -114,9 +115,9 @@ function ConfirmPanel({
 }) {
   return (
     <div className="w-full rounded-md border border-error/20 bg-error/8 p-4 text-left shadow-soft">
-      <div className="text-[13px] font-semibold text-fg">Remove this project?</div>
+      <div className="text-[13px] font-semibold text-fg">{missingProjectCopy.confirm.title}</div>
       <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">
-        Isagi forgets it. Files on disk are left alone.
+        {missingProjectCopy.confirm.body}
       </p>
       {error && (
         <p role="alert" className="mt-2 text-[12px] leading-snug text-error">

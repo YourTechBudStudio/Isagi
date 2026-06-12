@@ -49,7 +49,9 @@ test('PTY websocket route rejects input for non-running sessions with a protocol
     }
   });
 
-  assert.deepEqual(messages, [{ type: 'error', message: 'PTY session is no longer live.' }]);
+  assert.deepEqual(messages, [
+    { type: 'error', code: 'session_not_running', message: 'PTY session 42 is not running.' },
+  ]);
 });
 
 test('PTY websocket route hides internal details for missing sessions', async () => {
@@ -63,7 +65,7 @@ test('PTY websocket route hides internal details for missing sessions', async ()
   });
 
   assert.deepEqual(messages, [
-    { type: 'error', message: "That session's gone — looks like it already wrapped up." },
+    { type: 'error', code: 'session_not_found', message: 'PTY session 42 was not found.' },
   ]);
 });
 
@@ -79,7 +81,11 @@ test('PTY websocket route hides internal details for replay failures', async () 
 
   assert.deepEqual(messages, [
     { type: 'session', status: 'running', exitCode: null, signal: null },
-    { type: 'error', message: 'Could not replay this session log.' },
+    {
+      type: 'error',
+      code: 'log_read_failed',
+      message: 'Could not replay PTY log /private/runtime-data/sessions/42.ptylog.',
+    },
   ]);
 });
 

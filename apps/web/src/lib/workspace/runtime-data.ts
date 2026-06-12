@@ -23,7 +23,14 @@ import type {
   WorkspaceSnapshot,
 } from '@isagi/contracts';
 
-import { createRuntimeClient, RuntimeApiError, type RuntimeClient } from '../runtime/client.js';
+import { runtimeErrorCopy } from '../../copy/index.js';
+import {
+  createRuntimeClient,
+  RuntimeApiError,
+  RuntimeDecodeError,
+  RuntimeTransportError,
+  type RuntimeClient,
+} from '../runtime/client.js';
 import { resolveRuntimeUrl } from '../runtime/resolve.js';
 
 let cachedClient: RuntimeClient | null = null;
@@ -143,12 +150,15 @@ function getClient() {
 
 export function formatRuntimeError(error: unknown) {
   if (error instanceof RuntimeApiError) {
-    return `${error.apiError.message} (${error.apiError.code}, request ${error.apiError.requestId})`;
+    return `${runtimeErrorCopy.fromApiError(error.apiError)} (${runtimeErrorCopy.diagnostic(error.apiError)})`;
   }
-  if (error instanceof Error) {
-    return error.message;
+  if (error instanceof RuntimeTransportError) {
+    return runtimeErrorCopy.transport;
   }
-  return String(error);
+  if (error instanceof RuntimeDecodeError) {
+    return runtimeErrorCopy.decode;
+  }
+  return runtimeErrorCopy.unknown;
 }
 
 export type { WorkspaceSnapshot };

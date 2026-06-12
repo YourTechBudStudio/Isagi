@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 
+import { toastCopy } from '../../copy/index.js';
 import { showToast } from '../toast/index.js';
 import {
   activeContextFromSelection,
@@ -46,8 +47,8 @@ export function useWorkspaceSelectionSync() {
       showToast({
         id: 'active-context-load-failed',
         kind: 'warning',
-        title: 'Could not restore the last active worktree.',
-        subtitle: 'Opening the first available worktree instead.',
+        title: toastCopy.activeContextLoadFailed.title,
+        subtitle: toastCopy.activeContextLoadFailed.subtitle,
       });
     }
 
@@ -74,8 +75,8 @@ export function useWorkspaceSelectionSync() {
         showToast({
           id: `active-worktree-recovered:${selection.worktreeId}`,
           kind: 'warning',
-          title: 'Active worktree is no longer available. Switched to the root checkout.',
-          subtitle: 'The selected checkout is no longer reported by Git.',
+          title: toastCopy.activeWorktreeRecovered.title,
+          subtitle: toastCopy.activeWorktreeRecovered.subtitle,
           lifetime: { autoDismiss: false },
         });
       }

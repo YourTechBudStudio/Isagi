@@ -1,5 +1,6 @@
 import { Bot } from 'lucide-react';
 
+import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
 import type { Surface } from '../../lib/workspace/types.js';
 import { PtySurface } from './PtySurface.js';
@@ -9,7 +10,9 @@ export function AgentSurface({ surface }: { surface: Surface }) {
   const detail = useSurfaceDetailQuery(surface.id);
 
   if (detail.isPending) {
-    return <SurfaceFrameState icon={Bot} title={surface.title} body="Loading agent surface..." />;
+    return (
+      <SurfaceFrameState icon={Bot} title={surface.title} body={surfaceDetailCopy.agent.loading} />
+    );
   }
 
   if (detail.error) {
@@ -17,7 +20,7 @@ export function AgentSurface({ surface }: { surface: Surface }) {
       <SurfaceFrameState
         icon={Bot}
         title={surface.title}
-        body={`Could not load this agent surface. ${formatRuntimeError(detail.error)}`}
+        body={surfaceDetailCopy.agent.loadFailed(formatRuntimeError(detail.error))}
         tone="error"
       />
     );

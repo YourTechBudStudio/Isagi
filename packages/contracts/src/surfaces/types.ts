@@ -135,6 +135,18 @@ export const ptyWebSocketInputMessageSchema = Schema.Union(
   }),
 );
 
+export const ptyWebSocketErrorCodeSchema = Schema.Literal(
+  'invalid_session_id',
+  'invalid_message',
+  'session_not_found',
+  'session_not_running',
+  'log_read_failed',
+  'worktree_not_found',
+  'pty_write_failed',
+  'pty_state_load_failed',
+  'unknown',
+);
+
 export const ptyWebSocketOutputMessageSchema = Schema.Union(
   Schema.Struct({
     type: Schema.Literal('session'),
@@ -161,7 +173,10 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union(
   }),
   Schema.Struct({
     type: Schema.Literal('error'),
-    message: Schema.String,
+    code: ptyWebSocketErrorCodeSchema,
+    // Diagnostic detail for logs and support. Clients render copy keyed off `code`,
+    // never this string. May be absent when there is nothing useful to add.
+    message: Schema.optional(Schema.String),
   }),
 );
 
@@ -188,3 +203,4 @@ export type LaunchAgentSessionInput = Schema.Schema.Type<typeof launchAgentSessi
 export type LaunchSessionOutput = Schema.Schema.Type<typeof launchSessionOutputSchema>;
 export type PtyWebSocketInputMessage = Schema.Schema.Type<typeof ptyWebSocketInputMessageSchema>;
 export type PtyWebSocketOutputMessage = Schema.Schema.Type<typeof ptyWebSocketOutputMessageSchema>;
+export type PtyWebSocketErrorCode = Schema.Schema.Type<typeof ptyWebSocketErrorCodeSchema>;

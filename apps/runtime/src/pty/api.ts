@@ -7,6 +7,7 @@ import {
   ptySessionWebSocketEndpoint,
   ptyWebSocketInputMessageSchema,
   type ApiError,
+  type PtyWebSocketErrorCode,
   type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
@@ -78,7 +79,7 @@ export function registerPtyApi(
         socket.send(
           JSON.stringify({
             type: 'error',
-            message: 'Invalid PTY session id.',
+            code: 'invalid_session_id',
           } satisfies PtyWebSocketOutputMessage),
         );
         socket.close();
@@ -119,7 +120,7 @@ export function registerPtyApi(
         .then(async (attachmentResult) => {
           if (Either.isLeft(attachmentResult)) {
             await new Promise((resolve) => setImmediate(resolve));
-            send({ type: 'error', message: websocketErrorMessage(attachmentResult.left) });
+            send({ type: 'error', ...websocketError(attachmentResult.left) });
             setImmediate(() => socket.close());
             return;
           }
@@ -152,7 +153,7 @@ export function registerPtyApi(
               `[runtime] PTY websocket replay failed ptySessionId=${ptySessionId}`,
               replayResult.left,
             );
-            send({ type: 'error', message: websocketErrorMessage(replayResult.left) });
+            send({ type: 'error', ...websocketError(replayResult.left) });
             setImmediate(() => socket.close());
             return;
           }
@@ -166,7 +167,7 @@ export function registerPtyApi(
           }
         })
         .catch((error: unknown) => {
-          send({ type: 'error', message: websocketErrorMessage(error) });
+          send({ type: 'error', ...websocketError(error) });
           socket.close();
         });
 
@@ -176,7 +177,7 @@ export function registerPtyApi(
         }
         const parsed = decodeSocketMessage(raw.toString());
         if (!parsed) {
-          send({ type: 'error', message: 'Invalid PTY socket message.' });
+          send({ type: 'error', code: 'invalid_message' });
           return;
         }
 
@@ -191,7 +192,7 @@ export function registerPtyApi(
         void run(effect.pipe(Effect.either)).then(
           (result) => {
             if (Either.isLeft(result)) {
-              send({ type: 'error', message: websocketErrorMessage(result.left) });
+              send({ type: 'error', ...websocketError(result.left) });
             }
           },
           (error: unknown) => {
@@ -199,7 +200,7 @@ export function registerPtyApi(
               `[runtime] PTY websocket input failed ptySessionId=${ptySessionId}`,
               error,
             );
-            send({ type: 'error', message: websocketErrorMessage(error) });
+            send({ type: 'error', ...websocketError(error) });
           },
         );
       });
@@ -224,26 +225,23 @@ function decodeSocketMessage(raw: string) {
   }
 }
 
-function websocketErrorMessage(error: unknown) {
+// Maps a runtime failure to a stable error code plus an optional diagnostic detail.
+// The user-facing wording lives in the web copy layer, keyed off `code`; the
+// `message` here is for logs and bug reports only and is never rendered as-is.
+function websocketError(error: unknown): {
+  readonly code: PtyWebSocketErrorCode;
+  readonly message?: string;
+} {
   if (error instanceof PtyServiceError) {
-    switch (error.code) {
-      case 'session_not_found':
-        return "That session's gone — looks like it already wrapped up.";
-      case 'session_not_running':
-        return 'PTY session is no longer live.';
-      case 'log_read_failed':
-        return 'Could not replay this session log.';
-      case 'worktree_not_found':
-        return 'Can\'t find that worktree. Did it get removed?';
-    }
+    return { code: error.code, message: error.message };
   }
   if (error instanceof PtyWriteError || error instanceof PtyResizeError) {
-    return 'PTY session could not accept that message.';
+    return { code: 'pty_write_failed', message: error.message };
   }
   if (error instanceof DatabaseError) {
-    return 'PTY session state could not be loaded.';
+    return { code: 'pty_state_load_failed', message: `PTY state load failed: ${error.operation}` };
   }
-  return 'PTY socket failed.';
+  return { code: 'unknown', message: errorMessage(error) };
 }
 
 function toSessionLaunchApiError(error: unknown, context: ApiRouteContext): ApiError {

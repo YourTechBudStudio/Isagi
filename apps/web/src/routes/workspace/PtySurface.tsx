@@ -8,11 +8,13 @@ import { useEffect, useRef, useState } from 'react';
 import type {
   PtySessionMetadata,
   PtySessionStatus,
+  PtyWebSocketOutputMessage,
   SurfaceDetail,
   SurfacePane,
 } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { ptyCopy, ptySocketErrorCopy } from '../../copy/index.js';
 import { formatRuntimeError, resolvePtyWebSocketUrl } from '../../lib/workspace/runtime-data.js';
 
 interface PtySurfaceProps {
@@ -36,9 +38,7 @@ export function PtySurface({ detail }: PtySurfaceProps) {
   if (detail.panes.length === 0) {
     return (
       <div className="grid h-full place-items-center rounded-md border border-line/20 bg-elevated/50 backdrop-blur-sm">
-        <span className="font-mono text-[12px] text-fg-subtle">
-          Nothing running here yet. cmd+k to start something.
-        </span>
+        <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptySurface}</span>
       </div>
     );
   }
@@ -95,7 +95,9 @@ function PtyPaneShell({
   const paneNotice =
     socketError ??
     (connection === 'error' || connection === 'disconnected'
-      ? connectionCopy(connection)
+      ? ptySocketErrorCopy.byReason(
+          connection === 'error' ? 'socket_unavailable' : 'socket_disconnected',
+        )
       : rendererWarning);
 
   return (
@@ -113,7 +115,7 @@ function PtyPaneShell({
         <AttentionDot state={pane.attention} />
         <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
         <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {session ? sessionStatusCopy(status, exit) : 'No session'}
+          {session ? ptyCopy.sessionStatus(status, exit) : ptyCopy.noSession}
         </span>
       </div>
       {paneNotice ? (
@@ -133,9 +135,7 @@ function PtyPaneShell({
         />
       ) : (
         <div className="grid min-h-0 flex-1 place-items-center px-4">
-          <span className="font-mono text-[12px] text-fg-subtle">
-            This pane's empty — nothing's claimed it yet.
-          </span>
+          <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptyPane}</span>
         </div>
       )}
     </section>
@@ -197,12 +197,12 @@ function XtermPane({
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => {
         webgl.dispose();
-        onRendererWarning('WebGL renderer fell back to canvas.');
+        onRendererWarning(ptyCopy.renderer.webglFallback);
       });
       terminal.loadAddon(webgl);
       onRendererWarning(null);
     } catch {
-      onRendererWarning('WebGL renderer unavailable; using canvas.');
+      onRendererWarning(ptyCopy.renderer.webglUnavailable);
     }
 
     const sendResize = () => {
@@ -245,7 +245,7 @@ function XtermPane({
         socket.addEventListener('message', (event) => {
           const message = decodeSocketMessage(event.data);
           if (!message) {
-            onSocketError('Invalid PTY socket message.');
+            onSocketError(ptySocketErrorCopy.byReason('invalid_message'));
             onConnectionChange('error');
             return;
           }
@@ -272,7 +272,7 @@ function XtermPane({
               break;
             }
             case 'error':
-              onSocketError(message.message);
+              onSocketError(ptySocketErrorCopy.byReason(message.code));
               onConnectionChange('error');
               break;
             case 'replay_start':
@@ -286,15 +286,16 @@ function XtermPane({
           }
         });
         socket.addEventListener('error', () => {
-          onSocketError('PTY socket unavailable.');
+          onSocketError(ptySocketErrorCopy.byReason('socket_unavailable'));
           onConnectionChange('error');
         });
       },
       (error: unknown) => {
         if (!disposed) {
-          onSocketError(formatRuntimeError(error));
+          const runtimeError = formatRuntimeError(error);
+          onSocketError(runtimeError);
           onConnectionChange('error');
-          terminal.write(`Could not connect to PTY session: ${formatRuntimeError(error)}\r\n`);
+          terminal.write(ptySocketErrorCopy.connectFailed(runtimeError));
         }
       },
     );
@@ -326,18 +327,7 @@ function decodeSocketMessage(data: unknown) {
     return null;
   }
   try {
-    return JSON.parse(data) as
-      | {
-          readonly type: 'session';
-          readonly status: PtySessionStatus;
-          readonly exitCode?: number | null;
-          readonly signal?: string | null;
-        }
-      | { readonly type: 'replay_start'; readonly bytes: number }
-      | { readonly type: 'output'; readonly data: string; readonly replay?: boolean }
-      | { readonly type: 'replay_end' }
-      | { readonly type: 'exit'; readonly exitCode: number | null; readonly signal: string | null }
-      | { readonly type: 'error'; readonly message: string };
+    return JSON.parse(data) as PtyWebSocketOutputMessage;
   } catch {
     return null;
   }
@@ -382,39 +372,4 @@ function terminalThemeFromTokens() {
 
 function alphaHex(color: string, alpha: string) {
   return /^#[\da-f]{6}$/i.test(color) ? `${color}${alpha}` : color;
-}
-
-function sessionStatusCopy(
-  status: PtySessionStatus | null,
-  exit: { readonly exitCode: number | null; readonly signal: string | null },
-) {
-  switch (status) {
-    case 'starting':
-      return 'Starting';
-    case 'running':
-      return 'Running';
-    case 'exited':
-      return exit.exitCode === null ? 'Exited' : `Exited with code ${exit.exitCode}`;
-    case 'failed':
-      if (exit.exitCode !== null) {
-        return `Failed with code ${exit.exitCode}`;
-      }
-      if (exit.signal) {
-        return `Stopped by ${exit.signal}`;
-      }
-      return 'Failed to start';
-    default:
-      return 'Unknown';
-  }
-}
-
-function connectionCopy(connection: ConnectionState) {
-  switch (connection) {
-    case 'error':
-      return 'PTY socket unavailable.';
-    case 'disconnected':
-      return 'PTY socket disconnected.';
-    default:
-      return '';
-  }
 }

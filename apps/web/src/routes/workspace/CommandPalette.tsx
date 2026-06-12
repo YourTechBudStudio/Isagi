@@ -13,6 +13,7 @@ import type { PathSuggestion } from '@isagi/contracts';
 
 import { Chip } from '../../components/Chip.js';
 import { Overline } from '../../components/Overline.js';
+import { paletteCopy } from '../../copy/index.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import { buildPaletteContext } from '../../lib/palette/context.js';
 import { assembleEntries } from '../../lib/palette/entries.js';
@@ -701,11 +702,11 @@ export function CommandPalette() {
                 placeholder={
                   command
                     ? spec?.kind === 'combo'
-                      ? 'choose or type a name…'
+                      ? paletteCopy.placeholders.chooseOrTypeName
                       : spec?.kind === 'text' || spec?.kind === 'path'
-                        ? (spec.placeholder ?? 'type a value…')
-                        : 'choose…'
-                    : 'Type a command…'
+                        ? (spec.placeholder ?? paletteCopy.placeholders.typedValue)
+                        : paletteCopy.placeholders.choose
+                    : paletteCopy.placeholders.command
                 }
                 className="min-w-30 flex-1 bg-transparent font-sans text-[15px] text-fg outline-none placeholder:text-fg-subtle"
               />
@@ -800,7 +801,7 @@ function EntryList({
   if (items.length === 0) {
     return (
       <p className="px-3 py-6 text-center font-mono text-[12px] text-fg-subtle">
-        No matches. Maybe try a different query?
+        {paletteCopy.emptySearch}
       </p>
     );
   }
@@ -849,7 +850,7 @@ function TextStep({ value, placeholder }: { value: string; placeholder: string |
   return (
     <div className="px-3 py-4">
       <p className="font-mono text-[11px] text-fg-subtle">
-        {value ? 'Press enter to use:' : (placeholder ?? 'Type a value, then press enter.')}
+        {value ? paletteCopy.textStep.useValue : (placeholder ?? paletteCopy.textStep.typeThenUse)}
       </p>
       {value && (
         <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
@@ -881,7 +882,7 @@ function PathOptions({
     return (
       <div className="px-3 py-4">
         <p className="font-mono text-[11px] text-fg-subtle">
-          {value ? 'Press enter to add this path:' : 'Type a repository root path.'}
+          {value ? paletteCopy.pathStep.addPath : paletteCopy.pathStep.typeRepositoryRoot}
         </p>
         {value && (
           <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
@@ -938,7 +939,11 @@ function ReviewStep({
     return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
   }
   if (loading || !content) {
-    return <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">Reading setup hooks…</p>;
+    return (
+      <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">
+        {paletteCopy.reviewStep.loadingSetupHooks}
+      </p>
+    );
   }
 
   return (
@@ -1014,7 +1019,11 @@ function WizardOptions({
   return (
     <>
       {hint && <p className="px-3 py-2 font-mono text-[11px] text-fg-subtle">{hint}</p>}
-      {loading && <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">Loading…</p>}
+      {loading && (
+        <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">
+          {paletteCopy.wizardStep.loading}
+        </p>
+      )}
       {options.map((option, index) =>
         option.create ? (
           <button
@@ -1078,24 +1087,24 @@ function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' }) {
     <div className="flex items-center gap-3 border-t border-line/14 px-4 py-2.5 font-mono text-[11px] text-fg-subtle">
       {mode === 'path' ? (
         <>
-          <TipKey hint="cycle">↑↓</TipKey>
-          <TipKey hint="fill">tab</TipKey>
-          <TipKey hint="fill/add">↵</TipKey>
-          <TipKey hint="back">esc</TipKey>
-          <span className="ml-auto opacity-70">/ to go deeper</span>
+          <TipKey hint={paletteCopy.tips.cycle}>↑↓</TipKey>
+          <TipKey hint={paletteCopy.tips.fill}>tab</TipKey>
+          <TipKey hint={paletteCopy.tips.fillOrAdd}>↵</TipKey>
+          <TipKey hint={paletteCopy.tips.back}>esc</TipKey>
+          <span className="ml-auto opacity-70">{paletteCopy.pathStep.goDeeper}</span>
         </>
       ) : mode === 'wizard' ? (
         <>
-          <TipKey hint="cycle">↑↓</TipKey>
-          <TipKey hint="select">↵</TipKey>
-          <TipKey hint="back">esc</TipKey>
+          <TipKey hint={paletteCopy.tips.cycle}>↑↓</TipKey>
+          <TipKey hint={paletteCopy.tips.select}>↵</TipKey>
+          <TipKey hint={paletteCopy.tips.back}>esc</TipKey>
         </>
       ) : (
         <>
-          <TipKey hint="move">↑↓</TipKey>
-          <TipKey hint="run">↵</TipKey>
-          <TipKey hint="close">esc</TipKey>
-          <span className="ml-auto opacity-70">tip: {modKey}K from anywhere</span>
+          <TipKey hint={paletteCopy.tips.move}>↑↓</TipKey>
+          <TipKey hint={paletteCopy.tips.run}>↵</TipKey>
+          <TipKey hint={paletteCopy.tips.close}>esc</TipKey>
+          <span className="ml-auto opacity-70">{paletteCopy.tips.anywhere(modKey)}</span>
         </>
       )}
     </div>

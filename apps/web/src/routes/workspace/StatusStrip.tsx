@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { workbenchCopy } from '../../copy/index.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { branchLabel } from '../../lib/workspace/selectors.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -50,7 +51,7 @@ export function StatusStrip() {
           onClick={() => openDrawer()}
           className="font-mono text-[11px] text-fg-subtle opacity-55 hover:text-fg hover:opacity-100"
         >
-          {'// no commands running'}
+          {workbenchCopy.noCommandsRunning}
         </button>
       )}
 
@@ -69,7 +70,7 @@ function CommandChip({ command, onOpen }: { command: Command; onOpen: () => void
       type="button"
       onClick={onOpen}
       className="flex flex-none items-center gap-2 text-fg-muted transition-colors hover:text-fg"
-      title={`Open ${command.label} logs`}
+      title={workbenchCopy.openCommandLogsTitle(command.label)}
     >
       <AttentionDot state={command.attention} />
       <span className="font-mono text-[11px]">{command.label}</span>

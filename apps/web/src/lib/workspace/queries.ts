@@ -11,6 +11,7 @@ import type {
   SetActiveContextInput,
 } from '@isagi/contracts';
 
+import { toastCopy } from '../../copy/index.js';
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
 import { workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
@@ -81,7 +82,7 @@ export function useDeleteProjectMutation() {
       showToast({
         id: `delete-project-failed:${projectId}`,
         kind: 'warning',
-        title: 'Could not remove the project.',
+        title: toastCopy.projectDeleteFailed.title,
         subtitle: formatRuntimeError(error),
       });
       console.error('[workspace] project deletion failed', error);
@@ -146,8 +147,8 @@ export function selectSurfaceAndPersistFocus(worktreeId: number, surfaceId: numb
       showToast({
         id: `surface-focus-persist-failed:${worktreeId}`,
         kind: 'warning',
-        title: 'Could not save the active surface.',
-        subtitle: 'This switch is local; restart may reopen another surface.',
+        title: toastCopy.surfaceFocusPersistFailed.title,
+        subtitle: toastCopy.surfaceFocusPersistFailed.subtitle,
       });
       console.error('[workspace] surface focus persistence failed', error);
     },
@@ -294,8 +295,8 @@ function flushActiveContextPersistence() {
         showToast({
           id: 'active-context-persist-failed',
           kind: 'warning',
-          title: 'Could not save the last active worktree.',
-          subtitle: 'This session is fine; restart may reopen elsewhere.',
+          title: toastCopy.activeContextPersistFailed.title,
+          subtitle: toastCopy.activeContextPersistFailed.subtitle,
         });
         console.error('[workspace] active context persistence failed', error);
       },
@@ -355,8 +356,8 @@ function handleReconciliationFindings(findings: readonly ReconciliationFinding[]
     showToast({
       id: 'workspace-project-missing',
       kind: 'warning',
-      title: missingProjectsTitle(missingProjects),
-      subtitle: missingProjectsSubtitle(missingProjects),
+      title: toastCopy.reconciliation.missingProjectsTitle(missingProjects),
+      subtitle: toastCopy.reconciliation.missingProjectsSubtitle(missingProjects),
       lifetime: { autoDismiss: false },
     });
   }
@@ -366,57 +367,11 @@ function handleReconciliationFindings(findings: readonly ReconciliationFinding[]
     showToast({
       id: 'workspace-worktree-missing',
       kind: 'warning',
-      title: missingWorktreesTitle(missingWorktrees),
-      subtitle: missingWorktreesSubtitle(missingWorktrees),
+      title: toastCopy.reconciliation.missingWorktreesTitle(missingWorktrees),
+      subtitle: toastCopy.reconciliation.missingWorktreesSubtitle(missingWorktrees),
       lifetime: { autoDismiss: false },
     });
   }
-}
-
-type MissingProjectFinding = Extract<ReconciliationFinding, { readonly kind: 'project_missing' }>;
-type MissingWorktreeFinding = Extract<ReconciliationFinding, { readonly kind: 'worktree_missing' }>;
-
-function missingProjectsTitle(findings: readonly MissingProjectFinding[]) {
-  if (findings.length === 1) {
-    return 'Project unavailable.';
-  }
-  return `${findings.length} projects unavailable.`;
-}
-
-function missingProjectsSubtitle(findings: readonly MissingProjectFinding[]) {
-  return `${summarizeFindings(findings, (finding) => finding.path)} — open the row to fix or remove it.`;
-}
-
-function missingWorktreesTitle(findings: readonly MissingWorktreeFinding[]) {
-  if (findings.length === 1 && findings[0]?.branch) {
-    return `Worktree missing: ${findings[0].branch}.`;
-  }
-  if (findings.length === 1) {
-    return 'Worktree missing.';
-  }
-  return `${findings.length} worktrees missing.`;
-}
-
-function missingWorktreesSubtitle(findings: readonly MissingWorktreeFinding[]) {
-  return `${summarizeFindings(findings, describeWorktreeFinding)} — gone from Git.`;
-}
-
-function describeWorktreeFinding(finding: MissingWorktreeFinding) {
-  return finding.branch ? `${finding.branch} at ${finding.path}` : finding.path;
-}
-
-function summarizeFindings<Finding>(
-  findings: readonly Finding[],
-  describeFinding: (finding: Finding) => string,
-) {
-  const first = findings[0];
-  if (!first) {
-    return 'nothing';
-  }
-
-  const summary = describeFinding(first);
-  const remaining = findings.length - 1;
-  return remaining > 0 ? `${summary} (+${remaining} more)` : summary;
 }
 
 export { formatRuntimeError };
