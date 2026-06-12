@@ -55,7 +55,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         runtimeDisposed = true;
       });
 
-      yield* tryPromise(() =>
+      yield* trySync(() =>
         fastify.register(cors, {
           methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
           origin: (origin, callback) => {
@@ -64,7 +64,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         }),
       );
 
-      yield* tryPromise(() => fastify.register(websocket));
+      yield* trySync(() => fastify.register(websocket));
 
       registerHealthApi(fastify);
       registerWorkspaceApi(fastify, runtime);
@@ -130,6 +130,13 @@ function disposeRuntime<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
 
 function tryPromise<T>(run: () => PromiseLike<T>) {
   return Effect.tryPromise({
+    try: run,
+    catch: toError,
+  });
+}
+
+function trySync<T>(run: () => T) {
+  return Effect.try({
     try: run,
     catch: toError,
   });
