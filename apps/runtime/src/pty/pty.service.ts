@@ -1,15 +1,12 @@
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
-import process from 'node:process';
+import { existsSync, mkdirSync } from 'node:fs';
 
-import { Context, Effect, Either, Layer, Schema } from 'effect';
+import { Context, Effect, Either, Layer } from 'effect';
 
 import type { LaunchSessionOutput, PtyWebSocketOutputMessage } from '@isagi/contracts';
 
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import type { PtySessionRow } from '../surfaces/index.js';
-import { PtyBackendRegistry } from './pty-backend-registry.js';
+import { PtyBackend } from './backend.js';
 import {
   appendLog,
   MissingLaunchWorktree,
@@ -17,54 +14,45 @@ import {
   type PtyRepositoryService,
 } from './pty.repository.js';
 import {
+  detachActiveAttachment,
+  requireActiveAttachment,
+  type ActiveAttachment,
+} from './service/attachments.js';
+import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
+import { runPtyGc, startPtyGcLoop } from './service/gc.js';
+import {
+  handleExit,
+  persistExit,
+  retryPersistKilledUntilSuccess,
+  type IntentionalKillState,
+} from './service/lifecycle.js';
+import { replaySessionLog, reportOrphanPtyLogs, replayBytesForSession } from './service/logs.js';
+import {
+  commandForLaunch,
+  launchEnv,
+  runtimeNamespace,
+  spawnFailureMessage,
+  titleForHarness,
+} from './service/runtime-namespace.js';
+import {
   PtyKillError,
   PtyResizeError,
   PtyServiceError,
   PtyWriteError,
-  type BackendAttachment,
   type BackendSessionRef,
   type LaunchPtySessionInput,
-  type PtyBackend,
-  type PtyBackendRegistry as PtyBackendRegistryService,
-  type PtyExit,
+  type PtyBackend as PtyBackendShape,
   type PtySessionLaunchMetadata,
 } from './types.js';
 
 const defaultCols = 100;
 const defaultRows = 30;
-const orphanLogSampleSize = 5;
 const statusPollIntervalMs = 10_000;
-const tmuxOrphanGcIntervalMs = 5 * 60_000;
-
-const nodePtyBackendRefSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  backend: Schema.Literal('node_pty'),
-  ptySessionId: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  pid: Schema.NullOr(Schema.Number.pipe(Schema.int())),
-});
-
-const tmuxBackendRefSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  backend: Schema.Literal('tmux'),
-  sessionName: Schema.String.pipe(Schema.minLength(1)),
-});
 
 export type PtyLaunchError = DatabaseError | PtyServiceError;
 export type PtyAttachError = DatabaseError | PtyServiceError;
 export type PtyInputError = DatabaseError | PtyServiceError | PtyWriteError | PtyResizeError;
 export type PtyKillSessionError = DatabaseError | PtyServiceError | PtyKillError;
-
-interface ActiveAttachment {
-  readonly ptySessionId: number;
-  readonly attachmentId: symbol;
-  readonly attachment: BackendAttachment;
-}
-
-interface IntentionalKillState {
-  readonly reason: 'user_killed';
-  completed: boolean;
-  exit: PtyExit | null;
-}
 
 export interface PtyAttachment {
   readonly session: PtySessionRow;
@@ -100,7 +88,6 @@ export interface PtyService {
   }) => Effect.Effect<void, PtyInputError>;
   readonly kill: (input: {
     readonly ptySessionId: number;
-    readonly reason: 'user_killed';
   }) => Effect.Effect<void, PtyKillSessionError>;
 }
 
@@ -110,18 +97,18 @@ export const PtyServiceLive = Layer.scoped(
   PtyService,
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
-    const registry = yield* PtyBackendRegistry;
+    const backend = yield* PtyBackend;
     const directory = yield* DataDirectory;
     const activeAttachments = new Map<number, ActiveAttachment>();
     const intentionalKills = new Map<number, IntentionalKillState>();
-    const dataDirHash = dataDirectoryHash(directory.paths.root);
+    const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedSessions(repository, registry, { startup: true });
-    yield* runTmuxOrphanGc(repository, registry, dataDirHash);
-    const pollTimer = startStatusPolling(repository, registry);
-    const tmuxOrphanGcTimer = startTmuxOrphanGc(repository, registry, dataDirHash);
+    yield* reconcilePersistedSessions(repository, backend, { startup: true });
+    yield* runPtyGc(repository, backend, namespace);
+    const pollTimer = startStatusPolling(repository, backend);
+    const gcTimer = startPtyGcLoop(repository, backend, namespace);
 
     const service = {
       launch: (input) =>
@@ -159,46 +146,15 @@ export const PtyServiceLive = Layer.scoped(
               }),
             );
 
-          const selectedBackend = yield* registry.selectForLaunch();
-          const launchResult = yield* launchWithBackend({
-            backend: selectedBackend,
+          const startResult = yield* launchWithBackend({
+            backend,
             metadata,
             repository,
             activeAttachments,
-            dataDirHash,
+            runtimeNamespace: namespace,
             sessionsPath: directory.paths.sessionsPath,
             intentionalKills,
           }).pipe(Effect.either);
-          const startResult =
-            Either.isLeft(launchResult) && selectedBackend.name === 'tmux'
-              ? yield* Effect.gen(function* () {
-                  yield* bestEffortKillPersistedSession(
-                    repository,
-                    registry,
-                    metadata.ptySessionId,
-                  );
-                  const fallbackBackend = yield* registry.get('node_pty').pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new PtyServiceError({
-                          code: 'backend_unavailable',
-                          message: `PTY backend ${error.backend} is not supported.`,
-                          ptySessionId: metadata.ptySessionId,
-                          cause: error,
-                        }),
-                    ),
-                  );
-                  return yield* launchWithBackend({
-                    backend: fallbackBackend,
-                    metadata,
-                    repository,
-                    activeAttachments,
-                    dataDirHash,
-                    sessionsPath: directory.paths.sessionsPath,
-                    intentionalKills,
-                  }).pipe(Effect.either);
-                })
-              : launchResult;
 
           if (Either.isLeft(startResult)) {
             const message = spawnFailureMessage(metadata.command, metadata.cwd, startResult.left);
@@ -239,9 +195,8 @@ export const PtyServiceLive = Layer.scoped(
                   }),
                 ),
                 Effect.catchAll((error) =>
-                  registry
-                    .get(startResult.right.backend)
-                    .pipe(Effect.flatMap((backend) => backend.kill(startResult.right)))
+                  backend
+                    .kill(startResult.right)
                     .pipe(Effect.ignore, Effect.zipRight(Effect.fail(error))),
                 ),
               );
@@ -278,17 +233,15 @@ export const PtyServiceLive = Layer.scoped(
           }
 
           const ref = yield* decodeBackendRef(session);
-          const backend = yield* registry.get(session.backend).pipe(
-            Effect.mapError(
-              (error) =>
-                new PtyServiceError({
-                  code: 'backend_unavailable',
-                  message: `PTY backend ${error.backend} is not supported.`,
-                  ptySessionId: session.id,
-                  cause: error,
-                }),
-            ),
-          );
+          if (session.backend !== backend.name) {
+            return yield* Effect.fail(
+              new PtyServiceError({
+                code: 'backend_unavailable',
+                message: `PTY backend ${session.backend} is not active in this runtime process.`,
+                ptySessionId: session.id,
+              }),
+            );
+          }
           yield* detachActiveAttachment(activeAttachments, session.id);
           const attachResult = yield* backend
             .attach({
@@ -343,18 +296,31 @@ export const PtyServiceLive = Layer.scoped(
         }),
       replay: (input) =>
         Effect.gen(function* () {
+          if (input.session.logMode === 'backend_file') {
+            yield* replaySessionLog({
+              logPath: input.session.logPath,
+              bytes: input.bytes,
+              send: input.send,
+            });
+            return;
+          }
+
+          if (input.session.status !== 'running') {
+            input.send({ type: 'replay_start', bytes: 0 });
+            input.send({ type: 'replay_end' });
+            return;
+          }
+
           const ref = yield* decodeBackendRef(input.session);
-          const backend = yield* registry.get(input.session.backend).pipe(
-            Effect.mapError(
-              (error) =>
-                new PtyServiceError({
-                  code: 'backend_unavailable',
-                  message: `PTY backend ${error.backend} is not supported.`,
-                  ptySessionId: input.session.id,
-                  cause: error,
-                }),
-            ),
-          );
+          if (input.session.backend !== backend.name) {
+            return yield* Effect.fail(
+              new PtyServiceError({
+                code: 'backend_unavailable',
+                message: `PTY backend ${input.session.backend} is not active in this runtime process.`,
+                ptySessionId: input.session.id,
+              }),
+            );
+          }
           yield* backend.replay({
             ref,
             logPath: input.session.logPath,
@@ -364,30 +330,20 @@ export const PtyServiceLive = Layer.scoped(
         }),
       write: (input) =>
         Effect.gen(function* () {
-          const active = activeAttachments.get(input.ptySessionId);
-          if (!active || active.attachmentId !== input.attachmentId) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'session_not_running',
-                message: `PTY session ${input.ptySessionId} is not running.`,
-                ptySessionId: input.ptySessionId,
-              }),
-            );
-          }
+          const active = yield* requireActiveAttachment(
+            activeAttachments,
+            input.ptySessionId,
+            input.attachmentId,
+          );
           yield* active.attachment.write(input.data);
         }),
       resize: (input) =>
         Effect.gen(function* () {
-          const active = activeAttachments.get(input.ptySessionId);
-          if (!active || active.attachmentId !== input.attachmentId) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'session_not_running',
-                message: `PTY session ${input.ptySessionId} is not running.`,
-                ptySessionId: input.ptySessionId,
-              }),
-            );
-          }
+          const active = yield* requireActiveAttachment(
+            activeAttachments,
+            input.ptySessionId,
+            input.attachmentId,
+          );
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
       kill: (input) =>
@@ -403,19 +359,16 @@ export const PtyServiceLive = Layer.scoped(
             );
           }
           const ref = yield* decodeBackendRef(session);
-          const backend = yield* registry.get(session.backend).pipe(
-            Effect.mapError(
-              (error) =>
-                new PtyServiceError({
-                  code: 'backend_unavailable',
-                  message: `PTY backend ${error.backend} is not supported.`,
-                  ptySessionId: session.id,
-                  cause: error,
-                }),
-            ),
-          );
+          if (session.backend !== backend.name) {
+            return yield* Effect.fail(
+              new PtyServiceError({
+                code: 'backend_unavailable',
+                message: `PTY backend ${session.backend} is not active in this runtime process.`,
+                ptySessionId: session.id,
+              }),
+            );
+          }
           const killState: IntentionalKillState = {
-            reason: input.reason,
             completed: false,
             exit: null,
           };
@@ -432,20 +385,19 @@ export const PtyServiceLive = Layer.scoped(
           const transitionResult = yield* repository
             .transitionSession({
               ptySessionId: session.id,
-              status: 'failed',
-              statusReason: input.reason,
+              status: 'killed',
+              statusReason: null,
               exitCode: null,
               signal: null,
             })
             .pipe(Effect.either);
           if (Either.isLeft(transitionResult)) {
-            scheduleIntentionalKillPersistenceRetry(
+            retryPersistKilledUntilSuccess(
               repository,
               intentionalKills,
               killState,
               session.backend,
               session.id,
-              input.reason,
             );
             return yield* Effect.fail(transitionResult.left);
           }
@@ -453,19 +405,17 @@ export const PtyServiceLive = Layer.scoped(
           if (session.backend === 'tmux' || killState.exit) {
             intentionalKills.delete(session.id);
           }
-          console.info(
-            `[runtime] PTY session killed ptySessionId=${session.id} reason=${input.reason}`,
-          );
+          console.info(`[runtime] PTY session killed ptySessionId=${session.id}`);
         }),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
         clearInterval(pollTimer);
-        clearInterval(tmuxOrphanGcTimer);
-        const sessions = yield* repository.listLivePersistedSessions.pipe(
-          Effect.orElseSucceed(() => []),
-        );
+        clearInterval(gcTimer);
+        const sessions = yield* repository
+          .listSessions({ statuses: ['starting', 'running'] })
+          .pipe(Effect.orElseSucceed(() => []));
         for (const active of activeAttachments.values()) {
           yield* active.attachment.detach;
         }
@@ -476,10 +426,7 @@ export const PtyServiceLive = Layer.scoped(
           }
           const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
           if (ref) {
-            const backend = yield* registry
-              .get(session.backend)
-              .pipe(Effect.orElseSucceed(() => null));
-            if (!backend) {
+            if (session.backend !== backend.name) {
               continue;
             }
             yield* backend.kill(ref).pipe(Effect.ignore);
@@ -499,10 +446,10 @@ export const PtyServiceLive = Layer.scoped(
   }),
 );
 
-function startStatusPolling(repository: PtyRepositoryService, registry: PtyBackendRegistryService) {
+function startStatusPolling(repository: PtyRepositoryService, backend: PtyBackendShape) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedSessions(repository, registry, { startup: false }).pipe(
+      reconcilePersistedSessions(repository, backend, { startup: false }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn('[runtime] PTY status polling failed', error);
@@ -515,33 +462,13 @@ function startStatusPolling(repository: PtyRepositoryService, registry: PtyBacke
   return timer;
 }
 
-function startTmuxOrphanGc(
-  repository: PtyRepositoryService,
-  registry: PtyBackendRegistryService,
-  dataDirHash: string,
-) {
-  const timer = setInterval(() => {
-    void Effect.runPromise(
-      runTmuxOrphanGc(repository, registry, dataDirHash).pipe(
-        Effect.catchAll((error) =>
-          Effect.sync(() => {
-            console.warn('[runtime] PTY tmux orphan GC failed', error);
-          }),
-        ),
-      ),
-    );
-  }, tmuxOrphanGcIntervalMs);
-  timer.unref();
-  return timer;
-}
-
 function reconcilePersistedSessions(
   repository: PtyRepositoryService,
-  registry: PtyBackendRegistryService,
+  backend: PtyBackendShape,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
-    const sessions = yield* repository.listLivePersistedSessions;
+    const sessions = yield* repository.listSessions({ statuses: ['starting', 'running'] });
     for (const session of sessions) {
       if (session.backend === 'node_pty' && options.startup) {
         yield* transitionIfChanged(repository, session, {
@@ -559,8 +486,7 @@ function reconcilePersistedSessions(
         });
         continue;
       }
-      const backend = yield* registry.get(session.backend).pipe(Effect.orElseSucceed(() => null));
-      if (!backend) {
+      if (session.backend !== backend.name) {
         yield* transitionIfChanged(repository, session, {
           status: 'running',
           statusReason: 'backend_unavailable',
@@ -602,136 +528,12 @@ function reconcilePersistedSessions(
   });
 }
 
-function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
-  return detectOrphanPtyLogs(repository, sessionsPath).pipe(
-    Effect.tap((orphans) =>
-      Effect.sync(() => {
-        if (orphans.length === 0) {
-          return;
-        }
-        const sample = orphans.slice(0, orphanLogSampleSize).join(', ');
-        const suffix = orphans.length > orphanLogSampleSize ? ', ...' : '';
-        console.warn(
-          `[runtime] Found ${orphans.length} orphan PTY log file(s) under sessions/: ${sample}${suffix}`,
-        );
-      }),
-    ),
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.warn('[runtime] Could not inspect PTY session logs for orphans', error);
-      }),
-    ),
-  );
-}
-
-export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
-  return Effect.gen(function* () {
-    const referencedLogPaths = new Set((yield* repository.listSessionLogPaths).map(normalizePath));
-    const entries = yield* Effect.try({
-      try: () => readdirSync(sessionsPath, { withFileTypes: true }),
-      catch: (cause) =>
-        new PtyServiceError({
-          code: 'log_read_failed',
-          message: 'Could not inspect PTY session logs.',
-          cause,
-        }),
-    });
-    return entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.ptylog'))
-      .map((entry) => join(sessionsPath, entry.name))
-      .filter((path) => !referencedLogPaths.has(normalizePath(path)))
-      .map((path) => relativeSessionLogPath(sessionsPath, path))
-      .sort();
-  });
-}
-
-export function runTmuxOrphanGc(
-  repository: PtyRepositoryService,
-  registry: PtyBackendRegistryService,
-  dataDirHash: string,
-) {
-  return Effect.gen(function* () {
-    const backend = yield* registry.get('tmux').pipe(Effect.orElseSucceed(() => null));
-    if (!backend) {
-      return;
-    }
-    const sessions = yield* backend.listSessions.pipe(
-      Effect.catchAll((error) =>
-        Effect.sync(() => {
-          console.warn('[runtime] Could not list tmux sessions for orphan GC', error);
-          return [];
-        }),
-      ),
-    );
-    for (const ref of sessions) {
-      if (ref.backend !== 'tmux') {
-        continue;
-      }
-      const parsed = parseRuntimeTmuxSessionName(ref.sessionName, dataDirHash);
-      if (!parsed) {
-        continue;
-      }
-      const sessionResult = yield* repository.findSession(parsed.ptySessionId).pipe(Effect.either);
-      if (Either.isLeft(sessionResult)) {
-        console.warn(
-          `[runtime] Skipping tmux orphan GC for sessionName=${ref.sessionName} ptySessionId=${parsed.ptySessionId} because DB lookup failed`,
-          sessionResult.left,
-        );
-        continue;
-      }
-      const session = sessionResult.right;
-      if (!session) {
-        console.warn(
-          `[runtime] Killing orphan tmux session with no DB row sessionName=${ref.sessionName} ptySessionId=${parsed.ptySessionId}`,
-        );
-        yield* killTmuxGcSession(backend, ref);
-        continue;
-      }
-      if (session.backend !== 'tmux') {
-        console.warn(
-          `[runtime] Skipping tmux session whose DB row uses backend=${session.backend} sessionName=${ref.sessionName} ptySessionId=${session.id}`,
-        );
-        continue;
-      }
-      if (session.status === 'failed' || session.status === 'exited') {
-        console.warn(
-          `[runtime] Killing tmux session for terminal-status PTY row sessionName=${ref.sessionName} ptySessionId=${session.id} status=${session.status}`,
-        );
-        yield* killTmuxGcSession(backend, ref);
-      }
-    }
-  });
-}
-
-function killTmuxGcSession(backend: PtyBackend, ref: BackendSessionRef) {
-  return backend.kill(ref).pipe(
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        const sessionName = ref.backend === 'tmux' ? ref.sessionName : 'unknown';
-        console.warn(
-          `[runtime] Failed to kill tmux session during orphan GC ${sessionName}`,
-          error,
-        );
-      }),
-    ),
-  );
-}
-
-function parseRuntimeTmuxSessionName(sessionName: string, dataDirHash: string) {
-  const match = new RegExp(`^isagi_${escapeRegExp(dataDirHash)}_(\\d+)$`).exec(sessionName);
-  if (!match?.[1]) {
-    return null;
-  }
-  const ptySessionId = Number(match[1]);
-  return Number.isSafeInteger(ptySessionId) && ptySessionId > 0 ? { ptySessionId } : null;
-}
-
 function launchWithBackend(input: {
-  readonly backend: PtyBackend;
+  readonly backend: PtyBackendShape;
   readonly metadata: PtySessionLaunchMetadata;
   readonly repository: PtyRepositoryService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
-  readonly dataDirHash: string;
+  readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly intentionalKills: Map<number, IntentionalKillState>;
 }) {
@@ -739,7 +541,7 @@ function launchWithBackend(input: {
     const backendMetadata = backendMetadataForLaunch(
       input.backend,
       input.metadata,
-      input.dataDirHash,
+      input.runtimeNamespace,
       input.sessionsPath,
     );
     if (backendMetadata.logPath && !existsSync(backendMetadata.logPath)) {
@@ -776,42 +578,9 @@ function launchWithBackend(input: {
   });
 }
 
-function backendMetadataForLaunch(
-  backend: PtyBackend,
-  metadata: PtySessionLaunchMetadata,
-  dataDirHash: string,
-  sessionsPath: string,
-) {
-  if (backend.name === 'tmux') {
-    const sessionName = `isagi_${dataDirHash}_${metadata.ptySessionId}`;
-    return {
-      backendSessionName: sessionName,
-      logMode: 'none' as const,
-      logPath: null,
-      ref: {
-        schemaVersion: 1,
-        backend: 'tmux',
-        sessionName,
-      } as const,
-    };
-  }
-  const logPath = join(sessionsPath, `${metadata.ptySessionId}.ptylog`);
-  return {
-    backendSessionName: null,
-    logMode: 'backend_file' as const,
-    logPath: metadata.logPath ?? logPath,
-    ref: {
-      schemaVersion: 1,
-      backend: 'node_pty',
-      ptySessionId: metadata.ptySessionId,
-      pid: null,
-    } as const,
-  };
-}
-
 function handleAttachFailure(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  backend: PtyBackendShape,
   session: PtySessionRow,
   ref: BackendSessionRef,
 ) {
@@ -842,30 +611,6 @@ function handleAttachFailure(
   });
 }
 
-function bestEffortKillPersistedSession(
-  repository: PtyRepositoryService,
-  registry: PtyBackendRegistryService,
-  ptySessionId: number,
-) {
-  return Effect.gen(function* () {
-    const session = yield* repository
-      .findSession(ptySessionId)
-      .pipe(Effect.orElseSucceed(() => null));
-    if (!session) {
-      return;
-    }
-    const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
-    if (!ref) {
-      return;
-    }
-    const backend = yield* registry.get(session.backend).pipe(Effect.orElseSucceed(() => null));
-    if (!backend) {
-      return;
-    }
-    yield* backend.kill(ref).pipe(Effect.ignore);
-  });
-}
-
 function transitionIfChanged(
   repository: PtyRepositoryService,
   session: PtySessionRow,
@@ -890,242 +635,4 @@ function transitionIfChanged(
     signal: next.status === 'running' ? null : session.signal,
     ...(lastSeenAt !== undefined ? { lastSeenAt } : {}),
   });
-}
-
-function detachActiveAttachment(
-  activeAttachments: Map<number, ActiveAttachment>,
-  ptySessionId: number,
-  attachmentId?: symbol,
-) {
-  return Effect.gen(function* () {
-    const active = activeAttachments.get(ptySessionId);
-    if (!active) {
-      return;
-    }
-    if (attachmentId && active.attachmentId !== attachmentId) {
-      return;
-    }
-    activeAttachments.delete(ptySessionId);
-    yield* active.attachment.detach;
-    console.info(`[runtime] PTY websocket detach ptySessionId=${ptySessionId}`);
-  });
-}
-
-function replayBytesForSession(session: PtySessionRow) {
-  if (session.logMode !== 'backend_file' || !session.logPath) {
-    return null;
-  }
-  try {
-    return statSync(session.logPath).size;
-  } catch {
-    return 0;
-  }
-}
-
-function decodeBackendRef(
-  session: PtySessionRow,
-): Effect.Effect<BackendSessionRef, PtyServiceError> {
-  return Effect.try({
-    try: () => {
-      const raw = JSON.parse(session.backendRefJson);
-      if (session.backend === 'tmux') {
-        return Schema.decodeUnknownSync(tmuxBackendRefSchema)(raw);
-      }
-      const ref = Schema.decodeUnknownSync(nodePtyBackendRefSchema)(raw);
-      if (ref.ptySessionId === session.id) {
-        return ref;
-      }
-      throw new Error(
-        `Backend ref ptySessionId ${ref.ptySessionId} does not match row id ${session.id}.`,
-      );
-    },
-    catch: (cause) =>
-      new PtyServiceError({
-        code: 'backend_session_missing',
-        message: `PTY session ${session.id} has an invalid or unsupported backend ref.`,
-        ptySessionId: session.id,
-        cause,
-      }),
-  });
-}
-
-function normalizePath(path: string) {
-  return relative(process.cwd(), path);
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function relativeSessionLogPath(sessionsPath: string, path: string) {
-  const relativePath = relative(sessionsPath, path);
-  return relativePath.startsWith('..') ? basename(path) : `sessions/${relativePath}`;
-}
-
-function handleExit(
-  repository: PtyRepositoryService,
-  activeAttachments: Map<number, ActiveAttachment>,
-  intentionalKills: Map<number, IntentionalKillState>,
-  ptySessionId: number,
-  exit: PtyExit,
-) {
-  return Effect.gen(function* () {
-    const killState = intentionalKills.get(ptySessionId);
-    if (killState) {
-      killState.exit = exit;
-      activeAttachments.delete(ptySessionId);
-      console.info(`[runtime] Ignoring backend exit for intentionally killed PTY ${ptySessionId}`);
-      if (killState.completed) {
-        intentionalKills.delete(ptySessionId);
-      }
-      return;
-    }
-    yield* persistExit(repository, activeAttachments, ptySessionId, exit);
-  });
-}
-
-function persistExit(
-  repository: PtyRepositoryService,
-  activeAttachments: Map<number, ActiveAttachment>,
-  ptySessionId: number,
-  exit: PtyExit,
-) {
-  return Effect.gen(function* () {
-    const status = exit.exitCode === 0 && exit.signal === null ? 'exited' : 'failed';
-    console.info(
-      `[runtime] PTY exited ptySessionId=${ptySessionId} status=${status} exitCode=${exit.exitCode ?? 'null'} signal=${exit.signal ?? 'null'}`,
-    );
-    activeAttachments.delete(ptySessionId);
-    yield* repository.transitionSession({
-      ptySessionId,
-      status,
-      statusReason: null,
-      exitCode: exit.exitCode,
-      signal: exit.signal,
-    });
-  }).pipe(
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.error(`[runtime] Failed to persist PTY exit for session ${ptySessionId}`, error);
-        scheduleExitPersistenceRetry(repository, activeAttachments, ptySessionId, exit);
-      }),
-    ),
-  );
-}
-
-function scheduleExitPersistenceRetry(
-  repository: PtyRepositoryService,
-  activeAttachments: Map<number, ActiveAttachment>,
-  ptySessionId: number,
-  exit: PtyExit,
-) {
-  const retry = () => {
-    void Effect.runPromise(
-      Effect.gen(function* () {
-        const status = exit.exitCode === 0 && exit.signal === null ? 'exited' : 'failed';
-        activeAttachments.delete(ptySessionId);
-        yield* repository.transitionSession({
-          ptySessionId,
-          status,
-          statusReason: null,
-          exitCode: exit.exitCode,
-          signal: exit.signal,
-        });
-      }).pipe(
-        Effect.catchAll((error) =>
-          Effect.sync(() => {
-            console.error(
-              `[runtime] Failed to retry PTY exit persistence for session ${ptySessionId}`,
-              error,
-            );
-            setTimeout(retry, 1_000);
-          }),
-        ),
-      ),
-    );
-  };
-
-  setTimeout(retry, 1_000);
-}
-
-function scheduleIntentionalKillPersistenceRetry(
-  repository: PtyRepositoryService,
-  intentionalKills: Map<number, IntentionalKillState>,
-  killState: IntentionalKillState,
-  backend: PtySessionRow['backend'],
-  ptySessionId: number,
-  reason: 'user_killed',
-) {
-  const retry = () => {
-    void Effect.runPromise(
-      repository
-        .transitionSession({
-          ptySessionId,
-          status: 'failed',
-          statusReason: reason,
-          exitCode: null,
-          signal: null,
-        })
-        .pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              killState.completed = true;
-              if (backend === 'tmux' || killState.exit) {
-                intentionalKills.delete(ptySessionId);
-              }
-            }),
-          ),
-          Effect.catchAll((error) =>
-            Effect.sync(() => {
-              console.error(
-                `[runtime] Failed to retry intentional PTY kill persistence for session ${ptySessionId}`,
-                error,
-              );
-              setTimeout(retry, 1_000);
-            }),
-          ),
-        ),
-    );
-  };
-
-  setTimeout(retry, 1_000);
-}
-
-function commandForLaunch(input: LaunchPtySessionInput) {
-  if (input.purpose === 'terminal') {
-    return process.env.SHELL || 'bash';
-  }
-  return input.harness ?? 'pi';
-}
-
-function titleForHarness(harness: LaunchPtySessionInput['harness']) {
-  switch (harness) {
-    case 'opencode':
-      return 'OpenCode';
-    case 'claude':
-      return 'Claude';
-    case 'codex':
-      return 'Codex';
-    case 'pi':
-    default:
-      return 'Pi';
-  }
-}
-
-function launchEnv() {
-  return {
-    ...process.env,
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
-  } satisfies NodeJS.ProcessEnv;
-}
-
-function dataDirectoryHash(root: string) {
-  return createHash('sha256').update(resolve(root)).digest('hex').slice(0, 8);
-}
-
-function spawnFailureMessage(command: string, cwd: string, error: unknown) {
-  const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : error;
-  const reason = cause instanceof Error && cause.message ? cause.message : String(cause);
-  return `\r\nFailed to start ${command} in ${cwd}: ${reason}\r\n`;
 }

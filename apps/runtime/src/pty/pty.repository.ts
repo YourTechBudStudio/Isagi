@@ -34,7 +34,9 @@ export interface PtyRepositoryService {
     ptySessionId: number,
   ) => Effect.Effect<PtySessionRow | null, DatabaseError>;
   readonly listSessionLogPaths: Effect.Effect<string[], DatabaseError>;
-  readonly listLivePersistedSessions: Effect.Effect<PtySessionRow[], DatabaseError>;
+  readonly listSessions: (input?: {
+    readonly statuses?: readonly PtySessionStatus[];
+  }) => Effect.Effect<PtySessionRow[], DatabaseError>;
   readonly updateBackendRef: (input: {
     readonly ptySessionId: number;
     readonly backendRefJson: string;
@@ -100,14 +102,15 @@ export const PtyRepositoryLive = Layer.effect(
           .all()
           .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
-      listLivePersistedSessions: database.use('list_live_persisted_pty_sessions', (db) =>
-        db
-          .select()
-          .from(ptySessions)
-          .where(inArray(ptySessions.status, ['starting', 'running']))
-          .all()
-          .map(ptySessionRow),
-      ),
+      listSessions: (input) =>
+        database.use('list_pty_sessions', (db) => {
+          const query = db.select().from(ptySessions);
+          const rows =
+            input?.statuses && input.statuses.length > 0
+              ? query.where(inArray(ptySessions.status, [...input.statuses])).all()
+              : query.all();
+          return rows.map(ptySessionRow);
+        }),
       updateBackendRef: (input) =>
         database.use('update_pty_backend_ref', (db) => {
           db.update(ptySessions)
@@ -157,7 +160,10 @@ export const PtyRepositoryLive = Layer.effect(
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
               updatedAt: now,
-              exitedAt: input.status === 'exited' || input.status === 'failed' ? now : null,
+              exitedAt:
+                input.status === 'exited' || input.status === 'failed' || input.status === 'killed'
+                  ? now
+                  : null,
               ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
             .where(eq(ptySessions.id, input.ptySessionId))
@@ -224,7 +230,7 @@ function attentionForStatus(
   if (status === 'running' || status === 'starting') {
     return 'working' as const;
   }
-  if (status === 'exited' && exitCode === 0 && signal === null) {
+  if (status === 'killed' || (status === 'exited' && exitCode === 0 && signal === null)) {
     return 'idle' as const;
   }
   return 'error' as const;

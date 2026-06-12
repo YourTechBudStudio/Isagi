@@ -4,18 +4,39 @@ import { promisify } from 'node:util';
 import { Context, Effect, Layer } from 'effect';
 import * as nodePty from 'node-pty';
 
-import type { BackendAttachment, PtyBackend as PtyBackendShape, TmuxBackendRef } from './types.js';
+import type { BackendAttachment, PtyBackend as PtyBackendShape, TmuxBackendRef } from '../types.js';
 import {
   PtyInspectError,
   PtyKillError,
   PtyResizeError,
   PtyStartError,
   PtyWriteError,
-} from './types.js';
+} from '../types.js';
+import { collectTmuxGarbage } from './tmux-gc.js';
 
 const execFileAsync = promisify(execFile);
 
 export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
+
+const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
+  Effect.map(({ stdout }) =>
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((sessionName) => sessionName.length > 0)
+      .map(
+        (sessionName) =>
+          ({
+            schemaVersion: 1,
+            backend: 'tmux',
+            sessionName,
+          }) satisfies TmuxBackendRef,
+      ),
+  ),
+  Effect.catchAll((cause) =>
+    isTmuxServerMissing(cause) ? Effect.succeed([]) : Effect.fail(new PtyInspectError({ cause })),
+  ),
+);
 
 export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
   name: 'tmux',
@@ -109,25 +130,8 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       Effect.as({ status: 'alive' as const }),
       Effect.catchAll((cause) => Effect.succeed(classifyTmuxInspectFailure(cause))),
     ),
-  listSessions: runTmux(['list-sessions', '-F', '#S']).pipe(
-    Effect.map(({ stdout }) =>
-      stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((sessionName) => sessionName.length > 0)
-        .map(
-          (sessionName) =>
-            ({
-              schemaVersion: 1,
-              backend: 'tmux',
-              sessionName,
-            }) satisfies TmuxBackendRef,
-        ),
-    ),
-    Effect.catchAll((cause) =>
-      isTmuxServerMissing(cause) ? Effect.succeed([]) : Effect.fail(new PtyInspectError({ cause })),
-    ),
-  ),
+  listSessions: listTmuxSessions,
+  collectGarbage: (input) => collectTmuxGarbage(input, listTmuxSessions),
   kill: (ref) =>
     runTmux(['kill-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
       Effect.asVoid,

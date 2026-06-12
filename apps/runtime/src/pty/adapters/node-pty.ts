@@ -20,14 +20,14 @@ import type {
   BackendAttachment,
   NodePtyBackendRef,
   PtyBackend as PtyBackendShape,
-} from './types.js';
+} from '../types.js';
 import {
   PtyKillError,
   PtyResizeError,
   PtyServiceError,
   PtyStartError,
   PtyWriteError,
-} from './types.js';
+} from '../types.js';
 
 const replayChunkBytes = 64 * 1024;
 

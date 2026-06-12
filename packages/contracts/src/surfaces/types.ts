@@ -58,7 +58,13 @@ export const ptySessionRouteParamsSchema = Schema.Struct({
   ptySessionId: positiveIntegerSchema,
 });
 
-export const ptySessionStatusSchema = Schema.Literal('starting', 'running', 'exited', 'failed');
+export const ptySessionStatusSchema = Schema.Literal(
+  'starting',
+  'running',
+  'exited',
+  'failed',
+  'killed',
+);
 export const ptySessionBackendSchema = Schema.Literal('tmux', 'node_pty');
 export const ptySessionStatusReasonSchema = Schema.Literal(
   'backend_unavailable',
@@ -66,7 +72,6 @@ export const ptySessionStatusReasonSchema = Schema.Literal(
   'backend_attach_failed',
   'backend_launch_failed',
   'runtime_ephemeral_lost',
-  'user_killed',
 );
 export const ptySessionPurposeSchema = Schema.Literal('agent', 'terminal');
 export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');

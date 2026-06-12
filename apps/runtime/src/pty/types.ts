@@ -4,6 +4,7 @@ import type {
   AgentHarness,
   PtySessionBackend,
   PtySessionPurpose,
+  PtySessionStatus,
   PtySessionStatusReason,
   PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
@@ -25,6 +26,30 @@ export interface TmuxBackendRef {
 }
 
 export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
+
+export interface PtyBackendGcSession {
+  readonly ptySessionId: number;
+  readonly ref: BackendSessionRef;
+  readonly status: PtySessionStatus;
+}
+
+export interface PtyBackendGcInput {
+  readonly runtimeNamespace: string;
+  readonly sessions: readonly PtyBackendGcSession[];
+}
+
+export type PtyBackendGcFinding =
+  | {
+      readonly type: 'orphan_backend_session';
+      readonly ref: BackendSessionRef;
+      readonly ptySessionId: number;
+    }
+  | {
+      readonly type: 'terminal_backend_session';
+      readonly ref: BackendSessionRef;
+      readonly ptySessionId: number;
+      readonly status: 'exited' | 'failed' | 'killed';
+    };
 
 export interface LaunchBackendSessionInput {
   readonly ptySessionId: number;
@@ -133,17 +158,9 @@ export interface PtyBackend {
     PtyInspectError
   >;
   readonly kill: (ref: BackendSessionRef) => import('effect').Effect.Effect<void, PtyKillError>;
-}
-
-export class UnsupportedPtyBackendError extends Data.TaggedError('UnsupportedPtyBackendError')<{
-  readonly backend: PtyBackendName;
-}> {}
-
-export interface PtyBackendRegistry {
-  readonly selectForLaunch: () => import('effect').Effect.Effect<PtyBackend, never>;
-  readonly get: (
-    name: PtyBackendName,
-  ) => import('effect').Effect.Effect<PtyBackend, UnsupportedPtyBackendError>;
+  readonly collectGarbage?: (
+    input: PtyBackendGcInput,
+  ) => import('effect').Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;
 }
 
 export interface LaunchPtySessionInput {

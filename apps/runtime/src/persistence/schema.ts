@@ -126,7 +126,9 @@ export const ptySessions = sqliteTable(
     harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }),
     command: text('command').notNull(),
     cwd: text('cwd').notNull(),
-    status: text('status', { enum: ['starting', 'running', 'exited', 'failed'] }).notNull(),
+    status: text('status', {
+      enum: ['starting', 'running', 'exited', 'failed', 'killed'],
+    }).notNull(),
     statusReason: text('status_reason', {
       enum: [
         'backend_unavailable',
@@ -134,7 +136,6 @@ export const ptySessions = sqliteTable(
         'backend_attach_failed',
         'backend_launch_failed',
         'runtime_ephemeral_lost',
-        'user_killed',
       ],
     }),
     exitCode: integer('exit_code'),

@@ -82,6 +82,8 @@ export const ptyCopy = {
           return `Stopped by ${exit.signal}`;
         }
         return 'Failed to start';
+      case 'killed':
+        return 'Killed';
       default:
         return 'Unknown';
     }
