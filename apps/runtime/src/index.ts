@@ -1,8 +1,9 @@
 import process from 'node:process';
 
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 
 import { formatReadyLine, parsePort, startRuntimeServer } from './server.js';
+import { formatStartupFailure } from './startup-diagnostics.js';
 
 const program = Effect.gen(function* () {
   const host = process.env.HOST;
@@ -28,7 +29,12 @@ const program = Effect.gen(function* () {
   });
 });
 
-await Effect.runPromise(program);
+const exit = await Effect.runPromiseExit(program);
+
+if (Exit.isFailure(exit)) {
+  console.error(formatStartupFailure(exit.cause));
+  process.exit(1);
+}
 
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error));

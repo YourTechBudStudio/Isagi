@@ -1,6 +1,6 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
-import { Effect, ManagedRuntime } from 'effect';
+import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { registerHealthApi } from './health/api.js';
@@ -27,7 +27,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
     let runtimeDisposed = false;
 
     return yield* Effect.gen(function* () {
-      yield* tryPromise(() => runtime.runtime());
+      yield* initializeRuntime(runtime);
 
       const fastify = Fastify({ logger: false });
       startupFastify = fastify;
@@ -126,6 +126,12 @@ function closeFastify(server: FastifyInstance) {
 
 function disposeRuntime<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
   return Effect.promise(() => runtime.dispose()).pipe(Effect.ignore);
+}
+
+function initializeRuntime<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
+  return Effect.promise(() => runtime.runPromiseExit(Effect.void)).pipe(
+    Effect.flatMap((exit) => (Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.void)),
+  );
 }
 
 function tryPromise<T>(run: () => T | PromiseLike<T>) {
