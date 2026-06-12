@@ -164,6 +164,7 @@ function XtermPane({
   const statusRef = useRef<PtySessionStatus>(session.status);
   const socketRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const edgeToEdge = session.harness === 'opencode';
 
   useEffect(() => {
     statusRef.current = session.status;
@@ -186,6 +187,7 @@ function XtermPane({
       fontFamily: '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace',
       fontSize: 12,
       lineHeight: 1.35,
+      ...(edgeToEdge ? { scrollback: 0 } : {}),
       theme: terminalThemeFromTokens(),
     });
     const fit = new FitAddon();
@@ -208,6 +210,9 @@ function XtermPane({
     const sendResize = () => {
       try {
         fit.fit();
+        if (edgeToEdge) {
+          terminal.resize(terminal.cols + 1, terminal.rows + 1);
+        }
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
           socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
@@ -315,11 +320,17 @@ function XtermPane({
     onRendererWarning,
     onSocketError,
     onStatusChange,
+    edgeToEdge,
     session.id,
     session.status,
   ]);
 
-  return <div ref={containerRef} className="isagi-xterm min-h-0 flex-1 px-3 py-2" />;
+  return (
+    <div
+      ref={containerRef}
+      className={`isagi-xterm min-h-0 flex-1 ${edgeToEdge ? 'isagi-xterm-edge' : 'px-3 py-2'}`}
+    />
+  );
 }
 
 function decodeSocketMessage(data: unknown) {
@@ -337,6 +348,8 @@ function terminalThemeFromTokens() {
   const styles = window.getComputedStyle(document.documentElement);
   const token = (name: string) => styles.getPropertyValue(name).trim();
   const canvas = token('--color-canvas');
+  const elevated = token('--color-elevated');
+  const terminalSurface = blendHex(elevated, canvas, 0.5);
   const fg = token('--color-fg');
   const fgSubtle = token('--color-fg-subtle');
   const blue = token('--color-blue');
@@ -347,11 +360,11 @@ function terminalThemeFromTokens() {
   const cyan = token('--color-cyan');
 
   return {
-    background: 'transparent',
+    background: terminalSurface,
     foreground: fg,
     cursor: cyan,
     selectionBackground: alphaHex(fgSubtle, '66'),
-    black: canvas,
+    black: terminalSurface,
     red,
     green,
     yellow: amber,
@@ -368,6 +381,38 @@ function terminalThemeFromTokens() {
     brightCyan: cyan,
     brightWhite: fg,
   };
+}
+
+function blendHex(foreground: string, background: string, opacity: number) {
+  const fg = parseHexColor(foreground);
+  const bg = parseHexColor(background);
+  if (!fg || !bg) {
+    return background;
+  }
+
+  const mix = (fgChannel: number, bgChannel: number) =>
+    Math.round(fgChannel * opacity + bgChannel * (1 - opacity));
+
+  return rgbToHex(mix(fg.r, bg.r), mix(fg.g, bg.g), mix(fg.b, bg.b));
+}
+
+function parseHexColor(color: string) {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(color);
+  const [, r, g, b] = match ?? [];
+  if (!r || !g || !b) {
+    return null;
+  }
+
+  return {
+    r: Number.parseInt(r, 16),
+    g: Number.parseInt(g, 16),
+    b: Number.parseInt(b, 16),
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number) {
+  const channel = (value: number) => value.toString(16).padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
 }
 
 function alphaHex(color: string, alpha: string) {
