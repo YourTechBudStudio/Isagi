@@ -62,7 +62,9 @@ test('PTY websocket route hides internal details for missing sessions', async ()
     }
   });
 
-  assert.deepEqual(messages, [{ type: 'error', message: 'PTY session was not found.' }]);
+  assert.deepEqual(messages, [
+    { type: 'error', message: "That session's gone — looks like it already wrapped up." },
+  ]);
 });
 
 test('PTY websocket route hides internal details for replay failures', async () => {

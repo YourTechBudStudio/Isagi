@@ -228,13 +228,13 @@ function websocketErrorMessage(error: unknown) {
   if (error instanceof PtyServiceError) {
     switch (error.code) {
       case 'session_not_found':
-        return 'PTY session was not found.';
+        return "That session's gone — looks like it already wrapped up.";
       case 'session_not_running':
         return 'PTY session is no longer live.';
       case 'log_read_failed':
         return 'Could not replay this session log.';
       case 'worktree_not_found':
-        return 'PTY session target was not found.';
+        return 'Can\'t find that worktree. Did it get removed?';
     }
   }
   if (error instanceof PtyWriteError || error instanceof PtyResizeError) {

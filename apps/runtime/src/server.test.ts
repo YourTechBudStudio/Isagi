@@ -27,7 +27,7 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
 
       assert.deepEqual(message, {
         type: 'error',
-        message: 'PTY session was not found.',
+        message: "That session's gone — looks like it already wrapped up.",
       } satisfies PtyWebSocketOutputMessage);
     } finally {
       socket.close();

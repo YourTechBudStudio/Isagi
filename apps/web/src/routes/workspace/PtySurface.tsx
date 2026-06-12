@@ -36,7 +36,9 @@ export function PtySurface({ detail }: PtySurfaceProps) {
   if (detail.panes.length === 0) {
     return (
       <div className="grid h-full place-items-center rounded-md border border-line/20 bg-elevated/50 backdrop-blur-sm">
-        <span className="font-mono text-[12px] text-fg-subtle">No panes on this surface.</span>
+        <span className="font-mono text-[12px] text-fg-subtle">
+          Nothing running here yet. cmd+k to start something.
+        </span>
       </div>
     );
   }
@@ -132,7 +134,7 @@ function PtyPaneShell({
       ) : (
         <div className="grid min-h-0 flex-1 place-items-center px-4">
           <span className="font-mono text-[12px] text-fg-subtle">
-            This pane has no PTY session.
+            This pane's empty — nothing's claimed it yet.
           </span>
         </div>
       )}
