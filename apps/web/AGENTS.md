@@ -31,6 +31,7 @@ src/
     <page-name>/          # A page and its page-specific components
   components/             # Reusable, shared components
     ui/                   # Base UI primitives wrapped + styled with Tailwind
+  copy/                   # Reviewable sentence-level UI prose
   hooks/                  # Reusable React hooks
   lib/                    # client.ts, runtime.ts, Effect workflows, pure helpers
 ```
@@ -38,6 +39,7 @@ src/
 - Keep the root of `src/` as empty as possible — only `main.tsx`, `App.tsx`, and `styles.css` live there. Client and runtime wiring goes in `lib/`.
 - `components/` holds components shared across pages.
 - Page-specific components live alongside their page inside `routes/<page-name>/`.
+- Sentence-level user-facing prose lives in `copy/`: toasts, empty states, error summaries, recovery guidance, onboarding text, and similar copy. Short chrome labels may stay local. Copy modules may export strings, objects, and string-returning functions, but not JSX or layout behavior.
 
 ### Page components
 

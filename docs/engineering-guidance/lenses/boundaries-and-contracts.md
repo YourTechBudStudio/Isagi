@@ -37,6 +37,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - `packages/contracts` should stay implementation-free: it may describe serializable API schemas and wire types, but not runtime services, layers, domain internals, fibers, or operational dependencies.
 - Runtime HTTP APIs should be explicit rather than hidden behind framework dispatch: routes, methods, request decoding, response encoding, and error envelopes should be reviewable at the boundary.
 - Runtime/client API contracts should use versioned routes, schema-backed success and error envelopes, `camelCase` field names, and `snake_case` literal error codes/reasons. This lens owns error shape, codes, and envelopes; the voice of any user-facing message string those errors carry is reviewed by `design-fidelity-and-voice.md`.
+- Runtime returns facts; web writes copy. Runtime and contracts should expose stable codes, statuses, structured data, and raw diagnostic messages, while the web app maps those facts to polished user-facing copy.
 - Internal runtime/domain failures may use Effect tagged data/errors; API contracts should expose stable serializable concepts, not those implementation types.
 - Branded or opaque internal domain types are encouraged where they protect operational targeting, but DTOs remain ordinary serializable contract shapes.
 - Pre-MVP internal interfaces should evolve cleanly. Avoid internal compatibility theater when callers can be migrated safely.
@@ -51,6 +52,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - A runtime API route that crosses the client/runtime boundary bypasses shared contracts, the versioned API surface, or explicit error modeling.
 - A cross-boundary expected failure is not represented by a stable contract error shape that clients can deliberately handle.
 - Runtime, desktop, web, and contracts ownership becomes materially unclear.
+- Runtime, contracts, or desktop import frontend copy or otherwise make web product voice a cross-boundary dependency.
 - A persisted, cached, or frontend-owned state value becomes hidden input to operational runtime behavior that should accept an explicit target.
 - A change makes future remote-runtime separation materially harder without an explicit tradeoff.
 - Command execution, filesystem access, process control, or privilege exposure expands without deliberate handling.
@@ -64,6 +66,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - A contract shape is technically usable but weakly communicates behavior, failure semantics, or client obligations.
 - API error handling exists but is too generic for clients to distinguish validation, domain, internal, or degraded-runtime cases that matter.
 - The mapping from internal tagged failures to API errors exists but is scattered or hard to audit.
+- Runtime/API messages are treated as default polished UI copy instead of semantic or raw diagnostic fallback.
 - Compatibility is preserved speculatively without a clear external dependency.
 - Trust boundary or dependency implications are lightly considered but not well surfaced.
 

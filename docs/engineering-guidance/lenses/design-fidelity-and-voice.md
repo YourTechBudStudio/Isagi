@@ -27,6 +27,7 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 - Voice: is copy deadpan, plain, and conversational — free of marketing-speak ("supercharge", "seamless", "delightful") and sparkle?
 - Voice: does humour stay in its allowed surfaces (empty states, 404s, footers, tip bars, fixable-error messages) and stay out of CTAs, working chrome, agent status lines, destructive confirmations, and validation errors?
 - Voice: do user-facing error and status messages match the dry, informative register even when they come from the runtime?
+- Is sentence-level UI prose easy to review in one place, instead of scattered through components and workflows?
 - Does the change repeat an existing pattern where one fits, rather than inventing a new visual or copy treatment?
 
 ## Isagi-Specific Notes
@@ -36,6 +37,7 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 - Isagi's default is personality, not neutrality. When a user-facing string is harmless — no accuracy, honesty, clarity, or wrong-location consequence — leaning into Isagi's voice (vivid, plain, a little dry) is correct and is **not** a finding. Do not flag copy merely for being more colourful than a flatter, neutral alternative; "name the thing plainly" includes naming the real stakes vividly.
 - The relaxation above is tied to _harmless_. It does not extend to the forbidden locations below (destructive confirmations, validation errors, agent status lines, primary CTAs, constantly-seen chrome), where seriousness or restraint is the point. Trust/approval prompts that are consequential but not destructive (e.g. approving project setup hooks) may carry vivid-plain voice; reserve the strict bar for genuinely destructive or irreversible confirmations.
 - This lens and `product-behavior-and-ux.md` split copy by what is wrong with it: copy that is inaccurate or too vague to support belongs to that lens; copy that is off-voice, marketing-speak, or cute in the wrong place belongs here.
+- In the web app, sentence-level user-facing copy belongs under `apps/web/src/copy/`: toasts, empty states, error summaries, recovery guidance, onboarding text, and similar prose. Short chrome labels such as `Run`, `Stop`, and `Cancel` may stay local.
 
 ## Severity Mapping
 
@@ -51,8 +53,11 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 - Visual drift that is not a hard ban: accent overload, the timid-middle spacing default, motion off the expo-out curve, or a spinner on an operation that takes real time.
 - A new visual or copy pattern is invented where an existing house pattern fits.
 - Copy register drifts toward generic or marketing-flavoured — reads like a template, hedges, or trades plainness for polish. (Drift toward _more_ Isagi personality on a harmless string is not a finding; see Isagi-Specific Notes.)
+- Sentence-level user-facing copy is added inline where it should live in `apps/web/src/copy/`, making voice review harder.
+- Copy modules start owning JSX, layout, or component behavior instead of reviewable strings, objects, and string-returning functions.
 
 ### Nit
 
 - Minor visual polish: a halo, gradient, or shadow that could be tuned; overline letter-spacing.
 - An empty or edge state that is fine but could better match Isagi's warmth.
+- A short local label could move to copy for consistency, but the reviewability risk is low.
