@@ -1,10 +1,7 @@
-import { join } from 'node:path';
-
 import { eq, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import {
-  DataDirectory,
   DatabaseError,
   RuntimeDatabase,
   type RuntimeDatabaseService,
@@ -76,7 +73,6 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
-    const directory = yield* DataDirectory;
 
     return {
       worktreeExists: (worktreeId) =>
@@ -168,6 +164,8 @@ export const SurfaceRepositoryLive = Layer.effect(
             .values({
               paneId: surface.paneId,
               worktreeId: input.worktreeId,
+              // Temporary non-null DB invariant. PtyService owns backend selection and
+              // overwrites backend/ref/log fields before launching the operational backend.
               backend: 'node_pty',
               backendRefJson: JSON.stringify({
                 schemaVersion: 1,
@@ -183,7 +181,7 @@ export const SurfaceRepositoryLive = Layer.effect(
               statusReason: null,
               exitCode: null,
               signal: null,
-              logMode: 'backend_file',
+              logMode: 'none',
               logPath: null,
               createdAt: now,
               updatedAt: now,
@@ -193,7 +191,6 @@ export const SurfaceRepositoryLive = Layer.effect(
             .returning({ id: ptySessions.id })
             .get();
           const ptySessionId = session.id;
-          const logPath = join(directory.paths.sessionsPath, `${ptySessionId}.ptylog`);
           db.update(ptySessions)
             .set({
               backendRefJson: JSON.stringify({
@@ -202,7 +199,6 @@ export const SurfaceRepositoryLive = Layer.effect(
                 ptySessionId,
                 pid: null,
               }),
-              logPath,
               updatedAt: now,
             })
             .where(eq(ptySessions.id, ptySessionId))
@@ -236,7 +232,7 @@ export const SurfaceRepositoryLive = Layer.effect(
             ptySessionId,
             command: input.command,
             cwd: worktree.path,
-            logPath,
+            logPath: null,
           } satisfies CreateSinglePanePtySessionSurfaceOutput;
         }),
       createPtySessionMetadata: (input) =>

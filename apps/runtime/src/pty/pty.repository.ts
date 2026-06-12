@@ -39,6 +39,13 @@ export interface PtyRepositoryService {
     readonly ptySessionId: number;
     readonly backendRefJson: string;
   }) => Effect.Effect<void, DatabaseError>;
+  readonly updateBackendMetadata: (input: {
+    readonly ptySessionId: number;
+    readonly backend: import('@isagi/contracts').PtySessionBackend;
+    readonly backendRefJson: string;
+    readonly logMode: import('@isagi/contracts').PtySessionLogMode;
+    readonly logPath: string | null;
+  }) => Effect.Effect<void, DatabaseError>;
   readonly transitionSession: (input: {
     readonly ptySessionId: number;
     readonly status: PtySessionStatus;
@@ -105,6 +112,19 @@ export const PtyRepositoryLive = Layer.effect(
         database.use('update_pty_backend_ref', (db) => {
           db.update(ptySessions)
             .set({ backendRefJson: input.backendRefJson, updatedAt: timestamp() })
+            .where(eq(ptySessions.id, input.ptySessionId))
+            .run();
+        }),
+      updateBackendMetadata: (input) =>
+        database.use('update_pty_backend_metadata', (db) => {
+          db.update(ptySessions)
+            .set({
+              backend: input.backend,
+              backendRefJson: input.backendRefJson,
+              logMode: input.logMode,
+              logPath: input.logPath,
+              updatedAt: timestamp(),
+            })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
         }),

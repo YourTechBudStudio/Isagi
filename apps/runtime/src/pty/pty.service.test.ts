@@ -28,7 +28,7 @@ import {
 import { SurfaceRepositoryLive, SurfaceService, SurfaceServiceLive } from '../surfaces/index.js';
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/index.js';
 import {
-  PtyBackend,
+  PtyBackendRegistry,
   PtyRepository,
   PtyRepositoryLive,
   PtyService,
@@ -37,6 +37,7 @@ import {
   PtyStartError,
   type LaunchBackendSessionInput,
   type PtyBackendShape,
+  type PtyBackendRegistryShape,
 } from './index.js';
 import { detectOrphanPtyLogs } from './pty.service.js';
 
@@ -86,8 +87,20 @@ test('orphan log detection reports unreferenced pty logs without deleting them',
           harness: null,
           command: process.env.SHELL || 'bash',
         });
-        assert.ok(metadata.logPath);
-        writeFileSync(metadata.logPath, 'referenced', 'utf8');
+        const logPath = join(dataRoot, 'sessions', `${metadata.ptySessionId}.ptylog`);
+        yield* repository.updateBackendMetadata({
+          ptySessionId: metadata.ptySessionId,
+          backend: 'node_pty',
+          backendRefJson: JSON.stringify({
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptySessionId: metadata.ptySessionId,
+            pid: null,
+          }),
+          logMode: 'backend_file',
+          logPath,
+        });
+        writeFileSync(logPath, 'referenced', 'utf8');
         const orphanPath = join(dataRoot, 'sessions', 'orphan.ptylog');
         writeFileSync(orphanPath, 'orphan', 'utf8');
 
@@ -280,7 +293,7 @@ test('replaced websocket attachment cannot keep writing to the current session',
   }
 });
 
-test('missing runtime-local backend session fails attach with backend code and durable reason', async () => {
+test('missing runtime-local backend session returns attach code and durable reason', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-missing-backend-'));
   const fake = fakeBackend({ failAttach: true });
   try {
@@ -305,7 +318,7 @@ test('missing runtime-local backend session fails attach with backend code and d
 
     assert.ok(Either.isLeft(output.attachResult));
     assert.ok(output.attachResult.left instanceof PtyServiceError);
-    assert.equal(output.attachResult.left.code, 'backend_session_missing');
+    assert.equal(output.attachResult.left.code, 'backend_attach_failed');
     assert.equal(output.detail.panes[0]?.ptySession?.status, 'failed');
     assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'runtime_ephemeral_lost');
   } finally {
@@ -378,6 +391,52 @@ test('startup recovery marks persisted live node-pty sessions failed without mut
   }
 });
 
+test('startup reconciliation treats missing tmux sessions as backend missing even when normal exit is indistinguishable', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-missing-'));
+  try {
+    const launched = await Effect.runPromise(
+      createPersistedTmuxSession('/repo/isagi', dataRoot, { statusReason: null }).pipe(
+        Effect.provide(repositoryOnlyLayer(dataRoot)),
+      ),
+    );
+
+    const recovered = await Effect.runPromise(
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.getSurfaceDetail(launched.surfaceId);
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeTmuxBackend('missing')))),
+    );
+
+    assert.equal(recovered.panes[0]?.ptySession?.status, 'failed');
+    assert.equal(recovered.panes[0]?.ptySession?.statusReason, 'backend_session_missing');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup reconciliation keeps tmux sessions recoverable when backend is unavailable', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-unavailable-'));
+  try {
+    const launched = await Effect.runPromise(
+      createPersistedTmuxSession('/repo/isagi', dataRoot, { statusReason: null }).pipe(
+        Effect.provide(repositoryOnlyLayer(dataRoot)),
+      ),
+    );
+
+    const recovered = await Effect.runPromise(
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.getSurfaceDetail(launched.surfaceId);
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeTmuxBackend('unavailable')))),
+    );
+
+    assert.equal(recovered.panes[0]?.ptySession?.status, 'running');
+    assert.equal(recovered.panes[0]?.ptySession?.statusReason, 'backend_unavailable');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 function fakeBackend(
   options: { readonly failStart?: boolean; readonly failAttach?: boolean } = {},
 ) {
@@ -422,36 +481,116 @@ function fakeBackend(
           if (options.failAttach) {
             throw new Error('attach failed');
           }
-          outputs.set(input.ref.ptySessionId, (data) => {
-            appendFakeLog(logPaths.get(input.ref.ptySessionId) ?? null, data);
+          if (input.ref.backend !== 'node_pty') {
+            throw new Error(`Unexpected fake backend ref ${input.ref.backend}.`);
+          }
+          const ref = input.ref;
+          outputs.set(ref.ptySessionId, (data) => {
+            appendFakeLog(logPaths.get(ref.ptySessionId) ?? null, data);
             input.onOutput(data);
           });
-          const existingExit = exits.get(input.ref.ptySessionId);
-          exits.set(input.ref.ptySessionId, (exit) => {
-            input.onExit(exit);
+          const existingExit = exits.get(ref.ptySessionId);
+          exits.set(ref.ptySessionId, (exit) => {
+            input.onSessionExit(exit);
             existingExit?.(exit);
           });
           return {
             write: () => Effect.void,
             resize: () => Effect.void,
             detach: Effect.sync(() => {
-              outputs.delete(input.ref.ptySessionId);
+              outputs.delete(ref.ptySessionId);
             }),
           };
         },
         catch: (cause) =>
           new PtyStartError({
-            ptySessionId: input.ref.ptySessionId,
+            ptySessionId: input.ref.backend === 'node_pty' ? input.ref.ptySessionId : undefined,
             command: 'node_pty_attach',
             cwd: '',
             cause,
           }),
       }),
     replay: (input) => replayFakeLog(input.logPath, input.bytes, input.send),
-    inspect: () => Effect.succeed({ alive: true }),
+    inspect: () => Effect.succeed({ status: 'alive' as const }),
     kill: () => Effect.void,
   } satisfies PtyBackendShape;
   return { backend, outputs, exits };
+}
+
+function fakeTmuxBackend(inspection: 'alive' | 'missing' | 'unavailable') {
+  return {
+    name: 'tmux',
+    available: Effect.succeed(true),
+    launch: (input: LaunchBackendSessionInput) =>
+      Effect.succeed({
+        schemaVersion: 1,
+        backend: 'tmux',
+        sessionName: input.backendSessionName ?? `isagi_test_${input.ptySessionId}`,
+      } as const),
+    attach: () =>
+      Effect.succeed({
+        write: () => Effect.void,
+        resize: () => Effect.void,
+        detach: Effect.void,
+      }),
+    replay: (input) =>
+      Effect.sync(() => {
+        input.send({ type: 'replay_start', bytes: 0 });
+        input.send({ type: 'replay_end' });
+      }),
+    inspect: () =>
+      Effect.succeed(
+        inspection === 'unavailable'
+          ? { status: 'unavailable' as const }
+          : { status: inspection as 'alive' | 'missing' },
+      ),
+    kill: () => Effect.void,
+  } satisfies PtyBackendShape;
+}
+
+function createPersistedTmuxSession(
+  rootPath: string,
+  dataRoot: string,
+  input: { readonly statusReason: import('@isagi/contracts').PtySessionStatusReason | null },
+) {
+  return Effect.gen(function* () {
+    const worktreeId = yield* insertWorktree(rootPath);
+    const repository = yield* PtyRepository;
+    const metadata = yield* repository.createLaunchMetadata({
+      worktreeId,
+      kind: 'terminal',
+      titleBase: 'Terminal',
+      purpose: 'terminal',
+      harness: null,
+      command: process.env.SHELL || 'bash',
+    });
+    const sessionName = `isagi_test_${metadata.ptySessionId}`;
+    yield* repository.updateBackendMetadata({
+      ptySessionId: metadata.ptySessionId,
+      backend: 'tmux',
+      backendRefJson: JSON.stringify({
+        schemaVersion: 1,
+        backend: 'tmux',
+        sessionName,
+      }),
+      logMode: 'none',
+      logPath: null,
+    });
+    yield* repository.transitionSession({
+      ptySessionId: metadata.ptySessionId,
+      status: 'running',
+      statusReason: input.statusReason,
+      exitCode: null,
+      signal: null,
+    });
+    return {
+      worktreeId: metadata.worktreeId,
+      surfaceId: metadata.surfaceId,
+      paneId: metadata.paneId,
+      ptySessionId: metadata.ptySessionId,
+      dataRoot,
+    };
+  });
 }
 
 function appendFakeLog(path: string | null, data: string) {
@@ -552,7 +691,7 @@ function testLayer(dataRoot: string, backend: PtyBackendShape) {
   );
   const ptyService = PtyServiceLive.pipe(
     Layer.provide(ptyRepository),
-    Layer.provide(Layer.succeed(PtyBackend, backend)),
+    Layer.provide(Layer.succeed(PtyBackendRegistry, fakeRegistry(backend))),
     Layer.provide(dataDirectoryLayer),
   );
   return Layer.mergeAll(
@@ -562,6 +701,16 @@ function testLayer(dataRoot: string, backend: PtyBackendShape) {
     ptyRepository,
     ptyService,
   );
+}
+
+function fakeRegistry(backend: PtyBackendShape) {
+  return {
+    selectForLaunch: () => Effect.succeed(backend),
+    get: (name) =>
+      name === backend.name
+        ? Effect.succeed(backend)
+        : Effect.die(`Unsupported fake backend ${name}`),
+  } satisfies PtyBackendRegistryShape;
 }
 
 function dataDirectoryService(dataRoot: string) {

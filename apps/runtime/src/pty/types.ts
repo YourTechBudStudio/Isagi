@@ -18,10 +18,17 @@ export interface NodePtyBackendRef {
   readonly pid: number | null;
 }
 
-export type BackendSessionRef = NodePtyBackendRef;
+export interface TmuxBackendRef {
+  readonly schemaVersion: 1;
+  readonly backend: 'tmux';
+  readonly sessionName: string;
+}
+
+export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
 
 export interface LaunchBackendSessionInput {
   readonly ptySessionId: number;
+  readonly backendSessionName: string | null;
   readonly command: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
@@ -78,9 +85,17 @@ export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
   readonly cause: unknown;
 }> {}
 
-export interface BackendInspection {
-  readonly alive: boolean;
-}
+export type BackendInspection =
+  | {
+      readonly status: 'alive';
+    }
+  | {
+      readonly status: 'missing';
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly cause?: unknown;
+    };
 
 export interface BackendAttachment {
   readonly write: (data: string) => import('effect').Effect.Effect<void, PtyWriteError>;
@@ -102,7 +117,7 @@ export interface PtyBackend {
     readonly cols: number;
     readonly rows: number;
     readonly onOutput: (data: string) => void;
-    readonly onExit: (exit: PtyExit) => void;
+    readonly onSessionExit: (exit: PtyExit) => void;
   }) => import('effect').Effect.Effect<BackendAttachment, PtyStartError>;
   readonly replay: (input: {
     readonly ref: BackendSessionRef;
@@ -114,6 +129,17 @@ export interface PtyBackend {
     ref: BackendSessionRef,
   ) => import('effect').Effect.Effect<BackendInspection, PtyInspectError>;
   readonly kill: (ref: BackendSessionRef) => import('effect').Effect.Effect<void, PtyKillError>;
+}
+
+export class UnsupportedPtyBackendError extends Data.TaggedError('UnsupportedPtyBackendError')<{
+  readonly backend: PtyBackendName;
+}> {}
+
+export interface PtyBackendRegistry {
+  readonly selectForLaunch: () => import('effect').Effect.Effect<PtyBackend, never>;
+  readonly get: (
+    name: PtyBackendName,
+  ) => import('effect').Effect.Effect<PtyBackend, UnsupportedPtyBackendError>;
 }
 
 export interface LaunchPtySessionInput {

@@ -48,10 +48,10 @@ interface NodePtyAttachment {
   }) => void;
 }
 
-export const PtyBackend = Context.GenericTag<PtyBackendShape>('isagi/PtyBackend');
+export const NodePtyBackend = Context.GenericTag<PtyBackendShape>('isagi/NodePtyBackend');
 
 export const NodePtyBackendLive = Layer.effect(
-  PtyBackend,
+  NodePtyBackend,
   Effect.sync(() => {
     ensureNodePtyDarwinHelperExecutable();
     const liveSessions = new Map<number, LiveNodePtySession>();
@@ -109,29 +109,31 @@ export const NodePtyBackendLive = Layer.effect(
       attach: (input) =>
         Effect.try({
           try: () => {
-            const live = liveSessions.get(input.ref.ptySessionId);
+            if (input.ref.backend !== 'node_pty') {
+              throw new Error(`Cannot attach node-pty backend to ${input.ref.backend} ref.`);
+            }
+            const ref = input.ref;
+            const live = liveSessions.get(ref.ptySessionId);
             if (!live?.running) {
-              throw new Error(`node-pty session ${input.ref.ptySessionId} is not live.`);
+              throw new Error(`node-pty session ${ref.ptySessionId} is not live.`);
             }
             live.process.resize(input.cols, input.rows);
             const attachment = {
-              id: Symbol(`node-pty-attachment-${input.ref.ptySessionId}`),
+              id: Symbol(`node-pty-attachment-${ref.ptySessionId}`),
               onOutput: input.onOutput,
-              onExit: input.onExit,
+              onExit: input.onSessionExit,
             } satisfies NodePtyAttachment;
             live.attachment = attachment;
             return {
               write: (data) =>
                 Effect.try({
                   try: () => live.process.write(data),
-                  catch: (cause) =>
-                    new PtyWriteError({ ptySessionId: input.ref.ptySessionId, cause }),
+                  catch: (cause) => new PtyWriteError({ ptySessionId: ref.ptySessionId, cause }),
                 }),
               resize: (size) =>
                 Effect.try({
                   try: () => live.process.resize(size.cols, size.rows),
-                  catch: (cause) =>
-                    new PtyResizeError({ ptySessionId: input.ref.ptySessionId, cause }),
+                  catch: (cause) => new PtyResizeError({ ptySessionId: ref.ptySessionId, cause }),
                 }),
               detach: Effect.sync(() => {
                 if (live.attachment?.id === attachment.id) {
@@ -142,7 +144,7 @@ export const NodePtyBackendLive = Layer.effect(
           },
           catch: (cause) =>
             new PtyStartError({
-              ptySessionId: input.ref.ptySessionId,
+              ptySessionId: input.ref.backend === 'node_pty' ? input.ref.ptySessionId : undefined,
               command: 'node_pty_attach',
               cwd: '',
               cause,
@@ -150,20 +152,30 @@ export const NodePtyBackendLive = Layer.effect(
         }),
       replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
       inspect: (ref) =>
-        Effect.succeed({
-          alive: Boolean(liveSessions.get(ref.ptySessionId)?.running),
-        }),
+        Effect.succeed(
+          ref.backend === 'node_pty' && liveSessions.get(ref.ptySessionId)?.running
+            ? { status: 'alive' as const }
+            : { status: 'missing' as const },
+        ),
       kill: (ref) =>
         Effect.try({
           try: () => {
-            const live = liveSessions.get(ref.ptySessionId);
+            if (ref.backend !== 'node_pty') {
+              throw new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`);
+            }
+            const nodeRef = ref;
+            const live = liveSessions.get(nodeRef.ptySessionId);
             if (!live) {
               return;
             }
             live.process.kill();
-            liveSessions.delete(ref.ptySessionId);
+            liveSessions.delete(nodeRef.ptySessionId);
           },
-          catch: (cause) => new PtyKillError({ ptySessionId: ref.ptySessionId, cause }),
+          catch: (cause) =>
+            new PtyKillError({
+              ptySessionId: ref.backend === 'node_pty' ? ref.ptySessionId : undefined,
+              cause,
+            }),
         }),
     } satisfies PtyBackendShape;
   }),

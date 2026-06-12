@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 
 import { Context, Effect, Either, Layer, Schema } from 'effect';
@@ -8,7 +9,7 @@ import type { LaunchSessionOutput, PtyWebSocketOutputMessage } from '@isagi/cont
 
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import type { PtySessionRow } from '../surfaces/index.js';
-import { PtyBackend } from './node-pty.adapter.js';
+import { PtyBackendRegistry } from './pty-backend-registry.js';
 import {
   appendLog,
   MissingLaunchWorktree,
@@ -18,11 +19,12 @@ import {
 import {
   PtyResizeError,
   PtyServiceError,
-  PtyStartError,
   PtyWriteError,
   type BackendAttachment,
   type BackendSessionRef,
   type LaunchPtySessionInput,
+  type PtyBackend,
+  type PtyBackendRegistry as PtyBackendRegistryService,
   type PtyExit,
   type PtySessionLaunchMetadata,
 } from './types.js';
@@ -30,12 +32,19 @@ import {
 const defaultCols = 100;
 const defaultRows = 30;
 const orphanLogSampleSize = 5;
+const statusPollIntervalMs = 10_000;
 
 const nodePtyBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   backend: Schema.Literal('node_pty'),
   ptySessionId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   pid: Schema.NullOr(Schema.Number.pipe(Schema.int())),
+});
+
+const tmuxBackendRefSchema = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  backend: Schema.Literal('tmux'),
+  sessionName: Schema.String.pipe(Schema.minLength(1)),
 });
 
 export type PtyLaunchError = DatabaseError | PtyServiceError;
@@ -88,13 +97,15 @@ export const PtyServiceLive = Layer.scoped(
   PtyService,
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
-    const backend = yield* PtyBackend;
+    const registry = yield* PtyBackendRegistry;
     const directory = yield* DataDirectory;
     const activeAttachments = new Map<number, ActiveAttachment>();
+    const dataDirHash = dataDirectoryHash(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* recoverStaleSessions(repository);
+    yield* reconcilePersistedSessions(repository, registry, { startup: true });
+    const pollTimer = startStatusPolling(repository, registry);
 
     const service = {
       launch: (input) =>
@@ -132,34 +143,56 @@ export const PtyServiceLive = Layer.scoped(
               }),
             );
 
-          if (metadata.logPath && !existsSync(metadata.logPath)) {
-            appendLog(metadata.logPath, '');
-          }
-
-          const startResult = yield* backend
-            .launch({
-              ptySessionId: metadata.ptySessionId,
-              command: metadata.command,
-              cwd: metadata.cwd,
-              env: launchEnv(),
-              cols: defaultCols,
-              rows: defaultRows,
-              logPath: metadata.logPath,
-              onExit: (exit) =>
-                void Effect.runPromise(
-                  handleExit(repository, activeAttachments, metadata.ptySessionId, exit),
-                ),
-            })
-            .pipe(Effect.either);
+          const selectedBackend = yield* registry.selectForLaunch();
+          const launchResult = yield* launchWithBackend({
+            backend: selectedBackend,
+            metadata,
+            repository,
+            activeAttachments,
+            dataDirHash,
+            sessionsPath: directory.paths.sessionsPath,
+          }).pipe(Effect.either);
+          const startResult =
+            Either.isLeft(launchResult) && selectedBackend.name === 'tmux'
+              ? yield* Effect.gen(function* () {
+                  yield* bestEffortKillPersistedSession(
+                    repository,
+                    registry,
+                    metadata.ptySessionId,
+                  );
+                  const fallbackBackend = yield* registry.get('node_pty').pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new PtyServiceError({
+                          code: 'backend_unavailable',
+                          message: `PTY backend ${error.backend} is not supported.`,
+                          ptySessionId: metadata.ptySessionId,
+                          cause: error,
+                        }),
+                    ),
+                  );
+                  return yield* launchWithBackend({
+                    backend: fallbackBackend,
+                    metadata,
+                    repository,
+                    activeAttachments,
+                    dataDirHash,
+                    sessionsPath: directory.paths.sessionsPath,
+                  }).pipe(Effect.either);
+                })
+              : launchResult;
 
           if (Either.isLeft(startResult)) {
             const message = spawnFailureMessage(metadata.command, metadata.cwd, startResult.left);
             console.warn(
               `[runtime] PTY launch failed ptySessionId=${metadata.ptySessionId} worktreeId=${metadata.worktreeId} command=${metadata.command}`,
-              startResult.left.cause,
+              startResult.left,
             );
-            if (metadata.logPath) {
-              appendLog(metadata.logPath, message);
+            const failedSession = yield* repository
+              .findSession(metadata.ptySessionId)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (failedSession?.logPath) {
+              appendLog(failedSession.logPath, message);
             }
             yield* repository.transitionSession({
               ptySessionId: metadata.ptySessionId,
@@ -170,7 +203,7 @@ export const PtyServiceLive = Layer.scoped(
             });
           } else {
             console.info(
-              `[runtime] PTY launch running ptySessionId=${metadata.ptySessionId} worktreeId=${metadata.worktreeId} backend=${backend.name}`,
+              `[runtime] PTY launch running ptySessionId=${metadata.ptySessionId} worktreeId=${metadata.worktreeId} backend=${startResult.right.backend}`,
             );
             yield* repository
               .updateBackendRef({
@@ -188,8 +221,9 @@ export const PtyServiceLive = Layer.scoped(
                   }),
                 ),
                 Effect.catchAll((error) =>
-                  backend
-                    .kill(startResult.right)
+                  registry
+                    .get(startResult.right.backend)
+                    .pipe(Effect.flatMap((backend) => backend.kill(startResult.right)))
                     .pipe(Effect.ignore, Effect.zipRight(Effect.fail(error))),
                 ),
               );
@@ -226,6 +260,17 @@ export const PtyServiceLive = Layer.scoped(
           }
 
           const ref = yield* decodeBackendRef(session);
+          const backend = yield* registry.get(session.backend).pipe(
+            Effect.mapError(
+              (error) =>
+                new PtyServiceError({
+                  code: 'backend_unavailable',
+                  message: `PTY backend ${error.backend} is not supported.`,
+                  ptySessionId: session.id,
+                  cause: error,
+                }),
+            ),
+          );
           yield* detachActiveAttachment(activeAttachments, session.id);
           const attachResult = yield* backend
             .attach({
@@ -233,28 +278,31 @@ export const PtyServiceLive = Layer.scoped(
               cols: defaultCols,
               rows: defaultRows,
               onOutput: (data) => input.send({ type: 'output', data }),
-              onExit: (exit) => input.send({ type: 'exit', ...exit }),
+              onSessionExit: (exit) => input.send({ type: 'exit', ...exit }),
             })
             .pipe(Effect.either);
 
           if (Either.isLeft(attachResult)) {
-            yield* repository.transitionSession({
-              ptySessionId: session.id,
-              status: 'failed',
-              statusReason: 'runtime_ephemeral_lost',
-              exitCode: null,
-              signal: null,
-            });
+            yield* handleAttachFailure(repository, backend, session, ref);
             return yield* Effect.fail(
               new PtyServiceError({
-                code: 'backend_session_missing',
-                message: `PTY session ${session.id} is missing its runtime-local backend session.`,
+                code: 'backend_attach_failed',
+                message: `Could not attach to PTY session ${session.id}.`,
                 ptySessionId: session.id,
                 cause: attachResult.left,
               }),
             );
           }
 
+          if (session.statusReason === 'backend_unavailable') {
+            yield* repository.transitionSession({
+              ptySessionId: session.id,
+              status: 'running',
+              statusReason: null,
+              exitCode: session.exitCode,
+              signal: session.signal,
+            });
+          }
           const attachmentId = Symbol(`pty-attachment-${session.id}`);
           activeAttachments.set(session.id, {
             ptySessionId: session.id,
@@ -278,6 +326,17 @@ export const PtyServiceLive = Layer.scoped(
       replay: (input) =>
         Effect.gen(function* () {
           const ref = yield* decodeBackendRef(input.session);
+          const backend = yield* registry.get(input.session.backend).pipe(
+            Effect.mapError(
+              (error) =>
+                new PtyServiceError({
+                  code: 'backend_unavailable',
+                  message: `PTY backend ${error.backend} is not supported.`,
+                  ptySessionId: input.session.id,
+                  cause: error,
+                }),
+            ),
+          );
           yield* backend.replay({
             ref,
             logPath: input.session.logPath,
@@ -317,6 +376,7 @@ export const PtyServiceLive = Layer.scoped(
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
+        clearInterval(pollTimer);
         const sessions = yield* repository.listLivePersistedSessions.pipe(
           Effect.orElseSucceed(() => []),
         );
@@ -325,8 +385,17 @@ export const PtyServiceLive = Layer.scoped(
         }
         activeAttachments.clear();
         for (const session of sessions) {
+          if (session.backend !== 'node_pty') {
+            continue;
+          }
           const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
           if (ref) {
+            const backend = yield* registry
+              .get(session.backend)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (!backend) {
+              continue;
+            }
             yield* backend.kill(ref).pipe(Effect.ignore);
           }
           yield* repository
@@ -344,20 +413,85 @@ export const PtyServiceLive = Layer.scoped(
   }),
 );
 
-function recoverStaleSessions(repository: PtyRepositoryService) {
+function startStatusPolling(repository: PtyRepositoryService, registry: PtyBackendRegistryService) {
+  const timer = setInterval(() => {
+    void Effect.runPromise(
+      reconcilePersistedSessions(repository, registry, { startup: false }).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() => {
+            console.warn('[runtime] PTY status polling failed', error);
+          }),
+        ),
+      ),
+    );
+  }, statusPollIntervalMs);
+  timer.unref();
+  return timer;
+}
+
+function reconcilePersistedSessions(
+  repository: PtyRepositoryService,
+  registry: PtyBackendRegistryService,
+  options: { readonly startup: boolean },
+) {
   return Effect.gen(function* () {
     const sessions = yield* repository.listLivePersistedSessions;
     for (const session of sessions) {
-      if (session.backend !== 'node_pty') {
+      if (session.backend === 'node_pty' && options.startup) {
+        yield* transitionIfChanged(repository, session, {
+          status: 'failed',
+          statusReason: 'runtime_ephemeral_lost',
+        });
         continue;
       }
-      yield* repository.transitionSession({
-        ptySessionId: session.id,
-        status: 'failed',
-        statusReason: 'runtime_ephemeral_lost',
-        exitCode: null,
-        signal: null,
-      });
+
+      const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
+      if (!ref) {
+        yield* transitionIfChanged(repository, session, {
+          status: 'failed',
+          statusReason: 'backend_session_missing',
+        });
+        continue;
+      }
+      const backend = yield* registry.get(session.backend).pipe(Effect.orElseSucceed(() => null));
+      if (!backend) {
+        yield* transitionIfChanged(repository, session, {
+          status: 'running',
+          statusReason: 'backend_unavailable',
+        });
+        continue;
+      }
+      const inspection = yield* backend
+        .inspect(ref)
+        .pipe(
+          Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })),
+        );
+      switch (inspection.status) {
+        case 'alive':
+          yield* transitionIfChanged(
+            repository,
+            session,
+            { status: 'running', statusReason: null },
+            options.startup ? new Date().toISOString() : undefined,
+          );
+          break;
+        case 'unavailable':
+          yield* transitionIfChanged(repository, session, {
+            status: 'running',
+            statusReason: 'backend_unavailable',
+          });
+          break;
+        case 'missing':
+          // Phase 2 limitation: tmux cannot currently distinguish normal shell exit from
+          // externally missing backend session. Treat all missing tmux sessions as failed
+          // until the backend records exit attribution explicitly.
+          yield* transitionIfChanged(repository, session, {
+            status: 'failed',
+            statusReason:
+              session.backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_session_missing',
+          });
+          break;
+      }
     }
   });
 }
@@ -405,6 +539,165 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
   });
 }
 
+function launchWithBackend(input: {
+  readonly backend: PtyBackend;
+  readonly metadata: PtySessionLaunchMetadata;
+  readonly repository: PtyRepositoryService;
+  readonly activeAttachments: Map<number, ActiveAttachment>;
+  readonly dataDirHash: string;
+  readonly sessionsPath: string;
+}) {
+  return Effect.gen(function* () {
+    const backendMetadata = backendMetadataForLaunch(
+      input.backend,
+      input.metadata,
+      input.dataDirHash,
+      input.sessionsPath,
+    );
+    if (backendMetadata.logPath && !existsSync(backendMetadata.logPath)) {
+      appendLog(backendMetadata.logPath, '');
+    }
+    yield* input.repository.updateBackendMetadata({
+      ptySessionId: input.metadata.ptySessionId,
+      backend: input.backend.name,
+      backendRefJson: JSON.stringify(backendMetadata.ref),
+      logMode: backendMetadata.logMode,
+      logPath: backendMetadata.logPath,
+    });
+    const startResult = yield* input.backend.launch({
+      ptySessionId: input.metadata.ptySessionId,
+      backendSessionName: backendMetadata.backendSessionName,
+      command: input.metadata.command,
+      cwd: input.metadata.cwd,
+      env: launchEnv(),
+      cols: defaultCols,
+      rows: defaultRows,
+      logPath: backendMetadata.logPath,
+      onExit: (exit) =>
+        void Effect.runPromise(
+          handleExit(input.repository, input.activeAttachments, input.metadata.ptySessionId, exit),
+        ),
+    });
+    return startResult;
+  });
+}
+
+function backendMetadataForLaunch(
+  backend: PtyBackend,
+  metadata: PtySessionLaunchMetadata,
+  dataDirHash: string,
+  sessionsPath: string,
+) {
+  if (backend.name === 'tmux') {
+    const sessionName = `isagi_${dataDirHash}_${metadata.ptySessionId}`;
+    return {
+      backendSessionName: sessionName,
+      logMode: 'none' as const,
+      logPath: null,
+      ref: {
+        schemaVersion: 1,
+        backend: 'tmux',
+        sessionName,
+      } as const,
+    };
+  }
+  const logPath = join(sessionsPath, `${metadata.ptySessionId}.ptylog`);
+  return {
+    backendSessionName: null,
+    logMode: 'backend_file' as const,
+    logPath: metadata.logPath ?? logPath,
+    ref: {
+      schemaVersion: 1,
+      backend: 'node_pty',
+      ptySessionId: metadata.ptySessionId,
+      pid: null,
+    } as const,
+  };
+}
+
+function handleAttachFailure(
+  repository: PtyRepositoryService,
+  backend: PtyBackend,
+  session: PtySessionRow,
+  ref: BackendSessionRef,
+) {
+  return Effect.gen(function* () {
+    if (session.backend === 'node_pty') {
+      yield* transitionIfChanged(repository, session, {
+        status: 'failed',
+        statusReason: 'runtime_ephemeral_lost',
+      });
+      return;
+    }
+    const inspection = yield* backend
+      .inspect(ref)
+      .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
+    if (inspection.status === 'missing') {
+      yield* transitionIfChanged(repository, session, {
+        status: 'failed',
+        statusReason: 'backend_session_missing',
+      });
+      return;
+    }
+    if (inspection.status === 'unavailable') {
+      yield* transitionIfChanged(repository, session, {
+        status: 'running',
+        statusReason: 'backend_unavailable',
+      });
+    }
+  });
+}
+
+function bestEffortKillPersistedSession(
+  repository: PtyRepositoryService,
+  registry: PtyBackendRegistryService,
+  ptySessionId: number,
+) {
+  return Effect.gen(function* () {
+    const session = yield* repository
+      .findSession(ptySessionId)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (!session) {
+      return;
+    }
+    const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
+    if (!ref) {
+      return;
+    }
+    const backend = yield* registry.get(session.backend).pipe(Effect.orElseSucceed(() => null));
+    if (!backend) {
+      return;
+    }
+    yield* backend.kill(ref).pipe(Effect.ignore);
+  });
+}
+
+function transitionIfChanged(
+  repository: PtyRepositoryService,
+  session: PtySessionRow,
+  next: {
+    readonly status: PtySessionRow['status'];
+    readonly statusReason: PtySessionRow['statusReason'];
+  },
+  lastSeenAt?: string,
+) {
+  if (
+    session.status === next.status &&
+    session.statusReason === next.statusReason &&
+    lastSeenAt === undefined
+  ) {
+    return Effect.void;
+  }
+  return repository.transitionSession({
+    ptySessionId: session.id,
+    status: next.status,
+    statusReason: next.statusReason,
+    exitCode: next.status === 'running' ? null : session.exitCode,
+    signal: next.status === 'running' ? null : session.signal,
+    ...(lastSeenAt !== undefined ? { lastSeenAt } : {}),
+  });
+}
+
 function detachActiveAttachment(
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
@@ -440,15 +733,17 @@ function decodeBackendRef(
 ): Effect.Effect<BackendSessionRef, PtyServiceError> {
   return Effect.try({
     try: () => {
-      const ref = Schema.decodeUnknownSync(nodePtyBackendRefSchema)(
-        JSON.parse(session.backendRefJson),
-      );
-      if (ref.ptySessionId !== session.id) {
-        throw new Error(
-          `Backend ref ptySessionId ${ref.ptySessionId} does not match row id ${session.id}.`,
-        );
+      const raw = JSON.parse(session.backendRefJson);
+      if (session.backend === 'tmux') {
+        return Schema.decodeUnknownSync(tmuxBackendRefSchema)(raw);
       }
-      return ref;
+      const ref = Schema.decodeUnknownSync(nodePtyBackendRefSchema)(raw);
+      if (ref.ptySessionId === session.id) {
+        return ref;
+      }
+      throw new Error(
+        `Backend ref ptySessionId ${ref.ptySessionId} does not match row id ${session.id}.`,
+      );
     },
     catch: (cause) =>
       new PtyServiceError({
@@ -562,8 +857,12 @@ function launchEnv() {
   } satisfies NodeJS.ProcessEnv;
 }
 
-function spawnFailureMessage(command: string, cwd: string, error: PtyStartError) {
-  const reason =
-    error.cause instanceof Error && error.cause.message ? error.cause.message : String(error.cause);
+function dataDirectoryHash(root: string) {
+  return createHash('sha256').update(resolve(root)).digest('hex').slice(0, 8);
+}
+
+function spawnFailureMessage(command: string, cwd: string, error: unknown) {
+  const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : error;
+  const reason = cause instanceof Error && cause.message ? cause.message : String(cause);
   return `\r\nFailed to start ${command} in ${cwd}: ${reason}\r\n`;
 }

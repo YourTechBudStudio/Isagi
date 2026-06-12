@@ -4,8 +4,10 @@ import { GitLive } from './git/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import {
   NodePtyBackendLive,
+  PtyBackendRegistryLive,
   PtyRepositoryLive,
   PtyServiceLive,
+  TmuxBackendLive,
   type PtyServiceShape,
 } from './pty/index.js';
 import {
@@ -35,7 +37,9 @@ const PtyRepositoryLayer = PtyRepositoryLive.pipe(
 );
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
+  Layer.provide(PtyBackendRegistryLive),
   Layer.provide(NodePtyBackendLive),
+  Layer.provide(TmuxBackendLive),
   Layer.provide(DataDirectoryLive),
 );
 
