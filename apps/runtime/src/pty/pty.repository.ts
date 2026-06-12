@@ -1,6 +1,6 @@
 import { appendFileSync } from 'node:fs';
 
-import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
@@ -20,6 +20,7 @@ import {
 import type { PtySessionLaunchMetadata } from './types.js';
 
 type PtySessionRecord = InferSelectModel<typeof ptySessions>;
+type PtySessionRecordWithSurface = PtySessionRecord & { readonly surfaceId: number };
 
 export interface PtyRepositoryService {
   readonly createLaunchMetadata: (input: {
@@ -65,6 +66,7 @@ export const PtyRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const surfaces = yield* SurfaceRepository;
+    const ptySessionColumns = getTableColumns(ptySessions);
 
     return {
       createLaunchMetadata: (input) =>
@@ -92,7 +94,12 @@ export const PtyRepositoryLive = Layer.effect(
           ),
       findSession: (ptySessionId) =>
         database.use('find_pty_session', (db) => {
-          const row = db.select().from(ptySessions).where(eq(ptySessions.id, ptySessionId)).get();
+          const row = db
+            .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+            .from(ptySessions)
+            .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+            .where(eq(ptySessions.id, ptySessionId))
+            .get();
           return row ? ptySessionRow(row) : null;
         }),
       listSessionLogPaths: database.use('list_pty_session_log_paths', (db) =>
@@ -104,11 +111,19 @@ export const PtyRepositoryLive = Layer.effect(
       ),
       listSessions: (input) =>
         database.use('list_pty_sessions', (db) => {
-          const query = db.select().from(ptySessions);
           const rows =
             input?.statuses && input.statuses.length > 0
-              ? query.where(inArray(ptySessions.status, [...input.statuses])).all()
-              : query.all();
+              ? db
+                  .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+                  .from(ptySessions)
+                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+                  .where(inArray(ptySessions.status, [...input.statuses]))
+                  .all()
+              : db
+                  .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+                  .from(ptySessions)
+                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+                  .all();
           return rows.map(ptySessionRow);
         }),
       updateBackendRef: (input) =>
@@ -198,10 +213,11 @@ function isMissingWorktreeCause(cause: unknown, worktreeId: number) {
   return cause instanceof SurfaceRepositoryWorktreeMissing && cause.worktreeId === worktreeId;
 }
 
-function ptySessionRow(row: PtySessionRecord): PtySessionRow {
+function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
   return {
     id: row.id,
     paneId: row.paneId,
+    surfaceId: row.surfaceId,
     worktreeId: row.worktreeId,
     backend: row.backend,
     backendRefJson: row.backendRefJson,

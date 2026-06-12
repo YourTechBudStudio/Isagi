@@ -4,6 +4,7 @@ import {
   apiBasePath,
   apiEndpoints,
   ptySessionWebSocketEndpoint,
+  runtimeEventsWebSocketEndpoint,
   apiErrorResponseSchema,
   apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
@@ -87,6 +88,7 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.surfaces.launchTerminalSession>
   >;
   readonly resolvePtyWebSocketUrl: (ptySessionId: number) => string;
+  readonly resolveRuntimeEventsWebSocketUrl: () => string;
   readonly addProject: (
     path: string,
   ) => Effect.Effect<AddProjectOutput, RuntimeEndpointError<typeof apiEndpoints.projects.add>>;
@@ -155,6 +157,11 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
         `${apiBasePath}${interpolatePath(ptySessionWebSocketEndpoint.path, { ptySessionId })}`,
         runtimeUrl,
       );
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      return httpUrl.toString();
+    },
+    resolveRuntimeEventsWebSocketUrl: () => {
+      const httpUrl = new URL(`${apiBasePath}${runtimeEventsWebSocketEndpoint.path}`, runtimeUrl);
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },

@@ -19,7 +19,7 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
-import type { SurfaceDetail } from '@isagi/contracts';
+import type { RuntimeEvent, SurfaceDetail } from '@isagi/contracts';
 
 import {
   DataDirectory,
@@ -27,6 +27,11 @@ import {
   RuntimeDatabaseLive,
   type DataDirectoryService,
 } from '../persistence/index.js';
+import {
+  RuntimeEventBus,
+  RuntimeEventBusLive,
+  type RuntimeEventBusService,
+} from '../runtime-events/index.js';
 import {
   SurfaceRepositoryLive,
   SurfaceService,
@@ -214,6 +219,57 @@ test('exit updates status and attention honestly', async () => {
 
     assert.equal(output.detail.attention, 'error');
     assert.equal(output.detail.panes[0]?.ptySession?.exitCode, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY lifecycle publishes session change events for launch and process exit', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-events-exit-'));
+  const fake = fakeBackend();
+  const events: RuntimeEvent[] = [];
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        const launched = yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+        fake.exits.get(launched.ptySessionId)?.({ exitCode: 1, signal: null });
+        yield* waitUntil(() => events.length >= 2);
+        return { launched, launchEvent: events[0]!, exitEvent: events[1]! };
+      }).pipe(Effect.provide(testLayer(dataRoot, fake.backend, { events }))),
+    );
+
+    assert.deepEqual(output.launchEvent, {
+      id: output.launchEvent.id,
+      type: 'pty_session_changed',
+      occurredAt: output.launchEvent.occurredAt,
+      payload: {
+        ptySessionId: output.launched.ptySessionId,
+        worktreeId: output.launched.worktreeId,
+        surfaceId: output.launched.surfaceId,
+        paneId: output.launched.paneId,
+        previousStatus: 'starting',
+        status: 'running',
+        previousStatusReason: null,
+        statusReason: null,
+      },
+    } satisfies RuntimeEvent);
+    assert.deepEqual(output.exitEvent, {
+      id: output.exitEvent.id,
+      type: 'pty_session_changed',
+      occurredAt: output.exitEvent.occurredAt,
+      payload: {
+        ptySessionId: output.launched.ptySessionId,
+        worktreeId: output.launched.worktreeId,
+        surfaceId: output.launched.surfaceId,
+        paneId: output.launched.paneId,
+        previousStatus: 'running',
+        status: 'failed',
+        previousStatusReason: null,
+        statusReason: null,
+      },
+    } satisfies RuntimeEvent);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -479,6 +535,68 @@ test('startup reconciliation treats missing tmux sessions as backend missing eve
 
     assert.equal(recovered.panes[0]?.ptySession?.status, 'failed');
     assert.equal(recovered.panes[0]?.ptySession?.statusReason, 'backend_session_missing');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup reconciliation publishes missing tmux session events through the real PTY service', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-events-tmux-missing-'));
+  const events: RuntimeEvent[] = [];
+  try {
+    const launched = await Effect.runPromise(
+      createPersistedTmuxSession('/repo/isagi', dataRoot, { statusReason: null }).pipe(
+        Effect.provide(repositoryOnlyLayer(dataRoot)),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* PtyService;
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeTmuxBackend('missing'), { events }))),
+    );
+    const event = events[0];
+
+    assert.ok(event);
+
+    assert.deepEqual(event, {
+      id: event.id,
+      type: 'pty_session_changed',
+      occurredAt: event.occurredAt,
+      payload: {
+        ptySessionId: launched.ptySessionId,
+        worktreeId: launched.worktreeId,
+        surfaceId: launched.surfaceId,
+        paneId: launched.paneId,
+        previousStatus: 'running',
+        status: 'failed',
+        previousStatusReason: null,
+        statusReason: 'backend_session_missing',
+      },
+    } satisfies RuntimeEvent);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup reconciliation does not publish when only lastSeenAt changes', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-events-no-change-'));
+  const events: RuntimeEvent[] = [];
+  try {
+    await Effect.runPromise(
+      createPersistedTmuxSession('/repo/isagi', dataRoot, { statusReason: null }).pipe(
+        Effect.provide(repositoryOnlyLayer(dataRoot)),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* PtyService;
+        yield* Effect.sleep('50 millis');
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeTmuxBackend('alive'), { events }))),
+    );
+
+    assert.deepEqual(events, []);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -967,7 +1085,11 @@ function repositoryOnlyLayer(dataRoot: string) {
   return Layer.mergeAll(workspaceRepository, surfaceRepository, ptyRepository);
 }
 
-function testLayer(dataRoot: string, backend: PtyBackendShape) {
+function testLayer(
+  dataRoot: string,
+  backend: PtyBackendShape,
+  options: { readonly events?: RuntimeEvent[] | undefined } = {},
+) {
   const dataDirectory = dataDirectoryService(dataRoot);
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
@@ -987,12 +1109,13 @@ function testLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(Layer.succeed(PtyBackend, backend)),
     Layer.provide(dataDirectoryLayer),
   );
+  const ptyServiceWithEvents = Layer.provideMerge(ptyService, runtimeEventBusLayer(options.events));
   return Layer.mergeAll(
     workspaceRepository,
     surfaceRepository,
     surfaceService,
     ptyRepository,
-    ptyService,
+    ptyServiceWithEvents,
   );
 }
 
@@ -1005,7 +1128,32 @@ function killRetryLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(Layer.succeed(PtyBackend, backend)),
     Layer.provide(dataDirectoryLayer),
   );
-  return ptyService;
+  return Layer.provideMerge(ptyService, RuntimeEventBusLive);
+}
+
+function runtimeEventBusLayer(events: RuntimeEvent[] | undefined) {
+  if (!events) {
+    return RuntimeEventBusLive;
+  }
+  return Layer.succeed(RuntimeEventBus, {
+    publish: (event) =>
+      Effect.sync(() => {
+        events.push(event);
+      }),
+    subscribe: Effect.die('Event sink test bus does not support subscriptions.'),
+  } satisfies RuntimeEventBusService);
+}
+
+function waitUntil(predicate: () => boolean) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (predicate()) {
+        return;
+      }
+      yield* Effect.sleep('10 millis');
+    }
+    return yield* Effect.die('Timed out waiting for predicate.');
+  });
 }
 
 function retryRepository() {
@@ -1016,6 +1164,7 @@ function retryRepository() {
         retrySession = {
           id: 1,
           paneId: 1,
+          surfaceId: 1,
           worktreeId: 1,
           backend: 'node_pty',
           backendRefJson: JSON.stringify({

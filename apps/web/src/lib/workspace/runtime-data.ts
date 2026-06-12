@@ -88,6 +88,10 @@ export function resolvePtyWebSocketUrl(ptySessionId: number): Effect.Effect<stri
   return getClient().pipe(Effect.map((client) => client.resolvePtyWebSocketUrl(ptySessionId)));
 }
 
+export function resolveRuntimeEventsWebSocketUrl(): Effect.Effect<string, Error> {
+  return getClient().pipe(Effect.map((client) => client.resolveRuntimeEventsWebSocketUrl()));
+}
+
 export function addProject(path: string): Effect.Effect<AddProjectOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.addProject(path)));
 }

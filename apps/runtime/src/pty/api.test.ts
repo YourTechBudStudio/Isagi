@@ -129,6 +129,7 @@ function fakePtyService(
             session: {
               id: input.ptySessionId,
               paneId: 1,
+              surfaceId: 1,
               worktreeId: 1,
               backend: 'node_pty' as const,
               backendRefJson: JSON.stringify({

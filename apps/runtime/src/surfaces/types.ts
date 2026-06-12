@@ -43,6 +43,7 @@ export interface SurfacePaneRow {
 export interface PtySessionRow {
   readonly id: number;
   readonly paneId: number;
+  readonly surfaceId: number;
   readonly worktreeId: number;
   readonly backend: PtySessionBackend;
   readonly backendRefJson: string;

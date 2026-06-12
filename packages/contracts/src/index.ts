@@ -1,6 +1,7 @@
 import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
+import { runtimeEventsWebSocketEndpoint } from './runtime-events/api.js';
 import { surfacesEndpoints } from './surfaces/api.js';
 import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
@@ -9,6 +10,7 @@ export const apiEndpoints = {
   health: healthEndpoint,
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
+  runtimeEvents: runtimeEventsWebSocketEndpoint,
   worktrees: worktreesEndpoints,
   surfaces: surfacesEndpoints,
   paths: pathsEndpoints,
@@ -131,6 +133,19 @@ export type {
   RelocateProjectInput,
   RelocateProjectOutput,
 } from './projects/types.js';
+export { runtimeEventsWebSocketEndpoint } from './runtime-events/api.js';
+export {
+  ptySessionChangedEventSchema,
+  runtimeEventBaseSchema,
+  runtimeEventSchema,
+  runtimeEventTypeSchema,
+} from './runtime-events/types.js';
+export type {
+  PtySessionChangedEvent,
+  RuntimeEvent,
+  RuntimeEventBase,
+  RuntimeEventType,
+} from './runtime-events/types.js';
 export { ptySessionWebSocketEndpoint, surfacesEndpoints } from './surfaces/api.js';
 export {
   agentHarnessSchema,

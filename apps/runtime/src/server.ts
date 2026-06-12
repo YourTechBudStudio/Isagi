@@ -8,6 +8,7 @@ import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
 import { registerPtyApi } from './pty/index.js';
+import { registerRuntimeEventsApi } from './runtime-events/index.js';
 import { RuntimeLayer } from './runtime.layer.js';
 import { registerSurfacesApi } from './surfaces/index.js';
 import { registerWorkspaceApi } from './workspace/api.js';
@@ -70,6 +71,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerWorkspaceApi(fastify, runtime);
       registerSurfacesApi(fastify, runtime);
       registerPtyApi(fastify, runtime);
+      registerRuntimeEventsApi(fastify, runtime);
       registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>

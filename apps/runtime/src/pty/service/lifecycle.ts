@@ -1,9 +1,11 @@
 import { Effect } from 'effect';
 
+import type { RuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtySessionRow } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
+import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './events.js';
 
 export interface IntentionalKillState {
   completed: boolean;
@@ -12,6 +14,7 @@ export interface IntentionalKillState {
 
 export function handleExit(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   intentionalKills: Map<number, IntentionalKillState>,
   ptySessionId: number,
@@ -28,21 +31,22 @@ export function handleExit(
       }
       return;
     }
-    yield* persistExit(repository, activeAttachments, ptySessionId, exit);
+    yield* persistExit(repository, eventBus, activeAttachments, ptySessionId, exit);
   });
 }
 
 export function persistExit(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,
 ) {
-  return persistExitOnce(repository, activeAttachments, ptySessionId, exit).pipe(
+  return persistExitOnce(repository, eventBus, activeAttachments, ptySessionId, exit).pipe(
     Effect.catchAll((error) =>
       Effect.sync(() => {
         console.error(`[runtime] Failed to persist PTY exit for session ${ptySessionId}`, error);
-        retryPersistExitUntilSuccess(repository, activeAttachments, ptySessionId, exit);
+        retryPersistExitUntilSuccess(repository, eventBus, activeAttachments, ptySessionId, exit);
       }),
     ),
   );
@@ -50,6 +54,7 @@ export function persistExit(
 
 export function retryPersistKilledUntilSuccess(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   intentionalKills: Map<number, IntentionalKillState>,
   killState: IntentionalKillState,
   backend: PtySessionRow['backend'],
@@ -58,13 +63,26 @@ export function retryPersistKilledUntilSuccess(
   const retry = () => {
     void Effect.runPromise(
       repository
-        .transitionSession({
-          ptySessionId,
-          status: 'killed',
-          statusReason: null,
-          exitCode: null,
-          signal: null,
-        })
+        .findSession(ptySessionId)
+        .pipe(
+          Effect.flatMap((session) =>
+            session
+              ? transitionSessionAndPublish(repository, eventBus, session, {
+                  ptySessionId,
+                  status: 'killed',
+                  statusReason: null,
+                  exitCode: null,
+                  signal: null,
+                })
+              : transitionSessionByIdAndPublish(repository, eventBus, {
+                  ptySessionId,
+                  status: 'killed',
+                  statusReason: null,
+                  exitCode: null,
+                  signal: null,
+                }),
+          ),
+        )
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
@@ -92,6 +110,7 @@ export function retryPersistKilledUntilSuccess(
 
 function persistExitOnce(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,
@@ -102,7 +121,7 @@ function persistExitOnce(
       `[runtime] PTY exited ptySessionId=${ptySessionId} status=${status} exitCode=${exit.exitCode ?? 'null'} signal=${exit.signal ?? 'null'}`,
     );
     activeAttachments.delete(ptySessionId);
-    yield* repository.transitionSession({
+    yield* transitionSessionByIdAndPublish(repository, eventBus, {
       ptySessionId,
       status,
       statusReason: null,
@@ -114,13 +133,14 @@ function persistExitOnce(
 
 function retryPersistExitUntilSuccess(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,
 ) {
   const retry = () => {
     void Effect.runPromise(
-      persistExitOnce(repository, activeAttachments, ptySessionId, exit).pipe(
+      persistExitOnce(repository, eventBus, activeAttachments, ptySessionId, exit).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.error(

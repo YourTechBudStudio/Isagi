@@ -10,6 +10,7 @@ import {
   TmuxBackendLive,
   type PtyServiceShape,
 } from './pty/index.js';
+import { RuntimeEventBusLive, type RuntimeEventBusService } from './runtime-events/index.js';
 import {
   SurfaceRepositoryLive,
   SurfaceServiceLive,
@@ -42,13 +43,18 @@ const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(TmuxBackendLive),
   Layer.provide(DataDirectoryLive),
 );
+const PtyServiceWithEventsLayer = Layer.provideMerge(PtyServiceLayer, RuntimeEventBusLive);
 
-export type RuntimeServices = WorkspaceServiceShape | SurfaceServiceShape | PtyServiceShape;
+export type RuntimeServices =
+  | WorkspaceServiceShape
+  | SurfaceServiceShape
+  | PtyServiceShape
+  | RuntimeEventBusService;
 
 export const RuntimeLayer = Layer.mergeAll(
   WorkspaceServiceLive,
   SurfaceServiceLive,
-  PtyServiceLayer,
+  PtyServiceWithEventsLayer,
 ).pipe(
   Layer.provide(
     Layer.mergeAll(

@@ -5,6 +5,7 @@ import { Context, Effect, Either, Layer } from 'effect';
 import type { LaunchSessionOutput, PtyWebSocketOutputMessage } from '@isagi/contracts';
 
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
+import { RuntimeEventBus, type RuntimeEventBusService } from '../runtime-events/index.js';
 import type { PtySessionRow } from '../surfaces/index.js';
 import { PtyBackend } from './backend.js';
 import {
@@ -19,6 +20,7 @@ import {
   type ActiveAttachment,
 } from './service/attachments.js';
 import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
+import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './service/events.js';
 import { runPtyGc, startPtyGcLoop } from './service/gc.js';
 import {
   handleExit,
@@ -99,15 +101,16 @@ export const PtyServiceLive = Layer.scoped(
     const repository = yield* PtyRepository;
     const backend = yield* PtyBackend;
     const directory = yield* DataDirectory;
+    const eventBus = yield* RuntimeEventBus;
     const activeAttachments = new Map<number, ActiveAttachment>();
     const intentionalKills = new Map<number, IntentionalKillState>();
     const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedSessions(repository, backend, { startup: true });
+    yield* reconcilePersistedSessions(repository, backend, eventBus, { startup: true });
     yield* runPtyGc(repository, backend, namespace);
-    const pollTimer = startStatusPolling(repository, backend);
+    const pollTimer = startStatusPolling(repository, backend, eventBus);
     const gcTimer = startPtyGcLoop(repository, backend, namespace);
 
     const service = {
@@ -154,6 +157,7 @@ export const PtyServiceLive = Layer.scoped(
             runtimeNamespace: namespace,
             sessionsPath: directory.paths.sessionsPath,
             intentionalKills,
+            eventBus,
           }).pipe(Effect.either);
 
           if (Either.isLeft(startResult)) {
@@ -168,7 +172,7 @@ export const PtyServiceLive = Layer.scoped(
             if (failedSession?.logPath) {
               appendLog(failedSession.logPath, message);
             }
-            yield* repository.transitionSession({
+            yield* transitionSessionByIdAndPublish(repository, eventBus, {
               ptySessionId: metadata.ptySessionId,
               status: 'failed',
               statusReason: 'backend_launch_failed',
@@ -186,7 +190,7 @@ export const PtyServiceLive = Layer.scoped(
               })
               .pipe(
                 Effect.zipRight(
-                  repository.transitionSession({
+                  transitionSessionByIdAndPublish(repository, eventBus, {
                     ptySessionId: metadata.ptySessionId,
                     status: 'running',
                     statusReason: null,
@@ -254,7 +258,7 @@ export const PtyServiceLive = Layer.scoped(
             .pipe(Effect.either);
 
           if (Either.isLeft(attachResult)) {
-            yield* handleAttachFailure(repository, backend, session, ref);
+            yield* handleAttachFailure(repository, backend, eventBus, session, ref);
             return yield* Effect.fail(
               new PtyServiceError({
                 code: 'backend_attach_failed',
@@ -266,7 +270,7 @@ export const PtyServiceLive = Layer.scoped(
           }
 
           if (session.statusReason === 'backend_unavailable') {
-            yield* repository.transitionSession({
+            yield* transitionSessionAndPublish(repository, eventBus, session, {
               ptySessionId: session.id,
               status: 'running',
               statusReason: null,
@@ -378,22 +382,32 @@ export const PtyServiceLive = Layer.scoped(
           if (Either.isLeft(killResult)) {
             intentionalKills.delete(session.id);
             if (killState.exit) {
-              yield* persistExit(repository, activeAttachments, session.id, killState.exit);
+              yield* persistExit(
+                repository,
+                eventBus,
+                activeAttachments,
+                session.id,
+                killState.exit,
+              );
             }
             return yield* Effect.fail(killResult.left);
           }
-          const transitionResult = yield* repository
-            .transitionSession({
+          const transitionResult = yield* transitionSessionAndPublish(
+            repository,
+            eventBus,
+            session,
+            {
               ptySessionId: session.id,
               status: 'killed',
               statusReason: null,
               exitCode: null,
               signal: null,
-            })
-            .pipe(Effect.either);
+            },
+          ).pipe(Effect.either);
           if (Either.isLeft(transitionResult)) {
             retryPersistKilledUntilSuccess(
               repository,
+              eventBus,
               intentionalKills,
               killState,
               session.backend,
@@ -431,25 +445,27 @@ export const PtyServiceLive = Layer.scoped(
             }
             yield* backend.kill(ref).pipe(Effect.ignore);
           }
-          yield* repository
-            .transitionSession({
-              ptySessionId: session.id,
-              status: 'failed',
-              statusReason: null,
-              exitCode: null,
-              signal: null,
-            })
-            .pipe(Effect.ignore);
+          yield* transitionSessionAndPublish(repository, eventBus, session, {
+            ptySessionId: session.id,
+            status: 'failed',
+            statusReason: null,
+            exitCode: null,
+            signal: null,
+          }).pipe(Effect.ignore);
         }
       }),
     );
   }),
 );
 
-function startStatusPolling(repository: PtyRepositoryService, backend: PtyBackendShape) {
+function startStatusPolling(
+  repository: PtyRepositoryService,
+  backend: PtyBackendShape,
+  eventBus: RuntimeEventBusService,
+) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedSessions(repository, backend, { startup: false }).pipe(
+      reconcilePersistedSessions(repository, backend, eventBus, { startup: false }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn('[runtime] PTY status polling failed', error);
@@ -465,13 +481,14 @@ function startStatusPolling(repository: PtyRepositoryService, backend: PtyBacken
 function reconcilePersistedSessions(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
+  eventBus: RuntimeEventBusService,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
     const sessions = yield* repository.listSessions({ statuses: ['starting', 'running'] });
     for (const session of sessions) {
       if (session.backend === 'node_pty' && options.startup) {
-        yield* transitionIfChanged(repository, session, {
+        yield* transitionIfChanged(repository, eventBus, session, {
           status: 'failed',
           statusReason: 'runtime_ephemeral_lost',
         });
@@ -480,14 +497,14 @@ function reconcilePersistedSessions(
 
       const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
       if (!ref) {
-        yield* transitionIfChanged(repository, session, {
+        yield* transitionIfChanged(repository, eventBus, session, {
           status: 'failed',
           statusReason: 'backend_session_missing',
         });
         continue;
       }
       if (session.backend !== backend.name) {
-        yield* transitionIfChanged(repository, session, {
+        yield* transitionIfChanged(repository, eventBus, session, {
           status: 'running',
           statusReason: 'backend_unavailable',
         });
@@ -502,13 +519,14 @@ function reconcilePersistedSessions(
         case 'alive':
           yield* transitionIfChanged(
             repository,
+            eventBus,
             session,
             { status: 'running', statusReason: null },
             options.startup ? new Date().toISOString() : undefined,
           );
           break;
         case 'unavailable':
-          yield* transitionIfChanged(repository, session, {
+          yield* transitionIfChanged(repository, eventBus, session, {
             status: 'running',
             statusReason: 'backend_unavailable',
           });
@@ -517,7 +535,7 @@ function reconcilePersistedSessions(
           // Phase 2 limitation: tmux cannot currently distinguish normal shell exit from
           // externally missing backend session. Treat all missing tmux sessions as failed
           // until the backend records exit attribution explicitly.
-          yield* transitionIfChanged(repository, session, {
+          yield* transitionIfChanged(repository, eventBus, session, {
             status: 'failed',
             statusReason:
               session.backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_session_missing',
@@ -536,6 +554,7 @@ function launchWithBackend(input: {
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly intentionalKills: Map<number, IntentionalKillState>;
+  readonly eventBus: RuntimeEventBusService;
 }) {
   return Effect.gen(function* () {
     const backendMetadata = backendMetadataForLaunch(
@@ -567,6 +586,7 @@ function launchWithBackend(input: {
         void Effect.runPromise(
           handleExit(
             input.repository,
+            input.eventBus,
             input.activeAttachments,
             input.intentionalKills,
             input.metadata.ptySessionId,
@@ -581,12 +601,13 @@ function launchWithBackend(input: {
 function handleAttachFailure(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
+  eventBus: RuntimeEventBusService,
   session: PtySessionRow,
   ref: BackendSessionRef,
 ) {
   return Effect.gen(function* () {
     if (session.backend === 'node_pty') {
-      yield* transitionIfChanged(repository, session, {
+      yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',
         statusReason: 'runtime_ephemeral_lost',
       });
@@ -596,14 +617,14 @@ function handleAttachFailure(
       .inspect(ref)
       .pipe(Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })));
     if (inspection.status === 'missing') {
-      yield* transitionIfChanged(repository, session, {
+      yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',
         statusReason: 'backend_session_missing',
       });
       return;
     }
     if (inspection.status === 'unavailable') {
-      yield* transitionIfChanged(repository, session, {
+      yield* transitionIfChanged(repository, eventBus, session, {
         status: 'running',
         statusReason: 'backend_unavailable',
       });
@@ -613,6 +634,7 @@ function handleAttachFailure(
 
 function transitionIfChanged(
   repository: PtyRepositoryService,
+  eventBus: RuntimeEventBusService,
   session: PtySessionRow,
   next: {
     readonly status: PtySessionRow['status'];
@@ -627,7 +649,7 @@ function transitionIfChanged(
   ) {
     return Effect.void;
   }
-  return repository.transitionSession({
+  return transitionSessionAndPublish(repository, eventBus, session, {
     ptySessionId: session.id,
     status: next.status,
     statusReason: next.statusReason,

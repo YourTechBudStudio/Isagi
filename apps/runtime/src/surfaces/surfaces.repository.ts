@@ -1,4 +1,4 @@
-import { eq, inArray, type InferSelectModel } from 'drizzle-orm';
+import { eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import {
@@ -29,6 +29,7 @@ import type {
 type WorktreeSurfaceRecord = InferSelectModel<typeof worktreeSurfaces>;
 type SurfacePaneRecord = InferSelectModel<typeof surfacePanes>;
 type PtySessionRecord = InferSelectModel<typeof ptySessions>;
+type PtySessionRecordWithSurface = PtySessionRecord & { readonly surfaceId: number };
 type EnvironmentFocusRecord = InferSelectModel<typeof worktreeEnvironmentStates>;
 
 export interface SurfaceRepositoryService {
@@ -73,6 +74,7 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
+    const ptySessionColumns = getTableColumns(ptySessions);
 
     return {
       worktreeExists: (worktreeId) =>
@@ -135,8 +137,9 @@ export const SurfaceRepositoryLive = Layer.effect(
             return [];
           }
           return db
-            .select()
+            .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
             .from(ptySessions)
+            .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
             .where(inArray(ptySessions.paneId, [...paneIds]))
             .all()
             .map(ptySessionRow);
@@ -409,10 +412,11 @@ function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
   };
 }
 
-function ptySessionRow(row: PtySessionRecord): PtySessionRow {
+function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
   return {
     id: row.id,
     paneId: row.paneId,
+    surfaceId: row.surfaceId,
     worktreeId: row.worktreeId,
     backend: row.backend,
     backendRefJson: row.backendRefJson,
