@@ -1,9 +1,11 @@
 import type {
   AgentHarness,
   AttentionState,
-  PtySessionAdapter,
+  PtySessionBackend,
+  PtySessionLogMode,
   PtySessionPurpose,
   PtySessionStatus,
+  PtySessionStatusReason,
   RuntimeSurfaceKind,
 } from '@isagi/contracts';
 
@@ -42,19 +44,22 @@ export interface PtySessionRow {
   readonly id: number;
   readonly paneId: number;
   readonly worktreeId: number;
-  readonly adapter: PtySessionAdapter;
+  readonly backend: PtySessionBackend;
+  readonly backendRefJson: string;
   readonly purpose: PtySessionPurpose;
   readonly harness: AgentHarness | null;
   readonly command: string;
   readonly cwd: string;
   readonly status: PtySessionStatus;
+  readonly statusReason: PtySessionStatusReason | null;
   readonly exitCode: number | null;
   readonly signal: string | null;
-  readonly logPath: string;
-  readonly logBytes: number;
+  readonly logMode: PtySessionLogMode;
+  readonly logPath: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly exitedAt: string | null;
+  readonly lastSeenAt: string | null;
 }
 
 export interface CreateSinglePaneSurfaceInput {
@@ -85,20 +90,23 @@ export interface CreateSinglePanePtySessionSurfaceOutput {
   readonly ptySessionId: number;
   readonly command: string;
   readonly cwd: string;
-  readonly logPath: string;
+  readonly logPath: string | null;
 }
 
 export interface CreatePtySessionMetadataInput {
   readonly paneId: number;
-  readonly adapter: PtySessionAdapter;
+  readonly backend: PtySessionBackend;
+  readonly backendRefJson: string;
   readonly purpose: PtySessionPurpose;
   readonly harness: AgentHarness | null;
   readonly command: string;
   readonly cwd: string;
   readonly status: PtySessionStatus;
+  readonly statusReason?: PtySessionStatusReason | null | undefined;
   readonly exitCode?: number | null | undefined;
   readonly signal?: string | null | undefined;
-  readonly logPath: string;
-  readonly logBytes?: number | undefined;
+  readonly logMode: PtySessionLogMode;
+  readonly logPath?: string | null | undefined;
   readonly exitedAt?: string | null | undefined;
+  readonly lastSeenAt?: string | null | undefined;
 }

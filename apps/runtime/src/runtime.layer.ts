@@ -3,7 +3,7 @@ import { Layer } from 'effect';
 import { GitLive } from './git/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import {
-  NodePtyAdapterLive,
+  NodePtyBackendLive,
   PtyRepositoryLive,
   PtyServiceLive,
   type PtyServiceShape,
@@ -35,7 +35,7 @@ const PtyRepositoryLayer = PtyRepositoryLive.pipe(
 );
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
-  Layer.provide(NodePtyAdapterLive),
+  Layer.provide(NodePtyBackendLive),
   Layer.provide(DataDirectoryLive),
 );
 

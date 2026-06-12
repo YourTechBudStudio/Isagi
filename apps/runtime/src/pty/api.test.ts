@@ -130,21 +130,30 @@ function fakePtyService(
               id: input.ptySessionId,
               paneId: 1,
               worktreeId: 1,
-              adapter: 'node_pty' as const,
+              backend: 'node_pty' as const,
+              backendRefJson: JSON.stringify({
+                schemaVersion: 1,
+                backend: 'node_pty',
+                ptySessionId: input.ptySessionId,
+                pid: 101,
+              }),
               purpose: 'terminal' as const,
               harness: null,
               command: 'bash',
               cwd: '/repo/isagi',
               status: running ? ('running' as const) : ('failed' as const),
+              statusReason: null,
               exitCode: null,
               signal: null,
+              logMode: 'backend_file' as const,
               logPath: '/tmp/no-log-needed',
-              logBytes: 5,
               createdAt: '2026-06-09T00:00:00.000Z',
               updatedAt: '2026-06-09T00:00:00.000Z',
               exitedAt: null,
+              lastSeenAt: null,
             },
-            replayOffset: 5,
+            attachmentId: running ? Symbol(`attachment-${input.ptySessionId}`) : null,
+            replayBytes: 5,
             live: running,
             unsubscribe: () => {},
           }),
@@ -158,7 +167,7 @@ function fakePtyService(
             }),
           )
         : Effect.sync(() => {
-            input.send({ type: 'replay_start', bytes: input.bytes });
+            input.send({ type: 'replay_start', bytes: input.bytes ?? 0 });
             input.send({ type: 'replay_end' });
           }),
     write: (input) =>

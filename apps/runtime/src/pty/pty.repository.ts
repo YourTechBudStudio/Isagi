@@ -3,7 +3,12 @@ import { appendFileSync } from 'node:fs';
 import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness, PtySessionPurpose, PtySessionStatus } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  PtySessionPurpose,
+  PtySessionStatus,
+  PtySessionStatusReason,
+} from '@isagi/contracts';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { ptySessions, surfacePanes, worktreeSurfaces } from '../persistence/schema.js';
@@ -30,19 +35,17 @@ export interface PtyRepositoryService {
   ) => Effect.Effect<PtySessionRow | null, DatabaseError>;
   readonly listSessionLogPaths: Effect.Effect<string[], DatabaseError>;
   readonly listLivePersistedSessions: Effect.Effect<PtySessionRow[], DatabaseError>;
-  readonly appendLogBytes: (input: {
+  readonly updateBackendRef: (input: {
     readonly ptySessionId: number;
-    readonly bytes: number;
-  }) => Effect.Effect<void, DatabaseError>;
-  readonly setLogBytes: (input: {
-    readonly ptySessionId: number;
-    readonly bytes: number;
+    readonly backendRefJson: string;
   }) => Effect.Effect<void, DatabaseError>;
   readonly transitionSession: (input: {
     readonly ptySessionId: number;
     readonly status: PtySessionStatus;
+    readonly statusReason?: PtySessionStatusReason | null | undefined;
     readonly exitCode?: number | null | undefined;
     readonly signal?: string | null | undefined;
+    readonly lastSeenAt?: string | null | undefined;
   }) => Effect.Effect<void, DatabaseError>;
 }
 
@@ -88,7 +91,7 @@ export const PtyRepositoryLive = Layer.effect(
           .select({ logPath: ptySessions.logPath })
           .from(ptySessions)
           .all()
-          .map((row) => row.logPath),
+          .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
       listLivePersistedSessions: database.use('list_live_persisted_pty_sessions', (db) =>
         db
@@ -98,25 +101,10 @@ export const PtyRepositoryLive = Layer.effect(
           .all()
           .map(ptySessionRow),
       ),
-      appendLogBytes: (input) =>
-        database.use('append_pty_log_bytes', (db) => {
-          const row = db
-            .select({ logBytes: ptySessions.logBytes })
-            .from(ptySessions)
-            .where(eq(ptySessions.id, input.ptySessionId))
-            .get();
-          if (!row) {
-            return;
-          }
+      updateBackendRef: (input) =>
+        database.use('update_pty_backend_ref', (db) => {
           db.update(ptySessions)
-            .set({ logBytes: row.logBytes + input.bytes, updatedAt: timestamp() })
-            .where(eq(ptySessions.id, input.ptySessionId))
-            .run();
-        }),
-      setLogBytes: (input) =>
-        database.use('set_pty_log_bytes', (db) => {
-          db.update(ptySessions)
-            .set({ logBytes: input.bytes, updatedAt: timestamp() })
+            .set({ backendRefJson: input.backendRefJson, updatedAt: timestamp() })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
         }),
@@ -145,10 +133,12 @@ export const PtyRepositoryLive = Layer.effect(
           db.update(ptySessions)
             .set({
               status: input.status,
+              statusReason: input.statusReason ?? null,
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
               updatedAt: now,
               exitedAt: input.status === 'exited' || input.status === 'failed' ? now : null,
+              ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
@@ -187,19 +177,22 @@ function ptySessionRow(row: PtySessionRecord): PtySessionRow {
     id: row.id,
     paneId: row.paneId,
     worktreeId: row.worktreeId,
-    adapter: row.adapter,
+    backend: row.backend,
+    backendRefJson: row.backendRefJson,
     purpose: row.purpose,
     harness: row.harness,
     command: row.command,
     cwd: row.cwd,
     status: row.status,
+    statusReason: row.statusReason,
     exitCode: row.exitCode,
     signal: row.signal,
+    logMode: row.logMode,
     logPath: row.logPath,
-    logBytes: row.logBytes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     exitedAt: row.exitedAt,
+    lastSeenAt: row.lastSeenAt,
   };
 }
 

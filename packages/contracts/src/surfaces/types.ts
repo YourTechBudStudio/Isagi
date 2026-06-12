@@ -59,26 +59,37 @@ export const ptySessionRouteParamsSchema = Schema.Struct({
 });
 
 export const ptySessionStatusSchema = Schema.Literal('starting', 'running', 'exited', 'failed');
-export const ptySessionAdapterSchema = Schema.Literal('node_pty');
+export const ptySessionBackendSchema = Schema.Literal('tmux', 'node_pty');
+export const ptySessionStatusReasonSchema = Schema.Literal(
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
+  'backend_launch_failed',
+  'runtime_ephemeral_lost',
+  'user_killed',
+);
 export const ptySessionPurposeSchema = Schema.Literal('agent', 'terminal');
 export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');
+export const ptySessionLogModeSchema = Schema.Literal('backend_file', 'none');
 
 export const ptySessionMetadataSchema = Schema.Struct({
   id: positiveIntegerSchema,
   paneId: positiveIntegerSchema,
   worktreeId: positiveIntegerSchema,
-  adapter: ptySessionAdapterSchema,
+  backend: ptySessionBackendSchema,
   purpose: ptySessionPurposeSchema,
   harness: Schema.NullOr(agentHarnessSchema),
   command: Schema.String,
   cwd: Schema.String,
   status: ptySessionStatusSchema,
+  statusReason: Schema.NullOr(ptySessionStatusReasonSchema),
   exitCode: Schema.NullOr(nonNegativeIntegerSchema),
   signal: Schema.NullOr(Schema.String),
-  logBytes: nonNegativeIntegerSchema,
+  logMode: ptySessionLogModeSchema,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   exitedAt: Schema.NullOr(Schema.String),
+  lastSeenAt: Schema.NullOr(Schema.String),
 });
 
 export const surfacePaneSchema = Schema.Struct({
@@ -142,6 +153,9 @@ export const ptyWebSocketErrorCodeSchema = Schema.Literal(
   'session_not_running',
   'log_read_failed',
   'worktree_not_found',
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
   'pty_write_failed',
   'pty_state_load_failed',
   'unknown',
@@ -187,8 +201,10 @@ export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
 >;
 export type PtySessionRouteParams = Schema.Schema.Type<typeof ptySessionRouteParamsSchema>;
 export type PtySessionStatus = Schema.Schema.Type<typeof ptySessionStatusSchema>;
-export type PtySessionAdapter = Schema.Schema.Type<typeof ptySessionAdapterSchema>;
+export type PtySessionBackend = Schema.Schema.Type<typeof ptySessionBackendSchema>;
+export type PtySessionStatusReason = Schema.Schema.Type<typeof ptySessionStatusReasonSchema>;
 export type PtySessionPurpose = Schema.Schema.Type<typeof ptySessionPurposeSchema>;
+export type PtySessionLogMode = Schema.Schema.Type<typeof ptySessionLogModeSchema>;
 export type AgentHarness = Schema.Schema.Type<typeof agentHarnessSchema>;
 export type PtySessionMetadata = Schema.Schema.Type<typeof ptySessionMetadataSchema>;
 export type SurfacePane = Schema.Schema.Type<typeof surfacePaneSchema>;

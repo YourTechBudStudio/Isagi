@@ -15,8 +15,8 @@ import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/
 import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { PtyService, PtyServiceError } from './pty.service.js';
-import { PtyResizeError, PtyWriteError } from './types.js';
+import { PtyService } from './pty.service.js';
+import { PtyResizeError, PtyServiceError, PtyWriteError } from './types.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -95,6 +95,7 @@ export function registerPtyApi(
       let replaying = true;
       let closed = false;
       let unsubscribe = () => {};
+      let attachmentId: symbol | null = null;
       const pending: PtyWebSocketOutputMessage[] = [];
       socket.once('close', () => {
         closed = true;
@@ -126,6 +127,7 @@ export function registerPtyApi(
           }
 
           const attachment = attachmentResult.right;
+          attachmentId = attachment.attachmentId;
           await new Promise((resolve) => setImmediate(resolve));
           send({
             type: 'session',
@@ -143,7 +145,7 @@ export function registerPtyApi(
               const pty = yield* PtyService;
               return yield* pty.replay({
                 session: attachment.session,
-                bytes: attachment.replayOffset,
+                bytes: attachment.replayBytes,
                 send,
               });
             }).pipe(Effect.either),
@@ -184,9 +186,14 @@ export function registerPtyApi(
         const effect = Effect.gen(function* () {
           const pty = yield* PtyService;
           if (parsed.type === 'input') {
-            return yield* pty.write({ ptySessionId, data: parsed.data });
+            return yield* pty.write({ ptySessionId, attachmentId, data: parsed.data });
           }
-          return yield* pty.resize({ ptySessionId, cols: parsed.cols, rows: parsed.rows });
+          return yield* pty.resize({
+            ptySessionId,
+            attachmentId,
+            cols: parsed.cols,
+            rows: parsed.rows,
+          });
         });
 
         void run(effect.pipe(Effect.either)).then(

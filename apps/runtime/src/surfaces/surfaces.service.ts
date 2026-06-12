@@ -172,18 +172,20 @@ function ptySessionForPane(ptySessions: readonly PtySessionRow[], paneId: number
     id: session.id,
     paneId: session.paneId,
     worktreeId: session.worktreeId,
-    adapter: session.adapter,
+    backend: session.backend,
     purpose: session.purpose,
     harness: session.harness,
     command: session.command,
     cwd: session.cwd,
     status: session.status,
+    statusReason: session.statusReason,
     exitCode: session.exitCode,
     signal: session.signal,
-    logBytes: session.logBytes,
+    logMode: session.logMode,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     exitedAt: session.exitedAt,
+    lastSeenAt: session.lastSeenAt,
   };
 }
 
