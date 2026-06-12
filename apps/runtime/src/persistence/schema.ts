@@ -120,19 +120,32 @@ export const ptySessions = sqliteTable(
     worktreeId: integer('worktree_id')
       .notNull()
       .references(() => worktrees.id, { onDelete: 'cascade' }),
-    adapter: text('adapter', { enum: ['node_pty'] }).notNull(),
+    backend: text('backend', { enum: ['tmux', 'node_pty'] }).notNull(),
+    backendRefJson: text('backend_ref_json').notNull(),
     purpose: text('purpose', { enum: ['agent', 'terminal'] }).notNull(),
     harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }),
     command: text('command').notNull(),
     cwd: text('cwd').notNull(),
-    status: text('status', { enum: ['starting', 'running', 'exited', 'failed'] }).notNull(),
+    status: text('status', {
+      enum: ['starting', 'running', 'exited', 'failed', 'killed'],
+    }).notNull(),
+    statusReason: text('status_reason', {
+      enum: [
+        'backend_unavailable',
+        'backend_session_missing',
+        'backend_attach_failed',
+        'backend_launch_failed',
+        'runtime_ephemeral_lost',
+      ],
+    }),
     exitCode: integer('exit_code'),
     signal: text('signal'),
-    logPath: text('log_path').notNull(),
-    logBytes: integer('log_bytes').notNull(),
+    logMode: text('log_mode', { enum: ['backend_file', 'none'] }).notNull(),
+    logPath: text('log_path'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
     exitedAt: text('exited_at'),
+    lastSeenAt: text('last_seen_at'),
   },
   (table) => [uniqueIndex('pty_sessions_pane_id_unique').on(table.paneId)],
 );

@@ -12,6 +12,7 @@ import {
   useWorkspaceSelectionSync,
 } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
+import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
 import {
   formatWorktreeSetupFailureDetails,
   useWorktreeSetupFailureStore,
@@ -116,6 +117,7 @@ export function WorkspacePage() {
 
   useWorkspaceSelectionSync();
   usePersistActiveContextSelection();
+  useRuntimeEventSubscription();
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.

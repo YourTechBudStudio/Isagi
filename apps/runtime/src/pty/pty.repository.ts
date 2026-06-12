@@ -1,9 +1,14 @@
 import { appendFileSync } from 'node:fs';
 
-import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness, PtySessionPurpose, PtySessionStatus } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  PtySessionPurpose,
+  PtySessionStatus,
+  PtySessionStatusReason,
+} from '@isagi/contracts';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { ptySessions, surfacePanes, worktreeSurfaces } from '../persistence/schema.js';
@@ -15,6 +20,7 @@ import {
 import type { PtySessionLaunchMetadata } from './types.js';
 
 type PtySessionRecord = InferSelectModel<typeof ptySessions>;
+type PtySessionRecordWithSurface = PtySessionRecord & { readonly surfaceId: number };
 
 export interface PtyRepositoryService {
   readonly createLaunchMetadata: (input: {
@@ -29,20 +35,27 @@ export interface PtyRepositoryService {
     ptySessionId: number,
   ) => Effect.Effect<PtySessionRow | null, DatabaseError>;
   readonly listSessionLogPaths: Effect.Effect<string[], DatabaseError>;
-  readonly listLivePersistedSessions: Effect.Effect<PtySessionRow[], DatabaseError>;
-  readonly appendLogBytes: (input: {
+  readonly listSessions: (input?: {
+    readonly statuses?: readonly PtySessionStatus[];
+  }) => Effect.Effect<PtySessionRow[], DatabaseError>;
+  readonly updateBackendRef: (input: {
     readonly ptySessionId: number;
-    readonly bytes: number;
+    readonly backendRefJson: string;
   }) => Effect.Effect<void, DatabaseError>;
-  readonly setLogBytes: (input: {
+  readonly updateBackendMetadata: (input: {
     readonly ptySessionId: number;
-    readonly bytes: number;
+    readonly backend: import('@isagi/contracts').PtySessionBackend;
+    readonly backendRefJson: string;
+    readonly logMode: import('@isagi/contracts').PtySessionLogMode;
+    readonly logPath: string | null;
   }) => Effect.Effect<void, DatabaseError>;
   readonly transitionSession: (input: {
     readonly ptySessionId: number;
     readonly status: PtySessionStatus;
+    readonly statusReason?: PtySessionStatusReason | null | undefined;
     readonly exitCode?: number | null | undefined;
     readonly signal?: string | null | undefined;
+    readonly lastSeenAt?: string | null | undefined;
   }) => Effect.Effect<void, DatabaseError>;
 }
 
@@ -53,6 +66,7 @@ export const PtyRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const surfaces = yield* SurfaceRepository;
+    const ptySessionColumns = getTableColumns(ptySessions);
 
     return {
       createLaunchMetadata: (input) =>
@@ -80,7 +94,12 @@ export const PtyRepositoryLive = Layer.effect(
           ),
       findSession: (ptySessionId) =>
         database.use('find_pty_session', (db) => {
-          const row = db.select().from(ptySessions).where(eq(ptySessions.id, ptySessionId)).get();
+          const row = db
+            .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+            .from(ptySessions)
+            .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+            .where(eq(ptySessions.id, ptySessionId))
+            .get();
           return row ? ptySessionRow(row) : null;
         }),
       listSessionLogPaths: database.use('list_pty_session_log_paths', (db) =>
@@ -88,35 +107,42 @@ export const PtyRepositoryLive = Layer.effect(
           .select({ logPath: ptySessions.logPath })
           .from(ptySessions)
           .all()
-          .map((row) => row.logPath),
+          .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
-      listLivePersistedSessions: database.use('list_live_persisted_pty_sessions', (db) =>
-        db
-          .select()
-          .from(ptySessions)
-          .where(inArray(ptySessions.status, ['starting', 'running']))
-          .all()
-          .map(ptySessionRow),
-      ),
-      appendLogBytes: (input) =>
-        database.use('append_pty_log_bytes', (db) => {
-          const row = db
-            .select({ logBytes: ptySessions.logBytes })
-            .from(ptySessions)
-            .where(eq(ptySessions.id, input.ptySessionId))
-            .get();
-          if (!row) {
-            return;
-          }
+      listSessions: (input) =>
+        database.use('list_pty_sessions', (db) => {
+          const rows =
+            input?.statuses && input.statuses.length > 0
+              ? db
+                  .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+                  .from(ptySessions)
+                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+                  .where(inArray(ptySessions.status, [...input.statuses]))
+                  .all()
+              : db
+                  .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
+                  .from(ptySessions)
+                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+                  .all();
+          return rows.map(ptySessionRow);
+        }),
+      updateBackendRef: (input) =>
+        database.use('update_pty_backend_ref', (db) => {
           db.update(ptySessions)
-            .set({ logBytes: row.logBytes + input.bytes, updatedAt: timestamp() })
+            .set({ backendRefJson: input.backendRefJson, updatedAt: timestamp() })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
         }),
-      setLogBytes: (input) =>
-        database.use('set_pty_log_bytes', (db) => {
+      updateBackendMetadata: (input) =>
+        database.use('update_pty_backend_metadata', (db) => {
           db.update(ptySessions)
-            .set({ logBytes: input.bytes, updatedAt: timestamp() })
+            .set({
+              backend: input.backend,
+              backendRefJson: input.backendRefJson,
+              logMode: input.logMode,
+              logPath: input.logPath,
+              updatedAt: timestamp(),
+            })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
         }),
@@ -145,10 +171,15 @@ export const PtyRepositoryLive = Layer.effect(
           db.update(ptySessions)
             .set({
               status: input.status,
+              statusReason: input.statusReason ?? null,
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
               updatedAt: now,
-              exitedAt: input.status === 'exited' || input.status === 'failed' ? now : null,
+              exitedAt:
+                input.status === 'exited' || input.status === 'failed' || input.status === 'killed'
+                  ? now
+                  : null,
+              ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
             .where(eq(ptySessions.id, input.ptySessionId))
             .run();
@@ -182,24 +213,28 @@ function isMissingWorktreeCause(cause: unknown, worktreeId: number) {
   return cause instanceof SurfaceRepositoryWorktreeMissing && cause.worktreeId === worktreeId;
 }
 
-function ptySessionRow(row: PtySessionRecord): PtySessionRow {
+function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
   return {
     id: row.id,
     paneId: row.paneId,
+    surfaceId: row.surfaceId,
     worktreeId: row.worktreeId,
-    adapter: row.adapter,
+    backend: row.backend,
+    backendRefJson: row.backendRefJson,
     purpose: row.purpose,
     harness: row.harness,
     command: row.command,
     cwd: row.cwd,
     status: row.status,
+    statusReason: row.statusReason,
     exitCode: row.exitCode,
     signal: row.signal,
+    logMode: row.logMode,
     logPath: row.logPath,
-    logBytes: row.logBytes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     exitedAt: row.exitedAt,
+    lastSeenAt: row.lastSeenAt,
   };
 }
 
@@ -211,7 +246,7 @@ function attentionForStatus(
   if (status === 'running' || status === 'starting') {
     return 'working' as const;
   }
-  if (status === 'exited' && exitCode === 0 && signal === null) {
+  if (status === 'killed' || (status === 'exited' && exitCode === 0 && signal === null)) {
     return 'idle' as const;
   }
   return 'error' as const;

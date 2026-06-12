@@ -2,7 +2,7 @@
 title: Project Settings
 status: candidate
 created: 2026-06-08
-updated: 2026-06-09
+updated: 2026-06-12
 tags: [candidate, settings, projects, trust, config]
 ---
 
@@ -37,6 +37,7 @@ Initial setting areas may include:
 - future project commands/defaults once those exist
 - future default shell/runtime launch preferences, likely with global defaults
   and project overrides only where projects prove they need them
+- future PTY/runtime lifecycle tuning, including configurable status polling and backend GC intervals with safe defaults
 - future agent harness launch commands/flags for Pi, OpenCode, Claude, Codex,
   and any later harnesses
 

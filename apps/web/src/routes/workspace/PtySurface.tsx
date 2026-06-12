@@ -90,7 +90,7 @@ function PtyPaneShell({
     setSocketError(null);
   }, [session?.exitCode, session?.id, session?.signal, session?.status]);
 
-  const dimmed = status === 'exited' || status === 'failed';
+  const dimmed = status === 'exited' || status === 'failed' || status === 'killed';
   const errored = status === 'failed';
   const paneNotice =
     socketError ??

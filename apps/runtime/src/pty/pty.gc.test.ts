@@ -1,0 +1,301 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import { Effect, Layer } from 'effect';
+
+import {
+  DataDirectory,
+  DatabaseError,
+  RuntimeDatabaseLive,
+  type DataDirectoryService,
+} from '../persistence/index.js';
+import { SurfaceRepositoryLive } from '../surfaces/index.js';
+import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/index.js';
+import { collectTmuxGarbage } from './adapters/tmux-gc.js';
+import {
+  PtyRepository,
+  PtyRepositoryLive,
+  type LaunchBackendSessionInput,
+  type PtyBackendShape,
+  type PtyRepositoryService,
+} from './index.js';
+import { runPtyGc } from './service/gc.js';
+
+test('tmux orphan GC kills current-hash sessions without DB rows only', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-orphan-'));
+  const killedSessionNames: string[] = [];
+  const backend = fakeTmuxBackend({
+    sessionNames: ['isagi_current_42', 'isagi_other_43', 'isagi_current_not-a-number'],
+    killedSessionNames,
+  });
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        yield* runPtyGc(repository, backend, 'current');
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(killedSessionNames, ['isagi_current_42']);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC kills terminal-status tmux rows and keeps live rows', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-terminal-'));
+  const killedSessionNames: string[] = [];
+  try {
+    const sessions = await Effect.runPromise(
+      Effect.gen(function* () {
+        const failed = yield* createPersistedTmuxSession('/repo/isagi-failed', dataRoot, {
+          status: 'failed',
+          statusReason: 'backend_session_missing',
+        });
+        const running = yield* createPersistedTmuxSession('/repo/isagi-running', dataRoot, {
+          status: 'running',
+          statusReason: null,
+        });
+        const repository = yield* PtyRepository;
+        const backend = fakeTmuxBackend({
+          sessionNames: [
+            `isagi_current_${failed.ptySessionId}`,
+            `isagi_current_${running.ptySessionId}`,
+          ],
+          killedSessionNames,
+        });
+        yield* runPtyGc(repository, backend, 'current');
+        return { failed, running };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(killedSessionNames, [`isagi_current_${sessions.failed.ptySessionId}`]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC skips matching rows that are not tmux backend', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-tmux-gc-backend-skip-'));
+  const killedSessionNames: string[] = [];
+  try {
+    const ptySessionId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const repository = yield* PtyRepository;
+        const metadata = yield* repository.createLaunchMetadata({
+          worktreeId,
+          kind: 'terminal',
+          titleBase: 'Terminal',
+          purpose: 'terminal',
+          harness: null,
+          command: process.env.SHELL || 'bash',
+        });
+        yield* repository.updateBackendMetadata({
+          ptySessionId: metadata.ptySessionId,
+          backend: 'node_pty',
+          backendRefJson: JSON.stringify({
+            schemaVersion: 1,
+            backend: 'node_pty',
+            ptySessionId: metadata.ptySessionId,
+            pid: null,
+          }),
+          logMode: 'backend_file',
+          logPath: join(dataRoot, 'sessions', `${metadata.ptySessionId}.ptylog`),
+        });
+        yield* repository.transitionSession({
+          ptySessionId: metadata.ptySessionId,
+          status: 'failed',
+          statusReason: 'runtime_ephemeral_lost',
+          exitCode: null,
+          signal: null,
+        });
+        const backend = fakeTmuxBackend({
+          sessionNames: [`isagi_current_${metadata.ptySessionId}`],
+          killedSessionNames,
+        });
+        yield* runPtyGc(repository, backend, 'current');
+        return metadata.ptySessionId;
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.equal(ptySessionId > 0, true);
+    assert.deepEqual(killedSessionNames, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('tmux orphan GC skips killing when DB lookup fails', async () => {
+  const killedSessionNames: string[] = [];
+  const backend = fakeTmuxBackend({
+    sessionNames: ['isagi_current_42'],
+    killedSessionNames,
+  });
+  const repository = {
+    createLaunchMetadata: () => Effect.die('createLaunchMetadata is not used by GC tests'),
+    findSession: () => Effect.succeed(null),
+    listSessionLogPaths: Effect.succeed([]),
+    listSessions: () =>
+      Effect.fail(
+        new DatabaseError({
+          operation: 'list_pty_sessions',
+          cause: new Error('database unavailable'),
+        }),
+      ),
+    updateBackendRef: () => Effect.void,
+    updateBackendMetadata: () => Effect.void,
+    transitionSession: () => Effect.void,
+  } satisfies PtyRepositoryService;
+
+  await Effect.runPromise(runPtyGc(repository, backend, 'current').pipe(Effect.ignore));
+
+  assert.deepEqual(killedSessionNames, []);
+});
+
+function fakeTmuxBackend(options: {
+  readonly sessionNames?: readonly string[];
+  readonly killedSessionNames?: string[];
+}) {
+  const listSessions = Effect.succeed(
+    (options.sessionNames ?? []).map(
+      (sessionName) =>
+        ({
+          schemaVersion: 1,
+          backend: 'tmux',
+          sessionName,
+        }) as const,
+    ),
+  );
+  return {
+    name: 'tmux',
+    available: Effect.succeed(true),
+    launch: (input: LaunchBackendSessionInput) =>
+      Effect.succeed({
+        schemaVersion: 1,
+        backend: 'tmux',
+        sessionName: input.backendSessionName ?? `isagi_test_${input.ptySessionId}`,
+      } as const),
+    attach: () =>
+      Effect.succeed({
+        write: () => Effect.void,
+        resize: () => Effect.void,
+        detach: Effect.void,
+      }),
+    replay: (input) =>
+      Effect.sync(() => {
+        input.send({ type: 'replay_start', bytes: 0 });
+        input.send({ type: 'replay_end' });
+      }),
+    inspect: () => Effect.succeed({ status: 'alive' as const }),
+    listSessions,
+    collectGarbage: (input) => collectTmuxGarbage(input, listSessions),
+    kill: (ref) =>
+      Effect.sync(() => {
+        if (ref.backend === 'tmux') {
+          options.killedSessionNames?.push(ref.sessionName);
+        }
+      }),
+  } satisfies PtyBackendShape;
+}
+
+function createPersistedTmuxSession(
+  rootPath: string,
+  dataRoot: string,
+  input: {
+    readonly status?: import('@isagi/contracts').PtySessionStatus | undefined;
+    readonly statusReason: import('@isagi/contracts').PtySessionStatusReason | null;
+  },
+) {
+  return Effect.gen(function* () {
+    const worktreeId = yield* insertWorktree(rootPath);
+    const repository = yield* PtyRepository;
+    const metadata = yield* repository.createLaunchMetadata({
+      worktreeId,
+      kind: 'terminal',
+      titleBase: 'Terminal',
+      purpose: 'terminal',
+      harness: null,
+      command: process.env.SHELL || 'bash',
+    });
+    const sessionName = `isagi_test_${metadata.ptySessionId}`;
+    yield* repository.updateBackendMetadata({
+      ptySessionId: metadata.ptySessionId,
+      backend: 'tmux',
+      backendRefJson: JSON.stringify({
+        schemaVersion: 1,
+        backend: 'tmux',
+        sessionName,
+      }),
+      logMode: 'none',
+      logPath: null,
+    });
+    yield* repository.transitionSession({
+      ptySessionId: metadata.ptySessionId,
+      status: input.status ?? 'running',
+      statusReason: input.statusReason,
+      exitCode: null,
+      signal: null,
+    });
+    return {
+      ptySessionId: metadata.ptySessionId,
+      sessionName,
+      logPath: join(dataRoot, 'sessions', `${metadata.ptySessionId}.ptylog`),
+    };
+  });
+}
+
+function insertWorktree(rootPath: string) {
+  return insertProjectWorktree(rootPath).pipe(Effect.map((row) => row.worktreeId));
+}
+
+function insertProjectWorktree(rootPath: string) {
+  return Effect.gen(function* () {
+    const repository = yield* WorkspaceRepository;
+    const projectId = yield* repository.insertProject({
+      name: rootPath.split('/').at(-1) ?? 'repo',
+      rootPath,
+    });
+    yield* repository.reconcileProjectWorktrees({
+      projectId,
+      discovered: [{ path: rootPath, branch: 'main', head: 'abcdef0' }],
+    });
+    const worktrees = yield* repository.listWorktrees;
+    const worktree = worktrees.find((candidate) => candidate.projectId === projectId);
+    if (!worktree) {
+      return yield* Effect.die('Expected test worktree to be inserted.');
+    }
+    return { projectId, worktreeId: worktree.id };
+  });
+}
+
+function repositoryOnlyLayer(dataRoot: string) {
+  const dataDirectory = dataDirectoryService(dataRoot);
+  const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
+  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
+  const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
+  const surfaceRepository = SurfaceRepositoryLive.pipe(
+    Layer.provide(database),
+    Layer.provide(dataDirectoryLayer),
+  );
+  const ptyRepository = PtyRepositoryLive.pipe(
+    Layer.provide(database),
+    Layer.provide(surfaceRepository),
+  );
+  return Layer.mergeAll(workspaceRepository, surfaceRepository, ptyRepository);
+}
+
+function dataDirectoryService(dataRoot: string) {
+  return {
+    paths: {
+      root: dataRoot,
+      databasePath: join(dataRoot, 'isagi.db'),
+      statePath: join(dataRoot, 'state.json'),
+      worktreesPath: join(dataRoot, 'worktrees'),
+      sessionsPath: join(dataRoot, 'sessions'),
+    },
+  } satisfies DataDirectoryService;
+}

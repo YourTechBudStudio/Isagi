@@ -1,10 +1,7 @@
-import { join } from 'node:path';
-
-import { eq, inArray, type InferSelectModel } from 'drizzle-orm';
+import { eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import {
-  DataDirectory,
   DatabaseError,
   RuntimeDatabase,
   type RuntimeDatabaseService,
@@ -32,6 +29,7 @@ import type {
 type WorktreeSurfaceRecord = InferSelectModel<typeof worktreeSurfaces>;
 type SurfacePaneRecord = InferSelectModel<typeof surfacePanes>;
 type PtySessionRecord = InferSelectModel<typeof ptySessions>;
+type PtySessionRecordWithSurface = PtySessionRecord & { readonly surfaceId: number };
 type EnvironmentFocusRecord = InferSelectModel<typeof worktreeEnvironmentStates>;
 
 export interface SurfaceRepositoryService {
@@ -76,7 +74,7 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
-    const directory = yield* DataDirectory;
+    const ptySessionColumns = getTableColumns(ptySessions);
 
     return {
       worktreeExists: (worktreeId) =>
@@ -139,8 +137,9 @@ export const SurfaceRepositoryLive = Layer.effect(
             return [];
           }
           return db
-            .select()
+            .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
             .from(ptySessions)
+            .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
             .where(inArray(ptySessions.paneId, [...paneIds]))
             .all()
             .map(ptySessionRow);
@@ -168,26 +167,44 @@ export const SurfaceRepositoryLive = Layer.effect(
             .values({
               paneId: surface.paneId,
               worktreeId: input.worktreeId,
-              adapter: 'node_pty',
+              // Temporary non-null DB invariant. PtyService owns backend selection and
+              // overwrites backend/ref/log fields before launching the operational backend.
+              backend: 'node_pty',
+              backendRefJson: JSON.stringify({
+                schemaVersion: 1,
+                backend: 'node_pty',
+                ptySessionId: 0,
+                pid: null,
+              }),
               purpose: input.purpose,
               harness: input.harness,
               command: input.command,
               cwd: worktree.path,
               status: 'starting',
+              statusReason: null,
               exitCode: null,
               signal: null,
-              logPath: '',
-              logBytes: 0,
+              logMode: 'none',
+              logPath: null,
               createdAt: now,
               updatedAt: now,
               exitedAt: null,
+              lastSeenAt: null,
             })
             .returning({ id: ptySessions.id })
             .get();
-          const logPath = join(directory.paths.sessionsPath, `${session.id}.ptylog`);
+          const ptySessionId = session.id;
           db.update(ptySessions)
-            .set({ logPath, updatedAt: now })
-            .where(eq(ptySessions.id, session.id))
+            .set({
+              backendRefJson: JSON.stringify({
+                schemaVersion: 1,
+                backend: 'node_pty',
+                ptySessionId,
+                pid: null,
+              }),
+              updatedAt: now,
+            })
+            .where(eq(ptySessions.id, ptySessionId))
             .run();
 
           const focus = db
@@ -215,10 +232,10 @@ export const SurfaceRepositoryLive = Layer.effect(
             worktreeId: input.worktreeId,
             surfaceId: surface.surfaceId,
             paneId: surface.paneId,
-            ptySessionId: session.id,
+            ptySessionId,
             command: input.command,
             cwd: worktree.path,
-            logPath,
+            logPath: null,
           } satisfies CreateSinglePanePtySessionSurfaceOutput;
         }),
       createPtySessionMetadata: (input) =>
@@ -240,19 +257,22 @@ export const SurfaceRepositoryLive = Layer.effect(
             .values({
               paneId: input.paneId,
               worktreeId: pane.worktreeId,
-              adapter: input.adapter,
+              backend: input.backend,
+              backendRefJson: input.backendRefJson,
               purpose: input.purpose,
               harness: input.harness,
               command: input.command,
               cwd: input.cwd,
               status: input.status,
+              statusReason: input.statusReason ?? null,
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
+              logMode: input.logMode,
               logPath: input.logPath,
-              logBytes: input.logBytes ?? 0,
               createdAt: now,
               updatedAt: now,
               exitedAt: input.exitedAt ?? null,
+              lastSeenAt: input.lastSeenAt ?? null,
             })
             .returning({ id: ptySessions.id })
             .get();
@@ -392,24 +412,28 @@ function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
   };
 }
 
-function ptySessionRow(row: PtySessionRecord): PtySessionRow {
+function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
   return {
     id: row.id,
     paneId: row.paneId,
+    surfaceId: row.surfaceId,
     worktreeId: row.worktreeId,
-    adapter: row.adapter,
+    backend: row.backend,
+    backendRefJson: row.backendRefJson,
     purpose: row.purpose,
     harness: row.harness,
     command: row.command,
     cwd: row.cwd,
     status: row.status,
+    statusReason: row.statusReason,
     exitCode: row.exitCode,
     signal: row.signal,
+    logMode: row.logMode,
     logPath: row.logPath,
-    logBytes: row.logBytes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     exitedAt: row.exitedAt,
+    lastSeenAt: row.lastSeenAt,
   };
 }
 
