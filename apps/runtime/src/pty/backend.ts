@@ -16,6 +16,8 @@ export const PtyBackendLive = Layer.effect(
     // Backend selection is process-scoped. A runtime process owns one PTY
     // backend family; if tmux degrades after startup, we surface that
     // degradation instead of mixing tmux and node-pty sessions.
-    return tmuxAvailable ? tmux : nodePty;
+    const backend = tmuxAvailable ? tmux : nodePty;
+    console.info(`[runtime] PTY backend selected backend=${backend.name}`);
+    return backend;
   }),
 );
