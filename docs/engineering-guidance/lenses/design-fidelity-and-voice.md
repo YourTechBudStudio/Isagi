@@ -10,7 +10,7 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 
 - Shipped user-facing UI.
 - Marketing surfaces.
-- User-facing error and status **messages** — the human-readable strings the UI renders as-is, including messages that originate in the runtime or API. The error contract (codes, structured fields, wire shape) stays with `boundaries-and-contracts.md`; this lens reviews only the message text the end user reads.
+- User-facing error and status **copy** — the strings the web renders to the user, which live in the web copy layer and are chosen by error code/reason. Whether a failure carries a mappable code, and whether the web wrongly renders a runtime- or contract-authored string as that copy, belong to `boundaries-and-contracts.md`; this lens reviews only the wording of the web-owned copy the user reads.
 
 ## What Is Out Of Scope
 
@@ -26,7 +26,7 @@ The [`design-system` skill](../../../.agents/skills/design-system/SKILL.md) is t
 - Visual: does the layout commit to either generous space or controlled density rather than the timid middle? Does the canvas keep its atmospheric depth and layered (not hard) shadows?
 - Voice: is copy deadpan, plain, and conversational — free of marketing-speak ("supercharge", "seamless", "delightful") and sparkle?
 - Voice: does humour stay in its allowed surfaces (empty states, 404s, footers, tip bars, fixable-error messages) and stay out of CTAs, working chrome, agent status lines, destructive confirmations, and validation errors?
-- Voice: do user-facing error and status messages match the dry, informative register even when they come from the runtime?
+- Voice: does the web-owned copy that error codes map to match the dry, informative register? (Whether a runtime string leaks through as that copy is a boundaries finding, not a voice one.)
 - Is sentence-level UI prose easy to review in one place, instead of scattered through components and workflows?
 - Does the change repeat an existing pattern where one fits, rather than inventing a new visual or copy treatment?
 

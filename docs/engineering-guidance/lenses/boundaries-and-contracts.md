@@ -23,6 +23,8 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - Are API errors modeled as stable client-facing contract concepts rather than leaked domain, framework, or runtime implementation errors?
 - Is the mapping from tagged runtime/domain failures to contract error codes, statuses, messages, and structured `data` explicit and reviewable?
 - Does the contract make success and failure semantics understandable enough for clients to handle them deliberately?
+- Does every user-facing failure that crosses the runtime/client boundary carry a stable code (and reason where nuance matters) the client can map to copy — on every API surface, not just HTTP request/response envelopes?
+- Does the web map those codes to its own copy, rather than rendering a runtime- or contract-authored message as the line the user reads?
 - Is Git still treated as source of truth for repository and worktree facts where practical?
 - Are interfaces explicit where behavior crosses package, process, platform, integration, persistence, or public API boundaries?
 - Is compatibility preserved only where a real user, data, API, integration, or deployment boundary requires it?
@@ -36,8 +38,10 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - `apps/desktop` owns Electron lifecycle, windows, preload boundaries, and runtime bootstrapping.
 - `packages/contracts` should stay implementation-free: it may describe serializable API schemas and wire types, but not runtime services, layers, domain internals, fibers, or operational dependencies.
 - Runtime HTTP APIs should be explicit rather than hidden behind framework dispatch: routes, methods, request decoding, response encoding, and error envelopes should be reviewable at the boundary.
-- Runtime/client API contracts should use versioned routes, schema-backed success and error envelopes, `camelCase` field names, and `snake_case` literal error codes/reasons. This lens owns error shape, codes, and envelopes; the voice of any user-facing message string those errors carry is reviewed by `design-fidelity-and-voice.md`.
+- Runtime/client API contracts should use versioned routes, schema-backed success and error envelopes, `camelCase` field names, and `snake_case` literal error codes/reasons. This lens owns error shape, codes, and the requirement that failures stay mappable across every API surface. A runtime message is diagnostic, not user copy; the wording of the web-owned copy those codes map to is reviewed by `design-fidelity-and-voice.md`.
 - Runtime returns facts; web writes copy. Runtime and contracts should expose stable codes, statuses, structured data, and raw diagnostic messages, while the web app maps those facts to polished user-facing copy.
+- Distinguish the voiced message (the line a person reads — always web-owned, chosen by code/reason) from diagnostic detail (a raw runtime message, command or process output, or `code`/`requestId`). The web may surface diagnostic detail when it aids debugging, but only clearly framed as diagnostic, never as the voiced line.
+- The requirement that user-facing failures carry a mappable code applies to every runtime/client surface that reaches the user, including streaming and socket protocols, not only HTTP request/response envelopes. A failure channel that can only describe itself with a human-readable string forces product voice behind the boundary.
 - Internal runtime/domain failures may use Effect tagged data/errors; API contracts should expose stable serializable concepts, not those implementation types.
 - Branded or opaque internal domain types are encouraged where they protect operational targeting, but DTOs remain ordinary serializable contract shapes.
 - Pre-MVP internal interfaces should evolve cleanly. Avoid internal compatibility theater when callers can be migrated safely.
@@ -53,6 +57,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - A cross-boundary expected failure is not represented by a stable contract error shape that clients can deliberately handle.
 - Runtime, desktop, web, and contracts ownership becomes materially unclear.
 - Runtime, contracts, or desktop import frontend copy or otherwise make web product voice a cross-boundary dependency.
+- A user-facing failure crosses the runtime/client boundary without a stable code the client can map to copy, or the web renders a runtime/contract message as the line the user reads. Either way, product voice ends up authored behind the boundary.
 - A persisted, cached, or frontend-owned state value becomes hidden input to operational runtime behavior that should accept an explicit target.
 - A change makes future remote-runtime separation materially harder without an explicit tradeoff.
 - Command execution, filesystem access, process control, or privilege exposure expands without deliberate handling.
@@ -66,7 +71,7 @@ This lens decides who owns a fact, behavior, API, source of truth, or trust boun
 - A contract shape is technically usable but weakly communicates behavior, failure semantics, or client obligations.
 - API error handling exists but is too generic for clients to distinguish validation, domain, internal, or degraded-runtime cases that matter.
 - The mapping from internal tagged failures to API errors exists but is scattered or hard to audit.
-- Runtime/API messages are treated as default polished UI copy instead of semantic or raw diagnostic fallback.
+- Diagnostic detail — a runtime message, command output, or `code`/`requestId` — is surfaced to the user without being clearly framed as diagnostic, blurring it with the voiced line.
 - Compatibility is preserved speculatively without a clear external dependency.
 - Trust boundary or dependency implications are lightly considered but not well surfaced.
 
