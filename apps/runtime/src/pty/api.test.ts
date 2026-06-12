@@ -49,7 +49,36 @@ test('PTY websocket route rejects input for non-running sessions with a protocol
     }
   });
 
-  assert.deepEqual(messages, [{ type: 'error', message: 'PTY session 42 is not running.' }]);
+  assert.deepEqual(messages, [{ type: 'error', message: 'PTY session is no longer live.' }]);
+});
+
+test('PTY websocket route hides internal details for missing sessions', async () => {
+  const messages = await withPtyApi(fakePtyService({ missing: true }), async (fastify) => {
+    const ws = await fastify.injectWS('/api/v1/pty-sessions/42');
+    try {
+      return await takeMessages(ws, 1);
+    } finally {
+      ws.terminate();
+    }
+  });
+
+  assert.deepEqual(messages, [{ type: 'error', message: 'PTY session was not found.' }]);
+});
+
+test('PTY websocket route hides internal details for replay failures', async () => {
+  const messages = await withPtyApi(fakePtyService({ replayFails: true }), async (fastify) => {
+    const ws = await fastify.injectWS('/api/v1/pty-sessions/42');
+    try {
+      return await takeMessages(ws, 2);
+    } finally {
+      ws.terminate();
+    }
+  });
+
+  assert.deepEqual(messages, [
+    { type: 'session', status: 'running', exitCode: null, signal: null },
+    { type: 'error', message: 'Could not replay this session log.' },
+  ]);
 });
 
 async function withPtyApi<A>(
@@ -69,39 +98,61 @@ async function withPtyApi<A>(
   }
 }
 
-function fakePtyService(options: { readonly running?: boolean } = {}) {
+function fakePtyService(
+  options: {
+    readonly running?: boolean;
+    readonly missing?: boolean;
+    readonly replayFails?: boolean;
+  } = {},
+) {
   const running = options.running ?? true;
   return {
     launch: () => Effect.die('launch is not used by websocket tests'),
     attach: (input) =>
-      Effect.succeed({
-        session: {
-          id: input.ptySessionId,
-          paneId: 1,
-          worktreeId: 1,
-          adapter: 'node_pty' as const,
-          purpose: 'terminal' as const,
-          harness: null,
-          command: 'bash',
-          cwd: '/repo/isagi',
-          status: running ? ('running' as const) : ('failed' as const),
-          exitCode: null,
-          signal: null,
-          logPath: '/tmp/no-log-needed',
-          logBytes: 5,
-          createdAt: '2026-06-09T00:00:00.000Z',
-          updatedAt: '2026-06-09T00:00:00.000Z',
-          exitedAt: null,
-        },
-        replayOffset: 5,
-        live: running,
-        unsubscribe: () => {},
-      }),
+      options.missing
+        ? Effect.fail(
+            new PtyServiceError({
+              code: 'session_not_found',
+              message: `PTY session ${input.ptySessionId} was not found.`,
+              ptySessionId: input.ptySessionId,
+            }),
+          )
+        : Effect.succeed({
+            session: {
+              id: input.ptySessionId,
+              paneId: 1,
+              worktreeId: 1,
+              adapter: 'node_pty' as const,
+              purpose: 'terminal' as const,
+              harness: null,
+              command: 'bash',
+              cwd: '/repo/isagi',
+              status: running ? ('running' as const) : ('failed' as const),
+              exitCode: null,
+              signal: null,
+              logPath: '/tmp/no-log-needed',
+              logBytes: 5,
+              createdAt: '2026-06-09T00:00:00.000Z',
+              updatedAt: '2026-06-09T00:00:00.000Z',
+              exitedAt: null,
+            },
+            replayOffset: 5,
+            live: running,
+            unsubscribe: () => {},
+          }),
     replay: (input) =>
-      Effect.sync(() => {
-        input.send({ type: 'replay_start', bytes: input.bytes });
-        input.send({ type: 'replay_end' });
-      }),
+      options.replayFails
+        ? Effect.fail(
+            new PtyServiceError({
+              code: 'log_read_failed',
+              message: 'Could not replay PTY log /private/runtime-data/sessions/42.ptylog.',
+              ptySessionId: input.session.id,
+            }),
+          )
+        : Effect.sync(() => {
+            input.send({ type: 'replay_start', bytes: input.bytes });
+            input.send({ type: 'replay_end' });
+          }),
     write: (input) =>
       running
         ? Effect.void

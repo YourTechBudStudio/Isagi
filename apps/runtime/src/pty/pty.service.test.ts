@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -25,6 +25,7 @@ import {
   type PtyAdapterShape,
   type PtyStartInput,
 } from './index.js';
+import { detectOrphanPtyLogs } from './pty.service.js';
 
 test('launch creates metadata, writes output to the log, and marks running attention', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-launch-'));
@@ -51,6 +52,40 @@ test('launch creates metadata, writes output to the log, and marks running atten
         'utf8',
       ).startsWith('hello from pty'),
     );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('orphan log detection reports unreferenced pty logs without deleting them', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-orphan-logs-'));
+  mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const repository = yield* PtyRepository;
+        const metadata = yield* repository.createLaunchMetadata({
+          worktreeId,
+          kind: 'terminal',
+          titleBase: 'Terminal',
+          purpose: 'terminal',
+          harness: null,
+          command: process.env.SHELL || 'bash',
+        });
+        writeFileSync(metadata.logPath, 'referenced', 'utf8');
+        const orphanPath = join(dataRoot, 'sessions', 'orphan.ptylog');
+        writeFileSync(orphanPath, 'orphan', 'utf8');
+
+        return {
+          orphans: yield* detectOrphanPtyLogs(repository, join(dataRoot, 'sessions')),
+          orphanPath,
+        };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.orphans, ['sessions/orphan.ptylog']);
+    assert.equal(readFileSync(output.orphanPath, 'utf8'), 'orphan');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

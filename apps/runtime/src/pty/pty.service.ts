@@ -1,4 +1,13 @@
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
+import { basename, join, relative } from 'node:path';
 import process from 'node:process';
 
 import { Context, Data, Effect, Either, Layer } from 'effect';
@@ -33,6 +42,7 @@ const defaultRows = 30;
 const replayChunkBytes = 64 * 1024;
 const restartNote = '\r\nRuntime restarted; this session is no longer live.\r\n';
 const shutdownNote = '\r\nRuntime shut down before this session reported an exit status.\r\n';
+const orphanLogSampleSize = 5;
 
 export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
   readonly code:
@@ -101,6 +111,7 @@ export const PtyServiceLive = Layer.scoped(
     const liveSessions = new Map<number, LiveSession>();
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
+    yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
     yield* recoverStaleSessions(repository);
 
     const service = {
@@ -108,6 +119,9 @@ export const PtyServiceLive = Layer.scoped(
         Effect.gen(function* () {
           const command = commandForLaunch(input);
           const titleBase = input.purpose === 'agent' ? titleForHarness(input.harness) : 'Terminal';
+          console.info(
+            `[runtime] PTY launch starting purpose=${input.purpose} harness=${input.harness ?? 'none'} worktreeId=${input.worktreeId}`,
+          );
           const metadata = yield* repository
             .createLaunchMetadata({
               worktreeId: input.worktreeId,
@@ -164,6 +178,10 @@ export const PtyServiceLive = Layer.scoped(
 
           if (Either.isLeft(startResult)) {
             const message = spawnFailureMessage(metadata.command, metadata.cwd, startResult.left);
+            console.warn(
+              `[runtime] PTY launch failed ptySessionId=${metadata.ptySessionId} worktreeId=${metadata.worktreeId} command=${metadata.command}`,
+              startResult.left.cause,
+            );
             appendSessionOutput(
               repository,
               liveSessions,
@@ -178,6 +196,9 @@ export const PtyServiceLive = Layer.scoped(
               signal: null,
             });
           } else {
+            console.info(
+              `[runtime] PTY launch running ptySessionId=${metadata.ptySessionId} worktreeId=${metadata.worktreeId} adapter=${adapter.name}`,
+            );
             const live = {
               handle: startResult.right,
               status: 'running' as const,
@@ -224,10 +245,18 @@ export const PtyServiceLive = Layer.scoped(
           }
 
           const live = liveSessions.get(input.ptySessionId);
+          console.info(
+            `[runtime] PTY websocket attach ptySessionId=${input.ptySessionId} live=${Boolean(live)}`,
+          );
           let unsubscribe = () => {};
           if (live) {
             live.subscribers.add(input.send);
-            unsubscribe = () => live.subscribers.delete(input.send);
+            unsubscribe = () => {
+              live.subscribers.delete(input.send);
+              console.info(
+                `[runtime] PTY websocket detach ptySessionId=${input.ptySessionId} remainingSubscribers=${live.subscribers.size}`,
+              );
+            };
           }
 
           const currentSession = live
@@ -320,6 +349,58 @@ function recoverStaleSessions(repository: PtyRepositoryService) {
   });
 }
 
+function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+  return detectOrphanPtyLogs(repository, sessionsPath).pipe(
+    Effect.tap((orphans) =>
+      Effect.sync(() => {
+        if (orphans.length === 0) {
+          return;
+        }
+        const sample = orphans.slice(0, orphanLogSampleSize).join(', ');
+        const suffix = orphans.length > orphanLogSampleSize ? ', ...' : '';
+        console.warn(
+          `[runtime] Found ${orphans.length} orphan PTY log file(s) under sessions/: ${sample}${suffix}`,
+        );
+      }),
+    ),
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        console.warn('[runtime] Could not inspect PTY session logs for orphans', error);
+      }),
+    ),
+  );
+}
+
+export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
+  return Effect.gen(function* () {
+    const referencedLogPaths = new Set((yield* repository.listSessionLogPaths).map(normalizePath));
+    const entries = yield* Effect.try({
+      try: () => readdirSync(sessionsPath, { withFileTypes: true }),
+      catch: (cause) =>
+        new PtyServiceError({
+          code: 'log_read_failed',
+          message: 'Could not inspect PTY session logs.',
+          cause,
+        }),
+    });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.ptylog'))
+      .map((entry) => join(sessionsPath, entry.name))
+      .filter((path) => !referencedLogPaths.has(normalizePath(path)))
+      .map((path) => relativeSessionLogPath(sessionsPath, path))
+      .sort();
+  });
+}
+
+function normalizePath(path: string) {
+  return relative(process.cwd(), path);
+}
+
+function relativeSessionLogPath(sessionsPath: string, path: string) {
+  const relativePath = relative(sessionsPath, path);
+  return relativePath.startsWith('..') ? basename(path) : `sessions/${relativePath}`;
+}
+
 function appendSessionOutput(
   repository: PtyRepositoryService,
   liveSessions: Map<number, LiveSession>,
@@ -390,6 +471,9 @@ function handleExit(
   return Effect.gen(function* () {
     const live = liveSessions.get(ptySessionId);
     const status = exit.exitCode === 0 && exit.signal === null ? 'exited' : 'failed';
+    console.info(
+      `[runtime] PTY exited ptySessionId=${ptySessionId} status=${status} exitCode=${exit.exitCode ?? 'null'} signal=${exit.signal ?? 'null'}`,
+    );
     if (live) {
       live.status = status;
       yield* flushLogBytes(repository, ptySessionId, live);
@@ -490,7 +574,7 @@ function replayLog(
     catch: (cause) =>
       new PtyServiceError({
         code: 'log_read_failed',
-        message: `Could not replay PTY log ${path}.`,
+        message: 'Could not replay this session log.',
         cause,
       }),
   });

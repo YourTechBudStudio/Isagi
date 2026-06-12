@@ -1,4 +1,4 @@
-import { Effect, Schema, type ManagedRuntime } from 'effect';
+import { Effect, Either, Schema, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
@@ -112,11 +112,19 @@ export function registerPtyApi(
               }
             },
           });
-        }),
+        }).pipe(Effect.either),
       );
 
       void attachmentPromise
-        .then(async (attachment) => {
+        .then(async (attachmentResult) => {
+          if (Either.isLeft(attachmentResult)) {
+            await new Promise((resolve) => setImmediate(resolve));
+            send({ type: 'error', message: websocketErrorMessage(attachmentResult.left) });
+            setImmediate(() => socket.close());
+            return;
+          }
+
+          const attachment = attachmentResult.right;
           await new Promise((resolve) => setImmediate(resolve));
           send({
             type: 'session',
@@ -129,7 +137,7 @@ export function registerPtyApi(
             unsubscribe();
             return;
           }
-          await run(
+          const replayResult = await run(
             Effect.gen(function* () {
               const pty = yield* PtyService;
               return yield* pty.replay({
@@ -137,8 +145,17 @@ export function registerPtyApi(
                 bytes: attachment.replayOffset,
                 send,
               });
-            }),
+            }).pipe(Effect.either),
           );
+          if (Either.isLeft(replayResult)) {
+            console.error(
+              `[runtime] PTY websocket replay failed ptySessionId=${ptySessionId}`,
+              replayResult.left,
+            );
+            send({ type: 'error', message: websocketErrorMessage(replayResult.left) });
+            setImmediate(() => socket.close());
+            return;
+          }
           replaying = false;
           if (closed) {
             unsubscribe();
@@ -171,9 +188,20 @@ export function registerPtyApi(
           return yield* pty.resize({ ptySessionId, cols: parsed.cols, rows: parsed.rows });
         });
 
-        void run(effect).catch((error: unknown) => {
-          send({ type: 'error', message: websocketErrorMessage(error) });
-        });
+        void run(effect.pipe(Effect.either)).then(
+          (result) => {
+            if (Either.isLeft(result)) {
+              send({ type: 'error', message: websocketErrorMessage(result.left) });
+            }
+          },
+          (error: unknown) => {
+            console.error(
+              `[runtime] PTY websocket input failed ptySessionId=${ptySessionId}`,
+              error,
+            );
+            send({ type: 'error', message: websocketErrorMessage(error) });
+          },
+        );
       });
     },
   );
@@ -198,15 +226,24 @@ function decodeSocketMessage(raw: string) {
 
 function websocketErrorMessage(error: unknown) {
   if (error instanceof PtyServiceError) {
-    return error.message;
+    switch (error.code) {
+      case 'session_not_found':
+        return 'PTY session was not found.';
+      case 'session_not_running':
+        return 'PTY session is no longer live.';
+      case 'log_read_failed':
+        return 'Could not replay this session log.';
+      case 'worktree_not_found':
+        return 'PTY session target was not found.';
+    }
   }
   if (error instanceof PtyWriteError || error instanceof PtyResizeError) {
     return 'PTY session could not accept that message.';
   }
   if (error instanceof DatabaseError) {
-    return `Database operation failed: ${error.operation}`;
+    return 'PTY session state could not be loaded.';
   }
-  return errorMessage(error);
+  return 'PTY socket failed.';
 }
 
 function toSessionLaunchApiError(error: unknown, context: ApiRouteContext): ApiError {

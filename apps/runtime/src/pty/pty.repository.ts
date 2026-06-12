@@ -28,6 +28,7 @@ export interface PtyRepositoryService {
   readonly findSession: (
     ptySessionId: number,
   ) => Effect.Effect<PtySessionRow | null, DatabaseError>;
+  readonly listSessionLogPaths: Effect.Effect<string[], DatabaseError>;
   readonly listLivePersistedSessions: Effect.Effect<PtySessionRow[], DatabaseError>;
   readonly appendLogBytes: (input: {
     readonly ptySessionId: number;
@@ -82,6 +83,13 @@ export const PtyRepositoryLive = Layer.effect(
           const row = db.select().from(ptySessions).where(eq(ptySessions.id, ptySessionId)).get();
           return row ? ptySessionRow(row) : null;
         }),
+      listSessionLogPaths: database.use('list_pty_session_log_paths', (db) =>
+        db
+          .select({ logPath: ptySessions.logPath })
+          .from(ptySessions)
+          .all()
+          .map((row) => row.logPath),
+      ),
       listLivePersistedSessions: database.use('list_live_persisted_pty_sessions', (db) =>
         db
           .select()
