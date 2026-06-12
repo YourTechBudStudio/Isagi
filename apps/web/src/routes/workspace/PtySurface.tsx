@@ -352,6 +352,7 @@ function terminalThemeFromTokens() {
   const terminalSurface = blendHex(elevated, canvas, 0.5);
   const fg = token('--color-fg');
   const fgSubtle = token('--color-fg-subtle');
+  const line = token('--color-line');
   const blue = token('--color-blue');
   const violet = token('--color-violet');
   const amber = token('--color-amber');
@@ -364,6 +365,12 @@ function terminalThemeFromTokens() {
     foreground: fg,
     cursor: cyan,
     selectionBackground: alphaHex(fgSubtle, '66'),
+    // xterm v6 paints its own overlay scrollbar; without these it defaults to
+    // foreground at 20% (a pale slab). Match the app's line-token scrollbar:
+    // ~34% at rest, ~56% hover, ~66% active. Shape is set in styles.css.
+    scrollbarSliderBackground: alphaHex(line, '57'),
+    scrollbarSliderHoverBackground: alphaHex(line, '8f'),
+    scrollbarSliderActiveBackground: alphaHex(line, 'a8'),
     black: terminalSurface,
     red,
     green,
