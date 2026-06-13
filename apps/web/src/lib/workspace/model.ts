@@ -201,6 +201,30 @@ export function activeSurfaceForSelection(
   return worktree ? findActiveSurface(worktree) : null;
 }
 
+export function resolveActivePaneId(
+  panes: readonly { readonly id: number }[],
+  storedPaneId: number | null | undefined,
+  detailActivePaneId: number | null | undefined,
+): number | null {
+  if (panes.length === 0) {
+    return null;
+  }
+
+  if (storedPaneId !== null && storedPaneId !== undefined && paneExists(panes, storedPaneId)) {
+    return storedPaneId;
+  }
+
+  if (
+    detailActivePaneId !== null &&
+    detailActivePaneId !== undefined &&
+    paneExists(panes, detailActivePaneId)
+  ) {
+    return detailActivePaneId;
+  }
+
+  return panes[0]?.id ?? null;
+}
+
 function projectGlyph(name: string) {
   return (
     name
@@ -212,4 +236,8 @@ function projectGlyph(name: string) {
     name.slice(0, 2).toUpperCase() ||
     'P'
   );
+}
+
+function paneExists(panes: readonly { readonly id: number }[], paneId: number) {
+  return panes.some((pane) => pane.id === paneId);
 }

@@ -15,7 +15,9 @@ import type {
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { ptyCopy, ptySocketErrorCopy } from '../../copy/index.js';
+import { resolveActivePaneId } from '../../lib/workspace/model.js';
 import { formatRuntimeError, resolvePtyWebSocketUrl } from '../../lib/workspace/runtime-data.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 
 interface PtySurfaceProps {
   readonly detail: SurfaceDetail;
@@ -24,16 +26,15 @@ interface PtySurfaceProps {
 type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 export function PtySurface({ detail }: PtySurfaceProps) {
-  const [focusedPaneId, setFocusedPaneId] = useState(
-    detail.activePaneId ?? detail.panes[0]?.id ?? null,
-  );
+  const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
+  const focusPane = useWorkspaceStore((state) => state.focusPane);
+  const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
 
   useEffect(() => {
-    if (focusedPaneId && detail.panes.some((pane) => pane.id === focusedPaneId)) {
-      return;
+    if (focusedPaneId !== null && focusedPaneId !== storedPaneId) {
+      focusPane(detail.id, focusedPaneId);
     }
-    setFocusedPaneId(detail.activePaneId ?? detail.panes[0]?.id ?? null);
-  }, [detail.activePaneId, detail.panes, focusedPaneId]);
+  }, [detail.id, focusedPaneId, focusPane, storedPaneId]);
 
   if (detail.panes.length === 0) {
     return (
@@ -51,7 +52,7 @@ export function PtySurface({ detail }: PtySurfaceProps) {
           pane={pane}
           surface={detail}
           focused={pane.id === focusedPaneId}
-          onFocus={() => setFocusedPaneId(pane.id)}
+          onFocus={() => focusPane(detail.id, pane.id)}
         />
       ))}
     </div>

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { activeContextFromSelection, selectionFromActiveContext } from './model.js';
+import {
+  activeContextFromSelection,
+  resolveActivePaneId,
+  selectionFromActiveContext,
+} from './model.js';
 import type { Project } from './types.js';
 
 const missingA = project({ id: 1, name: 'missing-a', status: 'missing' });
@@ -40,6 +44,15 @@ test('transient missing-project selection is not converted into persisted active
     activeContextFromSelection({ kind: 'missingProject', projectId: missingA.id }),
     null,
   );
+});
+
+test('active pane fallback ignores stale stored pane ids', () => {
+  const panes = [{ id: 10 }, { id: 20 }, { id: 30 }];
+
+  assert.equal(resolveActivePaneId(panes, 20, 10), 20);
+  assert.equal(resolveActivePaneId(panes, 999, 30), 30);
+  assert.equal(resolveActivePaneId(panes, 999, 888), 10);
+  assert.equal(resolveActivePaneId([], 20, 10), null);
 });
 
 function project(input: {

@@ -7,27 +7,27 @@ const RECENTS_CAP = 12;
 
 interface PaletteStore {
   open: boolean;
-  /** When opened straight into a command's wizard (e.g. Mod+N → New worktree). */
-  autostartCommandId: string | null;
+  /** When opened straight into an entry's command wizard (e.g. Mod+N -> Add project). */
+  autostartEntryId: string | null;
   /** Pre-filled wizard values (e.g. project-specific rail + button). */
   autostartValues: ArgValues;
   /** Recently run entry ids, most-recent-first. Drives the empty-query view. */
   recents: readonly string[];
 
-  openPalette: (commandId?: string, values?: ArgValues) => void;
+  openPalette: (entryId?: string, values?: ArgValues) => void;
   closePalette: () => void;
   pushRecent: (entryId: string) => void;
 }
 
 export const usePaletteStore = create<PaletteStore>((set) => ({
   open: false,
-  autostartCommandId: null,
+  autostartEntryId: null,
   autostartValues: {},
   recents: [],
 
-  openPalette: (commandId, values = {}) =>
-    set({ open: true, autostartCommandId: commandId ?? null, autostartValues: values }),
-  closePalette: () => set({ open: false, autostartCommandId: null, autostartValues: {} }),
+  openPalette: (entryId, values = {}) =>
+    set({ open: true, autostartEntryId: entryId ?? null, autostartValues: values }),
+  closePalette: () => set({ open: false, autostartEntryId: null, autostartValues: {} }),
   pushRecent: (entryId) =>
     set((state) => ({
       recents: [entryId, ...state.recents.filter((id) => id !== entryId)].slice(0, RECENTS_CAP),

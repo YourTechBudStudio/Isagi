@@ -10,6 +10,7 @@ interface DrawerState {
 interface WorkspaceStore {
   selection: WorkspaceSelection;
   activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
+  activePaneBySurfaceId: Readonly<Record<number, number>>;
   drawer: DrawerState;
   zen: boolean;
 
@@ -17,6 +18,7 @@ interface WorkspaceStore {
   selectWorktree: (projectId: number, worktreeId: number) => void;
   selectMissingProject: (projectId: number) => void;
   selectSurface: (worktreeId: number, surfaceId: number) => void;
+  focusPane: (surfaceId: number, paneId: number) => void;
   setZen: (zen: boolean) => void;
   toggleZen: () => void;
   openDrawer: (commandId?: string) => void;
@@ -29,6 +31,7 @@ export const emptyWorkspaceSelection: WorkspaceSelection = { kind: 'empty' };
 export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   selection: emptyWorkspaceSelection,
   activeSurfaceByWorktreeId: {},
+  activePaneBySurfaceId: {},
   drawer: { open: false, selectedCommandId: null },
   zen: false,
 
@@ -47,6 +50,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
       activeSurfaceByWorktreeId: {
         ...state.activeSurfaceByWorktreeId,
         [worktreeId]: surfaceId,
+      },
+    })),
+  focusPane: (surfaceId, paneId) =>
+    set((state) => ({
+      activePaneBySurfaceId: {
+        ...state.activePaneBySurfaceId,
+        [surfaceId]: paneId,
       },
     })),
 

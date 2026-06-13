@@ -5,7 +5,9 @@ import type {
   ArgValues,
   Option,
   PaletteContext,
+  PaletteCommand,
   PaletteEntry,
+  ReviewChoice,
 } from './types.js';
 
 /**
@@ -140,4 +142,19 @@ export function labelForValue(
 
   const option = options.find((candidate) => candidate.value === value);
   return option?.label ?? value;
+}
+
+export function commandForEntryId(
+  entries: readonly PaletteEntry[],
+  entryId: string | null,
+): { readonly entryId: string; readonly command: PaletteCommand } | null {
+  if (!entryId) {
+    return null;
+  }
+  const entry = entries.find((candidate) => candidate.id === entryId);
+  return entry?.command ? { entryId: entry.id, command: entry.command } : null;
+}
+
+export function reviewChoiceCancels(choice: ReviewChoice): boolean {
+  return choice.intent === 'cancel';
 }

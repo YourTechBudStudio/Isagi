@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -16,10 +17,12 @@ import { Overline } from '../../components/Overline.js';
 import { paletteCopy } from '../../copy/index.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import { buildPaletteContext } from '../../lib/palette/context.js';
+import { resolveCommandPreflight } from '../../lib/palette/dispatcher.js';
 import { assembleEntries } from '../../lib/palette/entries.js';
 import { GROUP_LABELS } from '../../lib/palette/groups.js';
 import {
   computeStepOptions,
+  commandForEntryId,
   defaultOptionIndex,
   filterEntries,
   firstUnfilledStep,
@@ -27,8 +30,8 @@ import {
   nextVisibleStep,
   prevVisibleStep,
   recencyView,
+  reviewChoiceCancels,
 } from '../../lib/palette/model.js';
-import { GLOBAL_COMMANDS } from '../../lib/palette/registry.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type {
   ArgPayloads,
@@ -43,25 +46,32 @@ import type {
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
+import { useWorkspaceStore } from '../../lib/workspace/store.js';
 
 export function CommandPalette() {
   const open = usePaletteStore((state) => state.open);
-  const autostartCommandId = usePaletteStore((state) => state.autostartCommandId);
+  const autostartEntryId = usePaletteStore((state) => state.autostartEntryId);
   const autostartValues = usePaletteStore((state) => state.autostartValues);
   const recents = usePaletteStore((state) => state.recents);
   const openPalette = usePaletteStore((state) => state.openPalette);
   const closePalette = usePaletteStore((state) => state.closePalette);
   const pushRecent = usePaletteStore((state) => state.pushRecent);
 
-  const { projects, activeWorktreeId } = useWorkspace();
+  const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
+  const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
   const ctx = useMemo(
-    () => buildPaletteContext(projects, activeWorktreeId),
-    [projects, activeWorktreeId],
+    () =>
+      buildPaletteContext(projects, activeWorktreeId, {
+        activeSurfaceByWorktreeId,
+        activePaneBySurfaceId,
+      }),
+    [projects, activeWorktreeId, activeSurfaceByWorktreeId, activePaneBySurfaceId],
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
 
   const [query, setQuery] = useState('');
   const [command, setCommand] = useState<PaletteCommand | null>(null);
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
   const [values, setValues] = useState<ArgValues>({});
   const [payloads, setPayloads] = useState<ArgPayloads>({});
@@ -83,10 +93,23 @@ export function CommandPalette() {
   // double-invoke (or a synchronous review loader) that could run twice. Reset
   // whenever a wizard (re)starts; cleared on failure so the user can retry.
   const finishedRef = useRef(false);
+  const preflightAttemptRef = useRef(0);
   // The path value the last Enter filled into the buffer. Pressing Enter again
   // with no edits since (buffer still equals it) commits — robust to the async
   // suggestion refresh, which the live highlight is not. Typing clears it.
   const lastFilledPath = useRef<string | null>(null);
+
+  const closeCurrentPalette = useCallback(() => {
+    preflightAttemptRef.current += 1;
+    closePalette();
+  }, [closePalette]);
+
+  useEffect(() => {
+    if (!open) {
+      preflightAttemptRef.current += 1;
+      finishedRef.current = false;
+    }
+  }, [open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
   useEffect(() => {
@@ -99,7 +122,7 @@ export function CommandPalette() {
       if (key === 'k') {
         event.preventDefault();
         if (open) {
-          closePalette();
+          closeCurrentPalette();
         } else {
           openPalette();
         }
@@ -110,7 +133,7 @@ export function CommandPalette() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, openPalette, closePalette]);
+  }, [open, openPalette, closeCurrentPalette]);
 
   // Reset on open; jump straight into a wizard when autostarted.
   useEffect(() => {
@@ -120,11 +143,9 @@ export function CommandPalette() {
     finishedRef.current = false;
     setQuery('');
     setCommandError(null);
-    const autostart = autostartCommandId
-      ? GLOBAL_COMMANDS.find((entry) => entry.id === autostartCommandId && entry.args?.length)
-      : undefined;
+    const autostart = commandForEntryId(allEntries, autostartEntryId);
 
-    if (!autostart?.args?.length) {
+    if (!autostart?.command.args?.length) {
       setValues({});
       setPayloads({});
       setLabels({});
@@ -136,12 +157,13 @@ export function CommandPalette() {
       setReviewLoading(false);
       setStepIndex(0);
       setCommand(null);
+      setActiveEntryId(null);
       return;
     }
 
     const initialValues = { ...autostartValues };
     const initialLabels = Object.fromEntries(
-      autostart.args
+      autostart.command.args
         .filter((arg) => initialValues[arg.key] !== undefined)
         .map((arg) => [
           arg.key,
@@ -158,9 +180,10 @@ export function CommandPalette() {
     setReviewContent(null);
     setReviewError(null);
     setReviewLoading(false);
-    setStepIndex(firstUnfilledStep(autostart.args, initialValues));
-    setCommand(autostart);
-  }, [open, autostartCommandId, autostartValues, ctx]);
+    setStepIndex(firstUnfilledStep(autostart.command.args, initialValues));
+    setCommand(autostart.command);
+    setActiveEntryId(autostart.entryId);
+  }, [open, autostartEntryId, autostartValues, allEntries, ctx]);
 
   const args = command?.args ?? [];
   const spec: ArgSpec | undefined = command ? args[stepIndex] : undefined;
@@ -388,13 +411,23 @@ export function CommandPalette() {
     }
   }, [open, viewKey]);
 
-  const enterWizard = (next: PaletteCommand) => {
+  const enterWizard = (entryId: string, next: PaletteCommand, initialValues: ArgValues = {}) => {
+    const initialLabels = Object.fromEntries(
+      (next.args ?? [])
+        .filter((arg) => initialValues[arg.key] !== undefined)
+        .map((arg) => [
+          arg.key,
+          labelForValue(arg, initialValues[arg.key] as string, ctx, initialValues),
+        ]),
+    );
+
     finishedRef.current = false;
     setCommand(next);
-    setStepIndex(0);
-    setValues({});
+    setActiveEntryId(entryId);
+    setStepIndex(firstUnfilledStep(next.args ?? [], initialValues));
+    setValues(initialValues);
     setPayloads({});
-    setLabels({});
+    setLabels(initialLabels);
     setStepOptions([]);
     setStepOptionsError(null);
     setStepOptionsLoading(false);
@@ -405,7 +438,7 @@ export function CommandPalette() {
   };
 
   const finish = () => {
-    closePalette();
+    closeCurrentPalette();
   };
 
   // Run a command to completion and close the palette, surfacing any failure as
@@ -415,6 +448,7 @@ export function CommandPalette() {
     cmd: PaletteCommand,
     runValues: ArgValues,
     runPayloads: ArgPayloads,
+    recentEntryId = activeEntryId ?? cmd.id,
   ) => {
     if (finishedRef.current) {
       return;
@@ -424,7 +458,7 @@ export function CommandPalette() {
     if (result instanceof Promise) {
       void result.then(
         () => {
-          pushRecent(cmd.id);
+          pushRecent(recentEntryId);
           finish();
         },
         (error: unknown) => {
@@ -434,14 +468,49 @@ export function CommandPalette() {
         },
       );
     } else {
-      pushRecent(cmd.id);
+      pushRecent(recentEntryId);
       finish();
     }
   };
 
   const runEntry = (entry: PaletteEntry) => {
     if (entry.command) {
-      enterWizard(entry.command);
+      const entryCommand = entry.command;
+      if (finishedRef.current) {
+        return;
+      }
+      const attempt = preflightAttemptRef.current + 1;
+      preflightAttemptRef.current = attempt;
+      finishedRef.current = true;
+      void resolveCommandPreflight(entryCommand, ctx, {}).then(
+        (preflight) => {
+          if (attempt !== preflightAttemptRef.current || !usePaletteStore.getState().open) {
+            return;
+          }
+          if (preflight.mode === 'unavailable') {
+            finishedRef.current = false;
+            return;
+          }
+          if (preflight.mode === 'palette') {
+            enterWizard(entry.id, entryCommand, preflight.values ?? {});
+            return;
+          }
+          finishedRef.current = false;
+          finishCommandRun(
+            entryCommand,
+            preflight.values ?? {},
+            preflight.payloads ?? {},
+            entry.id,
+          );
+        },
+        (error: unknown) => {
+          if (attempt !== preflightAttemptRef.current || !usePaletteStore.getState().open) {
+            return;
+          }
+          finishedRef.current = false;
+          setCommandError(formatRuntimeError(error));
+        },
+      );
     } else {
       if (finishedRef.current) {
         return;
@@ -500,6 +569,10 @@ export function CommandPalette() {
   };
 
   const acceptReviewChoice = (choice: ReviewChoice) => {
+    if (reviewChoiceCancels(choice)) {
+      closeCurrentPalette();
+      return;
+    }
     acceptValue(choice.value, choice.label, choice.payload);
   };
 
@@ -556,7 +629,7 @@ export function CommandPalette() {
 
   const back = () => {
     if (!command) {
-      closePalette();
+      closeCurrentPalette();
       return;
     }
     const previous = prevVisibleStep(args, stepIndex, ctx, values, payloads);
@@ -586,6 +659,7 @@ export function CommandPalette() {
       setStepIndex(previous);
     } else {
       setCommand(null);
+      setActiveEntryId(null);
       setStepOptions([]);
       setStepOptionsError(null);
       setStepOptionsLoading(false);
@@ -658,7 +732,7 @@ export function CommandPalette() {
           transition={uiTransition}
           onPointerDown={(event) => {
             if (event.target === event.currentTarget) {
-              closePalette();
+              closeCurrentPalette();
             }
           }}
           className="fixed inset-0 z-50 flex justify-center bg-scrim/45 px-4 pt-[14vh] backdrop-blur-sm"

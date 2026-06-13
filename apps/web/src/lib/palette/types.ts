@@ -1,5 +1,5 @@
 import type { IconType } from '../icon.js';
-import type { Project, Worktree } from '../workspace/types.js';
+import type { Project, Surface, Worktree } from '../workspace/types.js';
 
 /**
  * The four palette groups. **Only `global` is config-driven** (the extensible
@@ -17,6 +17,8 @@ export interface PaletteContext {
   readonly projects: readonly Project[];
   readonly activeWorktree: Worktree | null;
   readonly activeProject: Project | null;
+  readonly activeSurface: Surface | null;
+  readonly activePaneId: number | null;
 }
 
 export interface Option<Payload = unknown> {
@@ -33,6 +35,20 @@ export interface Option<Payload = unknown> {
 export type ArgValues = Record<string, string>;
 export type ArgPayloads = Record<string, unknown>;
 export type MaybePromise<T> = T | Promise<T>;
+
+export type CommandPreflightResult =
+  | {
+      readonly mode: 'run';
+      readonly values?: ArgValues;
+      readonly payloads?: ArgPayloads;
+    }
+  | {
+      readonly mode: 'palette';
+      readonly values?: ArgValues;
+    }
+  | {
+      readonly mode: 'unavailable';
+    };
 
 export interface ReviewChoice<Payload = unknown> {
   readonly value: string;
@@ -133,6 +149,10 @@ export interface PaletteCommand {
   readonly icon: IconType;
   readonly group: PaletteGroup;
   readonly available?: (ctx: PaletteContext) => boolean;
+  readonly preflight?: (
+    ctx: PaletteContext,
+    values: ArgValues,
+  ) => MaybePromise<CommandPreflightResult>;
   readonly args?: readonly ArgSpec[];
   readonly run: (
     values: ArgValues,

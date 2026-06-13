@@ -14,14 +14,32 @@ function findWorktreeProject(
 export function buildPaletteContext(
   projects: readonly Project[],
   activeWorktreeId: number | null,
+  options: {
+    readonly activeSurfaceByWorktreeId?: Readonly<Record<number, number>>;
+    readonly activePaneBySurfaceId?: Readonly<Record<number, number>>;
+  } = {},
 ): PaletteContext {
   const activeWorktree =
     projects
       .flatMap((project) => project.worktrees)
       .find((worktree) => worktree.id === activeWorktreeId) ?? null;
+  const storedActiveSurfaceId = activeWorktree
+    ? options.activeSurfaceByWorktreeId?.[activeWorktree.id]
+    : null;
+  const storedActiveSurface =
+    activeWorktree?.surfaces.find((surface) => surface.id === storedActiveSurfaceId) ?? null;
+  const runtimeActiveSurface =
+    activeWorktree?.surfaces.find((surface) => surface.id === activeWorktree.activeSurfaceId) ??
+    null;
+  const activeSurface = storedActiveSurface ?? runtimeActiveSurface;
+
   return {
     projects,
     activeWorktree,
     activeProject: findWorktreeProject(projects, activeWorktree),
+    activeSurface,
+    activePaneId: activeSurface
+      ? (options.activePaneBySurfaceId?.[activeSurface.id] ?? null)
+      : null,
   };
 }
