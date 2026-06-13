@@ -38,6 +38,12 @@ export interface ReviewChoice<Payload = unknown> {
   readonly value: string;
   readonly label: string;
   readonly hint?: string;
+  /**
+   * Visual + semantic weight of the choice. `danger` is the destructive accept
+   * (red, reserved per the design system); `cancel` is the quiet back-out. The
+   * palette wizard owns what each value does — `intent` only drives presentation.
+   */
+  readonly intent?: 'default' | 'danger' | 'cancel';
   readonly payload?: Payload;
 }
 

@@ -83,7 +83,7 @@ export function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: (id: 
       <span className="min-w-0">
         <span className="block text-[13.5px] leading-snug font-medium text-fg">{toast.title}</span>
         {toast.subtitle && (
-          <span className="mt-1 block truncate font-mono text-[11px] text-fg-subtle">
+          <span className="mt-1 block font-mono text-[11px] leading-snug text-fg-subtle">
             {toast.subtitle}
           </span>
         )}

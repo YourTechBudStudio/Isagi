@@ -922,6 +922,33 @@ function PathOptions({
   );
 }
 
+/**
+ * Per-choice colour for a review step. `danger` is the only place red appears in
+ * the wizard (reserved for the destructive accept); `cancel` reads as a quiet
+ * back-out; everything else is the neutral choice tone.
+ */
+function reviewChoiceTone(intent: ReviewChoice['intent'], selected: boolean) {
+  if (intent === 'danger') {
+    return {
+      row: selected ? 'bg-error/14' : 'hover:bg-error/8',
+      glyph: 'text-error',
+      label: 'text-error',
+    };
+  }
+  if (intent === 'cancel') {
+    return {
+      row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+      glyph: 'text-fg-subtle',
+      label: 'text-fg-muted',
+    };
+  }
+  return {
+    row: selected ? 'bg-white/8' : 'hover:bg-white/4',
+    glyph: 'text-fg-subtle',
+    label: 'text-fg',
+  };
+}
+
 function ReviewStep({
   content,
   error,
@@ -970,28 +997,29 @@ function ReviewStep({
         </div>
       )}
       <div className="mt-3 space-y-1">
-        {content.choices.map((choice, index) => (
-          <button
-            type="button"
-            key={choice.value}
-            onClick={() => onPick(index)}
-            className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
-              index === sel ? 'bg-white/8' : 'hover:bg-white/4'
-            }`}
-          >
-            <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-              {index === sel ? '●' : '○'}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13.5px] text-fg">{choice.label}</span>
-              {choice.hint && (
-                <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
-                  {choice.hint}
-                </span>
-              )}
-            </span>
-          </button>
-        ))}
+        {content.choices.map((choice, index) => {
+          const tone = reviewChoiceTone(choice.intent, index === sel);
+          return (
+            <button
+              type="button"
+              key={choice.value}
+              onClick={() => onPick(index)}
+              className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${tone.row}`}
+            >
+              <span className={`w-4 text-center font-mono text-[12px] ${tone.glyph}`}>
+                {index === sel ? '●' : '○'}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className={`block truncate text-[13.5px] ${tone.label}`}>{choice.label}</span>
+                {choice.hint && (
+                  <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
+                    {choice.hint}
+                  </span>
+                )}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

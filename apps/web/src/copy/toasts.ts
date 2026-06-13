@@ -15,6 +15,14 @@ export const toastCopy = {
   projectDeleteFailed: {
     title: 'Could not remove the project.',
   },
+  paneCleanupPending: {
+    title: 'Pane deleted.',
+    subtitle: 'Its session is still stopping — Isagi will finish in the background.',
+  },
+  surfaceCleanupPending: {
+    title: 'Surface deleted.',
+    subtitle: 'Its session is still stopping — Isagi will finish in the background.',
+  },
   surfaceFocusPersistFailed: {
     title: 'Could not save the active surface.',
     subtitle: 'This switch is local; restart may reopen another surface.',
