@@ -41,7 +41,11 @@ export const workspaceActiveContextRejectedErrorSchema = Schema.Struct({
 
 export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_not_found');
 
-export const surfaceRejectionReasonSchema = Schema.Literal('surface_not_found');
+export const surfaceRejectionReasonSchema = Schema.Literal(
+  'surface_not_found',
+  'pane_not_found',
+  'invalid_surface_title',
+);
 
 export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
   'worktree_not_found',
@@ -137,6 +141,7 @@ export const surfaceRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: surfaceRejectionReasonSchema,
     surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 

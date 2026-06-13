@@ -183,6 +183,7 @@ function fakePtyService(
           ),
     resize: () => Effect.void,
     kill: () => Effect.void,
+    cleanupSessionForDelete: () => Effect.succeed([]),
   } satisfies PtyServiceShape;
 }
 

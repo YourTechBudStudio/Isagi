@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Effect, Either, Schema } from 'effect';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
@@ -71,14 +71,23 @@ export function registerApiEndpoint<
       const interrupt = requestInterruptSignal(request, reply);
       let output: ApiEndpointOutput<Endpoint>;
       try {
-        output = await options.run(options.handle(input.value, context, params.value), {
-          signal: interrupt.signal,
-        });
+        const result = await options.run(
+          Effect.either(options.handle(input.value, context, params.value)),
+          {
+            signal: interrupt.signal,
+          },
+        );
+        if (Either.isLeft(result)) {
+          const apiError =
+            options.mapError?.(result.left, context) ?? unhandledApiError(context, result.left);
+          return sendRouteApiError(request, reply, endpoint, context, apiError);
+        }
+        output = result.right;
       } catch (error: unknown) {
         if (interrupt.signal.aborted || reply.raw.destroyed) {
           return;
         }
-        const apiError = options.mapError?.(error, context) ?? unhandledApiError(context, error);
+        const apiError = unhandledApiError(context, error);
         return sendRouteApiError(request, reply, endpoint, context, apiError);
       } finally {
         interrupt.cleanup();

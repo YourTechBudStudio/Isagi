@@ -50,6 +50,11 @@ export const surfaceRouteParamsSchema = Schema.Struct({
   surfaceId: positiveIntegerSchema,
 });
 
+export const surfacePaneRouteParamsSchema = Schema.Struct({
+  surfaceId: positiveIntegerSchema,
+  paneId: positiveIntegerSchema,
+});
+
 export const worktreeEnvironmentFocusRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
 });
@@ -120,6 +125,28 @@ export const surfaceDetailSchema = Schema.Struct({
 export const setWorktreeEnvironmentFocusInputSchema = Schema.Struct({
   activeSurfaceId: Schema.NullOr(positiveIntegerSchema),
   activePaneId: Schema.NullOr(positiveIntegerSchema),
+});
+
+export const renameSurfaceInputSchema = Schema.Struct({
+  title: Schema.String,
+});
+
+export const renameSurfaceOutputSchema = Schema.Struct({
+  surfaceId: positiveIntegerSchema,
+  title: Schema.String,
+});
+
+export const surfaceDeleteWarningSchema = Schema.Struct({
+  code: Schema.Literal('pty_kill_failed', 'pty_backend_unavailable', 'pty_log_delete_failed'),
+  paneId: positiveIntegerSchema,
+  ptySessionId: positiveIntegerSchema,
+});
+
+export const deleteSurfaceOutputSchema = Schema.Struct({
+  deletedSurfaceId: Schema.NullOr(positiveIntegerSchema),
+  deletedPaneIds: Schema.Array(positiveIntegerSchema),
+  attemptedPtySessionIds: Schema.Array(positiveIntegerSchema),
+  warnings: Schema.Array(surfaceDeleteWarningSchema),
 });
 
 export const worktreeEnvironmentFocusOutputSchema = Schema.Struct({
@@ -201,6 +228,7 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union(
 
 export type RuntimeSurfaceKind = Schema.Schema.Type<typeof runtimeSurfaceKindSchema>;
 export type SurfaceRouteParams = Schema.Schema.Type<typeof surfaceRouteParamsSchema>;
+export type SurfacePaneRouteParams = Schema.Schema.Type<typeof surfacePaneRouteParamsSchema>;
 export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRouteParamsSchema
 >;
@@ -217,6 +245,10 @@ export type SurfaceDetail = Schema.Schema.Type<typeof surfaceDetailSchema>;
 export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
   typeof setWorktreeEnvironmentFocusInputSchema
 >;
+export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
+export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
+export type SurfaceDeleteWarning = Schema.Schema.Type<typeof surfaceDeleteWarningSchema>;
+export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
 >;

@@ -2,7 +2,11 @@ import { existsSync, mkdirSync } from 'node:fs';
 
 import { Context, Effect, Either, Layer } from 'effect';
 
-import type { LaunchSessionOutput, PtyWebSocketOutputMessage } from '@isagi/contracts';
+import type {
+  LaunchSessionOutput,
+  PtyWebSocketOutputMessage,
+  SurfaceDeleteWarning,
+} from '@isagi/contracts';
 
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import { RuntimeEventBus, type RuntimeEventBusService } from '../runtime-events/index.js';
@@ -91,6 +95,9 @@ export interface PtyService {
   readonly kill: (input: {
     readonly ptySessionId: number;
   }) => Effect.Effect<void, PtyKillSessionError>;
+  readonly cleanupSessionForDelete: (input: {
+    readonly ptySessionId: number;
+  }) => Effect.Effect<SurfaceDeleteWarning[], DatabaseError>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyService');
@@ -421,6 +428,53 @@ export const PtyServiceLive = Layer.scoped(
           }
           console.info(`[runtime] PTY session killed ptySessionId=${session.id}`);
         }),
+      cleanupSessionForDelete: (input) =>
+        Effect.gen(function* () {
+          const session = yield* repository.findSession(input.ptySessionId);
+          if (!session || (session.status !== 'starting' && session.status !== 'running')) {
+            return [];
+          }
+
+          if (session.backend !== backend.name) {
+            return [deleteCleanupWarning('pty_backend_unavailable', session.paneId, session.id)];
+          }
+
+          const ref = yield* decodeBackendRef(session).pipe(
+            Effect.catchAll(() => Effect.succeed<BackendSessionRef | null>(null)),
+          );
+          if (!ref) {
+            return [deleteCleanupWarning('pty_kill_failed', session.paneId, session.id)];
+          }
+
+          yield* detachActiveAttachment(activeAttachments, session.id);
+          const inspection = yield* backend
+            .inspect(ref)
+            .pipe(Effect.catchAll(() => Effect.succeed({ status: 'unavailable' as const })));
+          if (inspection.status === 'missing') {
+            return [];
+          }
+          if (inspection.status === 'unavailable') {
+            // Immediate cleanup could not happen in this runtime process. The
+            // durable row is still deleted by SurfaceService; backend GC can
+            // retry orphan cleanup later when the relevant backend is available.
+            return [deleteCleanupWarning('pty_backend_unavailable', session.paneId, session.id)];
+          }
+
+          const killResult = yield* backend.kill(ref).pipe(Effect.either);
+          if (Either.isLeft(killResult)) {
+            console.warn(
+              `[runtime] PTY delete cleanup could not kill backend session ptySessionId=${session.id}`,
+              killResult.left,
+            );
+            return [deleteCleanupWarning('pty_kill_failed', session.paneId, session.id)];
+          }
+
+          // Delete cleanup intentionally does not persist a durable `killed` state:
+          // user intent is to remove the pane/surface now, and the DB rows are deleted
+          // by SurfaceService immediately after this best-effort backend cleanup.
+          console.info(`[runtime] PTY session prepared for delete ptySessionId=${session.id}`);
+          return [];
+        }),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
@@ -476,6 +530,14 @@ function startStatusPolling(
   }, statusPollIntervalMs);
   timer.unref();
   return timer;
+}
+
+function deleteCleanupWarning(
+  code: SurfaceDeleteWarning['code'],
+  paneId: number,
+  ptySessionId: number,
+): SurfaceDeleteWarning {
+  return { code, paneId, ptySessionId };
 }
 
 function reconcilePersistedSessions(

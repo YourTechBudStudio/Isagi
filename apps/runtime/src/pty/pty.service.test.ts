@@ -1099,7 +1099,6 @@ function testLayer(
     Layer.provide(database),
     Layer.provide(dataDirectoryLayer),
   );
-  const surfaceService = SurfaceServiceLive.pipe(Layer.provide(surfaceRepository));
   const ptyRepository = PtyRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(surfaceRepository),
@@ -1110,12 +1109,15 @@ function testLayer(
     Layer.provide(dataDirectoryLayer),
   );
   const ptyServiceWithEvents = Layer.provideMerge(ptyService, runtimeEventBusLayer(options.events));
+  const surfaceAndPtyService = Layer.provideMerge(
+    SurfaceServiceLive.pipe(Layer.provide(surfaceRepository)),
+    ptyServiceWithEvents,
+  );
   return Layer.mergeAll(
     workspaceRepository,
     surfaceRepository,
-    surfaceService,
     ptyRepository,
-    ptyServiceWithEvents,
+    surfaceAndPtyService,
   );
 }
 

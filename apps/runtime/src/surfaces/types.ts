@@ -111,3 +111,27 @@ export interface CreatePtySessionMetadataInput {
   readonly exitedAt?: string | null | undefined;
   readonly lastSeenAt?: string | null | undefined;
 }
+
+export interface SurfaceDeleteSessionTarget extends PtySessionRow {
+  readonly logPath: string | null;
+}
+
+export interface SurfaceDeletePaneTarget {
+  readonly pane: SurfacePaneRow;
+  readonly ptySession: SurfaceDeleteSessionTarget | null;
+}
+
+export interface SurfaceDeleteTarget {
+  readonly surface: SurfaceRow;
+  readonly panes: readonly SurfaceDeletePaneTarget[];
+}
+
+export interface RenameSurfaceOutput {
+  readonly surfaceId: number;
+  readonly title: string;
+}
+
+export interface DeleteSurfaceRowsOutput {
+  readonly deletedSurfaceId: number | null;
+  readonly deletedPaneIds: readonly number[];
+}

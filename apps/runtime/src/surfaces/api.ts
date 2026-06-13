@@ -32,6 +32,42 @@ export function registerSurfacesApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.rename, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.renameSurface({
+          surfaceId: params.surfaceId,
+          title: input.title,
+        });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.delete, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.deleteSurface(params.surfaceId);
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.deletePane, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.deleteSurfacePane({
+          surfaceId: params.surfaceId,
+          paneId: params.paneId,
+        });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.surfaces.setWorktreeEnvironmentFocus, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
@@ -48,15 +84,16 @@ export function registerSurfacesApi(
 
 function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof SurfaceError) {
-    if (context.endpointId === 'surfaces.get') {
+    if (context.endpointId.startsWith('surfaces.')) {
       return {
         code: 'surface_rejected',
         status: 400,
         message: error.message,
         requestId: context.requestId,
         data: {
-          reason: 'surface_not_found',
+          reason: surfaceRejectionReason(error),
           ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
+          ...(error.paneId ? { paneId: error.paneId } : {}),
         },
       };
     }
@@ -97,4 +134,15 @@ function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
     requestId: context.requestId,
     data: { endpointId: context.endpointId },
   };
+}
+
+function surfaceRejectionReason(error: SurfaceError) {
+  switch (error.code) {
+    case 'surface_not_found':
+    case 'pane_not_found':
+    case 'invalid_surface_title':
+      return error.code;
+    default:
+      return 'surface_not_found';
+  }
 }

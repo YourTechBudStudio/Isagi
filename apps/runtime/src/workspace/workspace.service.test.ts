@@ -91,6 +91,10 @@ const testSurfaceRepository = {
   listEnvironmentFocusStates: Effect.succeed([]),
   listPanesForSurface: () => Effect.succeed([]),
   listPtySessionsForPanes: () => Effect.succeed([]),
+  findSurfaceDeleteTarget: () => Effect.succeed(null),
+  renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
+  deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
+  deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
   createSinglePanePtySessionSurface: () =>
