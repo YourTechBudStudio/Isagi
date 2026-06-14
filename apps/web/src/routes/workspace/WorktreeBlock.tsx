@@ -1,8 +1,10 @@
 import { Pencil, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
+import type { MouseEvent } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { ContextMenu } from '../../components/ContextMenu.js';
+import { Tooltip } from '../../components/Tooltip.js';
 import { surfaceActionsCopy } from '../../copy/index.js';
 import { EASE_EXPO, surfaceTransition, uiTransition } from '../../lib/motion.js';
 import {
@@ -21,38 +23,66 @@ import type { Worktree, Surface } from '../../lib/workspace/types.js';
  * a brighter title are signal enough.
  */
 export function WorktreeBlock({
+  projectId,
   worktree,
   active,
   activeSurfaceId,
   onSelectWorktree,
   onSelectSurface,
 }: {
+  projectId: number;
   worktree: Worktree;
   active: boolean;
   activeSurfaceId: number | null;
   onSelectWorktree: (worktreeId: number) => void;
   onSelectSurface: (worktreeId: number, surfaceId: number) => void;
 }) {
+  const dispatchCommand = useCommandDispatcher();
+
+  const dispatchWorktreeDelete = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onSelectWorktree(worktree.id);
+    void dispatchCommand('delete-active-worktree', {
+      projectId: String(projectId),
+      worktreeId: String(worktree.id),
+    }).catch(handleDispatchedCommandError);
+  };
+
   return (
     <div className={worktree.parked ? 'opacity-55 hover:opacity-80' : ''}>
-      <button
-        type="button"
-        onClick={() => onSelectWorktree(worktree.id)}
-        aria-current={active ? 'true' : undefined}
-        className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left transition duration-micro ease-expo hover:bg-line/14"
-      >
-        <AttentionDot state={worktree.attention} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={`block truncate text-[13px] ${active ? 'font-semibold text-fg' : 'font-medium text-fg-muted'}`}
-          >
-            {worktree.title}
+      <div className="group/worktree-row relative">
+        <button
+          type="button"
+          onClick={() => onSelectWorktree(worktree.id)}
+          aria-current={active ? 'true' : undefined}
+          className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 pr-9 text-left transition duration-micro ease-expo hover:bg-line/14 focus-visible:bg-line/14 focus-visible:outline-none"
+        >
+          <AttentionDot state={worktree.attention} />
+          <span className="min-w-0 flex-1">
+            <span
+              className={`block truncate text-[13px] ${active ? 'font-semibold text-fg' : 'font-medium text-fg-muted'}`}
+            >
+              {worktree.title}
+            </span>
+            <span className="mt-0.5 block truncate font-mono text-[10.5px] text-fg-subtle">
+              {worktreeSubtitle(worktree)}
+            </span>
           </span>
-          <span className="mt-0.5 block truncate font-mono text-[10.5px] text-fg-subtle">
-            {worktreeSubtitle(worktree)}
-          </span>
-        </span>
-      </button>
+        </button>
+
+        {!worktree.isRoot && (
+          <Tooltip label="Delete worktree" side="left">
+            <button
+              type="button"
+              aria-label={`Delete worktree ${worktree.title}`}
+              onClick={dispatchWorktreeDelete}
+              className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 place-items-center rounded-sm border border-line/20 bg-elevated/70 text-fg-subtle opacity-0 backdrop-blur-sm transition duration-micro ease-expo group-focus-within/worktree-row:opacity-100 group-hover/worktree-row:opacity-100 hover:border-error/40 hover:bg-error/12 hover:text-error focus-visible:opacity-100 focus-visible:outline-none"
+            >
+              <Trash2 size={13} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
 
       <AnimatePresence initial={false}>
         {active && (

@@ -46,6 +46,7 @@ export function ProjectGroup({
       {project.worktrees.map((worktree) => (
         <WorktreeBlock
           key={worktree.id}
+          projectId={project.id}
           worktree={worktree}
           active={worktree.id === activeWorktreeId}
           activeSurfaceId={activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId}
