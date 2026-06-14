@@ -15,7 +15,7 @@ Updated: 2026-06-12
 
 ## Recommended next order
 
-1. [ ] PTY session close/delete lifecycle — `.pi/tasks/worktree-continuity-pty-session-close-delete.md`
+1. [x] PTY session close/delete lifecycle — `.pi/tasks/worktree-continuity-pty-session-close-delete.md`
    - Add explicit stop/kill/close/delete actions for PTY-backed panes/surfaces.
    - Remove DB rows and `.ptylog` files only on user-caused deletion.
    - Keep failed/exited evidence visible until the user cleans it up.

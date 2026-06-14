@@ -23,6 +23,16 @@ export const paletteCopy = {
   wizardStep: {
     loading: 'Loading\u2026',
   },
+  outcome: {
+    resultLabel: 'Result',
+    errorLabel: 'Could not run command',
+    localFeedback: 'Review what happened.',
+    commandUnavailableTitle: 'Command is no longer available.',
+    commandUnavailableBody:
+      'The workspace changed while the palette was open. Close this and try again.',
+    close: 'Close',
+    diagnostic: 'Diagnostic detail',
+  },
   tips: {
     cycle: 'cycle',
     fill: 'fill',

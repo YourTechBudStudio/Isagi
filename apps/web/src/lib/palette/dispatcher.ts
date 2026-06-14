@@ -43,6 +43,11 @@ export async function dispatchCommandEntry(
     return;
   }
 
+  if (entry.command.feedbackSurface === 'palette' && options.openPalette) {
+    options.openPalette(entry.id, values);
+    return;
+  }
+
   const preflight = await resolveCommandPreflight(entry.command, options.ctx, values);
 
   if (preflight.mode === 'unavailable') {

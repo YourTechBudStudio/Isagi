@@ -1,0 +1,320 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { Plus } from 'lucide-react';
+
+import { initialPaletteState, paletteReducer } from './machine.js';
+import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
+
+const ctx: PaletteContext = {
+  projects: [],
+  activeProject: null,
+  activeWorktree: null,
+  activeSurface: null,
+  activePaneId: null,
+};
+
+test('opens into search and tracks query/selection movement', () => {
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+  assert.equal(state.kind, 'search');
+
+  state = paletteReducer(state, { type: 'query-changed', query: 'open' });
+  assert.equal(state.kind, 'search');
+  assert.equal(state.query, 'open');
+
+  state = paletteReducer(state, {
+    type: 'view-snap',
+    viewKey: 'search:open:3:0',
+    length: 3,
+    defaultIndex: 0,
+  });
+  state = paletteReducer(state, { type: 'move-selection', delta: 1, length: 3 });
+
+  assert.equal(state.kind, 'search');
+  assert.equal(state.selectedIndex, 1);
+});
+
+test('activation preflights commands and ignores stale completions', () => {
+  const command = fakeCommand({
+    preflight: () => ({ mode: 'run', values: { ok: '1' } }),
+  });
+  const entry = fakeEntry(command);
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry, ctx });
+
+  assert.equal(state.kind, 'search');
+  assert.equal(state.effects.at(0)?.kind, 'preflight');
+  const attemptId = state.effects.at(0)?.attemptId;
+  assert.equal(state.preflightAttemptId, attemptId);
+
+  state = paletteReducer(state, {
+    type: 'preflight-failed',
+    attemptId: (attemptId ?? 0) + 1,
+    error: 'stale',
+  });
+  assert.equal(state.kind, 'search');
+  assert.equal(state.inlineError, null);
+
+  state = paletteReducer(state, {
+    type: 'preflight-succeeded',
+    attemptId: attemptId ?? 0,
+    entryId: entry.id,
+    command,
+    ctx,
+    result: { mode: 'run', values: { ok: '1' } },
+  });
+
+  assert.equal(state.kind, 'search');
+  assert.equal(state.runAttemptId, (attemptId ?? 0) + 1);
+  assert.equal(state.effects.at(-1)?.kind, 'run');
+});
+
+test('preflight can enter a wizard with preserved values', () => {
+  const command = fakeCommand({
+    preflight: () => ({ mode: 'palette', values: { name: 'Terminal' } }),
+    args: [{ kind: 'text', key: 'name', label: 'Name' }],
+  });
+  const entry = fakeEntry(command);
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry, ctx });
+  const attemptId = state.effects.at(0)?.attemptId ?? 0;
+  state = paletteReducer(state, {
+    type: 'preflight-succeeded',
+    attemptId,
+    entryId: entry.id,
+    command,
+    ctx,
+    result: { mode: 'palette', values: { name: 'Terminal' } },
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.flow.values.name, 'Terminal');
+  assert.equal(state.query, 'Terminal');
+});
+
+test('step accept skips irrelevant steps and back returns to previous visible step', () => {
+  const command = fakeCommand({
+    args: [
+      {
+        kind: 'select',
+        key: 'kind',
+        label: 'Kind',
+        options: () => [{ value: 'existing', label: 'Existing' }],
+      },
+      {
+        kind: 'select',
+        key: 'base',
+        label: 'Base',
+        skip: (_ctx, values) => values.kind === 'existing',
+        options: () => [{ value: 'main', label: 'main' }],
+      },
+      { kind: 'text', key: 'title', label: 'Title' },
+    ],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command,
+    ctx,
+    values: {},
+  });
+
+  assert.equal(state.kind, 'step');
+  state = paletteReducer(state, {
+    type: 'accept-value',
+    command,
+    ctx,
+    value: 'existing',
+    label: 'Existing',
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.flow.stepIndex, 2);
+
+  state = paletteReducer(state, { type: 'back', command, ctx });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.flow.stepIndex, 0);
+  assert.equal(state.flow.values.kind, undefined);
+});
+
+test('review cancel closes and null review runs the command once', () => {
+  const command = fakeCommand({
+    args: [{ kind: 'review', key: 'confirm', label: 'Confirm', load: () => null }],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command,
+    ctx,
+    values: {},
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.effects.at(0)?.kind, 'loadReview');
+
+  const reviewAttempt = state.effects.at(0)?.attemptId ?? 0;
+  state = paletteReducer(state, {
+    type: 'review-loaded',
+    attemptId: reviewAttempt,
+    content: null,
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.runAttemptId, reviewAttempt + 1);
+  assert.equal(state.effects.at(-1)?.kind, 'run');
+
+  const cancelCommand = fakeCommand({
+    args: [{ kind: 'review', key: 'confirm', label: 'Confirm', load: () => null }],
+  });
+  state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command: cancelCommand,
+    ctx,
+    values: {},
+  });
+  state = paletteReducer(state, {
+    type: 'accept-review-choice',
+    command: cancelCommand,
+    ctx,
+    choice: { value: 'cancel', label: 'Cancel', intent: 'cancel' },
+  });
+  assert.equal(state.kind, 'closed');
+});
+
+test('stale option loads are ignored', () => {
+  const command = fakeCommand({
+    args: [
+      {
+        kind: 'select',
+        key: 'project',
+        label: 'Project',
+        options: () => [{ value: '1', label: 'One' }],
+      },
+    ],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command,
+    ctx,
+    values: {},
+  });
+  assert.equal(state.kind, 'step');
+  const attemptId = state.stepData.kind === 'select' ? state.stepData.attemptId : 0;
+
+  state = paletteReducer(state, {
+    type: 'options-loaded',
+    attemptId: attemptId + 1,
+    options: [{ value: 'stale' }],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'select');
+  assert.deepEqual(state.stepData.options, []);
+
+  state = paletteReducer(state, {
+    type: 'options-loaded',
+    attemptId,
+    options: [{ value: '1', label: 'One' }],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'select');
+  assert.deepEqual(state.stepData.options, [{ value: '1', label: 'One' }]);
+});
+
+test('run success closes or shows structured result/error outcomes', () => {
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(null), ctx });
+  assert.equal(state.kind, 'search');
+  const closeAttempt = state.runAttemptId ?? 0;
+
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId: closeAttempt,
+    outcome: undefined,
+  });
+  assert.equal(state.kind, 'closed');
+
+  state = paletteReducer(initialPaletteState, { type: 'opened' });
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(null), ctx });
+  const resultAttempt = state.kind === 'search' ? (state.runAttemptId ?? 0) : 0;
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId: resultAttempt,
+    outcome: {
+      kind: 'result',
+      content: {
+        tone: 'warning',
+        title: 'Checkout deleted, branch preserved.',
+        diagnostic: { label: 'git', detail: 'branch is not fully merged' },
+      },
+    },
+  });
+  assert.equal(state.kind, 'result');
+  assert.equal(state.content.diagnostic?.detail, 'branch is not fully merged');
+
+  state = paletteReducer(initialPaletteState, { type: 'opened' });
+  state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(null), ctx });
+  const errorAttempt = state.kind === 'search' ? (state.runAttemptId ?? 0) : 0;
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId: errorAttempt,
+    outcome: {
+      kind: 'error',
+      content: { title: 'Root worktree cannot be deleted.' },
+    },
+  });
+  assert.equal(state.kind, 'error');
+  assert.equal(state.content.title, 'Root worktree cannot be deleted.');
+});
+
+test('step flows can fail locally when their command entry disappears', () => {
+  const command = fakeCommand({
+    args: [{ kind: 'text', key: 'title', label: 'Title' }],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command,
+    ctx,
+    values: {},
+  });
+
+  assert.equal(state.kind, 'step');
+
+  state = paletteReducer(state, {
+    type: 'flow-failed',
+    content: {
+      title: 'Command is no longer available.',
+      body: 'The workspace changed while the palette was open. Close this and try again.',
+    },
+  });
+
+  assert.equal(state.kind, 'error');
+  assert.equal(state.entryId, 'fake');
+  assert.equal(state.content.title, 'Command is no longer available.');
+});
+
+function fakeCommand(overrides: Partial<PaletteCommand> = {}): PaletteCommand {
+  return {
+    id: 'fake-command',
+    label: 'Fake command',
+    icon: Plus,
+    group: 'global',
+    run: () => undefined,
+    ...overrides,
+  };
+}
+
+function fakeEntry(command: PaletteCommand | null): PaletteEntry {
+  return {
+    id: 'fake-entry',
+    label: 'Fake entry',
+    icon: Plus,
+    group: 'global',
+    ...(command ? { command } : {}),
+    run: () => undefined,
+  };
+}

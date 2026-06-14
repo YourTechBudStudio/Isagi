@@ -82,6 +82,52 @@ test('dispatcher opens palette with entry id for palette preflight', async () =>
   assert.deepEqual(opened, [{ entryId: 'fake:palette', value: 'Terminal' }]);
 });
 
+test('dispatcher routes palette-owned commands through palette with explicit values', async () => {
+  const opened: Array<{
+    readonly entryId: string | undefined;
+    readonly projectId: string | undefined;
+    readonly worktreeId: string | undefined;
+  }> = [];
+  const entries: readonly PaletteEntry[] = [
+    {
+      id: 'fake:delete-worktree',
+      label: 'Delete worktree',
+      icon: Plus,
+      group: 'worktree-actions',
+      command: {
+        id: 'fake-delete-worktree',
+        label: 'Delete worktree',
+        icon: Plus,
+        group: 'worktree-actions',
+        feedbackSurface: 'palette',
+        preflight: () => {
+          throw new Error('preflight should be owned by palette');
+        },
+        run: () => {
+          throw new Error('run should be owned by palette');
+        },
+      },
+      run: () => undefined,
+    },
+  ];
+
+  await dispatchCommandEntry(
+    'fake:delete-worktree',
+    { projectId: '1', worktreeId: '10' },
+    {
+      entries,
+      ctx,
+      openPalette: (entryId, values) =>
+        opened.push({ entryId, projectId: values?.projectId, worktreeId: values?.worktreeId }),
+      pushRecent: () => {
+        throw new Error('recent should not be pushed');
+      },
+    },
+  );
+
+  assert.deepEqual(opened, [{ entryId: 'fake:delete-worktree', projectId: '1', worktreeId: '10' }]);
+});
+
 test('dispatcher unavailable preflight no-ops', async () => {
   const events: string[] = [];
   const entries: readonly PaletteEntry[] = [

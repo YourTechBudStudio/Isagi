@@ -36,6 +36,48 @@ export type ArgValues = Record<string, string>;
 export type ArgPayloads = Record<string, unknown>;
 export type MaybePromise<T> = T | Promise<T>;
 
+export type CommandOutcomeTone = 'info' | 'success' | 'warning' | 'danger';
+
+export interface CommandOutcomeDiagnostic {
+  readonly label: string;
+  readonly detail: string;
+}
+
+export interface CommandOutcomeAction {
+  readonly value: 'close' | 'cancel' | (string & {});
+  readonly label: string;
+  readonly intent?: 'default' | 'primary' | 'danger' | 'cancel';
+}
+
+export interface CommandResultContent {
+  readonly tone: CommandOutcomeTone;
+  readonly title: string;
+  readonly body?: string | undefined;
+  readonly diagnostic?: CommandOutcomeDiagnostic | undefined;
+  readonly actions?: readonly CommandOutcomeAction[] | undefined;
+}
+
+export interface CommandErrorContent {
+  readonly tone?: CommandOutcomeTone | undefined;
+  readonly title: string;
+  readonly body?: string | undefined;
+  readonly diagnostic?: CommandOutcomeDiagnostic | undefined;
+  readonly actions?: readonly CommandOutcomeAction[] | undefined;
+}
+
+export type CommandOutcome =
+  | {
+      readonly kind: 'close';
+    }
+  | {
+      readonly kind: 'result';
+      readonly content: CommandResultContent;
+    }
+  | {
+      readonly kind: 'error';
+      readonly content: CommandErrorContent;
+    };
+
 export type CommandPreflightResult =
   | {
       readonly mode: 'run';
@@ -148,6 +190,15 @@ export interface PaletteCommand {
   readonly label: string;
   readonly icon: IconType;
   readonly group: PaletteGroup;
+  /**
+   * Applies only when a command is invoked from an external workbench affordance
+   * (rail row, pane button, shortcut), not when the user runs it from palette
+   * search. `direct` preserves the current behavior: external dispatch may
+   * preflight/run directly and use caller or fallback error handling. `palette`
+   * routes external dispatch through the palette so command-owned reviews,
+   * localized errors, results, and diagnostics stay at the action site.
+   */
+  readonly feedbackSurface?: 'direct' | 'palette';
   readonly available?: (ctx: PaletteContext) => boolean;
   readonly preflight?: (
     ctx: PaletteContext,
@@ -158,7 +209,7 @@ export interface PaletteCommand {
     values: ArgValues,
     ctx: PaletteContext,
     payloads?: ArgPayloads,
-  ) => void | Promise<void>;
+  ) => CommandOutcome | void | Promise<CommandOutcome | void>;
 }
 
 /** A resolved, runnable item shown in the palette list. */
@@ -171,5 +222,5 @@ export interface PaletteEntry {
   readonly accent?: boolean;
   /** Global commands with args open the wizard instead of running immediately. */
   readonly command?: PaletteCommand;
-  readonly run: () => MaybePromise<void>;
+  readonly run: () => MaybePromise<CommandOutcome | void>;
 }

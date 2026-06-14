@@ -6,7 +6,8 @@ import {
   useCallback,
   useMemo,
   useRef,
-  useState,
+  useReducer,
+  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 
@@ -21,28 +22,32 @@ import { resolveCommandPreflight } from '../../lib/palette/dispatcher.js';
 import { assembleEntries } from '../../lib/palette/entries.js';
 import { GROUP_LABELS } from '../../lib/palette/groups.js';
 import {
+  currentStep,
+  initialPaletteState,
+  paletteReducer,
+  stepDefaultIndex,
+  type PaletteEffect,
+  type PaletteEvent,
+  type PaletteState,
+} from '../../lib/palette/machine.js';
+import {
   computeStepOptions,
   commandForEntryId,
-  defaultOptionIndex,
   filterEntries,
-  firstUnfilledStep,
-  labelForValue,
-  nextVisibleStep,
-  prevVisibleStep,
   recencyView,
-  reviewChoiceCancels,
 } from '../../lib/palette/model.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type {
-  ArgPayloads,
-  ArgSpec,
-  ArgValues,
+  CommandErrorContent,
+  CommandOutcomeAction,
+  CommandOutcomeTone,
+  CommandResultContent,
   Option,
   PaletteCommand,
   PaletteContext,
   PaletteEntry,
-  ReviewContent,
   ReviewChoice,
+  ReviewContent,
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -70,47 +75,25 @@ export function CommandPalette() {
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
 
-  const [query, setQuery] = useState('');
-  const [command, setCommand] = useState<PaletteCommand | null>(null);
-  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [values, setValues] = useState<ArgValues>({});
-  const [payloads, setPayloads] = useState<ArgPayloads>({});
-  const [labels, setLabels] = useState<Record<string, string>>({});
-  const [sel, setSel] = useState<number | null>(0);
-  const [stepOptions, setStepOptions] = useState<readonly Option[]>([]);
-  const [stepOptionsLoading, setStepOptionsLoading] = useState(false);
-  const [stepOptionsError, setStepOptionsError] = useState<string | null>(null);
-  const [pathSuggestions, setPathSuggestions] = useState<readonly PathSuggestion[]>([]);
-  const [pathError, setPathError] = useState<string | null>(null);
-  const [commandError, setCommandError] = useState<string | null>(null);
-  const [reviewContent, setReviewContent] = useState<ReviewContent | null>(null);
-  const [reviewLoading, setReviewLoading] = useState(false);
-  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [machine, send] = useReducer(paletteReducer, initialPaletteState);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Guards `command.run` to one invocation per wizard run. `command.run` can be
-  // a non-idempotent runtime mutation (e.g. open-worktree creates a worktree),
-  // and the review auto-finish path fires it from an effect — under StrictMode's
-  // double-invoke (or a synchronous review loader) that could run twice. Reset
-  // whenever a wizard (re)starts; cleared on failure so the user can retry.
-  const finishedRef = useRef(false);
-  const preflightAttemptRef = useRef(0);
-  // The path value the last Enter filled into the buffer. Pressing Enter again
-  // with no edits since (buffer still equals it) commits — robust to the async
-  // suggestion refresh, which the live highlight is not. Typing clears it.
-  const lastFilledPath = useRef<string | null>(null);
+  const seenEffectIds = useRef(new Set<number>());
+  const pathSuggestTimer = useRef<number | null>(null);
+  const lastOpenRequest = useRef<{
+    readonly entryId: string | null;
+    readonly values: typeof autostartValues;
+  } | null>(null);
 
   const closeCurrentPalette = useCallback(() => {
-    preflightAttemptRef.current += 1;
-    closePalette();
-  }, [closePalette]);
+    send({ type: 'closed' });
+  }, []);
 
   useEffect(() => {
-    if (!open) {
-      preflightAttemptRef.current += 1;
-      finishedRef.current = false;
+    if (!open || machine.kind !== 'closed' || lastOpenRequest.current === null) {
+      return;
     }
-  }, [open]);
+    closePalette();
+  }, [closePalette, machine.kind, open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
   useEffect(() => {
@@ -136,259 +119,133 @@ export function CommandPalette() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, openPalette, closeCurrentPalette]);
 
-  // Reset on open; jump straight into a wizard when autostarted.
+  // Reset on open; jump straight into a command flow when autostarted.
   useEffect(() => {
     if (!open) {
+      lastOpenRequest.current = null;
+      if (machine.kind !== 'closed') {
+        send({ type: 'closed' });
+      }
       return;
     }
-    finishedRef.current = false;
-    setQuery('');
-    setCommandError(null);
+
+    const openRequest = { entryId: autostartEntryId, values: autostartValues };
+    if (
+      lastOpenRequest.current?.entryId === openRequest.entryId &&
+      lastOpenRequest.current.values === openRequest.values
+    ) {
+      return;
+    }
+
+    lastOpenRequest.current = openRequest;
     const autostart = commandForEntryId(allEntries, autostartEntryId);
-
-    if (!autostart?.command.args?.length) {
-      setValues({});
-      setPayloads({});
-      setLabels({});
-      setStepOptions([]);
-      setStepOptionsError(null);
-      setStepOptionsLoading(false);
-      setReviewContent(null);
-      setReviewError(null);
-      setReviewLoading(false);
-      setStepIndex(0);
-      setCommand(null);
-      setActiveEntryId(null);
+    if (!autostart?.command) {
+      send({ type: 'opened' });
       return;
     }
+    send({
+      type: 'autostart',
+      entryId: autostart.entryId,
+      command: autostart.command,
+      ctx,
+      values: { ...autostartValues },
+    });
+  }, [open, machine.kind, autostartEntryId, autostartValues, allEntries, ctx]);
 
-    const initialValues = { ...autostartValues };
-    const initialLabels = Object.fromEntries(
-      autostart.command.args
-        .filter((arg) => initialValues[arg.key] !== undefined)
-        .map((arg) => [
-          arg.key,
-          labelForValue(arg, initialValues[arg.key] as string, ctx, initialValues),
-        ]),
-    );
-
-    setValues(initialValues);
-    setPayloads({});
-    setLabels(initialLabels);
-    setStepOptions([]);
-    setStepOptionsError(null);
-    setStepOptionsLoading(false);
-    setReviewContent(null);
-    setReviewError(null);
-    setReviewLoading(false);
-    const initialStepIndex = firstUnfilledStep(autostart.command.args, initialValues);
-    setStepIndex(initialStepIndex);
-    setCommand(autostart.command);
-    setActiveEntryId(autostart.entryId);
-    setQuery(initialTextQuery(autostart.command.args, initialStepIndex, ctx, initialValues));
-  }, [open, autostartEntryId, autostartValues, allEntries, ctx]);
-
+  const command = useMemo(() => resolveStateCommand(machine, allEntries), [machine, allEntries]);
   const args = command?.args ?? [];
-  const spec: ArgSpec | undefined = command ? args[stepIndex] : undefined;
+  const spec = currentStep(command, machine);
+  const query = machine.kind === 'search' || machine.kind === 'step' ? machine.query : '';
+  const sel = machine.kind === 'search' || machine.kind === 'step' ? machine.selectedIndex : null;
+  const commandError =
+    machine.kind === 'search' || machine.kind === 'step' ? machine.inlineError : null;
+  const acceptsInput = machine.kind === 'search' || machine.kind === 'step';
+
+  useEffect(() => {
+    if (machine.kind !== 'step' || (command && spec)) {
+      return;
+    }
+    send({
+      type: 'flow-failed',
+      content: {
+        title: paletteCopy.outcome.commandUnavailableTitle,
+        body: paletteCopy.outcome.commandUnavailableBody,
+      },
+    });
+  }, [command, machine.kind, spec]);
 
   const view = useMemo(() => {
-    if (command && spec) {
+    if (machine.kind === 'result') {
+      return { kind: 'result' as const, content: machine.content };
+    }
+    if (machine.kind === 'error') {
+      return { kind: 'error' as const, content: machine.content };
+    }
+    if (machine.kind === 'step' && command && spec) {
       if (spec.kind === 'text') {
         return {
           kind: 'text' as const,
-          value: query.trim(),
+          value: machine.query.trim(),
           placeholder: spec.placeholder,
         };
       }
 
-      if (spec.kind === 'path') {
+      if (spec.kind === 'path' && machine.stepData.kind === 'path') {
         return {
           kind: 'path' as const,
-          value: query.trim(),
-          suggestions: pathSuggestions,
-          error: pathError,
+          value: machine.query.trim(),
+          suggestions: machine.stepData.suggestions as readonly PathSuggestion[],
+          error: machine.stepData.error,
           placeholder: spec.placeholder,
         };
       }
 
-      if (spec.kind === 'review') {
+      if (spec.kind === 'review' && machine.stepData.kind === 'review') {
         return {
           kind: 'review' as const,
-          content: reviewContent,
-          error: reviewError,
-          loading: reviewLoading,
+          content: machine.stepData.content,
+          error: machine.stepData.error,
+          loading: machine.stepData.loading,
         };
       }
 
-      const options = computeStepOptions(spec, stepOptions, query);
+      const loadedOptions =
+        machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
+          ? machine.stepData.options
+          : [];
+      const options = computeStepOptions(spec, loadedOptions, machine.query);
       return {
         kind: 'wizard' as const,
-        error: stepOptionsError,
-        hint: spec.emptyHint,
-        loading: stepOptionsLoading,
+        error:
+          machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
+            ? machine.stepData.error
+            : null,
+        hint: spec.kind === 'select' || spec.kind === 'combo' ? spec.emptyHint : undefined,
+        loading:
+          machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
+            ? machine.stepData.loading
+            : false,
         options,
       };
     }
-    const items = query ? filterEntries(allEntries, query) : recencyView(allEntries, recents);
+
+    const searchQuery = machine.kind === 'search' ? machine.query : '';
+    const items = searchQuery
+      ? filterEntries(allEntries, searchQuery)
+      : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
-  }, [
-    command,
-    spec,
-    ctx,
-    values,
-    query,
-    allEntries,
-    recents,
-    pathSuggestions,
-    pathError,
-    stepOptions,
-    stepOptionsError,
-    stepOptionsLoading,
-    reviewContent,
-    reviewError,
-    reviewLoading,
-  ]);
+  }, [machine, command, spec, allEntries, recents]);
 
   useEffect(() => {
-    if (!open || !command || (spec?.kind !== 'select' && spec?.kind !== 'combo')) {
-      setStepOptions([]);
-      setStepOptionsError(null);
-      setStepOptionsLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setStepOptionsError(null);
-
-    try {
-      const loaded = spec.options(ctx, values);
-      if (loaded instanceof Promise) {
-        setStepOptionsLoading(true);
-        void loaded
-          .then(
-            (options) => {
-              if (!cancelled) {
-                setStepOptions(options);
-                setStepOptionsError(null);
-              }
-            },
-            (error: unknown) => {
-              if (!cancelled) {
-                setStepOptions([]);
-                setStepOptionsError(error instanceof Error ? error.message : String(error));
-              }
-            },
-          )
-          .finally(() => {
-            if (!cancelled) {
-              setStepOptionsLoading(false);
-            }
-          });
-      } else {
-        setStepOptions(loaded);
-        setStepOptionsLoading(false);
-      }
-    } catch (error) {
-      setStepOptions([]);
-      setStepOptionsLoading(false);
-      setStepOptionsError(error instanceof Error ? error.message : String(error));
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, command, spec, ctx, values]);
-
-  useEffect(() => {
-    if (!open || !command || spec?.kind !== 'review') {
-      setReviewContent(null);
-      setReviewError(null);
-      setReviewLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setReviewError(null);
-
-    // A review step whose load resolves to `null` has nothing to ask: finish the
-    // wizard and run the command directly (the review is always the terminal step).
-    const settle = (content: ReviewContent | null) => {
-      if (cancelled) {
-        return;
-      }
-      if (content === null) {
-        finishCommandRun(command, values, payloads);
-        return;
-      }
-      setReviewContent(content);
-      setReviewError(null);
-    };
-
-    try {
-      const loaded = spec.load(ctx, values);
-      if (loaded instanceof Promise) {
-        setReviewLoading(true);
-        void loaded
-          .then(settle, (error: unknown) => {
-            if (!cancelled) {
-              setReviewContent(null);
-              setReviewError(error instanceof Error ? error.message : String(error));
-            }
-          })
-          .finally(() => {
-            if (!cancelled) {
-              setReviewLoading(false);
-            }
-          });
-      } else {
-        setReviewLoading(false);
-        settle(loaded);
-      }
-    } catch (error) {
-      setReviewContent(null);
-      setReviewLoading(false);
-      setReviewError(error instanceof Error ? error.message : String(error));
-    }
-
-    return () => {
-      cancelled = true;
-    };
-    // `finishCommandRun` is intentionally excluded: it is re-created every render,
-    // so including it would re-fire `spec.load` (and preflight) on every render.
-    // It is stable for a given wizard run and guarded against double-invocation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, command, spec, ctx, values, payloads]);
-
-  useEffect(() => {
-    if (!open || !command || spec?.kind !== 'path') {
-      setPathSuggestions([]);
-      setPathError(null);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void Effect.runPromise(suggestProjectPaths(query)).then(
-        (output) => {
-          if (!cancelled) {
-            setPathSuggestions(output.suggestions);
-            setPathError(null);
-          }
-        },
-        (error: unknown) => {
-          if (!cancelled) {
-            setPathSuggestions([]);
-            setPathError(error instanceof Error ? error.message : String(error));
-          }
-        },
-      );
-    }, 80);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [open, command, spec?.kind, query]);
+    runPaletteEffects(machine.effects, {
+      allEntries,
+      ctx,
+      send,
+      pushRecent,
+      pathSuggestTimer,
+      seenEffectIds,
+    });
+  }, [machine.effects, allEntries, ctx, pushRecent]);
 
   const length =
     view.kind === 'wizard'
@@ -399,174 +256,45 @@ export function CommandPalette() {
           ? view.suggestions.length
           : view.kind === 'review'
             ? (view.content?.choices.length ?? 0)
-            : 0;
-  const viewKey = command ? `wizard-${stepIndex}` : query ? 'search' : 'recent';
-  const defaultIndex = view.kind === 'wizard' && spec ? defaultOptionIndex(spec, view.options) : 0;
+            : view.kind === 'result' || view.kind === 'error'
+              ? outcomeActions(view.content).length
+              : 0;
+  const baseViewKey =
+    machine.kind === 'step'
+      ? `wizard-${machine.flow.stepIndex}:${query}`
+      : machine.kind === 'search'
+        ? query
+          ? `search:${query}`
+          : 'recent'
+        : machine.kind === 'result' || machine.kind === 'error'
+          ? machine.viewKey
+          : 'closed';
+  const defaultIndex = view.kind === 'wizard' ? stepDefaultIndex(spec, view.options) : 0;
+  const viewKey = `${baseViewKey}:${length}:${defaultIndex ?? 'none'}`;
 
   // Snap the selection to the default whenever the view changes shape.
   useEffect(() => {
-    setSel(query === '' ? defaultIndex : length > 0 ? 0 : null);
-  }, [viewKey, query, defaultIndex, length]);
-
-  useEffect(() => {
-    if (open) {
-      inputRef.current?.focus();
-    }
-  }, [open, viewKey]);
-
-  const enterWizard = (entryId: string, next: PaletteCommand, initialValues: ArgValues = {}) => {
-    const initialLabels = Object.fromEntries(
-      (next.args ?? [])
-        .filter((arg) => initialValues[arg.key] !== undefined)
-        .map((arg) => [
-          arg.key,
-          labelForValue(arg, initialValues[arg.key] as string, ctx, initialValues),
-        ]),
-    );
-
-    const initialStepIndex = firstUnfilledStep(next.args ?? [], initialValues);
-
-    finishedRef.current = false;
-    setCommand(next);
-    setActiveEntryId(entryId);
-    setStepIndex(initialStepIndex);
-    setValues(initialValues);
-    setPayloads({});
-    setLabels(initialLabels);
-    setStepOptions([]);
-    setStepOptionsError(null);
-    setStepOptionsLoading(false);
-    setReviewContent(null);
-    setReviewError(null);
-    setReviewLoading(false);
-    setQuery(initialTextQuery(next.args ?? [], initialStepIndex, ctx, initialValues));
-  };
-
-  const finish = () => {
-    closeCurrentPalette();
-  };
-
-  // Run a command to completion and close the palette, surfacing any failure as
-  // the inline command error. Shared by the wizard's accept path and the review
-  // step's auto-finish (when a review resolves to `null`, i.e. nothing to ask).
-  const finishCommandRun = (
-    cmd: PaletteCommand,
-    runValues: ArgValues,
-    runPayloads: ArgPayloads,
-    recentEntryId = activeEntryId ?? cmd.id,
-  ) => {
-    if (finishedRef.current) {
+    if (!open) {
       return;
     }
-    finishedRef.current = true;
-    const result = cmd.run(runValues, ctx, runPayloads);
-    if (result instanceof Promise) {
-      void result.then(
-        () => {
-          pushRecent(recentEntryId);
-          finish();
-        },
-        (error: unknown) => {
-          // Let the user retry from the same step.
-          finishedRef.current = false;
-          setCommandError(formatRuntimeError(error));
-        },
-      );
-    } else {
-      pushRecent(recentEntryId);
-      finish();
+    send({ type: 'view-snap', viewKey, length, defaultIndex });
+  }, [open, viewKey, length, defaultIndex]);
+
+  useEffect(() => {
+    if (open && (machine.kind === 'search' || machine.kind === 'step')) {
+      inputRef.current?.focus();
     }
-  };
+  }, [open, machine.kind, viewKey]);
 
   const runEntry = (entry: PaletteEntry) => {
-    if (entry.command) {
-      const entryCommand = entry.command;
-      if (finishedRef.current) {
-        return;
-      }
-      const attempt = preflightAttemptRef.current + 1;
-      preflightAttemptRef.current = attempt;
-      finishedRef.current = true;
-      void resolveCommandPreflight(entryCommand, ctx, {}).then(
-        (preflight) => {
-          if (attempt !== preflightAttemptRef.current || !usePaletteStore.getState().open) {
-            return;
-          }
-          if (preflight.mode === 'unavailable') {
-            finishedRef.current = false;
-            return;
-          }
-          if (preflight.mode === 'palette') {
-            enterWizard(entry.id, entryCommand, preflight.values ?? {});
-            return;
-          }
-          finishedRef.current = false;
-          finishCommandRun(
-            entryCommand,
-            preflight.values ?? {},
-            preflight.payloads ?? {},
-            entry.id,
-          );
-        },
-        (error: unknown) => {
-          if (attempt !== preflightAttemptRef.current || !usePaletteStore.getState().open) {
-            return;
-          }
-          finishedRef.current = false;
-          setCommandError(formatRuntimeError(error));
-        },
-      );
-    } else {
-      if (finishedRef.current) {
-        return;
-      }
-      finishedRef.current = true;
-      const result = entry.run();
-      if (result instanceof Promise) {
-        void result.then(
-          () => {
-            pushRecent(entry.id);
-            finish();
-          },
-          (error: unknown) => {
-            finishedRef.current = false;
-            setCommandError(formatRuntimeError(error));
-          },
-        );
-      } else {
-        pushRecent(entry.id);
-        finish();
-      }
-    }
+    send({ type: 'activate-entry', entry, ctx });
   };
 
   const acceptValue = (value: string, label: string, payload?: unknown) => {
-    if (!command || !spec || (!value && spec.kind !== 'text')) {
+    if (!command) {
       return;
     }
-    const nextValues = { ...values, [spec.key]: value };
-    const nextPayloads = { ...payloads, [spec.key]: payload };
-    const nextLabels = { ...labels, [spec.key]: label };
-    const finishOnAccept =
-      (spec.kind === 'select' || spec.kind === 'combo') &&
-      (spec.finishOnAccept?.(value, payload, ctx, nextValues) ?? false);
-    // Skip any now-irrelevant steps; if none remain, the wizard is done.
-    const next = nextVisibleStep(args, stepIndex + 1, ctx, nextValues, nextPayloads);
-    if (finishOnAccept || next >= args.length) {
-      finishCommandRun(command, nextValues, nextPayloads);
-    } else {
-      setValues(nextValues);
-      setPayloads(nextPayloads);
-      setLabels(nextLabels);
-      setStepOptions([]);
-      setStepOptionsError(null);
-      setStepOptionsLoading(false);
-      setReviewContent(null);
-      setReviewError(null);
-      setReviewLoading(false);
-      setQuery('');
-      setStepIndex(next);
-    }
+    send({ type: 'accept-value', command, ctx, value, label, payload });
   };
 
   const acceptOption = (option: Option) => {
@@ -574,11 +302,10 @@ export function CommandPalette() {
   };
 
   const acceptReviewChoice = (choice: ReviewChoice) => {
-    if (reviewChoiceCancels(choice)) {
-      closeCurrentPalette();
+    if (!command) {
       return;
     }
-    acceptValue(choice.value, choice.label, choice.payload);
+    send({ type: 'accept-review-choice', command, ctx, choice });
   };
 
   const acceptText = () => {
@@ -594,14 +321,13 @@ export function CommandPalette() {
     // Shell-style: Enter fills the input with the highlighted directory rather
     // than submitting. Press it again (buffer unchanged since the fill) to
     // commit, or type "/" to drill into the filled path and keep navigating.
-    if (view.value && view.value === lastFilledPath.current) {
+    if (machine.kind === 'step' && view.value && view.value === machine.lastFilledPath) {
       acceptValue(view.value, view.value);
       return;
     }
     const highlighted = sel === null ? undefined : view.suggestions[sel];
     if (highlighted && highlighted.path !== view.value) {
-      lastFilledPath.current = highlighted.path;
-      setQuery(highlighted.path);
+      send({ type: 'fill-path', path: highlighted.path });
       return;
     }
     if (view.value) {
@@ -627,61 +353,50 @@ export function CommandPalette() {
       if (choice) {
         acceptReviewChoice(choice);
       }
+    } else if (view.kind === 'result' || view.kind === 'error') {
+      const action = outcomeActions(view.content)[sel ?? 0];
+      if (action) {
+        send({ type: 'outcome-action', value: action.value });
+      }
     } else {
       acceptText();
     }
   };
 
-  const back = () => {
-    if (!command) {
-      closeCurrentPalette();
+  useEffect(() => {
+    if (!open || (view.kind !== 'result' && view.kind !== 'error')) {
       return;
     }
-    const previous = prevVisibleStep(args, stepIndex, ctx, values, payloads);
-    if (previous !== null) {
-      const previousKey = args[previous]?.key;
-      if (previousKey) {
-        setValues((current) => {
-          const next = { ...current };
-          delete next[previousKey];
-          return next;
-        });
-        setPayloads((current) => {
-          const next = { ...current };
-          delete next[previousKey];
-          return next;
-        });
-        setLabels((current) => {
-          const next = { ...current };
-          delete next[previousKey];
-          return next;
-        });
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        send({ type: 'move-selection', delta: 1, length });
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        send({ type: 'move-selection', delta: -1, length });
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        const action = outcomeActions(view.content)[sel ?? 0];
+        if (action) {
+          send({ type: 'outcome-action', value: action.value });
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        send({ type: 'back', ctx });
       }
-      setStepOptions([]);
-      setStepOptionsError(null);
-      setStepOptionsLoading(false);
-      setQuery('');
-      setStepIndex(previous);
-    } else {
-      setCommand(null);
-      setActiveEntryId(null);
-      setStepOptions([]);
-      setStepOptionsError(null);
-      setStepOptionsLoading(false);
-      setQuery('');
-    }
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [ctx, length, open, sel, view]);
+
+  const back = () => {
+    send({ type: 'back', command: command ?? undefined, ctx });
   };
 
   const cycleSel = (delta: number) => {
-    setSel((current) => {
-      if (length === 0) {
-        return null;
-      }
-      if (current === null) {
-        return delta < 0 ? length - 1 : 0;
-      }
-      return (current + delta + length) % length;
-    });
+    send({ type: 'move-selection', delta, length });
   };
 
   // Tab fills the buffer with the highlighted directory without submitting, so
@@ -692,8 +407,7 @@ export function CommandPalette() {
     }
     const highlighted = sel === null ? undefined : view.suggestions[sel];
     if (highlighted) {
-      lastFilledPath.current = highlighted.path;
-      setQuery(highlighted.path);
+      send({ type: 'fill-path', path: highlighted.path });
     }
   };
 
@@ -721,9 +435,16 @@ export function CommandPalette() {
 
   const crumbLabels = command
     ? args
-        .slice(0, stepIndex)
-        .filter((arg) => !(arg.kind === 'select' && (arg.skip?.(ctx, values, payloads) ?? false)))
-        .map((arg) => labels[arg.key] ?? '')
+        .slice(0, machine.kind === 'step' ? machine.flow.stepIndex : 0)
+        .filter(
+          (arg) =>
+            machine.kind !== 'step' ||
+            !(
+              arg.kind === 'select' &&
+              (arg.skip?.(ctx, machine.flow.values, machine.flow.payloads) ?? false)
+            ),
+        )
+        .map((arg) => (machine.kind === 'step' ? (machine.flow.labels[arg.key] ?? '') : ''))
     : [];
 
   return (
@@ -766,29 +487,41 @@ export function CommandPalette() {
                   ))}
                   <span className="text-[11px] text-fg-subtle">›</span>
                 </>
+              ) : machine.kind === 'result' ? (
+                <Chip tone="command">{paletteCopy.outcome.resultLabel}</Chip>
+              ) : machine.kind === 'error' ? (
+                <Chip tone="command">{paletteCopy.outcome.errorLabel}</Chip>
               ) : (
                 <span className="font-mono text-[13px] text-blue">{modKey}K</span>
               )}
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={(event) => {
-                  setCommandError(null);
-                  lastFilledPath.current = null;
-                  setQuery(event.target.value);
-                }}
-                onKeyDown={onKeyDown}
-                placeholder={
-                  command
-                    ? spec?.kind === 'combo'
-                      ? paletteCopy.placeholders.chooseOrTypeName
-                      : spec?.kind === 'text' || spec?.kind === 'path'
-                        ? (spec.placeholder ?? paletteCopy.placeholders.typedValue)
-                        : paletteCopy.placeholders.choose
-                    : paletteCopy.placeholders.command
-                }
-                className="min-w-30 flex-1 bg-transparent font-sans text-[15px] text-fg outline-none placeholder:text-fg-subtle"
-              />
+              {acceptsInput ? (
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={(event) => {
+                    send({
+                      type: 'query-changed',
+                      query: event.target.value,
+                      spec: spec ?? undefined,
+                    });
+                  }}
+                  onKeyDown={onKeyDown}
+                  placeholder={
+                    command
+                      ? spec?.kind === 'combo'
+                        ? paletteCopy.placeholders.chooseOrTypeName
+                        : spec?.kind === 'text' || spec?.kind === 'path'
+                          ? (spec.placeholder ?? paletteCopy.placeholders.typedValue)
+                          : paletteCopy.placeholders.choose
+                      : paletteCopy.placeholders.command
+                  }
+                  className="min-w-30 flex-1 bg-transparent font-sans text-[15px] text-fg outline-none placeholder:text-fg-subtle"
+                />
+              ) : (
+                <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-subtle">
+                  {paletteCopy.outcome.localFeedback}
+                </span>
+              )}
             </div>
 
             {commandError && (
@@ -846,6 +579,18 @@ export function CommandPalette() {
                 />
               ) : view.kind === 'text' ? (
                 <TextStep value={view.value} placeholder={view.placeholder} />
+              ) : view.kind === 'result' ? (
+                <OutcomePanel
+                  content={view.content}
+                  kind="result"
+                  onAction={(value) => send({ type: 'outcome-action', value })}
+                />
+              ) : view.kind === 'error' ? (
+                <OutcomePanel
+                  content={view.content}
+                  kind="error"
+                  onAction={(value) => send({ type: 'outcome-action', value })}
+                />
               ) : (
                 <EntryList
                   items={view.items}
@@ -860,7 +605,17 @@ export function CommandPalette() {
               )}
             </motion.div>
 
-            <Tip mode={command ? (spec?.kind === 'path' ? 'path' : 'wizard') : 'list'} />
+            <Tip
+              mode={
+                view.kind === 'result' || view.kind === 'error'
+                  ? 'outcome'
+                  : command
+                    ? spec?.kind === 'path'
+                      ? 'path'
+                      : 'wizard'
+                    : 'list'
+              }
+            />
           </motion.div>
         </motion.div>
       )}
@@ -868,14 +623,280 @@ export function CommandPalette() {
   );
 }
 
-function initialTextQuery(
-  args: readonly ArgSpec[],
-  stepIndex: number,
-  ctx: PaletteContext,
-  values: ArgValues,
+function runPaletteEffects(
+  effects: readonly PaletteEffect[],
+  options: {
+    readonly allEntries: readonly PaletteEntry[];
+    readonly ctx: PaletteContext;
+    readonly send: Dispatch<PaletteEvent>;
+    readonly pushRecent: (entryId: string) => void;
+    readonly pathSuggestTimer: { current: number | null };
+    readonly seenEffectIds: { current: Set<number> };
+  },
 ) {
-  const spec = args[stepIndex];
-  return spec?.kind === 'text' ? (values[spec.key] ?? spec.default?.(ctx, values) ?? '') : '';
+  const pending = effects.filter((effect) => !options.seenEffectIds.current.has(effect.id));
+  if (pending.length === 0) {
+    return;
+  }
+
+  for (const effect of pending) {
+    options.seenEffectIds.current.add(effect.id);
+  }
+  options.send({ type: 'effects-consumed', ids: pending.map((effect) => effect.id) });
+
+  for (const effect of pending) {
+    runPaletteEffect(effect, options);
+  }
+}
+
+function runPaletteEffect(
+  effect: PaletteEffect,
+  options: {
+    readonly allEntries: readonly PaletteEntry[];
+    readonly ctx: PaletteContext;
+    readonly send: Dispatch<PaletteEvent>;
+    readonly pushRecent: (entryId: string) => void;
+    readonly pathSuggestTimer: { current: number | null };
+  },
+) {
+  if (effect.kind === 'preflight') {
+    const command = resolveCommandByIds(options.allEntries, effect.entryId, effect.commandId);
+    if (!command) {
+      options.send({
+        type: 'preflight-failed',
+        attemptId: effect.attemptId,
+        error: paletteCopy.outcome.commandUnavailableTitle,
+      });
+      return;
+    }
+    void resolveMaybe(() => resolveCommandPreflight(command, options.ctx, effect.values)).then(
+      (result) =>
+        options.send({
+          type: 'preflight-succeeded',
+          attemptId: effect.attemptId,
+          entryId: effect.entryId,
+          command,
+          ctx: options.ctx,
+          result,
+        }),
+      (error: unknown) =>
+        options.send({
+          type: 'preflight-failed',
+          attemptId: effect.attemptId,
+          error: formatRuntimeError(error),
+        }),
+    );
+    return;
+  }
+
+  if (effect.kind === 'loadOptions') {
+    const command = resolveCommandByIds(options.allEntries, effect.entryId, effect.commandId);
+    const spec = command?.args?.[effect.stepIndex];
+    if (!spec || (spec.kind !== 'select' && spec.kind !== 'combo')) {
+      options.send({
+        type: 'options-failed',
+        attemptId: effect.attemptId,
+        error: paletteCopy.outcome.commandUnavailableTitle,
+      });
+      return;
+    }
+    void resolveMaybe(() => spec.options(options.ctx, effect.values)).then(
+      (loaded) =>
+        options.send({ type: 'options-loaded', attemptId: effect.attemptId, options: loaded }),
+      (error: unknown) =>
+        options.send({
+          type: 'options-failed',
+          attemptId: effect.attemptId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    );
+    return;
+  }
+
+  if (effect.kind === 'loadReview') {
+    const command = resolveCommandByIds(options.allEntries, effect.entryId, effect.commandId);
+    const spec = command?.args?.[effect.stepIndex];
+    if (!spec || spec.kind !== 'review') {
+      options.send({
+        type: 'review-failed',
+        attemptId: effect.attemptId,
+        error: paletteCopy.outcome.commandUnavailableTitle,
+      });
+      return;
+    }
+    void resolveMaybe(() => spec.load(options.ctx, effect.values)).then(
+      (content) => options.send({ type: 'review-loaded', attemptId: effect.attemptId, content }),
+      (error: unknown) =>
+        options.send({
+          type: 'review-failed',
+          attemptId: effect.attemptId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    );
+    return;
+  }
+
+  if (effect.kind === 'suggestPaths') {
+    if (options.pathSuggestTimer.current !== null) {
+      window.clearTimeout(options.pathSuggestTimer.current);
+    }
+    options.pathSuggestTimer.current = window.setTimeout(() => {
+      options.pathSuggestTimer.current = null;
+      void Effect.runPromise(suggestProjectPaths(effect.query)).then(
+        (output) =>
+          options.send({
+            type: 'paths-loaded',
+            attemptId: effect.attemptId,
+            suggestions: output.suggestions,
+          }),
+        (error: unknown) =>
+          options.send({
+            type: 'paths-failed',
+            attemptId: effect.attemptId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      );
+    }, 80);
+    return;
+  }
+
+  const entry = options.allEntries.find((candidate) => candidate.id === effect.entryId);
+  const command = effect.commandId
+    ? resolveCommandByIds(options.allEntries, effect.entryId, effect.commandId)
+    : null;
+  const run = command
+    ? () => command.run(effect.values, options.ctx, effect.payloads)
+    : entry
+      ? () => entry.run()
+      : null;
+
+  if (!run) {
+    options.send({
+      type: 'run-failed',
+      attemptId: effect.attemptId,
+      error: paletteCopy.outcome.commandUnavailableTitle,
+    });
+    return;
+  }
+
+  void resolveMaybe(run).then(
+    (outcome) => {
+      options.pushRecent(effect.entryId);
+      options.send({ type: 'run-succeeded', attemptId: effect.attemptId, outcome });
+    },
+    (error: unknown) =>
+      options.send({
+        type: 'run-failed',
+        attemptId: effect.attemptId,
+        error: formatRuntimeError(error),
+      }),
+  );
+}
+
+function resolveMaybe<T>(run: () => T | Promise<T>): Promise<T> {
+  try {
+    return Promise.resolve(run());
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+function resolveStateCommand(
+  state: PaletteState,
+  entries: readonly PaletteEntry[],
+): PaletteCommand | null {
+  if (state.kind !== 'step') {
+    return null;
+  }
+  return resolveCommandByIds(entries, state.flow.entryId, state.flow.commandId);
+}
+
+function resolveCommandByIds(
+  entries: readonly PaletteEntry[],
+  entryId: string,
+  commandId: string,
+): PaletteCommand | null {
+  return (
+    entries.find((entry) => entry.id === entryId && entry.command?.id === commandId)?.command ??
+    null
+  );
+}
+
+function outcomeActions(content: CommandResultContent | CommandErrorContent) {
+  return content.actions?.length
+    ? content.actions
+    : [{ value: 'close', label: paletteCopy.outcome.close } satisfies CommandOutcomeAction];
+}
+
+function OutcomePanel({
+  content,
+  kind,
+  onAction,
+}: {
+  content: CommandResultContent | CommandErrorContent;
+  kind: 'result' | 'error';
+  onAction: (value: string) => void;
+}) {
+  const tone = kind === 'error' ? (content.tone ?? 'danger') : (content.tone ?? 'info');
+  const toneClass = outcomeToneClass(tone);
+  return (
+    <div className="px-3 py-3">
+      <div className={`rounded-md border p-3 ${toneClass.frame}`}>
+        <p className={`text-[13.5px] font-medium ${toneClass.title}`}>{content.title}</p>
+        {content.body && (
+          <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{content.body}</p>
+        )}
+        {content.diagnostic && (
+          <div className="mt-3 rounded-sm border border-line/18 bg-scrim/28 p-2">
+            <p className="font-mono text-[10.5px] text-fg-subtle">
+              {content.diagnostic.label || paletteCopy.outcome.diagnostic}
+            </p>
+            <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap font-mono text-[10.5px] leading-relaxed text-fg-muted">
+              {content.diagnostic.detail}
+            </pre>
+          </div>
+        )}
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        {outcomeActions(content).map((action) => (
+          <button
+            key={action.value}
+            type="button"
+            onClick={() => onAction(action.value)}
+            className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)}`}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function outcomeToneClass(tone: CommandOutcomeTone) {
+  if (tone === 'success') {
+    return { frame: 'border-green/22 bg-green/8', title: 'text-green' };
+  }
+  if (tone === 'warning') {
+    return { frame: 'border-amber/24 bg-amber/8', title: 'text-amber' };
+  }
+  if (tone === 'danger') {
+    return { frame: 'border-error/24 bg-error/8', title: 'text-error' };
+  }
+  return { frame: 'border-blue/20 bg-blue/8', title: 'text-fg' };
+}
+
+function outcomeActionClass(action: CommandOutcomeAction) {
+  if (action.intent === 'danger') {
+    return 'bg-error/14 text-error hover:bg-error/20';
+  }
+  if (action.intent === 'primary') {
+    return 'bg-blue/16 text-blue hover:bg-blue/22';
+  }
+  if (action.intent === 'cancel') {
+    return 'bg-white/5 text-fg-muted hover:bg-white/8';
+  }
+  return 'bg-white/8 text-fg hover:bg-white/12';
 }
 
 function EntryList({
@@ -1199,10 +1220,14 @@ function TipKey({ children, hint }: { children: string; hint: string }) {
   );
 }
 
-function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' }) {
+function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' }) {
   return (
     <div className="flex items-center gap-3 border-t border-line/14 px-4 py-2.5 font-mono text-[11px] text-fg-subtle">
-      {mode === 'path' ? (
+      {mode === 'outcome' ? (
+        <>
+          <TipKey hint={paletteCopy.tips.close}>esc</TipKey>
+        </>
+      ) : mode === 'path' ? (
         <>
           <TipKey hint={paletteCopy.tips.cycle}>↑↓</TipKey>
           <TipKey hint={paletteCopy.tips.fill}>tab</TipKey>
