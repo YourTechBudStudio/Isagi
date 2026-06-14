@@ -1,4 +1,4 @@
-import type { PtySessionStatus } from '@isagi/contracts';
+import type { PtySessionStatus, PtySessionStatusReason } from '@isagi/contracts';
 
 import type { MissingProject, Surface, Worktree } from '../lib/workspace/types.js';
 
@@ -65,8 +65,24 @@ export const ptyCopy = {
   },
   sessionStatus: (
     status: PtySessionStatus | null,
+    statusReason: PtySessionStatusReason | null,
     exit: { readonly exitCode: number | null; readonly signal: string | null },
   ) => {
+    if (statusReason) {
+      switch (statusReason) {
+        case 'backend_unavailable':
+          return 'Backend unavailable';
+        case 'backend_session_missing':
+          return 'Session missing';
+        case 'backend_attach_failed':
+          return 'Attach failed';
+        case 'backend_launch_failed':
+          return 'Launch failed';
+        case 'runtime_ephemeral_lost':
+          return 'Runtime session lost';
+      }
+    }
+
     switch (status) {
       case 'starting':
         return 'Starting';
@@ -86,6 +102,25 @@ export const ptyCopy = {
         return 'Killed';
       default:
         return 'Unknown';
+    }
+  },
+  sessionNotice: (
+    _status: PtySessionStatus | null,
+    statusReason: PtySessionStatusReason | null,
+  ): string | null => {
+    switch (statusReason) {
+      case 'backend_unavailable':
+        return "The runtime that owned this session isn't available. You can delete the pane when you're done with the evidence.";
+      case 'backend_session_missing':
+        return 'Isagi could not find the backend session. It may have exited outside this runtime.';
+      case 'backend_attach_failed':
+        return 'Isagi could not attach to this session. The pane keeps the evidence it still has.';
+      case 'backend_launch_failed':
+        return "The session did not launch. Check the output above, then delete the pane when you're done.";
+      case 'runtime_ephemeral_lost':
+        return 'This session belonged to runtime memory that is gone now. The pane keeps what Isagi still has.';
+      case null:
+        return null;
     }
   },
 } as const;

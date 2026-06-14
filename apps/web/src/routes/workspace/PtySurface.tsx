@@ -29,6 +29,10 @@ interface PtySurfaceProps {
 }
 
 type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
+type SocketNotice = {
+  readonly message: string;
+  readonly kind: 'protocol' | 'transport';
+};
 
 export function PtySurface({ detail }: PtySurfaceProps) {
   const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
@@ -98,24 +102,31 @@ function PtyPaneShell({
   });
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [rendererWarning, setRendererWarning] = useState<string | null>(null);
-  const [socketError, setSocketError] = useState<string | null>(null);
+  const [socketNotice, setSocketNotice] = useState<SocketNotice | null>(null);
   const status = liveStatus ?? session?.status ?? null;
+  const statusReason = session?.statusReason ?? null;
 
   useEffect(() => {
     setLiveStatus(session?.status ?? null);
     setExit({ exitCode: session?.exitCode ?? null, signal: session?.signal ?? null });
-    setSocketError(null);
-  }, [session?.exitCode, session?.id, session?.signal, session?.status]);
+    setSocketNotice(null);
+  }, [session?.exitCode, session?.id, session?.signal, session?.status, session?.statusReason]);
 
   const dimmed = status === 'exited' || status === 'failed' || status === 'killed';
   const errored = status === 'failed';
-  const paneNotice =
-    socketError ??
-    (connection === 'error' || connection === 'disconnected'
+  const statusReasonNotice = ptyCopy.sessionNotice(status, statusReason);
+  const connectionNotice =
+    connection === 'error' || connection === 'disconnected'
       ? ptySocketErrorCopy.byReason(
           connection === 'error' ? 'socket_unavailable' : 'socket_disconnected',
         )
-      : rendererWarning);
+      : null;
+  const paneNotice =
+    (socketNotice?.kind === 'protocol' ? socketNotice.message : null) ??
+    statusReasonNotice ??
+    socketNotice?.message ??
+    connectionNotice ??
+    rendererWarning;
 
   return (
     <section
@@ -132,7 +143,7 @@ function PtyPaneShell({
         <AttentionDot state={pane.attention} />
         <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
         <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {session ? ptyCopy.sessionStatus(status, exit) : ptyCopy.noSession}
+          {session ? ptyCopy.sessionStatus(status, statusReason, exit) : ptyCopy.noSession}
         </span>
       </div>
       {paneNotice ? (
@@ -147,7 +158,7 @@ function PtyPaneShell({
           onConnectionChange={setConnection}
           onExit={setExit}
           onRendererWarning={setRendererWarning}
-          onSocketError={setSocketError}
+          onSocketNotice={setSocketNotice}
           onStatusChange={setLiveStatus}
         />
       ) : (
@@ -165,7 +176,7 @@ function XtermPane({
   onConnectionChange,
   onExit,
   onRendererWarning,
-  onSocketError,
+  onSocketNotice,
   onStatusChange,
 }: {
   readonly session: PtySessionMetadata;
@@ -175,7 +186,7 @@ function XtermPane({
     readonly signal: string | null;
   }) => void;
   readonly onRendererWarning: (message: string | null) => void;
-  readonly onSocketError: (message: string | null) => void;
+  readonly onSocketNotice: (notice: SocketNotice | null) => void;
   readonly onStatusChange: (status: PtySessionStatus) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -252,7 +263,7 @@ function XtermPane({
     });
 
     onConnectionChange('connecting');
-    onSocketError(null);
+    onSocketNotice(null);
     void Effect.runPromise(resolvePtyWebSocketUrl(session.id)).then(
       (url) => {
         if (disposed) {
@@ -261,14 +272,17 @@ function XtermPane({
         const socket = new WebSocket(url);
         socketRef.current = socket;
         socket.addEventListener('open', () => {
-          onSocketError(null);
+          onSocketNotice(null);
           onConnectionChange('connected');
           sendResize();
         });
         socket.addEventListener('message', (event) => {
           const message = decodeSocketMessage(event.data);
           if (!message) {
-            onSocketError(ptySocketErrorCopy.byReason('invalid_message'));
+            onSocketNotice({
+              message: ptySocketErrorCopy.byReason('invalid_message'),
+              kind: 'protocol',
+            });
             onConnectionChange('error');
             return;
           }
@@ -295,7 +309,10 @@ function XtermPane({
               break;
             }
             case 'error':
-              onSocketError(ptySocketErrorCopy.byReason(message.code));
+              onSocketNotice({
+                message: ptySocketErrorCopy.byReason(message.code),
+                kind: 'protocol',
+              });
               onConnectionChange('error');
               break;
             case 'replay_start':
@@ -309,14 +326,17 @@ function XtermPane({
           }
         });
         socket.addEventListener('error', () => {
-          onSocketError(ptySocketErrorCopy.byReason('socket_unavailable'));
+          onSocketNotice({
+            message: ptySocketErrorCopy.byReason('socket_unavailable'),
+            kind: 'transport',
+          });
           onConnectionChange('error');
         });
       },
       (error: unknown) => {
         if (!disposed) {
           const runtimeError = formatRuntimeError(error);
-          onSocketError(runtimeError);
+          onSocketNotice({ message: runtimeError, kind: 'transport' });
           onConnectionChange('error');
           terminal.write(ptySocketErrorCopy.connectFailed(runtimeError));
         }
@@ -336,7 +356,7 @@ function XtermPane({
     onConnectionChange,
     onExit,
     onRendererWarning,
-    onSocketError,
+    onSocketNotice,
     onStatusChange,
     edgeToEdge,
     session.id,
