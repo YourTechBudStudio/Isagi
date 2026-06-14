@@ -452,7 +452,7 @@ test('missing runtime-local backend session returns attach code and durable reas
   }
 });
 
-test('graceful service shutdown marks live node-pty sessions failed without recovery reason', async () => {
+test('graceful service shutdown marks live node-pty sessions killed with shutdown reason', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-graceful-shutdown-'));
   try {
     const launched = await Effect.runPromise(
@@ -470,8 +470,33 @@ test('graceful service shutdown marks live node-pty sessions failed without reco
       }).pipe(Effect.provide(testLayer(dataRoot, fakeBackend().backend))),
     );
 
-    assert.equal(detail.panes[0]?.ptySession?.status, 'failed');
-    assert.equal(detail.panes[0]?.ptySession?.statusReason, null);
+    assert.equal(detail.panes[0]?.ptySession?.status, 'killed');
+    assert.equal(detail.panes[0]?.ptySession?.statusReason, 'runtime_shutdown');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('shutdown persists runtime_shutdown even when backend kill fails', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-shutdown-kill-fails-'));
+  try {
+    const launched = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const pty = yield* PtyService;
+        return yield* pty.launch({ worktreeId, purpose: 'terminal', harness: null });
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeBackend({ failKill: true }).backend))),
+    );
+
+    const detail = await Effect.runPromise(
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.getSurfaceDetail(launched.surfaceId);
+      }).pipe(Effect.provide(testLayer(dataRoot, fakeBackend().backend))),
+    );
+
+    assert.equal(detail.panes[0]?.ptySession?.status, 'killed');
+    assert.equal(detail.panes[0]?.ptySession?.statusReason, 'runtime_shutdown');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -645,7 +670,7 @@ test('kill service terminates tmux session and marks it killed', async () => {
       `isagi_${dataDirectoryHashForTest(dataRoot)}_${output.launched.ptySessionId}`,
     ]);
     assert.equal(output.detail.panes[0]?.ptySession?.status, 'killed');
-    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_requested');
     assert.equal(output.detail.panes[0]?.ptySession?.exitCode, null);
     assert.equal(output.detail.panes[0]?.ptySession?.signal, null);
   } finally {
@@ -670,7 +695,7 @@ test('kill service terminates node-pty session and marks it killed', async () =>
 
     assert.equal(fake.kills.has(output.launched.ptySessionId), true);
     assert.equal(output.detail.panes[0]?.ptySession?.status, 'killed');
-    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_requested');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -694,7 +719,7 @@ test('kill service keeps killed status when node-pty exit fires during kill', as
 
     assert.equal(fake.kills.has(output.launched.ptySessionId), true);
     assert.equal(output.detail.panes[0]?.ptySession?.status, 'killed');
-    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, null);
+    assert.equal(output.detail.panes[0]?.ptySession?.statusReason, 'user_requested');
     assert.equal(output.detail.panes[0]?.ptySession?.exitCode, null);
     assert.equal(output.detail.panes[0]?.ptySession?.signal, null);
   } finally {
@@ -764,7 +789,7 @@ test('kill retry keeps killed status when node-pty exit arrives after retry', as
     assert.ok(Either.isLeft(output.killResult));
     assert.ok(output.killResult.left instanceof DatabaseError);
     assert.equal(output.session?.status, 'killed');
-    assert.equal(output.session?.statusReason, null);
+    assert.equal(output.session?.statusReason, 'user_requested');
     assert.equal(output.session?.exitCode, null);
     assert.equal(output.session?.signal, null);
   } finally {

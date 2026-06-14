@@ -1,5 +1,7 @@
 import { Effect } from 'effect';
 
+import type { PtySessionStatusReason } from '@isagi/contracts';
+
 import type { RuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtySessionRow } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
@@ -7,27 +9,31 @@ import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './events.js';
 
-export interface IntentionalKillState {
+export interface PtyTerminationState {
   completed: boolean;
   exit: PtyExit | null;
+  reason: Extract<PtySessionStatusReason, 'user_requested' | 'runtime_shutdown'>;
+  outcome: 'persist_killed' | 'delete_session';
 }
 
 export function handleExit(
   repository: PtyRepositoryService,
   eventBus: RuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
-  intentionalKills: Map<number, IntentionalKillState>,
+  terminations: Map<number, PtyTerminationState>,
   ptySessionId: number,
   exit: PtyExit,
 ) {
   return Effect.gen(function* () {
-    const killState = intentionalKills.get(ptySessionId);
-    if (killState) {
-      killState.exit = exit;
+    const termination = terminations.get(ptySessionId);
+    if (termination) {
+      termination.exit = exit;
       activeAttachments.delete(ptySessionId);
-      console.info(`[runtime] Ignoring backend exit for intentionally killed PTY ${ptySessionId}`);
-      if (killState.completed) {
-        intentionalKills.delete(ptySessionId);
+      console.info(
+        `[runtime] Ignoring backend exit for terminating PTY ${ptySessionId} reason=${termination.reason} outcome=${termination.outcome}`,
+      );
+      if (termination.completed) {
+        terminations.delete(ptySessionId);
       }
       return;
     }
@@ -55,8 +61,8 @@ export function persistExit(
 export function retryPersistKilledUntilSuccess(
   repository: PtyRepositoryService,
   eventBus: RuntimeEventBusService,
-  intentionalKills: Map<number, IntentionalKillState>,
-  killState: IntentionalKillState,
+  terminations: Map<number, PtyTerminationState>,
+  termination: PtyTerminationState,
   backend: PtySessionRow['backend'],
   ptySessionId: number,
 ) {
@@ -70,14 +76,14 @@ export function retryPersistKilledUntilSuccess(
               ? transitionSessionAndPublish(repository, eventBus, session, {
                   ptySessionId,
                   status: 'killed',
-                  statusReason: null,
+                  statusReason: termination.reason,
                   exitCode: null,
                   signal: null,
                 })
               : transitionSessionByIdAndPublish(repository, eventBus, {
                   ptySessionId,
                   status: 'killed',
-                  statusReason: null,
+                  statusReason: termination.reason,
                   exitCode: null,
                   signal: null,
                 }),
@@ -86,16 +92,16 @@ export function retryPersistKilledUntilSuccess(
         .pipe(
           Effect.tap(() =>
             Effect.sync(() => {
-              killState.completed = true;
-              if (backend === 'tmux' || killState.exit) {
-                intentionalKills.delete(ptySessionId);
+              termination.completed = true;
+              if (backend === 'tmux' || termination.exit) {
+                terminations.delete(ptySessionId);
               }
             }),
           ),
           Effect.catchAll((error) =>
             Effect.sync(() => {
               console.error(
-                `[runtime] Failed to retry intentional PTY kill persistence for session ${ptySessionId}`,
+                `[runtime] Failed to retry PTY termination persistence for session ${ptySessionId}`,
                 error,
               );
               setTimeout(retry, 1_000);

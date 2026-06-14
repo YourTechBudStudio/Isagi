@@ -35,13 +35,16 @@ test('PTY status reasons produce degraded pane status labels', () => {
   );
   assert.equal(ptyCopy.sessionStatus('failed', 'backend_launch_failed', exit()), 'Launch failed');
   assert.equal(ptyCopy.sessionStatus('failed', 'backend_attach_failed', exit()), 'Attach failed');
-  assert.equal(ptyCopy.sessionStatus('killed', null, exit()), 'Killed');
+  assert.equal(ptyCopy.sessionStatus('killed', 'user_requested', exit()), 'Killed');
+  assert.equal(ptyCopy.sessionStatus('killed', 'runtime_shutdown', exit()), 'Killed on shutdown');
 });
 
 test('PTY status reasons produce restrained pane notices', () => {
   assert.equal(ptyCopy.sessionNotice('running', null), null);
 
   const notices: Record<PtySessionStatusReason, string | null> = {
+    user_requested: ptyCopy.sessionNotice('killed', 'user_requested'),
+    runtime_shutdown: ptyCopy.sessionNotice('killed', 'runtime_shutdown'),
     backend_unavailable: ptyCopy.sessionNotice('running', 'backend_unavailable'),
     backend_session_missing: ptyCopy.sessionNotice('failed', 'backend_session_missing'),
     backend_attach_failed: ptyCopy.sessionNotice('failed', 'backend_attach_failed'),
@@ -49,6 +52,8 @@ test('PTY status reasons produce restrained pane notices', () => {
     runtime_ephemeral_lost: ptyCopy.sessionNotice('failed', 'runtime_ephemeral_lost'),
   };
 
+  assert.equal(notices.user_requested, null);
+  assert.match(notices.runtime_shutdown ?? '', /runtime shut down/);
   assert.match(notices.backend_unavailable ?? '', /runtime/);
   assert.match(notices.backend_session_missing ?? '', /backend session/);
   assert.match(notices.backend_attach_failed ?? '', /attach/);

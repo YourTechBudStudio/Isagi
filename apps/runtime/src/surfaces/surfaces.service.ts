@@ -290,6 +290,7 @@ function cleanupLiveSessionsForDelete(
       attemptedPtySessionIds.push(ptySession.id);
       const sessionWarnings = yield* pty.cleanupSessionForDelete({
         ptySessionId: ptySession.id,
+        paneId: ptySession.paneId,
       });
       warnings.push(...sessionWarnings);
     }

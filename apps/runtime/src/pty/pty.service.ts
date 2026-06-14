@@ -26,12 +26,7 @@ import {
 import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
 import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './service/events.js';
 import { runPtyGc, startPtyGcLoop } from './service/gc.js';
-import {
-  handleExit,
-  persistExit,
-  retryPersistKilledUntilSuccess,
-  type IntentionalKillState,
-} from './service/lifecycle.js';
+import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
 import {
   replaySessionLog,
   reportOrphanPtyLogs,
@@ -45,6 +40,10 @@ import {
   spawnFailureMessage,
   titleForHarness,
 } from './service/runtime-namespace.js';
+import {
+  terminatePtySessionAndPersistKilled,
+  terminatePtySessionForDelete,
+} from './service/termination.js';
 import {
   PtyKillError,
   PtyResizeError,
@@ -102,6 +101,7 @@ export interface PtyService {
   }) => Effect.Effect<void, PtyKillSessionError>;
   readonly cleanupSessionForDelete: (input: {
     readonly ptySessionId: number;
+    readonly paneId: number;
   }) => Effect.Effect<SurfaceDeleteWarning[], DatabaseError>;
 }
 
@@ -115,7 +115,7 @@ export const PtyServiceLive = Layer.scoped(
     const directory = yield* DataDirectory;
     const eventBus = yield* RuntimeEventBus;
     const activeAttachments = new Map<number, ActiveAttachment>();
-    const intentionalKills = new Map<number, IntentionalKillState>();
+    const terminations = new Map<number, PtyTerminationState>();
     const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
@@ -169,7 +169,7 @@ export const PtyServiceLive = Layer.scoped(
             activeAttachments,
             runtimeNamespace: namespace,
             sessionsPath: directory.paths.sessionsPath,
-            intentionalKills,
+            terminations,
             eventBus,
           }).pipe(Effect.either);
 
@@ -364,122 +364,23 @@ export const PtyServiceLive = Layer.scoped(
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
       kill: (input) =>
-        Effect.gen(function* () {
-          const session = yield* repository.findSession(input.ptySessionId);
-          if (!session) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'session_not_found',
-                message: `PTY session ${input.ptySessionId} was not found.`,
-                ptySessionId: input.ptySessionId,
-              }),
-            );
-          }
-          const ref = yield* decodeBackendRef(session);
-          if (session.backend !== backend.name) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'backend_unavailable',
-                message: `PTY backend ${session.backend} is not active in this runtime process.`,
-                ptySessionId: session.id,
-              }),
-            );
-          }
-          const killState: IntentionalKillState = {
-            completed: false,
-            exit: null,
-          };
-          intentionalKills.set(session.id, killState);
-          yield* detachActiveAttachment(activeAttachments, session.id);
-          const killResult = yield* backend.kill(ref).pipe(Effect.either);
-          if (Either.isLeft(killResult)) {
-            intentionalKills.delete(session.id);
-            if (killState.exit) {
-              yield* persistExit(
-                repository,
-                eventBus,
-                activeAttachments,
-                session.id,
-                killState.exit,
-              );
-            }
-            return yield* Effect.fail(killResult.left);
-          }
-          const transitionResult = yield* transitionSessionAndPublish(
-            repository,
-            eventBus,
-            session,
-            {
-              ptySessionId: session.id,
-              status: 'killed',
-              statusReason: null,
-              exitCode: null,
-              signal: null,
-            },
-          ).pipe(Effect.either);
-          if (Either.isLeft(transitionResult)) {
-            retryPersistKilledUntilSuccess(
-              repository,
-              eventBus,
-              intentionalKills,
-              killState,
-              session.backend,
-              session.id,
-            );
-            return yield* Effect.fail(transitionResult.left);
-          }
-          killState.completed = true;
-          if (session.backend === 'tmux' || killState.exit) {
-            intentionalKills.delete(session.id);
-          }
-          console.info(`[runtime] PTY session killed ptySessionId=${session.id}`);
+        terminatePtySessionAndPersistKilled({
+          repository,
+          backend,
+          eventBus,
+          activeAttachments,
+          terminations,
+          ptySessionId: input.ptySessionId,
+          reason: 'user_requested',
         }),
       cleanupSessionForDelete: (input) =>
-        Effect.gen(function* () {
-          const session = yield* repository.findSession(input.ptySessionId);
-          if (!session || (session.status !== 'starting' && session.status !== 'running')) {
-            return [];
-          }
-
-          if (session.backend !== backend.name) {
-            return [deleteCleanupWarning('pty_backend_unavailable', session.paneId, session.id)];
-          }
-
-          const ref = yield* decodeBackendRef(session).pipe(
-            Effect.catchAll(() => Effect.succeed<BackendSessionRef | null>(null)),
-          );
-          if (!ref) {
-            return [deleteCleanupWarning('pty_kill_failed', session.paneId, session.id)];
-          }
-
-          yield* detachActiveAttachment(activeAttachments, session.id);
-          const inspection = yield* backend
-            .inspect(ref)
-            .pipe(Effect.catchAll(() => Effect.succeed({ status: 'unavailable' as const })));
-          if (inspection.status === 'missing') {
-            return [];
-          }
-          if (inspection.status === 'unavailable') {
-            // Immediate cleanup could not happen in this runtime process. The
-            // durable row is still deleted by SurfaceService; backend GC can
-            // retry orphan cleanup later when the relevant backend is available.
-            return [deleteCleanupWarning('pty_backend_unavailable', session.paneId, session.id)];
-          }
-
-          const killResult = yield* backend.kill(ref).pipe(Effect.either);
-          if (Either.isLeft(killResult)) {
-            console.warn(
-              `[runtime] PTY delete cleanup could not kill backend session ptySessionId=${session.id}`,
-              killResult.left,
-            );
-            return [deleteCleanupWarning('pty_kill_failed', session.paneId, session.id)];
-          }
-
-          // Delete cleanup intentionally does not persist a durable `killed` state:
-          // user intent is to remove the pane/surface now, and the DB rows are deleted
-          // by SurfaceService immediately after this best-effort backend cleanup.
-          console.info(`[runtime] PTY session prepared for delete ptySessionId=${session.id}`);
-          return [];
+        terminatePtySessionForDelete({
+          repository,
+          backend,
+          activeAttachments,
+          terminations,
+          ptySessionId: input.ptySessionId,
+          paneId: input.paneId,
         }),
     } satisfies PtyService;
 
@@ -499,19 +400,15 @@ export const PtyServiceLive = Layer.scoped(
           if (session.backend !== 'node_pty') {
             continue;
           }
-          const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
-          if (ref) {
-            if (session.backend !== backend.name) {
-              continue;
-            }
-            yield* backend.kill(ref).pipe(Effect.ignore);
-          }
-          yield* transitionSessionAndPublish(repository, eventBus, session, {
+          yield* terminatePtySessionAndPersistKilled({
+            repository,
+            backend,
+            eventBus,
+            activeAttachments,
+            terminations,
             ptySessionId: session.id,
-            status: 'failed',
-            statusReason: null,
-            exitCode: null,
-            signal: null,
+            reason: 'runtime_shutdown',
+            killFailurePolicy: 'persist_killed',
           }).pipe(Effect.ignore);
         }
       }),
@@ -537,14 +434,6 @@ function startStatusPolling(
   }, statusPollIntervalMs);
   timer.unref();
   return timer;
-}
-
-function deleteCleanupWarning(
-  code: SurfaceDeleteWarning['code'],
-  paneId: number,
-  ptySessionId: number,
-): SurfaceDeleteWarning {
-  return { code, paneId, ptySessionId };
 }
 
 function reconcilePersistedSessions(
@@ -622,7 +511,7 @@ function launchWithBackend(input: {
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
-  readonly intentionalKills: Map<number, IntentionalKillState>;
+  readonly terminations: Map<number, PtyTerminationState>;
   readonly eventBus: RuntimeEventBusService;
 }) {
   return Effect.gen(function* () {
@@ -657,7 +546,7 @@ function launchWithBackend(input: {
             input.repository,
             input.eventBus,
             input.activeAttachments,
-            input.intentionalKills,
+            input.terminations,
             input.metadata.ptySessionId,
             exit,
           ),

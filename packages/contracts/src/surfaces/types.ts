@@ -72,6 +72,8 @@ export const ptySessionStatusSchema = Schema.Literal(
 );
 export const ptySessionBackendSchema = Schema.Literal('tmux', 'node_pty');
 export const ptySessionStatusReasonSchema = Schema.Literal(
+  'user_requested',
+  'runtime_shutdown',
   'backend_unavailable',
   'backend_session_missing',
   'backend_attach_failed',

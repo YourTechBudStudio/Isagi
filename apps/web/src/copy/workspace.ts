@@ -70,6 +70,10 @@ export const ptyCopy = {
   ) => {
     if (statusReason) {
       switch (statusReason) {
+        case 'user_requested':
+          return 'Killed';
+        case 'runtime_shutdown':
+          return 'Killed on shutdown';
         case 'backend_unavailable':
           return 'Backend unavailable';
         case 'backend_session_missing':
@@ -109,6 +113,10 @@ export const ptyCopy = {
     statusReason: PtySessionStatusReason | null,
   ): string | null => {
     switch (statusReason) {
+      case 'user_requested':
+        return null;
+      case 'runtime_shutdown':
+        return 'The runtime shut down and stopped this session.';
       case 'backend_unavailable':
         return "The runtime that owned this session isn't available. You can delete the pane when you're done with the evidence.";
       case 'backend_session_missing':

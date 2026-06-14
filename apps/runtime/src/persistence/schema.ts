@@ -131,6 +131,8 @@ export const ptySessions = sqliteTable(
     }).notNull(),
     statusReason: text('status_reason', {
       enum: [
+        'user_requested',
+        'runtime_shutdown',
         'backend_unavailable',
         'backend_session_missing',
         'backend_attach_failed',
