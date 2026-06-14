@@ -17,6 +17,7 @@ import { Chip } from '../../components/Chip.js';
 import { Overline } from '../../components/Overline.js';
 import { paletteCopy } from '../../copy/index.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
+import { workbenchActionCommands } from '../../lib/palette/commands/workbench-actions.js';
 import { buildPaletteContext } from '../../lib/palette/context.js';
 import { resolveCommandPreflight } from '../../lib/palette/dispatcher.js';
 import { assembleEntries } from '../../lib/palette/entries.js';
@@ -138,7 +139,9 @@ export function CommandPalette() {
     }
 
     lastOpenRequest.current = openRequest;
-    const autostart = commandForEntryId(allEntries, autostartEntryId);
+    const autostart =
+      commandForEntryId(allEntries, autostartEntryId) ??
+      commandForWorkbenchActionId(autostartEntryId);
     if (!autostart?.command) {
       send({ type: 'opened' });
       return;
@@ -148,7 +151,7 @@ export function CommandPalette() {
       entryId: autostart.entryId,
       command: autostart.command,
       ctx,
-      values: { ...autostartValues },
+      values: { ...(autostart.values ?? {}), ...autostartValues },
     });
   }, [open, machine.kind, autostartEntryId, autostartValues, allEntries, ctx]);
 
@@ -725,7 +728,14 @@ function runPaletteEffect(
       return;
     }
     void resolveMaybe(() => spec.load(options.ctx, effect.values)).then(
-      (content) => options.send({ type: 'review-loaded', attemptId: effect.attemptId, content }),
+      (content) =>
+        options.send({
+          type: 'review-loaded',
+          attemptId: effect.attemptId,
+          command,
+          ctx: options.ctx,
+          content,
+        }),
       (error: unknown) =>
         options.send({
           type: 'review-failed',
@@ -818,8 +828,21 @@ function resolveCommandByIds(
 ): PaletteCommand | null {
   return (
     entries.find((entry) => entry.id === entryId && entry.command?.id === commandId)?.command ??
+    workbenchActionCommands.find((command) => command.id === entryId && command.id === commandId) ??
     null
   );
+}
+
+function commandForWorkbenchActionId(entryId: string | null): {
+  readonly entryId: string;
+  readonly command: PaletteCommand;
+  readonly values?: PaletteEntry['values'];
+} | null {
+  if (!entryId) {
+    return null;
+  }
+  const command = workbenchActionCommands.find((candidate) => candidate.id === entryId);
+  return command ? { entryId, command } : null;
 }
 
 function outcomeActions(content: CommandResultContent | CommandErrorContent) {

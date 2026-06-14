@@ -7,6 +7,7 @@ import type {
   PtySessionStatus,
   PtySessionStatusReason,
   RuntimeSurfaceKind,
+  SurfaceDeleteWarning,
 } from '@isagi/contracts';
 
 export interface EnvironmentFocusRow {
@@ -124,6 +125,11 @@ export interface SurfaceDeletePaneTarget {
 export interface SurfaceDeleteTarget {
   readonly surface: SurfaceRow;
   readonly panes: readonly SurfaceDeletePaneTarget[];
+}
+
+export interface WorktreeDeleteCleanupOutput {
+  readonly attemptedPtySessionIds: readonly number[];
+  readonly warnings: readonly SurfaceDeleteWarning[];
 }
 
 export interface RenameSurfaceOutput {

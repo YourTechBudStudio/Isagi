@@ -134,6 +134,33 @@ export function registerWorkspaceApi(
     mapError: (error, context) => toWorkspaceApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.deletePreflight, {
+    handle: (_input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.preflightDeleteWorktree({
+          projectId: params.projectId,
+          worktreeId: params.worktreeId,
+        });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.delete, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteWorktree({
+          projectId: params.projectId,
+          worktreeId: params.worktreeId,
+          request: input,
+        });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
 }
 
 function relocationRejectionReason(error: WorkspaceError) {
@@ -173,6 +200,20 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'setup_config_invalid':
     case 'setup_trust_required':
     case 'setup_trust_mismatch':
+      return error.code;
+    default:
+      return 'project_not_found';
+  }
+}
+
+function worktreeDeleteRejectionReason(error: WorkspaceError) {
+  switch (error.code) {
+    case 'project_not_found':
+    case 'project_not_present':
+    case 'worktree_not_found':
+    case 'root_worktree_not_deletable':
+    case 'dirty_checkout_requires_force':
+    case 'root_worktree_not_found':
       return error.code;
     default:
       return 'project_not_found';
@@ -316,6 +357,24 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
           ...(error.projectId ? { projectId: error.projectId } : {}),
           ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.branch ? { branch: error.branch } : {}),
+          ...(error.path ? { path: error.path } : {}),
+        },
+      };
+    }
+
+    if (
+      context.endpointId === 'worktrees.deletePreflight' ||
+      context.endpointId === 'worktrees.delete'
+    ) {
+      return {
+        code: 'worktree_delete_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: worktreeDeleteRejectionReason(error),
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.path ? { path: error.path } : {}),
         },
       };

@@ -70,6 +70,26 @@ test('activation preflights commands and ignores stale completions', () => {
   assert.equal(state.effects.at(-1)?.kind, 'run');
 });
 
+test('activation preflight carries entry-captured values', () => {
+  const command = fakeCommand({
+    preflight: () => ({ mode: 'palette' }),
+  });
+  const entry = {
+    ...fakeEntry(command),
+    values: { projectId: '1', worktreeId: '11' },
+  } satisfies PaletteEntry;
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, { type: 'activate-entry', entry, ctx });
+
+  const effect = state.effects.at(0);
+  assert.equal(effect?.kind, 'preflight');
+  assert.deepEqual(effect?.kind === 'preflight' ? effect.values : null, {
+    projectId: '1',
+    worktreeId: '11',
+  });
+});
+
 test('preflight can enter a wizard with preserved values', () => {
   const command = fakeCommand({
     preflight: () => ({ mode: 'palette', values: { name: 'Terminal' } }),
@@ -158,6 +178,8 @@ test('review cancel closes and null review runs the command once', () => {
   state = paletteReducer(state, {
     type: 'review-loaded',
     attemptId: reviewAttempt,
+    command,
+    ctx,
     content: null,
   });
 
@@ -182,6 +204,42 @@ test('review cancel closes and null review runs the command once', () => {
     choice: { value: 'cancel', label: 'Cancel', intent: 'cancel' },
   });
   assert.equal(state.kind, 'closed');
+});
+
+test('null review advances to the next visible step before running', () => {
+  const command = fakeCommand({
+    args: [
+      { kind: 'review', key: 'dirty', label: 'Dirty checkout', load: () => null },
+      {
+        kind: 'select',
+        key: 'mode',
+        label: 'Delete mode',
+        options: () => [{ value: 'checkout-only', label: 'Checkout only' }],
+      },
+    ],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'delete-active-worktree',
+    command,
+    ctx,
+    values: {},
+  });
+
+  assert.equal(state.kind, 'step');
+  const reviewAttempt = state.effects.at(0)?.attemptId ?? 0;
+  state = paletteReducer(state, {
+    type: 'review-loaded',
+    attemptId: reviewAttempt,
+    command,
+    ctx,
+    content: null,
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.flow.stepIndex, 1);
+  assert.equal(state.stepData.kind, 'select');
+  assert.equal(state.runAttemptId, null);
 });
 
 test('stale option loads are ignored', () => {

@@ -147,12 +147,22 @@ export function labelForValue(
 export function commandForEntryId(
   entries: readonly PaletteEntry[],
   entryId: string | null,
-): { readonly entryId: string; readonly command: PaletteCommand } | null {
+): {
+  readonly entryId: string;
+  readonly command: PaletteCommand;
+  readonly values?: PaletteEntry['values'];
+} | null {
   if (!entryId) {
     return null;
   }
   const entry = entries.find((candidate) => candidate.id === entryId);
-  return entry?.command ? { entryId: entry.id, command: entry.command } : null;
+  return entry?.command
+    ? {
+        entryId: entry.id,
+        command: entry.command,
+        ...(entry.values ? { values: entry.values } : {}),
+      }
+    : null;
 }
 
 export function reviewChoiceCancels(choice: ReviewChoice): boolean {

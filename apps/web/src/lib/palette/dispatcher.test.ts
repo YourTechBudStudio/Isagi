@@ -189,3 +189,29 @@ test('dispatcher resolves explicit surface commands even when absent from assemb
     { entryId: 'rename-active-surface', surfaceId: '501', title: 'Terminal' },
   ]);
 });
+
+test('dispatcher resolves explicit worktree commands even when absent from assembled entries', async () => {
+  const opened: Array<{
+    readonly entryId: string | undefined;
+    readonly projectId: string | undefined;
+    readonly worktreeId: string | undefined;
+  }> = [];
+
+  await dispatchCommandEntry(
+    'delete-active-worktree',
+    { projectId: '1', worktreeId: '11' },
+    {
+      entries: [],
+      ctx,
+      openPalette: (entryId, values) =>
+        opened.push({ entryId, projectId: values?.projectId, worktreeId: values?.worktreeId }),
+      pushRecent: () => {
+        throw new Error('recent should not be pushed');
+      },
+    },
+  );
+
+  assert.deepEqual(opened, [
+    { entryId: 'delete-active-worktree', projectId: '1', worktreeId: '11' },
+  ]);
+});

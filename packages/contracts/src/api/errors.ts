@@ -85,6 +85,15 @@ export const worktreeSetupRejectionReasonSchema = Schema.Literal(
   'setup_trust_mismatch',
 );
 
+export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_present',
+  'worktree_not_found',
+  'root_worktree_not_deletable',
+  'dirty_checkout_requires_force',
+  'root_worktree_not_found',
+);
+
 export const worktreeBranchListRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('worktree_branch_list_rejected'),
   status: Schema.Literal(400),
@@ -119,6 +128,19 @@ export const worktreeSetupRejectedErrorSchema = Schema.Struct({
     reason: worktreeSetupRejectionReasonSchema,
     projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     hash: Schema.optional(Schema.String),
+  }),
+});
+
+export const worktreeDeleteRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_delete_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeDeleteRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    path: Schema.optional(Schema.String),
   }),
 });
 
@@ -301,6 +323,13 @@ export const worktreeSetupApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const worktreeDeleteApiErrorSchema = Schema.Union(
+  worktreeDeleteRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export type ProjectPathRejectionReason = Schema.Schema.Type<
   typeof projectPathRejectionReasonSchema
 >;
@@ -326,6 +355,9 @@ export type WorktreeOperationRejectionReason = Schema.Schema.Type<
 export type WorktreeSetupRejectionReason = Schema.Schema.Type<
   typeof worktreeSetupRejectionReasonSchema
 >;
+export type WorktreeDeleteRejectionReason = Schema.Schema.Type<
+  typeof worktreeDeleteRejectionReasonSchema
+>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema
@@ -349,4 +381,7 @@ export type WorktreeBranchListRejectedError = Schema.Schema.Type<
 export type WorktreeOpenRejectedError = Schema.Schema.Type<typeof worktreeOpenRejectedErrorSchema>;
 export type WorktreeSetupRejectedError = Schema.Schema.Type<
   typeof worktreeSetupRejectedErrorSchema
+>;
+export type WorktreeDeleteRejectedError = Schema.Schema.Type<
+  typeof worktreeDeleteRejectedErrorSchema
 >;

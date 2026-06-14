@@ -476,6 +476,63 @@ test('delete pane cleans up every live session when invalid layout escalates to 
   }
 });
 
+test('cleanup worktree for delete cleans live sessions across surfaces without deleting rows', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-cleanup-worktree-'));
+  try {
+    const cleanupCalls: number[] = [];
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const first = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          kind: 'terminal',
+          titleBase: 'Terminal',
+        });
+        const second = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          kind: 'agent',
+          titleBase: 'Agent',
+        });
+        const firstSessionId = yield* insertPtySession({
+          paneId: first.paneId,
+          worktreeId,
+          logPath: null,
+          status: 'running',
+        });
+        const secondSessionId = yield* insertPtySession({
+          paneId: second.paneId,
+          worktreeId,
+          logPath: null,
+          status: 'starting',
+        });
+
+        const cleanup = yield* surfaces.cleanupWorktreeForDelete(worktreeId);
+        const detail = yield* surfaces.getSurfaceDetail(first.surfaceId);
+        return { cleanup, detail, firstSessionId, secondSessionId };
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            cleanupWarnings: (ptySessionId) => {
+              cleanupCalls.push(ptySessionId);
+              return [];
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.deepEqual(cleanupCalls, [output.firstSessionId, output.secondSessionId]);
+    assert.deepEqual(output.cleanup, {
+      attemptedPtySessionIds: [output.firstSessionId, output.secondSessionId],
+      warnings: [],
+    });
+    assert.equal(output.detail.panes.length, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
     const workspaceRepository = yield* WorkspaceRepository;

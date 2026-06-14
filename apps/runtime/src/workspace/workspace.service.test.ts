@@ -14,7 +14,12 @@ import {
   type DataDirectoryService,
   type StateFileService,
 } from '../persistence/index.js';
-import { SurfaceRepository, type SurfaceRepositoryService } from '../surfaces/index.js';
+import {
+  SurfaceService,
+  SurfaceRepository,
+  type SurfaceRepositoryService,
+  type SurfaceServiceShape,
+} from '../surfaces/index.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -46,6 +51,13 @@ const worktree: WorktreeRow = {
   updatedAt: '2026-06-04T00:00:00.000Z',
   firstSeenAt: '2026-06-04T00:00:00.000Z',
   lastSeenAt: '2026-06-04T00:00:00.000Z',
+};
+
+const featureWorktree: WorktreeRow = {
+  ...worktree,
+  id: 11,
+  path: '/repo/isagi-feature',
+  branch: 'feature/delete-me',
 };
 
 const git = {
@@ -92,6 +104,7 @@ const testSurfaceRepository = {
   listPanesForSurface: () => Effect.succeed([]),
   listPtySessionsForPanes: () => Effect.succeed([]),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
+  listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
   deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
@@ -101,6 +114,16 @@ const testSurfaceRepository = {
     Effect.die('pty session surface creation is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
+
+const testSurfaceService = {
+  getSurfaceDetail: () => Effect.die('surface detail is not used by workspace tests'),
+  renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
+  deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
+  deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
+  cleanupWorktreeForDelete: () => Effect.succeed({ attemptedPtySessionIds: [], warnings: [] }),
+  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
+} satisfies SurfaceServiceShape;
 
 test('active context persistence validates before writing state', async () => {
   let writeCalls = 0;
@@ -121,6 +144,7 @@ test('active context persistence validates before writing state', async () => {
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -156,6 +180,7 @@ test('project deletion does not touch frontend-owned active context persistence'
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
@@ -190,6 +215,7 @@ test('project relocation rejects projects that are not missing before touching g
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, quietGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -256,6 +282,7 @@ test('project relocation restores the same project id and reconciles discovered 
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, relocationGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -326,6 +353,7 @@ test('project branch listing rejects a present project whose path disappeared be
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -339,6 +367,258 @@ test('project branch listing rejects a present project whose path disappeared be
   assert.equal(error.code, 'project_not_present');
   assert.equal(status, 'missing');
   assert.equal(gitBranchCalls, 0);
+});
+
+test('delete worktree rejects dirty checkout in normal mode before cleanup or removal', async () => {
+  const fixtures = deleteFixtures();
+  let cleanupCalls = 0;
+  let deleteCalls = 0;
+  const commands: string[][] = [];
+  const repository = {
+    ...repositoryWithWorktrees({
+      project: fixtures.project,
+      worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+    }),
+    deleteWorktree: () =>
+      Effect.sync(() => {
+        deleteCalls += 1;
+        return true;
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const dirtyGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        commands.push([...args]);
+        if (args.includes('status')) {
+          return { stdout: ' M src/index.ts\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+  const surfaceService = {
+    ...testSurfaceService,
+    cleanupWorktreeForDelete: () =>
+      Effect.sync(() => {
+        cleanupCalls += 1;
+        return { attemptedPtySessionIds: [], warnings: [] };
+      }),
+  } satisfies SurfaceServiceShape;
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteWorktree({
+          projectId: fixtures.project.id,
+          worktreeId: fixtures.targetWorktree.id,
+          request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, surfaceService),
+        Effect.provideService(
+          StateFile,
+          stateFileWithWriteCounter(() => {}),
+        ),
+        Effect.provideService(Git, dirtyGit),
+        Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+      ),
+    ),
+  );
+
+  assert.ok(error instanceof WorkspaceError);
+  assert.equal(error.code, 'dirty_checkout_requires_force');
+  assert.equal(cleanupCalls, 0);
+  assert.equal(deleteCalls, 0);
+  assert.equal(
+    commands.some((args) => args.includes('remove')),
+    false,
+  );
+  fixtures.cleanup();
+});
+
+test('delete worktree force removes checkout before deleting DB row and returns root selection', async () => {
+  const fixtures = deleteFixtures();
+  const events: string[] = [];
+  const repository = {
+    ...repositoryWithWorktrees({
+      project: fixtures.project,
+      worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+    }),
+    deleteWorktree: (worktreeId: number) =>
+      Effect.sync(() => {
+        events.push(`db:${worktreeId}`);
+        return true;
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const deleteGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        if (args.includes('status')) {
+          return { stdout: '?? scratch.txt\n', stderr: '' };
+        }
+        events.push(`git:${args.join(' ')}`);
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+  const surfaceService = {
+    ...testSurfaceService,
+    cleanupWorktreeForDelete: (worktreeId: number) =>
+      Effect.sync(() => {
+        events.push(`cleanup:${worktreeId}`);
+        return { attemptedPtySessionIds: [701], warnings: [] };
+      }),
+  } satisfies SurfaceServiceShape;
+
+  const output = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService;
+      return yield* workspace.deleteWorktree({
+        projectId: fixtures.project.id,
+        worktreeId: fixtures.targetWorktree.id,
+        request: { checkoutRemovalMode: 'force', branchRemovalMode: 'preserve' },
+      });
+    }).pipe(
+      Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, surfaceService),
+      Effect.provideService(
+        StateFile,
+        stateFileWithWriteCounter(() => {}),
+      ),
+      Effect.provideService(Git, deleteGit),
+      Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+    ),
+  );
+
+  assert.deepEqual(output, {
+    projectId: fixtures.project.id,
+    deletedWorktreeId: fixtures.targetWorktree.id,
+    selectedWorktreeId: fixtures.rootWorktree.id,
+    branchRemoval: { status: 'not_requested' },
+    warnings: [],
+  });
+  assert.deepEqual(events, [
+    `cleanup:${fixtures.targetWorktree.id}`,
+    `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
+    `db:${fixtures.targetWorktree.id}`,
+  ]);
+  fixtures.cleanup();
+});
+
+test('delete worktree reports safe branch deletion failure as partial success', async () => {
+  const fixtures = deleteFixtures();
+  const repository = repositoryWithWorktrees({
+    project: fixtures.project,
+    worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+  });
+  const branchGit = {
+    run: (args: readonly string[]) => {
+      if (args.includes('status')) {
+        return Effect.succeed({ stdout: '', stderr: '' });
+      }
+      if (args.includes('branch')) {
+        return Effect.fail(
+          new GitCommandError({
+            args,
+            cause: new Error('branch not merged'),
+            cwd: undefined,
+            stderr: 'error: The branch is not fully merged.',
+          }),
+        );
+      }
+      return Effect.succeed({ stdout: '', stderr: '' });
+    },
+  } satisfies GitService;
+
+  const output = await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService;
+      return yield* workspace.deleteWorktree({
+        projectId: fixtures.project.id,
+        worktreeId: fixtures.targetWorktree.id,
+        request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'delete_if_safe' },
+      });
+    }).pipe(
+      Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(
+        StateFile,
+        stateFileWithWriteCounter(() => {}),
+      ),
+      Effect.provideService(Git, branchGit),
+      Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+    ),
+  );
+
+  assert.deepEqual(output.branchRemoval, {
+    status: 'failed',
+    branch: 'feature/delete-me',
+    diagnostic: 'error: The branch is not fully merged.',
+  });
+  fixtures.cleanup();
+});
+
+test('delete worktree rejects before destructive work when root fallback is missing', async () => {
+  const fixtures = deleteFixtures();
+  let cleanupCalls = 0;
+  const repository = repositoryWithWorktrees({
+    project: fixtures.project,
+    worktrees: [fixtures.targetWorktree],
+  });
+  const surfaceService = {
+    ...testSurfaceService,
+    cleanupWorktreeForDelete: () =>
+      Effect.sync(() => {
+        cleanupCalls += 1;
+        return { attemptedPtySessionIds: [], warnings: [] };
+      }),
+  } satisfies SurfaceServiceShape;
+  const quietGit = {
+    run: () => Effect.succeed({ stdout: '', stderr: '' }),
+  } satisfies GitService;
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteWorktree({
+          projectId: fixtures.project.id,
+          worktreeId: fixtures.targetWorktree.id,
+          request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, surfaceService),
+        Effect.provideService(
+          StateFile,
+          stateFileWithWriteCounter(() => {}),
+        ),
+        Effect.provideService(Git, quietGit),
+        Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+      ),
+    ),
+  );
+
+  assert.ok(error instanceof WorkspaceError);
+  assert.equal(error.code, 'root_worktree_not_found');
+  assert.equal(cleanupCalls, 0);
+  fixtures.cleanup();
 });
 
 test('project branch listing combines local branches with known open worktrees', async () => {
@@ -369,6 +649,7 @@ test('project branch listing combines local branches with known open worktrees',
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, branchGit),
         Effect.provideService(DataDirectory, testDataDirectory),
@@ -486,6 +767,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, dataDirectory),
@@ -548,6 +830,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, invalidGit),
           Effect.provideService(DataDirectory, testDataDirectory),
@@ -609,6 +892,7 @@ test('opening a missing branch without a base asks the client for base selection
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, missingBaseGit),
           Effect.provideService(DataDirectory, {
@@ -719,6 +1003,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, {
@@ -821,6 +1106,7 @@ test('opening a missing branch can create it from the current detached worktree'
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, openGit),
         Effect.provideService(DataDirectory, {
@@ -940,6 +1226,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             Effect.provide(WorkspaceServiceLive),
             Effect.provideService(WorkspaceRepository, repository),
             Effect.provideService(SurfaceRepository, testSurfaceRepository),
+            Effect.provideService(SurfaceService, testSurfaceService),
             Effect.provideService(StateFile, stateFile),
             Effect.provideService(Git, invalidBaseGit),
             Effect.provideService(DataDirectory, testDataDirectory),
@@ -1011,6 +1298,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, dirtyPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1081,6 +1369,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, registeredPathGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1147,6 +1436,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
+          Effect.provideService(SurfaceService, testSurfaceService),
           Effect.provideService(StateFile, stateFile),
           Effect.provideService(Git, parentFailureGit),
           Effect.provideService(DataDirectory, dataDirectory),
@@ -1182,6 +1472,7 @@ test('valid active context persistence writes after validation', async () => {
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, testSurfaceService),
       Effect.provideService(StateFile, stateFile),
       Effect.provideService(Git, git),
       Effect.provideService(DataDirectory, testDataDirectory),
@@ -1204,6 +1495,22 @@ function repositoryWith(input: {
     findProjectByRootPath: () => Effect.succeed(input.project),
     findWorktree: (worktreeId) =>
       Effect.succeed(input.worktree && input.worktree.id === worktreeId ? input.worktree : null),
+    findProjectWorktree: (lookup) =>
+      Effect.succeed(
+        input.worktree &&
+          input.worktree.projectId === lookup.projectId &&
+          input.worktree.id === lookup.worktreeId
+          ? input.worktree
+          : null,
+      ),
+    findProjectRootWorktree: (lookup) =>
+      Effect.succeed(
+        input.worktree &&
+          input.worktree.projectId === lookup.projectId &&
+          input.worktree.path === lookup.rootPath
+          ? input.worktree
+          : null,
+      ),
     findProjectWorktreeByBranch: (lookup) =>
       Effect.succeed(
         input.worktree &&
@@ -1213,12 +1520,72 @@ function repositoryWith(input: {
           : null,
       ),
     deleteProject: () => Effect.succeed(false),
+    deleteWorktree: () => Effect.succeed(false),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.succeed(input.project ? [input.project] : []),
     listWorktrees: Effect.succeed(input.worktree ? [input.worktree] : []),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
+  };
+}
+
+function repositoryWithWorktrees(input: {
+  readonly project: ProjectRow;
+  readonly worktrees: readonly WorktreeRow[];
+}): WorkspaceRepositoryService {
+  return {
+    findProject: (projectId) =>
+      Effect.succeed(input.project.id === projectId ? input.project : null),
+    findProjectByRootPath: (rootPath) =>
+      Effect.succeed(input.project.rootPath === rootPath ? input.project : null),
+    findWorktree: (worktreeId) =>
+      Effect.succeed(input.worktrees.find((candidate) => candidate.id === worktreeId) ?? null),
+    findProjectWorktree: (lookup) =>
+      Effect.succeed(
+        input.worktrees.find(
+          (candidate) =>
+            candidate.projectId === lookup.projectId && candidate.id === lookup.worktreeId,
+        ) ?? null,
+      ),
+    findProjectRootWorktree: (lookup) =>
+      Effect.succeed(
+        input.worktrees.find(
+          (candidate) =>
+            candidate.projectId === lookup.projectId && candidate.path === lookup.rootPath,
+        ) ?? null,
+      ),
+    findProjectWorktreeByBranch: (lookup) =>
+      Effect.succeed(
+        input.worktrees.find(
+          (candidate) =>
+            candidate.projectId === lookup.projectId && candidate.branch === lookup.branch,
+        ) ?? null,
+      ),
+    deleteProject: () => Effect.succeed(false),
+    deleteWorktree: () => Effect.succeed(true),
+    insertProject: () => Effect.succeed(input.project.id),
+    listProjects: Effect.succeed([input.project]),
+    listWorktrees: Effect.succeed([...input.worktrees]),
+    reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
+    restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
+    setProjectStatus: () => Effect.void,
+  };
+}
+
+function deleteFixtures() {
+  const rootPath = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-delete-worktree-')));
+  const fixtureProject = { ...project, rootPath };
+  const rootWorktree = { ...worktree, path: rootPath };
+  const targetWorktree = {
+    ...featureWorktree,
+    path: join(rootPath, '../isagi-feature'),
+  };
+  return {
+    project: fixtureProject,
+    rootWorktree,
+    targetWorktree,
+    cleanup: () => rmSync(rootPath, { recursive: true, force: true }),
   };
 }
 

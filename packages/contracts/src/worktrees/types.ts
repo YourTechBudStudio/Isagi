@@ -1,9 +1,16 @@
 import { Schema } from 'effect';
 
+import { surfaceDeleteWarningSchema } from '../surfaces/types.js';
+
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const projectWorktreeRouteParamsSchema = Schema.Struct({
   projectId: positiveIntegerSchema,
+});
+
+export const worktreeRouteParamsSchema = Schema.Struct({
+  projectId: positiveIntegerSchema,
+  worktreeId: positiveIntegerSchema,
 });
 
 export const worktreeBranchSchema = Schema.Struct({
@@ -29,6 +36,53 @@ export const worktreeBaseRefSchema = Schema.Union(
 export const openWorktreeInputSchema = Schema.Struct({
   branch: Schema.String.pipe(Schema.minLength(1)),
   base: Schema.optional(worktreeBaseRefSchema),
+});
+
+export const checkoutRemovalModeSchema = Schema.Literal('normal', 'force');
+
+export const branchRemovalModeSchema = Schema.Literal('preserve', 'delete_if_safe');
+
+export const deleteWorktreePreflightOutputSchema = Schema.Struct({
+  projectId: positiveIntegerSchema,
+  worktreeId: positiveIntegerSchema,
+  path: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  isRoot: Schema.Boolean,
+  dirty: Schema.Boolean,
+});
+
+// `checkoutRemovalMode: "force"` applies only to `git worktree remove --force`.
+// It deliberately does not force branch deletion; branch cleanup only supports
+// safe deletion through `branchRemovalMode: "delete_if_safe"`.
+export const deleteWorktreeInputSchema = Schema.Struct({
+  checkoutRemovalMode: checkoutRemovalModeSchema,
+  branchRemovalMode: branchRemovalModeSchema,
+});
+
+export const worktreeBranchRemovalSchema = Schema.Union(
+  Schema.Struct({
+    status: Schema.Literal('not_requested'),
+  }),
+  Schema.Struct({
+    status: Schema.Literal('not_applicable'),
+  }),
+  Schema.Struct({
+    status: Schema.Literal('deleted'),
+    branch: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal('failed'),
+    branch: Schema.String,
+    diagnostic: Schema.String,
+  }),
+);
+
+export const deleteWorktreeOutputSchema = Schema.Struct({
+  projectId: positiveIntegerSchema,
+  deletedWorktreeId: positiveIntegerSchema,
+  selectedWorktreeId: positiveIntegerSchema,
+  branchRemoval: worktreeBranchRemovalSchema,
+  warnings: Schema.Array(surfaceDeleteWarningSchema),
 });
 
 export const worktreeSetupLifecycleSchema = Schema.Literal('post_create');
@@ -165,10 +219,19 @@ export const openWorktreeOutputSchema = Schema.Union(
 export type ProjectWorktreeRouteParams = Schema.Schema.Type<
   typeof projectWorktreeRouteParamsSchema
 >;
+export type WorktreeRouteParams = Schema.Schema.Type<typeof worktreeRouteParamsSchema>;
 export type WorktreeBranch = Schema.Schema.Type<typeof worktreeBranchSchema>;
 export type ListProjectBranchesOutput = Schema.Schema.Type<typeof listProjectBranchesOutputSchema>;
 export type WorktreeBaseRef = Schema.Schema.Type<typeof worktreeBaseRefSchema>;
 export type OpenWorktreeInput = Schema.Schema.Type<typeof openWorktreeInputSchema>;
+export type CheckoutRemovalMode = Schema.Schema.Type<typeof checkoutRemovalModeSchema>;
+export type BranchRemovalMode = Schema.Schema.Type<typeof branchRemovalModeSchema>;
+export type DeleteWorktreePreflightOutput = Schema.Schema.Type<
+  typeof deleteWorktreePreflightOutputSchema
+>;
+export type DeleteWorktreeInput = Schema.Schema.Type<typeof deleteWorktreeInputSchema>;
+export type WorktreeBranchRemoval = Schema.Schema.Type<typeof worktreeBranchRemovalSchema>;
+export type DeleteWorktreeOutput = Schema.Schema.Type<typeof deleteWorktreeOutputSchema>;
 export type WorktreeSetupLifecycle = Schema.Schema.Type<typeof worktreeSetupLifecycleSchema>;
 export type WorktreeSetupHookType = Schema.Schema.Type<typeof worktreeSetupHookTypeSchema>;
 export type WorktreeSetupSummary = Schema.Schema.Type<typeof worktreeSetupSummarySchema>;

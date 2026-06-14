@@ -210,6 +210,7 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         attemptedPtySessionIds: [],
         warnings: [],
       }),
+    cleanupWorktreeForDelete: () => Effect.succeed({ attemptedPtySessionIds: [], warnings: [] }),
     createSinglePaneSurface: () =>
       Effect.die('createSinglePaneSurface is not used by surface API tests'),
     setWorktreeEnvironmentFocus: (input) =>

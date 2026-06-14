@@ -77,6 +77,17 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       setup_trust_mismatch: setupTrustMismatch,
     },
   },
+  worktree_delete_rejected: {
+    summary: "Couldn't delete that worktree.",
+    byReason: {
+      project_not_found: projectGone,
+      project_not_present: projectFilesGone,
+      worktree_not_found: worktreeGone,
+      root_worktree_not_deletable: 'The root worktree cannot be deleted.',
+      dirty_checkout_requires_force: 'That checkout has changes. Confirm checkout removal first.',
+      root_worktree_not_found: "Couldn't find the root checkout to select afterward.",
+    },
+  },
   workspace_reconcile_rejected: {
     summary: "Couldn't refresh that project.",
     byReason: {

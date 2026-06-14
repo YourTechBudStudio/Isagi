@@ -6,7 +6,7 @@ import { showToast } from '../toast/index.js';
 import { useWorkspace } from '../workspace/hooks.js';
 import { formatRuntimeError, workspaceQueryKey } from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
-import { surfaceActionCommands } from './commands/surface-actions.js';
+import { workbenchActionCommands } from './commands/workbench-actions.js';
 import { buildPaletteContext } from './context.js';
 import { assembleEntries } from './entries.js';
 import { usePaletteStore } from './store.js';
@@ -37,6 +37,7 @@ export async function dispatchCommandEntry(
     return;
   }
 
+  const commandValues = { ...(entry.values ?? {}), ...values };
   if (!entry.command) {
     await entry.run();
     options.pushRecent?.(entry.id);
@@ -44,22 +45,22 @@ export async function dispatchCommandEntry(
   }
 
   if (entry.command.feedbackSurface === 'palette' && options.openPalette) {
-    options.openPalette(entry.id, values);
+    options.openPalette(entry.id, commandValues);
     return;
   }
 
-  const preflight = await resolveCommandPreflight(entry.command, options.ctx, values);
+  const preflight = await resolveCommandPreflight(entry.command, options.ctx, commandValues);
 
   if (preflight.mode === 'unavailable') {
     return;
   }
 
   if (preflight.mode === 'palette') {
-    options.openPalette?.(entry.id, preflight.values ?? values);
+    options.openPalette?.(entry.id, preflight.values ?? commandValues);
     return;
   }
 
-  await entry.command.run(preflight.values ?? values, options.ctx, preflight.payloads);
+  await entry.command.run(preflight.values ?? commandValues, options.ctx, preflight.payloads);
   options.pushRecent?.(entry.id);
 }
 
@@ -68,7 +69,7 @@ function explicitDispatchEntry(entryId: string, values: ArgValues): PaletteEntry
     return null;
   }
 
-  const command = surfaceActionCommands.find((candidate) => candidate.id === entryId);
+  const command = workbenchActionCommands.find((candidate) => candidate.id === entryId);
   if (!command) {
     return null;
   }
@@ -79,6 +80,7 @@ function explicitDispatchEntry(entryId: string, values: ArgValues): PaletteEntry
     icon: command.icon,
     group: command.group,
     command,
+    values,
     run: () => command.run(values, emptyPaletteContext),
   };
 }

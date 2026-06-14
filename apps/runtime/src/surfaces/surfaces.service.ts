@@ -22,8 +22,8 @@ import type {
   CreateSinglePaneSurfaceOutput,
   PtySessionRow,
   SurfaceDeletePaneTarget,
-  SurfaceDeleteTarget,
   SurfacePaneRow,
+  WorktreeDeleteCleanupOutput,
 } from './types.js';
 
 export class SurfaceError extends Data.TaggedError('SurfaceError')<{
@@ -55,6 +55,9 @@ export interface SurfaceService {
     readonly surfaceId: number;
     readonly paneId: number;
   }) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
+  readonly cleanupWorktreeForDelete: (
+    worktreeId: number,
+  ) => Effect.Effect<WorktreeDeleteCleanupOutput, SurfaceServiceError>;
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, SurfaceServiceError>;
@@ -132,7 +135,7 @@ export const SurfaceServiceLive = Layer.effect(
       deleteSurface: (surfaceId) =>
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, surfaceId);
-          const cleanup = yield* cleanupLiveSessionsForDelete(pty, target);
+          const cleanup = yield* cleanupLiveSessionsForPanes(pty, target.panes);
           const deleted = yield* repository.deleteSurface(target);
           const logWarnings = deleteLogsForPanes(target.panes);
           return {
@@ -163,7 +166,7 @@ export const SurfaceServiceLive = Layer.effect(
             ...target,
             panes: target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
           };
-          const cleanup = yield* cleanupLiveSessionsForDelete(pty, cleanupTarget);
+          const cleanup = yield* cleanupLiveSessionsForPanes(pty, cleanupTarget.panes);
           const deleted = yield* repository.deleteSurfacePane({
             target,
             plan,
@@ -177,6 +180,28 @@ export const SurfaceServiceLive = Layer.effect(
             attemptedPtySessionIds: cleanup.attemptedPtySessionIds,
             warnings: [...cleanup.warnings, ...logWarnings],
           } satisfies DeleteSurfaceOutput;
+        }),
+      cleanupWorktreeForDelete: (worktreeId) =>
+        Effect.gen(function* () {
+          const exists = yield* repository.worktreeExists(worktreeId);
+          if (!exists) {
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'worktree_not_found',
+                message: `Worktree ${worktreeId} was not found.`,
+                worktreeId,
+              }),
+            );
+          }
+
+          const targets = yield* repository.listWorktreeDeleteTargets(worktreeId);
+          const panes = targets.flatMap((target) => target.panes);
+          const cleanup = yield* cleanupLiveSessionsForPanes(pty, panes);
+          const logWarnings = deleteLogsForPanes(panes);
+          return {
+            attemptedPtySessionIds: cleanup.attemptedPtySessionIds,
+            warnings: [...cleanup.warnings, ...logWarnings],
+          } satisfies WorktreeDeleteCleanupOutput;
         }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
@@ -276,14 +301,14 @@ function loadDeleteTarget(
   });
 }
 
-function cleanupLiveSessionsForDelete(
+function cleanupLiveSessionsForPanes(
   pty: Pick<PtyServiceShape, 'cleanupSessionForDelete'>,
-  target: SurfaceDeleteTarget,
+  panes: readonly SurfaceDeletePaneTarget[],
 ) {
   return Effect.gen(function* () {
     const attemptedPtySessionIds: number[] = [];
     const warnings: SurfaceDeleteWarning[] = [];
-    for (const { ptySession } of target.panes) {
+    for (const { ptySession } of panes) {
       if (!ptySession || (ptySession.status !== 'starting' && ptySession.status !== 'running')) {
         continue;
       }

@@ -161,8 +161,8 @@ export type ArgSpec =
       readonly label: string;
       /**
        * Loads the review screen. Returning `null` means there is nothing to
-       * review — the wizard skips the screen and finishes immediately (e.g. an
-       * open-worktree with no setup hooks to approve).
+       * review — the wizard skips this screen and advances to the next visible
+       * step, or runs the command if this is the final visible step.
        */
       readonly load: (ctx: PaletteContext, values: ArgValues) => MaybePromise<ReviewContent | null>;
     }
@@ -220,6 +220,8 @@ export interface PaletteEntry {
   readonly group: PaletteGroup;
   readonly sub?: string;
   readonly accent?: boolean;
+  /** Values captured when the entry was assembled, before async command effects run. */
+  readonly values?: ArgValues;
   /** Global commands with args open the wizard instead of running immediately. */
   readonly command?: PaletteCommand;
   readonly run: () => MaybePromise<CommandOutcome | void>;

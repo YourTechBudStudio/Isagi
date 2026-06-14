@@ -4,6 +4,8 @@ import { Duration, Effect } from 'effect';
 import type {
   ActiveContextPersistenceInput,
   AgentHarness,
+  DeleteWorktreeInput,
+  DeleteWorktreeOutput,
   DeleteSurfaceOutput,
   LaunchSessionOutput,
   OpenWorktreeInput,
@@ -16,12 +18,13 @@ import type {
 import { toastCopy } from '../../copy/index.js';
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
-import { workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
+import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
 import {
   addProject,
   deleteSurface,
   deleteSurfacePane,
   deleteProject,
+  deleteWorktree,
   fetchActiveContext,
   fetchWorkspace,
   formatRuntimeError,
@@ -110,6 +113,21 @@ export async function openWorktreeFromPalette(projectId: number, input: OpenWork
   const output = await Effect.runPromise(openWorktree(projectId, input));
   await commitOpenWorktreeSuccess(queryClient, output);
   return output;
+}
+
+export async function deleteWorktreeFromPalette(
+  projectId: number,
+  worktreeId: number,
+  input: DeleteWorktreeInput,
+) {
+  try {
+    const output = await Effect.runPromise(deleteWorktree(projectId, worktreeId, input));
+    await commitDeleteWorktreeSuccess(queryClient, output);
+    return output;
+  } catch (error) {
+    await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+    throw error;
+  }
 }
 
 export async function startAgentSessionFromPalette(worktreeId: number, harness: AgentHarness) {
@@ -314,6 +332,37 @@ export async function commitDeleteSurfaceSuccess(
   }
 
   showCleanupWarning(input.operation, input.surfaceId, input.output.warnings);
+}
+
+export async function commitDeleteWorktreeSuccess(
+  client: QueryClient,
+  output: DeleteWorktreeOutput,
+  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
+    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+) {
+  const data = await client.fetchQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceData(signal),
+    staleTime: 0,
+  });
+
+  const project = data.projects.find((candidate) => candidate.id === output.projectId);
+  const selected = project?.worktrees.find(
+    (candidate) => candidate.id === output.selectedWorktreeId,
+  );
+  const store = useWorkspaceStore.getState();
+  if (project && selected) {
+    store.selectWorktree(project.id, selected.id);
+    return;
+  }
+
+  store.setSelection(
+    reconcileSelection(data.projects, {
+      kind: 'worktree',
+      projectId: output.projectId,
+      worktreeId: output.selectedWorktreeId,
+    }),
+  );
 }
 
 export async function commitAddProjectSuccess(

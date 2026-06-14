@@ -5,12 +5,15 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   AgentHarness,
+  DeleteWorktreeInput,
+  DeleteWorktreeOutput,
   DeleteSurfaceOutput,
   DeleteProjectOutput,
   LaunchSessionOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
+  DeleteWorktreePreflightOutput,
   PathSuggestOutput,
   RenameSurfaceOutput,
   ReconcileWorkspaceInput,
@@ -158,6 +161,25 @@ export function openWorktree(
   input: OpenWorktreeInput,
 ): Effect.Effect<OpenWorktreeOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.openWorktree(projectId, input)));
+}
+
+export function preflightDeleteWorktree(
+  projectId: number,
+  worktreeId: number,
+): Effect.Effect<DeleteWorktreePreflightOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.preflightDeleteWorktree(projectId, worktreeId)),
+  );
+}
+
+export function deleteWorktree(
+  projectId: number,
+  worktreeId: number,
+  input: DeleteWorktreeInput,
+): Effect.Effect<DeleteWorktreeOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.deleteWorktree(projectId, worktreeId, input)),
+  );
 }
 
 export function suggestProjectPaths(

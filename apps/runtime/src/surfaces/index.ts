@@ -25,4 +25,5 @@ export type {
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
+  WorktreeDeleteCleanupOutput,
 } from './types.js';

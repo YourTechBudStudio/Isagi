@@ -207,6 +207,8 @@ export type PaletteEvent =
   | {
       readonly type: 'review-loaded';
       readonly attemptId: number;
+      readonly command: PaletteCommand;
+      readonly ctx: PaletteContext;
       readonly content: ReviewContent | null;
     }
   | { readonly type: 'review-failed'; readonly attemptId: number; readonly error: string }
@@ -306,7 +308,7 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
       return updateOptions(state, event.attemptId, { options: [], error: event.error });
 
     case 'review-loaded':
-      return reviewLoaded(state, event.attemptId, event.content);
+      return reviewLoaded(state, event.attemptId, event.command, event.ctx, event.content);
 
     case 'review-failed':
       return updateReview(state, event.attemptId, { content: null, error: event.error });
@@ -466,12 +468,13 @@ function activateEntry(
     return startRun(state, entry.id, undefined, {}, {});
   }
 
+  const values = entry.values ?? {};
   if (entry.command.preflight) {
-    return startPreflight(state, entry.id, entry.command, {});
+    return startPreflight(state, entry.id, entry.command, values);
   }
 
   if (entry.command.args?.length) {
-    return startFlow(state, entry.id, entry.command, ctx, {}, {});
+    return startFlow(state, entry.id, entry.command, ctx, values, {});
   }
 
   return startRun(state, entry.id, entry.command.id, {}, {});
@@ -907,6 +910,8 @@ function updateOptions(
 function reviewLoaded(
   state: PaletteState,
   attemptId: number,
+  command: PaletteCommand,
+  ctx: PaletteContext,
   content: ReviewContent | null,
 ): PaletteState {
   if (
@@ -917,13 +922,25 @@ function reviewLoaded(
     return state;
   }
   if (content === null) {
-    return startRun(
-      state,
-      state.flow.entryId,
-      state.flow.commandId,
+    const args = command.args ?? [];
+    const nextStepIndex = nextVisibleStep(
+      args,
+      state.flow.stepIndex + 1,
+      ctx,
       state.flow.values,
       state.flow.payloads,
     );
+    if (nextStepIndex >= args.length) {
+      return startRun(
+        state,
+        state.flow.entryId,
+        state.flow.commandId,
+        state.flow.values,
+        state.flow.payloads,
+      );
+    }
+    const nextFlow = { ...state.flow, stepIndex: nextStepIndex };
+    return enterStep(state, nextFlow, args[nextStepIndex], '', null);
   }
   return updateReview(state, attemptId, { content, error: null });
 }

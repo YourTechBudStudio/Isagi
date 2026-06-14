@@ -69,6 +69,7 @@ test('autostart command lookup resolves contextual assembled entry ids', () => {
       icon: command.icon,
       group: command.group,
       command,
+      values: { worktreeId: '10', surfaceId: '501' },
       run: () => undefined,
     },
   ];
@@ -76,6 +77,7 @@ test('autostart command lookup resolves contextual assembled entry ids', () => {
   assert.deepEqual(commandForEntryId(entries, 'worktree:10:rename-active-surface'), {
     entryId: 'worktree:10:rename-active-surface',
     command,
+    values: { worktreeId: '10', surfaceId: '501' },
   });
   assert.equal(commandForEntryId(entries, command.id), null);
 });

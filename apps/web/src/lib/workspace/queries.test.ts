@@ -10,6 +10,7 @@ import { clearToasts, useToastStore } from '../toast/index.js';
 import type { WorkspaceData } from './model.js';
 import {
   commitAddProjectSuccess,
+  commitDeleteWorktreeSuccess,
   commitDeleteSurfaceSuccess,
   commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
@@ -197,6 +198,78 @@ test('delete pane success clears only the deleted pane override', async () => {
   assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 10: 501 });
   assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, {});
   assert.deepEqual(client.getQueryData(surfaceDetailQueryKey(501)), { id: 501 });
+});
+
+test('delete worktree success refetches workspace and selects returned root worktree', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  const events: string[] = [];
+  useWorkspaceStore.getState().setSelection(emptyWorkspaceSelection);
+
+  await commitDeleteWorktreeSuccess(
+    client,
+    {
+      projectId: 1,
+      deletedWorktreeId: 11,
+      selectedWorktreeId: 10,
+      branchRemoval: { status: 'not_requested' },
+      warnings: [],
+    },
+    async () => {
+      events.push(`fetch:${useWorkspaceStore.getState().selection.kind}`);
+      return {
+        projects: [
+          project({
+            id: 1,
+            name: 'fresh',
+            surfaces: [],
+          }),
+        ],
+      };
+    },
+  );
+
+  events.push(`select:${useWorkspaceStore.getState().selection.kind}`);
+  assert.deepEqual(events, ['fetch:empty', 'select:worktree']);
+  assert.deepEqual(useWorkspaceStore.getState().selection, {
+    kind: 'worktree',
+    projectId: 1,
+    worktreeId: 10,
+  });
+});
+
+test('delete worktree success falls back through selection reconciliation when returned root is absent', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  useWorkspaceStore.getState().setSelection({
+    kind: 'worktree',
+    projectId: 1,
+    worktreeId: 11,
+  });
+
+  await commitDeleteWorktreeSuccess(
+    client,
+    {
+      projectId: 1,
+      deletedWorktreeId: 11,
+      selectedWorktreeId: 999,
+      branchRemoval: { status: 'not_requested' },
+      warnings: [],
+    },
+    async () => ({
+      projects: [
+        project({
+          id: 1,
+          name: 'fresh',
+          surfaces: [],
+        }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(useWorkspaceStore.getState().selection, {
+    kind: 'worktree',
+    projectId: 1,
+    worktreeId: 10,
+  });
 });
 
 test('surface focus persistence ignores stale success responses', async () => {

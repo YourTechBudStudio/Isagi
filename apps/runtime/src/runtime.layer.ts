@@ -45,6 +45,7 @@ const PtyServiceLayer = PtyServiceLive.pipe(
 );
 const PtyServiceWithEventsLayer = Layer.provideMerge(PtyServiceLayer, RuntimeEventBusLive);
 const SurfaceAndPtyServiceLayer = Layer.provideMerge(SurfaceServiceLive, PtyServiceWithEventsLayer);
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(Layer.provide(SurfaceAndPtyServiceLayer));
 
 export type RuntimeServices =
   | WorkspaceServiceShape
@@ -52,7 +53,7 @@ export type RuntimeServices =
   | PtyServiceShape
   | RuntimeEventBusService;
 
-export const RuntimeLayer = Layer.mergeAll(WorkspaceServiceLive, SurfaceAndPtyServiceLayer).pipe(
+export const RuntimeLayer = Layer.mergeAll(WorkspaceServiceLayer, SurfaceAndPtyServiceLayer).pipe(
   Layer.provide(
     Layer.mergeAll(
       RepositoryLive,

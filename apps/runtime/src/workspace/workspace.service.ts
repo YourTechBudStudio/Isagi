@@ -8,7 +8,10 @@ import type {
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   AddProjectOutput,
+  DeleteWorktreeInput,
+  DeleteWorktreeOutput,
   DeleteProjectOutput,
+  DeleteWorktreePreflightOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -39,7 +42,7 @@ import {
   type StateFileError,
 } from '../persistence/index.js';
 import { ProjectConfigError } from '../project-config/project-config.service.js';
-import { SurfaceRepository } from '../surfaces/index.js';
+import { SurfaceError, SurfaceRepository, SurfaceService } from '../surfaces/index.js';
 import {
   runPostCreateSetup,
   WorktreeSetupError,
@@ -68,6 +71,9 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'checkout_path_registered'
     | 'checkout_parent_unavailable'
     | 'worktree_not_found'
+    | 'root_worktree_not_deletable'
+    | 'dirty_checkout_requires_force'
+    | 'root_worktree_not_found'
     | 'setup_config_invalid'
     | 'setup_trust_required'
     | 'setup_trust_mismatch';
@@ -109,6 +115,15 @@ export interface WorkspaceService {
     readonly projectId: number;
     readonly request: OpenWorktreeInput;
   }) => Effect.Effect<OpenWorktreeOutput, WorkspaceServiceError>;
+  readonly preflightDeleteWorktree: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+  }) => Effect.Effect<DeleteWorktreePreflightOutput, WorkspaceServiceError>;
+  readonly deleteWorktree: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+    readonly request: DeleteWorktreeInput;
+  }) => Effect.Effect<DeleteWorktreeOutput, WorkspaceServiceError>;
   readonly registerProject: (input: {
     readonly path: string;
   }) => Effect.Effect<AddProjectOutput, WorkspaceServiceError>;
@@ -136,6 +151,7 @@ export const WorkspaceServiceLive = Layer.effect(
     const worktreeSetup = yield* WorktreeSetupService;
     const worktreeSetupRepository = yield* WorktreeSetupRepository;
     const surfaceRepository = yield* SurfaceRepository;
+    const surfaceService = yield* SurfaceService;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -333,6 +349,97 @@ export const WorkspaceServiceLive = Layer.effect(
             setup,
           } satisfies OpenWorktreeOutput;
         }),
+      preflightDeleteWorktree: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* ensureProjectPathAvailable(repository, project);
+          const worktree = yield* requireProjectWorktree(repository, {
+            projectId: project.id,
+            worktreeId: input.worktreeId,
+          });
+          const dirty = yield* checkoutIsDirty(git, worktree.path);
+          return {
+            projectId: project.id,
+            worktreeId: worktree.id,
+            path: worktree.path,
+            branch: worktree.branch,
+            isRoot: isRootWorktree(project, worktree),
+            dirty,
+          } satisfies DeleteWorktreePreflightOutput;
+        }),
+      deleteWorktree: (input) =>
+        Effect.gen(function* () {
+          const project = yield* requirePresentProject(repository, input.projectId);
+          yield* ensureProjectPathAvailable(repository, project);
+          const worktree = yield* requireProjectWorktree(repository, {
+            projectId: project.id,
+            worktreeId: input.worktreeId,
+          });
+          const rootWorktree = yield* requireProjectRootWorktree(repository, project);
+
+          if (isRootWorktree(project, worktree)) {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'root_worktree_not_deletable',
+                message: `Root worktree ${worktree.id} cannot be deleted.`,
+                projectId: project.id,
+                worktreeId: worktree.id,
+                path: worktree.path,
+              }),
+            );
+          }
+
+          const dirty = yield* checkoutIsDirty(git, worktree.path);
+          if (dirty && input.request.checkoutRemovalMode === 'normal') {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'dirty_checkout_requires_force',
+                message: `Worktree ${worktree.id} has uncommitted or untracked changes.`,
+                projectId: project.id,
+                worktreeId: worktree.id,
+                path: worktree.path,
+              }),
+            );
+          }
+
+          const cleanup = yield* surfaceService.cleanupWorktreeForDelete(worktree.id).pipe(
+            Effect.mapError((error) =>
+              error instanceof SurfaceError
+                ? new WorkspaceError({
+                    code: 'worktree_not_found',
+                    message: error.message,
+                    projectId: project.id,
+                    worktreeId: worktree.id,
+                  })
+                : error,
+            ),
+          );
+
+          // Destructive sequencing is deliberate: stop live sessions that may
+          // hold cwd inside the checkout, remove the Git worktree, delete the DB
+          // row so dependent state cascades, then optionally safe-delete the
+          // branch. `checkoutRemovalMode: "force"` does not force branch deletion.
+          yield* git.run(
+            input.request.checkoutRemovalMode === 'force'
+              ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
+              : ['-C', project.rootPath, 'worktree', 'remove', worktree.path],
+          );
+          yield* repository.deleteWorktree(worktree.id);
+          const branchRemoval = yield* deleteBranchIfRequested(
+            git,
+            project,
+            worktree,
+            input.request,
+          );
+
+          return {
+            projectId: project.id,
+            deletedWorktreeId: worktree.id,
+            selectedWorktreeId: rootWorktree.id,
+            branchRemoval,
+            warnings: [...cleanup.warnings],
+          } satisfies DeleteWorktreeOutput;
+        }),
       registerProject: (input) =>
         Effect.gen(function* () {
           const projectRoot = yield* validateProjectRoot(input.path).pipe(
@@ -459,6 +566,46 @@ function requireProject(repository: WorkspaceRepositoryService, projectId: numbe
   });
 }
 
+function requireProjectWorktree(
+  repository: WorkspaceRepositoryService,
+  input: { readonly projectId: number; readonly worktreeId: number },
+) {
+  return Effect.gen(function* () {
+    const worktree = yield* repository.findProjectWorktree(input);
+    if (!worktree) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'worktree_not_found',
+          message: `Worktree ${input.worktreeId} was not found for project ${input.projectId}.`,
+          projectId: input.projectId,
+          worktreeId: input.worktreeId,
+        }),
+      );
+    }
+    return worktree;
+  });
+}
+
+function requireProjectRootWorktree(repository: WorkspaceRepositoryService, project: ProjectRow) {
+  return Effect.gen(function* () {
+    const rootWorktree = yield* repository.findProjectRootWorktree({
+      projectId: project.id,
+      rootPath: project.rootPath,
+    });
+    if (!rootWorktree) {
+      return yield* Effect.fail(
+        new WorkspaceError({
+          code: 'root_worktree_not_found',
+          message: `Root worktree was not found for project ${project.id}.`,
+          projectId: project.id,
+          path: project.rootPath,
+        }),
+      );
+    }
+    return rootWorktree;
+  });
+}
+
 function requirePresentProject(repository: WorkspaceRepositoryService, projectId: number) {
   return Effect.gen(function* () {
     const project = yield* requireProject(repository, projectId);
@@ -467,6 +614,49 @@ function requirePresentProject(repository: WorkspaceRepositoryService, projectId
     }
     return project;
   });
+}
+
+function isRootWorktree(project: ProjectRow, worktree: WorktreeRow) {
+  return worktree.path === project.rootPath;
+}
+
+function checkoutIsDirty(git: GitServiceShape, checkoutPath: string) {
+  return git
+    .run(['-C', checkoutPath, 'status', '--porcelain'])
+    .pipe(Effect.map(({ stdout }) => stdout.trim().length > 0));
+}
+
+function deleteBranchIfRequested(
+  git: GitServiceShape,
+  project: ProjectRow,
+  worktree: WorktreeRow,
+  request: DeleteWorktreeInput,
+): Effect.Effect<DeleteWorktreeOutput['branchRemoval'], never, never> {
+  if (request.branchRemovalMode === 'preserve') {
+    return Effect.succeed({ status: 'not_requested' });
+  }
+  if (!worktree.branch) {
+    return Effect.succeed({ status: 'not_applicable' });
+  }
+
+  return git.run(['-C', project.rootPath, 'branch', '-d', worktree.branch]).pipe(
+    Effect.as({ status: 'deleted' as const, branch: worktree.branch }),
+    Effect.catchAll((error) =>
+      Effect.succeed({
+        status: 'failed' as const,
+        branch: worktree.branch as string,
+        diagnostic: gitBranchDeleteDiagnostic(error),
+      }),
+    ),
+  );
+}
+
+function gitBranchDeleteDiagnostic(error: GitCommandError) {
+  const stderr = error.stderr.trim();
+  if (stderr) {
+    return stderr;
+  }
+  return `git ${error.args.join(' ')} failed`;
 }
 
 function ensureProjectPathAvailable(repository: WorkspaceRepositoryService, project: ProjectRow) {

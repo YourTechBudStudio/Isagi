@@ -10,6 +10,7 @@ import {
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
+import { worktreeActionCommands } from './commands/worktree-actions.js';
 import { GLOBAL_COMMANDS } from './registry.js';
 import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
@@ -33,6 +34,9 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
   const worktree = ctx.activeWorktree;
   if (worktree) {
     const activeSurfaceTitle = ctx.activeSurface?.title;
+    const activeWorktreeCommands = worktreeActionCommands.filter(
+      (command) => command.available?.(ctx) ?? true,
+    );
     const activeSurfaceCommands = surfaceActionCommands.filter(
       (command) => command.available?.(ctx) ?? true,
     );
@@ -59,18 +63,46 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
       },
     };
 
-    for (const command of activeSurfaceCommands) {
-      const sub =
-        command.id === 'delete-active-pane'
-          ? (activeSurfaceTitle ?? 'active pane')
-          : activeSurfaceTitle;
+    for (const command of activeWorktreeCommands) {
+      const values = {
+        projectId: String(worktree.projectId),
+        worktreeId: String(worktree.id),
+      };
       entries.push({
         id: command.id,
         label: command.label,
         icon: command.icon,
         group: command.group,
         command,
-        run: () => command.run({}, ctx),
+        values,
+        run: () => command.run(values, ctx),
+        sub: worktree.title,
+      });
+    }
+
+    for (const command of activeSurfaceCommands) {
+      const sub =
+        command.id === 'delete-active-pane'
+          ? (activeSurfaceTitle ?? 'active pane')
+          : activeSurfaceTitle;
+      const values = ctx.activeSurface
+        ? {
+            worktreeId: String(worktree.id),
+            surfaceId: String(ctx.activeSurface.id),
+            ...(command.id === 'rename-active-surface' ? { title: ctx.activeSurface.title } : {}),
+            ...(command.id === 'delete-active-pane' && ctx.activePaneId
+              ? { paneId: String(ctx.activePaneId) }
+              : {}),
+          }
+        : { worktreeId: String(worktree.id) };
+      entries.push({
+        id: command.id,
+        label: command.label,
+        icon: command.icon,
+        group: command.group,
+        command,
+        values,
+        run: () => command.run(values, ctx),
         ...(sub ? { sub } : {}),
       });
     }

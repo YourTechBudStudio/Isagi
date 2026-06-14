@@ -1,14 +1,19 @@
 import {
   worktreeBranchListApiErrorSchema,
+  worktreeDeleteApiErrorSchema,
   worktreeOpenApiErrorSchema,
   worktreeSetupApiErrorSchema,
 } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
+  deleteWorktreeInputSchema,
+  deleteWorktreeOutputSchema,
+  deleteWorktreePreflightOutputSchema,
   listProjectBranchesOutputSchema,
   openWorktreeInputSchema,
   openWorktreeOutputSchema,
   projectWorktreeRouteParamsSchema,
+  worktreeRouteParamsSchema,
   worktreeSetupPreflightOutputSchema,
   worktreeSetupTrustInputSchema,
   worktreeSetupTrustOutputSchema,
@@ -49,6 +54,23 @@ export const worktreesEndpoints = {
     output: openWorktreeOutputSchema,
     errors: worktreeOpenApiErrorSchema,
   },
+  deletePreflight: {
+    id: 'worktrees.deletePreflight',
+    method: 'POST',
+    path: '/projects/:projectId/worktrees/:worktreeId/delete/preflight',
+    params: worktreeRouteParamsSchema,
+    output: deleteWorktreePreflightOutputSchema,
+    errors: worktreeDeleteApiErrorSchema,
+  },
+  delete: {
+    id: 'worktrees.delete',
+    method: 'DELETE',
+    path: '/projects/:projectId/worktrees/:worktreeId',
+    params: worktreeRouteParamsSchema,
+    body: deleteWorktreeInputSchema,
+    output: deleteWorktreeOutputSchema,
+    errors: worktreeDeleteApiErrorSchema,
+  },
 } as const satisfies {
   readonly branches: ApiEndpoint<
     undefined,
@@ -73,5 +95,17 @@ export const worktreesEndpoints = {
     typeof openWorktreeOutputSchema,
     typeof worktreeOpenApiErrorSchema,
     typeof projectWorktreeRouteParamsSchema
+  >;
+  readonly deletePreflight: ApiEndpoint<
+    undefined,
+    typeof deleteWorktreePreflightOutputSchema,
+    typeof worktreeDeleteApiErrorSchema,
+    typeof worktreeRouteParamsSchema
+  >;
+  readonly delete: ApiEndpoint<
+    typeof deleteWorktreeInputSchema,
+    typeof deleteWorktreeOutputSchema,
+    typeof worktreeDeleteApiErrorSchema,
+    typeof worktreeRouteParamsSchema
   >;
 };

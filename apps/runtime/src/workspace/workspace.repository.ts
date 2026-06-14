@@ -25,11 +25,20 @@ export interface WorkspaceRepositoryService {
     rootPath: string,
   ) => Effect.Effect<ProjectRow | null, DatabaseError>;
   readonly findWorktree: (worktreeId: number) => Effect.Effect<WorktreeRow | null, DatabaseError>;
+  readonly findProjectWorktree: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+  }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
+  readonly findProjectRootWorktree: (input: {
+    readonly projectId: number;
+    readonly rootPath: string;
+  }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
   readonly findProjectWorktreeByBranch: (input: {
     readonly projectId: number;
     readonly branch: string;
   }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
   readonly deleteProject: (projectId: number) => Effect.Effect<boolean, DatabaseError>;
+  readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly insertProject: (input: {
     readonly name: string;
     readonly rootPath: string;
@@ -77,6 +86,28 @@ export const WorkspaceRepositoryLive = Layer.effect(
           const row = db.select().from(worktrees).where(eq(worktrees.id, worktreeId)).get();
           return row ? worktreeRow(row) : null;
         }),
+      findProjectWorktree: (input) =>
+        database.use<WorktreeRow | null>('find_project_worktree', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(
+              and(eq(worktrees.projectId, input.projectId), eq(worktrees.id, input.worktreeId)),
+            )
+            .get();
+          return row ? worktreeRow(row) : null;
+        }),
+      findProjectRootWorktree: (input) =>
+        database.use<WorktreeRow | null>('find_project_root_worktree', (db) => {
+          const row = db
+            .select()
+            .from(worktrees)
+            .where(
+              and(eq(worktrees.projectId, input.projectId), eq(worktrees.path, input.rootPath)),
+            )
+            .get();
+          return row ? worktreeRow(row) : null;
+        }),
       findProjectWorktreeByBranch: (input) =>
         database.use<WorktreeRow | null>('find_project_worktree_by_branch', (db) => {
           const row = db
@@ -91,6 +122,11 @@ export const WorkspaceRepositoryLive = Layer.effect(
       deleteProject: (projectId) =>
         database.use('delete_project', (db) => {
           const result = db.delete(projects).where(eq(projects.id, projectId)).run();
+          return result.changes > 0;
+        }),
+      deleteWorktree: (worktreeId) =>
+        database.use('delete_worktree', (db) => {
+          const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
           return result.changes > 0;
         }),
       insertProject: (input) =>

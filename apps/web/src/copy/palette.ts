@@ -86,6 +86,47 @@ export const surfaceActionsCopy = {
   },
 } as const;
 
+export const worktreeActionsCopy = {
+  deleteWorktree: {
+    dirtyReview: {
+      title: 'Worktree has uncommitted or untracked changes.',
+      body: 'Deleting this checkout removes the checkout and those changes.',
+      checkoutLabel: 'Checkout',
+      confirm: 'Delete checkout',
+      cancel: 'Cancel',
+    },
+    mode: {
+      checkoutOnly: {
+        label: 'Delete checkout only',
+        hint: 'Keeps the Git branch.',
+      },
+      checkoutAndBranch: {
+        label: 'Delete checkout and branch',
+        hint: 'Uses safe branch deletion.',
+      },
+    },
+    rootNotDeletable: {
+      title: 'Root worktree cannot be deleted.',
+      body: 'The main checkout stays as the project fallback.',
+    },
+    branchDeleteFailed: {
+      title: 'Checkout deleted. Branch was not deleted.',
+      body: 'Git refused to delete the branch safely. The checkout is already gone.',
+      diagnosticLabel: 'Git output',
+    },
+    cleanupWarning: {
+      title: 'Checkout deleted. Cleanup needs attention.',
+      body: 'The worktree was removed, but Isagi could not finish all session cleanup.',
+      diagnosticLabel: 'Cleanup warnings',
+    },
+    partialWarning: {
+      title: 'Checkout deleted with warnings.',
+      body: 'The branch was not deleted, and Isagi could not finish all session cleanup.',
+      diagnosticLabel: 'Delete details',
+    },
+  },
+} as const;
+
 export const worktreeSetupReviewCopy = {
   title: "This project has setup hooks Isagi hasn't run yet.",
   body: "They're defined in .isagi/config.yaml and run right after the worktree is created. Worth a look before you let them touch your machine.",

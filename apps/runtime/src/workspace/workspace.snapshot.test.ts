@@ -16,7 +16,12 @@ import {
   type DataDirectoryService,
   type WorkspaceState,
 } from '../persistence/index.js';
-import { SurfaceRepository, type SurfaceRepositoryService } from '../surfaces/index.js';
+import {
+  SurfaceService,
+  SurfaceRepository,
+  type SurfaceRepositoryService,
+  type SurfaceServiceShape,
+} from '../surfaces/index.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
@@ -66,6 +71,7 @@ const testSurfaceRepository = {
   listPanesForSurface: () => Effect.succeed([]),
   listPtySessionsForPanes: () => Effect.succeed([]),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
+  listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
   deleteSurfacePane: () =>
@@ -76,6 +82,17 @@ const testSurfaceRepository = {
     Effect.die('pty session surface creation is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
+
+const testSurfaceService = {
+  getSurfaceDetail: () => Effect.die('surface detail is not used by workspace snapshot tests'),
+  renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
+  deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
+  deleteSurfacePane: () =>
+    Effect.die('surface pane delete is not used by workspace snapshot tests'),
+  cleanupWorktreeForDelete: () => Effect.succeed({ attemptedPtySessionIds: [], warnings: [] }),
+  createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
+} satisfies SurfaceServiceShape;
 
 const project: ProjectRow = {
   id: 1,
@@ -176,6 +193,20 @@ test('workspace reads known rows without reconciling Git state', async () => {
     findProjectByRootPath: () => Effect.succeed(currentProject),
     findWorktree: (worktreeId) =>
       Effect.succeed(worktrees.find((worktree) => worktree.id === worktreeId) ?? null),
+    findProjectWorktree: (lookup) =>
+      Effect.succeed(
+        worktrees.find(
+          (worktree) =>
+            worktree.projectId === lookup.projectId && worktree.id === lookup.worktreeId,
+        ) ?? null,
+      ),
+    findProjectRootWorktree: (lookup) =>
+      Effect.succeed(
+        worktrees.find(
+          (worktree) =>
+            worktree.projectId === lookup.projectId && worktree.path === lookup.rootPath,
+        ) ?? null,
+      ),
     findProjectWorktreeByBranch: (lookup) =>
       Effect.succeed(
         worktrees.find(
@@ -184,6 +215,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         ) ?? null,
       ),
     deleteProject: () => Effect.succeed(false),
+    deleteWorktree: () => Effect.succeed(false),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
@@ -254,6 +286,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
         Effect.provideService(StateFile, stateFile),
         Effect.provideService(Git, git),
         Effect.provideService(DataDirectory, testDataDirectory),

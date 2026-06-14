@@ -56,6 +56,9 @@ export interface SurfaceRepositoryService {
   readonly findSurfaceDeleteTarget: (
     surfaceId: number,
   ) => Effect.Effect<SurfaceDeleteTarget | null, DatabaseError>;
+  readonly listWorktreeDeleteTargets: (
+    worktreeId: number,
+  ) => Effect.Effect<SurfaceDeleteTarget[], DatabaseError>;
   readonly renameSurface: (input: {
     readonly surfaceId: number;
     readonly title: string;
@@ -209,6 +212,61 @@ export const SurfaceRepositoryLive = Layer.effect(
               ptySession: sessionByPaneId.get(pane.id) ?? null,
             })),
           } satisfies SurfaceDeleteTarget;
+        }),
+      listWorktreeDeleteTargets: (worktreeId) =>
+        database.use('list_worktree_delete_targets', (db) => {
+          const surfaces = db
+            .select()
+            .from(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.worktreeId, worktreeId))
+            .orderBy(worktreeSurfaces.sortOrder, worktreeSurfaces.id)
+            .all();
+          if (surfaces.length === 0) {
+            return [];
+          }
+
+          const surfaceIds = surfaces.map((surface) => surface.id);
+          const panes = db
+            .select()
+            .from(surfacePanes)
+            .where(inArray(surfacePanes.surfaceId, surfaceIds))
+            .orderBy(surfacePanes.surfaceId, surfacePanes.sortOrder, surfacePanes.id)
+            .all()
+            .map(paneRow);
+          const sessions =
+            panes.length === 0
+              ? []
+              : db
+                  .select({
+                    ...ptySessionColumns,
+                    surfaceId: surfacePanes.surfaceId,
+                  })
+                  .from(ptySessions)
+                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
+                  .where(
+                    inArray(
+                      ptySessions.paneId,
+                      panes.map((pane) => pane.id),
+                    ),
+                  )
+                  .all()
+                  .map(ptySessionRow);
+          const sessionByPaneId = new Map(sessions.map((session) => [session.paneId, session]));
+          const panesBySurfaceId = new Map<number, SurfacePaneRow[]>();
+          for (const pane of panes) {
+            panesBySurfaceId.set(pane.surfaceId, [
+              ...(panesBySurfaceId.get(pane.surfaceId) ?? []),
+              pane,
+            ]);
+          }
+
+          return surfaces.map((surface) => ({
+            surface: surfaceRow(surface),
+            panes: (panesBySurfaceId.get(surface.id) ?? []).map((pane) => ({
+              pane,
+              ptySession: sessionByPaneId.get(pane.id) ?? null,
+            })),
+          }));
         }),
       renameSurface: (input) =>
         database.use('rename_surface', (db) => {

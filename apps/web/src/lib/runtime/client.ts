@@ -15,6 +15,8 @@ import {
   type ApiEndpointParams,
   type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
+  type DeleteWorktreeInput,
+  type DeleteWorktreeOutput,
   type LaunchSessionOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
@@ -28,6 +30,7 @@ import {
   type ListProjectBranchesOutput,
   type OpenWorktreeInput,
   type OpenWorktreeOutput,
+  type DeleteWorktreePreflightOutput,
   type PathSuggestOutput,
   type WorktreeSetupPreflightOutput,
   type WorktreeSetupTrustInput,
@@ -150,6 +153,21 @@ export interface RuntimeClient {
     projectId: number,
     input: OpenWorktreeInput,
   ) => Effect.Effect<OpenWorktreeOutput, RuntimeEndpointError<typeof apiEndpoints.worktrees.open>>;
+  readonly preflightDeleteWorktree: (
+    projectId: number,
+    worktreeId: number,
+  ) => Effect.Effect<
+    DeleteWorktreePreflightOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.deletePreflight>
+  >;
+  readonly deleteWorktree: (
+    projectId: number,
+    worktreeId: number,
+    input: DeleteWorktreeInput,
+  ) => Effect.Effect<
+    DeleteWorktreeOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.delete>
+  >;
   readonly suggestProjectPaths: (
     input: string,
     limit?: number,
@@ -202,6 +220,10 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     trustWorktreeSetup: (projectId, input) =>
       request(apiEndpoints.worktrees.setupTrust, { projectId }, input),
     openWorktree: (projectId, input) => request(apiEndpoints.worktrees.open, { projectId }, input),
+    preflightDeleteWorktree: (projectId, worktreeId) =>
+      request(apiEndpoints.worktrees.deletePreflight, { projectId, worktreeId }),
+    deleteWorktree: (projectId, worktreeId, input) =>
+      request(apiEndpoints.worktrees.delete, { projectId, worktreeId }, input),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),
   };
