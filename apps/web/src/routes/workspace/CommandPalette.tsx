@@ -436,19 +436,20 @@ export function CommandPalette() {
     }
   };
 
-  const crumbLabels = command
-    ? args
-        .slice(0, machine.kind === 'step' ? machine.flow.stepIndex : 0)
-        .filter(
-          (arg) =>
-            machine.kind !== 'step' ||
-            !(
-              arg.kind === 'select' &&
-              (arg.skip?.(ctx, machine.flow.values, machine.flow.payloads) ?? false)
-            ),
-        )
-        .map((arg) => (machine.kind === 'step' ? (machine.flow.labels[arg.key] ?? '') : ''))
-    : [];
+  const crumbs =
+    command && machine.kind === 'step'
+      ? args.slice(0, machine.flow.stepIndex).flatMap((arg) => {
+          if (
+            arg.kind === 'select' &&
+            (arg.skip?.(ctx, machine.flow.values, machine.flow.payloads) ?? false)
+          ) {
+            return [];
+          }
+
+          const label = machine.flow.labels[arg.key];
+          return label?.trim() ? [{ key: arg.key, label }] : [];
+        })
+      : [];
 
   return (
     <AnimatePresence>
@@ -482,10 +483,10 @@ export function CommandPalette() {
               {command ? (
                 <>
                   <Chip tone="command">{command.label}</Chip>
-                  {crumbLabels.map((label, index) => (
-                    <span key={args[index]?.key} className="flex items-center gap-1.5">
+                  {crumbs.map((crumb) => (
+                    <span key={crumb.key} className="flex items-center gap-1.5">
                       <span className="text-[11px] text-fg-subtle">›</span>
-                      <Chip tone="crumb">{label}</Chip>
+                      <Chip tone="crumb">{crumb.label}</Chip>
                     </span>
                   ))}
                   <span className="text-[11px] text-fg-subtle">›</span>
