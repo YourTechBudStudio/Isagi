@@ -32,7 +32,12 @@ import {
   retryPersistKilledUntilSuccess,
   type IntentionalKillState,
 } from './service/lifecycle.js';
-import { replaySessionLog, reportOrphanPtyLogs, replayBytesForSession } from './service/logs.js';
+import {
+  replaySessionLog,
+  reportOrphanPtyLogs,
+  replayBytesForSession,
+  startOrphanPtyLogGcLoop,
+} from './service/logs.js';
 import {
   commandForLaunch,
   launchEnv,
@@ -119,6 +124,7 @@ export const PtyServiceLive = Layer.scoped(
     yield* runPtyGc(repository, backend, namespace);
     const pollTimer = startStatusPolling(repository, backend, eventBus);
     const gcTimer = startPtyGcLoop(repository, backend, namespace);
+    const logGcTimer = startOrphanPtyLogGcLoop(repository, directory.paths.sessionsPath);
 
     const service = {
       launch: (input) =>
@@ -481,6 +487,7 @@ export const PtyServiceLive = Layer.scoped(
       Effect.gen(function* () {
         clearInterval(pollTimer);
         clearInterval(gcTimer);
+        clearInterval(logGcTimer);
         const sessions = yield* repository
           .listSessions({ statuses: ['starting', 'running'] })
           .pipe(Effect.orElseSucceed(() => []));

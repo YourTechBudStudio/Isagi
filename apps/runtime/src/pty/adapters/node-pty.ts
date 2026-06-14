@@ -28,6 +28,7 @@ import {
   PtyStartError,
   PtyWriteError,
 } from '../types.js';
+import { collectNodePtyGarbage } from './node-pty-gc.js';
 
 const replayChunkBytes = 64 * 1024;
 
@@ -37,6 +38,7 @@ interface LiveNodePtySession {
   readonly logPath: string | null;
   attachment: NodePtyAttachment | null;
   running: boolean;
+  suppressExitCallback: boolean;
 }
 
 interface NodePtyAttachment {
@@ -55,6 +57,20 @@ export const NodePtyBackendLive = Layer.effect(
   Effect.sync(() => {
     ensureNodePtyDarwinHelperExecutable();
     const liveSessions = new Map<number, LiveNodePtySession>();
+    const listSessions = Effect.sync(() =>
+      [...liveSessions.values()].flatMap((session) =>
+        session.running
+          ? [
+              {
+                schemaVersion: 1,
+                backend: 'node_pty' as const,
+                ptySessionId: session.ptySessionId,
+                pid: session.process.pid,
+              } satisfies NodePtyBackendRef,
+            ]
+          : [],
+      ),
+    );
 
     return {
       name: 'node_pty',
@@ -75,6 +91,7 @@ export const NodePtyBackendLive = Layer.effect(
               logPath: input.logPath,
               attachment: null,
               running: true,
+              suppressExitCallback: false,
             };
             liveSessions.set(input.ptySessionId, live);
             pty.onData((data) => {
@@ -82,6 +99,12 @@ export const NodePtyBackendLive = Layer.effect(
               live.attachment?.onOutput(data);
             });
             pty.onExit((event) => {
+              // `kill` marks and removes the process-local live entry before
+              // node-pty can emit exit. Ignore that callback so GC/delete cleanup
+              // cannot rewrite an already-terminal or already-deleted durable row.
+              if (live.suppressExitCallback || liveSessions.get(input.ptySessionId) !== live) {
+                return;
+              }
               live.running = false;
               const exit = {
                 exitCode: event.exitCode ?? null,
@@ -157,20 +180,8 @@ export const NodePtyBackendLive = Layer.effect(
             ? { status: 'alive' as const }
             : { status: 'missing' as const },
         ),
-      listSessions: Effect.sync(() =>
-        [...liveSessions.values()].flatMap((session) =>
-          session.running
-            ? [
-                {
-                  schemaVersion: 1,
-                  backend: 'node_pty' as const,
-                  ptySessionId: session.ptySessionId,
-                  pid: session.process.pid,
-                },
-              ]
-            : [],
-        ),
-      ),
+      listSessions,
+      collectGarbage: (input) => collectNodePtyGarbage(input, listSessions),
       kill: (ref) =>
         Effect.try({
           try: () => {
@@ -182,8 +193,17 @@ export const NodePtyBackendLive = Layer.effect(
             if (!live) {
               return;
             }
-            live.process.kill();
+            live.suppressExitCallback = true;
             liveSessions.delete(nodeRef.ptySessionId);
+            try {
+              live.process.kill();
+            } catch (error) {
+              live.suppressExitCallback = false;
+              if (live.running) {
+                liveSessions.set(nodeRef.ptySessionId, live);
+              }
+              throw error;
+            }
           },
           catch: (cause) =>
             new PtyKillError({
