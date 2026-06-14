@@ -117,3 +117,29 @@ test('dispatcher unavailable preflight no-ops', async () => {
 
   assert.deepEqual(events, []);
 });
+
+test('dispatcher resolves explicit surface commands even when absent from assembled entries', async () => {
+  const opened: Array<{
+    readonly entryId: string | undefined;
+    readonly surfaceId: string | undefined;
+    readonly title: string | undefined;
+  }> = [];
+
+  await dispatchCommandEntry(
+    'rename-active-surface',
+    { worktreeId: '10', surfaceId: '501', title: 'Terminal' },
+    {
+      entries: [],
+      ctx,
+      openPalette: (entryId, values) =>
+        opened.push({ entryId, surfaceId: values?.surfaceId, title: values?.title }),
+      pushRecent: () => {
+        throw new Error('recent should not be pushed');
+      },
+    },
+  );
+
+  assert.deepEqual(opened, [
+    { entryId: 'rename-active-surface', surfaceId: '501', title: 'Terminal' },
+  ]);
+});

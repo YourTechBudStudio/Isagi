@@ -6,8 +6,13 @@ import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { worktreeSetupFailureCopy, workspaceBootCopy } from '../../copy/index.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
+import {
+  handleDispatchedCommandError,
+  useCommandDispatcher,
+} from '../../lib/palette/dispatcher.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import {
+  useWorkspace,
   usePersistActiveContextSelection,
   useWorkspaceSelectionSync,
 } from '../../lib/workspace/hooks.js';
@@ -110,6 +115,8 @@ export function WorkspacePage() {
   const zen = useWorkspaceStore((state) => state.zen);
   const setZen = useWorkspaceStore((state) => state.setZen);
   const workspace = useWorkspaceQuery();
+  const { activeSurface } = useWorkspace();
+  const dispatchCommand = useCommandDispatcher();
   const workspaceErrorIsFatal = Boolean(workspace.error && !workspace.data);
   const hasConfiguredProjects =
     !workspaceErrorIsFatal && (workspace.data?.projects.length ?? 0) > 0;
@@ -142,6 +149,27 @@ export function WorkspacePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [zen, paletteOpen, setZen]);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        paletteOpen ||
+        isEditableEventTarget(event.target) ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== 'w' ||
+        !activeSurface
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      void dispatchCommand('delete-active-pane').catch(handleDispatchedCommandError);
+    };
+
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [activeSurface, dispatchCommand, paletteOpen]);
+
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: DURATION.ui, ease: EASE_EXPO }}>
       <TooltipDelayProvider>
@@ -168,5 +196,20 @@ export function WorkspacePage() {
         </>
       </TooltipDelayProvider>
     </MotionConfig>
+  );
+}
+
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return (
+    tagName === 'input' ||
+    tagName === 'textarea' ||
+    tagName === 'select' ||
+    target.isContentEditable ||
+    Boolean(target.closest('[contenteditable="true"]'))
   );
 }

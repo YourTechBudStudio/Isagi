@@ -1,6 +1,6 @@
-import { unlinkSync } from "node:fs";
+import { unlinkSync } from 'node:fs';
 
-import { Data, Effect, Schema, Context, Layer } from "effect";
+import { Data, Effect, Schema, Context, Layer } from 'effect';
 
 import type {
   DeleteSurfaceOutput,
@@ -10,19 +10,13 @@ import type {
   SurfaceDeleteWarning,
   SurfaceLayoutNode,
   WorktreeEnvironmentFocusOutput,
-} from "@isagi/contracts";
-import { surfaceLayoutNodeSchema } from "@isagi/contracts";
+} from '@isagi/contracts';
+import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
-import type { DatabaseError } from "../persistence/index.js";
-import {
-  PtyService,
-  type PtyService as PtyServiceShape,
-} from "../pty/pty.service.js";
-import { planSurfacePaneDelete } from "./delete-plan.js";
-import {
-  SurfaceRepository,
-  type SurfaceRepositoryService,
-} from "./surfaces.repository.js";
+import type { DatabaseError } from '../persistence/index.js';
+import { PtyService, type PtyService as PtyServiceShape } from '../pty/pty.service.js';
+import { planSurfacePaneDelete } from './delete-plan.js';
+import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
 import type {
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
@@ -30,14 +24,14 @@ import type {
   SurfaceDeletePaneTarget,
   SurfaceDeleteTarget,
   SurfacePaneRow,
-} from "./types.js";
+} from './types.js';
 
-export class SurfaceError extends Data.TaggedError("SurfaceError")<{
+export class SurfaceError extends Data.TaggedError('SurfaceError')<{
   readonly code:
-    | "surface_not_found"
-    | "worktree_not_found"
-    | "pane_not_found"
-    | "invalid_surface_title";
+    | 'surface_not_found'
+    | 'worktree_not_found'
+    | 'pane_not_found'
+    | 'invalid_surface_title';
   readonly message: string;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
@@ -70,9 +64,7 @@ export interface SurfaceService {
   }) => Effect.Effect<WorktreeEnvironmentFocusOutput, SurfaceServiceError>;
 }
 
-export const SurfaceService = Context.GenericTag<SurfaceService>(
-  "isagi/SurfaceService",
-);
+export const SurfaceService = Context.GenericTag<SurfaceService>('isagi/SurfaceService');
 
 export const SurfaceServiceLive = Layer.effect(
   SurfaceService,
@@ -87,7 +79,7 @@ export const SurfaceServiceLive = Layer.effect(
           if (!surface) {
             return yield* Effect.fail(
               new SurfaceError({
-                code: "surface_not_found",
+                code: 'surface_not_found',
                 message: `Surface ${surfaceId} was not found.`,
                 surfaceId,
               }),
@@ -98,9 +90,7 @@ export const SurfaceServiceLive = Layer.effect(
           const ptySessions = yield* repository.listPtySessionsForPanes(
             panes.map((pane) => pane.id),
           );
-          const focus = yield* repository.findEnvironmentFocus(
-            surface.worktreeId,
-          );
+          const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
           const activePaneId = activePaneForSurface(surface.id, panes, focus);
 
           return {
@@ -128,7 +118,7 @@ export const SurfaceServiceLive = Layer.effect(
           if (!surface) {
             return yield* Effect.fail(
               new SurfaceError({
-                code: "surface_not_found",
+                code: 'surface_not_found',
                 message: `Surface ${input.surfaceId} was not found.`,
                 surfaceId: input.surfaceId,
               }),
@@ -155,13 +145,11 @@ export const SurfaceServiceLive = Layer.effect(
       deleteSurfacePane: (input) =>
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, input.surfaceId);
-          const paneTarget = target.panes.find(
-            ({ pane }) => pane.id === input.paneId,
-          );
+          const paneTarget = target.panes.find(({ pane }) => pane.id === input.paneId);
           if (!paneTarget) {
             return yield* Effect.fail(
               new SurfaceError({
-                code: "pane_not_found",
+                code: 'pane_not_found',
                 message: `Pane ${input.paneId} was not found for surface ${input.surfaceId}.`,
                 surfaceId: input.surfaceId,
                 paneId: input.paneId,
@@ -173,14 +161,9 @@ export const SurfaceServiceLive = Layer.effect(
           const deletedPaneIds = new Set(plan.deletedPaneIds);
           const cleanupTarget = {
             ...target,
-            panes: target.panes.filter(({ pane }) =>
-              deletedPaneIds.has(pane.id),
-            ),
+            panes: target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
           };
-          const cleanup = yield* cleanupLiveSessionsForDelete(
-            pty,
-            cleanupTarget,
-          );
+          const cleanup = yield* cleanupLiveSessionsForDelete(pty, cleanupTarget);
           const deleted = yield* repository.deleteSurfacePane({
             target,
             plan,
@@ -201,7 +184,7 @@ export const SurfaceServiceLive = Layer.effect(
           if (!exists) {
             return yield* Effect.fail(
               new SurfaceError({
-                code: "worktree_not_found",
+                code: 'worktree_not_found',
                 message: `Worktree ${input.worktreeId} was not found.`,
                 worktreeId: input.worktreeId,
               }),
@@ -215,7 +198,7 @@ export const SurfaceServiceLive = Layer.effect(
           if (!exists) {
             return yield* Effect.fail(
               new SurfaceError({
-                code: "worktree_not_found",
+                code: 'worktree_not_found',
                 message: `Worktree ${input.worktreeId} was not found.`,
                 worktreeId: input.worktreeId,
               }),
@@ -223,13 +206,11 @@ export const SurfaceServiceLive = Layer.effect(
           }
 
           if (input.focus.activeSurfaceId !== null) {
-            const surface = yield* repository.findSurface(
-              input.focus.activeSurfaceId,
-            );
+            const surface = yield* repository.findSurface(input.focus.activeSurfaceId);
             if (!surface || surface.worktreeId !== input.worktreeId) {
               return yield* Effect.fail(
                 new SurfaceError({
-                  code: "surface_not_found",
+                  code: 'surface_not_found',
                   message: `Surface ${input.focus.activeSurfaceId} was not found for worktree ${input.worktreeId}.`,
                   worktreeId: input.worktreeId,
                   surfaceId: input.focus.activeSurfaceId,
@@ -243,7 +224,7 @@ export const SurfaceServiceLive = Layer.effect(
             if (!pane || pane.surfaceId !== input.focus.activeSurfaceId) {
               return yield* Effect.fail(
                 new SurfaceError({
-                  code: "pane_not_found",
+                  code: 'pane_not_found',
                   message: `Pane ${input.focus.activePaneId} was not found for surface ${input.focus.activeSurfaceId}.`,
                   worktreeId: input.worktreeId,
                   surfaceId: input.focus.activeSurfaceId ?? undefined,
@@ -268,8 +249,8 @@ function validateSurfaceTitle(title: string) {
   if (trimmed.length === 0 || trimmed.length > 80) {
     return Effect.fail(
       new SurfaceError({
-        code: "invalid_surface_title",
-        message: "Surface title must be between 1 and 80 characters.",
+        code: 'invalid_surface_title',
+        message: 'Surface title must be between 1 and 80 characters.',
       }),
     );
   }
@@ -277,7 +258,7 @@ function validateSurfaceTitle(title: string) {
 }
 
 function loadDeleteTarget(
-  repository: Pick<SurfaceRepositoryService, "findSurfaceDeleteTarget">,
+  repository: Pick<SurfaceRepositoryService, 'findSurfaceDeleteTarget'>,
   surfaceId: number,
 ) {
   return Effect.gen(function* () {
@@ -285,7 +266,7 @@ function loadDeleteTarget(
     if (!target) {
       return yield* Effect.fail(
         new SurfaceError({
-          code: "surface_not_found",
+          code: 'surface_not_found',
           message: `Surface ${surfaceId} was not found.`,
           surfaceId,
         }),
@@ -296,17 +277,14 @@ function loadDeleteTarget(
 }
 
 function cleanupLiveSessionsForDelete(
-  pty: Pick<PtyServiceShape, "cleanupSessionForDelete">,
+  pty: Pick<PtyServiceShape, 'cleanupSessionForDelete'>,
   target: SurfaceDeleteTarget,
 ) {
   return Effect.gen(function* () {
     const attemptedPtySessionIds: number[] = [];
     const warnings: SurfaceDeleteWarning[] = [];
     for (const { ptySession } of target.panes) {
-      if (
-        !ptySession ||
-        (ptySession.status !== "starting" && ptySession.status !== "running")
-      ) {
+      if (!ptySession || (ptySession.status !== 'starting' && ptySession.status !== 'running')) {
         continue;
       }
       attemptedPtySessionIds.push(ptySession.id);
@@ -336,7 +314,7 @@ function deleteLogsForPanes(panes: readonly SurfaceDeletePaneTarget[]) {
         error,
       );
       warnings.push({
-        code: "pty_log_delete_failed",
+        code: 'pty_log_delete_failed',
         paneId: pane.id,
         ptySessionId: ptySession.id,
       });
@@ -347,10 +325,10 @@ function deleteLogsForPanes(panes: readonly SurfaceDeletePaneTarget[]) {
 
 function isMissingFileError(error: unknown) {
   return (
-    typeof error === "object" &&
+    typeof error === 'object' &&
     error !== null &&
-    "code" in error &&
-    (error as { readonly code?: unknown }).code === "ENOENT"
+    'code' in error &&
+    (error as { readonly code?: unknown }).code === 'ENOENT'
   );
 }
 
@@ -365,15 +343,10 @@ function activePaneForSurface(
   if (focus?.activeSurfaceId !== surfaceId || focus.activePaneId === null) {
     return null;
   }
-  return panes.some((pane) => pane.id === focus.activePaneId)
-    ? focus.activePaneId
-    : null;
+  return panes.some((pane) => pane.id === focus.activePaneId) ? focus.activePaneId : null;
 }
 
-function ptySessionForPane(
-  ptySessions: readonly PtySessionRow[],
-  paneId: number,
-) {
+function ptySessionForPane(ptySessions: readonly PtySessionRow[], paneId: number) {
   const session = ptySessions.find((candidate) => candidate.paneId === paneId);
   if (!session) {
     return null;
@@ -400,7 +373,5 @@ function ptySessionForPane(
 }
 
 function decodeLayout(layoutJson: string): SurfaceLayoutNode {
-  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(
-    JSON.parse(layoutJson),
-  );
+  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(layoutJson));
 }

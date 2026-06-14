@@ -18,7 +18,7 @@ export const paletteCopy = {
     goDeeper: '/ to go deeper',
   },
   reviewStep: {
-    loadingSetupHooks: 'Reading setup hooks...',
+    loading: 'Reading setup hooks...',
   },
   wizardStep: {
     loading: 'Loading\u2026',
@@ -50,7 +50,7 @@ export const surfaceActionsCopy = {
   },
   deletePane: {
     title: 'Delete this pane?',
-    body: 'Its session is still running. Deleting the pane stops it.',
+    body: 'This session is still running. Isagi will delete the pane and stop the session.',
     confirm: 'Delete pane',
     cancel: 'Cancel',
   },
@@ -64,17 +64,15 @@ export const surfaceActionsCopy = {
      * the single-pane, all-live, and some-live shapes grammatically.
      */
     body: (paneCount: number, liveCount: number): string => {
-      const stays = 'The worktree itself stays.';
-      if (paneCount <= 1) {
-        return `Its session is still running. Deleting the surface stops it. ${stays}`;
-      }
-      if (liveCount >= paneCount) {
-        return `All ${paneCount} panes are still running. Deleting the surface stops them. ${stays}`;
-      }
-      const verb = liveCount === 1 ? 'is' : 'are';
-      const object = liveCount === 1 ? 'it' : 'them';
-      return `${liveCount} of its ${paneCount} panes ${verb} still running. Deleting the surface stops ${object} and closes the rest. ${stays}`;
+      const panes = paneCount === 1 ? '1 pane' : `${paneCount} panes`;
+      const sessions = liveCount === 1 ? '1 session is' : `${liveCount} sessions are`;
+      return `This will delete ${panes}. ${sessions} still running and will be stopped.`;
     },
+  },
+  renameSurface: {
+    placeholder: 'Type a surface title…',
+    emptyTitle: 'Surface title cannot be empty.',
+    titleTooLong: 'Surface title must be 80 characters or fewer.',
   },
 } as const;
 

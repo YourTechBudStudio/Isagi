@@ -5,12 +5,14 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   AgentHarness,
+  DeleteSurfaceOutput,
   DeleteProjectOutput,
   LaunchSessionOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
   PathSuggestOutput,
+  RenameSurfaceOutput,
   ReconcileWorkspaceInput,
   SetWorktreeEnvironmentFocusInput,
   SurfaceDetail,
@@ -36,6 +38,13 @@ import { resolveRuntimeUrl } from '../runtime/resolve.js';
 let cachedClient: RuntimeClient | null = null;
 let cachedRuntimeUrl: string | null = null;
 
+export class UserVisibleError extends Error {
+  constructor(readonly userMessage: string) {
+    super(userMessage);
+    this.name = 'UserVisibleError';
+  }
+}
+
 export function fetchWorkspace() {
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorkspace()));
 }
@@ -58,6 +67,24 @@ export function reconcileWorkspace(
 
 export function getSurfaceDetail(surfaceId: number): Effect.Effect<SurfaceDetail, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.getSurfaceDetail(surfaceId)));
+}
+
+export function renameSurfaceTitle(
+  surfaceId: number,
+  title: string,
+): Effect.Effect<RenameSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.renameSurfaceTitle(surfaceId, title)));
+}
+
+export function deleteSurface(surfaceId: number): Effect.Effect<DeleteSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.deleteSurface(surfaceId)));
+}
+
+export function deleteSurfacePane(
+  surfaceId: number,
+  paneId: number,
+): Effect.Effect<DeleteSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.deleteSurfacePane(surfaceId, paneId)));
 }
 
 export function setWorktreeEnvironmentFocus(
@@ -153,6 +180,9 @@ function getClient() {
 }
 
 export function formatRuntimeError(error: unknown) {
+  if (error instanceof UserVisibleError) {
+    return error.userMessage;
+  }
   if (error instanceof RuntimeApiError) {
     return `${runtimeErrorCopy.fromApiError(error.apiError)} (${runtimeErrorCopy.diagnostic(error.apiError)})`;
   }

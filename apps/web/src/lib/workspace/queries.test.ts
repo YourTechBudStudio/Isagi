@@ -10,10 +10,12 @@ import { clearToasts, useToastStore } from '../toast/index.js';
 import type { WorkspaceData } from './model.js';
 import {
   commitAddProjectSuccess,
+  commitDeleteSurfaceSuccess,
   commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
   commitRelocateProjectSuccess,
   selectSurfaceAndPersistFocus,
+  surfaceDetailQueryKey,
   workspaceQueryKey,
 } from './queries.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
@@ -111,6 +113,92 @@ test('launch success refetches workspace and selects the new surface locally', a
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
 });
 
+test('delete surface success refetches workspace and clears only stale local overrides', async () => {
+  clearToasts();
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, {
+    projects: [
+      project({
+        id: 1,
+        name: 'stale',
+        surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+      }),
+    ],
+  });
+  client.setQueryData(surfaceDetailQueryKey(501), { id: 501 });
+  useWorkspaceStore.setState({
+    activeSurfaceByWorktreeId: { 10: 501, 20: 999 },
+    activePaneBySurfaceId: { 501: 601, 999: 1001 },
+  });
+
+  await commitDeleteSurfaceSuccess(client, {
+    worktreeId: 10,
+    surfaceId: 501,
+    operation: 'surface',
+    output: {
+      deletedSurfaceId: 501,
+      deletedPaneIds: [601],
+      attemptedPtySessionIds: [701],
+      warnings: [{ code: 'pty_kill_failed', paneId: 601, ptySessionId: 701 }],
+    },
+    fetchWorkspaceData: async () => ({
+      projects: [
+        project({
+          id: 1,
+          name: 'fresh',
+          surfaces: [{ id: 502, kind: 'terminal', title: 'Terminal 2', attention: 'idle' }],
+        }),
+      ],
+    }),
+  });
+
+  assert.equal(client.getQueryData(surfaceDetailQueryKey(501)), undefined);
+  assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 20: 999 });
+  assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, { 999: 1001 });
+  assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
+  const toast = useToastStore
+    .getState()
+    .toasts.find((candidate) => candidate.id === 'surface-cleanup-pending:501');
+  assert.equal(toast?.title, 'Surface deleted.');
+  assert.equal(toast?.subtitle, 'Cleanup will retry in the background.');
+  clearToasts();
+});
+
+test('delete pane success clears only the deleted pane override', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData(surfaceDetailQueryKey(501), { id: 501 });
+  useWorkspaceStore.setState({
+    activeSurfaceByWorktreeId: { 10: 501 },
+    activePaneBySurfaceId: { 501: 601 },
+  });
+
+  await commitDeleteSurfaceSuccess(client, {
+    worktreeId: 10,
+    surfaceId: 501,
+    paneId: 601,
+    operation: 'pane',
+    output: {
+      deletedSurfaceId: null,
+      deletedPaneIds: [601],
+      attemptedPtySessionIds: [],
+      warnings: [],
+    },
+    fetchWorkspaceData: async () => ({
+      projects: [
+        project({
+          id: 1,
+          name: 'fresh',
+          surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+        }),
+      ],
+    }),
+  });
+
+  assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 10: 501 });
+  assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, {});
+  assert.deepEqual(client.getQueryData(surfaceDetailQueryKey(501)), { id: 501 });
+});
+
 test('surface focus persistence ignores stale success responses', async () => {
   const originalFetch = globalThis.fetch;
   const hadWindow = 'window' in globalThis;
@@ -174,6 +262,103 @@ test('surface focus persistence ignores stale success responses', async () => {
     requests[0]!.resolve();
     await Promise.resolve();
     assert.equal(activeSurfaceIdFromCache(), 102);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (hadWindow) {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: originalWindow,
+      });
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+    queryClient.clear();
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
+  }
+});
+
+test('surface delete prevents stale focus persistence from restoring deleted surface', async () => {
+  const originalFetch = globalThis.fetch;
+  const hadWindow = 'window' in globalThis;
+  const originalWindow = globalThis.window;
+  const requests: SurfaceFocusRequest[] = [];
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      isagi: {
+        getRuntimeUrl: () => Promise.resolve('http://runtime.test'),
+      },
+    },
+  });
+
+  globalThis.fetch = ((_input, init) =>
+    new Promise<Response>((resolve) => {
+      const body = JSON.parse(String(init?.body)) as { readonly activeSurfaceId: number };
+      requests.push({
+        surfaceId: body.activeSurfaceId,
+        resolve: () =>
+          resolve(
+            new Response(
+              JSON.stringify({
+                data: {
+                  worktreeId: 10,
+                  activeSurfaceId: body.activeSurfaceId,
+                  activePaneId: null,
+                },
+                meta: { requestId: `focus-${body.activeSurfaceId}` },
+              }),
+              { status: 200 },
+            ),
+          ),
+      });
+    })) as typeof fetch;
+
+  try {
+    queryClient.clear();
+    queryClient.setQueryData<WorkspaceData>(workspaceQueryKey, {
+      projects: [
+        project({
+          id: 1,
+          name: 'existing',
+          surfaces: [
+            { id: 101, kind: 'agent', title: 'Pi', attention: 'idle' },
+            { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
+          ],
+        }),
+      ],
+    });
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: { 10: 101 } });
+
+    selectSurfaceAndPersistFocus(10, 101);
+    await waitFor(() => requests.length === 1);
+
+    await commitDeleteSurfaceSuccess(queryClient, {
+      worktreeId: 10,
+      surfaceId: 101,
+      operation: 'surface',
+      output: {
+        deletedSurfaceId: 101,
+        deletedPaneIds: [201],
+        attemptedPtySessionIds: [],
+        warnings: [],
+      },
+      fetchWorkspaceData: async () => ({
+        projects: [
+          project({
+            id: 1,
+            name: 'fresh',
+            surfaces: [{ id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+          }),
+        ],
+      }),
+    });
+
+    assert.notEqual(activeSurfaceIdFromCache(), 101);
+    requests[0]!.resolve();
+    await Promise.resolve();
+    assert.notEqual(activeSurfaceIdFromCache(), 101);
+    assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, {});
   } finally {
     globalThis.fetch = originalFetch;
     if (hadWindow) {

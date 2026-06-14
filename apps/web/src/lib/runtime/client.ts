@@ -18,6 +18,8 @@ import {
   type LaunchSessionOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
+  type DeleteSurfaceOutput,
+  type RenameSurfaceOutput,
   type WorktreeEnvironmentFocusOutput,
   type ActiveContextOutput,
   type ActiveContextPersistenceInput,
@@ -67,6 +69,26 @@ export interface RuntimeClient {
   readonly getSurfaceDetail: (
     surfaceId: number,
   ) => Effect.Effect<SurfaceDetail, RuntimeEndpointError<typeof apiEndpoints.surfaces.get>>;
+  readonly renameSurfaceTitle: (
+    surfaceId: number,
+    title: string,
+  ) => Effect.Effect<
+    RenameSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.rename>
+  >;
+  readonly deleteSurface: (
+    surfaceId: number,
+  ) => Effect.Effect<
+    DeleteSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.delete>
+  >;
+  readonly deleteSurfacePane: (
+    surfaceId: number,
+    paneId: number,
+  ) => Effect.Effect<
+    DeleteSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.deletePane>
+  >;
   readonly setWorktreeEnvironmentFocus: (
     worktreeId: number,
     input: SetWorktreeEnvironmentFocusInput,
@@ -146,6 +168,11 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
     reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),
     getSurfaceDetail: (surfaceId) => request(apiEndpoints.surfaces.get, { surfaceId }),
+    renameSurfaceTitle: (surfaceId, title) =>
+      request(apiEndpoints.surfaces.rename, { surfaceId }, { title }),
+    deleteSurface: (surfaceId) => request(apiEndpoints.surfaces.delete, { surfaceId }),
+    deleteSurfacePane: (surfaceId, paneId) =>
+      request(apiEndpoints.surfaces.deletePane, { surfaceId, paneId }),
     setWorktreeEnvironmentFocus: (worktreeId, input) =>
       request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
     launchAgentSession: (worktreeId, harness) =>

@@ -14,7 +14,12 @@ import type {
 } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { PaneDeleteButton } from '../../components/PaneDeleteButton.js';
 import { ptyCopy, ptySocketErrorCopy } from '../../copy/index.js';
+import {
+  handleDispatchedCommandError,
+  useCommandDispatcher,
+} from '../../lib/palette/dispatcher.js';
 import { resolveActivePaneId } from '../../lib/workspace/model.js';
 import { formatRuntimeError, resolvePtyWebSocketUrl } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -28,6 +33,7 @@ type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 export function PtySurface({ detail }: PtySurfaceProps) {
   const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
   const focusPane = useWorkspaceStore((state) => state.focusPane);
+  const dispatchCommand = useCommandDispatcher();
   const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
 
   useEffect(() => {
@@ -53,6 +59,14 @@ export function PtySurface({ detail }: PtySurfaceProps) {
           surface={detail}
           focused={pane.id === focusedPaneId}
           onFocus={() => focusPane(detail.id, pane.id)}
+          onDelete={() => {
+            focusPane(detail.id, pane.id);
+            void dispatchCommand('delete-active-pane', {
+              worktreeId: String(detail.worktreeId),
+              surfaceId: String(detail.id),
+              paneId: String(pane.id),
+            }).catch(handleDispatchedCommandError);
+          }}
         />
       ))}
     </div>
@@ -64,11 +78,13 @@ function PtyPaneShell({
   surface,
   focused,
   onFocus,
+  onDelete,
 }: {
   readonly pane: SurfacePane;
   readonly surface: SurfaceDetail;
   readonly focused: boolean;
   readonly onFocus: () => void;
+  readonly onDelete: () => void;
 }) {
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
   const session = pane.ptySession;
@@ -105,7 +121,7 @@ function PtyPaneShell({
     <section
       aria-label={pane.title}
       onPointerDown={onFocus}
-      className={`relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-opacity duration-ui ease-expo ${
+      className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-opacity duration-ui ease-expo ${
         focused ? 'opacity-100' : 'opacity-55'
       } ${errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'} ${
         dimmed ? 'bg-elevated/38' : ''
@@ -139,6 +155,7 @@ function PtyPaneShell({
           <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptyPane}</span>
         </div>
       )}
+      <PaneDeleteButton onDelete={onDelete} />
     </section>
   );
 }

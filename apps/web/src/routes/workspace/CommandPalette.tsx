@@ -39,6 +39,7 @@ import type {
   ArgValues,
   Option,
   PaletteCommand,
+  PaletteContext,
   PaletteEntry,
   ReviewContent,
   ReviewChoice,
@@ -180,9 +181,11 @@ export function CommandPalette() {
     setReviewContent(null);
     setReviewError(null);
     setReviewLoading(false);
-    setStepIndex(firstUnfilledStep(autostart.command.args, initialValues));
+    const initialStepIndex = firstUnfilledStep(autostart.command.args, initialValues);
+    setStepIndex(initialStepIndex);
     setCommand(autostart.command);
     setActiveEntryId(autostart.entryId);
+    setQuery(initialTextQuery(autostart.command.args, initialStepIndex, ctx, initialValues));
   }, [open, autostartEntryId, autostartValues, allEntries, ctx]);
 
   const args = command?.args ?? [];
@@ -193,7 +196,7 @@ export function CommandPalette() {
       if (spec.kind === 'text') {
         return {
           kind: 'text' as const,
-          value: query.trim() || spec.default?.(ctx, values) || '',
+          value: query.trim(),
           placeholder: spec.placeholder,
         };
       }
@@ -421,10 +424,12 @@ export function CommandPalette() {
         ]),
     );
 
+    const initialStepIndex = firstUnfilledStep(next.args ?? [], initialValues);
+
     finishedRef.current = false;
     setCommand(next);
     setActiveEntryId(entryId);
-    setStepIndex(firstUnfilledStep(next.args ?? [], initialValues));
+    setStepIndex(initialStepIndex);
     setValues(initialValues);
     setPayloads({});
     setLabels(initialLabels);
@@ -434,7 +439,7 @@ export function CommandPalette() {
     setReviewContent(null);
     setReviewError(null);
     setReviewLoading(false);
-    setQuery('');
+    setQuery(initialTextQuery(next.args ?? [], initialStepIndex, ctx, initialValues));
   };
 
   const finish = () => {
@@ -536,7 +541,7 @@ export function CommandPalette() {
   };
 
   const acceptValue = (value: string, label: string, payload?: unknown) => {
-    if (!command || !spec || !value) {
+    if (!command || !spec || (!value && spec.kind !== 'text')) {
       return;
     }
     const nextValues = { ...values, [spec.key]: value };
@@ -863,6 +868,16 @@ export function CommandPalette() {
   );
 }
 
+function initialTextQuery(
+  args: readonly ArgSpec[],
+  stepIndex: number,
+  ctx: PaletteContext,
+  values: ArgValues,
+) {
+  const spec = args[stepIndex];
+  return spec?.kind === 'text' ? (values[spec.key] ?? spec.default?.(ctx, values) ?? '') : '';
+}
+
 function EntryList({
   items,
   sel,
@@ -1042,7 +1057,7 @@ function ReviewStep({
   if (loading || !content) {
     return (
       <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">
-        {paletteCopy.reviewStep.loadingSetupHooks}
+        {paletteCopy.reviewStep.loading}
       </p>
     );
   }

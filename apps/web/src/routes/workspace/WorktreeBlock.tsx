@@ -1,7 +1,14 @@
+import { Pencil, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { ContextMenu } from '../../components/ContextMenu.js';
+import { surfaceActionsCopy } from '../../copy/index.js';
 import { EASE_EXPO, surfaceTransition, uiTransition } from '../../lib/motion.js';
+import {
+  handleDispatchedCommandError,
+  useCommandDispatcher,
+} from '../../lib/palette/dispatcher.js';
 import { worktreeSubtitle } from '../../lib/workspace/selectors.js';
 import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Worktree, Surface } from '../../lib/workspace/types.js';
@@ -62,6 +69,7 @@ export function WorktreeBlock({
                 {worktree.surfaces.map((surface) => (
                   <SurfaceRow
                     key={surface.id}
+                    worktreeId={worktree.id}
                     surface={surface}
                     active={surface.id === activeSurfaceId}
                     pillId={`surface-pill-${worktree.id}`}
@@ -82,37 +90,65 @@ export function WorktreeBlock({
 }
 
 function SurfaceRow({
+  worktreeId,
   surface,
   active,
   pillId,
   onSelect,
 }: {
+  worktreeId: number;
   surface: Surface;
   active: boolean;
   pillId: string;
   onSelect: () => void;
 }) {
   const Icon = surfaceIcon(surface.kind);
+  const dispatchCommand = useCommandDispatcher();
+
+  const dispatchSurfaceCommand = (commandId: 'rename-active-surface' | 'delete-active-surface') => {
+    onSelect();
+    void dispatchCommand(commandId, {
+      worktreeId: String(worktreeId),
+      surfaceId: String(surface.id),
+      title: surface.title,
+    }).catch(handleDispatchedCommandError);
+  };
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={active ? 'true' : undefined}
-      className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-micro ease-expo ${
-        active ? 'text-fg' : 'text-fg-muted hover:bg-white/5 hover:text-fg'
-      }`}
+    <ContextMenu
+      items={[
+        {
+          label: surfaceActionsCopy.menu.rename,
+          icon: Pencil,
+          onSelect: () => dispatchSurfaceCommand('rename-active-surface'),
+        },
+        {
+          label: surfaceActionsCopy.menu.delete,
+          icon: Trash2,
+          danger: true,
+          onSelect: () => dispatchSurfaceCommand('delete-active-surface'),
+        },
+      ]}
     >
-      {/* the neutral lift slides between rows via shared layout */}
-      {active && (
-        <motion.span
-          layoutId={pillId}
-          transition={{ ...uiTransition, ease: EASE_EXPO }}
-          className="absolute inset-0 rounded-lg bg-white/8"
-        />
-      )}
-      <Icon size={14} className={`relative z-10 ${active ? 'text-fg' : 'text-fg-subtle'}`} />
-      <span className="relative z-10 truncate">{surface.title}</span>
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={active ? 'true' : undefined}
+        className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-micro ease-expo ${
+          active ? 'text-fg' : 'text-fg-muted hover:bg-white/5 hover:text-fg'
+        }`}
+      >
+        {/* the neutral lift slides between rows via shared layout */}
+        {active && (
+          <motion.span
+            layoutId={pillId}
+            transition={{ ...uiTransition, ease: EASE_EXPO }}
+            className="absolute inset-0 rounded-lg bg-white/8"
+          />
+        )}
+        <Icon size={14} className={`relative z-10 ${active ? 'text-fg' : 'text-fg-subtle'}`} />
+        <span className="relative z-10 truncate">{surface.title}</span>
+      </button>
+    </ContextMenu>
   );
 }

@@ -1,12 +1,9 @@
-import { Schema } from "effect";
+import { Schema } from 'effect';
 
-import {
-  surfaceLayoutNodeSchema,
-  type SurfaceLayoutNode,
-} from "@isagi/contracts";
+import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contracts';
 
-import { prunePaneFromLayout } from "./layout.js";
-import type { SurfaceDeleteTarget } from "./types.js";
+import { prunePaneFromLayout } from './layout.js';
+import type { SurfaceDeleteTarget } from './types.js';
 
 export interface SurfacePaneDeletePlan {
   readonly deletedSurfaceId: number | null;
@@ -32,10 +29,7 @@ export function planSurfacePaneDelete(
     return deleteSurfacePlan(target);
   }
 
-  const nextLayout = prunePaneFromLayout(
-    decodeLayout(target.surface.layoutJson),
-    paneId,
-  );
+  const nextLayout = prunePaneFromLayout(decodeLayout(target.surface.layoutJson), paneId);
   if (!nextLayout) {
     return deleteSurfacePlan(target);
   }
@@ -56,7 +50,5 @@ function deleteSurfacePlan(target: SurfaceDeleteTarget): SurfacePaneDeletePlan {
 }
 
 function decodeLayout(layoutJson: string) {
-  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(
-    JSON.parse(layoutJson),
-  );
+  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(layoutJson));
 }

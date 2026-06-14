@@ -9,6 +9,7 @@ import {
 } from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
+import { surfaceActionCommands } from './commands/surface-actions.js';
 import { GLOBAL_COMMANDS } from './registry.js';
 import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
@@ -31,6 +32,10 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
 
   const worktree = ctx.activeWorktree;
   if (worktree) {
+    const activeSurfaceTitle = ctx.activeSurface?.title;
+    const activeSurfaceCommands = surfaceActionCommands.filter(
+      (command) => command.available?.(ctx) ?? true,
+    );
     const startAgentCommand: PaletteCommand = {
       id: `worktree:${worktree.id}:start-agent-session`,
       label: 'Start agent session',
@@ -53,6 +58,22 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         await startAgentSessionFromPalette(worktree.id, values.harness as AgentHarness);
       },
     };
+
+    for (const command of activeSurfaceCommands) {
+      const sub =
+        command.id === 'delete-active-pane'
+          ? (activeSurfaceTitle ?? 'active pane')
+          : activeSurfaceTitle;
+      entries.push({
+        id: command.id,
+        label: command.label,
+        icon: command.icon,
+        group: command.group,
+        command,
+        run: () => command.run({}, ctx),
+        ...(sub ? { sub } : {}),
+      });
+    }
 
     entries.push(
       {

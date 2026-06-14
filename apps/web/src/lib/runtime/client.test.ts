@@ -3,7 +3,14 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import type { AddProjectOutput, ApiError, Project, WorkspaceSnapshot } from '@isagi/contracts';
+import type {
+  AddProjectOutput,
+  ApiError,
+  DeleteSurfaceOutput,
+  Project,
+  RenameSurfaceOutput,
+  WorkspaceSnapshot,
+} from '@isagi/contracts';
 
 import {
   createRuntimeClient,
@@ -43,6 +50,18 @@ const addProjectOutput = {
   projectId: project.id,
   alreadyExisted: false,
 } satisfies AddProjectOutput;
+
+const renameSurfaceOutput = {
+  surfaceId: 7,
+  title: 'Terminal',
+} satisfies RenameSurfaceOutput;
+
+const deleteSurfaceOutput = {
+  deletedSurfaceId: 7,
+  deletedPaneIds: [11],
+  attemptedPtySessionIds: [13],
+  warnings: [],
+} satisfies DeleteSurfaceOutput;
 
 const originalFetch = globalThis.fetch;
 
@@ -99,6 +118,44 @@ test('runtime client interpolates path params', async () => {
 
   assert.equal(requestedUrl, 'http://runtime.test/api/v1/projects/42');
   assert.deepEqual(output, { projectId: 42, deleted: true });
+});
+
+test('runtime client calls surface title and delete endpoints', async () => {
+  const requests: Array<{ readonly url: string; readonly method: string; readonly body: string }> =
+    [];
+  globalThis.fetch = ((input, init) => {
+    requests.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: String(init?.body ?? ''),
+    });
+    const data = requests.length === 1 ? renameSurfaceOutput : deleteSurfaceOutput;
+    return Promise.resolve(
+      new Response(JSON.stringify({ data, meta: { requestId: `req-${requests.length}` } }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  const client = createRuntimeClient('http://runtime.test');
+  assert.deepEqual(await Effect.runPromise(client.renameSurfaceTitle(7, 'Terminal')), {
+    surfaceId: 7,
+    title: 'Terminal',
+  });
+  assert.deepEqual(await Effect.runPromise(client.deleteSurfacePane(7, 11)), deleteSurfaceOutput);
+
+  assert.deepEqual(requests, [
+    {
+      url: 'http://runtime.test/api/v1/surfaces/7/title',
+      method: 'PUT',
+      body: JSON.stringify({ title: 'Terminal' }),
+    },
+    {
+      url: 'http://runtime.test/api/v1/surfaces/7/panes/11',
+      method: 'DELETE',
+      body: '',
+    },
+  ]);
 });
 
 test('runtime client decodes endpoint API errors before base API errors', async () => {
