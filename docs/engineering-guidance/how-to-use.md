@@ -24,7 +24,30 @@ Review the change against each relevant lens. The lenses are equal priority; do 
 
 Prefer findings that explain consequence. A good finding says what could break, drift, become hard to debug, or become hard to change.
 
-Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material. If a finding could fit multiple lenses, report it under the lens that best describes the primary failure rather than duplicating it.
+Use the lens-specific severity mapping. When two severities seem plausible, choose the lower severity unless the consequence is concrete and material. If a finding could fit multiple lenses, report it under the lens that best describes the primary failure rather than duplicating it. Hard-to-review working code is usually a **Concern**, not a **Blocker**, unless the structure makes behavior ownership, runtime lifecycle, or correctness impossible to assess.
+
+## Consuming Review Output
+
+When the `engineering-guidance-reviewer` returns, it hands back two distinct kinds of output. Handle them differently; do not collapse them into one list.
+
+### Severity Findings
+
+Each finding is a defect on the ladder defined in [`README.md`](./README.md). Act by tier:
+
+- **Blocker** - must fix before returning the change to the user; re-review after the fix.
+- **Concern** - fix directly when the resolution is clear; surface to the user when it needs a design-level tradeoff or conflicts with their stated direction; re-review only if the fix is substantial.
+- **Nit** - terminal; apply only if trivial and safe; never a reason to re-review.
+
+Never silently dismiss a Blocker or Concern. Dismissing either one requires explicit user acknowledgement.
+
+### Architectural Reflection (Step-Back)
+
+Separately from the ladder, the reviewer may return an `Architectural Reflection`: a proposal that a simpler mental model or different solution shape would serve the goal better. It is not a finding to fix, and it never triggers a re-review. Weigh it as a decision, not a reflex patch:
+
+- **In scope and clearly aligned with the plan** - you may adopt it, but as a deliberate "yes, this fits," not an autopilot edit.
+- **Beyond the change's scope, structural, or in tension with the plan** - stop and bring the user in, offering two paths: re-architect now, or ship the current change and defer the restructuring. Where a deferred restructuring lands is the user's call.
+
+You own the plan and intent judgment; the reviewer only estimates the technical blast radius. Do not silently fold a large or scope-expanding re-architecture into the change.
 
 ## Effect Adoption Posture
 
@@ -47,14 +70,6 @@ Use these primitives where they protect real reasoning:
 - **Branded or opaque domain types** for identifiers, refs, paths, tokens, or other primitives that cross boundaries or could be confused in dangerous ways.
 
 Contracts are the exception boundary: they may use Effect Schema for serializable DTOs, but they must not expose runtime services, layers, fibers, Effect error classes, or domain implementation internals.
-
-## Severity Semantics
-
-- **Blocker** - material divergence from guidance; must fix before returning the change; re-review after the fix.
-- **Concern** - real consequence, but not necessarily a stop-ship defect; fix directly when clear or surface the tradeoff.
-- **Nit** - optional improvement; terminal and never a reason for re-review on its own.
-
-Hard-to-review working code is usually a **Concern**, not a **Blocker**, unless the structure makes behavior ownership, runtime lifecycle, or correctness impossible to assess.
 
 ## Pre-MVP Interface Evolution
 

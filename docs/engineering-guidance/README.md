@@ -23,6 +23,13 @@ The lenses are equal-priority review tools. A change does not need to touch ever
 - [`design-fidelity-and-voice.md`](./lenses/design-fidelity-and-voice.md) - visual and voice adherence to Isagi's design language on user-facing surfaces, reviewed against the `design-system` skill.
 - [`reviewability-and-verification.md`](./lenses/reviewability-and-verification.md) - verification depth, dependency justification, review evidence, and completed-work trust.
 
+## Reviewer Output
+
+The reviewer returns two distinct kinds of output. See [`how-to-use.md`](./how-to-use.md) for how the primary agent should consume each.
+
+- **Severity findings** - defects on the ladder below.
+- **`Architectural Reflection` (Step-Back)** - a proposal that a different solution shape would serve the goal better. It sits outside the ladder, is weighed as a decision rather than applied as a fix, and never triggers a re-review.
+
 ## Severity Ladder
 
 Each lens defines its own `Blocker`, `Concern`, and `Nit` calibration.
