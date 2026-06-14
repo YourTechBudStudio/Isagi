@@ -1,9 +1,9 @@
 ---
 title: PTY session close/delete lifecycle
-status: todo
+status: done
 milestone: worktree-continuity
 created: 2026-06-12
-updated: 2026-06-12
+updated: 2026-06-14
 depends_on: [worktree-continuity-agent-sessions]
 ---
 
