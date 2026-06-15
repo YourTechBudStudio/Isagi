@@ -11,6 +11,7 @@ import {
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
+import { isPlatformModifierShortcut } from '../../lib/platform.js';
 import {
   useWorkspace,
   usePersistActiveContextSelection,
@@ -140,7 +141,7 @@ export function WorkspacePage() {
         setZen(false);
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key === '.') {
+      if (isPlatformModifierShortcut(event) && event.key === '.') {
         event.preventDefault();
         setZen(!zen);
       }
@@ -155,7 +156,7 @@ export function WorkspacePage() {
         event.defaultPrevented ||
         paletteOpen ||
         isEditableEventTarget(event.target) ||
-        !(event.metaKey || event.ctrlKey) ||
+        !isPlatformModifierShortcut(event) ||
         event.key.toLowerCase() !== 'w' ||
         !activeSurface
       ) {

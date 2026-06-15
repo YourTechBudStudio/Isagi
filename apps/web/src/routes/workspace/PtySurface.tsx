@@ -232,12 +232,13 @@ function XtermPane({
     let resizeObserver: ResizeObserver | null = null;
     let pendingResizeFrame: number | null = null;
     let warnedFitUnavailable = false;
+    const terminalFontFamily = terminalFontFamilyFromElement(container);
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: true,
       cursorBlink: true,
       disableStdin: session.status !== 'running',
-      fontFamily: '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace',
+      fontFamily: terminalFontFamily,
       fontSize: 12,
       lineHeight: 1.35,
       macOptionClickForcesSelection: true,
@@ -575,6 +576,11 @@ function fitTerminalToHost(terminal: Terminal, host: HTMLElement): TerminalFitRe
 function cssPixelValue(value: string) {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function terminalFontFamilyFromElement(element: HTMLElement) {
+  const fontFamily = window.getComputedStyle(element).fontFamily.trim();
+  return fontFamily || 'monospace';
 }
 
 function terminalThemeFromTokens() {

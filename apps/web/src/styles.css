@@ -15,6 +15,7 @@
   --font-display: 'Sora Variable', ui-sans-serif, system-ui, sans-serif;
   --font-sans: 'Source Sans 3 Variable', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
+  --font-terminal: var(--font-mono);
 
   /* Surfaces — the deep canvas and its elevations */
   --color-canvas: #24273a;
@@ -180,6 +181,7 @@ body::after {
 }
 
 .isagi-xterm {
+  font-family: var(--font-terminal);
   background: color-mix(in srgb, var(--color-elevated) 50%, var(--color-canvas));
 }
 

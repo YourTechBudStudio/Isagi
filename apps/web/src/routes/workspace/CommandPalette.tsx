@@ -50,7 +50,7 @@ import type {
   ReviewChoice,
   ReviewContent,
 } from '../../lib/palette/types.js';
-import { modKey } from '../../lib/platform.js';
+import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -99,8 +99,7 @@ export function CommandPalette() {
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const mod = event.metaKey || event.ctrlKey;
-      if (!mod) {
+      if (!isPlatformModifierShortcut(event)) {
         return;
       }
       const key = event.key.toLowerCase();
