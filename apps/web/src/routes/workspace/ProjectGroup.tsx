@@ -1,5 +1,7 @@
 import { Plus } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 
+import { surfaceTransition } from '../../lib/motion.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type { PresentProject } from '../../lib/workspace/types.js';
 import { ProjectGlyph } from './ProjectGlyph.js';
@@ -43,17 +45,27 @@ export function ProjectGroup({
         </button>
       </div>
 
-      {project.worktrees.map((worktree) => (
-        <WorktreeBlock
-          key={worktree.id}
-          projectId={project.id}
-          worktree={worktree}
-          active={worktree.id === activeWorktreeId}
-          activeSurfaceId={activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId}
-          onSelectWorktree={(worktreeId) => onSelectWorktree(project.id, worktreeId)}
-          onSelectSurface={onSelectSurface}
-        />
-      ))}
+      {/* A removed worktree collapses in place; the rows below reflow up
+          naturally, and the rows above stay put. */}
+      <AnimatePresence initial={false}>
+        {project.worktrees.map((worktree) => (
+          <motion.div
+            key={worktree.id}
+            exit={{ height: 0, opacity: 0 }}
+            transition={surfaceTransition}
+            className="overflow-hidden"
+          >
+            <WorktreeBlock
+              projectId={project.id}
+              worktree={worktree}
+              active={worktree.id === activeWorktreeId}
+              activeSurfaceId={activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId}
+              onSelectWorktree={(worktreeId) => onSelectWorktree(project.id, worktreeId)}
+              onSelectSurface={onSelectSurface}
+            />
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }

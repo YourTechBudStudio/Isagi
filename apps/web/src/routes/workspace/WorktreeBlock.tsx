@@ -105,24 +105,33 @@ export function WorktreeBlock({
             transition={surfaceTransition}
             className="overflow-hidden"
           >
-            {worktree.surfaces.length > 0 ? (
-              <div className="my-1 ml-5 flex flex-col gap-0.5 border-l-2 border-blue/50 pl-2.75">
+            <div className="my-1 ml-5 flex flex-col gap-0.5 border-l-2 border-blue/50 pl-2.75">
+              {/* A removed surface collapses on its own; siblings below reflow
+                  up while siblings above hold still. */}
+              <AnimatePresence initial={false}>
                 {worktree.surfaces.map((surface) => (
-                  <SurfaceRow
+                  <motion.div
                     key={surface.id}
-                    worktreeId={worktree.id}
-                    surface={surface}
-                    active={surface.id === activeSurfaceId}
-                    pillId={`surface-pill-${worktree.id}`}
-                    onSelect={() => onSelectSurface(worktree.id, surface.id)}
-                  />
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={surfaceTransition}
+                    className="overflow-hidden"
+                  >
+                    <SurfaceRow
+                      worktreeId={worktree.id}
+                      surface={surface}
+                      active={surface.id === activeSurfaceId}
+                      pillId={`surface-pill-${worktree.id}`}
+                      onSelect={() => onSelectSurface(worktree.id, surface.id)}
+                    />
+                  </motion.div>
                 ))}
-              </div>
-            ) : (
-              <p className="my-1 ml-5 border-l-2 border-blue/50 py-1 pl-3.75 font-mono text-[10.5px] text-fg-subtle opacity-60">
-                {'// no surfaces yet'}
-              </p>
-            )}
+              </AnimatePresence>
+              {worktree.surfaces.length === 0 && (
+                <p className="py-1 pl-1 font-mono text-[10.5px] text-fg-subtle opacity-60">
+                  {'// no surfaces yet'}
+                </p>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

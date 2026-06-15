@@ -24,10 +24,14 @@ const APP_VERSION = '0.0.1';
  * The two sections share one `LayoutGroup`, and each project carries a stable
  * `layoutId`. Because a project is mounted in exactly one section at a time, a
  * project that flips status *travels* between the sections as a single element
- * (resizing from the group to the row) rather than disappearing from one place
- * and reappearing in another. `layout` on every row also lets the Active list
- * close the gap a departing project leaves and the Disconnected list make room
- * for an arriving one.
+ * rather than disappearing from one place and reappearing in another. Each row
+ * uses `layout="position"` (not full `layout`): it animates only its *position*
+ * — closing the gap a departing project leaves, or making room for an arriving
+ * one — and never its *size*. Animating size here would scale the whole project
+ * subtree whenever anything inside it (a worktree, a surface) is added or
+ * removed, dragging unrelated rows around. Internal size changes instead reflow
+ * naturally, and the removed item plays its own local collapse (see
+ * {@link ./ProjectGroup} and {@link ./WorktreeBlock}).
  */
 export function Rail() {
   const {
@@ -65,7 +69,7 @@ export function Rail() {
             {presentProjects.map((project) => (
               <motion.div
                 key={project.id}
-                layout
+                layout="position"
                 layoutId={`project-${project.id}`}
                 transition={surfaceTransition}
                 className="mt-4 first:mt-0"
@@ -100,7 +104,7 @@ export function Rail() {
           {missingProjects.map((project) => (
             <motion.div
               key={project.id}
-              layout
+              layout="position"
               layoutId={`project-${project.id}`}
               transition={surfaceTransition}
             >
