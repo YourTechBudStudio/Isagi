@@ -72,10 +72,20 @@ export interface PtyAttachment {
   readonly unsubscribe: () => void;
 }
 
+export interface PtyAttachmentPlan {
+  readonly session: PtySessionRow;
+  readonly replayBytes: number | null;
+  readonly live: boolean;
+  readonly replaySource: 'backend' | 'file_log';
+}
+
 export interface PtyService {
   readonly launch: (
     input: LaunchPtySessionInput,
   ) => Effect.Effect<LaunchSessionOutput, PtyLaunchError>;
+  readonly getAttachmentPlan: (input: {
+    readonly ptySessionId: number;
+  }) => Effect.Effect<PtyAttachmentPlan, PtyAttachError>;
   readonly attach: (input: {
     readonly ptySessionId: number;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
@@ -226,39 +236,22 @@ export const PtyServiceLive = Layer.scoped(
             ptySessionId: metadata.ptySessionId,
           } satisfies LaunchSessionOutput;
         }),
+      getAttachmentPlan: (input) => getAttachmentPlan(repository, backend, input.ptySessionId),
       attach: (input) =>
         Effect.gen(function* () {
-          const session = yield* repository.findSession(input.ptySessionId);
-          if (!session) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'session_not_found',
-                message: `PTY session ${input.ptySessionId} was not found.`,
-                ptySessionId: input.ptySessionId,
-              }),
-            );
-          }
-
-          if (session.status !== 'running') {
+          const plan = yield* getAttachmentPlan(repository, backend, input.ptySessionId);
+          if (!plan.live) {
             return {
-              session,
+              session: plan.session,
               attachmentId: null,
-              replayBytes: replayBytesForSession(session),
+              replayBytes: plan.replayBytes,
               live: false,
               unsubscribe: () => {},
             } satisfies PtyAttachment;
           }
 
+          const session = plan.session;
           const ref = yield* decodeBackendRef(session);
-          if (session.backend !== backend.name) {
-            return yield* Effect.fail(
-              new PtyServiceError({
-                code: 'backend_unavailable',
-                message: `PTY backend ${session.backend} is not active in this runtime process.`,
-                ptySessionId: session.id,
-              }),
-            );
-          }
           yield* detachActiveAttachment(activeAttachments, session.id);
           const attachResult = yield* backend
             .attach({
@@ -302,7 +295,7 @@ export const PtyServiceLive = Layer.scoped(
           return {
             session,
             attachmentId,
-            replayBytes: replayBytesForSession(session),
+            replayBytes: plan.replayBytes,
             live: true,
             unsubscribe: () => {
               void Effect.runPromise(
@@ -415,6 +408,43 @@ export const PtyServiceLive = Layer.scoped(
     );
   }),
 );
+
+function getAttachmentPlan(
+  repository: PtyRepositoryService,
+  backend: PtyBackendShape,
+  ptySessionId: number,
+) {
+  return Effect.gen(function* () {
+    const session = yield* repository.findSession(ptySessionId);
+    if (!session) {
+      return yield* Effect.fail(
+        new PtyServiceError({
+          code: 'session_not_found',
+          message: `PTY session ${ptySessionId} was not found.`,
+          ptySessionId,
+        }),
+      );
+    }
+
+    const live = session.status === 'running';
+    if (live && session.backend !== backend.name) {
+      return yield* Effect.fail(
+        new PtyServiceError({
+          code: 'backend_unavailable',
+          message: `PTY backend ${session.backend} is not active in this runtime process.`,
+          ptySessionId: session.id,
+        }),
+      );
+    }
+
+    return {
+      session,
+      replayBytes: replayBytesForSession(session),
+      live,
+      replaySource: session.logMode === 'backend_file' ? 'file_log' : 'backend',
+    } satisfies PtyAttachmentPlan;
+  });
+}
 
 function startStatusPolling(
   repository: PtyRepositoryService,

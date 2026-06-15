@@ -8,6 +8,7 @@ import {
   ptyWebSocketInputMessageSchema,
   type ApiError,
   type PtyWebSocketErrorCode,
+  type PtyWebSocketInputMessage,
   type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
@@ -25,6 +26,9 @@ const runWithRuntime =
     options?: { readonly signal?: AbortSignal | undefined },
   ) =>
     runtime.runPromise(effect, options);
+
+const websocketAttachmentClaims = new Map<number, symbol>();
+const websocketAttachmentTurns = new Map<number, Promise<void>>();
 
 export function registerPtyApi(
   fastify: FastifyInstance,
@@ -96,67 +100,157 @@ export function registerPtyApi(
       let closed = false;
       let unsubscribe = () => {};
       let attachmentId: symbol | null = null;
+      const attachmentClaim = Symbol(`pty-websocket-${ptySessionId}`);
+      websocketAttachmentClaims.set(ptySessionId, attachmentClaim);
+      const ownsAttachmentClaim = () =>
+        websocketAttachmentClaims.get(ptySessionId) === attachmentClaim;
       const pending: PtyWebSocketOutputMessage[] = [];
+      const pendingClientMessages: PtyWebSocketInputMessage[] = [];
+      let acceptingClientMessages = false;
       socket.once('close', () => {
         closed = true;
+        pendingClientMessages.splice(0);
+        if (ownsAttachmentClaim()) {
+          websocketAttachmentClaims.delete(ptySessionId);
+        }
         unsubscribe();
       });
-      const attachmentPromise = run(
+
+      const attach = (sendAttachmentMessage: (message: PtyWebSocketOutputMessage) => void) =>
+        run(
+          Effect.gen(function* () {
+            const pty = yield* PtyService;
+            return yield* pty.attach({
+              ptySessionId,
+              send: sendAttachmentMessage,
+            });
+          }).pipe(Effect.either),
+        );
+      const planPromise = run(
         Effect.gen(function* () {
           const pty = yield* PtyService;
-          return yield* pty.attach({
-            ptySessionId,
-            send: (message) => {
-              if (replaying) {
-                pending.push(message);
-              } else {
-                send(message);
-              }
-            },
-          });
+          return yield* pty.getAttachmentPlan({ ptySessionId });
         }).pipe(Effect.either),
       );
 
-      void attachmentPromise
-        .then(async (attachmentResult) => {
-          if (Either.isLeft(attachmentResult)) {
+      void planPromise
+        .then(async (planResult) => {
+          if (Either.isLeft(planResult)) {
             await new Promise((resolve) => setImmediate(resolve));
-            send({ type: 'error', ...websocketError(attachmentResult.left) });
+            send({ type: 'error', ...websocketError(planResult.left) });
             setImmediate(() => socket.close());
             return;
           }
 
-          const attachment = attachmentResult.right;
-          attachmentId = attachment.attachmentId;
+          const plan = planResult.right;
           await new Promise((resolve) => setImmediate(resolve));
           send({
             type: 'session',
-            status: attachment.session.status,
-            exitCode: attachment.session.exitCode,
-            signal: attachment.session.signal,
+            status: plan.session.status,
+            exitCode: plan.session.exitCode,
+            signal: plan.session.signal,
           });
-          unsubscribe = attachment.unsubscribe;
           if (closed) {
-            unsubscribe();
             return;
           }
-          const replayResult = await run(
-            Effect.gen(function* () {
-              const pty = yield* PtyService;
-              return yield* pty.replay({
-                session: attachment.session,
-                bytes: attachment.replayBytes,
-                send,
-              });
-            }).pipe(Effect.either),
-          );
-          if (Either.isLeft(replayResult)) {
+
+          const runReplay = () =>
+            run(
+              Effect.gen(function* () {
+                const pty = yield* PtyService;
+                return yield* pty.replay({
+                  session: plan.session,
+                  bytes: plan.replayBytes,
+                  send,
+                });
+              }).pipe(Effect.either),
+            );
+          const sendReplayError = (error: unknown) => {
             console.error(
               `[runtime] PTY websocket replay failed ptySessionId=${ptySessionId}`,
-              replayResult.left,
+              error,
             );
-            send({ type: 'error', ...websocketError(replayResult.left) });
+            send({ type: 'error', ...websocketError(error) });
             setImmediate(() => socket.close());
+          };
+          const attachLive = async (
+            sendAttachmentMessage: (message: PtyWebSocketOutputMessage) => void,
+          ) => {
+            return await runAttachmentTurn(ptySessionId, async () => {
+              if (closed || !ownsAttachmentClaim()) {
+                return null;
+              }
+              const attachmentResult = await attach(sendAttachmentMessage);
+              if (Either.isLeft(attachmentResult)) {
+                send({ type: 'error', ...websocketError(attachmentResult.left) });
+                setImmediate(() => socket.close());
+                return null;
+              }
+              const attachment = attachmentResult.right;
+              attachmentId = attachment.attachmentId;
+              unsubscribe = attachment.unsubscribe;
+              if (closed || !ownsAttachmentClaim()) {
+                unsubscribe();
+                return null;
+              }
+              return attachment;
+            });
+          };
+          const closeIfSuperseded = () => {
+            if (!closed && !ownsAttachmentClaim()) {
+              pendingClientMessages.splice(0);
+              setImmediate(() => socket.close());
+            }
+          };
+          const flushClientMessages = () => {
+            acceptingClientMessages = true;
+            for (const message of pendingClientMessages.splice(0)) {
+              runClientMessage(message);
+            }
+          };
+
+          if (!plan.live) {
+            const replayResult = await runReplay();
+            if (Either.isLeft(replayResult)) {
+              sendReplayError(replayResult.left);
+              return;
+            }
+            flushClientMessages();
+            return;
+          }
+
+          if (plan.replaySource === 'backend') {
+            const replayResult = await runReplay();
+            replaying = false;
+            if (Either.isLeft(replayResult)) {
+              sendReplayError(replayResult.left);
+              return;
+            }
+            const attachment = await attachLive(send);
+            if (attachment) {
+              flushClientMessages();
+            } else {
+              closeIfSuperseded();
+            }
+            return;
+          }
+
+          const attachment = await attachLive((message) => {
+            if (replaying) {
+              pending.push(message);
+            } else {
+              send(message);
+            }
+          });
+          if (!attachment) {
+            closeIfSuperseded();
+            return;
+          }
+          flushClientMessages();
+
+          const replayResult = await runReplay();
+          if (Either.isLeft(replayResult)) {
+            sendReplayError(replayResult.left);
             return;
           }
           replaying = false;
@@ -183,6 +277,22 @@ export function registerPtyApi(
           return;
         }
 
+        if (!acceptingClientMessages) {
+          pendingClientMessages.push(parsed);
+          return;
+        }
+        runClientMessage(parsed);
+      });
+
+      const runClientMessage = (parsed: PtyWebSocketInputMessage) => {
+        if (closed) {
+          return;
+        }
+        if (!ownsAttachmentClaim()) {
+          pendingClientMessages.splice(0);
+          setImmediate(() => socket.close());
+          return;
+        }
         const effect = Effect.gen(function* () {
           const pty = yield* PtyService;
           if (parsed.type === 'input') {
@@ -194,9 +304,9 @@ export function registerPtyApi(
             cols: parsed.cols,
             rows: parsed.rows,
           });
-        });
+        }).pipe(Effect.either);
 
-        void run(effect.pipe(Effect.either)).then(
+        void run(effect).then(
           (result) => {
             if (Either.isLeft(result)) {
               send({ type: 'error', ...websocketError(result.left) });
@@ -210,7 +320,7 @@ export function registerPtyApi(
             send({ type: 'error', ...websocketError(error) });
           },
         );
-      });
+      };
     },
   );
 }
@@ -222,6 +332,23 @@ function decodePtySessionId(params: unknown) {
   const value = (params as { readonly ptySessionId?: unknown }).ptySessionId;
   const decoded = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
   return typeof decoded === 'number' && Number.isInteger(decoded) && decoded > 0 ? decoded : null;
+}
+
+async function runAttachmentTurn<A>(ptySessionId: number, run: () => Promise<A>) {
+  const previous = websocketAttachmentTurns.get(ptySessionId) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(run);
+  const turn = current.then(
+    () => {},
+    () => {},
+  );
+  websocketAttachmentTurns.set(ptySessionId, turn);
+  try {
+    return await current;
+  } finally {
+    if (websocketAttachmentTurns.get(ptySessionId) === turn) {
+      websocketAttachmentTurns.delete(ptySessionId);
+    }
+  }
 }
 
 function decodeSocketMessage(raw: string) {

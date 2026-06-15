@@ -718,6 +718,7 @@ function fakePtyService(options: {
 }): PtyServiceShape {
   return {
     launch: () => Effect.die('launch is not used by surface service tests'),
+    getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used by surface service tests'),
     attach: () => Effect.die('attach is not used by surface service tests'),
     replay: () => Effect.die('replay is not used by surface service tests'),
     write: () => Effect.die('write is not used by surface service tests'),

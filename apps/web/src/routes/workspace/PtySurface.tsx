@@ -263,6 +263,7 @@ function XtermPane({
     const sendInput = (data: string) => {
       const socket = socketRef.current;
       if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
+        terminal.scrollToBottom();
         socket.send(JSON.stringify({ type: 'input', data }));
       }
     };
@@ -360,7 +361,7 @@ function XtermPane({
     const forcePrimaryMouseSelection = (event: MouseEvent) => {
       // Isagi favors ordinary drag-to-select/copy for terminal text. Users can
       // still send primary mouse events to tmux-aware apps with Shift-click on
-      // macOS or Alt-click elsewhere; wheel events continue to flow to tmux.
+      // macOS or Alt-click elsewhere.
       if (event.button !== 0 || event.altKey || event.shiftKey) {
         return;
       }

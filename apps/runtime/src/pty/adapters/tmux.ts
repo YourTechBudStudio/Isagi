@@ -9,6 +9,7 @@ import {
   PtyInspectError,
   PtyKillError,
   PtyResizeError,
+  PtyServiceError,
   PtyStartError,
   PtyWriteError,
 } from '../types.js';
@@ -18,11 +19,13 @@ const execFileAsync = promisify(execFile);
 
 const isagiTmuxSocketName = 'isagi';
 const isagiTmuxOptions = [
-  ['set-option', '-g', 'mouse', 'on'],
+  ['set-option', '-g', 'status', 'off'],
+  ['set-option', '-g', 'mouse', 'off'],
   ['set-option', '-gq', 'extended-keys', 'on'],
   ['set-option', '-gq', 'extended-keys-format', 'csi-u'],
   ['set-option', '-gq', 'xterm-keys', 'on'],
   ['set-option', '-gq', 'terminal-features[99]', 'xterm*:extkeys'],
+  ['set-option', '-gq', 'terminal-overrides[99]', 'xterm*:smcup@:rmcup@'],
 ] as const;
 
 export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
@@ -146,8 +149,39 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       });
     }),
   replay: (input) =>
-    Effect.sync(() => {
-      input.send({ type: 'replay_start', bytes: 0 });
+    Effect.gen(function* () {
+      if (input.ref.backend !== 'tmux') {
+        return yield* Effect.fail(
+          new PtyServiceError({
+            code: 'log_read_failed',
+            message: `Cannot replay tmux backend from ${input.ref.backend} ref.`,
+          }),
+        );
+      }
+      const ref = input.ref;
+      const { stdout } = yield* runTmux([
+        'capture-pane',
+        '-p',
+        '-e',
+        '-S',
+        '-',
+        '-t',
+        ref.sessionName,
+      ]).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PtyServiceError({
+              code: 'log_read_failed',
+              message: `Could not replay tmux session ${ref.sessionName}.`,
+              cause,
+            }),
+        ),
+      );
+      const bytes = Buffer.byteLength(stdout);
+      input.send({ type: 'replay_start', bytes });
+      if (bytes > 0) {
+        input.send({ type: 'output', data: stdout, replay: true });
+      }
       input.send({ type: 'replay_end' });
     }),
   inspect: (ref) =>
