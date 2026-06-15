@@ -16,6 +16,15 @@ import { collectTmuxGarbage } from './tmux-gc.js';
 
 const execFileAsync = promisify(execFile);
 
+const isagiTmuxSocketName = 'isagi';
+const isagiTmuxOptions = [
+  ['set-option', '-g', 'mouse', 'on'],
+  ['set-option', '-gq', 'extended-keys', 'on'],
+  ['set-option', '-gq', 'extended-keys-format', 'csi-u'],
+  ['set-option', '-gq', 'xterm-keys', 'on'],
+  ['set-option', '-gq', 'terminal-features[99]', 'xterm*:extkeys'],
+] as const;
+
 export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
 
 const listTmuxSessions = runTmux(['list-sessions', '-F', '#S']).pipe(
@@ -57,9 +66,12 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
         );
       }
       const sessionName = input.backendSessionName;
-      yield* runTmux(['new-session', '-d', '-s', sessionName, '-c', input.cwd, input.command], {
-        env: input.env,
-      }).pipe(
+      yield* runConfiguredTmux(
+        ['new-session', '-d', '-s', sessionName, '-c', input.cwd, input.command],
+        {
+          env: input.env,
+        },
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new PtyStartError({
@@ -77,48 +89,61 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       } satisfies TmuxBackendRef;
     }),
   attach: (input) =>
-    Effect.try({
-      try: () => {
-        if (input.ref.backend !== 'tmux') {
-          throw new Error(`Cannot attach tmux backend to ${input.ref.backend} ref.`);
-        }
-        const client = nodePty.spawn('tmux', ['attach-session', '-t', input.ref.sessionName], {
-          name: 'xterm-256color',
-          cols: input.cols,
-          rows: input.rows,
-          env: {
-            ...process.env,
-            TERM: 'xterm-256color',
-            COLORTERM: 'truecolor',
-          },
-        });
-        client.onData(input.onOutput);
-        client.onExit(() => {
-          // The tmux client is only the runtime attachment. Its exit is not durable
-          // session exit; startup reconciliation and polling own tmux session state.
-        });
-        return {
-          write: (data) =>
-            Effect.try({
-              try: () => client.write(data),
-              catch: (cause) => new PtyWriteError({ cause }),
-            }),
-          resize: (size) =>
-            Effect.try({
-              try: () => client.resize(size.cols, size.rows),
-              catch: (cause) => new PtyResizeError({ cause }),
-            }),
-          detach: Effect.sync(() => {
-            client.kill();
+    Effect.gen(function* () {
+      if (input.ref.backend !== 'tmux') {
+        return yield* Effect.fail(
+          new PtyStartError({
+            command: 'tmux attach-session',
+            cwd: '',
+            cause: new Error(`Cannot attach tmux backend to ${input.ref.backend} ref.`),
           }),
-        } satisfies BackendAttachment;
-      },
-      catch: (cause) =>
-        new PtyStartError({
-          command: 'tmux attach-session',
-          cwd: '',
-          cause,
-        }),
+        );
+      }
+      const sessionName = input.ref.sessionName;
+      return yield* Effect.try({
+        try: () => {
+          const client = nodePty.spawn(
+            'tmux',
+            tmuxArgs(configuredTmuxCommand(['attach-session', '-t', sessionName])),
+            {
+              name: 'xterm-256color',
+              cols: input.cols,
+              rows: input.rows,
+              env: {
+                ...process.env,
+                TERM: 'xterm-256color',
+                COLORTERM: 'truecolor',
+              },
+            },
+          );
+          client.onData(input.onOutput);
+          client.onExit(() => {
+            // The tmux client is only the runtime attachment. Its exit is not durable
+            // session exit; startup reconciliation and polling own tmux session state.
+          });
+          return {
+            write: (data) =>
+              Effect.try({
+                try: () => client.write(data),
+                catch: (cause) => new PtyWriteError({ cause }),
+              }),
+            resize: (size) =>
+              Effect.try({
+                try: () => client.resize(size.cols, size.rows),
+                catch: (cause) => new PtyResizeError({ cause }),
+              }),
+            detach: Effect.sync(() => {
+              client.kill();
+            }),
+          } satisfies BackendAttachment;
+        },
+        catch: (cause) =>
+          new PtyStartError({
+            command: 'tmux attach-session',
+            cwd: '',
+            cause,
+          }),
+      });
     }),
   replay: (input) =>
     Effect.sync(() => {
@@ -139,13 +164,20 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
     ),
 } satisfies PtyBackendShape);
 
+function runConfiguredTmux(
+  args: readonly string[],
+  options: { readonly env?: NodeJS.ProcessEnv | undefined } = {},
+) {
+  return runTmux(configuredTmuxCommand(args), options);
+}
+
 function runTmux(
   args: readonly string[],
   options: { readonly env?: NodeJS.ProcessEnv | undefined } = {},
 ) {
   return Effect.tryPromise({
     try: async (signal) => {
-      const { stdout, stderr } = await execFileAsync('tmux', [...args], {
+      const { stdout, stderr } = await execFileAsync('tmux', tmuxArgs(args), {
         encoding: 'utf8',
         env: options.env,
         signal,
@@ -154,6 +186,19 @@ function runTmux(
     },
     catch: (cause) => cause,
   });
+}
+
+function configuredTmuxCommand(args: readonly string[]) {
+  const command: string[] = [];
+  for (const option of isagiTmuxOptions) {
+    command.push(...option, ';');
+  }
+  command.push(...args);
+  return command;
+}
+
+function tmuxArgs(args: readonly string[]) {
+  return ['-L', isagiTmuxSocketName, ...args];
 }
 
 function classifyTmuxInspectFailure(cause: unknown) {
