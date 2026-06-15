@@ -216,6 +216,8 @@ function XtermPane({
       fontFamily: '"JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace',
       fontSize: 12,
       lineHeight: 1.35,
+      macOptionClickForcesSelection: true,
+      rightClickSelectsWord: true,
       ...(edgeToEdge ? { scrollback: 0 } : {}),
       theme: terminalThemeFromTokens(),
     });
@@ -236,6 +238,13 @@ function XtermPane({
       onRendererWarning(ptyCopy.renderer.webglUnavailable);
     }
 
+    const sendInput = (data: string) => {
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
+        socket.send(JSON.stringify({ type: 'input', data }));
+      }
+    };
+
     const sendResize = () => {
       try {
         fit.fit();
@@ -255,12 +264,71 @@ function XtermPane({
     resizeObserver.observe(container);
     window.setTimeout(sendResize, 0);
 
-    const inputDisposable = terminal.onData((data) => {
-      const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
-        socket.send(JSON.stringify({ type: 'input', data }));
+    const inputDisposable = terminal.onData(sendInput);
+
+    let lastHandledShiftEnterAt = 0;
+    const shouldShimShiftEnter = session.purpose === 'agent';
+    const handleShiftEnter = (event: KeyboardEvent) => {
+      if (
+        !shouldShimShiftEnter ||
+        event.type !== 'keydown' ||
+        event.key !== 'Enter' ||
+        !event.shiftKey
+      ) {
+        return false;
       }
-    });
+      lastHandledShiftEnterAt = performance.now();
+      event.preventDefault();
+      event.stopPropagation();
+      sendInput('\x1b[200~\n\x1b[201~');
+      return true;
+    };
+    terminal.attachCustomKeyEventHandler((event) => !handleShiftEnter(event));
+
+    const handleTerminalKeyDown = (event: KeyboardEvent) => {
+      if (isCopyShortcut(event)) {
+        const selection = terminal.getSelection();
+        if (selection) {
+          event.preventDefault();
+          event.stopPropagation();
+          void navigator.clipboard?.writeText(selection).catch(() => {
+            // The copy event handler covers the normal browser path; this is a best-effort fallback.
+          });
+          return;
+        }
+      }
+      if (performance.now() - lastHandledShiftEnterAt < 50) {
+        return;
+      }
+      handleShiftEnter(event);
+    };
+    container.addEventListener('keydown', handleTerminalKeyDown, true);
+
+    const forcePrimaryMouseSelection = (event: MouseEvent) => {
+      // Isagi favors ordinary drag-to-select/copy for terminal text. Users can
+      // still send primary mouse events to tmux-aware apps with Shift-click on
+      // macOS or Alt-click elsewhere; wheel events continue to flow to tmux.
+      if (event.button !== 0 || event.altKey || event.shiftKey) {
+        return;
+      }
+      try {
+        Object.defineProperty(event, isMacPlatform() ? 'altKey' : 'shiftKey', { value: true });
+      } catch {
+        // If the browser marks the modifier property non-configurable, users can
+        // still force xterm selection with Option on macOS or Shift elsewhere.
+      }
+    };
+    container.addEventListener('mousedown', forcePrimaryMouseSelection, true);
+
+    const handleTerminalCopy = (event: ClipboardEvent) => {
+      const selection = terminal.getSelection();
+      if (!selection) {
+        return;
+      }
+      event.clipboardData?.setData('text/plain', selection);
+      event.preventDefault();
+    };
+    container.addEventListener('copy', handleTerminalCopy);
 
     onConnectionChange('connecting');
     onSocketNotice(null);
@@ -347,6 +415,9 @@ function XtermPane({
       disposed = true;
       resizeObserver?.disconnect();
       inputDisposable.dispose();
+      container.removeEventListener('keydown', handleTerminalKeyDown, true);
+      container.removeEventListener('mousedown', forcePrimaryMouseSelection, true);
+      container.removeEventListener('copy', handleTerminalCopy);
       socketRef.current?.close();
       socketRef.current = null;
       fitRef.current = null;
@@ -360,6 +431,7 @@ function XtermPane({
     onStatusChange,
     edgeToEdge,
     session.id,
+    session.purpose,
     session.status,
   ]);
 
@@ -369,6 +441,20 @@ function XtermPane({
       className={`isagi-xterm min-h-0 flex-1 ${edgeToEdge ? 'isagi-xterm-edge' : 'px-3 py-2'}`}
     />
   );
+}
+
+function isCopyShortcut(event: KeyboardEvent) {
+  if (event.type !== 'keydown' || event.key.toLowerCase() !== 'c') {
+    return false;
+  }
+  if (isMacPlatform()) {
+    return event.metaKey && !event.altKey;
+  }
+  return event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+}
+
+function isMacPlatform() {
+  return /mac/i.test(navigator.platform);
 }
 
 function decodeSocketMessage(data: unknown) {
