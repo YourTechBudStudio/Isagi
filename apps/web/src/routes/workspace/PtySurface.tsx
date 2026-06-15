@@ -1,4 +1,3 @@
-import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { Effect } from 'effect';
@@ -23,6 +22,7 @@ import {
 import { resolveActivePaneId } from '../../lib/workspace/model.js';
 import { formatRuntimeError, resolvePtyWebSocketUrl } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { calculateTerminalFit } from './ptyFit.js';
 
 interface PtySurfaceProps {
   readonly detail: SurfaceDetail;
@@ -33,6 +33,25 @@ type SocketNotice = {
   readonly message: string;
   readonly kind: 'protocol' | 'transport';
 };
+type XtermRenderDimensions = {
+  readonly css?: {
+    readonly cell?: {
+      readonly width?: number;
+      readonly height?: number;
+    };
+  };
+};
+type XtermPrivateTerminal = Terminal & {
+  readonly ['_core']?: {
+    readonly ['_renderService']?: {
+      readonly dimensions?: XtermRenderDimensions;
+      readonly clear?: () => void;
+    };
+  };
+};
+type TerminalFitResult = 'fit' | 'unready';
+
+const TERMINAL_FIT_RETRY_FRAMES = 12;
 
 export function PtySurface({ detail }: PtySurfaceProps) {
   const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
@@ -155,6 +174,7 @@ function PtyPaneShell({
         <XtermPane
           key={session.id}
           session={session}
+          focused={focused}
           onConnectionChange={setConnection}
           onExit={setExit}
           onRendererWarning={setRendererWarning}
@@ -173,6 +193,7 @@ function PtyPaneShell({
 
 function XtermPane({
   session,
+  focused,
   onConnectionChange,
   onExit,
   onRendererWarning,
@@ -180,6 +201,7 @@ function XtermPane({
   onStatusChange,
 }: {
   readonly session: PtySessionMetadata;
+  readonly focused: boolean;
   readonly onConnectionChange: (state: ConnectionState) => void;
   readonly onExit: (exit: {
     readonly exitCode: number | null;
@@ -190,10 +212,10 @@ function XtermPane({
   readonly onStatusChange: (status: PtySessionStatus) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<Terminal | null>(null);
   const statusRef = useRef<PtySessionStatus>(session.status);
   const socketRef = useRef<WebSocket | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
-  const edgeToEdge = session.harness === 'opencode';
+  const disableScrollback = session.harness === 'opencode';
 
   useEffect(() => {
     statusRef.current = session.status;
@@ -208,6 +230,8 @@ function XtermPane({
 
     let disposed = false;
     let resizeObserver: ResizeObserver | null = null;
+    let pendingResizeFrame: number | null = null;
+    let warnedFitUnavailable = false;
     const terminal = new Terminal({
       allowProposedApi: true,
       convertEol: true,
@@ -218,13 +242,11 @@ function XtermPane({
       lineHeight: 1.35,
       macOptionClickForcesSelection: true,
       rightClickSelectsWord: true,
-      ...(edgeToEdge ? { scrollback: 0 } : {}),
+      ...(disableScrollback ? { scrollback: 0 } : {}),
       theme: terminalThemeFromTokens(),
     });
-    const fit = new FitAddon();
-    fitRef.current = fit;
-    terminal.loadAddon(fit);
     terminal.open(container);
+    terminalRef.current = terminal;
 
     try {
       const webgl = new WebglAddon();
@@ -247,22 +269,53 @@ function XtermPane({
 
     const sendResize = () => {
       try {
-        fit.fit();
-        if (edgeToEdge) {
-          terminal.resize(terminal.cols + 1, terminal.rows + 1);
+        if (disposed) {
+          return 'unready' as const;
+        }
+        const result = fitTerminalToHost(terminal, container);
+        if (result === 'unready') {
+          return result;
         }
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
           socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
         }
+        return result;
       } catch {
         // xterm can briefly report zero-size geometry while the canvas is animating.
+        return 'unready' as const;
       }
     };
 
-    resizeObserver = new ResizeObserver(sendResize);
+    const scheduleResize = (attempt = 0) => {
+      if (pendingResizeFrame !== null) {
+        window.cancelAnimationFrame(pendingResizeFrame);
+      }
+      pendingResizeFrame = window.requestAnimationFrame(() => {
+        pendingResizeFrame = null;
+        if (sendResize() === 'fit' || disposed) {
+          return;
+        }
+        const hostRect = container.getBoundingClientRect();
+        const hostVisible = hostRect.width > 0 && hostRect.height > 0;
+        if (hostVisible && attempt < TERMINAL_FIT_RETRY_FRAMES) {
+          scheduleResize(attempt + 1);
+          return;
+        }
+        if (hostVisible && !warnedFitUnavailable) {
+          warnedFitUnavailable = true;
+          console.warn('xterm fit skipped because render cell dimensions were unavailable.', {
+            ptySessionId: session.id,
+            hostWidth: hostRect.width,
+            hostHeight: hostRect.height,
+          });
+        }
+      });
+    };
+
+    resizeObserver = new ResizeObserver(() => scheduleResize());
     resizeObserver.observe(container);
-    window.setTimeout(sendResize, 0);
+    scheduleResize();
 
     const inputDisposable = terminal.onData(sendInput);
 
@@ -413,6 +466,9 @@ function XtermPane({
 
     return () => {
       disposed = true;
+      if (pendingResizeFrame !== null) {
+        window.cancelAnimationFrame(pendingResizeFrame);
+      }
       resizeObserver?.disconnect();
       inputDisposable.dispose();
       container.removeEventListener('keydown', handleTerminalKeyDown, true);
@@ -420,7 +476,7 @@ function XtermPane({
       container.removeEventListener('copy', handleTerminalCopy);
       socketRef.current?.close();
       socketRef.current = null;
-      fitRef.current = null;
+      terminalRef.current = null;
       terminal.dispose();
     };
   }, [
@@ -429,18 +485,31 @@ function XtermPane({
     onRendererWarning,
     onSocketNotice,
     onStatusChange,
-    edgeToEdge,
+    disableScrollback,
     session.id,
     session.purpose,
     session.status,
   ]);
 
-  return (
-    <div
-      ref={containerRef}
-      className={`isagi-xterm min-h-0 flex-1 ${edgeToEdge ? 'isagi-xterm-edge' : 'px-3 py-2'}`}
-    />
-  );
+  useEffect(() => {
+    if (!focused) {
+      return;
+    }
+    let cancelled = false;
+    const frame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (!cancelled) {
+          terminalRef.current?.focus();
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [focused]);
+
+  return <div ref={containerRef} className="isagi-xterm isagi-xterm-edge min-h-0 flex-1" />;
 }
 
 function isCopyShortcut(event: KeyboardEvent) {
@@ -466,6 +535,45 @@ function decodeSocketMessage(data: unknown) {
   } catch {
     return null;
   }
+}
+
+function fitTerminalToHost(terminal: Terminal, host: HTMLElement): TerminalFitResult {
+  const xtermElement = terminal.element;
+  const renderService = (terminal as XtermPrivateTerminal)['_core']?.['_renderService'];
+  const cell = renderService?.dimensions?.css?.cell;
+  if (!xtermElement || !cell?.width || !cell.height) {
+    return 'unready';
+  }
+
+  const xtermStyle = window.getComputedStyle(xtermElement);
+  const hostRect = host.getBoundingClientRect();
+  // xterm v6 renders the scrollbar as an overlay inside the terminal surface.
+  // The stock fit addon reserves scrollbar width for scrollback sessions, which
+  // makes OpenCode and other PTYs fit to different visual widths.
+  const size = calculateTerminalFit({
+    hostWidth: hostRect.width,
+    hostHeight: hostRect.height,
+    paddingLeft: cssPixelValue(xtermStyle.paddingLeft),
+    paddingRight: cssPixelValue(xtermStyle.paddingRight),
+    paddingTop: cssPixelValue(xtermStyle.paddingTop),
+    paddingBottom: cssPixelValue(xtermStyle.paddingBottom),
+    cellWidth: cell.width,
+    cellHeight: cell.height,
+  });
+  if (!size) {
+    return 'unready';
+  }
+
+  if (terminal.cols !== size.cols || terminal.rows !== size.rows) {
+    renderService?.clear?.();
+    terminal.resize(size.cols, size.rows);
+  }
+  return 'fit';
+}
+
+function cssPixelValue(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function terminalThemeFromTokens() {

@@ -290,7 +290,9 @@ export async function commitLaunchSessionSuccess(
     queryFn: ({ signal }) => fetchWorkspaceData(signal),
     staleTime: 0,
   });
-  useWorkspaceStore.getState().selectSurface(output.worktreeId, output.surfaceId);
+  const store = useWorkspaceStore.getState();
+  store.selectSurface(output.worktreeId, output.surfaceId);
+  store.focusPane(output.surfaceId, output.paneId);
 }
 
 export async function commitRenameSurfaceSuccess(client: QueryClient, surfaceId: number) {

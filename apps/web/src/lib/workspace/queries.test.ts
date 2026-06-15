@@ -85,6 +85,7 @@ test('launch success refetches workspace and selects the new surface locally', a
   useWorkspaceStore.setState({
     selection: emptyWorkspaceSelection,
     activeSurfaceByWorktreeId: {},
+    activePaneBySurfaceId: {},
   });
 
   await commitLaunchSessionSuccess(
@@ -111,6 +112,7 @@ test('launch success refetches workspace and selects the new surface locally', a
 
   events.push(`select:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
   assert.deepEqual(events, ['fetch:none', 'select:501']);
+  assert.equal(useWorkspaceStore.getState().activePaneBySurfaceId[501], 601);
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
 });
 
