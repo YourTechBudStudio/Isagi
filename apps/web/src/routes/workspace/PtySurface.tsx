@@ -235,7 +235,7 @@ function XtermPane({
     const terminalFontFamily = terminalFontFamilyFromElement(container);
     const terminal = new Terminal({
       allowProposedApi: true,
-      convertEol: true,
+      convertEol: false,
       cursorBlink: true,
       disableStdin: session.status !== 'running',
       fontFamily: terminalFontFamily,

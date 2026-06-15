@@ -10,7 +10,7 @@ import { TmuxBackend, TmuxBackendLive } from './tmux.js';
 
 test('tmux replay captures the full pane and marks replay output', async () => {
   await withFakeTmux(async ({ logPath, path }) => {
-    const output = '\u001b[32mhello from tmux\u001b[0m\n';
+    const replayOutput = '\u001b[32mhello from tmux\u001b[0m\r\nsecond row\r\n';
     const messages = await Effect.runPromise(
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
@@ -26,8 +26,8 @@ test('tmux replay captures the full pane and marks replay output', async () => {
     );
 
     assert.deepEqual(messages, [
-      { type: 'replay_start', bytes: Buffer.byteLength(output) },
-      { type: 'output', data: output, replay: true },
+      { type: 'replay_start', bytes: Buffer.byteLength(replayOutput) },
+      { type: 'output', data: replayOutput, replay: true },
       { type: 'replay_end' },
     ]);
     assert.deepEqual(readTmuxCalls(logPath), [
@@ -71,7 +71,7 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           'set-option',
           '-g',
           'mouse',
-          'off',
+          'on',
           ';',
           'set-option',
           '-gq',
@@ -94,9 +94,8 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           'xterm*:extkeys',
           ';',
           'set-option',
-          '-gq',
+          '-gqu',
           'terminal-overrides[99]',
-          'xterm*:smcup@:rmcup@',
           ';',
           'new-session',
           '-d',
@@ -133,7 +132,7 @@ appendFileSync(
 );
 
 if (process.argv.includes('capture-pane')) {
-  process.stdout.write('\\u001b[32mhello from tmux\\u001b[0m\\n');
+  process.stdout.write('\\u001b[32mhello from tmux\\u001b[0m\\nsecond row\\n');
 }
 `,
       'utf8',

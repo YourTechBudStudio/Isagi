@@ -20,12 +20,12 @@ const execFileAsync = promisify(execFile);
 const isagiTmuxSocketName = 'isagi';
 const isagiTmuxOptions = [
   ['set-option', '-g', 'status', 'off'],
-  ['set-option', '-g', 'mouse', 'off'],
+  ['set-option', '-g', 'mouse', 'on'],
   ['set-option', '-gq', 'extended-keys', 'on'],
   ['set-option', '-gq', 'extended-keys-format', 'csi-u'],
   ['set-option', '-gq', 'xterm-keys', 'on'],
   ['set-option', '-gq', 'terminal-features[99]', 'xterm*:extkeys'],
-  ['set-option', '-gq', 'terminal-overrides[99]', 'xterm*:smcup@:rmcup@'],
+  ['set-option', '-gqu', 'terminal-overrides[99]'],
 ] as const;
 
 export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
@@ -177,10 +177,11 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
             }),
         ),
       );
-      const bytes = Buffer.byteLength(stdout);
+      const data = terminalReplayDataFromCapturePane(stdout);
+      const bytes = Buffer.byteLength(data);
       input.send({ type: 'replay_start', bytes });
       if (bytes > 0) {
-        input.send({ type: 'output', data: stdout, replay: true });
+        input.send({ type: 'output', data, replay: true });
       }
       input.send({ type: 'replay_end' });
     }),
@@ -197,6 +198,13 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       Effect.mapError((cause) => new PtyKillError({ cause })),
     ),
 } satisfies PtyBackendShape);
+
+function terminalReplayDataFromCapturePane(output: string) {
+  // `capture-pane -p` returns rendered screen rows separated with LF, not a raw PTY byte
+  // stream. xterm runs with convertEol disabled for live-stream correctness, so replay
+  // snapshots need explicit carriage returns to start each captured row at column 0.
+  return output.replace(/\r?\n/g, '\r\n');
+}
 
 function runConfiguredTmux(
   args: readonly string[],
