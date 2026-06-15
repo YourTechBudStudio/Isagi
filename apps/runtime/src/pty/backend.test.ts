@@ -43,10 +43,7 @@ test('PTY backend warns when configured tmux is unavailable', async () => {
   }
 });
 
-function selectedBackend(
-  config: RuntimeConfigShape,
-  options: { readonly tmuxAvailable: boolean },
-) {
+function selectedBackend(config: RuntimeConfigShape, options: { readonly tmuxAvailable: boolean }) {
   return Effect.gen(function* () {
     return yield* PtyBackend;
   }).pipe(

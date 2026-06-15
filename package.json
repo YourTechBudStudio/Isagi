@@ -30,6 +30,13 @@
     "oxlint-tailwindcss": "^1.0.0",
     "typescript": "^6.0.3"
   },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "22.22.3",
+      "onFail": "download"
+    }
+  },
   "engines": {
     "node": "22.22.3"
   },

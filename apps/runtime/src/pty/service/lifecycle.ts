@@ -104,14 +104,14 @@ export function retryPersistKilledUntilSuccess(
                 `[runtime] Failed to retry PTY termination persistence for session ${ptySessionId}`,
                 error,
               );
-              setTimeout(retry, 1_000);
+              scheduleRetry(retry);
             }),
           ),
         ),
     );
   };
 
-  setTimeout(retry, 1_000);
+  scheduleRetry(retry);
 }
 
 function persistExitOnce(
@@ -153,12 +153,17 @@ function retryPersistExitUntilSuccess(
               `[runtime] Failed to retry PTY exit persistence for session ${ptySessionId}`,
               error,
             );
-            setTimeout(retry, 1_000);
+            scheduleRetry(retry);
           }),
         ),
       ),
     );
   };
 
-  setTimeout(retry, 1_000);
+  scheduleRetry(retry);
+}
+
+function scheduleRetry(retry: () => void) {
+  const timer = setTimeout(retry, 1_000);
+  timer.unref();
 }
