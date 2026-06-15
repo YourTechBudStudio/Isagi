@@ -10,6 +10,7 @@ import {
   TmuxBackendLive,
   type PtyServiceShape,
 } from './pty/index.js';
+import { RuntimeConfigLive } from './runtime-config/index.js';
 import { RuntimeEventBusLive, type RuntimeEventBusService } from './runtime-events/index.js';
 import {
   SurfaceRepositoryLive,
@@ -25,6 +26,7 @@ import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktre
 
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
+const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -39,6 +41,7 @@ const PtyRepositoryLayer = PtyRepositoryLive.pipe(
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
+  Layer.provide(RuntimeConfigLayer),
   Layer.provide(NodePtyBackendLive),
   Layer.provide(TmuxBackendLive),
   Layer.provide(DataDirectoryLive),
