@@ -1,18 +1,13 @@
-import { ArrowRight, Bot, SquareTerminal } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
-import type { AgentHarness } from '@isagi/contracts';
-
-import {
-  selectSurfaceAndPersistFocus,
-  startAgentSessionFromPalette,
-  startTerminalSessionFromPalette,
-} from '../workspace/queries.js';
+import { selectSurfaceAndPersistFocus } from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
+import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
 import { GLOBAL_COMMANDS } from './registry.js';
-import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
+import type { PaletteContext, PaletteEntry } from './types.js';
 
 export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
@@ -40,28 +35,9 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
     const activeSurfaceCommands = surfaceActionCommands.filter(
       (command) => command.available?.(ctx) ?? true,
     );
-    const startAgentCommand: PaletteCommand = {
-      id: `worktree:${worktree.id}:start-agent-session`,
-      label: 'Start agent session',
-      icon: Bot,
-      group: 'worktree-actions',
-      args: [
-        {
-          kind: 'select',
-          key: 'harness',
-          label: 'Harness',
-          options: () => [
-            { value: 'pi', label: 'Pi' },
-            { value: 'opencode', label: 'OpenCode' },
-            { value: 'claude', label: 'Claude' },
-            { value: 'codex', label: 'Codex' },
-          ],
-        },
-      ],
-      run: async (values) => {
-        await startAgentSessionFromPalette(worktree.id, values.harness as AgentHarness);
-      },
-    };
+    const activeSessionCommands = sessionActionCommands.filter(
+      (command) => command.available?.(ctx) ?? true,
+    );
 
     for (const command of activeWorktreeCommands) {
       const values = {
@@ -107,27 +83,22 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
       });
     }
 
-    entries.push(
-      {
-        id: startAgentCommand.id,
-        label: startAgentCommand.label,
-        icon: startAgentCommand.icon,
-        group: 'worktree-actions',
-        sub: 'choose a harness',
-        command: startAgentCommand,
-        run: () => startAgentCommand.run({}, ctx),
-      },
-      {
-        id: `worktree:${worktree.id}:start-terminal`,
-        label: 'Start terminal',
-        icon: SquareTerminal,
-        group: 'worktree-actions',
-        sub: 'open shell',
-        run: async () => {
-          await startTerminalSessionFromPalette(worktree.id);
-        },
-      },
-    );
+    for (const command of activeSessionCommands) {
+      const values = {
+        projectId: String(worktree.projectId),
+        worktreeId: String(worktree.id),
+      };
+      entries.push({
+        id: command.id,
+        label: command.label,
+        icon: command.icon,
+        group: command.group,
+        command,
+        values,
+        run: () => command.run(values, ctx),
+        sub: command.id === 'start-agent-session' ? 'choose a harness' : 'open shell',
+      });
+    }
 
     for (const surface of worktree.surfaces) {
       entries.push({

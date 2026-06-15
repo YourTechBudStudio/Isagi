@@ -86,7 +86,21 @@ export const surfaceActionsCopy = {
   },
 } as const;
 
+// Canonical session-action labels, shared by the command palette command
+// definitions and the rail worktree context menu so the two never drift. The
+// menu appends an ellipsis where the action opens a follow-on step (harness
+// pick, delete confirm); the immediate terminal action carries none.
+const startTerminalLabel = 'Start terminal';
+const startAgentSessionLabel = 'Start agent session';
+
 export const worktreeActionsCopy = {
+  startTerminal: startTerminalLabel,
+  startAgentSession: startAgentSessionLabel,
+  menu: {
+    startTerminal: startTerminalLabel,
+    startAgent: `${startAgentSessionLabel}…`,
+    delete: 'Delete worktree…',
+  },
   deleteWorktree: {
     dirtyReview: {
       title: 'Worktree has uncommitted or untracked changes.',

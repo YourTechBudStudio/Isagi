@@ -1,11 +1,10 @@
-import { Pencil, Trash2 } from 'lucide-react';
+import { Bot, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { MouseEvent } from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { ContextMenu } from '../../components/ContextMenu.js';
-import { Tooltip } from '../../components/Tooltip.js';
-import { surfaceActionsCopy } from '../../copy/index.js';
+import type { ContextMenuItem } from '../../components/ContextMenu.js';
+import { surfaceActionsCopy, worktreeActionsCopy } from '../../copy/index.js';
 import { EASE_EXPO, surfaceTransition, uiTransition } from '../../lib/motion.js';
 import {
   handleDispatchedCommandError,
@@ -39,23 +38,48 @@ export function WorktreeBlock({
 }) {
   const dispatchCommand = useCommandDispatcher();
 
-  const dispatchWorktreeDelete = (event: MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
+  const dispatchWorktreeCommand = (
+    commandId: 'start-terminal-session' | 'start-agent-session' | 'delete-active-worktree',
+  ) => {
+    // Selecting makes the clicked row active in the rail; it does not retarget the
+    // command. The command resolves its target from the explicit ids below, which
+    // win over the dispatcher's (still-active-worktree) context on this same tick.
     onSelectWorktree(worktree.id);
-    void dispatchCommand('delete-active-worktree', {
+    void dispatchCommand(commandId, {
       projectId: String(projectId),
       worktreeId: String(worktree.id),
     }).catch(handleDispatchedCommandError);
   };
 
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: worktreeActionsCopy.menu.startTerminal,
+      icon: SquareTerminal,
+      onSelect: () => dispatchWorktreeCommand('start-terminal-session'),
+    },
+    {
+      label: worktreeActionsCopy.menu.startAgent,
+      icon: Bot,
+      onSelect: () => dispatchWorktreeCommand('start-agent-session'),
+    },
+  ];
+  if (!worktree.isRoot) {
+    menuItems.push({
+      label: worktreeActionsCopy.menu.delete,
+      icon: Trash2,
+      danger: true,
+      onSelect: () => dispatchWorktreeCommand('delete-active-worktree'),
+    });
+  }
+
   return (
     <div className={worktree.parked ? 'opacity-55 hover:opacity-80' : ''}>
-      <div className="group/worktree-row relative">
+      <ContextMenu items={menuItems}>
         <button
           type="button"
           onClick={() => onSelectWorktree(worktree.id)}
           aria-current={active ? 'true' : undefined}
-          className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 pr-9 text-left transition duration-micro ease-expo hover:bg-line/14 focus-visible:bg-line/14 focus-visible:outline-none"
+          className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left transition duration-micro ease-expo hover:bg-line/14 focus-visible:bg-line/14 focus-visible:outline-none"
         >
           <AttentionDot state={worktree.attention} />
           <span className="min-w-0 flex-1">
@@ -69,20 +93,7 @@ export function WorktreeBlock({
             </span>
           </span>
         </button>
-
-        {!worktree.isRoot && (
-          <Tooltip label="Delete worktree" side="left">
-            <button
-              type="button"
-              aria-label={`Delete worktree ${worktree.title}`}
-              onClick={dispatchWorktreeDelete}
-              className="absolute top-1/2 right-1.5 grid size-6 -translate-y-1/2 place-items-center rounded-sm border border-line/20 bg-elevated/70 text-fg-subtle opacity-0 backdrop-blur-sm transition duration-micro ease-expo group-focus-within/worktree-row:opacity-100 group-hover/worktree-row:opacity-100 hover:border-error/40 hover:bg-error/12 hover:text-error focus-visible:opacity-100 focus-visible:outline-none"
-            >
-              <Trash2 size={13} />
-            </button>
-          </Tooltip>
-        )}
-      </div>
+      </ContextMenu>
 
       <AnimatePresence initial={false}>
         {active && (

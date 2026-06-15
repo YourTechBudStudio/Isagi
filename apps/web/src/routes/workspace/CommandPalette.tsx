@@ -971,7 +971,9 @@ function EntryList({
                   </span>
                 )}
               </span>
-              {entry.command && <span className="font-mono text-[10.5px] text-fg-subtle">›</span>}
+              {entry.command?.args?.length ? (
+                <span className="font-mono text-[10.5px] text-fg-subtle">›</span>
+              ) : null}
             </button>
           </div>
         );
