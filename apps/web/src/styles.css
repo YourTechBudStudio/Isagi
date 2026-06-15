@@ -3,7 +3,19 @@
 /* Self-hosted fonts (desktop app — no CDN dependency). */
 @import '@fontsource-variable/sora';
 @import '@fontsource-variable/source-sans-3';
-@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/fira-code';
+
+/* Icon-only fallback so terminal Nerd Font glyphs (Powerline, devicons, etc.)
+   always resolve — even when the user has no Nerd Font installed. Bundled from
+   ryanoasis/nerd-fonts v3.2.1 (OFL/MIT — see assets/fonts/LICENSE.txt); the
+   chain prefers a system-installed symbols font first. */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+}
 
 /* ──────────────────────────────────────────────────────────────────────────
    Isagi design tokens — Catppuccin Macchiato.
@@ -14,8 +26,13 @@
   /* Type families */
   --font-display: 'Sora Variable', ui-sans-serif, system-ui, sans-serif;
   --font-sans: 'Source Sans 3 Variable', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
-  --font-terminal: var(--font-mono);
+  --font-mono: 'Fira Code Variable', ui-monospace, SFMono-Regular, monospace;
+  /* Terminal text uses the mono face, then falls through to whatever Nerd/symbols
+     font is installed, and finally the bundled glyph-only fallback. Icon glyphs
+     resolve per-codepoint from the first family in the chain that has them. */
+  --font-terminal:
+    'Fira Code Variable', ui-monospace, SFMono-Regular, 'Symbols Nerd Font',
+    'Symbols Nerd Font Mono', monospace;
 
   /* Surfaces — the deep canvas and its elevations */
   --color-canvas: #24273a;

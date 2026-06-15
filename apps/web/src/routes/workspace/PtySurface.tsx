@@ -223,264 +223,299 @@ function XtermPane({
   }, [onStatusChange, session.status]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
+    const host = containerRef.current;
+    if (!host) {
       return;
     }
 
     let disposed = false;
-    let resizeObserver: ResizeObserver | null = null;
-    let pendingResizeFrame: number | null = null;
-    let warnedFitUnavailable = false;
-    const terminalFontFamily = terminalFontFamilyFromElement(container);
-    const terminal = new Terminal({
-      allowProposedApi: true,
-      convertEol: false,
-      cursorBlink: true,
-      disableStdin: session.status !== 'running',
-      fontFamily: terminalFontFamily,
-      fontSize: 12,
-      lineHeight: 1.35,
-      macOptionClickForcesSelection: true,
-      rightClickSelectsWord: true,
-      ...(disableScrollback ? { scrollback: 0 } : {}),
-      theme: terminalThemeFromTokens(),
-    });
-    terminal.open(container);
-    terminalRef.current = terminal;
+    let teardown: (() => void) | undefined;
 
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        webgl.dispose();
-        onRendererWarning(ptyCopy.renderer.webglFallback);
-      });
-      terminal.loadAddon(webgl);
-      onRendererWarning(null);
-    } catch {
-      onRendererWarning(ptyCopy.renderer.webglUnavailable);
-    }
-
-    const sendInput = (data: string) => {
-      const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
-        terminal.scrollToBottom();
-        socket.send(JSON.stringify({ type: 'input', data }));
+    // xterm measures cell geometry and bakes its glyph atlas at construction and
+    // never re-checks. Fonts loaded after that leave misaligned glyphs and wrong
+    // cell widths on both the WebGL and DOM renderers, so we construct only once
+    // the terminal's fonts are usable. document.fonts.ready alone is not enough:
+    // it only awaits faces already in the loading set, and the bundled icon
+    // @font-face loads lazily (nothing has rendered a glyph that needs it yet), so
+    // we explicitly kick off its load — otherwise users without a system Nerd Font
+    // still get a corrupted first paint. document.fonts.load resolves immediately
+    // for locally-installed families and is a no-op once cached, so in the steady
+    // state this only defers the very first terminal of a session.
+    const fontsReady = Promise.all([
+      document.fonts.ready,
+      document.fonts.load('12px "Fira Code Variable"'),
+      document.fonts.load('12px "Symbols Nerd Font Mono"'),
+    ]).catch(() => undefined);
+    void fontsReady.then(() => {
+      if (disposed || !host) {
+        return;
       }
+      teardown = startXtermSession(host);
+    });
+
+    return () => {
+      // Set before teardown so an unmount that races font loading (terminal not
+      // yet constructed, teardown still undefined) still cancels startXtermSession.
+      disposed = true;
+      teardown?.();
     };
 
-    const sendResize = () => {
+    function startXtermSession(container: HTMLElement) {
+      let resizeObserver: ResizeObserver | null = null;
+      let pendingResizeFrame: number | null = null;
+      let warnedFitUnavailable = false;
+      const terminalFontFamily = terminalFontFamilyFromElement(container);
+      const terminal = new Terminal({
+        allowProposedApi: true,
+        convertEol: false,
+        cursorBlink: true,
+        disableStdin: session.status !== 'running',
+        fontFamily: terminalFontFamily,
+        fontSize: 12,
+        lineHeight: 1.35,
+        macOptionClickForcesSelection: true,
+        rightClickSelectsWord: true,
+        ...(disableScrollback ? { scrollback: 0 } : {}),
+        theme: terminalThemeFromTokens(),
+      });
+      terminal.open(container);
+      terminalRef.current = terminal;
+
       try {
-        if (disposed) {
-          return 'unready' as const;
-        }
-        const result = fitTerminalToHost(terminal, container);
-        if (result === 'unready') {
-          return result;
-        }
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          webgl.dispose();
+          onRendererWarning(ptyCopy.renderer.webglFallback);
+        });
+        terminal.loadAddon(webgl);
+        onRendererWarning(null);
+      } catch {
+        onRendererWarning(ptyCopy.renderer.webglUnavailable);
+      }
+
+      const sendInput = (data: string) => {
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
-          socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+          terminal.scrollToBottom();
+          socket.send(JSON.stringify({ type: 'input', data }));
         }
-        return result;
-      } catch {
-        // xterm can briefly report zero-size geometry while the canvas is animating.
-        return 'unready' as const;
-      }
-    };
+      };
 
-    const scheduleResize = (attempt = 0) => {
-      if (pendingResizeFrame !== null) {
-        window.cancelAnimationFrame(pendingResizeFrame);
-      }
-      pendingResizeFrame = window.requestAnimationFrame(() => {
-        pendingResizeFrame = null;
-        if (sendResize() === 'fit' || disposed) {
-          return;
+      const sendResize = () => {
+        try {
+          if (disposed) {
+            return 'unready' as const;
+          }
+          const result = fitTerminalToHost(terminal, container);
+          if (result === 'unready') {
+            return result;
+          }
+          const socket = socketRef.current;
+          if (socket?.readyState === WebSocket.OPEN && statusRef.current === 'running') {
+            socket.send(
+              JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }),
+            );
+          }
+          return result;
+        } catch {
+          // xterm can briefly report zero-size geometry while the canvas is animating.
+          return 'unready' as const;
         }
-        const hostRect = container.getBoundingClientRect();
-        const hostVisible = hostRect.width > 0 && hostRect.height > 0;
-        if (hostVisible && attempt < TERMINAL_FIT_RETRY_FRAMES) {
-          scheduleResize(attempt + 1);
-          return;
+      };
+
+      const scheduleResize = (attempt = 0) => {
+        if (pendingResizeFrame !== null) {
+          window.cancelAnimationFrame(pendingResizeFrame);
         }
-        if (hostVisible && !warnedFitUnavailable) {
-          warnedFitUnavailable = true;
-          console.warn('xterm fit skipped because render cell dimensions were unavailable.', {
-            ptySessionId: session.id,
-            hostWidth: hostRect.width,
-            hostHeight: hostRect.height,
-          });
-        }
-      });
-    };
-
-    resizeObserver = new ResizeObserver(() => scheduleResize());
-    resizeObserver.observe(container);
-    scheduleResize();
-
-    const inputDisposable = terminal.onData(sendInput);
-
-    let lastHandledShiftEnterAt = 0;
-    const shouldShimShiftEnter = session.purpose === 'agent';
-    const handleShiftEnter = (event: KeyboardEvent) => {
-      if (
-        !shouldShimShiftEnter ||
-        event.type !== 'keydown' ||
-        event.key !== 'Enter' ||
-        !event.shiftKey
-      ) {
-        return false;
-      }
-      lastHandledShiftEnterAt = performance.now();
-      event.preventDefault();
-      event.stopPropagation();
-      sendInput('\x1b[200~\n\x1b[201~');
-      return true;
-    };
-    terminal.attachCustomKeyEventHandler((event) => !handleShiftEnter(event));
-
-    const handleTerminalKeyDown = (event: KeyboardEvent) => {
-      if (isCopyShortcut(event)) {
-        const selection = terminal.getSelection();
-        if (selection) {
-          event.preventDefault();
-          event.stopPropagation();
-          void navigator.clipboard?.writeText(selection).catch(() => {
-            // The copy event handler covers the normal browser path; this is a best-effort fallback.
-          });
-          return;
-        }
-      }
-      if (performance.now() - lastHandledShiftEnterAt < 50) {
-        return;
-      }
-      handleShiftEnter(event);
-    };
-    container.addEventListener('keydown', handleTerminalKeyDown, true);
-
-    const forcePrimaryMouseSelection = (event: MouseEvent) => {
-      // Isagi favors ordinary drag-to-select/copy for terminal text. Users can
-      // still send primary mouse events to tmux-aware apps with Shift-click on
-      // macOS or Alt-click elsewhere.
-      if (event.button !== 0 || event.altKey || event.shiftKey) {
-        return;
-      }
-      try {
-        Object.defineProperty(event, isMacPlatform() ? 'altKey' : 'shiftKey', { value: true });
-      } catch {
-        // If the browser marks the modifier property non-configurable, users can
-        // still force xterm selection with Option on macOS or Shift elsewhere.
-      }
-    };
-    container.addEventListener('mousedown', forcePrimaryMouseSelection, true);
-
-    const handleTerminalCopy = (event: ClipboardEvent) => {
-      const selection = terminal.getSelection();
-      if (!selection) {
-        return;
-      }
-      event.clipboardData?.setData('text/plain', selection);
-      event.preventDefault();
-    };
-    container.addEventListener('copy', handleTerminalCopy);
-
-    onConnectionChange('connecting');
-    onSocketNotice(null);
-    void Effect.runPromise(resolvePtyWebSocketUrl(session.id)).then(
-      (url) => {
-        if (disposed) {
-          return;
-        }
-        const socket = new WebSocket(url);
-        socketRef.current = socket;
-        socket.addEventListener('open', () => {
-          onSocketNotice(null);
-          onConnectionChange('connected');
-          sendResize();
-        });
-        socket.addEventListener('message', (event) => {
-          const message = decodeSocketMessage(event.data);
-          if (!message) {
-            onSocketNotice({
-              message: ptySocketErrorCopy.byReason('invalid_message'),
-              kind: 'protocol',
-            });
-            onConnectionChange('error');
+        pendingResizeFrame = window.requestAnimationFrame(() => {
+          pendingResizeFrame = null;
+          if (sendResize() === 'fit' || disposed) {
             return;
           }
-          switch (message.type) {
-            case 'session':
-              statusRef.current = message.status;
-              terminal.options.disableStdin = message.status !== 'running';
-              onStatusChange(message.status);
-              onExit({
-                exitCode: message.exitCode ?? null,
-                signal: message.signal ?? null,
-              });
-              break;
-            case 'output':
-              terminal.write(message.data);
-              break;
-            case 'exit': {
-              const status =
-                message.exitCode === 0 && message.signal === null ? 'exited' : 'failed';
-              statusRef.current = status;
-              terminal.options.disableStdin = true;
-              onStatusChange(status);
-              onExit({ exitCode: message.exitCode, signal: message.signal });
-              break;
-            }
-            case 'error':
+          const hostRect = container.getBoundingClientRect();
+          const hostVisible = hostRect.width > 0 && hostRect.height > 0;
+          if (hostVisible && attempt < TERMINAL_FIT_RETRY_FRAMES) {
+            scheduleResize(attempt + 1);
+            return;
+          }
+          if (hostVisible && !warnedFitUnavailable) {
+            warnedFitUnavailable = true;
+            console.warn('xterm fit skipped because render cell dimensions were unavailable.', {
+              ptySessionId: session.id,
+              hostWidth: hostRect.width,
+              hostHeight: hostRect.height,
+            });
+          }
+        });
+      };
+
+      resizeObserver = new ResizeObserver(() => scheduleResize());
+      resizeObserver.observe(container);
+      scheduleResize();
+
+      const inputDisposable = terminal.onData(sendInput);
+
+      let lastHandledShiftEnterAt = 0;
+      const shouldShimShiftEnter = session.purpose === 'agent';
+      const handleShiftEnter = (event: KeyboardEvent) => {
+        if (
+          !shouldShimShiftEnter ||
+          event.type !== 'keydown' ||
+          event.key !== 'Enter' ||
+          !event.shiftKey
+        ) {
+          return false;
+        }
+        lastHandledShiftEnterAt = performance.now();
+        event.preventDefault();
+        event.stopPropagation();
+        sendInput('\x1b[200~\n\x1b[201~');
+        return true;
+      };
+      terminal.attachCustomKeyEventHandler((event) => !handleShiftEnter(event));
+
+      const handleTerminalKeyDown = (event: KeyboardEvent) => {
+        if (isCopyShortcut(event)) {
+          const selection = terminal.getSelection();
+          if (selection) {
+            event.preventDefault();
+            event.stopPropagation();
+            void navigator.clipboard?.writeText(selection).catch(() => {
+              // The copy event handler covers the normal browser path; this is a best-effort fallback.
+            });
+            return;
+          }
+        }
+        if (performance.now() - lastHandledShiftEnterAt < 50) {
+          return;
+        }
+        handleShiftEnter(event);
+      };
+      container.addEventListener('keydown', handleTerminalKeyDown, true);
+
+      const forcePrimaryMouseSelection = (event: MouseEvent) => {
+        // Isagi favors ordinary drag-to-select/copy for terminal text. Users can
+        // still send primary mouse events to tmux-aware apps with Shift-click on
+        // macOS or Alt-click elsewhere.
+        if (event.button !== 0 || event.altKey || event.shiftKey) {
+          return;
+        }
+        try {
+          Object.defineProperty(event, isMacPlatform() ? 'altKey' : 'shiftKey', { value: true });
+        } catch {
+          // If the browser marks the modifier property non-configurable, users can
+          // still force xterm selection with Option on macOS or Shift elsewhere.
+        }
+      };
+      container.addEventListener('mousedown', forcePrimaryMouseSelection, true);
+
+      const handleTerminalCopy = (event: ClipboardEvent) => {
+        const selection = terminal.getSelection();
+        if (!selection) {
+          return;
+        }
+        event.clipboardData?.setData('text/plain', selection);
+        event.preventDefault();
+      };
+      container.addEventListener('copy', handleTerminalCopy);
+
+      onConnectionChange('connecting');
+      onSocketNotice(null);
+      void Effect.runPromise(resolvePtyWebSocketUrl(session.id)).then(
+        (url) => {
+          if (disposed) {
+            return;
+          }
+          const socket = new WebSocket(url);
+          socketRef.current = socket;
+          socket.addEventListener('open', () => {
+            onSocketNotice(null);
+            onConnectionChange('connected');
+            sendResize();
+          });
+          socket.addEventListener('message', (event) => {
+            const message = decodeSocketMessage(event.data);
+            if (!message) {
               onSocketNotice({
-                message: ptySocketErrorCopy.byReason(message.code),
+                message: ptySocketErrorCopy.byReason('invalid_message'),
                 kind: 'protocol',
               });
               onConnectionChange('error');
-              break;
-            case 'replay_start':
-            case 'replay_end':
-              break;
-          }
-        });
-        socket.addEventListener('close', () => {
-          if (!disposed) {
-            onConnectionChange('disconnected');
-          }
-        });
-        socket.addEventListener('error', () => {
-          onSocketNotice({
-            message: ptySocketErrorCopy.byReason('socket_unavailable'),
-            kind: 'transport',
+              return;
+            }
+            switch (message.type) {
+              case 'session':
+                statusRef.current = message.status;
+                terminal.options.disableStdin = message.status !== 'running';
+                onStatusChange(message.status);
+                onExit({
+                  exitCode: message.exitCode ?? null,
+                  signal: message.signal ?? null,
+                });
+                break;
+              case 'output':
+                terminal.write(message.data);
+                break;
+              case 'exit': {
+                const status =
+                  message.exitCode === 0 && message.signal === null ? 'exited' : 'failed';
+                statusRef.current = status;
+                terminal.options.disableStdin = true;
+                onStatusChange(status);
+                onExit({ exitCode: message.exitCode, signal: message.signal });
+                break;
+              }
+              case 'error':
+                onSocketNotice({
+                  message: ptySocketErrorCopy.byReason(message.code),
+                  kind: 'protocol',
+                });
+                onConnectionChange('error');
+                break;
+              case 'replay_start':
+              case 'replay_end':
+                break;
+            }
           });
-          onConnectionChange('error');
-        });
-      },
-      (error: unknown) => {
-        if (!disposed) {
-          const runtimeError = formatRuntimeError(error);
-          onSocketNotice({ message: runtimeError, kind: 'transport' });
-          onConnectionChange('error');
-          terminal.write(ptySocketErrorCopy.connectFailed(runtimeError));
-        }
-      },
-    );
+          socket.addEventListener('close', () => {
+            if (!disposed) {
+              onConnectionChange('disconnected');
+            }
+          });
+          socket.addEventListener('error', () => {
+            onSocketNotice({
+              message: ptySocketErrorCopy.byReason('socket_unavailable'),
+              kind: 'transport',
+            });
+            onConnectionChange('error');
+          });
+        },
+        (error: unknown) => {
+          if (!disposed) {
+            const runtimeError = formatRuntimeError(error);
+            onSocketNotice({ message: runtimeError, kind: 'transport' });
+            onConnectionChange('error');
+            terminal.write(ptySocketErrorCopy.connectFailed(runtimeError));
+          }
+        },
+      );
 
-    return () => {
-      disposed = true;
-      if (pendingResizeFrame !== null) {
-        window.cancelAnimationFrame(pendingResizeFrame);
-      }
-      resizeObserver?.disconnect();
-      inputDisposable.dispose();
-      container.removeEventListener('keydown', handleTerminalKeyDown, true);
-      container.removeEventListener('mousedown', forcePrimaryMouseSelection, true);
-      container.removeEventListener('copy', handleTerminalCopy);
-      socketRef.current?.close();
-      socketRef.current = null;
-      terminalRef.current = null;
-      terminal.dispose();
-    };
+      return () => {
+        disposed = true;
+        if (pendingResizeFrame !== null) {
+          window.cancelAnimationFrame(pendingResizeFrame);
+        }
+        resizeObserver?.disconnect();
+        inputDisposable.dispose();
+        container.removeEventListener('keydown', handleTerminalKeyDown, true);
+        container.removeEventListener('mousedown', forcePrimaryMouseSelection, true);
+        container.removeEventListener('copy', handleTerminalCopy);
+        socketRef.current?.close();
+        socketRef.current = null;
+        terminalRef.current = null;
+        terminal.dispose();
+      };
+    }
   }, [
     onConnectionChange,
     onExit,

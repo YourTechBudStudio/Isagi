@@ -109,9 +109,9 @@ importers:
       '@base-ui/react':
         specifier: ^1.5.0
         version: 1.5.0(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@fontsource-variable/jetbrains-mono':
-        specifier: ^5.2.8
-        version: 5.2.8
+      '@fontsource-variable/fira-code':
+        specifier: ^5.2.7
+        version: 5.2.7
       '@fontsource-variable/sora':
         specifier: ^5.2.8
         version: 5.2.8
@@ -796,8 +796,8 @@ packages:
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
 
-  '@fontsource-variable/jetbrains-mono@5.2.8':
-    resolution: {integrity: sha512-WBA9elru6Jdp5df2mES55wuOO0WIrn3kpXnI4+W2ek5u3ZgLS9XS4gmIlcQhiZOWEKl95meYdvK7xI+ETLCq/Q==}
+  '@fontsource-variable/fira-code@5.2.7':
+    resolution: {integrity: sha512-J2bxN7fz5rd8WpQYyau4o19WqTzxoTqaNj9jhsv4p21GSu1Rf34tbqsxqjyDCR+wDMHM3SajyFqtq+5uvRUQ7w==}
 
   '@fontsource-variable/sora@5.2.8':
     resolution: {integrity: sha512-sP+ILTfi5r3cqmMBntI4ooQNxFI+LyHyD5hcPbWwwL4uh4kKFAkOz0w2veCXjz18fKRdva6OG0dY+5yQ02f30w==}
@@ -3869,7 +3869,7 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@fontsource-variable/jetbrains-mono@5.2.8': {}
+  '@fontsource-variable/fira-code@5.2.7': {}
 
   '@fontsource-variable/sora@5.2.8': {}
 

@@ -1,0 +1,5 @@
+# Vendored binary assets — keep diffs clean and avoid line-ending munging.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
