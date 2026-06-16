@@ -53,7 +53,7 @@ Capture these as implementation constraints. Do not reopen them unless a concret
 - Generated hook/plugin/extension/config artifacts must live under runtime-owned data paths, for example `harness-integrations/<harness>/` for static adapter artifacts and `agent-sessions/<agentSessionId>/integration/` for per-session material.
 - Inherit user harness config by default. Only inject Isagi’s per-process integration on top. Do not mutate global user config, harness home config, or project-local harness config.
 - A supported harness adapter must satisfy the full contract: launch, resume by session ID, per-invocation integration, and current session ID observation. Do not build a product-facing capabilities matrix for partial adapters.
-- Only one active interactive websocket attachment is supported per session/process for now. Prefer rejecting a second attach with a stable error over replacing the first connection.
+- Only one active interactive websocket attachment is supported per durable session/process for now. Latest valid claim/attach wins: supersede the previous attachment with a stable `session_attachment_moved` websocket error, then close it.
 - Closing a websocket is detach only. Killing a PTY process is explicit and independent from durable session deletion. Deleting a pane/surface/worktree deletes durable sessions and cleans up active processes.
 - Resume should not send automatic text/input to the harness. It should only open the harness session.
 - Phase 1 must be UI mock states only so the product feel can be reviewed before runtime functionality is wired.
@@ -63,46 +63,53 @@ Capture these as implementation constraints. Do not reopen them unless a concret
 Conceptual ownership:
 
 ```txt
-surface_panes
-  -> durable entity: agent_sessions or terminal_sessions
+worktree
+  -> UI placement: worktree_surfaces -> surface_panes
+       -> nullable pane placement: agent_session or terminal_session id
+  -> durable runtime entities: agent_sessions / terminal_sessions
        -> active_pty_process_id nullable
             -> pty_processes row and live backend ref
 ```
 
+Durable sessions are worktree-scoped runtime entities. They must not know which pane or surface is displaying them. `surface_panes` owns UI placement through nullable polymorphic placement fields (`session_kind`, `session_id`). Service-level validation owns preventing invalid session-kind/session-id combinations and cross-worktree placement.
+
 Suggested persistence shape:
 
 ```txt
+surface_panes
+  id
+  surface_id
+  title
+  attention
+  sort_order
+  session_kind nullable: agent_session | terminal_session
+  session_id nullable
+  created_at
+  updated_at
+
 agent_sessions
   id
-  pane_id unique
   worktree_id
   harness
   cwd
   harness_session_id nullable
   harness_session_ref_json nullable
   active_pty_process_id nullable
-  diagnostic_code nullable
-  diagnostic_detail nullable
   created_at
   updated_at
   last_seen_at
 
 terminal_sessions
   id
-  pane_id unique
   worktree_id
   cwd
   command
   active_pty_process_id nullable
-  diagnostic_code nullable
-  diagnostic_detail nullable
   created_at
   updated_at
 
 pty_processes
   id
-  owner_kind: agent_session | terminal_session
-  owner_id
   backend: node_pty | tmux
   backend_ref_json
   command
@@ -120,9 +127,9 @@ pty_processes
   last_seen_at
 ```
 
-Do not store full env values in the database because tokens and secrets may be present. Keep env in memory during launch and record only diagnostic-safe metadata.
+Do not store full env values in the database because tokens and secrets may be present. Keep env in memory during launch and record only diagnostic-safe metadata. Do not store derived session diagnostic columns while the state can be projected from durable session facts plus active PTY process facts.
 
-Suggested stable diagnostic codes:
+Stable diagnostic codes include:
 
 - `harness_session_id_missing`
 - `harness_resume_failed`
@@ -130,6 +137,8 @@ Suggested stable diagnostic codes:
 - `harness_event_auth_failed`
 - `pty_process_launch_failed`
 - `pty_process_attach_failed`
+- `pty_process_missing`
+- `pty_process_not_running`
 
 ## Target Contract Shape
 
@@ -262,49 +271,65 @@ Done when:
 - The old `pty-sessions/:id` route and public contract vocabulary are no longer used by the web.
 - Durable session rows survive independently of current PTY process status.
 
-## Phase 3: Lazy Attach Restoration, Process Lifecycle, And Diagnostics
+## Phase 3: Lazy Attach Restoration, Process Lifecycle, Pane Ownership, And Diagnostics
 
-Goal: make opening/attaching to a durable session ensure an attachable PTY process exists.
+Goal: make opening/attaching to a durable session ensure an attachable PTY process exists, while correcting pane/session ownership so panes own UI placement and durable sessions stay worktree-scoped runtime entities.
 
-Attach flow:
+Claim/attach flow:
 
 ```txt
-web opens agent/terminal session websocket
+web creates or focuses a pane
+-> pane session claim/create API validates worktree placement
+-> pane placement points at an agent_session or terminal_session
+-> runtime issues a single-use attach token
+-> web opens agent/terminal session websocket with attachToken
+-> session lifecycle consumes token and enforces latest-wins attachment
 -> durable service loads session
--> if active_pty_process_id is running, attach to it
+-> if active_pty_process_id is running/starting, attach to it
 -> otherwise build launch/resume intent
 -> launch a new pty_process
 -> update active_pty_process_id
--> attach websocket to the new process
+-> attach websocket to the process
 ```
 
-Agent sessions in this phase can resume only when a `harness_session_id` is already present. Harness capture arrives in later phases. Terminal sessions should recreate a fresh shell when their process is missing.
+Agent sessions in this phase can resume only when a `harness_session_id` is already present. Harness capture arrives in later phases. Terminal sessions recreate a fresh shell when their process is missing.
 
 Work involved:
 
-- Add per-session restore/attach locking so two opens cannot create two processes. Use Effect synchronization primitives or an equivalent process-local lock owned by the session service.
-- Enforce one active interactive websocket attachment per durable session/process. Prefer rejecting the second connection with a stable websocket error.
-- Startup reconciliation should mark stale `pty_processes` honestly, especially node-pty process records after runtime restart, while preserving durable sessions.
+- Correct ownership so `agent_sessions` and `terminal_sessions` are pane-unaware, worktree-scoped runtime entities, and `surface_panes` owns nullable polymorphic session placement.
+- Add explicit single-pane surface creation and pane session claim/create APIs. Claim/create supports starting fresh agent/terminal sessions and claiming existing sessions, validates worktree ownership, and uses last-wins pane placement.
+- Add a runtime-local `session-lifecycle` service for keyed restore locks, single-use five-minute attach tokens, active websocket registration, and active attachment supersession.
+- Require websocket attach tokens. Missing, invalid, expired, or mismatched tokens are stable websocket protocol errors.
+- Enforce one active interactive websocket attachment per durable session/process with latest-wins handoff. The previous socket receives `session_attachment_moved`, detaches, and closes.
+- Startup reconciliation should mark stale `pty_processes` honestly, especially node-pty process records after runtime restart, while preserving durable sessions and pane placement.
 - Websocket close detaches only.
 - Explicit kill kills the current process and leaves the durable session unless the caller is deleting the pane/surface/worktree.
-- Delete pane/surface/worktree cleans up durable entities and active process incarnations.
-- Add diagnostic state on durable sessions for missing session ID, resume failure, launch failure, and attach failure.
+- Delete pane/surface/worktree cleans up pane-owned session placement, durable sessions, and active process incarnations through the normal cleanup paths.
+- Keep diagnostic state derived read-side from durable session facts plus active PTY process facts. Do not add durable diagnostic columns while the state is derivable.
+- Add frontend handling for the protocol-only moved attachment state with `Start fresh` and `Claim session` actions.
+- Add simple runtime orphan session GC: sessions with no pane placement are eligible after a 60 second grace period; active websocket attachments are skipped; live active PTY processes are killed/cleaned before durable session deletion.
 
 Verification:
 
-- Tests for startup reconciliation: stale processes become terminal, durable sessions remain.
+- Tests for pane-owned placement, surface detail projection, and cross-worktree claim rejection.
+- Tests for explicit surface creation and pane session claim/create behavior.
+- Tests for attach token issuance, single-use consumption, expiration, revocation, and attach-token websocket errors.
+- Tests for latest-wins websocket supersession and `session_attachment_moved` handling.
+- Tests for startup reconciliation: stale processes become terminal, durable sessions/pane placement remain.
 - Tests for lazy attach reusing a live process.
 - Tests for lazy attach creating a new process when active process is missing.
-- Tests for concurrent attach producing exactly one process.
-- Tests for second active websocket rejection.
-- Tests for failed restoration leaving the pane/entity visible with stable diagnostics.
+- Tests for concurrent attach/restore producing exactly one process.
+- Tests for failed restoration leaving the pane/entity visible with stable derived diagnostics.
+- Tests for moved-attachment frontend state/actions and orphan session GC.
 - `pnpm check`.
 
 Done when:
 
 - Runtime restart no longer makes durable agent/terminal panes disappear or become conceptually dead.
-- Opening a pane performs lazy process recreation when appropriate.
-- The UI can render honest failed/unavailable states from durable session diagnostics.
+- Opening a pane performs claim-then-attach and lazy process recreation when appropriate.
+- The UI can render honest failed/unavailable/moved states from runtime facts and websocket protocol errors.
+- Pane/session ownership is modeled in the right direction: panes own placement, sessions own runtime continuity, and PTY processes remain disposable transports.
+- Orphan sessions are cleaned up without adding a public session deletion API.
 
 ## Phase 4: Internal Harness Event IPC And Pi Adapter End To End
 

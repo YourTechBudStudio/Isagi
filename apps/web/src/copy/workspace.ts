@@ -63,6 +63,15 @@ export const ptyCopy = {
   emptySurface: 'Nothing running here yet. cmd+k to start something.',
   noSession: 'No session',
   emptyPane: "This pane's empty \u2014 nothing's claimed it yet.",
+  movedAttachment: {
+    status: 'Moved',
+    title: 'This session moved elsewhere.',
+    body: 'Start fresh in this pane, or claim the session back here.',
+    action: {
+      startFresh: 'Start fresh',
+      claim: 'Claim session',
+    },
+  },
   renderer: {
     webglFallback: 'WebGL renderer fell back to canvas.',
     webglUnavailable: 'WebGL renderer unavailable; using canvas.',

@@ -5,12 +5,13 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   AgentHarness,
+  CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
   DeleteSurfaceOutput,
   DeleteProjectOutput,
-  LaunchAgentSessionOutput,
-  LaunchTerminalSessionOutput,
+  PaneSessionClaimInput,
+  PaneSessionClaimOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -100,34 +101,65 @@ export function setWorktreeEnvironmentFocus(
   );
 }
 
+export function createSurface(
+  worktreeId: number,
+  kind: 'agent' | 'terminal',
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.createSurface(worktreeId, kind)));
+}
+
+export function claimPaneSession(
+  worktreeId: number,
+  input: PaneSessionClaimInput,
+): Effect.Effect<PaneSessionClaimOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.claimPaneSession(worktreeId, input)));
+}
+
 export function launchAgentSession(
   worktreeId: number,
   harness: AgentHarness,
-): Effect.Effect<LaunchAgentSessionOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.launchAgentSession(worktreeId, harness)),
-  );
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return Effect.gen(function* () {
+    const surface = yield* createSurface(worktreeId, 'agent');
+    yield* claimPaneSession(worktreeId, {
+      action: 'start_fresh_agent',
+      paneId: surface.paneId,
+      harness,
+    });
+    return surface;
+  });
 }
 
 export function launchTerminalSession(
   worktreeId: number,
-): Effect.Effect<LaunchTerminalSessionOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.launchTerminalSession(worktreeId)));
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return Effect.gen(function* () {
+    const surface = yield* createSurface(worktreeId, 'terminal');
+    yield* claimPaneSession(worktreeId, {
+      action: 'start_fresh_terminal',
+      paneId: surface.paneId,
+    });
+    return surface;
+  });
 }
 
 export function resolveAgentSessionPtyWebSocketUrl(
   agentSessionId: number,
+  attachToken?: string,
 ): Effect.Effect<string, Error> {
   return getClient().pipe(
-    Effect.map((client) => client.resolveAgentSessionPtyWebSocketUrl(agentSessionId)),
+    Effect.map((client) => client.resolveAgentSessionPtyWebSocketUrl(agentSessionId, attachToken)),
   );
 }
 
 export function resolveTerminalSessionPtyWebSocketUrl(
   terminalSessionId: number,
+  attachToken?: string,
 ): Effect.Effect<string, Error> {
   return getClient().pipe(
-    Effect.map((client) => client.resolveTerminalSessionPtyWebSocketUrl(terminalSessionId)),
+    Effect.map((client) =>
+      client.resolveTerminalSessionPtyWebSocketUrl(terminalSessionId, attachToken),
+    ),
   );
 }
 

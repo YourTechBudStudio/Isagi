@@ -4,11 +4,10 @@ import { Duration, Effect } from 'effect';
 import type {
   ActiveContextPersistenceInput,
   AgentHarness,
+  CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
   DeleteSurfaceOutput,
-  LaunchAgentSessionOutput,
-  LaunchTerminalSessionOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
   ReconciliationFinding,
@@ -282,7 +281,7 @@ export async function commitOpenWorktreeSuccess(
 
 export async function commitLaunchSessionSuccess(
   client: QueryClient,
-  output: LaunchAgentSessionOutput | LaunchTerminalSessionOutput,
+  output: CreateSurfaceOutput,
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
     Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {

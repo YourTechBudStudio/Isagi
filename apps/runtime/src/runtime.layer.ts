@@ -32,6 +32,8 @@ import {
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from './runtime-events/index.js';
+import { SessionGcLive, type SessionGcService } from './session-gc/index.js';
+import { SessionLifecycleLive, type SessionLifecycleService } from './session-lifecycle/index.js';
 import {
   SurfaceRepositoryLive,
   SurfaceServiceLive,
@@ -75,19 +77,34 @@ const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(Layer.provid
 const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
 );
+const SessionLifecycleLayer = SessionLifecycleLive;
 const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(HarnessAdapterRegistryLayer),
+  Layer.provide(SessionLifecycleLayer),
 );
 const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(PtyServiceLayer),
+  Layer.provide(SessionLifecycleLayer),
 );
-const SurfaceAndPtyServiceLayer = Layer.provideMerge(SurfaceServiceLive, PtyServiceLayer);
 const SessionServicesLayer = Layer.mergeAll(AgentSessionServiceLayer, TerminalSessionServiceLayer);
+const SurfaceServiceLayer = SurfaceServiceLive.pipe(
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(AgentSessionServiceLayer),
+  Layer.provide(TerminalSessionServiceLayer),
+  Layer.provide(SessionLifecycleLayer),
+);
+const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
+const SessionGcLayer = SessionGcLive.pipe(
+  Layer.provide(AgentSessionRepositoryLayer),
+  Layer.provide(TerminalSessionRepositoryLayer),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(SessionLifecycleLayer),
+);
 const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
@@ -103,6 +120,8 @@ const ApiServicesLayer = Layer.mergeAll(
   HarnessEventServiceLayer,
   HarnessEventEndpointLive,
   HarnessEventTokenRegistryLayer,
+  SessionLifecycleLayer,
+  SessionGcLayer,
 );
 const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(Layer.provide(SurfaceAndPtyServiceLayer));
 
@@ -116,7 +135,9 @@ export type RuntimeServices =
   | InternalRuntimeEventBusService
   | HarnessEventServiceShape
   | HarnessEventEndpointService
-  | HarnessEventTokenRegistryService;
+  | HarnessEventTokenRegistryService
+  | SessionLifecycleService
+  | SessionGcService;
 
 const ServicesLayer = Layer.mergeAll(WorkspaceServiceLayer, ApiServicesLayer).pipe(
   Layer.provideMerge(InternalRuntimeEventBusLive),

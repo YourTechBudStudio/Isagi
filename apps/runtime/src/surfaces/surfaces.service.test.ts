@@ -9,6 +9,7 @@ import { Effect, Either, Layer } from 'effect';
 
 import type { SurfaceDeleteWarning } from '@isagi/contracts';
 
+import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
 import {
   DataDirectory,
   RuntimeDatabase,
@@ -16,12 +17,18 @@ import {
   type DataDirectoryService,
 } from '../persistence/index.js';
 import {
+  agentSessions,
   ptyProcesses,
   surfacePanes,
   terminalSessions,
   worktreeSurfaces,
 } from '../persistence/schema.js';
 import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
+import { SessionLifecycleLive } from '../session-lifecycle/index.js';
+import {
+  TerminalSessionService,
+  type TerminalSessionServiceShape,
+} from '../terminal-sessions/index.js';
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/index.js';
 import {
   SurfaceError,
@@ -67,6 +74,159 @@ test('single-pane surface creation persists duplicate-safe titles and one-leaf l
     });
     assert.equal(output.detail.panes[0]?.id, output.first.paneId);
     assert.equal(output.detail.panes[0]?.session, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('create surface API slice creates and focuses a single empty pane', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-create-api-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const created = yield* surfaces.createSurface({ worktreeId, kind: 'terminal' });
+        return {
+          created,
+          focus: yield* surfaces.setWorktreeEnvironmentFocus({
+            worktreeId,
+            focus: { activeSurfaceId: created.surfaceId, activePaneId: created.paneId },
+          }),
+          detail: yield* surfaces.getSurfaceDetail(created.surfaceId),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(output.created.title, 'Terminal');
+    assert.equal(output.detail.panes[0]?.id, output.created.paneId);
+    assert.equal(output.detail.panes[0]?.session, null);
+    assert.deepEqual(output.focus, {
+      worktreeId: output.created.worktreeId,
+      activeSurfaceId: output.created.surfaceId,
+      activePaneId: output.created.paneId,
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('claim pane session start fresh assigns the new agent session to the pane', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-claim-start-fresh-'));
+  let startFreshInput: Parameters<AgentSessionServiceShape['startFresh']>[0] | null = null;
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          kind: 'agent',
+          titleBase: 'Agent',
+        });
+        const claim = yield* surfaces.claimPaneSession({
+          worktreeId,
+          claim: { action: 'start_fresh_agent', paneId: surface.paneId, harness: 'pi' },
+        });
+        const database = yield* RuntimeDatabase;
+        const pane = yield* database.use('test_find_claimed_pane', (db) =>
+          db.select().from(surfacePanes).where(eq(surfacePanes.id, surface.paneId)).get(),
+        );
+        return { claim, pane };
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            agentService: {
+              startFresh: (input) =>
+                Effect.sync(() => {
+                  startFreshInput = input;
+                  return { agentSessionId: 123 };
+                }),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.deepEqual(startFreshInput, {
+      worktreeId: output.claim.worktreeId,
+      harness: 'pi',
+      cwd: '/repo/isagi',
+    });
+    assert.equal(output.pane?.sessionKind, 'agent_session');
+    assert.equal(output.pane?.sessionId, 123);
+    assert.deepEqual(output.claim.session, { kind: 'agent_session', agentSessionId: 123 });
+    assert.equal(typeof output.claim.attachToken, 'string');
+    assert.ok(output.claim.attachToken.length > 0);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('claim pane session rejects sessions from another worktree', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-claim-worktree-mismatch-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          kind: 'agent',
+          titleBase: 'Agent',
+        });
+        return yield* surfaces
+          .claimPaneSession({
+            worktreeId,
+            claim: { action: 'claim_agent_session', paneId: surface.paneId, agentSessionId: 77 },
+          })
+          .pipe(Effect.either);
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            agentService: {
+              get: () => Effect.succeed(agentSessionRowForTest({ id: 77, worktreeId: 999 })),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(Either.isLeft(result), true);
+    if (Either.isLeft(result)) {
+      assert.equal(result.left instanceof SurfaceError, true);
+      assert.equal((result.left as SurfaceError).code, 'session_worktree_mismatch');
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('surface detail composes pane-owned agent session placement', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-pane-session-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          kind: 'agent',
+          titleBase: 'Pi',
+        });
+        const agentSessionId = yield* insertAgentSessionForWorktree({
+          worktreeId,
+          paneId: surface.paneId,
+        });
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId);
+        return { agentSessionId, detail };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    const paneSession = output.detail.panes[0]?.session;
+    assert.equal(paneSession?.kind, 'agent_session');
+    assert.equal(paneSession?.agentSession.id, output.agentSessionId);
+    assert.equal(paneSession?.agentSession.paneId, output.detail.panes[0]?.id);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -635,6 +795,38 @@ function addPaneToSurface(surfaceId: number) {
   });
 }
 
+function insertAgentSessionForWorktree(input: {
+  readonly worktreeId: number;
+  readonly paneId: number;
+}) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    return yield* database.use('test_insert_agent_session_for_pane', (db) => {
+      const now = new Date().toISOString();
+      const session = db
+        .insert(agentSessions)
+        .values({
+          worktreeId: input.worktreeId,
+          harness: 'pi',
+          cwd: '/repo/isagi',
+          harnessSessionId: null,
+          harnessSessionRefJson: null,
+          activePtyProcessId: null,
+          createdAt: now,
+          updatedAt: now,
+          lastSeenAt: null,
+        })
+        .returning({ id: agentSessions.id })
+        .get();
+      db.update(surfacePanes)
+        .set({ sessionKind: 'agent_session', sessionId: session.id, updatedAt: now })
+        .where(eq(surfacePanes.id, input.paneId))
+        .run();
+      return session.id;
+    });
+  });
+}
+
 function insertPtySession(input: {
   readonly paneId: number;
   readonly worktreeId: number;
@@ -688,7 +880,6 @@ function insertPtySession(input: {
       const session = db
         .insert(terminalSessions)
         .values({
-          paneId: input.paneId,
           worktreeId: input.worktreeId,
           cwd: '/repo/isagi',
           shellCommand: 'bash',
@@ -699,6 +890,10 @@ function insertPtySession(input: {
         })
         .returning({ id: terminalSessions.id })
         .get();
+      db.update(surfacePanes)
+        .set({ sessionKind: 'terminal_session', sessionId: session.id, updatedAt: now })
+        .where(eq(surfacePanes.id, input.paneId))
+        .run();
       outputPaneIdBySession.set(process.id, input.paneId);
       return session.id;
     });
@@ -709,6 +904,8 @@ function testLayer(
   dataRoot: string,
   options: {
     readonly cleanupWarnings?: (ptyProcessId: number) => readonly SurfaceDeleteWarning[];
+    readonly agentService?: Partial<AgentSessionServiceShape> | undefined;
+    readonly terminalService?: Partial<TerminalSessionServiceShape> | undefined;
   } = {},
 ) {
   const dataDirectory = {
@@ -725,15 +922,79 @@ function testLayer(
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const ptyService = Layer.succeed(PtyService, fakePtyService(options));
+  const agentService = Layer.succeed(
+    AgentSessionService,
+    fakeAgentSessionService(options.agentService),
+  );
+  const terminalService = Layer.succeed(
+    TerminalSessionService,
+    fakeTerminalSessionService(options.terminalService),
+  );
   const surfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(dataDirectoryLayer),
   );
+  const sessionLifecycle = SessionLifecycleLive;
   const surfaceService = SurfaceServiceLive.pipe(
     Layer.provide(surfaceRepository),
     Layer.provide(ptyService),
+    Layer.provide(agentService),
+    Layer.provide(terminalService),
+    Layer.provide(sessionLifecycle),
   );
-  return Layer.mergeAll(database, workspaceRepository, surfaceRepository, surfaceService);
+  return Layer.mergeAll(
+    database,
+    workspaceRepository,
+    surfaceRepository,
+    surfaceService,
+    sessionLifecycle,
+  );
+}
+
+function fakeAgentSessionService(
+  overrides: Partial<AgentSessionServiceShape> = {},
+): AgentSessionServiceShape {
+  return {
+    startFresh: () => Effect.die('agent startFresh is not used by surface service tests'),
+    get: () => Effect.die('agent get is not used by surface service tests'),
+    ensureActivePtyProcess: () =>
+      Effect.die('agent ensureActivePtyProcess is not used by surface service tests'),
+    activePtyProcessId: () =>
+      Effect.die('agent activePtyProcessId is not used by surface service tests'),
+    recordHarnessSessionObservation: () =>
+      Effect.die('agent recordHarnessSessionObservation is not used by surface service tests'),
+    ...overrides,
+  } satisfies AgentSessionServiceShape;
+}
+
+function fakeTerminalSessionService(
+  overrides: Partial<TerminalSessionServiceShape> = {},
+): TerminalSessionServiceShape {
+  return {
+    startFresh: () => Effect.die('terminal startFresh is not used by surface service tests'),
+    get: () => Effect.die('terminal get is not used by surface service tests'),
+    ensureActivePtyProcess: () =>
+      Effect.die('terminal ensureActivePtyProcess is not used by surface service tests'),
+    activePtyProcessId: () =>
+      Effect.die('terminal activePtyProcessId is not used by surface service tests'),
+    ...overrides,
+  } satisfies TerminalSessionServiceShape;
+}
+
+function agentSessionRowForTest(input: { readonly id: number; readonly worktreeId: number }) {
+  return {
+    id: input.id,
+    worktreeId: input.worktreeId,
+    harness: 'pi' as const,
+    cwd: '/repo/isagi',
+    harnessSessionId: null,
+    harnessSessionRefJson: null,
+    activePtyProcessId: null,
+    createdAt: '2026-06-15T00:00:00.000Z',
+    updatedAt: '2026-06-15T00:00:00.000Z',
+    lastSeenAt: null,
+    activePtyProcess: null,
+  };
 }
 
 function fakePtyService(options: {

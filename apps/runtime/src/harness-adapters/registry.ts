@@ -1,7 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
-
 import { HarnessEventEndpoint } from '../harness-events/endpoint.service.js';
 import { HarnessEventTokenRegistry } from '../harness-events/token-registry.js';
 import { DataDirectory } from '../persistence/index.js';

@@ -9,17 +9,17 @@ import {
   apiErrorResponseSchema,
   apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
-  type AgentHarness,
   type ApiEndpoint,
   type ApiEndpointError,
   type ApiEndpointOutput,
   type ApiEndpointParams,
   type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
+  type CreateSurfaceOutput,
   type DeleteWorktreeInput,
   type DeleteWorktreeOutput,
-  type LaunchAgentSessionOutput,
-  type LaunchTerminalSessionOutput,
+  type PaneSessionClaimInput,
+  type PaneSessionClaimOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
   type DeleteSurfaceOutput,
@@ -101,21 +101,28 @@ export interface RuntimeClient {
     WorktreeEnvironmentFocusOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.setWorktreeEnvironmentFocus>
   >;
-  readonly launchAgentSession: (
+  readonly createSurface: (
     worktreeId: number,
-    harness: AgentHarness,
+    kind: 'agent' | 'terminal',
   ) => Effect.Effect<
-    LaunchAgentSessionOutput,
-    RuntimeEndpointError<typeof apiEndpoints.surfaces.launchAgentSession>
+    CreateSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.createSurface>
   >;
-  readonly launchTerminalSession: (
+  readonly claimPaneSession: (
     worktreeId: number,
+    input: PaneSessionClaimInput,
   ) => Effect.Effect<
-    LaunchTerminalSessionOutput,
-    RuntimeEndpointError<typeof apiEndpoints.surfaces.launchTerminalSession>
+    PaneSessionClaimOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.claimPaneSession>
   >;
-  readonly resolveAgentSessionPtyWebSocketUrl: (agentSessionId: number) => string;
-  readonly resolveTerminalSessionPtyWebSocketUrl: (terminalSessionId: number) => string;
+  readonly resolveAgentSessionPtyWebSocketUrl: (
+    agentSessionId: number,
+    attachToken?: string,
+  ) => string;
+  readonly resolveTerminalSessionPtyWebSocketUrl: (
+    terminalSessionId: number,
+    attachToken?: string,
+  ) => string;
   readonly resolveRuntimeEventsWebSocketUrl: () => string;
   readonly addProject: (
     path: string,
@@ -196,23 +203,25 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.deletePane, { surfaceId, paneId }),
     setWorktreeEnvironmentFocus: (worktreeId, input) =>
       request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
-    launchAgentSession: (worktreeId, harness) =>
-      request(apiEndpoints.surfaces.launchAgentSession, { worktreeId }, { harness }),
-    launchTerminalSession: (worktreeId) =>
-      request(apiEndpoints.surfaces.launchTerminalSession, { worktreeId }),
-    resolveAgentSessionPtyWebSocketUrl: (agentSessionId) => {
+    createSurface: (worktreeId, kind) =>
+      request(apiEndpoints.surfaces.createSurface, { worktreeId }, { kind }),
+    claimPaneSession: (worktreeId, input) =>
+      request(apiEndpoints.surfaces.claimPaneSession, { worktreeId }, input),
+    resolveAgentSessionPtyWebSocketUrl: (agentSessionId, attachToken) => {
       const httpUrl = new URL(
         `${apiBasePath}${interpolatePath(agentSessionPtyWebSocketEndpoint.path, { agentSessionId })}`,
         runtimeUrl,
       );
+      if (attachToken) httpUrl.searchParams.set('attachToken', attachToken);
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
-    resolveTerminalSessionPtyWebSocketUrl: (terminalSessionId) => {
+    resolveTerminalSessionPtyWebSocketUrl: (terminalSessionId, attachToken) => {
       const httpUrl = new URL(
         `${apiBasePath}${interpolatePath(terminalSessionPtyWebSocketEndpoint.path, { terminalSessionId })}`,
         runtimeUrl,
       );
+      if (attachToken) httpUrl.searchParams.set('attachToken', attachToken);
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },

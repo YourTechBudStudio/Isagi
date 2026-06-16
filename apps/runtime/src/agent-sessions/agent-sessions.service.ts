@@ -1,24 +1,24 @@
 import { Context, Effect, Layer } from 'effect';
 
-import type { AgentHarness, LaunchAgentSessionOutput } from '@isagi/contracts';
+import type { AgentHarness } from '@isagi/contracts';
 
 import { HarnessAdapterError, HarnessAdapterRegistry } from '../harness-adapters/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js';
-import { titleForHarness } from '../pty-processes/service/runtime-namespace.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
-import { SurfaceRepository } from '../surfaces/index.js';
+import { SessionLifecycle } from '../session-lifecycle/index.js';
 import type { AgentSessionRow } from '../surfaces/types.js';
 import { AgentSessionRepository } from './agent-sessions.repository.js';
 
 export interface AgentSessionService {
-  readonly launch: (input: {
+  readonly startFresh: (input: {
     readonly worktreeId: number;
     readonly harness: AgentHarness;
-  }) => Effect.Effect<
-    LaunchAgentSessionOutput,
-    DatabaseError | PtyLaunchError | HarnessAdapterError
-  >;
+    readonly cwd: string;
+  }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError>;
+  readonly get: (
+    agentSessionId: number,
+  ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
   readonly ensureActivePtyProcess: (
     agentSessionId: number,
   ) => Effect.Effect<
@@ -61,11 +61,10 @@ export const AgentSessionServiceLive = Layer.effect(
   AgentSessionService,
   Effect.gen(function* () {
     const repository = yield* AgentSessionRepository;
-    const surfaces = yield* SurfaceRepository;
     const pty = yield* PtyService;
     const harnesses = yield* HarnessAdapterRegistry;
     const eventBus = yield* InternalRuntimeEventBus;
-    const restoreLocks = new Map<number, Promise<void>>();
+    const lifecycle = yield* SessionLifecycle;
 
     const publishChanged = (agentSessionId: number) =>
       eventBus.publish({ type: 'agent_session_changed', agentSessionId });
@@ -83,9 +82,8 @@ export const AgentSessionServiceLive = Layer.effect(
       });
 
     const ensureActivePtyProcess = (agentSessionId: number) =>
-      withSessionLock(
-        restoreLocks,
-        agentSessionId,
+      lifecycle.withRestoreLock(
+        { kind: 'agent_session', sessionId: agentSessionId },
         Effect.gen(function* () {
           const session = yield* findAgentSessionOrFail(repository, agentSessionId);
           const process = session.activePtyProcess;
@@ -108,38 +106,17 @@ export const AgentSessionServiceLive = Layer.effect(
       );
 
     return {
-      launch: (input) =>
+      startFresh: (input) =>
         Effect.gen(function* () {
-          const surface = yield* surfaces.createSinglePaneSurface({
-            worktreeId: input.worktreeId,
-            kind: 'agent',
-            titleBase: titleForHarness(input.harness),
-          });
           const agentSessionId = yield* repository.create({
-            paneId: surface.paneId,
             worktreeId: input.worktreeId,
             harness: input.harness,
-            cwd: surface.cwd,
-          });
-          const launch = yield* harnesses.buildLaunch({
-            agentSessionId,
-            harness: input.harness,
-            cwd: surface.cwd,
-            latestHarnessSessionId: null,
-          });
-          const process = yield* pty.launch(launch);
-          yield* repository.setActivePtyProcess({
-            agentSessionId,
-            ptyProcessId: process.ptyProcessId,
+            cwd: input.cwd,
           });
           yield* publishChanged(agentSessionId);
-          return {
-            worktreeId: input.worktreeId,
-            surfaceId: surface.surfaceId,
-            paneId: surface.paneId,
-            agentSessionId,
-          } satisfies LaunchAgentSessionOutput;
+          return { agentSessionId };
         }),
+      get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
       ensureActivePtyProcess,
       activePtyProcessId: (agentSessionId) =>
         Effect.gen(function* () {
@@ -217,42 +194,6 @@ function agentLaunchEnvelope(
     harness: session.harness,
     cwd: session.cwd,
     latestHarnessSessionId: session.harnessSessionId,
-  });
-}
-
-function withSessionLock<A, E>(
-  locks: Map<number, Promise<void>>,
-  sessionId: number,
-  effect: Effect.Effect<A, E>,
-): Effect.Effect<A, E> {
-  return Effect.acquireUseRelease(
-    acquireSessionLock(locks, sessionId),
-    () => effect,
-    (release) => Effect.sync(release),
-  );
-}
-
-function acquireSessionLock(locks: Map<number, Promise<void>>, sessionId: number) {
-  return Effect.promise(() => {
-    const previous = locks.get(sessionId) ?? Promise.resolve();
-    let releaseCurrent: () => void = () => {};
-    const current = previous
-      .catch(() => {})
-      .then(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseCurrent = resolve;
-          }),
-      );
-    locks.set(sessionId, current);
-    return previous
-      .catch(() => {})
-      .then(() => () => {
-        releaseCurrent();
-        if (locks.get(sessionId) === current) {
-          locks.delete(sessionId);
-        }
-      });
   });
 }
 

@@ -65,12 +65,14 @@ const testSurfaceRepository = {
   worktreeExists: () => Effect.succeed(false),
   findSurface: () => Effect.succeed(null),
   findPane: () => Effect.succeed(null),
+  findWorktreePath: () => Effect.succeed(null),
   findEnvironmentFocus: () => Effect.succeed(null),
   listWorkspaceSurfaceMetadata: Effect.succeed([]),
   listEnvironmentFocusStates: Effect.succeed([]),
   listPanesForSurface: () => Effect.succeed([]),
   listAgentSessionsForPanes: () => Effect.succeed([]),
   listTerminalSessionsForPanes: () => Effect.succeed([]),
+  findPaneForSession: () => Effect.succeed(null),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
   listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
@@ -78,6 +80,8 @@ const testSurfaceRepository = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
+  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
 
@@ -87,6 +91,8 @@ const testSurfaceService = {
   deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
+  createSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),

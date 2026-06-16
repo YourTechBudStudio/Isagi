@@ -200,6 +200,10 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   harness_session_id_missing:
     'No harness session was captured for this pane, so there is nothing to resume yet.',
   session_already_attached: 'This session is already attached in another pane.',
+  session_attachment_moved: 'This session moved to another pane.',
+  attach_token_missing: 'This pane needs to claim the session before attaching.',
+  attach_token_invalid: 'This pane no longer has the current attach claim.',
+  attach_token_expired: 'This attach claim expired. Claim the session again.',
   log_read_failed: "Couldn't replay this session's history.",
   worktree_not_found: worktreeGone,
   backend_unavailable: "This session's backend isn't available.",

@@ -27,7 +27,7 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
 
       // The runtime emits a stable error code; user-facing wording lives in web copy.
       assert.equal(message.type, 'error');
-      assert.equal(message.type === 'error' ? message.code : undefined, 'session_not_found');
+      assert.equal(message.type === 'error' ? message.code : undefined, 'attach_token_missing');
     } finally {
       socket.close();
     }

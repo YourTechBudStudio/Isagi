@@ -80,6 +80,26 @@ export function registerSurfacesApi(
     mapError: (error, context) => toSurfaceApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.createSurface, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.createSurface({ worktreeId: params.worktreeId, kind: input.kind });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.claimPaneSession, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.claimPaneSession({ worktreeId: params.worktreeId, claim: input });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
 }
 
 function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
@@ -92,8 +112,10 @@ function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
         requestId: context.requestId,
         data: {
           reason: surfaceRejectionReason(error),
+          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
           ...(error.paneId ? { paneId: error.paneId } : {}),
+          ...(error.sessionId ? { sessionId: error.sessionId } : {}),
         },
       };
     }
@@ -141,6 +163,9 @@ function surfaceRejectionReason(error: SurfaceError) {
     case 'surface_not_found':
     case 'pane_not_found':
     case 'invalid_surface_title':
+    case 'worktree_not_found':
+    case 'session_not_found':
+    case 'session_worktree_mismatch':
       return error.code;
     default:
       return 'surface_not_found';

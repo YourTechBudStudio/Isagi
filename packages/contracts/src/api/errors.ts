@@ -44,6 +44,9 @@ export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_n
 export const surfaceRejectionReasonSchema = Schema.Literal(
   'surface_not_found',
   'pane_not_found',
+  'worktree_not_found',
+  'session_not_found',
+  'session_worktree_mismatch',
   'invalid_surface_title',
 );
 
@@ -162,8 +165,10 @@ export const surfaceRejectedErrorSchema = Schema.Struct({
   requestId: Schema.String,
   data: Schema.Struct({
     reason: surfaceRejectionReasonSchema,
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    sessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 

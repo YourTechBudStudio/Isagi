@@ -106,6 +106,8 @@ export const surfacePanes = sqliteTable('surface_panes', {
   title: text('title').notNull(),
   attention: text('attention', { enum: ['idle', 'working', 'waiting', 'error'] }).notNull(),
   sortOrder: integer('sort_order').notNull(),
+  sessionKind: text('session_kind', { enum: ['agent_session', 'terminal_session'] }),
+  sessionId: integer('session_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -141,47 +143,33 @@ export const ptyProcesses = sqliteTable('pty_processes', {
   lastSeenAt: text('last_seen_at'),
 });
 
-export const agentSessions = sqliteTable(
-  'agent_sessions',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    paneId: integer('pane_id')
-      .notNull()
-      .references(() => surfacePanes.id, { onDelete: 'cascade' }),
-    worktreeId: integer('worktree_id')
-      .notNull()
-      .references(() => worktrees.id, { onDelete: 'cascade' }),
-    harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }).notNull(),
-    cwd: text('cwd').notNull(),
-    harnessSessionId: text('harness_session_id'),
-    harnessSessionRefJson: text('harness_session_ref_json'),
-    activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
-    createdAt: text('created_at').notNull(),
-    updatedAt: text('updated_at').notNull(),
-    lastSeenAt: text('last_seen_at'),
-  },
-  (table) => [uniqueIndex('agent_sessions_pane_id_unique').on(table.paneId)],
-);
+export const agentSessions = sqliteTable('agent_sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  worktreeId: integer('worktree_id')
+    .notNull()
+    .references(() => worktrees.id, { onDelete: 'cascade' }),
+  harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }).notNull(),
+  cwd: text('cwd').notNull(),
+  harnessSessionId: text('harness_session_id'),
+  harnessSessionRefJson: text('harness_session_ref_json'),
+  activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  lastSeenAt: text('last_seen_at'),
+});
 
-export const terminalSessions = sqliteTable(
-  'terminal_sessions',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    paneId: integer('pane_id')
-      .notNull()
-      .references(() => surfacePanes.id, { onDelete: 'cascade' }),
-    worktreeId: integer('worktree_id')
-      .notNull()
-      .references(() => worktrees.id, { onDelete: 'cascade' }),
-    cwd: text('cwd').notNull(),
-    shellCommand: text('shell_command').notNull(),
-    shellArgsJson: text('shell_args_json').notNull(),
-    activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
-    createdAt: text('created_at').notNull(),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (table) => [uniqueIndex('terminal_sessions_pane_id_unique').on(table.paneId)],
-);
+export const terminalSessions = sqliteTable('terminal_sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  worktreeId: integer('worktree_id')
+    .notNull()
+    .references(() => worktrees.id, { onDelete: 'cascade' }),
+  cwd: text('cwd').notNull(),
+  shellCommand: text('shell_command').notNull(),
+  shellArgsJson: text('shell_args_json').notNull(),
+  activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
 
 export const worktreeEnvironmentStates = sqliteTable(
   'worktree_environment_states',

@@ -1,19 +1,23 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { Effect } from 'effect';
-import { Bot, SquareTerminal } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Bot, CirclePlus, RotateCw, SquareTerminal } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
   AgentSessionMetadata,
   SessionStatus,
   TerminalSessionMetadata,
+  PaneSessionClaimInput,
+  PtyWebSocketErrorCode,
   PtyWebSocketOutputMessage,
   SurfaceDetail,
   SurfacePane,
 } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
+import { Button } from '../../components/Button.js';
 import { PaneDeleteButton } from '../../components/PaneDeleteButton.js';
 import { ptyCopy, ptySocketErrorCopy } from '../../copy/index.js';
 import {
@@ -21,7 +25,9 @@ import {
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
 import { resolveActivePaneId } from '../../lib/workspace/model.js';
+import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/queries.js';
 import {
+  claimPaneSession,
   formatRuntimeError,
   resolveAgentSessionPtyWebSocketUrl,
   resolveTerminalSessionPtyWebSocketUrl,
@@ -40,6 +46,7 @@ type PtyPaneSession =
 type SocketNotice = {
   readonly message: string;
   readonly kind: 'protocol' | 'transport';
+  readonly code?: PtyWebSocketErrorCode | undefined;
 };
 type XtermRenderDimensions = {
   readonly css?: {
@@ -119,6 +126,11 @@ function PtyPaneShell({
 }) {
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
   const session = ptyPaneSession(pane.session);
+  const queryClient = useQueryClient();
+  const [movedSession, setMovedSession] = useState<PtyPaneSession | null>(null);
+  const [pendingMovedAction, setPendingMovedAction] = useState<'start_fresh' | 'claim' | null>(
+    null,
+  );
   const [liveStatus, setLiveStatus] = useState<SessionStatus | null>(session?.status ?? null);
   const [exit, setExit] = useState<{
     readonly exitCode: number | null;
@@ -137,9 +149,12 @@ function PtyPaneShell({
     setLiveStatus(session?.status ?? null);
     setExit({ exitCode: null, signal: null });
     setSocketNotice(null);
-  }, [session?.id, session?.status, session?.statusReason]);
+    setMovedSession(null);
+    setPendingMovedAction(null);
+  }, [session?.id, session?.kind, session?.status, session?.statusReason]);
 
-  const dimmed = status === 'exited' || status === 'failed' || status === 'killed';
+  const moved = movedSession !== null;
+  const dimmed = moved || status === 'exited' || status === 'failed' || status === 'killed';
   const errored = status === 'failed';
   const statusReasonNotice = ptyCopy.sessionNotice(status, statusReason);
   const connectionNotice =
@@ -149,11 +164,53 @@ function PtyPaneShell({
         )
       : null;
   const paneNotice =
-    (socketNotice?.kind === 'protocol' ? socketNotice.message : null) ??
-    statusReasonNotice ??
-    socketNotice?.message ??
-    connectionNotice ??
-    rendererWarning;
+    movedSession !== null
+      ? ptySocketErrorCopy.byReason('session_attachment_moved')
+      : ((socketNotice?.kind === 'protocol' ? socketNotice.message : null) ??
+        statusReasonNotice ??
+        socketNotice?.message ??
+        connectionNotice ??
+        rendererWarning);
+
+  const claimCurrentSession = () => {
+    if (!movedSession || pendingMovedAction) return;
+    setPendingMovedAction('claim');
+    void Effect.runPromise(
+      claimPaneSession(surface.worktreeId, claimInputForSession(pane.id, movedSession)),
+    )
+      .then(async () => {
+        setSocketNotice(null);
+        setMovedSession(null);
+        await queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surface.id) });
+        await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      })
+      .catch((error: unknown) => {
+        setSocketNotice({ message: formatRuntimeError(error), kind: 'transport' });
+      })
+      .finally(() => setPendingMovedAction(null));
+  };
+
+  const startFreshSession = () => {
+    if (!movedSession || pendingMovedAction) return;
+    setPendingMovedAction('start_fresh');
+    void Effect.runPromise(
+      claimPaneSession(surface.worktreeId, startFreshInputForSession(pane.id, movedSession)),
+    )
+      .then(async () => {
+        setSocketNotice(null);
+        setMovedSession(null);
+        await queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surface.id) });
+        await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+      })
+      .catch((error: unknown) => {
+        setSocketNotice({ message: formatRuntimeError(error), kind: 'transport' });
+      })
+      .finally(() => setPendingMovedAction(null));
+  };
+
+  const handleMoved = useCallback(() => {
+    if (session) setMovedSession(session);
+  }, [session]);
 
   return (
     <section
@@ -170,7 +227,11 @@ function PtyPaneShell({
         <AttentionDot state={pane.attention} />
         <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
         <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {session ? ptyCopy.sessionStatus(status, statusReason, exit) : ptyCopy.noSession}
+          {moved
+            ? ptyCopy.movedAttachment.status
+            : session
+              ? ptyCopy.sessionStatus(status, statusReason, exit)
+              : ptyCopy.noSession}
         </span>
       </div>
       {paneNotice ? (
@@ -178,13 +239,22 @@ function PtyPaneShell({
           {paneNotice}
         </div>
       ) : null}
-      {session ? (
+      {movedSession ? (
+        <MovedAttachmentState
+          pendingAction={pendingMovedAction}
+          onClaim={claimCurrentSession}
+          onStartFresh={startFreshSession}
+        />
+      ) : session ? (
         <XtermPane
           key={session.id}
+          paneId={pane.id}
+          worktreeId={surface.worktreeId}
           session={session}
           focused={focused}
           onConnectionChange={setConnection}
           onExit={setExit}
+          onMoved={handleMoved}
           onRendererWarning={setRendererWarning}
           onSocketNotice={setSocketNotice}
           onStatusChange={setLiveStatus}
@@ -200,14 +270,19 @@ function PtyPaneShell({
 }
 
 function XtermPane({
+  paneId,
+  worktreeId,
   session,
   focused,
   onConnectionChange,
   onExit,
+  onMoved,
   onRendererWarning,
   onSocketNotice,
   onStatusChange,
 }: {
+  readonly paneId: number;
+  readonly worktreeId: number;
   readonly session: PtyPaneSession;
   readonly focused: boolean;
   readonly onConnectionChange: (state: ConnectionState) => void;
@@ -215,6 +290,7 @@ function XtermPane({
     readonly exitCode: number | null;
     readonly signal: string | null;
   }) => void;
+  readonly onMoved: () => void;
   readonly onRendererWarning: (message: string | null) => void;
   readonly onSocketNotice: (notice: SocketNotice | null) => void;
   readonly onStatusChange: (status: SessionStatus) => void;
@@ -429,7 +505,7 @@ function XtermPane({
 
       onConnectionChange('connecting');
       onSocketNotice(null);
-      void Effect.runPromise(resolveSessionPtyWebSocketUrl(session)).then(
+      void Effect.runPromise(resolveSessionPtyWebSocketUrl(worktreeId, paneId, session)).then(
         (url) => {
           if (disposed) {
             return;
@@ -477,8 +553,12 @@ function XtermPane({
                 onSocketNotice({
                   message: ptySocketErrorCopy.byReason(message.code),
                   kind: 'protocol',
+                  code: message.code,
                 });
                 onConnectionChange('error');
+                if (message.code === 'session_attachment_moved') {
+                  onMoved();
+                }
                 break;
               case 'replay_start':
               case 'replay_end':
@@ -527,13 +607,16 @@ function XtermPane({
   }, [
     onConnectionChange,
     onExit,
+    onMoved,
     onRendererWarning,
     onSocketNotice,
     onStatusChange,
     disableScrollback,
+    paneId,
     session.id,
     session.kind,
     session.status,
+    worktreeId,
   ]);
 
   useEffect(() => {
@@ -567,10 +650,74 @@ function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession | null 
   return { kind: 'terminal_session', ...session.terminalSession };
 }
 
-function resolveSessionPtyWebSocketUrl(session: PtyPaneSession): Effect.Effect<string, Error> {
+function resolveSessionPtyWebSocketUrl(
+  worktreeId: number,
+  paneId: number,
+  session: PtyPaneSession,
+): Effect.Effect<string, Error> {
+  return Effect.gen(function* () {
+    const claim = yield* claimPaneSession(worktreeId, claimInputForSession(paneId, session));
+    const attachToken = claim.attachToken;
+    return yield* session.kind === 'agent_session'
+      ? resolveAgentSessionPtyWebSocketUrl(session.id, attachToken)
+      : resolveTerminalSessionPtyWebSocketUrl(session.id, attachToken);
+  });
+}
+
+function claimInputForSession(paneId: number, session: PtyPaneSession): PaneSessionClaimInput {
   return session.kind === 'agent_session'
-    ? resolveAgentSessionPtyWebSocketUrl(session.id)
-    : resolveTerminalSessionPtyWebSocketUrl(session.id);
+    ? { action: 'claim_agent_session', paneId, agentSessionId: session.id }
+    : { action: 'claim_terminal_session', paneId, terminalSessionId: session.id };
+}
+
+function startFreshInputForSession(paneId: number, session: PtyPaneSession): PaneSessionClaimInput {
+  return session.kind === 'agent_session'
+    ? { action: 'start_fresh_agent', paneId, harness: session.harness }
+    : { action: 'start_fresh_terminal', paneId };
+}
+
+function MovedAttachmentState({
+  pendingAction,
+  onClaim,
+  onStartFresh,
+}: {
+  readonly pendingAction: 'start_fresh' | 'claim' | null;
+  readonly onClaim: () => void;
+  readonly onStartFresh: () => void;
+}) {
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <RotateCw size={18} aria-hidden className="text-waiting" />
+        <div className="space-y-1">
+          <p className="font-mono text-[12px] text-fg-muted">{ptyCopy.movedAttachment.title}</p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+            {ptyCopy.movedAttachment.body}
+          </p>
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={CirclePlus}
+            disabled={pendingAction !== null}
+            onClick={onStartFresh}
+          >
+            {ptyCopy.movedAttachment.action.startFresh}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={RotateCw}
+            disabled={pendingAction !== null}
+            onClick={onClaim}
+          >
+            {ptyCopy.movedAttachment.action.claim}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function isCopyShortcut(event: KeyboardEvent) {

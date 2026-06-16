@@ -11,6 +11,7 @@ import {
 } from '@isagi/contracts';
 
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
+import { SessionLifecycle, SessionLifecycleLive } from '../session-lifecycle/index.js';
 import {
   TerminalSessionService,
   type TerminalSessionServiceShape,
@@ -55,6 +56,7 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
             }),
         }),
       ),
+      SessionLifecycleLive,
     ),
   );
 
@@ -62,8 +64,16 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
     await fastify.register(websocket);
     registerPtyApi(fastify, runtime as never);
     await fastify.ready();
+    const token = await runtime.runPromise(
+      Effect.gen(function* () {
+        const lifecycle = yield* SessionLifecycle;
+        return yield* lifecycle.issueAttachToken({ kind: 'agent_session', sessionId: 10 });
+      }),
+    );
 
-    const ws = await fastify.injectWS('/api/v1/agent-sessions/10/attach');
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
     await attachStarted;
     const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()));
     ws.terminate();
@@ -80,7 +90,8 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
 
 function fakeAgentSessionService(): AgentSessionServiceShape {
   return {
-    launch: () => Effect.die('launch is not used'),
+    startFresh: () => Effect.die('startFresh is not used'),
+    get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
     activePtyProcessId: () => Effect.succeed(20),
     recordHarnessSessionObservation: () => Effect.void,
@@ -89,7 +100,8 @@ function fakeAgentSessionService(): AgentSessionServiceShape {
 
 function fakeTerminalSessionService(): TerminalSessionServiceShape {
   return {
-    launch: () => Effect.die('launch is not used'),
+    startFresh: () => Effect.die('startFresh is not used'),
+    get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.die('terminal attach is not used'),
     activePtyProcessId: () => Effect.die('terminal attach is not used'),
   } satisfies TerminalSessionServiceShape;

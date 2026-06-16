@@ -1,19 +1,21 @@
 import { Context, Effect, Layer } from 'effect';
 
-import type { LaunchTerminalSessionOutput } from '@isagi/contracts';
-
 import { DatabaseError } from '../persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js';
 import { terminalShellCommand } from '../pty-processes/service/runtime-namespace.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
-import { SurfaceRepository } from '../surfaces/index.js';
+import { SessionLifecycle } from '../session-lifecycle/index.js';
 import type { TerminalSessionRow } from '../surfaces/types.js';
 import { TerminalSessionRepository } from './terminal-sessions.repository.js';
 
 export interface TerminalSessionService {
-  readonly launch: (input: {
+  readonly startFresh: (input: {
     readonly worktreeId: number;
-  }) => Effect.Effect<LaunchTerminalSessionOutput, DatabaseError | PtyLaunchError>;
+    readonly cwd: string;
+  }) => Effect.Effect<{ readonly terminalSessionId: number }, DatabaseError>;
+  readonly get: (
+    terminalSessionId: number,
+  ) => Effect.Effect<TerminalSessionRow, DatabaseError | TerminalSessionError>;
   readonly ensureActivePtyProcess: (
     terminalSessionId: number,
   ) => Effect.Effect<number, DatabaseError | TerminalSessionError | PtyLaunchError>;
@@ -40,10 +42,9 @@ export const TerminalSessionServiceLive = Layer.effect(
   TerminalSessionService,
   Effect.gen(function* () {
     const repository = yield* TerminalSessionRepository;
-    const surfaces = yield* SurfaceRepository;
     const pty = yield* PtyService;
     const eventBus = yield* InternalRuntimeEventBus;
-    const restoreLocks = new Map<number, Promise<void>>();
+    const lifecycle = yield* SessionLifecycle;
 
     const publishChanged = (terminalSessionId: number) =>
       eventBus.publish({ type: 'terminal_session_changed', terminalSessionId });
@@ -64,9 +65,8 @@ export const TerminalSessionServiceLive = Layer.effect(
       });
 
     const ensureActivePtyProcess = (terminalSessionId: number) =>
-      withSessionLock(
-        restoreLocks,
-        terminalSessionId,
+      lifecycle.withRestoreLock(
+        { kind: 'terminal_session', sessionId: terminalSessionId },
         Effect.gen(function* () {
           const session = yield* findTerminalSessionOrFail(repository, terminalSessionId);
           const process = session.activePtyProcess;
@@ -81,34 +81,19 @@ export const TerminalSessionServiceLive = Layer.effect(
       );
 
     return {
-      launch: (input) =>
+      startFresh: (input) =>
         Effect.gen(function* () {
-          const surface = yield* surfaces.createSinglePaneSurface({
-            worktreeId: input.worktreeId,
-            kind: 'terminal',
-            titleBase: 'Terminal',
-          });
           const shellCommand = terminalShellCommand();
           const terminalSessionId = yield* repository.create({
-            paneId: surface.paneId,
             worktreeId: input.worktreeId,
-            cwd: surface.cwd,
+            cwd: input.cwd,
             shellCommand,
             shellArgs: [],
           });
-          const process = yield* pty.launch({ command: shellCommand, args: [], cwd: surface.cwd });
-          yield* repository.setActivePtyProcess({
-            terminalSessionId,
-            ptyProcessId: process.ptyProcessId,
-          });
           yield* publishChanged(terminalSessionId);
-          return {
-            worktreeId: input.worktreeId,
-            surfaceId: surface.surfaceId,
-            paneId: surface.paneId,
-            terminalSessionId,
-          } satisfies LaunchTerminalSessionOutput;
+          return { terminalSessionId };
         }),
+      get: (terminalSessionId) => findTerminalSessionOrFail(repository, terminalSessionId),
       ensureActivePtyProcess,
       activePtyProcessId: (terminalSessionId) =>
         Effect.gen(function* () {
@@ -148,41 +133,5 @@ function findTerminalSessionOrFail(
       );
     }
     return session;
-  });
-}
-
-function withSessionLock<A, E>(
-  locks: Map<number, Promise<void>>,
-  sessionId: number,
-  effect: Effect.Effect<A, E>,
-): Effect.Effect<A, E> {
-  return Effect.acquireUseRelease(
-    acquireSessionLock(locks, sessionId),
-    () => effect,
-    (release) => Effect.sync(release),
-  );
-}
-
-function acquireSessionLock(locks: Map<number, Promise<void>>, sessionId: number) {
-  return Effect.promise(() => {
-    const previous = locks.get(sessionId) ?? Promise.resolve();
-    let releaseCurrent: () => void = () => {};
-    const current = previous
-      .catch(() => {})
-      .then(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseCurrent = resolve;
-          }),
-      );
-    locks.set(sessionId, current);
-    return previous
-      .catch(() => {})
-      .then(() => () => {
-        releaseCurrent();
-        if (locks.get(sessionId) === current) {
-          locks.delete(sessionId);
-        }
-      });
   });
 }

@@ -1,6 +1,5 @@
 CREATE TABLE `agent_sessions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`pane_id` integer NOT NULL,
 	`worktree_id` integer NOT NULL,
 	`harness` text NOT NULL,
 	`cwd` text NOT NULL,
@@ -10,12 +9,10 @@ CREATE TABLE `agent_sessions` (
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	`last_seen_at` text,
-	FOREIGN KEY (`pane_id`) REFERENCES `surface_panes`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`active_pty_process_id`) REFERENCES `pty_processes`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `agent_sessions_pane_id_unique` ON `agent_sessions` (`pane_id`);--> statement-breakpoint
 CREATE TABLE `projects` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,
@@ -53,6 +50,8 @@ CREATE TABLE `surface_panes` (
 	`title` text NOT NULL,
 	`attention` text NOT NULL,
 	`sort_order` integer NOT NULL,
+	`session_kind` text,
+	`session_id` integer,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`surface_id`) REFERENCES `worktree_surfaces`(`id`) ON UPDATE no action ON DELETE cascade
@@ -60,7 +59,6 @@ CREATE TABLE `surface_panes` (
 --> statement-breakpoint
 CREATE TABLE `terminal_sessions` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-	`pane_id` integer NOT NULL,
 	`worktree_id` integer NOT NULL,
 	`cwd` text NOT NULL,
 	`shell_command` text NOT NULL,
@@ -68,12 +66,10 @@ CREATE TABLE `terminal_sessions` (
 	`active_pty_process_id` integer,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	FOREIGN KEY (`pane_id`) REFERENCES `surface_panes`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`active_pty_process_id`) REFERENCES `pty_processes`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `terminal_sessions_pane_id_unique` ON `terminal_sessions` (`pane_id`);--> statement-breakpoint
 CREATE TABLE `worktree_environment_states` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`worktree_id` integer NOT NULL,

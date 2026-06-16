@@ -210,6 +210,35 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         attemptedSessionIds: [],
         warnings: [],
       }),
+    createSurface: (input) =>
+      Effect.succeed({
+        worktreeId: input.worktreeId,
+        surfaceId: 42,
+        paneId: 7,
+        title: input.kind === 'agent' ? 'Agent' : 'Terminal',
+      }),
+    claimPaneSession: (input) =>
+      Effect.succeed({
+        worktreeId: input.worktreeId,
+        surfaceId: 42,
+        paneId: input.claim.paneId,
+        attachToken: 'test-attach-token',
+        session:
+          input.claim.action === 'start_fresh_terminal' ||
+          input.claim.action === 'claim_terminal_session'
+            ? {
+                kind: 'terminal_session',
+                terminalSessionId:
+                  input.claim.action === 'claim_terminal_session'
+                    ? input.claim.terminalSessionId
+                    : 1,
+              }
+            : {
+                kind: 'agent_session',
+                agentSessionId:
+                  input.claim.action === 'claim_agent_session' ? input.claim.agentSessionId : 1,
+              },
+      }),
     cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
     createSinglePaneSurface: () =>
       Effect.die('createSinglePaneSurface is not used by surface API tests'),

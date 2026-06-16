@@ -1,7 +1,5 @@
 import { Bot, CircleDashed, History, Link2, RotateCw, Sparkles, TriangleAlert } from 'lucide-react';
 
-import type { IconType } from '../../lib/icon.js';
-
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
 import {
@@ -9,6 +7,7 @@ import {
   agentSessionCopy,
   type AgentPaneRestoreState,
 } from '../../copy/index.js';
+import type { IconType } from '../../lib/icon.js';
 
 /**
  * Dev-only preview of the agent-pane attach/restore states (plan Phase 1).
@@ -31,7 +30,8 @@ const MOCK_PANES: readonly MockPane[] = [
   {
     state: 'running',
     title: 'pi · feat/agent-session-tracking',
-    caption: 'Attached to a live process. The harness is interactive — the work surface is the hero.',
+    caption:
+      'Attached to a live process. The harness is interactive — the work surface is the hero.',
   },
   {
     state: 'connecting',
@@ -41,12 +41,14 @@ const MOCK_PANES: readonly MockPane[] = [
   {
     state: 'resuming',
     title: 'claude · fix/scrollback-render',
-    caption: 'The runtime restarted; the process is gone. We recreate it and resume the last session.',
+    caption:
+      'The runtime restarted; the process is gone. We recreate it and resume the last session.',
   },
   {
     state: 'resume_unavailable',
     title: 'opencode · spike/harness-events',
-    caption: 'No harness session id was ever captured, so there is nothing to resume — only start fresh.',
+    caption:
+      'No harness session id was ever captured, so there is nothing to resume — only start fresh.',
   },
   {
     state: 'resume_failed',

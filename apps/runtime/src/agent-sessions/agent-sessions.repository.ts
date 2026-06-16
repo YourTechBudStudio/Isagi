@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, lt } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
@@ -9,7 +9,6 @@ import type { AgentSessionRow, PtyProcessRow } from '../surfaces/index.js';
 
 export interface AgentSessionRepositoryService {
   readonly create: (input: {
-    readonly paneId: number;
     readonly worktreeId: number;
     readonly harness: AgentHarness;
     readonly cwd: string;
@@ -22,6 +21,10 @@ export interface AgentSessionRepositoryService {
   readonly findByActivePtyProcessId: (
     ptyProcessId: number,
   ) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
+  readonly listOrphans: (input: {
+    readonly updatedBefore: string;
+  }) => Effect.Effect<AgentSessionRow[], DatabaseError>;
+  readonly delete: (agentSessionId: number) => Effect.Effect<void, DatabaseError>;
   readonly recordHarnessSessionObservation: (input: {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
@@ -44,7 +47,6 @@ export const AgentSessionRepositoryLive = Layer.effect(
           return db
             .insert(agentSessions)
             .values({
-              paneId: input.paneId,
               worktreeId: input.worktreeId,
               harness: input.harness,
               cwd: input.cwd,
@@ -68,32 +70,43 @@ export const AgentSessionRepositoryLive = Layer.effect(
       find: (agentSessionId) =>
         database.use('find_agent_session', (db) => {
           const row = db
-            .select({
-              session: agentSessions,
-              surfaceId: surfacePanes.surfaceId,
-              process: ptyProcesses,
-            })
+            .select({ session: agentSessions, process: ptyProcesses })
             .from(agentSessions)
-            .innerJoin(surfacePanes, eq(agentSessions.paneId, surfacePanes.id))
             .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
             .where(eq(agentSessions.id, agentSessionId))
             .get();
-          return row ? agentSessionRow(row.session, row.surfaceId, row.process) : null;
+          return row ? agentSessionRow(row.session, row.process) : null;
         }),
       findByActivePtyProcessId: (ptyProcessId) =>
         database.use('find_agent_session_by_active_process', (db) => {
           const row = db
-            .select({
-              session: agentSessions,
-              surfaceId: surfacePanes.surfaceId,
-              process: ptyProcesses,
-            })
+            .select({ session: agentSessions, process: ptyProcesses })
             .from(agentSessions)
-            .innerJoin(surfacePanes, eq(agentSessions.paneId, surfacePanes.id))
             .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
             .where(eq(agentSessions.activePtyProcessId, ptyProcessId))
             .get();
-          return row ? agentSessionRow(row.session, row.surfaceId, row.process) : null;
+          return row ? agentSessionRow(row.session, row.process) : null;
+        }),
+      listOrphans: (input) =>
+        database.use('list_orphan_agent_sessions', (db) =>
+          db
+            .select({ session: agentSessions, process: ptyProcesses })
+            .from(agentSessions)
+            .leftJoin(
+              surfacePanes,
+              and(
+                eq(surfacePanes.sessionKind, 'agent_session'),
+                eq(surfacePanes.sessionId, agentSessions.id),
+              ),
+            )
+            .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+            .where(and(isNull(surfacePanes.id), lt(agentSessions.updatedAt, input.updatedBefore)))
+            .all()
+            .map((row) => agentSessionRow(row.session, row.process)),
+        ),
+      delete: (agentSessionId) =>
+        database.use('delete_agent_session', (db) => {
+          db.delete(agentSessions).where(eq(agentSessions.id, agentSessionId)).run();
         }),
       recordHarnessSessionObservation: (input) =>
         database.use('record_agent_harness_session_observation', (db) => {
@@ -113,13 +126,10 @@ export const AgentSessionRepositoryLive = Layer.effect(
 
 function agentSessionRow(
   row: typeof agentSessions.$inferSelect,
-  surfaceId: number,
   process: typeof ptyProcesses.$inferSelect | null,
 ): AgentSessionRow {
   return {
     id: row.id,
-    paneId: row.paneId,
-    surfaceId,
     worktreeId: row.worktreeId,
     harness: row.harness,
     cwd: row.cwd,

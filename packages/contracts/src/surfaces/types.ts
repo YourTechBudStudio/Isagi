@@ -178,6 +178,17 @@ export const setWorktreeEnvironmentFocusInputSchema = Schema.Struct({
   activePaneId: Schema.NullOr(positiveIntegerSchema),
 });
 
+export const createSurfaceInputSchema = Schema.Struct({
+  kind: runtimeSurfaceKindSchema,
+});
+
+export const createSurfaceOutputSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+  paneId: positiveIntegerSchema,
+  title: Schema.String,
+});
+
 export const renameSurfaceInputSchema = Schema.Struct({
   title: Schema.String,
 });
@@ -217,22 +228,43 @@ export const worktreeEnvironmentFocusOutputSchema = Schema.Struct({
   activePaneId: Schema.NullOr(positiveIntegerSchema),
 });
 
-export const launchAgentSessionInputSchema = Schema.Struct({
-  harness: agentHarnessSchema,
-});
+export const paneSessionClaimInputSchema = Schema.Union(
+  Schema.Struct({
+    action: Schema.Literal('start_fresh_agent'),
+    paneId: positiveIntegerSchema,
+    harness: agentHarnessSchema,
+  }),
+  Schema.Struct({
+    action: Schema.Literal('start_fresh_terminal'),
+    paneId: positiveIntegerSchema,
+  }),
+  Schema.Struct({
+    action: Schema.Literal('claim_agent_session'),
+    paneId: positiveIntegerSchema,
+    agentSessionId: positiveIntegerSchema,
+  }),
+  Schema.Struct({
+    action: Schema.Literal('claim_terminal_session'),
+    paneId: positiveIntegerSchema,
+    terminalSessionId: positiveIntegerSchema,
+  }),
+);
 
-export const launchAgentSessionOutputSchema = Schema.Struct({
+export const paneSessionClaimOutputSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
   paneId: positiveIntegerSchema,
-  agentSessionId: positiveIntegerSchema,
-});
-
-export const launchTerminalSessionOutputSchema = Schema.Struct({
-  worktreeId: positiveIntegerSchema,
-  surfaceId: positiveIntegerSchema,
-  paneId: positiveIntegerSchema,
-  terminalSessionId: positiveIntegerSchema,
+  attachToken: Schema.String.pipe(Schema.minLength(1)),
+  session: Schema.Union(
+    Schema.Struct({
+      kind: Schema.Literal('agent_session'),
+      agentSessionId: positiveIntegerSchema,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal('terminal_session'),
+      terminalSessionId: positiveIntegerSchema,
+    }),
+  ),
 });
 
 export const ptyWebSocketInputMessageSchema = Schema.Union(
@@ -256,6 +288,10 @@ export const ptyWebSocketErrorCodeSchema = Schema.Literal(
   'active_process_not_running',
   'harness_session_id_missing',
   'session_already_attached',
+  'session_attachment_moved',
+  'attach_token_missing',
+  'attach_token_invalid',
+  'attach_token_expired',
   'log_read_failed',
   'worktree_not_found',
   'backend_unavailable',
@@ -326,6 +362,8 @@ export type SurfaceDetail = Schema.Schema.Type<typeof surfaceDetailSchema>;
 export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
   typeof setWorktreeEnvironmentFocusInputSchema
 >;
+export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSchema>;
+export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type SurfaceSessionCleanupTarget = Schema.Schema.Type<
@@ -336,11 +374,8 @@ export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputS
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
 >;
-export type LaunchAgentSessionInput = Schema.Schema.Type<typeof launchAgentSessionInputSchema>;
-export type LaunchAgentSessionOutput = Schema.Schema.Type<typeof launchAgentSessionOutputSchema>;
-export type LaunchTerminalSessionOutput = Schema.Schema.Type<
-  typeof launchTerminalSessionOutputSchema
->;
+export type PaneSessionClaimInput = Schema.Schema.Type<typeof paneSessionClaimInputSchema>;
+export type PaneSessionClaimOutput = Schema.Schema.Type<typeof paneSessionClaimOutputSchema>;
 export type PtyWebSocketInputMessage = Schema.Schema.Type<typeof ptyWebSocketInputMessageSchema>;
 export type PtyWebSocketOutputMessage = Schema.Schema.Type<typeof ptyWebSocketOutputMessageSchema>;
 export type PtyWebSocketErrorCode = Schema.Schema.Type<typeof ptyWebSocketErrorCodeSchema>;

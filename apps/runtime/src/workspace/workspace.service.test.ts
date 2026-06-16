@@ -98,18 +98,22 @@ const testSurfaceRepository = {
   worktreeExists: () => Effect.succeed(false),
   findSurface: () => Effect.succeed(null),
   findPane: () => Effect.succeed(null),
+  findWorktreePath: () => Effect.succeed(null),
   findEnvironmentFocus: () => Effect.succeed(null),
   listWorkspaceSurfaceMetadata: Effect.succeed([]),
   listEnvironmentFocusStates: Effect.succeed([]),
   listPanesForSurface: () => Effect.succeed([]),
   listAgentSessionsForPanes: () => Effect.succeed([]),
   listTerminalSessionsForPanes: () => Effect.succeed([]),
+  findPaneForSession: () => Effect.succeed(null),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
   listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
   deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
+  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
 
@@ -118,6 +122,8 @@ const testSurfaceService = {
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
   deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
+  createSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
@@ -468,7 +474,10 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     cleanupWorktreeForDelete: (worktreeId: number) =>
       Effect.sync(() => {
         events.push(`cleanup:${worktreeId}`);
-        return { attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 701 }], warnings: [] };
+        return {
+          attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 701 }],
+          warnings: [],
+        };
       }),
   } satisfies SurfaceServiceShape;
 

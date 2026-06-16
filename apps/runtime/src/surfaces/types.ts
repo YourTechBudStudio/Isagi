@@ -39,6 +39,8 @@ export interface SurfacePaneRow {
   readonly title: string;
   readonly attention: AttentionState;
   readonly sortOrder: number;
+  readonly sessionKind: 'agent_session' | 'terminal_session' | null;
+  readonly sessionId: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -82,8 +84,6 @@ export type PtySessionRow = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
 
 export interface AgentSessionRow {
   readonly id: number;
-  readonly paneId: number;
-  readonly surfaceId: number;
   readonly worktreeId: number;
   readonly harness: AgentHarness;
   readonly cwd: string;
@@ -98,8 +98,6 @@ export interface AgentSessionRow {
 
 export interface TerminalSessionRow {
   readonly id: number;
-  readonly paneId: number;
-  readonly surfaceId: number;
   readonly worktreeId: number;
   readonly cwd: string;
   readonly shellCommand: string;

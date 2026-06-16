@@ -94,7 +94,7 @@ test('launch success refetches workspace and selects the new surface locally', a
       worktreeId: 10,
       surfaceId: 501,
       paneId: 601,
-      terminalSessionId: 701,
+      title: 'Terminal 2',
     },
     async () => {
       events.push(`fetch:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);

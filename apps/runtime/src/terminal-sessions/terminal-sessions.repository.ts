@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, lt } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
@@ -7,7 +7,6 @@ import type { PtyProcessRow, TerminalSessionRow } from '../surfaces/index.js';
 
 export interface TerminalSessionRepositoryService {
   readonly create: (input: {
-    readonly paneId: number;
     readonly worktreeId: number;
     readonly cwd: string;
     readonly shellCommand: string;
@@ -23,6 +22,10 @@ export interface TerminalSessionRepositoryService {
   readonly findByActivePtyProcessId: (
     ptyProcessId: number,
   ) => Effect.Effect<TerminalSessionRow | null, DatabaseError>;
+  readonly listOrphans: (input: {
+    readonly updatedBefore: string;
+  }) => Effect.Effect<TerminalSessionRow[], DatabaseError>;
+  readonly delete: (terminalSessionId: number) => Effect.Effect<void, DatabaseError>;
 }
 
 export const TerminalSessionRepository = Context.GenericTag<TerminalSessionRepositoryService>(
@@ -40,7 +43,6 @@ export const TerminalSessionRepositoryLive = Layer.effect(
           return db
             .insert(terminalSessions)
             .values({
-              paneId: input.paneId,
               worktreeId: input.worktreeId,
               cwd: input.cwd,
               shellCommand: input.shellCommand,
@@ -62,32 +64,45 @@ export const TerminalSessionRepositoryLive = Layer.effect(
       find: (terminalSessionId) =>
         database.use('find_terminal_session', (db) => {
           const row = db
-            .select({
-              session: terminalSessions,
-              surfaceId: surfacePanes.surfaceId,
-              process: ptyProcesses,
-            })
+            .select({ session: terminalSessions, process: ptyProcesses })
             .from(terminalSessions)
-            .innerJoin(surfacePanes, eq(terminalSessions.paneId, surfacePanes.id))
             .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
             .where(eq(terminalSessions.id, terminalSessionId))
             .get();
-          return row ? terminalSessionRow(row.session, row.surfaceId, row.process) : null;
+          return row ? terminalSessionRow(row.session, row.process) : null;
         }),
       findByActivePtyProcessId: (ptyProcessId) =>
         database.use('find_terminal_session_by_active_process', (db) => {
           const row = db
-            .select({
-              session: terminalSessions,
-              surfaceId: surfacePanes.surfaceId,
-              process: ptyProcesses,
-            })
+            .select({ session: terminalSessions, process: ptyProcesses })
             .from(terminalSessions)
-            .innerJoin(surfacePanes, eq(terminalSessions.paneId, surfacePanes.id))
             .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
             .where(eq(terminalSessions.activePtyProcessId, ptyProcessId))
             .get();
-          return row ? terminalSessionRow(row.session, row.surfaceId, row.process) : null;
+          return row ? terminalSessionRow(row.session, row.process) : null;
+        }),
+      listOrphans: (input) =>
+        database.use('list_orphan_terminal_sessions', (db) =>
+          db
+            .select({ session: terminalSessions, process: ptyProcesses })
+            .from(terminalSessions)
+            .leftJoin(
+              surfacePanes,
+              and(
+                eq(surfacePanes.sessionKind, 'terminal_session'),
+                eq(surfacePanes.sessionId, terminalSessions.id),
+              ),
+            )
+            .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
+            .where(
+              and(isNull(surfacePanes.id), lt(terminalSessions.updatedAt, input.updatedBefore)),
+            )
+            .all()
+            .map((row) => terminalSessionRow(row.session, row.process)),
+        ),
+      delete: (terminalSessionId) =>
+        database.use('delete_terminal_session', (db) => {
+          db.delete(terminalSessions).where(eq(terminalSessions.id, terminalSessionId)).run();
         }),
     } satisfies TerminalSessionRepositoryService;
   }),
@@ -95,13 +110,10 @@ export const TerminalSessionRepositoryLive = Layer.effect(
 
 function terminalSessionRow(
   row: typeof terminalSessions.$inferSelect,
-  surfaceId: number,
   process: typeof ptyProcesses.$inferSelect | null,
 ): TerminalSessionRow {
   return {
     id: row.id,
-    paneId: row.paneId,
-    surfaceId,
     worktreeId: row.worktreeId,
     cwd: row.cwd,
     shellCommand: row.shellCommand,

@@ -3,7 +3,10 @@ import { unlinkSync } from 'node:fs';
 import { Context, Data, Effect, Layer, Schema } from 'effect';
 
 import type {
+  CreateSurfaceOutput,
   DeleteSurfaceOutput,
+  PaneSessionClaimInput,
+  PaneSessionClaimOutput,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
   SurfaceDeleteWarning,
@@ -14,8 +17,16 @@ import type {
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
+import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import { HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
-import { PtyService, type PtyService as PtyServiceShape } from '../pty-processes/pty.service.js';
+import {
+  PtyService,
+  type PtyLaunchError,
+  type PtyService as PtyServiceShape,
+} from '../pty-processes/pty.service.js';
+import { SessionLifecycle } from '../session-lifecycle/index.js';
+import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
@@ -34,14 +45,18 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
     | 'surface_not_found'
     | 'worktree_not_found'
     | 'pane_not_found'
+    | 'session_not_found'
+    | 'session_worktree_mismatch'
     | 'invalid_surface_title';
   readonly message: string;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
   readonly paneId?: number | undefined;
+  readonly sessionId?: number | undefined;
 }> {}
 
 export type SurfaceServiceError = DatabaseError | SurfaceError;
+type PaneSessionClaimError = SurfaceServiceError | PtyLaunchError | HarnessAdapterError;
 
 export interface SurfaceService {
   readonly getSurfaceDetail: (
@@ -58,6 +73,14 @@ export interface SurfaceService {
     readonly surfaceId: number;
     readonly paneId: number;
   }) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
+  readonly createSurface: (input: {
+    readonly worktreeId: number;
+    readonly kind: 'agent' | 'terminal';
+  }) => Effect.Effect<CreateSurfaceOutput, SurfaceServiceError>;
+  readonly claimPaneSession: (input: {
+    readonly worktreeId: number;
+    readonly claim: PaneSessionClaimInput;
+  }) => Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError>;
   readonly cleanupWorktreeForDelete: (
     worktreeId: number,
   ) => Effect.Effect<WorktreeDeleteCleanupOutput, SurfaceServiceError>;
@@ -77,6 +100,9 @@ export const SurfaceServiceLive = Layer.effect(
   Effect.gen(function* () {
     const repository = yield* SurfaceRepository;
     const pty = yield* PtyService;
+    const agents = yield* AgentSessionService;
+    const terminals = yield* TerminalSessionService;
+    const lifecycle = yield* SessionLifecycle;
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -112,7 +138,7 @@ export const SurfaceServiceLive = Layer.effect(
               title: pane.title,
               attention: pane.attention,
               sortOrder: pane.sortOrder,
-              session: sessionForPane(agentSessions, terminalSessions, pane.id),
+              session: sessionForPane(agentSessions, terminalSessions, pane),
             })),
           } satisfies SurfaceDetail;
         }),
@@ -174,6 +200,22 @@ export const SurfaceServiceLive = Layer.effect(
             warnings: [...cleanup.warnings, ...logWarnings],
           } satisfies DeleteSurfaceOutput;
         }),
+      createSurface: (input) =>
+        Effect.gen(function* () {
+          const surface = yield* createSinglePaneSurface(repository, {
+            worktreeId: input.worktreeId,
+            kind: input.kind,
+            titleBase: input.kind === 'agent' ? 'Agent' : 'Terminal',
+          });
+          return {
+            worktreeId: input.worktreeId,
+            surfaceId: surface.surfaceId,
+            paneId: surface.paneId,
+            title: surface.title,
+          } satisfies CreateSurfaceOutput;
+        }),
+      claimPaneSession: (input) =>
+        claimPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.claim),
       cleanupWorktreeForDelete: (worktreeId) =>
         Effect.gen(function* () {
           const exists = yield* repository.worktreeExists(worktreeId);
@@ -211,6 +253,194 @@ export const SurfaceServiceLive = Layer.effect(
     } satisfies SurfaceService;
   }),
 );
+
+function createSinglePaneSurface(
+  repository: SurfaceRepositoryService,
+  input: CreateSinglePaneSurfaceInput,
+) {
+  return Effect.gen(function* () {
+    const exists = yield* repository.worktreeExists(input.worktreeId);
+    if (!exists)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'worktree_not_found',
+          message: `Worktree ${input.worktreeId} was not found.`,
+          worktreeId: input.worktreeId,
+        }),
+      );
+    return yield* repository.createSinglePaneSurface(input);
+  });
+}
+
+function claimPaneSession(
+  repository: SurfaceRepositoryService,
+  agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
+  terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
+  lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  worktreeId: number,
+  claim: PaneSessionClaimInput,
+): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
+  return Effect.gen(function* () {
+    const pane = yield* repository.findPane(claim.paneId);
+    if (!pane)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'pane_not_found',
+          message: `Pane ${claim.paneId} was not found.`,
+          worktreeId,
+          paneId: claim.paneId,
+        }),
+      );
+    const surface = yield* repository.findSurface(pane.surfaceId);
+    if (!surface || surface.worktreeId !== worktreeId)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'pane_not_found',
+          message: `Pane ${claim.paneId} was not found for worktree ${worktreeId}.`,
+          worktreeId,
+          surfaceId: pane.surfaceId,
+          paneId: claim.paneId,
+        }),
+      );
+    const cwd = yield* repository.findWorktreePath(worktreeId);
+    if (!cwd)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'worktree_not_found',
+          message: `Worktree ${worktreeId} was not found.`,
+          worktreeId,
+        }),
+      );
+
+    const session = yield* resolveClaimSession(agents, terminals, worktreeId, cwd, claim);
+    const key = { kind: session.kind, sessionId: session.sessionId };
+    yield* repository.claimPaneSession({
+      paneId: claim.paneId,
+      sessionKind: session.kind,
+      sessionId: session.sessionId,
+    });
+    yield* lifecycle.supersedeAttachment(key);
+    const attachToken = yield* lifecycle.issueAttachToken(key);
+    yield* repository.setEnvironmentFocus({
+      worktreeId,
+      activeSurfaceId: surface.id,
+      activePaneId: pane.id,
+    });
+
+    return {
+      worktreeId,
+      surfaceId: surface.id,
+      paneId: pane.id,
+      attachToken: attachToken.token,
+      session:
+        session.kind === 'agent_session'
+          ? { kind: 'agent_session', agentSessionId: session.sessionId }
+          : { kind: 'terminal_session', terminalSessionId: session.sessionId },
+    } satisfies PaneSessionClaimOutput;
+  });
+}
+
+function resolveClaimSession(
+  agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
+  terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
+  worktreeId: number,
+  cwd: string,
+  claim: PaneSessionClaimInput,
+): Effect.Effect<
+  { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
+  PaneSessionClaimError
+> {
+  return Effect.gen(function* () {
+    switch (claim.action) {
+      case 'start_fresh_agent': {
+        const created = yield* agents.startFresh({ worktreeId, harness: claim.harness, cwd });
+        return { kind: 'agent_session' as const, sessionId: created.agentSessionId };
+      }
+      case 'start_fresh_terminal': {
+        const created = yield* terminals.startFresh({ worktreeId, cwd });
+        return { kind: 'terminal_session' as const, sessionId: created.terminalSessionId };
+      }
+      case 'claim_agent_session': {
+        yield* ensureAgentSessionInWorktree(agents, claim.agentSessionId, worktreeId);
+        return { kind: 'agent_session' as const, sessionId: claim.agentSessionId };
+      }
+      case 'claim_terminal_session': {
+        yield* ensureTerminalSessionInWorktree(terminals, claim.terminalSessionId, worktreeId);
+        return { kind: 'terminal_session' as const, sessionId: claim.terminalSessionId };
+      }
+    }
+  });
+}
+
+function ensureAgentSessionInWorktree(
+  agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
+  agentSessionId: number,
+  worktreeId: number,
+) {
+  return agents.get(agentSessionId).pipe(
+    Effect.flatMap((session) => {
+      if (session.worktreeId === worktreeId) return Effect.void;
+      return Effect.fail(
+        new SurfaceError({
+          code: 'session_worktree_mismatch',
+          message: `Agent session ${agentSessionId} does not belong to worktree ${worktreeId}.`,
+          worktreeId,
+          sessionId: agentSessionId,
+        }),
+      );
+    }),
+    Effect.catchAll((error) =>
+      error instanceof AgentSessionError
+        ? Effect.fail(sessionSurfaceError(error, worktreeId, agentSessionId))
+        : Effect.fail(error),
+    ),
+  );
+}
+
+function ensureTerminalSessionInWorktree(
+  terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
+  terminalSessionId: number,
+  worktreeId: number,
+) {
+  return terminals.get(terminalSessionId).pipe(
+    Effect.flatMap((session) => {
+      if (session.worktreeId === worktreeId) return Effect.void;
+      return Effect.fail(
+        new SurfaceError({
+          code: 'session_worktree_mismatch',
+          message: `Terminal session ${terminalSessionId} does not belong to worktree ${worktreeId}.`,
+          worktreeId,
+          sessionId: terminalSessionId,
+        }),
+      );
+    }),
+    Effect.catchAll((error) =>
+      error instanceof TerminalSessionError
+        ? Effect.fail(sessionSurfaceError(error, worktreeId, terminalSessionId))
+        : Effect.fail(error),
+    ),
+  );
+}
+
+function sessionSurfaceError(
+  error: AgentSessionError | TerminalSessionError,
+  worktreeId: number,
+  sessionId: number,
+) {
+  if (error.code === 'session_not_found')
+    return new SurfaceError({
+      code: 'session_not_found',
+      message: error.message,
+      worktreeId,
+      sessionId,
+    });
+  return new SurfaceError({
+    code: 'session_not_found',
+    message: error.message,
+    worktreeId,
+    sessionId,
+  });
+}
 
 function validateSurfaceTitle(title: string) {
   const trimmed = title.trim();
@@ -308,16 +538,17 @@ function activePaneForSurface(
 function sessionForPane(
   agentSessions: readonly AgentSessionRow[],
   terminalSessions: readonly TerminalSessionRow[],
-  paneId: number,
+  pane: SurfacePaneRow,
 ): SurfaceDetail['panes'][number]['session'] {
-  const agent = agentSessions.find((candidate) => candidate.paneId === paneId);
-  if (agent) {
+  if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
+    const agent = agentSessions.find((candidate) => candidate.id === pane.sessionId);
+    if (!agent) return null;
     const state = deriveAgentSessionState(agent);
     return {
       kind: 'agent_session',
       agentSession: {
         id: agent.id,
-        paneId: agent.paneId,
+        paneId: pane.id,
         worktreeId: agent.worktreeId,
         harness: agent.harness,
         cwd: agent.cwd,
@@ -332,14 +563,15 @@ function sessionForPane(
       },
     };
   }
-  const terminal = terminalSessions.find((candidate) => candidate.paneId === paneId);
-  if (terminal) {
+  if (pane.sessionKind === 'terminal_session' && pane.sessionId !== null) {
+    const terminal = terminalSessions.find((candidate) => candidate.id === pane.sessionId);
+    if (!terminal) return null;
     const state = deriveTerminalSessionState(terminal);
     return {
       kind: 'terminal_session',
       terminalSession: {
         id: terminal.id,
-        paneId: terminal.paneId,
+        paneId: pane.id,
         worktreeId: terminal.worktreeId,
         cwd: terminal.cwd,
         shellCommand: terminal.shellCommand,

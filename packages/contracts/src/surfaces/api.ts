@@ -1,15 +1,12 @@
-import {
-  sessionLaunchApiErrorSchema,
-  surfaceApiErrorSchema,
-  worktreeEnvironmentFocusApiErrorSchema,
-} from '../api/errors.js';
+import { surfaceApiErrorSchema, worktreeEnvironmentFocusApiErrorSchema } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
   agentSessionRouteParamsSchema,
+  createSurfaceInputSchema,
+  createSurfaceOutputSchema,
   deleteSurfaceOutputSchema,
-  launchAgentSessionInputSchema,
-  launchAgentSessionOutputSchema,
-  launchTerminalSessionOutputSchema,
+  paneSessionClaimInputSchema,
+  paneSessionClaimOutputSchema,
   ptyWebSocketInputMessageSchema,
   ptyWebSocketOutputMessageSchema,
   renameSurfaceInputSchema,
@@ -82,22 +79,23 @@ export const surfacesEndpoints = {
     output: worktreeEnvironmentFocusOutputSchema,
     errors: worktreeEnvironmentFocusApiErrorSchema,
   },
-  launchAgentSession: {
-    id: 'worktrees.launchAgentSession',
+  createSurface: {
+    id: 'worktrees.createSurface',
     method: 'POST',
-    path: '/worktrees/:worktreeId/agent-sessions',
+    path: '/worktrees/:worktreeId/surfaces',
     params: worktreeEnvironmentFocusRouteParamsSchema,
-    body: launchAgentSessionInputSchema,
-    output: launchAgentSessionOutputSchema,
-    errors: sessionLaunchApiErrorSchema,
+    body: createSurfaceInputSchema,
+    output: createSurfaceOutputSchema,
+    errors: surfaceApiErrorSchema,
   },
-  launchTerminalSession: {
-    id: 'worktrees.launchTerminalSession',
+  claimPaneSession: {
+    id: 'worktrees.claimPaneSession',
     method: 'POST',
-    path: '/worktrees/:worktreeId/terminal-sessions',
+    path: '/worktrees/:worktreeId/pane-session-claims',
     params: worktreeEnvironmentFocusRouteParamsSchema,
-    output: launchTerminalSessionOutputSchema,
-    errors: sessionLaunchApiErrorSchema,
+    body: paneSessionClaimInputSchema,
+    output: paneSessionClaimOutputSchema,
+    errors: surfaceApiErrorSchema,
   },
 } as const satisfies {
   readonly get: ApiEndpoint<
@@ -130,16 +128,16 @@ export const surfacesEndpoints = {
     typeof worktreeEnvironmentFocusApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;
-  readonly launchAgentSession: ApiEndpoint<
-    typeof launchAgentSessionInputSchema,
-    typeof launchAgentSessionOutputSchema,
-    typeof sessionLaunchApiErrorSchema,
+  readonly createSurface: ApiEndpoint<
+    typeof createSurfaceInputSchema,
+    typeof createSurfaceOutputSchema,
+    typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;
-  readonly launchTerminalSession: ApiEndpoint<
-    undefined,
-    typeof launchTerminalSessionOutputSchema,
-    typeof sessionLaunchApiErrorSchema,
+  readonly claimPaneSession: ApiEndpoint<
+    typeof paneSessionClaimInputSchema,
+    typeof paneSessionClaimOutputSchema,
+    typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;
 };
