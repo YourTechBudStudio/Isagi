@@ -20,7 +20,7 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
   try {
     const started = await Effect.runPromise(startRuntimeServer());
     server = started.server;
-    const socket = new WebSocket(ptyWebSocketUrl(started.url, 1));
+    const socket = new WebSocket(agentSessionPtyWebSocketUrl(started.url, 1));
     try {
       await waitForSocketOpen(socket);
       const message = await waitForSocketMessage(socket);
@@ -46,8 +46,8 @@ function restoreDataDirectory(value: string | undefined) {
   process.env.ISAGI_DATA_DIR = value;
 }
 
-function ptyWebSocketUrl(runtimeUrl: string, ptySessionId: number) {
-  const url = new URL(`/api/v1/pty-sessions/${ptySessionId}`, runtimeUrl);
+function agentSessionPtyWebSocketUrl(runtimeUrl: string, agentSessionId: number) {
+  const url = new URL(`/api/v1/agent-sessions/${agentSessionId}/attach`, runtimeUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
 }

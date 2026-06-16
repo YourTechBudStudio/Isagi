@@ -5,26 +5,36 @@ import {
 } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
+  agentSessionRouteParamsSchema,
   deleteSurfaceOutputSchema,
   launchAgentSessionInputSchema,
-  ptySessionRouteParamsSchema,
+  launchAgentSessionOutputSchema,
+  launchTerminalSessionOutputSchema,
   ptyWebSocketInputMessageSchema,
   ptyWebSocketOutputMessageSchema,
-  launchSessionOutputSchema,
   renameSurfaceInputSchema,
   renameSurfaceOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
   surfaceDetailSchema,
   surfacePaneRouteParamsSchema,
   surfaceRouteParamsSchema,
+  terminalSessionRouteParamsSchema,
   worktreeEnvironmentFocusOutputSchema,
   worktreeEnvironmentFocusRouteParamsSchema,
 } from './types.js';
 
-export const ptySessionWebSocketEndpoint = {
-  id: 'ptySessions.attach',
-  path: '/pty-sessions/:ptySessionId',
-  params: ptySessionRouteParamsSchema,
+export const agentSessionPtyWebSocketEndpoint = {
+  id: 'agentSessions.attachPty',
+  path: '/agent-sessions/:agentSessionId/attach',
+  params: agentSessionRouteParamsSchema,
+  clientMessages: ptyWebSocketInputMessageSchema,
+  serverMessages: ptyWebSocketOutputMessageSchema,
+} as const;
+
+export const terminalSessionPtyWebSocketEndpoint = {
+  id: 'terminalSessions.attachPty',
+  path: '/terminal-sessions/:terminalSessionId/attach',
+  params: terminalSessionRouteParamsSchema,
   clientMessages: ptyWebSocketInputMessageSchema,
   serverMessages: ptyWebSocketOutputMessageSchema,
 } as const;
@@ -78,7 +88,7 @@ export const surfacesEndpoints = {
     path: '/worktrees/:worktreeId/agent-sessions',
     params: worktreeEnvironmentFocusRouteParamsSchema,
     body: launchAgentSessionInputSchema,
-    output: launchSessionOutputSchema,
+    output: launchAgentSessionOutputSchema,
     errors: sessionLaunchApiErrorSchema,
   },
   launchTerminalSession: {
@@ -86,7 +96,7 @@ export const surfacesEndpoints = {
     method: 'POST',
     path: '/worktrees/:worktreeId/terminal-sessions',
     params: worktreeEnvironmentFocusRouteParamsSchema,
-    output: launchSessionOutputSchema,
+    output: launchTerminalSessionOutputSchema,
     errors: sessionLaunchApiErrorSchema,
   },
 } as const satisfies {
@@ -122,13 +132,13 @@ export const surfacesEndpoints = {
   >;
   readonly launchAgentSession: ApiEndpoint<
     typeof launchAgentSessionInputSchema,
-    typeof launchSessionOutputSchema,
+    typeof launchAgentSessionOutputSchema,
     typeof sessionLaunchApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;
   readonly launchTerminalSession: ApiEndpoint<
     undefined,
-    typeof launchSessionOutputSchema,
+    typeof launchTerminalSessionOutputSchema,
     typeof sessionLaunchApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;

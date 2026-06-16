@@ -1,13 +1,15 @@
 import type {
   AgentHarness,
+  AgentSessionStatusReason,
   AttentionState,
-  PtySessionBackend,
-  PtySessionLogMode,
-  PtySessionPurpose,
-  PtySessionStatus,
-  PtySessionStatusReason,
+  PtyProcessBackend,
+  PtyProcessLogMode,
   RuntimeSurfaceKind,
+  SessionDiagnosticCode,
+  SessionStatus,
   SurfaceDeleteWarning,
+  SurfaceSessionCleanupTarget,
+  TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
 export interface EnvironmentFocusRow {
@@ -41,27 +43,86 @@ export interface SurfacePaneRow {
   readonly updatedAt: string;
 }
 
-export interface PtySessionRow {
+export interface PtyProcessRow {
   readonly id: number;
-  readonly paneId: number;
-  readonly surfaceId: number;
-  readonly worktreeId: number;
-  readonly backend: PtySessionBackend;
+  readonly backend: PtyProcessBackend;
   readonly backendRefJson: string;
-  readonly purpose: PtySessionPurpose;
-  readonly harness: AgentHarness | null;
   readonly command: string;
+  readonly args: readonly string[];
+  readonly argsJson: string;
   readonly cwd: string;
-  readonly status: PtySessionStatus;
-  readonly statusReason: PtySessionStatusReason | null;
+  readonly status: SessionStatus;
+  readonly statusReason:
+    | 'user_requested'
+    | 'runtime_shutdown'
+    | 'backend_unavailable'
+    | 'backend_process_missing'
+    | 'backend_attach_failed'
+    | 'backend_launch_failed'
+    | 'runtime_ephemeral_lost'
+    | null;
   readonly exitCode: number | null;
   readonly signal: string | null;
-  readonly logMode: PtySessionLogMode;
+  readonly logMode: PtyProcessLogMode;
   readonly logPath: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly exitedAt: string | null;
   readonly lastSeenAt: string | null;
+}
+
+// Compatibility alias for old internal files while the folder is being renamed.
+export type PtySessionRow = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
+  readonly args?: readonly string[] | undefined;
+  readonly argsJson?: string | undefined;
+  readonly paneId?: number | undefined;
+  readonly surfaceId?: number | undefined;
+  readonly worktreeId?: number | undefined;
+};
+
+export interface AgentSessionRow {
+  readonly id: number;
+  readonly paneId: number;
+  readonly surfaceId: number;
+  readonly worktreeId: number;
+  readonly harness: AgentHarness;
+  readonly cwd: string;
+  readonly harnessSessionId: string | null;
+  readonly harnessSessionRefJson: string | null;
+  readonly activePtyProcessId: number | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly lastSeenAt: string | null;
+  readonly activePtyProcess: PtyProcessRow | null;
+}
+
+export interface TerminalSessionRow {
+  readonly id: number;
+  readonly paneId: number;
+  readonly surfaceId: number;
+  readonly worktreeId: number;
+  readonly cwd: string;
+  readonly shellCommand: string;
+  readonly shellArgs: readonly string[];
+  readonly shellArgsJson: string;
+  readonly activePtyProcessId: number | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly activePtyProcess: PtyProcessRow | null;
+}
+
+export interface DerivedAgentSessionState {
+  readonly status: SessionStatus;
+  readonly statusReason: AgentSessionStatusReason | null;
+  readonly diagnosticCode: SessionDiagnosticCode | null;
+  readonly diagnosticDetail: string | null;
+}
+
+export interface DerivedTerminalSessionState {
+  readonly status: SessionStatus;
+  readonly statusReason: TerminalSessionStatusReason | null;
+  readonly diagnosticCode: SessionDiagnosticCode | null;
+  readonly diagnosticDetail: string | null;
 }
 
 export interface CreateSinglePaneSurfaceInput {
@@ -74,52 +135,18 @@ export interface CreateSinglePaneSurfaceOutput {
   readonly surfaceId: number;
   readonly paneId: number;
   readonly title: string;
-}
-
-export interface CreateSinglePanePtySessionSurfaceInput {
-  readonly worktreeId: number;
-  readonly kind: RuntimeSurfaceKind;
-  readonly titleBase: string;
-  readonly purpose: PtySessionPurpose;
-  readonly harness: AgentHarness | null;
-  readonly command: string;
-}
-
-export interface CreateSinglePanePtySessionSurfaceOutput {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly paneId: number;
-  readonly ptySessionId: number;
-  readonly command: string;
   readonly cwd: string;
-  readonly logPath: string | null;
-}
-
-export interface CreatePtySessionMetadataInput {
-  readonly paneId: number;
-  readonly backend: PtySessionBackend;
-  readonly backendRefJson: string;
-  readonly purpose: PtySessionPurpose;
-  readonly harness: AgentHarness | null;
-  readonly command: string;
-  readonly cwd: string;
-  readonly status: PtySessionStatus;
-  readonly statusReason?: PtySessionStatusReason | null | undefined;
-  readonly exitCode?: number | null | undefined;
-  readonly signal?: string | null | undefined;
-  readonly logMode: PtySessionLogMode;
-  readonly logPath?: string | null | undefined;
-  readonly exitedAt?: string | null | undefined;
-  readonly lastSeenAt?: string | null | undefined;
-}
-
-export interface SurfaceDeleteSessionTarget extends PtySessionRow {
-  readonly logPath: string | null;
 }
 
 export interface SurfaceDeletePaneTarget {
   readonly pane: SurfacePaneRow;
-  readonly ptySession: SurfaceDeleteSessionTarget | null;
+  readonly session: SurfaceDeleteSessionTarget | null;
+}
+
+export interface SurfaceDeleteSessionTarget {
+  readonly cleanupTarget: SurfaceSessionCleanupTarget;
+  readonly activePtyProcessId: number | null;
+  readonly activePtyProcess: PtyProcessRow | null;
 }
 
 export interface SurfaceDeleteTarget {
@@ -128,7 +155,7 @@ export interface SurfaceDeleteTarget {
 }
 
 export interface WorktreeDeleteCleanupOutput {
-  readonly attemptedPtySessionIds: readonly number[];
+  readonly attemptedSessionIds: readonly SurfaceSessionCleanupTarget[];
   readonly warnings: readonly SurfaceDeleteWarning[];
 }
 

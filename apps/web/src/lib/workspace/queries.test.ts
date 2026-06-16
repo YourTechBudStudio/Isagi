@@ -94,7 +94,7 @@ test('launch success refetches workspace and selects the new surface locally', a
       worktreeId: 10,
       surfaceId: 501,
       paneId: 601,
-      ptySessionId: 701,
+      terminalSessionId: 701,
     },
     async () => {
       events.push(`fetch:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
@@ -141,8 +141,14 @@ test('delete surface success refetches workspace and clears only stale local ove
     output: {
       deletedSurfaceId: 501,
       deletedPaneIds: [601],
-      attemptedPtySessionIds: [701],
-      warnings: [{ code: 'pty_kill_failed', paneId: 601, ptySessionId: 701 }],
+      attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 701 }],
+      warnings: [
+        {
+          code: 'session_process_cleanup_failed',
+          paneId: 601,
+          session: { kind: 'terminal_session', terminalSessionId: 701 },
+        },
+      ],
     },
     fetchWorkspaceData: async () => ({
       projects: [
@@ -183,7 +189,7 @@ test('delete pane success clears only the deleted pane override', async () => {
     output: {
       deletedSurfaceId: null,
       deletedPaneIds: [601],
-      attemptedPtySessionIds: [],
+      attemptedSessionIds: [],
       warnings: [],
     },
     fetchWorkspaceData: async () => ({
@@ -415,7 +421,7 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
       output: {
         deletedSurfaceId: 101,
         deletedPaneIds: [201],
-        attemptedPtySessionIds: [],
+        attemptedSessionIds: [],
         warnings: [],
       },
       fetchWorkspaceData: async () => ({

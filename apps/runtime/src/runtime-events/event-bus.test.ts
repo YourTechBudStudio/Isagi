@@ -8,7 +8,7 @@ import type { RuntimeEvent } from '@isagi/contracts';
 import { RuntimeEventBus, RuntimeEventBusLive } from './event-bus.js';
 
 test('runtime event bus publishes events to subscribers', async () => {
-  const event = ptySessionChangedEvent();
+  const event = agentSessionChangedEvent();
 
   const received = await Effect.runPromise(
     Effect.gen(function* () {
@@ -24,20 +24,19 @@ test('runtime event bus publishes events to subscribers', async () => {
   assert.deepEqual(received, event);
 });
 
-function ptySessionChangedEvent() {
+function agentSessionChangedEvent() {
   return {
     id: 'evt_test_1',
-    type: 'pty_session_changed',
+    type: 'agent_session_changed',
     occurredAt: '2026-06-12T00:00:00.000Z',
     payload: {
-      ptySessionId: 1,
+      agentSessionId: 1,
       worktreeId: 2,
       surfaceId: 3,
       paneId: 4,
-      previousStatus: 'running',
       status: 'failed',
-      previousStatusReason: null,
-      statusReason: 'backend_session_missing',
+      statusReason: 'harness_session_id_missing',
+      diagnosticCode: 'harness_session_id_missing',
     },
   } satisfies RuntimeEvent;
 }

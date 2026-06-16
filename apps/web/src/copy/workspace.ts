@@ -1,4 +1,8 @@
-import type { PtySessionStatus, PtySessionStatusReason } from '@isagi/contracts';
+import type {
+  AgentSessionStatusReason,
+  SessionStatus,
+  TerminalSessionStatusReason,
+} from '@isagi/contracts';
 
 import type { MissingProject, Surface, Worktree } from '../lib/workspace/types.js';
 
@@ -64,26 +68,33 @@ export const ptyCopy = {
     webglUnavailable: 'WebGL renderer unavailable; using canvas.',
   },
   sessionStatus: (
-    status: PtySessionStatus | null,
-    statusReason: PtySessionStatusReason | null,
+    status: SessionStatus | null,
+    statusReason: AgentSessionStatusReason | TerminalSessionStatusReason | null,
     exit: { readonly exitCode: number | null; readonly signal: string | null },
   ) => {
     if (statusReason) {
       switch (statusReason) {
-        case 'user_requested':
-          return 'Killed';
         case 'runtime_shutdown':
           return 'Killed on shutdown';
-        case 'backend_unavailable':
-          return 'Backend unavailable';
-        case 'backend_session_missing':
-          return 'Session missing';
-        case 'backend_attach_failed':
-          return 'Attach failed';
-        case 'backend_launch_failed':
+        case 'harness_launch_failed':
+        case 'shell_launch_failed':
           return 'Launch failed';
-        case 'runtime_ephemeral_lost':
-          return 'Runtime session lost';
+        case 'harness_process_exited':
+        case 'shell_exited':
+          return 'Exited';
+        case 'harness_process_killed':
+        case 'shell_killed':
+          return 'Killed';
+        case 'process_attach_failed':
+          return 'Attach failed';
+        case 'harness_session_id_missing':
+          return 'No prior session';
+        case 'harness_resume_failed':
+          return 'Resume failed';
+        case 'pty_process_missing':
+          return 'Process missing';
+        case 'pty_process_not_running':
+          return 'Process not running';
       }
     }
 
@@ -109,24 +120,31 @@ export const ptyCopy = {
     }
   },
   sessionNotice: (
-    _status: PtySessionStatus | null,
-    statusReason: PtySessionStatusReason | null,
+    _status: SessionStatus | null,
+    statusReason: AgentSessionStatusReason | TerminalSessionStatusReason | null,
   ): string | null => {
     switch (statusReason) {
-      case 'user_requested':
-        return null;
       case 'runtime_shutdown':
         return 'The runtime shut down and stopped this session.';
-      case 'backend_unavailable':
-        return "The runtime that owned this session isn't available. You can delete the pane when you're done with the evidence.";
-      case 'backend_session_missing':
-        return 'Isagi could not find the backend session. It may have exited outside this runtime.';
-      case 'backend_attach_failed':
-        return 'Isagi could not attach to this session. The pane keeps the evidence it still has.';
-      case 'backend_launch_failed':
+      case 'harness_launch_failed':
+      case 'shell_launch_failed':
         return "The session did not launch. Check the output above, then delete the pane when you're done.";
-      case 'runtime_ephemeral_lost':
-        return 'This session belonged to runtime memory that is gone now. The pane keeps what Isagi still has.';
+      case 'harness_process_exited':
+      case 'shell_exited':
+        return null;
+      case 'harness_process_killed':
+      case 'shell_killed':
+        return null;
+      case 'process_attach_failed':
+        return 'Isagi could not attach to this session. The pane keeps the evidence it still has.';
+      case 'harness_session_id_missing':
+        return 'No harness session was captured for this pane, so a new one will start fresh.';
+      case 'harness_resume_failed':
+        return 'Could not resume the harness session.';
+      case 'pty_process_missing':
+        return 'Isagi could not find the backing process for this session.';
+      case 'pty_process_not_running':
+        return 'The backing process is not running.';
       case null:
         return null;
     }

@@ -5,8 +5,9 @@ import { Bot, SquareTerminal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import type {
-  PtySessionMetadata,
-  PtySessionStatus,
+  AgentSessionMetadata,
+  SessionStatus,
+  TerminalSessionMetadata,
   PtyWebSocketOutputMessage,
   SurfaceDetail,
   SurfacePane,
@@ -20,7 +21,11 @@ import {
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
 import { resolveActivePaneId } from '../../lib/workspace/model.js';
-import { formatRuntimeError, resolvePtyWebSocketUrl } from '../../lib/workspace/runtime-data.js';
+import {
+  formatRuntimeError,
+  resolveAgentSessionPtyWebSocketUrl,
+  resolveTerminalSessionPtyWebSocketUrl,
+} from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { calculateTerminalFit } from './ptyFit.js';
 
@@ -29,6 +34,9 @@ interface PtySurfaceProps {
 }
 
 type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
+type PtyPaneSession =
+  | ({ readonly kind: 'agent_session' } & AgentSessionMetadata)
+  | ({ readonly kind: 'terminal_session' } & TerminalSessionMetadata);
 type SocketNotice = {
   readonly message: string;
   readonly kind: 'protocol' | 'transport';
@@ -110,14 +118,14 @@ function PtyPaneShell({
   readonly onDelete: () => void;
 }) {
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
-  const session = pane.ptySession;
-  const [liveStatus, setLiveStatus] = useState<PtySessionStatus | null>(session?.status ?? null);
+  const session = ptyPaneSession(pane.session);
+  const [liveStatus, setLiveStatus] = useState<SessionStatus | null>(session?.status ?? null);
   const [exit, setExit] = useState<{
     readonly exitCode: number | null;
     readonly signal: string | null;
   }>({
-    exitCode: session?.exitCode ?? null,
-    signal: session?.signal ?? null,
+    exitCode: null,
+    signal: null,
   });
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [rendererWarning, setRendererWarning] = useState<string | null>(null);
@@ -127,9 +135,9 @@ function PtyPaneShell({
 
   useEffect(() => {
     setLiveStatus(session?.status ?? null);
-    setExit({ exitCode: session?.exitCode ?? null, signal: session?.signal ?? null });
+    setExit({ exitCode: null, signal: null });
     setSocketNotice(null);
-  }, [session?.exitCode, session?.id, session?.signal, session?.status, session?.statusReason]);
+  }, [session?.id, session?.status, session?.statusReason]);
 
   const dimmed = status === 'exited' || status === 'failed' || status === 'killed';
   const errored = status === 'failed';
@@ -200,7 +208,7 @@ function XtermPane({
   onSocketNotice,
   onStatusChange,
 }: {
-  readonly session: PtySessionMetadata;
+  readonly session: PtyPaneSession;
   readonly focused: boolean;
   readonly onConnectionChange: (state: ConnectionState) => void;
   readonly onExit: (exit: {
@@ -209,13 +217,13 @@ function XtermPane({
   }) => void;
   readonly onRendererWarning: (message: string | null) => void;
   readonly onSocketNotice: (notice: SocketNotice | null) => void;
-  readonly onStatusChange: (status: PtySessionStatus) => void;
+  readonly onStatusChange: (status: SessionStatus) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const statusRef = useRef<PtySessionStatus>(session.status);
+  const statusRef = useRef<SessionStatus>(session.status);
   const socketRef = useRef<WebSocket | null>(null);
-  const disableScrollback = session.harness === 'opencode';
+  const disableScrollback = session.kind === 'agent_session' && session.harness === 'opencode';
 
   useEffect(() => {
     statusRef.current = session.status;
@@ -356,7 +364,7 @@ function XtermPane({
       const inputDisposable = terminal.onData(sendInput);
 
       let lastHandledShiftEnterAt = 0;
-      const shouldShimShiftEnter = session.purpose === 'agent';
+      const shouldShimShiftEnter = session.kind === 'agent_session';
       const handleShiftEnter = (event: KeyboardEvent) => {
         if (
           !shouldShimShiftEnter ||
@@ -421,7 +429,7 @@ function XtermPane({
 
       onConnectionChange('connecting');
       onSocketNotice(null);
-      void Effect.runPromise(resolvePtyWebSocketUrl(session.id)).then(
+      void Effect.runPromise(resolveSessionPtyWebSocketUrl(session)).then(
         (url) => {
           if (disposed) {
             return;
@@ -524,7 +532,7 @@ function XtermPane({
     onStatusChange,
     disableScrollback,
     session.id,
-    session.purpose,
+    session.kind,
     session.status,
   ]);
 
@@ -547,6 +555,22 @@ function XtermPane({
   }, [focused]);
 
   return <div ref={containerRef} className="isagi-xterm isagi-xterm-edge min-h-0 flex-1" />;
+}
+
+function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession | null {
+  if (!session) {
+    return null;
+  }
+  if (session.kind === 'agent_session') {
+    return { kind: 'agent_session', ...session.agentSession };
+  }
+  return { kind: 'terminal_session', ...session.terminalSession };
+}
+
+function resolveSessionPtyWebSocketUrl(session: PtyPaneSession): Effect.Effect<string, Error> {
+  return session.kind === 'agent_session'
+    ? resolveAgentSessionPtyWebSocketUrl(session.id)
+    : resolveTerminalSessionPtyWebSocketUrl(session.id);
 }
 
 function isCopyShortcut(event: KeyboardEvent) {

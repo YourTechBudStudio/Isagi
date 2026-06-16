@@ -7,35 +7,35 @@ import {
   type RuntimeDatabaseService,
 } from '../persistence/index.js';
 import {
-  ptySessions,
+  agentSessions,
+  ptyProcesses,
   surfacePanes,
+  terminalSessions,
   worktreeEnvironmentStates,
   worktrees,
   worktreeSurfaces,
 } from '../persistence/schema.js';
 import type { SurfacePaneDeletePlan } from './delete-plan.js';
 import type {
-  CreatePtySessionMetadataInput,
-  CreateSinglePanePtySessionSurfaceInput,
-  CreateSinglePanePtySessionSurfaceOutput,
+  AgentSessionRow,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
-  PtySessionRow,
+  PtyProcessRow,
   RenameSurfaceOutput,
   SurfaceDeleteTarget,
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
+  TerminalSessionRow,
 } from './types.js';
 
 type WorktreeSurfaceRecord = InferSelectModel<typeof worktreeSurfaces>;
 type SurfacePaneRecord = InferSelectModel<typeof surfacePanes>;
-type PtySessionRecord = InferSelectModel<typeof ptySessions>;
-type PtySessionRecordWithSurface = PtySessionRecord & {
-  readonly surfaceId: number;
-};
+type PtyProcessRecord = InferSelectModel<typeof ptyProcesses>;
+type AgentSessionRecord = InferSelectModel<typeof agentSessions>;
+type TerminalSessionRecord = InferSelectModel<typeof terminalSessions>;
 type EnvironmentFocusRecord = InferSelectModel<typeof worktreeEnvironmentStates>;
 
 export interface SurfaceRepositoryService {
@@ -50,9 +50,12 @@ export interface SurfaceRepositoryService {
   readonly listPanesForSurface: (
     surfaceId: number,
   ) => Effect.Effect<SurfacePaneRow[], DatabaseError>;
-  readonly listPtySessionsForPanes: (
+  readonly listAgentSessionsForPanes: (
     paneIds: readonly number[],
-  ) => Effect.Effect<PtySessionRow[], DatabaseError>;
+  ) => Effect.Effect<AgentSessionRow[], DatabaseError>;
+  readonly listTerminalSessionsForPanes: (
+    paneIds: readonly number[],
+  ) => Effect.Effect<TerminalSessionRow[], DatabaseError>;
   readonly findSurfaceDeleteTarget: (
     surfaceId: number,
   ) => Effect.Effect<SurfaceDeleteTarget | null, DatabaseError>;
@@ -73,12 +76,6 @@ export interface SurfaceRepositoryService {
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError>;
-  readonly createPtySessionMetadata: (
-    input: CreatePtySessionMetadataInput,
-  ) => Effect.Effect<number, DatabaseError>;
-  readonly createSinglePanePtySessionSurface: (
-    input: CreateSinglePanePtySessionSurfaceInput,
-  ) => Effect.Effect<CreateSinglePanePtySessionSurfaceOutput, DatabaseError>;
   readonly setEnvironmentFocus: (
     input: EnvironmentFocusRow,
   ) => Effect.Effect<EnvironmentFocusRow, DatabaseError>;
@@ -97,7 +94,15 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
-    const ptySessionColumns = getTableColumns(ptySessions);
+    const ptyColumns = getTableColumns(ptyProcesses);
+
+    const sessionRowsForPanes = (paneIds: readonly number[]) => {
+      const agents = listAgentSessionsForPanes(database, ptyColumns, paneIds);
+      const terminals = listTerminalSessionsForPanes(database, ptyColumns, paneIds);
+      return Effect.all([agents, terminals]).pipe(
+        Effect.map(([agentRows, terminalRows]) => ({ agentRows, terminalRows })),
+      );
+    };
 
     return {
       worktreeExists: (worktreeId) =>
@@ -154,104 +159,64 @@ export const SurfaceRepositoryLive = Layer.effect(
             .all()
             .map(paneRow),
         ),
-      listPtySessionsForPanes: (paneIds) =>
-        database.use('list_pty_sessions_for_panes', (db) => {
-          if (paneIds.length === 0) {
-            return [];
-          }
-          return db
-            .select({ ...ptySessionColumns, surfaceId: surfacePanes.surfaceId })
-            .from(ptySessions)
-            .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
-            .where(inArray(ptySessions.paneId, [...paneIds]))
-            .all()
-            .map(ptySessionRow);
-        }),
+      listAgentSessionsForPanes: (paneIds) =>
+        listAgentSessionsForPanes(database, ptyColumns, paneIds),
+      listTerminalSessionsForPanes: (paneIds) =>
+        listTerminalSessionsForPanes(database, ptyColumns, paneIds),
       findSurfaceDeleteTarget: (surfaceId) =>
-        database.use('find_surface_delete_target', (db) => {
-          const surface = db
-            .select()
-            .from(worktreeSurfaces)
-            .where(eq(worktreeSurfaces.id, surfaceId))
-            .get();
-          if (!surface) {
-            return null;
-          }
-
-          const panes = db
-            .select()
-            .from(surfacePanes)
-            .where(eq(surfacePanes.surfaceId, surfaceId))
-            .orderBy(surfacePanes.sortOrder, surfacePanes.id)
-            .all()
-            .map(paneRow);
-          const sessions =
-            panes.length === 0
-              ? []
-              : db
-                  .select({
-                    ...ptySessionColumns,
-                    surfaceId: surfacePanes.surfaceId,
-                  })
-                  .from(ptySessions)
-                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
-                  .where(
-                    inArray(
-                      ptySessions.paneId,
-                      panes.map((pane) => pane.id),
-                    ),
-                  )
-                  .all()
-                  .map(ptySessionRow);
-          const sessionByPaneId = new Map(sessions.map((session) => [session.paneId, session]));
-
-          return {
-            surface: surfaceRow(surface),
-            panes: panes.map((pane) => ({
-              pane,
-              ptySession: sessionByPaneId.get(pane.id) ?? null,
-            })),
-          } satisfies SurfaceDeleteTarget;
+        Effect.gen(function* () {
+          const surface = yield* database.use('find_surface_delete_target_surface', (db) => {
+            const row = db
+              .select()
+              .from(worktreeSurfaces)
+              .where(eq(worktreeSurfaces.id, surfaceId))
+              .get();
+            return row ? surfaceRow(row) : null;
+          });
+          if (!surface) return null;
+          const panes = yield* database.use('find_surface_delete_target_panes', (db) =>
+            db
+              .select()
+              .from(surfacePanes)
+              .where(eq(surfacePanes.surfaceId, surfaceId))
+              .orderBy(surfacePanes.sortOrder, surfacePanes.id)
+              .all()
+              .map(paneRow),
+          );
+          const { agentRows, terminalRows } = yield* sessionRowsForPanes(
+            panes.map((pane) => pane.id),
+          );
+          return deleteTarget(surface, panes, agentRows, terminalRows);
         }),
       listWorktreeDeleteTargets: (worktreeId) =>
-        database.use('list_worktree_delete_targets', (db) => {
-          const surfaces = db
-            .select()
-            .from(worktreeSurfaces)
-            .where(eq(worktreeSurfaces.worktreeId, worktreeId))
-            .orderBy(worktreeSurfaces.sortOrder, worktreeSurfaces.id)
-            .all();
-          if (surfaces.length === 0) {
-            return [];
-          }
-
-          const surfaceIds = surfaces.map((surface) => surface.id);
-          const panes = db
-            .select()
-            .from(surfacePanes)
-            .where(inArray(surfacePanes.surfaceId, surfaceIds))
-            .orderBy(surfacePanes.surfaceId, surfacePanes.sortOrder, surfacePanes.id)
-            .all()
-            .map(paneRow);
-          const sessions =
-            panes.length === 0
-              ? []
-              : db
-                  .select({
-                    ...ptySessionColumns,
-                    surfaceId: surfacePanes.surfaceId,
-                  })
-                  .from(ptySessions)
-                  .innerJoin(surfacePanes, eq(ptySessions.paneId, surfacePanes.id))
-                  .where(
-                    inArray(
-                      ptySessions.paneId,
-                      panes.map((pane) => pane.id),
-                    ),
-                  )
-                  .all()
-                  .map(ptySessionRow);
-          const sessionByPaneId = new Map(sessions.map((session) => [session.paneId, session]));
+        Effect.gen(function* () {
+          const surfaces = yield* database.use('list_worktree_delete_target_surfaces', (db) =>
+            db
+              .select()
+              .from(worktreeSurfaces)
+              .where(eq(worktreeSurfaces.worktreeId, worktreeId))
+              .orderBy(worktreeSurfaces.sortOrder, worktreeSurfaces.id)
+              .all()
+              .map(surfaceRow),
+          );
+          if (surfaces.length === 0) return [];
+          const panes = yield* database.use('list_worktree_delete_target_panes', (db) =>
+            db
+              .select()
+              .from(surfacePanes)
+              .where(
+                inArray(
+                  surfacePanes.surfaceId,
+                  surfaces.map((surface) => surface.id),
+                ),
+              )
+              .orderBy(surfacePanes.surfaceId, surfacePanes.sortOrder, surfacePanes.id)
+              .all()
+              .map(paneRow),
+          );
+          const { agentRows, terminalRows } = yield* sessionRowsForPanes(
+            panes.map((pane) => pane.id),
+          );
           const panesBySurfaceId = new Map<number, SurfacePaneRow[]>();
           for (const pane of panes) {
             panesBySurfaceId.set(pane.surfaceId, [
@@ -259,14 +224,9 @@ export const SurfaceRepositoryLive = Layer.effect(
               pane,
             ]);
           }
-
-          return surfaces.map((surface) => ({
-            surface: surfaceRow(surface),
-            panes: (panesBySurfaceId.get(surface.id) ?? []).map((pane) => ({
-              pane,
-              ptySession: sessionByPaneId.get(pane.id) ?? null,
-            })),
-          }));
+          return surfaces.map((surface) =>
+            deleteTarget(surface, panesBySurfaceId.get(surface.id) ?? [], agentRows, terminalRows),
+          );
         }),
       renameSurface: (input) =>
         database.use('rename_surface', (db) => {
@@ -286,10 +246,8 @@ export const SurfaceRepositoryLive = Layer.effect(
         }),
       deleteSurfacePane: (input) =>
         database.transaction('delete_surface_pane', (db) => {
-          if (input.plan.deletedPaneIds.length === 0) {
+          if (input.plan.deletedPaneIds.length === 0)
             return { deletedSurfaceId: null, deletedPaneIds: [] };
-          }
-
           if (input.plan.deletedSurfaceId !== null) {
             db.delete(worktreeSurfaces)
               .where(eq(worktreeSurfaces.id, input.target.surface.id))
@@ -299,86 +257,27 @@ export const SurfaceRepositoryLive = Layer.effect(
               deletedPaneIds: input.plan.deletedPaneIds,
             };
           }
-
           const deletedPaneId = input.plan.deletedPaneIds[0];
-          if (!deletedPaneId || !input.plan.nextLayout) {
+          if (!deletedPaneId || !input.plan.nextLayout)
             return { deletedSurfaceId: null, deletedPaneIds: [] };
-          }
-
           const now = timestamp();
           db.update(worktreeSurfaces)
-            .set({
-              layoutJson: JSON.stringify(input.plan.nextLayout),
-              updatedAt: now,
-            })
+            .set({ layoutJson: JSON.stringify(input.plan.nextLayout), updatedAt: now })
             .where(eq(worktreeSurfaces.id, input.target.surface.id))
             .run();
           db.delete(surfacePanes).where(eq(surfacePanes.id, deletedPaneId)).run();
           return { deletedSurfaceId: null, deletedPaneIds: [deletedPaneId] };
         }),
       createSinglePaneSurface: (input) =>
-        database.transaction('create_single_pane_surface', (db) =>
-          createSinglePaneSurfaceRows(db, input),
-        ),
-      createSinglePanePtySessionSurface: (input) =>
-        database.transaction('create_single_pane_pty_session_surface', (db) => {
+        database.transaction('create_single_pane_surface', (db) => {
           const worktree = db
             .select()
             .from(worktrees)
             .where(eq(worktrees.id, input.worktreeId))
             .get();
-          if (!worktree) {
-            throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
-          }
-
-          const now = timestamp();
+          if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
           const surface = createSinglePaneSurfaceRows(db, input);
-
-          const session = db
-            .insert(ptySessions)
-            .values({
-              paneId: surface.paneId,
-              worktreeId: input.worktreeId,
-              // Temporary non-null DB invariant. PtyService owns backend selection and
-              // overwrites backend/ref/log fields before launching the operational backend.
-              backend: 'node_pty',
-              backendRefJson: JSON.stringify({
-                schemaVersion: 1,
-                backend: 'node_pty',
-                ptySessionId: 0,
-                pid: null,
-              }),
-              purpose: input.purpose,
-              harness: input.harness,
-              command: input.command,
-              cwd: worktree.path,
-              status: 'starting',
-              statusReason: null,
-              exitCode: null,
-              signal: null,
-              logMode: 'none',
-              logPath: null,
-              createdAt: now,
-              updatedAt: now,
-              exitedAt: null,
-              lastSeenAt: null,
-            })
-            .returning({ id: ptySessions.id })
-            .get();
-          const ptySessionId = session.id;
-          db.update(ptySessions)
-            .set({
-              backendRefJson: JSON.stringify({
-                schemaVersion: 1,
-                backend: 'node_pty',
-                ptySessionId,
-                pid: null,
-              }),
-              updatedAt: now,
-            })
-            .where(eq(ptySessions.id, ptySessionId))
-            .run();
-
+          const now = timestamp();
           const focus = db
             .select({ id: worktreeEnvironmentStates.id })
             .from(worktreeEnvironmentStates)
@@ -396,63 +295,10 @@ export const SurfaceRepositoryLive = Layer.effect(
               .run();
           } else {
             db.insert(worktreeEnvironmentStates)
-              .values({
-                worktreeId: input.worktreeId,
-                ...focusValues,
-                createdAt: now,
-              })
+              .values({ worktreeId: input.worktreeId, ...focusValues, createdAt: now })
               .run();
           }
-
-          return {
-            worktreeId: input.worktreeId,
-            surfaceId: surface.surfaceId,
-            paneId: surface.paneId,
-            ptySessionId,
-            command: input.command,
-            cwd: worktree.path,
-            logPath: null,
-          } satisfies CreateSinglePanePtySessionSurfaceOutput;
-        }),
-      createPtySessionMetadata: (input) =>
-        database.use('create_pty_session_metadata', (db) => {
-          const now = timestamp();
-          const pane = db
-            .select({ worktreeId: worktreeSurfaces.worktreeId })
-            .from(surfacePanes)
-            .innerJoin(worktreeSurfaces, eq(surfacePanes.surfaceId, worktreeSurfaces.id))
-            .where(eq(surfacePanes.id, input.paneId))
-            .get();
-
-          if (!pane) {
-            throw new Error(`Cannot create PTY session metadata for missing pane ${input.paneId}.`);
-          }
-
-          const row = db
-            .insert(ptySessions)
-            .values({
-              paneId: input.paneId,
-              worktreeId: pane.worktreeId,
-              backend: input.backend,
-              backendRefJson: input.backendRefJson,
-              purpose: input.purpose,
-              harness: input.harness,
-              command: input.command,
-              cwd: input.cwd,
-              status: input.status,
-              statusReason: input.statusReason ?? null,
-              exitCode: input.exitCode ?? null,
-              signal: input.signal ?? null,
-              logMode: input.logMode,
-              logPath: input.logPath,
-              createdAt: now,
-              updatedAt: now,
-              exitedAt: input.exitedAt ?? null,
-              lastSeenAt: input.lastSeenAt ?? null,
-            })
-            .returning({ id: ptySessions.id })
-            .get();
-          return row.id;
+          return { ...surface, cwd: worktree.path };
         }),
       setEnvironmentFocus: (input) =>
         database.use('set_worktree_environment_focus', (db) => {
@@ -474,11 +320,7 @@ export const SurfaceRepositoryLive = Layer.effect(
               .run();
           } else {
             db.insert(worktreeEnvironmentStates)
-              .values({
-                worktreeId: input.worktreeId,
-                ...values,
-                createdAt: now,
-              })
+              .values({ worktreeId: input.worktreeId, ...values, createdAt: now })
               .run();
           }
           return input;
@@ -487,28 +329,57 @@ export const SurfaceRepositoryLive = Layer.effect(
   }),
 );
 
+function listAgentSessionsForPanes(
+  database: RuntimeDatabaseService,
+  ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
+  paneIds: readonly number[],
+) {
+  return database.use('list_agent_sessions_for_panes', (db) => {
+    if (paneIds.length === 0) return [];
+    return db
+      .select({ session: agentSessions, process: ptyColumns, surfaceId: surfacePanes.surfaceId })
+      .from(agentSessions)
+      .innerJoin(surfacePanes, eq(agentSessions.paneId, surfacePanes.id))
+      .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+      .where(inArray(agentSessions.paneId, [...paneIds]))
+      .all()
+      .map((row) => agentSessionRow(row.session, row.surfaceId, row.process));
+  });
+}
+
+function listTerminalSessionsForPanes(
+  database: RuntimeDatabaseService,
+  ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
+  paneIds: readonly number[],
+) {
+  return database.use('list_terminal_sessions_for_panes', (db) => {
+    if (paneIds.length === 0) return [];
+    return db
+      .select({ session: terminalSessions, process: ptyColumns, surfaceId: surfacePanes.surfaceId })
+      .from(terminalSessions)
+      .innerJoin(surfacePanes, eq(terminalSessions.paneId, surfacePanes.id))
+      .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
+      .where(inArray(terminalSessions.paneId, [...paneIds]))
+      .all()
+      .map((row) => terminalSessionRow(row.session, row.surfaceId, row.process));
+  });
+}
+
 export function duplicateSafeTitle(titleBase: string, existingTitles: readonly string[]) {
   const used = new Set(existingTitles);
-  if (!used.has(titleBase)) {
-    return titleBase;
-  }
+  if (!used.has(titleBase)) return titleBase;
   let suffix = 2;
-  while (used.has(`${titleBase} ${suffix}`)) {
-    suffix += 1;
-  }
+  while (used.has(`${titleBase} ${suffix}`)) suffix += 1;
   return `${titleBase} ${suffix}`;
 }
 
 function createSinglePaneSurfaceRows(
   db: RuntimeDatabaseConnection,
   input: CreateSinglePaneSurfaceInput,
-): CreateSinglePaneSurfaceOutput {
+): Omit<CreateSinglePaneSurfaceOutput, 'cwd'> {
   const now = timestamp();
   const existingSurfaces = db
-    .select({
-      title: worktreeSurfaces.title,
-      sortOrder: worktreeSurfaces.sortOrder,
-    })
+    .select({ title: worktreeSurfaces.title, sortOrder: worktreeSurfaces.sortOrder })
     .from(worktreeSurfaces)
     .where(eq(worktreeSurfaces.worktreeId, input.worktreeId))
     .all();
@@ -559,6 +430,44 @@ function createSinglePaneSurfaceRows(
   return { surfaceId: surface.id, paneId: pane.id, title };
 }
 
+function deleteTarget(
+  surface: SurfaceRow,
+  panes: readonly SurfacePaneRow[],
+  agents: readonly AgentSessionRow[],
+  terminals: readonly TerminalSessionRow[],
+): SurfaceDeleteTarget {
+  const agentByPane = new Map(agents.map((session) => [session.paneId, session]));
+  const terminalByPane = new Map(terminals.map((session) => [session.paneId, session]));
+  return {
+    surface,
+    panes: panes.map((pane) => {
+      const agent = agentByPane.get(pane.id);
+      if (agent) {
+        return {
+          pane,
+          session: {
+            cleanupTarget: { kind: 'agent_session', agentSessionId: agent.id },
+            activePtyProcessId: agent.activePtyProcessId,
+            activePtyProcess: agent.activePtyProcess,
+          },
+        };
+      }
+      const terminal = terminalByPane.get(pane.id);
+      if (terminal) {
+        return {
+          pane,
+          session: {
+            cleanupTarget: { kind: 'terminal_session', terminalSessionId: terminal.id },
+            activePtyProcessId: terminal.activePtyProcessId,
+            activePtyProcess: terminal.activePtyProcess,
+          },
+        };
+      }
+      return { pane, session: null };
+    }),
+  };
+}
+
 function surfaceMetadataRow(row: WorktreeSurfaceRecord): SurfaceMetadataRow {
   return {
     id: row.id,
@@ -569,7 +478,6 @@ function surfaceMetadataRow(row: WorktreeSurfaceRecord): SurfaceMetadataRow {
     sortOrder: row.sortOrder,
   };
 }
-
 function surfaceRow(row: WorktreeSurfaceRecord): SurfaceRow {
   return {
     ...surfaceMetadataRow(row),
@@ -578,7 +486,6 @@ function surfaceRow(row: WorktreeSurfaceRecord): SurfaceRow {
     updatedAt: row.updatedAt,
   };
 }
-
 function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
   return {
     id: row.id,
@@ -590,18 +497,15 @@ function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
     updatedAt: row.updatedAt,
   };
 }
-
-function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
+function ptyProcessRow(row: PtyProcessRecord | null): PtyProcessRow | null {
+  if (!row) return null;
   return {
     id: row.id,
-    paneId: row.paneId,
-    surfaceId: row.surfaceId,
-    worktreeId: row.worktreeId,
     backend: row.backend,
     backendRefJson: row.backendRefJson,
-    purpose: row.purpose,
-    harness: row.harness,
     command: row.command,
+    args: decodeArgs(row.argsJson),
+    argsJson: row.argsJson,
     cwd: row.cwd,
     status: row.status,
     statusReason: row.statusReason,
@@ -615,7 +519,47 @@ function ptySessionRow(row: PtySessionRecordWithSurface): PtySessionRow {
     lastSeenAt: row.lastSeenAt,
   };
 }
-
+function agentSessionRow(
+  row: AgentSessionRecord,
+  surfaceId: number,
+  process: PtyProcessRecord | null,
+): AgentSessionRow {
+  return {
+    id: row.id,
+    paneId: row.paneId,
+    surfaceId,
+    worktreeId: row.worktreeId,
+    harness: row.harness,
+    cwd: row.cwd,
+    harnessSessionId: row.harnessSessionId,
+    harnessSessionRefJson: row.harnessSessionRefJson,
+    activePtyProcessId: row.activePtyProcessId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastSeenAt: row.lastSeenAt,
+    activePtyProcess: ptyProcessRow(process),
+  };
+}
+function terminalSessionRow(
+  row: TerminalSessionRecord,
+  surfaceId: number,
+  process: PtyProcessRecord | null,
+): TerminalSessionRow {
+  return {
+    id: row.id,
+    paneId: row.paneId,
+    surfaceId,
+    worktreeId: row.worktreeId,
+    cwd: row.cwd,
+    shellCommand: row.shellCommand,
+    shellArgs: decodeArgs(row.shellArgsJson),
+    shellArgsJson: row.shellArgsJson,
+    activePtyProcessId: row.activePtyProcessId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    activePtyProcess: ptyProcessRow(process),
+  };
+}
 function focusRow(row: EnvironmentFocusRecord): EnvironmentFocusRow {
   return {
     worktreeId: row.worktreeId,
@@ -623,7 +567,16 @@ function focusRow(row: EnvironmentFocusRecord): EnvironmentFocusRow {
     activePaneId: row.activePaneId,
   };
 }
-
+function decodeArgs(json: string) {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
 function timestamp() {
   return new Date().toISOString();
 }

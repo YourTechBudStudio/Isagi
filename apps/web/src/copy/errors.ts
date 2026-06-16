@@ -195,6 +195,11 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   invalid_message: "Isagi couldn't read that terminal message.",
   session_not_found: "That session's gone — looks like it already wrapped up.",
   session_not_running: "This session isn't running anymore.",
+  active_process_missing: 'This session has no active process to attach to yet.',
+  active_process_not_running: "This session's active process is not running.",
+  harness_session_id_missing:
+    'No harness session was captured for this pane, so there is nothing to resume yet.',
+  session_already_attached: 'This session is already attached in another pane.',
   log_read_failed: "Couldn't replay this session's history.",
   worktree_not_found: worktreeGone,
   backend_unavailable: "This session's backend isn't available.",

@@ -3,7 +3,8 @@ import { Effect, Schema } from 'effect';
 import {
   apiBasePath,
   apiEndpoints,
-  ptySessionWebSocketEndpoint,
+  agentSessionPtyWebSocketEndpoint,
+  terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   apiErrorResponseSchema,
   apiInfrastructureErrorSchema,
@@ -17,7 +18,8 @@ import {
   type ApiInfrastructureError,
   type DeleteWorktreeInput,
   type DeleteWorktreeOutput,
-  type LaunchSessionOutput,
+  type LaunchAgentSessionOutput,
+  type LaunchTerminalSessionOutput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
   type DeleteSurfaceOutput,
@@ -103,16 +105,17 @@ export interface RuntimeClient {
     worktreeId: number,
     harness: AgentHarness,
   ) => Effect.Effect<
-    LaunchSessionOutput,
+    LaunchAgentSessionOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.launchAgentSession>
   >;
   readonly launchTerminalSession: (
     worktreeId: number,
   ) => Effect.Effect<
-    LaunchSessionOutput,
+    LaunchTerminalSessionOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.launchTerminalSession>
   >;
-  readonly resolvePtyWebSocketUrl: (ptySessionId: number) => string;
+  readonly resolveAgentSessionPtyWebSocketUrl: (agentSessionId: number) => string;
+  readonly resolveTerminalSessionPtyWebSocketUrl: (terminalSessionId: number) => string;
   readonly resolveRuntimeEventsWebSocketUrl: () => string;
   readonly addProject: (
     path: string,
@@ -197,9 +200,17 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.launchAgentSession, { worktreeId }, { harness }),
     launchTerminalSession: (worktreeId) =>
       request(apiEndpoints.surfaces.launchTerminalSession, { worktreeId }),
-    resolvePtyWebSocketUrl: (ptySessionId) => {
+    resolveAgentSessionPtyWebSocketUrl: (agentSessionId) => {
       const httpUrl = new URL(
-        `${apiBasePath}${interpolatePath(ptySessionWebSocketEndpoint.path, { ptySessionId })}`,
+        `${apiBasePath}${interpolatePath(agentSessionPtyWebSocketEndpoint.path, { agentSessionId })}`,
+        runtimeUrl,
+      );
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      return httpUrl.toString();
+    },
+    resolveTerminalSessionPtyWebSocketUrl: (terminalSessionId) => {
+      const httpUrl = new URL(
+        `${apiBasePath}${interpolatePath(terminalSessionPtyWebSocketEndpoint.path, { terminalSessionId })}`,
         runtimeUrl,
       );
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';

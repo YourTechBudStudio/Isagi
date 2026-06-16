@@ -1,10 +1,11 @@
 import { Effect, Either } from 'effect';
 
-import type { PtySessionStatusReason, SurfaceDeleteWarning } from '@isagi/contracts';
+import type { SurfaceDeleteWarning } from '@isagi/contracts';
 
-import type { RuntimeEventBusService } from '../../runtime-events/index.js';
+import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtySessionRow } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtySessionStatusReason } from '../types.js';
 import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { detachActiveAttachment } from './attachments.js';
@@ -26,7 +27,7 @@ export type PtyTerminationOutcome = 'persist_killed' | 'delete_session';
 export function terminatePtySessionAndPersistKilled(input: {
   readonly repository: PtyRepositoryService;
   readonly backend: PtyBackend;
-  readonly eventBus: RuntimeEventBusService;
+  readonly eventBus: InternalRuntimeEventBusService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: Map<number, PtyTerminationState>;
   readonly ptySessionId: number;
@@ -97,10 +98,12 @@ export function terminatePtySessionAndPersistKilled(input: {
 export function terminatePtySessionForDelete(input: {
   readonly repository: PtyRepositoryService;
   readonly backend: PtyBackend;
+  readonly eventBus: InternalRuntimeEventBusService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: Map<number, PtyTerminationState>;
   readonly ptySessionId: number;
   readonly paneId: number;
+  readonly session: SurfaceDeleteWarning['session'];
 }) {
   return Effect.gen(function* () {
     const session = yield* input.repository.findSession(input.ptySessionId);
@@ -109,14 +112,14 @@ export function terminatePtySessionForDelete(input: {
     }
 
     if (session.backend !== input.backend.name) {
-      return [deleteCleanupWarning('pty_backend_unavailable', input.paneId, session.id)];
+      return [deleteCleanupWarning('session_process_cleanup_failed', input.paneId, input.session)];
     }
 
     const ref = yield* decodeBackendRef(session).pipe(
       Effect.catchAll(() => Effect.succeed<BackendSessionRef | null>(null)),
     );
     if (!ref) {
-      return [deleteCleanupWarning('pty_kill_failed', input.paneId, session.id)];
+      return [deleteCleanupWarning('session_process_cleanup_failed', input.paneId, input.session)];
     }
 
     yield* detachActiveAttachment(input.activeAttachments, session.id);
@@ -130,7 +133,7 @@ export function terminatePtySessionForDelete(input: {
       // Immediate cleanup could not happen in this runtime process. The
       // durable row is still deleted by SurfaceService; backend GC can
       // retry orphan cleanup later when the relevant backend is available.
-      return [deleteCleanupWarning('pty_backend_unavailable', input.paneId, session.id)];
+      return [deleteCleanupWarning('session_process_cleanup_failed', input.paneId, input.session)];
     }
 
     const termination = beginPtyTermination(input.terminations, session.id, {
@@ -144,11 +147,17 @@ export function terminatePtySessionForDelete(input: {
         `[runtime] PTY delete cleanup could not terminate backend session ptySessionId=${session.id}`,
         killResult.left,
       );
-      return [deleteCleanupWarning('pty_kill_failed', input.paneId, session.id)];
+      return [deleteCleanupWarning('session_process_cleanup_failed', input.paneId, input.session)];
     }
 
     termination.completed = true;
     input.terminations.delete(session.id);
+    yield* input.eventBus.publish({
+      type: 'pty_process_killed',
+      ptyProcessId: session.id,
+      status: 'killed',
+      statusReason: 'user_requested',
+    });
     console.info(
       `[runtime] PTY session terminated for delete ptySessionId=${session.id} reason=user_requested outcome=delete_session`,
     );
@@ -193,7 +202,7 @@ function beginPtyTermination(
 function persistKilledTransition(
   input: {
     readonly repository: PtyRepositoryService;
-    readonly eventBus: RuntimeEventBusService;
+    readonly eventBus: InternalRuntimeEventBusService;
     readonly reason: DurablePtyTerminationReason;
   },
   session: PtySessionRow,
@@ -221,7 +230,7 @@ function completePtyTermination(
 function deleteCleanupWarning(
   code: SurfaceDeleteWarning['code'],
   paneId: number,
-  ptySessionId: number,
+  session: SurfaceDeleteWarning['session'],
 ): SurfaceDeleteWarning {
-  return { code, paneId, ptySessionId };
+  return { code, paneId, session };
 }

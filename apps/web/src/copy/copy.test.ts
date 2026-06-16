@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ApiError, PtySessionStatusReason } from '@isagi/contracts';
+import type {
+  AgentSessionStatusReason,
+  ApiError,
+  TerminalSessionStatusReason,
+} from '@isagi/contracts';
 
 import { ptyCopy, runtimeErrorCopy } from './index.js';
 
@@ -20,45 +24,55 @@ test('surface API error reasons map to web-owned copy', () => {
   );
 });
 
-test('PTY status reasons produce degraded pane status labels', () => {
+test('session status reasons produce degraded pane status labels', () => {
+  assert.equal(ptyCopy.sessionStatus('failed', 'harness_launch_failed', exit()), 'Launch failed');
+  assert.equal(ptyCopy.sessionStatus('failed', 'shell_launch_failed', exit()), 'Launch failed');
+  assert.equal(ptyCopy.sessionStatus('failed', 'process_attach_failed', exit()), 'Attach failed');
   assert.equal(
-    ptyCopy.sessionStatus('running', 'backend_unavailable', exit()),
-    'Backend unavailable',
+    ptyCopy.sessionStatus('failed', 'harness_session_id_missing', exit()),
+    'No prior session',
   );
+  assert.equal(ptyCopy.sessionStatus('failed', 'harness_resume_failed', exit()), 'Resume failed');
+  assert.equal(ptyCopy.sessionStatus('failed', 'pty_process_missing', exit()), 'Process missing');
   assert.equal(
-    ptyCopy.sessionStatus('failed', 'backend_session_missing', exit()),
-    'Session missing',
+    ptyCopy.sessionStatus('failed', 'pty_process_not_running', exit()),
+    'Process not running',
   );
-  assert.equal(
-    ptyCopy.sessionStatus('failed', 'runtime_ephemeral_lost', exit()),
-    'Runtime session lost',
-  );
-  assert.equal(ptyCopy.sessionStatus('failed', 'backend_launch_failed', exit()), 'Launch failed');
-  assert.equal(ptyCopy.sessionStatus('failed', 'backend_attach_failed', exit()), 'Attach failed');
-  assert.equal(ptyCopy.sessionStatus('killed', 'user_requested', exit()), 'Killed');
+  assert.equal(ptyCopy.sessionStatus('killed', 'harness_process_killed', exit()), 'Killed');
+  assert.equal(ptyCopy.sessionStatus('killed', 'shell_killed', exit()), 'Killed');
   assert.equal(ptyCopy.sessionStatus('killed', 'runtime_shutdown', exit()), 'Killed on shutdown');
 });
 
-test('PTY status reasons produce restrained pane notices', () => {
+test('session status reasons produce restrained pane notices', () => {
   assert.equal(ptyCopy.sessionNotice('running', null), null);
 
-  const notices: Record<PtySessionStatusReason, string | null> = {
-    user_requested: ptyCopy.sessionNotice('killed', 'user_requested'),
+  const notices: Record<AgentSessionStatusReason | TerminalSessionStatusReason, string | null> = {
     runtime_shutdown: ptyCopy.sessionNotice('killed', 'runtime_shutdown'),
-    backend_unavailable: ptyCopy.sessionNotice('running', 'backend_unavailable'),
-    backend_session_missing: ptyCopy.sessionNotice('failed', 'backend_session_missing'),
-    backend_attach_failed: ptyCopy.sessionNotice('failed', 'backend_attach_failed'),
-    backend_launch_failed: ptyCopy.sessionNotice('failed', 'backend_launch_failed'),
-    runtime_ephemeral_lost: ptyCopy.sessionNotice('failed', 'runtime_ephemeral_lost'),
+    harness_launch_failed: ptyCopy.sessionNotice('failed', 'harness_launch_failed'),
+    shell_launch_failed: ptyCopy.sessionNotice('failed', 'shell_launch_failed'),
+    harness_process_exited: ptyCopy.sessionNotice('exited', 'harness_process_exited'),
+    shell_exited: ptyCopy.sessionNotice('exited', 'shell_exited'),
+    harness_process_killed: ptyCopy.sessionNotice('killed', 'harness_process_killed'),
+    shell_killed: ptyCopy.sessionNotice('killed', 'shell_killed'),
+    process_attach_failed: ptyCopy.sessionNotice('failed', 'process_attach_failed'),
+    harness_session_id_missing: ptyCopy.sessionNotice('failed', 'harness_session_id_missing'),
+    harness_resume_failed: ptyCopy.sessionNotice('failed', 'harness_resume_failed'),
+    pty_process_missing: ptyCopy.sessionNotice('failed', 'pty_process_missing'),
+    pty_process_not_running: ptyCopy.sessionNotice('failed', 'pty_process_not_running'),
   };
 
-  assert.equal(notices.user_requested, null);
   assert.match(notices.runtime_shutdown ?? '', /runtime shut down/);
-  assert.match(notices.backend_unavailable ?? '', /runtime/);
-  assert.match(notices.backend_session_missing ?? '', /backend session/);
-  assert.match(notices.backend_attach_failed ?? '', /attach/);
-  assert.match(notices.backend_launch_failed ?? '', /did not launch/);
-  assert.match(notices.runtime_ephemeral_lost ?? '', /runtime memory/);
+  assert.match(notices.harness_launch_failed ?? '', /did not launch/);
+  assert.match(notices.shell_launch_failed ?? '', /did not launch/);
+  assert.equal(notices.harness_process_exited, null);
+  assert.equal(notices.shell_exited, null);
+  assert.equal(notices.harness_process_killed, null);
+  assert.equal(notices.shell_killed, null);
+  assert.match(notices.process_attach_failed ?? '', /attach/);
+  assert.match(notices.harness_session_id_missing ?? '', /No harness session/);
+  assert.match(notices.harness_resume_failed ?? '', /resume/);
+  assert.match(notices.pty_process_missing ?? '', /backing process/);
+  assert.match(notices.pty_process_not_running ?? '', /not running/);
 });
 
 function surfaceRejected(reason: 'surface_not_found' | 'pane_not_found' | 'invalid_surface_title') {

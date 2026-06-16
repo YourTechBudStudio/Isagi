@@ -1,6 +1,20 @@
 import { Layer } from 'effect';
 
+import {
+  AgentSessionRepositoryLive,
+  AgentSessionServiceLive,
+  type AgentSessionServiceShape,
+} from './agent-sessions/index.js';
 import { GitLive } from './git/index.js';
+import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
+import {
+  HarnessEventEndpointLive,
+  HarnessEventServiceLive,
+  HarnessEventTokenRegistryLive,
+  type HarnessEventEndpointService,
+  type HarnessEventServiceShape,
+  type HarnessEventTokenRegistryService,
+} from './harness-events/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import {
   NodePtyBackendLive,
@@ -9,14 +23,25 @@ import {
   PtyServiceLive,
   TmuxBackendLive,
   type PtyServiceShape,
-} from './pty/index.js';
+} from './pty-processes/index.js';
 import { RuntimeConfigLive } from './runtime-config/index.js';
-import { RuntimeEventBusLive, type RuntimeEventBusService } from './runtime-events/index.js';
+import {
+  InternalRuntimeEventBusLive,
+  RuntimeEventBusLive,
+  RuntimeEventProjectionLive,
+  type InternalRuntimeEventBusService,
+  type RuntimeEventBusService,
+} from './runtime-events/index.js';
 import {
   SurfaceRepositoryLive,
   SurfaceServiceLive,
   type SurfaceServiceShape,
 } from './surfaces/index.js';
+import {
+  TerminalSessionRepositoryLive,
+  TerminalSessionServiceLive,
+  type TerminalSessionServiceShape,
+} from './terminal-sessions/index.js';
 import {
   WorkspaceRepositoryLive,
   WorkspaceServiceLive,
@@ -28,16 +53,10 @@ const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
-  Layer.provide(DatabaseLive),
-  Layer.provide(DataDirectoryLive),
-);
+const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
-const PtyRepositoryLayer = PtyRepositoryLive.pipe(
-  Layer.provide(DatabaseLive),
-  Layer.provide(SurfaceRepositoryLayer),
-);
+const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
@@ -46,17 +65,65 @@ const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(TmuxBackendLive),
   Layer.provide(DataDirectoryLive),
 );
-const PtyServiceWithEventsLayer = Layer.provideMerge(PtyServiceLayer, RuntimeEventBusLive);
-const SurfaceAndPtyServiceLayer = Layer.provideMerge(SurfaceServiceLive, PtyServiceWithEventsLayer);
+const HarnessEventTokenRegistryLayer = HarnessEventTokenRegistryLive;
+const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(HarnessEventEndpointLive),
+  Layer.provide(HarnessEventTokenRegistryLayer),
+);
+const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+);
+const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
+  Layer.provide(AgentSessionRepositoryLayer),
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(HarnessAdapterRegistryLayer),
+);
+const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
+  Layer.provide(TerminalSessionRepositoryLayer),
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(PtyServiceLayer),
+);
+const SurfaceAndPtyServiceLayer = Layer.provideMerge(SurfaceServiceLive, PtyServiceLayer);
+const SessionServicesLayer = Layer.mergeAll(AgentSessionServiceLayer, TerminalSessionServiceLayer);
+const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
+  Layer.provide(AgentSessionRepositoryLayer),
+  Layer.provide(TerminalSessionRepositoryLayer),
+);
+const HarnessEventServiceLayer = HarnessEventServiceLive.pipe(
+  Layer.provide(HarnessEventTokenRegistryLayer),
+  Layer.provide(AgentSessionServiceLayer),
+);
+const ApiServicesLayer = Layer.mergeAll(
+  SurfaceAndPtyServiceLayer,
+  SessionServicesLayer,
+  EventProjectionLayer,
+  HarnessEventServiceLayer,
+  HarnessEventEndpointLive,
+  HarnessEventTokenRegistryLayer,
+);
 const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(Layer.provide(SurfaceAndPtyServiceLayer));
 
 export type RuntimeServices =
   | WorkspaceServiceShape
   | SurfaceServiceShape
   | PtyServiceShape
-  | RuntimeEventBusService;
+  | AgentSessionServiceShape
+  | TerminalSessionServiceShape
+  | RuntimeEventBusService
+  | InternalRuntimeEventBusService
+  | HarnessEventServiceShape
+  | HarnessEventEndpointService
+  | HarnessEventTokenRegistryService;
 
-export const RuntimeLayer = Layer.mergeAll(WorkspaceServiceLayer, SurfaceAndPtyServiceLayer).pipe(
+const ServicesLayer = Layer.mergeAll(WorkspaceServiceLayer, ApiServicesLayer).pipe(
+  Layer.provideMerge(InternalRuntimeEventBusLive),
+  Layer.provideMerge(RuntimeEventBusLive),
+);
+
+export const RuntimeLayer = ServicesLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       RepositoryLive,

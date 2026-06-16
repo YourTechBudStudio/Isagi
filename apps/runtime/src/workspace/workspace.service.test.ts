@@ -102,16 +102,14 @@ const testSurfaceRepository = {
   listWorkspaceSurfaceMetadata: Effect.succeed([]),
   listEnvironmentFocusStates: Effect.succeed([]),
   listPanesForSurface: () => Effect.succeed([]),
-  listPtySessionsForPanes: () => Effect.succeed([]),
+  listAgentSessionsForPanes: () => Effect.succeed([]),
+  listTerminalSessionsForPanes: () => Effect.succeed([]),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
   listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
   deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
-  createPtySessionMetadata: () => Effect.die('pty metadata is not used by workspace tests'),
-  createSinglePanePtySessionSurface: () =>
-    Effect.die('pty session surface creation is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
 } satisfies SurfaceRepositoryService;
 
@@ -120,7 +118,7 @@ const testSurfaceService = {
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),
   deleteSurfacePane: () => Effect.die('surface pane delete is not used by workspace tests'),
-  cleanupWorktreeForDelete: () => Effect.succeed({ attemptedPtySessionIds: [], warnings: [] }),
+  cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
@@ -400,7 +398,7 @@ test('delete worktree rejects dirty checkout in normal mode before cleanup or re
     cleanupWorktreeForDelete: () =>
       Effect.sync(() => {
         cleanupCalls += 1;
-        return { attemptedPtySessionIds: [], warnings: [] };
+        return { attemptedSessionIds: [], warnings: [] };
       }),
   } satisfies SurfaceServiceShape;
 
@@ -470,7 +468,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     cleanupWorktreeForDelete: (worktreeId: number) =>
       Effect.sync(() => {
         events.push(`cleanup:${worktreeId}`);
-        return { attemptedPtySessionIds: [701], warnings: [] };
+        return { attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 701 }], warnings: [] };
       }),
   } satisfies SurfaceServiceShape;
 
@@ -582,7 +580,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
     cleanupWorktreeForDelete: () =>
       Effect.sync(() => {
         cleanupCalls += 1;
-        return { attemptedPtySessionIds: [], warnings: [] };
+        return { attemptedSessionIds: [], warnings: [] };
       }),
   } satisfies SurfaceServiceShape;
   const quietGit = {

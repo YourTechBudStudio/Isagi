@@ -1,16 +1,29 @@
-import { Data } from 'effect';
+import { Data, type Effect } from 'effect';
 
 import type {
-  AgentHarness,
-  PtySessionBackend,
-  PtySessionPurpose,
-  PtySessionStatus,
-  PtySessionStatusReason,
+  PtyProcessBackend,
+  PtyProcessLogMode,
   PtyWebSocketOutputMessage,
+  SessionStatus,
 } from '@isagi/contracts';
 
-export type PtyBackendName = PtySessionBackend;
-export type { PtySessionStatusReason };
+export type PtyBackendName = PtyProcessBackend;
+export type PtyProcessStatus = SessionStatus;
+export type PtyProcessStatusReason =
+  | 'user_requested'
+  | 'runtime_shutdown'
+  | 'backend_unavailable'
+  | 'backend_process_missing'
+  | 'backend_attach_failed'
+  | 'backend_launch_failed'
+  | 'runtime_ephemeral_lost';
+
+// Compatibility aliases used while the old PTY internals are being renamed.
+// These names are internal only; public contracts no longer expose PTY sessions.
+export type PtySessionStatus = PtyProcessStatus;
+export type PtySessionStatusReason = PtyProcessStatusReason;
+export type PtySessionBackend = PtyProcessBackend;
+export type PtySessionLogMode = PtyProcessLogMode;
 
 export interface NodePtyBackendRef {
   readonly schemaVersion: 1;
@@ -30,7 +43,7 @@ export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
 export interface PtyBackendGcSession {
   readonly ptySessionId: number;
   readonly ref: BackendSessionRef;
-  readonly status: PtySessionStatus;
+  readonly status: PtyProcessStatus;
 }
 
 export interface PtyBackendGcInput {
@@ -95,6 +108,9 @@ export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
     | 'worktree_not_found'
     | 'session_not_found'
     | 'session_not_running'
+    | 'active_process_missing'
+    | 'active_process_not_running'
+    | 'session_already_attached'
     | 'backend_unavailable'
     | 'backend_session_missing'
     | 'backend_attach_failed'
@@ -111,64 +127,65 @@ export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
 }> {}
 
 export type BackendInspection =
-  | {
-      readonly status: 'alive';
-    }
-  | {
-      readonly status: 'missing';
-    }
-  | {
-      readonly status: 'unavailable';
-      readonly cause?: unknown;
-    };
+  | { readonly status: 'alive' }
+  | { readonly status: 'missing' }
+  | { readonly status: 'unavailable'; readonly cause?: unknown };
 
 export interface BackendAttachment {
-  readonly write: (data: string) => import('effect').Effect.Effect<void, PtyWriteError>;
+  readonly write: (data: string) => Effect.Effect<void, PtyWriteError>;
   readonly resize: (size: {
     readonly cols: number;
     readonly rows: number;
-  }) => import('effect').Effect.Effect<void, PtyResizeError>;
-  readonly detach: import('effect').Effect.Effect<void, never>;
+  }) => Effect.Effect<void, PtyResizeError>;
+  readonly detach: Effect.Effect<void, never>;
 }
 
 export interface PtyBackend {
   readonly name: PtyBackendName;
-  readonly available: import('effect').Effect.Effect<boolean, never>;
+  readonly available: Effect.Effect<boolean, never>;
   readonly launch: (
     input: LaunchBackendSessionInput,
-  ) => import('effect').Effect.Effect<BackendSessionRef, PtyStartError>;
+  ) => Effect.Effect<BackendSessionRef, PtyStartError>;
   readonly attach: (input: {
     readonly ref: BackendSessionRef;
     readonly cols: number;
     readonly rows: number;
     readonly onOutput: (data: string) => void;
     readonly onSessionExit: (exit: PtyExit) => void;
-  }) => import('effect').Effect.Effect<BackendAttachment, PtyStartError>;
+  }) => Effect.Effect<BackendAttachment, PtyStartError>;
   readonly replay: (input: {
     readonly ref: BackendSessionRef;
     readonly logPath: string | null;
     readonly bytes: number | null;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
-  }) => import('effect').Effect.Effect<void, PtyServiceError>;
-  readonly inspect: (
-    ref: BackendSessionRef,
-  ) => import('effect').Effect.Effect<BackendInspection, PtyInspectError>;
-  readonly listSessions: import('effect').Effect.Effect<
-    readonly BackendSessionRef[],
-    PtyInspectError
-  >;
-  readonly kill: (ref: BackendSessionRef) => import('effect').Effect.Effect<void, PtyKillError>;
+  }) => Effect.Effect<void, PtyServiceError>;
+  readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection, PtyInspectError>;
+  readonly listSessions: Effect.Effect<readonly BackendSessionRef[], PtyInspectError>;
+  readonly kill: (ref: BackendSessionRef) => Effect.Effect<void, PtyKillError>;
   readonly collectGarbage?: (
     input: PtyBackendGcInput,
-  ) => import('effect').Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;
+  ) => Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;
 }
 
-export interface LaunchPtySessionInput {
-  readonly worktreeId: number;
-  readonly purpose: PtySessionPurpose;
-  readonly harness: AgentHarness | null;
+export interface LaunchPtyProcessInput {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly envForProcess?:
+    | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
+    | undefined;
 }
 
+export interface PtyProcessLaunchMetadata {
+  readonly ptyProcessId: number;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly logPath: string | null;
+}
+
+// Internal compatibility shape for old backend helpers.
 export interface PtySessionLaunchMetadata {
   readonly worktreeId: number;
   readonly surfaceId: number;

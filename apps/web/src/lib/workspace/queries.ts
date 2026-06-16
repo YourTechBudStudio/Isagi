@@ -7,7 +7,8 @@ import type {
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
   DeleteSurfaceOutput,
-  LaunchSessionOutput,
+  LaunchAgentSessionOutput,
+  LaunchTerminalSessionOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
   ReconciliationFinding,
@@ -281,7 +282,7 @@ export async function commitOpenWorktreeSuccess(
 
 export async function commitLaunchSessionSuccess(
   client: QueryClient,
-  output: LaunchSessionOutput,
+  output: LaunchAgentSessionOutput | LaunchTerminalSessionOutput,
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
     Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {

@@ -110,8 +110,39 @@ export const surfacePanes = sqliteTable('surface_panes', {
   updatedAt: text('updated_at').notNull(),
 });
 
-export const ptySessions = sqliteTable(
-  'pty_sessions',
+export const ptyProcesses = sqliteTable('pty_processes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  backend: text('backend', { enum: ['tmux', 'node_pty'] }).notNull(),
+  backendRefJson: text('backend_ref_json').notNull(),
+  command: text('command').notNull(),
+  argsJson: text('args_json').notNull(),
+  cwd: text('cwd').notNull(),
+  status: text('status', {
+    enum: ['starting', 'running', 'exited', 'failed', 'killed'],
+  }).notNull(),
+  statusReason: text('status_reason', {
+    enum: [
+      'user_requested',
+      'runtime_shutdown',
+      'backend_unavailable',
+      'backend_process_missing',
+      'backend_attach_failed',
+      'backend_launch_failed',
+      'runtime_ephemeral_lost',
+    ],
+  }),
+  exitCode: integer('exit_code'),
+  signal: text('signal'),
+  logMode: text('log_mode', { enum: ['backend_file', 'none'] }).notNull(),
+  logPath: text('log_path'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  exitedAt: text('exited_at'),
+  lastSeenAt: text('last_seen_at'),
+});
+
+export const agentSessions = sqliteTable(
+  'agent_sessions',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     paneId: integer('pane_id')
@@ -120,36 +151,36 @@ export const ptySessions = sqliteTable(
     worktreeId: integer('worktree_id')
       .notNull()
       .references(() => worktrees.id, { onDelete: 'cascade' }),
-    backend: text('backend', { enum: ['tmux', 'node_pty'] }).notNull(),
-    backendRefJson: text('backend_ref_json').notNull(),
-    purpose: text('purpose', { enum: ['agent', 'terminal'] }).notNull(),
-    harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }),
-    command: text('command').notNull(),
+    harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }).notNull(),
     cwd: text('cwd').notNull(),
-    status: text('status', {
-      enum: ['starting', 'running', 'exited', 'failed', 'killed'],
-    }).notNull(),
-    statusReason: text('status_reason', {
-      enum: [
-        'user_requested',
-        'runtime_shutdown',
-        'backend_unavailable',
-        'backend_session_missing',
-        'backend_attach_failed',
-        'backend_launch_failed',
-        'runtime_ephemeral_lost',
-      ],
-    }),
-    exitCode: integer('exit_code'),
-    signal: text('signal'),
-    logMode: text('log_mode', { enum: ['backend_file', 'none'] }).notNull(),
-    logPath: text('log_path'),
+    harnessSessionId: text('harness_session_id'),
+    harnessSessionRefJson: text('harness_session_ref_json'),
+    activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
-    exitedAt: text('exited_at'),
     lastSeenAt: text('last_seen_at'),
   },
-  (table) => [uniqueIndex('pty_sessions_pane_id_unique').on(table.paneId)],
+  (table) => [uniqueIndex('agent_sessions_pane_id_unique').on(table.paneId)],
+);
+
+export const terminalSessions = sqliteTable(
+  'terminal_sessions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    paneId: integer('pane_id')
+      .notNull()
+      .references(() => surfacePanes.id, { onDelete: 'cascade' }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    cwd: text('cwd').notNull(),
+    shellCommand: text('shell_command').notNull(),
+    shellArgsJson: text('shell_args_json').notNull(),
+    activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('terminal_sessions_pane_id_unique').on(table.paneId)],
 );
 
 export const worktreeEnvironmentStates = sqliteTable(

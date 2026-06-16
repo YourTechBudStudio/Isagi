@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { Pencil, Trash2 } from 'lucide-react';
 
-import type { PtySessionStatus, SurfaceDetail, SurfacePane } from '@isagi/contracts';
+import type { SessionStatus, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
 import { surfaceActionsCopy } from '../../../copy/index.js';
 import { queryClient } from '../../query/client.js';
@@ -140,7 +140,7 @@ export const deleteActivePaneCommand: PaletteCommand = {
       worktreeId: String(target.worktreeId),
       paneId: String(pane.id),
     };
-    return isLiveStatus(pane.ptySession?.status ?? null)
+    return isLiveStatus(sessionStatus(pane))
       ? { mode: 'palette', values: nextValues }
       : { mode: 'run', values: nextValues };
   },
@@ -157,7 +157,7 @@ export const deleteActivePaneCommand: PaletteCommand = {
         }
         const detail = await fetchSurfaceDetail(surfaceId);
         const pane = detail.panes.find((candidate) => candidate.id === paneId);
-        return isLiveStatus(pane?.ptySession?.status ?? null) ? deletePaneReview() : null;
+        return isLiveStatus(pane ? sessionStatus(pane) : null) ? deletePaneReview() : null;
       },
     },
   ],
@@ -217,12 +217,21 @@ function resolveCommandPane(
   return detail.panes.find((pane) => pane.id === paneId) ?? null;
 }
 
-function isLiveStatus(status: PtySessionStatus | null) {
+function isLiveStatus(status: SessionStatus | null) {
   return status === 'starting' || status === 'running';
 }
 
 function countLiveSessions(panes: readonly SurfacePane[]) {
-  return panes.filter((pane) => isLiveStatus(pane.ptySession?.status ?? null)).length;
+  return panes.filter((pane) => isLiveStatus(sessionStatus(pane))).length;
+}
+
+function sessionStatus(pane: SurfacePane): SessionStatus | null {
+  if (!pane.session) {
+    return null;
+  }
+  return pane.session.kind === 'agent_session'
+    ? pane.session.agentSession.status
+    : pane.session.terminalSession.status;
 }
 
 function deletePaneReview(): ReviewContent {

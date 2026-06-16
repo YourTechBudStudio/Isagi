@@ -1,28 +1,31 @@
 import { unlinkSync } from 'node:fs';
 
-import { Data, Effect, Schema, Context, Layer } from 'effect';
+import { Context, Data, Effect, Layer, Schema } from 'effect';
 
 import type {
   DeleteSurfaceOutput,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
-  SurfaceDetail,
   SurfaceDeleteWarning,
+  SurfaceDetail,
   SurfaceLayoutNode,
+  SurfaceSessionCleanupTarget,
   WorktreeEnvironmentFocusOutput,
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
 import type { DatabaseError } from '../persistence/index.js';
-import { PtyService, type PtyService as PtyServiceShape } from '../pty/pty.service.js';
+import { PtyService, type PtyService as PtyServiceShape } from '../pty-processes/pty.service.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
+import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
 import type {
+  AgentSessionRow,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
-  PtySessionRow,
   SurfaceDeletePaneTarget,
   SurfacePaneRow,
+  TerminalSessionRow,
   WorktreeDeleteCleanupOutput,
 } from './types.js';
 
@@ -79,7 +82,7 @@ export const SurfaceServiceLive = Layer.effect(
       getSurfaceDetail: (surfaceId) =>
         Effect.gen(function* () {
           const surface = yield* repository.findSurface(surfaceId);
-          if (!surface) {
+          if (!surface)
             return yield* Effect.fail(
               new SurfaceError({
                 code: 'surface_not_found',
@@ -87,15 +90,14 @@ export const SurfaceServiceLive = Layer.effect(
                 surfaceId,
               }),
             );
-          }
-
           const panes = yield* repository.listPanesForSurface(surface.id);
-          const ptySessions = yield* repository.listPtySessionsForPanes(
-            panes.map((pane) => pane.id),
-          );
+          const paneIds = panes.map((pane) => pane.id);
+          const [agentSessions, terminalSessions] = yield* Effect.all([
+            repository.listAgentSessionsForPanes(paneIds),
+            repository.listTerminalSessionsForPanes(paneIds),
+          ]);
           const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
           const activePaneId = activePaneForSurface(surface.id, panes, focus);
-
           return {
             id: surface.id,
             worktreeId: surface.worktreeId,
@@ -110,7 +112,7 @@ export const SurfaceServiceLive = Layer.effect(
               title: pane.title,
               attention: pane.attention,
               sortOrder: pane.sortOrder,
-              ptySession: ptySessionForPane(ptySessions, pane.id),
+              session: sessionForPane(agentSessions, terminalSessions, pane.id),
             })),
           } satisfies SurfaceDetail;
         }),
@@ -118,7 +120,7 @@ export const SurfaceServiceLive = Layer.effect(
         Effect.gen(function* () {
           const title = yield* validateSurfaceTitle(input.title);
           const surface = yield* repository.findSurface(input.surfaceId);
-          if (!surface) {
+          if (!surface)
             return yield* Effect.fail(
               new SurfaceError({
                 code: 'surface_not_found',
@@ -126,11 +128,7 @@ export const SurfaceServiceLive = Layer.effect(
                 surfaceId: input.surfaceId,
               }),
             );
-          }
-          return yield* repository.renameSurface({
-            surfaceId: input.surfaceId,
-            title,
-          });
+          return yield* repository.renameSurface({ surfaceId: input.surfaceId, title });
         }),
       deleteSurface: (surfaceId) =>
         Effect.gen(function* () {
@@ -141,7 +139,7 @@ export const SurfaceServiceLive = Layer.effect(
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedPtySessionIds: cleanup.attemptedPtySessionIds,
+            attemptedSessionIds: cleanup.attemptedSessionIds,
             warnings: [...cleanup.warnings, ...logWarnings],
           } satisfies DeleteSurfaceOutput;
         }),
@@ -149,7 +147,7 @@ export const SurfaceServiceLive = Layer.effect(
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, input.surfaceId);
           const paneTarget = target.panes.find(({ pane }) => pane.id === input.paneId);
-          if (!paneTarget) {
+          if (!paneTarget)
             return yield* Effect.fail(
               new SurfaceError({
                 code: 'pane_not_found',
@@ -158,8 +156,6 @@ export const SurfaceServiceLive = Layer.effect(
                 paneId: input.paneId,
               }),
             );
-          }
-
           const plan = planSurfacePaneDelete(target, input.paneId);
           const deletedPaneIds = new Set(plan.deletedPaneIds);
           const cleanupTarget = {
@@ -167,24 +163,21 @@ export const SurfaceServiceLive = Layer.effect(
             panes: target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
           };
           const cleanup = yield* cleanupLiveSessionsForPanes(pty, cleanupTarget.panes);
-          const deleted = yield* repository.deleteSurfacePane({
-            target,
-            plan,
-          });
+          const deleted = yield* repository.deleteSurfacePane({ target, plan });
           const logWarnings = deleteLogsForPanes(
             target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
           );
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedPtySessionIds: cleanup.attemptedPtySessionIds,
+            attemptedSessionIds: cleanup.attemptedSessionIds,
             warnings: [...cleanup.warnings, ...logWarnings],
           } satisfies DeleteSurfaceOutput;
         }),
       cleanupWorktreeForDelete: (worktreeId) =>
         Effect.gen(function* () {
           const exists = yield* repository.worktreeExists(worktreeId);
-          if (!exists) {
+          if (!exists)
             return yield* Effect.fail(
               new SurfaceError({
                 code: 'worktree_not_found',
@@ -192,21 +185,19 @@ export const SurfaceServiceLive = Layer.effect(
                 worktreeId,
               }),
             );
-          }
-
           const targets = yield* repository.listWorktreeDeleteTargets(worktreeId);
           const panes = targets.flatMap((target) => target.panes);
           const cleanup = yield* cleanupLiveSessionsForPanes(pty, panes);
           const logWarnings = deleteLogsForPanes(panes);
           return {
-            attemptedPtySessionIds: cleanup.attemptedPtySessionIds,
+            attemptedSessionIds: cleanup.attemptedSessionIds,
             warnings: [...cleanup.warnings, ...logWarnings],
           } satisfies WorktreeDeleteCleanupOutput;
         }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
           const exists = yield* repository.worktreeExists(input.worktreeId);
-          if (!exists) {
+          if (!exists)
             return yield* Effect.fail(
               new SurfaceError({
                 code: 'worktree_not_found',
@@ -214,71 +205,22 @@ export const SurfaceServiceLive = Layer.effect(
                 worktreeId: input.worktreeId,
               }),
             );
-          }
           return yield* repository.createSinglePaneSurface(input);
         }),
-      setWorktreeEnvironmentFocus: (input) =>
-        Effect.gen(function* () {
-          const exists = yield* repository.worktreeExists(input.worktreeId);
-          if (!exists) {
-            return yield* Effect.fail(
-              new SurfaceError({
-                code: 'worktree_not_found',
-                message: `Worktree ${input.worktreeId} was not found.`,
-                worktreeId: input.worktreeId,
-              }),
-            );
-          }
-
-          if (input.focus.activeSurfaceId !== null) {
-            const surface = yield* repository.findSurface(input.focus.activeSurfaceId);
-            if (!surface || surface.worktreeId !== input.worktreeId) {
-              return yield* Effect.fail(
-                new SurfaceError({
-                  code: 'surface_not_found',
-                  message: `Surface ${input.focus.activeSurfaceId} was not found for worktree ${input.worktreeId}.`,
-                  worktreeId: input.worktreeId,
-                  surfaceId: input.focus.activeSurfaceId,
-                }),
-              );
-            }
-          }
-
-          if (input.focus.activePaneId !== null) {
-            const pane = yield* repository.findPane(input.focus.activePaneId);
-            if (!pane || pane.surfaceId !== input.focus.activeSurfaceId) {
-              return yield* Effect.fail(
-                new SurfaceError({
-                  code: 'pane_not_found',
-                  message: `Pane ${input.focus.activePaneId} was not found for surface ${input.focus.activeSurfaceId}.`,
-                  worktreeId: input.worktreeId,
-                  surfaceId: input.focus.activeSurfaceId ?? undefined,
-                  paneId: input.focus.activePaneId,
-                }),
-              );
-            }
-          }
-
-          return yield* repository.setEnvironmentFocus({
-            worktreeId: input.worktreeId,
-            activeSurfaceId: input.focus.activeSurfaceId,
-            activePaneId: input.focus.activePaneId,
-          });
-        }),
+      setWorktreeEnvironmentFocus: (input) => setWorktreeEnvironmentFocus(repository, input),
     } satisfies SurfaceService;
   }),
 );
 
 function validateSurfaceTitle(title: string) {
   const trimmed = title.trim();
-  if (trimmed.length === 0 || trimmed.length > 80) {
+  if (trimmed.length === 0 || trimmed.length > 80)
     return Effect.fail(
       new SurfaceError({
         code: 'invalid_surface_title',
         message: 'Surface title must be between 1 and 80 characters.',
       }),
     );
-  }
   return Effect.succeed(trimmed);
 }
 
@@ -288,7 +230,7 @@ function loadDeleteTarget(
 ) {
   return Effect.gen(function* () {
     const target = yield* repository.findSurfaceDeleteTarget(surfaceId);
-    if (!target) {
+    if (!target)
       return yield* Effect.fail(
         new SurfaceError({
           code: 'surface_not_found',
@@ -296,53 +238,49 @@ function loadDeleteTarget(
           surfaceId,
         }),
       );
-    }
     return target;
   });
 }
 
 function cleanupLiveSessionsForPanes(
-  pty: Pick<PtyServiceShape, 'cleanupSessionForDelete'>,
+  pty: Pick<PtyServiceShape, 'cleanupProcessForDelete'>,
   panes: readonly SurfaceDeletePaneTarget[],
 ) {
   return Effect.gen(function* () {
-    const attemptedPtySessionIds: number[] = [];
+    const attemptedSessionIds: SurfaceSessionCleanupTarget[] = [];
     const warnings: SurfaceDeleteWarning[] = [];
-    for (const { ptySession } of panes) {
-      if (!ptySession || (ptySession.status !== 'starting' && ptySession.status !== 'running')) {
+    for (const { pane, session } of panes) {
+      if (
+        !session?.activePtyProcess ||
+        (session.activePtyProcess.status !== 'starting' &&
+          session.activePtyProcess.status !== 'running')
+      )
         continue;
-      }
-      attemptedPtySessionIds.push(ptySession.id);
-      const sessionWarnings = yield* pty.cleanupSessionForDelete({
-        ptySessionId: ptySession.id,
-        paneId: ptySession.paneId,
+      attemptedSessionIds.push(session.cleanupTarget);
+      const sessionWarnings = yield* pty.cleanupProcessForDelete({
+        ptyProcessId: session.activePtyProcess.id,
+        paneId: pane.id,
+        session: session.cleanupTarget,
       });
       warnings.push(...sessionWarnings);
     }
-    return { attemptedPtySessionIds, warnings };
+    return { attemptedSessionIds, warnings };
   });
 }
 
 function deleteLogsForPanes(panes: readonly SurfaceDeletePaneTarget[]) {
   const warnings: SurfaceDeleteWarning[] = [];
-  for (const { pane, ptySession } of panes) {
-    if (!ptySession?.logPath) {
-      continue;
-    }
+  for (const { pane, session } of panes) {
+    const logPath = session?.activePtyProcess?.logPath;
+    if (!logPath || !session) continue;
     try {
-      unlinkSync(ptySession.logPath);
+      unlinkSync(logPath);
     } catch (error) {
-      if (isMissingFileError(error)) {
-        continue;
-      }
-      console.warn(
-        `[runtime] Failed to delete PTY log for deleted pane paneId=${pane.id} ptySessionId=${ptySession.id}`,
-        error,
-      );
+      if (isMissingFileError(error)) continue;
       warnings.push({
-        code: 'pty_log_delete_failed',
+        code: 'session_log_delete_failed',
         paneId: pane.id,
-        ptySessionId: ptySession.id,
+        session: session.cleanupTarget,
       });
     }
   }
@@ -361,41 +299,109 @@ function isMissingFileError(error: unknown) {
 function activePaneForSurface(
   surfaceId: number,
   panes: readonly SurfacePaneRow[],
-  focus: {
-    readonly activeSurfaceId: number | null;
-    readonly activePaneId: number | null;
-  } | null,
+  focus: { readonly activeSurfaceId: number | null; readonly activePaneId: number | null } | null,
 ) {
-  if (focus?.activeSurfaceId !== surfaceId || focus.activePaneId === null) {
-    return null;
-  }
+  if (focus?.activeSurfaceId !== surfaceId || focus.activePaneId === null) return null;
   return panes.some((pane) => pane.id === focus.activePaneId) ? focus.activePaneId : null;
 }
 
-function ptySessionForPane(ptySessions: readonly PtySessionRow[], paneId: number) {
-  const session = ptySessions.find((candidate) => candidate.paneId === paneId);
-  if (!session) {
-    return null;
+function sessionForPane(
+  agentSessions: readonly AgentSessionRow[],
+  terminalSessions: readonly TerminalSessionRow[],
+  paneId: number,
+): SurfaceDetail['panes'][number]['session'] {
+  const agent = agentSessions.find((candidate) => candidate.paneId === paneId);
+  if (agent) {
+    const state = deriveAgentSessionState(agent);
+    return {
+      kind: 'agent_session',
+      agentSession: {
+        id: agent.id,
+        paneId: agent.paneId,
+        worktreeId: agent.worktreeId,
+        harness: agent.harness,
+        cwd: agent.cwd,
+        harnessSessionId: agent.harnessSessionId,
+        status: state.status,
+        statusReason: state.statusReason,
+        diagnosticCode: state.diagnosticCode,
+        diagnosticDetail: state.diagnosticDetail,
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+        lastSeenAt: agent.lastSeenAt,
+      },
+    };
   }
-  return {
-    id: session.id,
-    paneId: session.paneId,
-    worktreeId: session.worktreeId,
-    backend: session.backend,
-    purpose: session.purpose,
-    harness: session.harness,
-    command: session.command,
-    cwd: session.cwd,
-    status: session.status,
-    statusReason: session.statusReason,
-    exitCode: session.exitCode,
-    signal: session.signal,
-    logMode: session.logMode,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    exitedAt: session.exitedAt,
-    lastSeenAt: session.lastSeenAt,
-  };
+  const terminal = terminalSessions.find((candidate) => candidate.paneId === paneId);
+  if (terminal) {
+    const state = deriveTerminalSessionState(terminal);
+    return {
+      kind: 'terminal_session',
+      terminalSession: {
+        id: terminal.id,
+        paneId: terminal.paneId,
+        worktreeId: terminal.worktreeId,
+        cwd: terminal.cwd,
+        shellCommand: terminal.shellCommand,
+        shellArgs: [...terminal.shellArgs],
+        status: state.status,
+        statusReason: state.statusReason,
+        diagnosticCode: state.diagnosticCode,
+        diagnosticDetail: state.diagnosticDetail,
+        createdAt: terminal.createdAt,
+        updatedAt: terminal.updatedAt,
+        lastSeenAt: null,
+      },
+    };
+  }
+  return null;
+}
+
+function setWorktreeEnvironmentFocus(
+  repository: SurfaceRepositoryService,
+  input: { readonly worktreeId: number; readonly focus: SetWorktreeEnvironmentFocusInput },
+) {
+  return Effect.gen(function* () {
+    const exists = yield* repository.worktreeExists(input.worktreeId);
+    if (!exists)
+      return yield* Effect.fail(
+        new SurfaceError({
+          code: 'worktree_not_found',
+          message: `Worktree ${input.worktreeId} was not found.`,
+          worktreeId: input.worktreeId,
+        }),
+      );
+    if (input.focus.activeSurfaceId !== null) {
+      const surface = yield* repository.findSurface(input.focus.activeSurfaceId);
+      if (!surface || surface.worktreeId !== input.worktreeId)
+        return yield* Effect.fail(
+          new SurfaceError({
+            code: 'surface_not_found',
+            message: `Surface ${input.focus.activeSurfaceId} was not found for worktree ${input.worktreeId}.`,
+            worktreeId: input.worktreeId,
+            surfaceId: input.focus.activeSurfaceId,
+          }),
+        );
+    }
+    if (input.focus.activePaneId !== null) {
+      const pane = yield* repository.findPane(input.focus.activePaneId);
+      if (!pane || pane.surfaceId !== input.focus.activeSurfaceId)
+        return yield* Effect.fail(
+          new SurfaceError({
+            code: 'pane_not_found',
+            message: `Pane ${input.focus.activePaneId} was not found for surface ${input.focus.activeSurfaceId}.`,
+            worktreeId: input.worktreeId,
+            surfaceId: input.focus.activeSurfaceId ?? undefined,
+            paneId: input.focus.activePaneId,
+          }),
+        );
+    }
+    return yield* repository.setEnvironmentFocus({
+      worktreeId: input.worktreeId,
+      activeSurfaceId: input.focus.activeSurfaceId,
+      activePaneId: input.focus.activePaneId,
+    });
+  });
 }
 
 function decodeLayout(layoutJson: string): SurfaceLayoutNode {

@@ -128,9 +128,9 @@ test('delete-active-worktree combines branch failure and cleanup warnings', asyn
     },
     warnings: [
       {
-        code: 'pty_backend_unavailable',
+        code: 'session_process_cleanup_failed',
         paneId: 7,
-        ptySessionId: 70,
+        session: { kind: 'terminal_session', terminalSessionId: 70 },
       },
     ],
   });
@@ -157,7 +157,7 @@ test('delete-active-worktree combines branch failure and cleanup warnings', asyn
   );
   assert.match(
     outcome?.kind === 'result' ? (outcome.content.diagnostic?.detail ?? '') : '',
-    /pty_backend_unavailable: pane 7, session 70/,
+    /session_process_cleanup_failed: pane 7, terminal session 70/,
   );
 });
 

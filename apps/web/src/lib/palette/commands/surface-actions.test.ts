@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { PtySessionStatus, SurfaceDetail } from '@isagi/contracts';
+import type { SessionStatus, SurfaceDetail } from '@isagi/contracts';
 
 import { queryClient } from '../../query/client.js';
 import { formatRuntimeError } from '../../workspace/runtime-data.js';
@@ -136,8 +136,8 @@ function surfaceDetail({
   secondStatus = 'exited',
 }: {
   readonly activePaneId: number | null;
-  readonly firstStatus?: PtySessionStatus;
-  readonly secondStatus?: PtySessionStatus;
+  readonly firstStatus?: SessionStatus;
+  readonly secondStatus?: SessionStatus;
 }): SurfaceDetail {
   return {
     id: 501,
@@ -154,7 +154,7 @@ function surfaceDetail({
         title: 'Terminal',
         attention: 'idle',
         sortOrder: 0,
-        ptySession: session(601, firstStatus),
+        session: terminalSession(601, firstStatus),
       },
       {
         id: 602,
@@ -162,30 +162,29 @@ function surfaceDetail({
         title: 'Terminal 2',
         attention: 'idle',
         sortOrder: 1,
-        ptySession: session(602, secondStatus),
+        session: terminalSession(602, secondStatus),
       },
     ],
   };
 }
 
-function session(paneId: number, status: PtySessionStatus) {
+function terminalSession(paneId: number, status: SessionStatus) {
   return {
-    id: paneId + 100,
-    paneId,
-    worktreeId: 10,
-    backend: 'node_pty',
-    purpose: 'terminal',
-    harness: null,
-    command: 'zsh',
-    cwd: '/repo/isagi',
-    status,
-    statusReason: null,
-    exitCode: status === 'exited' ? 0 : null,
-    signal: null,
-    logMode: 'backend_file',
-    createdAt: '2026-06-14T00:00:00.000Z',
-    updatedAt: '2026-06-14T00:00:00.000Z',
-    exitedAt: status === 'exited' ? '2026-06-14T00:00:00.000Z' : null,
-    lastSeenAt: null,
-  } satisfies NonNullable<SurfaceDetail['panes'][number]['ptySession']>;
+    kind: 'terminal_session',
+    terminalSession: {
+      id: paneId + 100,
+      paneId,
+      worktreeId: 10,
+      cwd: '/repo/isagi',
+      shellCommand: 'zsh',
+      shellArgs: [],
+      status,
+      statusReason: null,
+      diagnosticCode: null,
+      diagnosticDetail: null,
+      createdAt: '2026-06-14T00:00:00.000Z',
+      updatedAt: '2026-06-14T00:00:00.000Z',
+      lastSeenAt: null,
+    },
+  } satisfies NonNullable<SurfaceDetail['panes'][number]['session']>;
 }

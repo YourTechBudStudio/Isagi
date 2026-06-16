@@ -59,7 +59,7 @@ const renameSurfaceOutput = {
 const deleteSurfaceOutput = {
   deletedSurfaceId: 7,
   deletedPaneIds: [11],
-  attemptedPtySessionIds: [13],
+  attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 13 }],
   warnings: [],
 } satisfies DeleteSurfaceOutput;
 

@@ -7,13 +7,13 @@ import { queryClient } from '../query/client.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from './queries.js';
 import { handleRuntimeEvent } from './runtime-events.js';
 
-test('runtime PTY session change events invalidate workspace and targeted surface queries', () => {
+test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
   queryClient.setQueryData(workspaceQueryKey, { projects: [] });
   queryClient.setQueryData(surfaceDetailQueryKey(3), { id: 3 });
   queryClient.setQueryData(surfaceDetailQueryKey(99), { id: 99 });
 
-  handleRuntimeEvent(ptySessionChangedEvent());
+  handleRuntimeEvent(agentSessionChangedEvent());
 
   assert.equal(queryClient.getQueryState(workspaceQueryKey)?.isInvalidated, true);
   assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(3))?.isInvalidated, true);
@@ -21,20 +21,19 @@ test('runtime PTY session change events invalidate workspace and targeted surfac
   queryClient.clear();
 });
 
-function ptySessionChangedEvent() {
+function agentSessionChangedEvent() {
   return {
     id: 'evt_test_1',
-    type: 'pty_session_changed',
+    type: 'agent_session_changed',
     occurredAt: '2026-06-12T00:00:00.000Z',
     payload: {
-      ptySessionId: 1,
+      agentSessionId: 1,
       worktreeId: 2,
       surfaceId: 3,
       paneId: 4,
-      previousStatus: 'running',
       status: 'failed',
-      previousStatusReason: null,
-      statusReason: 'backend_session_missing',
+      statusReason: 'harness_session_id_missing',
+      diagnosticCode: 'harness_session_id_missing',
     },
   } satisfies RuntimeEvent;
 }

@@ -1,10 +1,18 @@
 import { Schema } from 'effect';
 
-import { ptySessionStatusReasonSchema, ptySessionStatusSchema } from '../surfaces/types.js';
+import {
+  agentSessionStatusReasonSchema,
+  sessionDiagnosticCodeSchema,
+  sessionStatusSchema,
+  terminalSessionStatusReasonSchema,
+} from '../surfaces/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
-export const runtimeEventTypeSchema = Schema.Literal('pty_session_changed');
+export const runtimeEventTypeSchema = Schema.Literal(
+  'agent_session_changed',
+  'terminal_session_changed',
+);
 
 export const runtimeEventBaseSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
@@ -12,25 +20,45 @@ export const runtimeEventBaseSchema = Schema.Struct({
   occurredAt: Schema.String.pipe(Schema.minLength(1)),
 });
 
-export const ptySessionChangedEventSchema = Schema.Struct({
+const changedSessionProjectionSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+  paneId: positiveIntegerSchema,
+  status: sessionStatusSchema,
+  diagnosticCode: Schema.NullOr(sessionDiagnosticCodeSchema),
+});
+
+export const agentSessionChangedEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
-  type: Schema.Literal('pty_session_changed'),
+  type: Schema.Literal('agent_session_changed'),
   occurredAt: Schema.String.pipe(Schema.minLength(1)),
   payload: Schema.Struct({
-    ptySessionId: positiveIntegerSchema,
-    worktreeId: positiveIntegerSchema,
-    surfaceId: positiveIntegerSchema,
-    paneId: positiveIntegerSchema,
-    previousStatus: ptySessionStatusSchema,
-    status: ptySessionStatusSchema,
-    previousStatusReason: Schema.NullOr(ptySessionStatusReasonSchema),
-    statusReason: Schema.NullOr(ptySessionStatusReasonSchema),
+    agentSessionId: positiveIntegerSchema,
+    statusReason: Schema.NullOr(agentSessionStatusReasonSchema),
+    ...changedSessionProjectionSchema.fields,
   }),
 });
 
-export const runtimeEventSchema = Schema.Union(ptySessionChangedEventSchema);
+export const terminalSessionChangedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('terminal_session_changed'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Struct({
+    terminalSessionId: positiveIntegerSchema,
+    statusReason: Schema.NullOr(terminalSessionStatusReasonSchema),
+    ...changedSessionProjectionSchema.fields,
+  }),
+});
+
+export const runtimeEventSchema = Schema.Union(
+  agentSessionChangedEventSchema,
+  terminalSessionChangedEventSchema,
+);
 
 export type RuntimeEventType = Schema.Schema.Type<typeof runtimeEventTypeSchema>;
 export type RuntimeEventBase = Schema.Schema.Type<typeof runtimeEventBaseSchema>;
-export type PtySessionChangedEvent = Schema.Schema.Type<typeof ptySessionChangedEventSchema>;
+export type AgentSessionChangedEvent = Schema.Schema.Type<typeof agentSessionChangedEventSchema>;
+export type TerminalSessionChangedEvent = Schema.Schema.Type<
+  typeof terminalSessionChangedEventSchema
+>;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;

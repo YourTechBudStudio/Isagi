@@ -160,7 +160,10 @@ function cleanupWarningDetail(warnings: readonly SurfaceDeleteWarning[]) {
   return warnings
     .map((warning) => {
       const pane = `pane ${warning.paneId}`;
-      const session = `session ${warning.ptySessionId}`;
+      const session =
+        warning.session.kind === 'agent_session'
+          ? `agent session ${warning.session.agentSessionId}`
+          : `terminal session ${warning.session.terminalSessionId}`;
       return `${warning.code}: ${pane}, ${session}`;
     })
     .join('\n');

@@ -1,10 +1,9 @@
 import { Effect } from 'effect';
 
-import type { PtySessionStatusReason } from '@isagi/contracts';
-
-import type { RuntimeEventBusService } from '../../runtime-events/index.js';
+import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtySessionRow } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtySessionStatusReason } from '../types.js';
 import type { PtyExit } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './events.js';
@@ -18,7 +17,7 @@ export interface PtyTerminationState {
 
 export function handleExit(
   repository: PtyRepositoryService,
-  eventBus: RuntimeEventBusService,
+  eventBus: InternalRuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   terminations: Map<number, PtyTerminationState>,
   ptySessionId: number,
@@ -43,7 +42,7 @@ export function handleExit(
 
 export function persistExit(
   repository: PtyRepositoryService,
-  eventBus: RuntimeEventBusService,
+  eventBus: InternalRuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,
@@ -60,7 +59,7 @@ export function persistExit(
 
 export function retryPersistKilledUntilSuccess(
   repository: PtyRepositoryService,
-  eventBus: RuntimeEventBusService,
+  eventBus: InternalRuntimeEventBusService,
   terminations: Map<number, PtyTerminationState>,
   termination: PtyTerminationState,
   backend: PtySessionRow['backend'],
@@ -116,7 +115,7 @@ export function retryPersistKilledUntilSuccess(
 
 function persistExitOnce(
   repository: PtyRepositoryService,
-  eventBus: RuntimeEventBusService,
+  eventBus: InternalRuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,
@@ -139,7 +138,7 @@ function persistExitOnce(
 
 function retryPersistExitUntilSuccess(
   repository: PtyRepositoryService,
-  eventBus: RuntimeEventBusService,
+  eventBus: InternalRuntimeEventBusService,
   activeAttachments: Map<number, ActiveAttachment>,
   ptySessionId: number,
   exit: PtyExit,

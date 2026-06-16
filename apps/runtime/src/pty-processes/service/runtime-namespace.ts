@@ -2,16 +2,17 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
-import type { LaunchPtySessionInput } from '../types.js';
+import type { AgentHarness } from '@isagi/contracts';
 
-export function commandForLaunch(input: LaunchPtySessionInput) {
-  if (input.purpose === 'terminal') {
-    return process.env.SHELL || 'bash';
-  }
-  return input.harness ?? 'pi';
+export function terminalShellCommand() {
+  return process.env.SHELL || 'bash';
 }
 
-export function titleForHarness(harness: LaunchPtySessionInput['harness']) {
+export function commandForHarness(harness: AgentHarness) {
+  return harness;
+}
+
+export function titleForHarness(harness: AgentHarness | null) {
   switch (harness) {
     case 'opencode':
       return 'OpenCode';

@@ -3,11 +3,12 @@ import websocket from '@fastify/websocket';
 import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { registerHarnessEventsApi, HarnessEventEndpoint } from './harness-events/index.js';
 import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
-import { registerPtyApi } from './pty/index.js';
+import { registerPtyApi } from './pty-processes/index.js';
 import { registerRuntimeEventsApi } from './runtime-events/index.js';
 import { RuntimeLayer } from './runtime.layer.js';
 import { registerSurfacesApi } from './surfaces/index.js';
@@ -72,6 +73,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerSurfacesApi(fastify, runtime);
       registerPtyApi(fastify, runtime);
       registerRuntimeEventsApi(fastify, runtime);
+      registerHarnessEventsApi(fastify, runtime);
       registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>
@@ -80,6 +82,17 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
           port: options.port ?? 0,
         }),
       ).pipe(Effect.uninterruptible);
+
+      yield* Effect.tryPromise({
+        try: () =>
+          runtime.runPromise(
+            Effect.gen(function* () {
+              const endpoint = yield* HarnessEventEndpoint;
+              yield* endpoint.setRuntimeUrl(url);
+            }),
+          ),
+        catch: toError,
+      });
 
       startupOwnsResources = false;
       return { server: fastify, url };

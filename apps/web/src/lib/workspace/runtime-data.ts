@@ -9,7 +9,8 @@ import type {
   DeleteWorktreeOutput,
   DeleteSurfaceOutput,
   DeleteProjectOutput,
-  LaunchSessionOutput,
+  LaunchAgentSessionOutput,
+  LaunchTerminalSessionOutput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -102,7 +103,7 @@ export function setWorktreeEnvironmentFocus(
 export function launchAgentSession(
   worktreeId: number,
   harness: AgentHarness,
-): Effect.Effect<LaunchSessionOutput, Error> {
+): Effect.Effect<LaunchAgentSessionOutput, Error> {
   return getClient().pipe(
     Effect.flatMap((client) => client.launchAgentSession(worktreeId, harness)),
   );
@@ -110,12 +111,24 @@ export function launchAgentSession(
 
 export function launchTerminalSession(
   worktreeId: number,
-): Effect.Effect<LaunchSessionOutput, Error> {
+): Effect.Effect<LaunchTerminalSessionOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.launchTerminalSession(worktreeId)));
 }
 
-export function resolvePtyWebSocketUrl(ptySessionId: number): Effect.Effect<string, Error> {
-  return getClient().pipe(Effect.map((client) => client.resolvePtyWebSocketUrl(ptySessionId)));
+export function resolveAgentSessionPtyWebSocketUrl(
+  agentSessionId: number,
+): Effect.Effect<string, Error> {
+  return getClient().pipe(
+    Effect.map((client) => client.resolveAgentSessionPtyWebSocketUrl(agentSessionId)),
+  );
+}
+
+export function resolveTerminalSessionPtyWebSocketUrl(
+  terminalSessionId: number,
+): Effect.Effect<string, Error> {
+  return getClient().pipe(
+    Effect.map((client) => client.resolveTerminalSessionPtyWebSocketUrl(terminalSessionId)),
+  );
 }
 
 export function resolveRuntimeEventsWebSocketUrl(): Effect.Effect<string, Error> {

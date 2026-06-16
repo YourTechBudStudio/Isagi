@@ -10,13 +10,12 @@ export { SurfaceError, SurfaceService, SurfaceServiceLive } from './surfaces.ser
 export type { SurfaceService as SurfaceServiceShape } from './surfaces.service.js';
 export { prunePaneFromLayout } from './layout.js';
 export type {
-  CreatePtySessionMetadataInput,
-  CreateSinglePanePtySessionSurfaceInput,
-  CreateSinglePanePtySessionSurfaceOutput,
+  AgentSessionRow,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
+  PtyProcessRow,
   PtySessionRow,
   RenameSurfaceOutput,
   SurfaceDeletePaneTarget,
@@ -25,5 +24,6 @@ export type {
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
+  TerminalSessionRow,
   WorktreeDeleteCleanupOutput,
 } from './types.js';

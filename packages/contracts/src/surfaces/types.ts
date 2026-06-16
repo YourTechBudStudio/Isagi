@@ -59,50 +59,99 @@ export const worktreeEnvironmentFocusRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
 });
 
-export const ptySessionRouteParamsSchema = Schema.Struct({
-  ptySessionId: positiveIntegerSchema,
+export const agentSessionRouteParamsSchema = Schema.Struct({
+  agentSessionId: positiveIntegerSchema,
 });
 
-export const ptySessionStatusSchema = Schema.Literal(
+export const terminalSessionRouteParamsSchema = Schema.Struct({
+  terminalSessionId: positiveIntegerSchema,
+});
+
+export const sessionStatusSchema = Schema.Literal(
   'starting',
   'running',
   'exited',
   'failed',
   'killed',
 );
-export const ptySessionBackendSchema = Schema.Literal('tmux', 'node_pty');
-export const ptySessionStatusReasonSchema = Schema.Literal(
-  'user_requested',
-  'runtime_shutdown',
-  'backend_unavailable',
-  'backend_session_missing',
-  'backend_attach_failed',
-  'backend_launch_failed',
-  'runtime_ephemeral_lost',
-);
-export const ptySessionPurposeSchema = Schema.Literal('agent', 'terminal');
-export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');
-export const ptySessionLogModeSchema = Schema.Literal('backend_file', 'none');
 
-export const ptySessionMetadataSchema = Schema.Struct({
+export const agentSessionStatusReasonSchema = Schema.Literal(
+  'harness_launch_failed',
+  'harness_process_exited',
+  'harness_process_killed',
+  'runtime_shutdown',
+  'process_attach_failed',
+  'harness_session_id_missing',
+  'harness_resume_failed',
+  'pty_process_missing',
+  'pty_process_not_running',
+);
+
+export const terminalSessionStatusReasonSchema = Schema.Literal(
+  'shell_launch_failed',
+  'shell_exited',
+  'shell_killed',
+  'runtime_shutdown',
+  'process_attach_failed',
+  'pty_process_missing',
+  'pty_process_not_running',
+);
+
+export const sessionDiagnosticCodeSchema = Schema.Literal(
+  'harness_session_id_missing',
+  'harness_resume_failed',
+  'harness_launch_failed',
+  'pty_process_launch_failed',
+  'pty_process_attach_failed',
+  'pty_process_missing',
+  'pty_process_not_running',
+);
+
+export const ptyProcessBackendSchema = Schema.Literal('tmux', 'node_pty');
+export const ptyProcessLogModeSchema = Schema.Literal('backend_file', 'none');
+export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');
+
+const sessionProjectionFields = {
+  status: sessionStatusSchema,
+  diagnosticCode: Schema.NullOr(sessionDiagnosticCodeSchema),
+  diagnosticDetail: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  lastSeenAt: Schema.NullOr(Schema.String),
+} as const;
+
+export const agentSessionMetadataSchema = Schema.Struct({
   id: positiveIntegerSchema,
   paneId: positiveIntegerSchema,
   worktreeId: positiveIntegerSchema,
-  backend: ptySessionBackendSchema,
-  purpose: ptySessionPurposeSchema,
-  harness: Schema.NullOr(agentHarnessSchema),
-  command: Schema.String,
+  harness: agentHarnessSchema,
   cwd: Schema.String,
-  status: ptySessionStatusSchema,
-  statusReason: Schema.NullOr(ptySessionStatusReasonSchema),
-  exitCode: Schema.NullOr(nonNegativeIntegerSchema),
-  signal: Schema.NullOr(Schema.String),
-  logMode: ptySessionLogModeSchema,
-  createdAt: Schema.String,
-  updatedAt: Schema.String,
-  exitedAt: Schema.NullOr(Schema.String),
-  lastSeenAt: Schema.NullOr(Schema.String),
+  harnessSessionId: Schema.NullOr(Schema.String),
+  statusReason: Schema.NullOr(agentSessionStatusReasonSchema),
+  ...sessionProjectionFields,
 });
+
+export const terminalSessionMetadataSchema = Schema.Struct({
+  id: positiveIntegerSchema,
+  paneId: positiveIntegerSchema,
+  worktreeId: positiveIntegerSchema,
+  cwd: Schema.String,
+  shellCommand: Schema.String,
+  shellArgs: Schema.Array(Schema.String),
+  statusReason: Schema.NullOr(terminalSessionStatusReasonSchema),
+  ...sessionProjectionFields,
+});
+
+export const surfacePaneSessionSchema = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal('agent_session'),
+    agentSession: agentSessionMetadataSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('terminal_session'),
+    terminalSession: terminalSessionMetadataSchema,
+  }),
+);
 
 export const surfacePaneSchema = Schema.Struct({
   id: positiveIntegerSchema,
@@ -110,7 +159,7 @@ export const surfacePaneSchema = Schema.Struct({
   title: Schema.String,
   attention: Schema.Literal('idle', 'working', 'waiting', 'error'),
   sortOrder: nonNegativeIntegerSchema,
-  ptySession: Schema.NullOr(ptySessionMetadataSchema),
+  session: Schema.NullOr(surfacePaneSessionSchema),
 });
 
 export const surfaceDetailSchema = Schema.Struct({
@@ -138,16 +187,27 @@ export const renameSurfaceOutputSchema = Schema.Struct({
   title: Schema.String,
 });
 
+export const surfaceSessionCleanupTargetSchema = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal('agent_session'),
+    agentSessionId: positiveIntegerSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('terminal_session'),
+    terminalSessionId: positiveIntegerSchema,
+  }),
+);
+
 export const surfaceDeleteWarningSchema = Schema.Struct({
-  code: Schema.Literal('pty_kill_failed', 'pty_backend_unavailable', 'pty_log_delete_failed'),
+  code: Schema.Literal('session_process_cleanup_failed', 'session_log_delete_failed'),
   paneId: positiveIntegerSchema,
-  ptySessionId: positiveIntegerSchema,
+  session: surfaceSessionCleanupTargetSchema,
 });
 
 export const deleteSurfaceOutputSchema = Schema.Struct({
   deletedSurfaceId: Schema.NullOr(positiveIntegerSchema),
   deletedPaneIds: Schema.Array(positiveIntegerSchema),
-  attemptedPtySessionIds: Schema.Array(positiveIntegerSchema),
+  attemptedSessionIds: Schema.Array(surfaceSessionCleanupTargetSchema),
   warnings: Schema.Array(surfaceDeleteWarningSchema),
 });
 
@@ -161,11 +221,18 @@ export const launchAgentSessionInputSchema = Schema.Struct({
   harness: agentHarnessSchema,
 });
 
-export const launchSessionOutputSchema = Schema.Struct({
+export const launchAgentSessionOutputSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
   paneId: positiveIntegerSchema,
-  ptySessionId: positiveIntegerSchema,
+  agentSessionId: positiveIntegerSchema,
+});
+
+export const launchTerminalSessionOutputSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+  paneId: positiveIntegerSchema,
+  terminalSessionId: positiveIntegerSchema,
 });
 
 export const ptyWebSocketInputMessageSchema = Schema.Union(
@@ -185,6 +252,10 @@ export const ptyWebSocketErrorCodeSchema = Schema.Literal(
   'invalid_message',
   'session_not_found',
   'session_not_running',
+  'active_process_missing',
+  'active_process_not_running',
+  'harness_session_id_missing',
+  'session_already_attached',
   'log_read_failed',
   'worktree_not_found',
   'backend_unavailable',
@@ -198,7 +269,7 @@ export const ptyWebSocketErrorCodeSchema = Schema.Literal(
 export const ptyWebSocketOutputMessageSchema = Schema.Union(
   Schema.Struct({
     type: Schema.Literal('session'),
-    status: ptySessionStatusSchema,
+    status: sessionStatusSchema,
     exitCode: Schema.optional(Schema.NullOr(nonNegativeIntegerSchema)),
     signal: Schema.optional(Schema.NullOr(Schema.String)),
   }),
@@ -234,14 +305,22 @@ export type SurfacePaneRouteParams = Schema.Schema.Type<typeof surfacePaneRouteP
 export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRouteParamsSchema
 >;
-export type PtySessionRouteParams = Schema.Schema.Type<typeof ptySessionRouteParamsSchema>;
-export type PtySessionStatus = Schema.Schema.Type<typeof ptySessionStatusSchema>;
-export type PtySessionBackend = Schema.Schema.Type<typeof ptySessionBackendSchema>;
-export type PtySessionStatusReason = Schema.Schema.Type<typeof ptySessionStatusReasonSchema>;
-export type PtySessionPurpose = Schema.Schema.Type<typeof ptySessionPurposeSchema>;
-export type PtySessionLogMode = Schema.Schema.Type<typeof ptySessionLogModeSchema>;
+export type AgentSessionRouteParams = Schema.Schema.Type<typeof agentSessionRouteParamsSchema>;
+export type TerminalSessionRouteParams = Schema.Schema.Type<
+  typeof terminalSessionRouteParamsSchema
+>;
+export type SessionStatus = Schema.Schema.Type<typeof sessionStatusSchema>;
+export type AgentSessionStatusReason = Schema.Schema.Type<typeof agentSessionStatusReasonSchema>;
+export type TerminalSessionStatusReason = Schema.Schema.Type<
+  typeof terminalSessionStatusReasonSchema
+>;
+export type SessionDiagnosticCode = Schema.Schema.Type<typeof sessionDiagnosticCodeSchema>;
+export type PtyProcessBackend = Schema.Schema.Type<typeof ptyProcessBackendSchema>;
+export type PtyProcessLogMode = Schema.Schema.Type<typeof ptyProcessLogModeSchema>;
 export type AgentHarness = Schema.Schema.Type<typeof agentHarnessSchema>;
-export type PtySessionMetadata = Schema.Schema.Type<typeof ptySessionMetadataSchema>;
+export type AgentSessionMetadata = Schema.Schema.Type<typeof agentSessionMetadataSchema>;
+export type TerminalSessionMetadata = Schema.Schema.Type<typeof terminalSessionMetadataSchema>;
+export type SurfacePaneSession = Schema.Schema.Type<typeof surfacePaneSessionSchema>;
 export type SurfacePane = Schema.Schema.Type<typeof surfacePaneSchema>;
 export type SurfaceDetail = Schema.Schema.Type<typeof surfaceDetailSchema>;
 export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
@@ -249,13 +328,19 @@ export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
 >;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
+export type SurfaceSessionCleanupTarget = Schema.Schema.Type<
+  typeof surfaceSessionCleanupTargetSchema
+>;
 export type SurfaceDeleteWarning = Schema.Schema.Type<typeof surfaceDeleteWarningSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
 >;
 export type LaunchAgentSessionInput = Schema.Schema.Type<typeof launchAgentSessionInputSchema>;
-export type LaunchSessionOutput = Schema.Schema.Type<typeof launchSessionOutputSchema>;
+export type LaunchAgentSessionOutput = Schema.Schema.Type<typeof launchAgentSessionOutputSchema>;
+export type LaunchTerminalSessionOutput = Schema.Schema.Type<
+  typeof launchTerminalSessionOutputSchema
+>;
 export type PtyWebSocketInputMessage = Schema.Schema.Type<typeof ptyWebSocketInputMessageSchema>;
 export type PtyWebSocketOutputMessage = Schema.Schema.Type<typeof ptyWebSocketOutputMessageSchema>;
 export type PtyWebSocketErrorCode = Schema.Schema.Type<typeof ptyWebSocketErrorCodeSchema>;

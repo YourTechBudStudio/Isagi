@@ -92,7 +92,8 @@ function decodeRuntimeEvent(data: unknown): RuntimeEvent | null {
 
 export function handleRuntimeEvent(event: RuntimeEvent) {
   switch (event.type) {
-    case 'pty_session_changed':
+    case 'agent_session_changed':
+    case 'terminal_session_changed':
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
       void queryClient.invalidateQueries({
         queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
