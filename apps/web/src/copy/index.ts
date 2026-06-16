@@ -1,4 +1,9 @@
 export {
+  agentPaneAttentionByState,
+  agentSessionCopy,
+  type AgentPaneRestoreState,
+} from './agentSession.js';
+export {
   canvasCopy,
   missingProjectCopy,
   ptyCopy,
