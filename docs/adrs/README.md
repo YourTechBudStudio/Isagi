@@ -20,3 +20,4 @@ Read this file before planning/coding. Read listed ADRs only when relevant.
 | `0005-disposable-pty-processes.md`                          | accepted | PTY/process lifecycle; node-pty/tmux semantics; process restoration boundaries; PTY table/API naming                                             |
 | `0006-durable-worktree-environment-entities.md`             | accepted | worktree environment restoration; durable agent/terminal/browser/editor/artifact entities; surface/pane continuity; lazy process recreation       |
 | `0007-per-invocation-harness-integration.md`                | accepted | agent harness adapters; hooks/plugins/extensions; session ID capture; resume commands; avoiding global/user/project config mutation               |
+| `0008-mutation-ownership-and-read-composition.md`           | accepted | runtime service mutation ownership; read-side joins/projections; source facts vs derived product state; durable entities and replaceable resources |
