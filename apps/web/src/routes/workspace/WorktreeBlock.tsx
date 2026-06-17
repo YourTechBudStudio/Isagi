@@ -156,7 +156,6 @@ function SurfaceRow({
   const dispatchCommand = useCommandDispatcher();
 
   const dispatchSurfaceCommand = (commandId: 'rename-active-surface' | 'delete-active-surface') => {
-    onSelect();
     void dispatchCommand(commandId, {
       worktreeId: String(worktreeId),
       surfaceId: String(surface.id),
