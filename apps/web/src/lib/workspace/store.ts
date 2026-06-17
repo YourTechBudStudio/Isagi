@@ -17,8 +17,8 @@ interface WorkspaceStore {
   setSelection: (selection: WorkspaceSelection) => void;
   selectWorktree: (projectId: number, worktreeId: number) => void;
   selectMissingProject: (projectId: number) => void;
-  selectSurface: (worktreeId: number, surfaceId: number) => void;
-  focusPane: (surfaceId: number, paneId: number) => void;
+  setActiveSurface: (worktreeId: number, surfaceId: number) => void;
+  setActivePane: (surfaceId: number, paneId: number) => void;
   forgetSurface: (worktreeId: number, surfaceId: number) => void;
   forgetPane: (surfaceId: number, paneId?: number) => void;
   setZen: (zen: boolean) => void;
@@ -47,14 +47,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
       selection: { kind: 'missingProject', projectId },
       drawer: { open: false, selectedCommandId: null },
     }),
-  selectSurface: (worktreeId, surfaceId) =>
+  setActiveSurface: (worktreeId, surfaceId) =>
     set((state) => ({
       activeSurfaceByWorktreeId: {
         ...state.activeSurfaceByWorktreeId,
         [worktreeId]: surfaceId,
       },
     })),
-  focusPane: (surfaceId, paneId) =>
+  setActivePane: (surfaceId, paneId) =>
     set((state) => ({
       activePaneBySurfaceId: {
         ...state.activePaneBySurfaceId,

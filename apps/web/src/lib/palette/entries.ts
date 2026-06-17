@@ -1,6 +1,6 @@
 import { ArrowRight } from 'lucide-react';
 
-import { selectSurfaceAndPersistFocus } from '../workspace/queries.js';
+import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceIcon } from '../workspace/surface-presentation.js';
 import { sessionActionCommands } from './commands/session-actions.js';
@@ -107,7 +107,7 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: surfaceIcon(surface.kind),
         group: 'worktree-surfaces',
         sub: 'go to surface',
-        run: () => selectSurfaceAndPersistFocus(worktree.id, surface.id),
+        run: () => activateSurface({ worktreeId: worktree.id, surfaceId: surface.id }),
       });
     }
   }
@@ -123,7 +123,10 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: ArrowRight,
         group: 'switch-worktree',
         sub: `${project.name} · ${candidate.branch ?? 'detached'}`,
-        run: () => useWorkspaceStore.getState().selectWorktree(project.id, candidate.id),
+        run: () => {
+          useWorkspaceStore.getState().selectWorktree(project.id, candidate.id);
+          restoreActivePaneFocus();
+        },
       });
     }
   }

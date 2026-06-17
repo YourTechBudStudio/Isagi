@@ -8,11 +8,18 @@ import {
   SquareChevronRight,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
+import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { Command } from '../../lib/workspace/types.js';
@@ -79,6 +86,11 @@ export function WorkbenchDrawer() {
   const widthRef = useRef(width);
   widthRef.current = width;
 
+  const closeDrawerAndRestoreFocus = useCallback(() => {
+    closeDrawer();
+    restoreActivePaneFocus();
+  }, [closeDrawer]);
+
   // Dismiss on Escape or a click anywhere outside the drawer (no close button).
   useEffect(() => {
     if (!open) {
@@ -86,12 +98,12 @@ export function WorkbenchDrawer() {
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        closeDrawer();
+        closeDrawerAndRestoreFocus();
       }
     };
     const onPointerDown = (event: PointerEvent) => {
       if (asideRef.current && !asideRef.current.contains(event.target as Node)) {
-        closeDrawer();
+        closeDrawerAndRestoreFocus();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -100,7 +112,7 @@ export function WorkbenchDrawer() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [open, closeDrawer]);
+  }, [open, closeDrawerAndRestoreFocus]);
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();

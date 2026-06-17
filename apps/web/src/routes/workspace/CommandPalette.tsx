@@ -51,6 +51,7 @@ import type {
   ReviewContent,
 } from '../../lib/palette/types.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
+import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -94,6 +95,7 @@ export function CommandPalette() {
       return;
     }
     closePalette();
+    restoreActivePaneFocus();
   }, [closePalette, machine.kind, open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.

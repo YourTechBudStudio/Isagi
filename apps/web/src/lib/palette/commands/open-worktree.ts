@@ -4,6 +4,7 @@ import { GitBranch } from 'lucide-react';
 import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
 
 import { worktreeSetupReviewCopy } from '../../../copy/index.js';
+import { restoreActivePaneFocus } from '../../workspace/activation.js';
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
 import {
   listProjectBranches,
@@ -217,6 +218,7 @@ export const openWorktreeCommand: PaletteCommand = {
     const selected = payloads?.branch;
     if (isExistingWorktreePayload(selected)) {
       useWorkspaceStore.getState().selectWorktree(selected.projectId, selected.worktreeId);
+      restoreActivePaneFocus();
       return;
     }
 
@@ -227,6 +229,7 @@ export const openWorktreeCommand: PaletteCommand = {
     );
     if (project && worktree) {
       useWorkspaceStore.getState().selectWorktree(project.id, worktree.id);
+      restoreActivePaneFocus();
       return;
     }
 

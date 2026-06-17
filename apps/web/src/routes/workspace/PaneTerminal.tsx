@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ptyCopy } from '../../copy/index.js';
+import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import type {
   PaneTerminalSink,
   PaneTransport,
@@ -39,11 +40,15 @@ const TERMINAL_FIT_RETRY_FRAMES = 12;
  */
 export function PaneTerminal({
   session,
+  surfaceId,
+  paneId,
   focused,
   transport,
   onRendererWarning,
 }: {
   readonly session: PtyPaneSession;
+  readonly surfaceId: number;
+  readonly paneId: number;
   readonly focused: boolean;
   readonly transport: PaneTransport;
   readonly onRendererWarning: (message: string | null) => void;
@@ -51,7 +56,6 @@ export function PaneTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const focusedRef = useRef(focused);
-  const focusFrameRef = useRef<readonly number[]>([]);
   // The terminal is constructed asynchronously (after fonts load), so the focus
   // effect below cannot rely on it existing at mount; this flips once it does.
   const [terminalReady, setTerminalReady] = useState(false);
@@ -64,27 +68,16 @@ export function PaneTerminal({
     focusedRef.current = focused;
   }, [focused]);
 
-  const cancelScheduledFocus = useCallback(() => {
-    for (const frame of focusFrameRef.current) {
-      window.cancelAnimationFrame(frame);
-    }
-    focusFrameRef.current = [];
+  const focusTerminal = useCallback(() => {
+    terminalRef.current?.focus();
   }, []);
-
-  const scheduleTerminalFocus = useCallback(() => {
-    cancelScheduledFocus();
-    let firstFrame = 0;
-    let secondFrame = 0;
-    firstFrame = window.requestAnimationFrame(() => {
-      focusFrameRef.current = focusFrameRef.current.filter((frame) => frame !== firstFrame);
-      secondFrame = window.requestAnimationFrame(() => {
-        focusFrameRef.current = focusFrameRef.current.filter((frame) => frame !== secondFrame);
-        terminalRef.current?.focus();
-      });
-      focusFrameRef.current = [...focusFrameRef.current, secondFrame];
-    });
-    focusFrameRef.current = [firstFrame];
-  }, [cancelScheduledFocus]);
+  usePaneFocusTarget({
+    surfaceId,
+    paneId,
+    priority: 100,
+    enabled: terminalReady,
+    focus: focusTerminal,
+  });
 
   useEffect(() => {
     const host = containerRef.current;
@@ -281,7 +274,7 @@ export function PaneTerminal({
         setInteractive: (running) => {
           terminal.options.disableStdin = !running;
           if (running && focusedRef.current) {
-            scheduleTerminalFocus();
+            restoreActivePaneFocus();
           }
         },
         onConnected: () => scheduleResize(),
@@ -293,7 +286,6 @@ export function PaneTerminal({
         disposed = true;
         setTerminalReady(false);
         disconnect();
-        cancelScheduledFocus();
         if (pendingResizeFrame !== null) {
           window.cancelAnimationFrame(pendingResizeFrame);
         }
@@ -313,8 +305,6 @@ export function PaneTerminal({
     shimShiftEnter,
     initiallyInteractive,
     sessionId,
-    scheduleTerminalFocus,
-    cancelScheduledFocus,
   ]);
 
   // Focus on becoming focused, and also once the terminal finishes constructing
@@ -324,9 +314,8 @@ export function PaneTerminal({
     if (!focused || !terminalReady) {
       return;
     }
-    scheduleTerminalFocus();
-    return cancelScheduledFocus;
-  }, [focused, terminalReady, scheduleTerminalFocus, cancelScheduledFocus]);
+    restoreActivePaneFocus();
+  }, [focused, terminalReady]);
 
   return <div ref={containerRef} className="isagi-xterm isagi-xterm-edge min-h-0 flex-1" />;
 }

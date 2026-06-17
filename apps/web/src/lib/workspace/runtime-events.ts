@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { runtimeEventSchema, type RuntimeEvent } from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
-import { surfaceDetailQueryKey, workspaceQueryKey } from './queries.js';
+import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 
 const initialReconnectDelayMs = 500;

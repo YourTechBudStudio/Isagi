@@ -30,7 +30,7 @@ import {
   type PaneView,
   type PtyPaneSession,
 } from '../../lib/workspace/pane-session/view.js';
-import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/queries.js';
+import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/query-keys.js';
 import {
   claimPaneSession,
   createPaneSession,

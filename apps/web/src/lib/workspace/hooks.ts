@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 
 import { toastCopy } from '../../copy/index.js';
 import { showToast } from '../toast/index.js';
+import { activateSurface, restoreActivePaneFocus } from './activation.js';
 import {
   activeContextFromSelection,
   activeWorktreeId,
@@ -13,7 +14,6 @@ import {
 } from './model.js';
 import {
   formatRuntimeError,
-  selectSurfaceAndPersistFocus,
   scheduleActiveContextPersistence,
   scheduleWorkspaceReconcileForProject,
   useActiveContextQuery,
@@ -113,6 +113,16 @@ export function useWorkspace() {
   const activeSurfaceByWorktreeId = useWorkspaceStore((state) => state.activeSurfaceByWorktreeId);
   const selectWorktree = useWorkspaceStore((state) => state.selectWorktree);
   const selectMissingProject = useWorkspaceStore((state) => state.selectMissingProject);
+  const selectWorktreeAndRestoreFocus = useCallback(
+    (projectId: number, worktreeId: number) => {
+      selectWorktree(projectId, worktreeId);
+      restoreActivePaneFocus();
+    },
+    [selectWorktree],
+  );
+  const selectSurfaceAndActivate = useCallback((worktreeId: number, surfaceId: number) => {
+    activateSurface({ worktreeId, surfaceId });
+  }, []);
 
   const projects = workspace.data?.projects ?? [];
   const currentActiveWorktreeId = activeWorktreeId(selection);
@@ -137,9 +147,9 @@ export function useWorkspace() {
     activeSurface,
     loading: workspace.isPending,
     error: workspace.error ? formatRuntimeError(workspace.error) : null,
-    selectWorktree,
+    selectWorktree: selectWorktreeAndRestoreFocus,
     selectMissingProject,
-    selectSurface: selectSurfaceAndPersistFocus,
+    selectSurface: selectSurfaceAndActivate,
     activeSurfaceByWorktreeId,
   };
 }

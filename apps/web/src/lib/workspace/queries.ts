@@ -18,7 +18,13 @@ import type {
 import { toastCopy } from '../../copy/index.js';
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
+import {
+  activatePane,
+  cancelWorkbenchFocusPersistence,
+  restoreActivePaneFocus,
+} from './activation.js';
 import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
+import { activeContextQueryKey, surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import {
   addProject,
   deleteSurface,
@@ -35,22 +41,16 @@ import {
   reconcileWorkspace,
   renameSurfaceTitle,
   relocateProject,
-  setWorktreeEnvironmentFocus,
   updateActiveContext,
 } from './runtime-data.js';
 import { showWorktreeSetupFailure } from './setup-failure.js';
 import { useWorkspaceStore } from './store.js';
-
-export const workspaceQueryKey = ['workspace'] as const;
-export const activeContextQueryKey = ['workspace', 'active-context'] as const;
-export const surfaceDetailQueryKey = (surfaceId: number) => ['surface', surfaceId] as const;
 
 let scheduledActiveContext: ActiveContextPersistenceInput | null = null;
 let activeContextInFlight: ActiveContextPersistenceInput | null = null;
 let activeContextAbortController: AbortController | null = null;
 let activeContextTimer: number | null = null;
 const workspaceReconcileInFlightProjectIds = new Set<number | null>();
-const surfaceFocusRevisionByWorktreeId = new Map<number, number>();
 
 export function useWorkspaceQuery() {
   return useQuery({
@@ -193,75 +193,6 @@ export async function deleteSurfacePaneFromPalette(input: {
   }
 }
 
-export function selectSurfaceAndPersistFocus(worktreeId: number, surfaceId: number) {
-  const revision = nextSurfaceFocusRevision(worktreeId);
-  useWorkspaceStore.getState().selectSurface(worktreeId, surfaceId);
-
-  void Effect.runPromise(
-    setWorktreeEnvironmentFocus(worktreeId, {
-      activeSurfaceId: surfaceId,
-      activePaneId: null,
-    }).pipe(
-      Effect.timeoutFail({
-        duration: Duration.seconds(5),
-        onTimeout: () => new Error('Surface focus persistence timed out.'),
-      }),
-    ),
-  ).then(
-    () => {
-      if (surfaceFocusRevisionByWorktreeId.get(worktreeId) !== revision) {
-        return;
-      }
-      commitPersistedSurfaceFocus(queryClient, { worktreeId, surfaceId });
-    },
-    (error: unknown) => {
-      if (surfaceFocusRevisionByWorktreeId.get(worktreeId) !== revision) {
-        return;
-      }
-      showToast({
-        id: `surface-focus-persist-failed:${worktreeId}`,
-        kind: 'warning',
-        title: toastCopy.surfaceFocusPersistFailed.title,
-        subtitle: toastCopy.surfaceFocusPersistFailed.subtitle,
-      });
-      console.error('[workspace] surface focus persistence failed', error);
-    },
-  );
-}
-
-function nextSurfaceFocusRevision(worktreeId: number) {
-  const revision = (surfaceFocusRevisionByWorktreeId.get(worktreeId) ?? 0) + 1;
-  surfaceFocusRevisionByWorktreeId.set(worktreeId, revision);
-  return revision;
-}
-
-function commitPersistedSurfaceFocus(
-  client: QueryClient,
-  input: { readonly worktreeId: number; readonly surfaceId: number },
-) {
-  client.setQueryData<WorkspaceData>(workspaceQueryKey, (data) => {
-    if (!data) {
-      return data;
-    }
-    return {
-      projects: data.projects.map((project) => {
-        if (project.status !== 'present') {
-          return project;
-        }
-        return {
-          ...project,
-          worktrees: project.worktrees.map((worktree) =>
-            worktree.id === input.worktreeId &&
-            worktree.surfaces.some((surface) => surface.id === input.surfaceId)
-              ? { ...worktree, activeSurfaceId: input.surfaceId }
-              : worktree,
-          ),
-        };
-      }),
-    };
-  });
-}
-
 export async function commitOpenWorktreeSuccess(
   client: QueryClient,
   output: OpenWorktreeOutput,
@@ -274,6 +205,7 @@ export async function commitOpenWorktreeSuccess(
     staleTime: 0,
   });
   useWorkspaceStore.getState().selectWorktree(output.projectId, output.worktreeId);
+  restoreActivePaneFocus();
   if (output.status === 'created_setup_failed') {
     showWorktreeSetupFailure(output);
   }
@@ -290,9 +222,10 @@ export async function commitLaunchSessionSuccess(
     queryFn: ({ signal }) => fetchWorkspaceData(signal),
     staleTime: 0,
   });
-  const store = useWorkspaceStore.getState();
-  store.selectSurface(output.worktreeId, output.surfaceId);
-  store.focusPane(output.surfaceId, output.paneId);
+  activatePane(
+    { worktreeId: output.worktreeId, surfaceId: output.surfaceId, paneId: output.paneId },
+    { persist: false },
+  );
 }
 
 export async function commitRenameSurfaceSuccess(client: QueryClient, surfaceId: number) {
@@ -324,7 +257,7 @@ export async function commitDeleteSurfaceSuccess(
 
   const store = useWorkspaceStore.getState();
   if (input.output.deletedSurfaceId === input.surfaceId) {
-    nextSurfaceFocusRevision(input.worktreeId);
+    cancelWorkbenchFocusPersistence(input.worktreeId);
     client.removeQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId), exact: true });
     store.forgetSurface(input.worktreeId, input.surfaceId);
     store.forgetPane(input.surfaceId);
@@ -355,6 +288,7 @@ export async function commitDeleteWorktreeSuccess(
   const store = useWorkspaceStore.getState();
   if (project && selected) {
     store.selectWorktree(project.id, selected.id);
+    restoreActivePaneFocus();
     return;
   }
 
@@ -365,6 +299,7 @@ export async function commitDeleteWorktreeSuccess(
       worktreeId: output.selectedWorktreeId,
     }),
   );
+  restoreActivePaneFocus();
 }
 
 export async function commitAddProjectSuccess(

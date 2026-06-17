@@ -7,6 +7,7 @@ import type { ReconciliationFinding } from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
 import { clearToasts, useToastStore } from '../toast/index.js';
+import { activateSurface } from './activation.js';
 import type { WorkspaceData } from './model.js';
 import {
   commitAddProjectSuccess,
@@ -15,10 +16,8 @@ import {
   commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
   commitRelocateProjectSuccess,
-  selectSurfaceAndPersistFocus,
-  surfaceDetailQueryKey,
-  workspaceQueryKey,
 } from './queries.js';
+import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
 
 test('open-worktree success refetches workspace before selecting returned worktree', async () => {
@@ -297,9 +296,13 @@ test('surface focus persistence ignores stale success responses', async () => {
 
   globalThis.fetch = ((_input, init) =>
     new Promise<Response>((resolve) => {
-      const body = JSON.parse(String(init?.body)) as { readonly activeSurfaceId: number };
+      const body = JSON.parse(String(init?.body)) as {
+        readonly activeSurfaceId: number;
+        readonly activePaneId: number | null;
+      };
       requests.push({
         surfaceId: body.activeSurfaceId,
+        paneId: body.activePaneId,
         resolve: () =>
           resolve(
             new Response(
@@ -307,7 +310,7 @@ test('surface focus persistence ignores stale success responses', async () => {
                 data: {
                   worktreeId: 10,
                   activeSurfaceId: body.activeSurfaceId,
-                  activePaneId: null,
+                  activePaneId: body.activePaneId,
                 },
                 meta: { requestId: `focus-${body.activeSurfaceId}` },
               }),
@@ -331,10 +334,12 @@ test('surface focus persistence ignores stale success responses', async () => {
         }),
       ],
     });
+    queryClient.setQueryData(surfaceDetailQueryKey(101), surfaceDetail(101, 201));
+    queryClient.setQueryData(surfaceDetailQueryKey(102), surfaceDetail(102, 202));
     useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
 
-    selectSurfaceAndPersistFocus(10, 101);
-    selectSurfaceAndPersistFocus(10, 102);
+    activateSurface({ worktreeId: 10, surfaceId: 101 });
+    activateSurface({ worktreeId: 10, surfaceId: 102 });
     await waitFor(() => requests.length === 2);
 
     requests[1]!.resolve();
@@ -343,6 +348,10 @@ test('surface focus persistence ignores stale success responses', async () => {
     requests[0]!.resolve();
     await Promise.resolve();
     assert.equal(activeSurfaceIdFromCache(), 102);
+    assert.equal(
+      queryClient.getQueryData<SurfaceDetailLike>(surfaceDetailQueryKey(102))?.activePaneId,
+      202,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     if (hadWindow) {
@@ -354,7 +363,7 @@ test('surface focus persistence ignores stale success responses', async () => {
       Reflect.deleteProperty(globalThis, 'window');
     }
     queryClient.clear();
-    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {}, activePaneBySurfaceId: {} });
   }
 });
 
@@ -375,9 +384,13 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
 
   globalThis.fetch = ((_input, init) =>
     new Promise<Response>((resolve) => {
-      const body = JSON.parse(String(init?.body)) as { readonly activeSurfaceId: number };
+      const body = JSON.parse(String(init?.body)) as {
+        readonly activeSurfaceId: number;
+        readonly activePaneId: number | null;
+      };
       requests.push({
         surfaceId: body.activeSurfaceId,
+        paneId: body.activePaneId,
         resolve: () =>
           resolve(
             new Response(
@@ -385,7 +398,7 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
                 data: {
                   worktreeId: 10,
                   activeSurfaceId: body.activeSurfaceId,
-                  activePaneId: null,
+                  activePaneId: body.activePaneId,
                 },
                 meta: { requestId: `focus-${body.activeSurfaceId}` },
               }),
@@ -409,9 +422,10 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
         }),
       ],
     });
+    queryClient.setQueryData(surfaceDetailQueryKey(101), surfaceDetail(101, 201));
     useWorkspaceStore.setState({ activeSurfaceByWorktreeId: { 10: 101 } });
 
-    selectSurfaceAndPersistFocus(10, 101);
+    activateSurface({ worktreeId: 10, surfaceId: 101 });
     await waitFor(() => requests.length === 1);
 
     await commitDeleteSurfaceSuccess(queryClient, {
@@ -451,7 +465,7 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
       Reflect.deleteProperty(globalThis, 'window');
     }
     queryClient.clear();
-    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {} });
+    useWorkspaceStore.setState({ activeSurfaceByWorktreeId: {}, activePaneBySurfaceId: {} });
   }
 });
 
@@ -527,7 +541,55 @@ async function waitFor(predicate: () => boolean) {
 
 interface SurfaceFocusRequest {
   readonly surfaceId: number;
+  readonly paneId: number | null;
   readonly resolve: () => void;
+}
+
+interface SurfaceDetailLike {
+  readonly id: number;
+  readonly worktreeId: number;
+  readonly kind: 'terminal';
+  readonly title: string;
+  readonly attention: 'idle';
+  readonly layout: {
+    readonly kind: 'leaf';
+    readonly nodeId: string;
+    readonly paneId: number;
+    readonly collapsed: false;
+  };
+  readonly activePaneId: number | null;
+  readonly panes: readonly [
+    {
+      readonly id: number;
+      readonly surfaceId: number;
+      readonly title: string;
+      readonly attention: 'idle';
+      readonly sortOrder: 0;
+      readonly session: null;
+    },
+  ];
+}
+
+function surfaceDetail(surfaceId: number, paneId: number): SurfaceDetailLike {
+  return {
+    id: surfaceId,
+    worktreeId: 10,
+    kind: 'terminal',
+    title: 'Terminal',
+    attention: 'idle',
+    layout: { kind: 'leaf', nodeId: `pane-${paneId}`, paneId, collapsed: false },
+    activePaneId: paneId,
+    panes: [
+      {
+        id: paneId,
+        surfaceId,
+        title: 'Pane',
+        attention: 'idle',
+        sortOrder: 0,
+        session: null,
+      },
+    ],
+  };
 }
 
 function project(input: {

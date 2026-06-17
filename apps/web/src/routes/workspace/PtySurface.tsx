@@ -6,7 +6,7 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
@@ -18,6 +18,11 @@ import {
   handleDispatchedCommandError,
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
+import {
+  activatePane,
+  syncActivePaneFromSurfaceDetail,
+  usePaneFocusTarget,
+} from '../../lib/workspace/activation.js';
 import {
   resolveActivePaneId,
   resolvePaneFocusAfterDetailChange,
@@ -33,7 +38,6 @@ interface PtySurfaceProps {
 
 export function PtySurface({ detail }: PtySurfaceProps) {
   const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
-  const focusPane = useWorkspaceStore((state) => state.focusPane);
   const dispatchCommand = useCommandDispatcher();
   const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
   const previousPaneIds = useRef<ReadonlySet<number> | null>(null);
@@ -46,10 +50,16 @@ export function PtySurface({ detail }: PtySurfaceProps) {
       previousPaneIds: previousPaneIds.current,
     });
     previousPaneIds.current = new Set(detail.panes.map((pane) => pane.id));
-    if (nextFocusedPaneId !== null && nextFocusedPaneId !== storedPaneId) {
-      focusPane(detail.id, nextFocusedPaneId);
+    if (nextFocusedPaneId !== null) {
+      syncActivePaneFromSurfaceDetail({
+        worktreeId: detail.worktreeId,
+        surfaceId: detail.id,
+        panes: detail.panes,
+        detailActivePaneId: detail.activePaneId,
+        preferredPaneId: nextFocusedPaneId,
+      });
     }
-  }, [detail.id, detail.panes, detail.activePaneId, focusPane, storedPaneId]);
+  }, [detail.id, detail.worktreeId, detail.panes, detail.activePaneId, storedPaneId]);
 
   if (detail.panes.length === 0) {
     return (
@@ -67,9 +77,15 @@ export function PtySurface({ detail }: PtySurfaceProps) {
           pane={pane}
           surface={detail}
           focused={pane.id === focusedPaneId}
-          onFocus={() => focusPane(detail.id, pane.id)}
+          onFocus={() =>
+            activatePane({ worktreeId: detail.worktreeId, surfaceId: detail.id, paneId: pane.id })
+          }
           onDelete={() => {
-            focusPane(detail.id, pane.id);
+            activatePane({
+              worktreeId: detail.worktreeId,
+              surfaceId: detail.id,
+              paneId: pane.id,
+            });
             void dispatchCommand('delete-active-pane', {
               worktreeId: String(detail.worktreeId),
               surfaceId: String(detail.id),
@@ -95,8 +111,18 @@ function PtyPaneShell({
   readonly onFocus: () => void;
   readonly onDelete: () => void;
 }) {
+  const shellRef = useRef<HTMLElement>(null);
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
+  const focusShell = useCallback(() => {
+    shellRef.current?.focus({ preventScroll: true });
+  }, []);
+  usePaneFocusTarget({
+    surfaceId: surface.id,
+    paneId: pane.id,
+    priority: 0,
+    focus: focusShell,
+  });
   const {
     view,
     attention,
@@ -122,7 +148,9 @@ function PtyPaneShell({
 
   return (
     <section
+      ref={shellRef}
       aria-label={pane.title}
+      tabIndex={-1}
       onPointerDown={onFocus}
       className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-opacity duration-ui ease-expo ${
         focused ? 'opacity-100' : 'opacity-55'
@@ -176,6 +204,8 @@ function PtyPaneShell({
         <PaneTerminal
           key={terminalKey}
           session={session}
+          surfaceId={surface.id}
+          paneId={pane.id}
           focused={focused}
           transport={transport}
           onRendererWarning={onRendererWarning}

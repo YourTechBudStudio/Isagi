@@ -10,8 +10,8 @@ import {
   deleteSurfaceFromPalette,
   deleteSurfacePaneFromPalette,
   renameSurfaceTitleFromPalette,
-  surfaceDetailQueryKey,
 } from '../../workspace/queries.js';
+import { surfaceDetailQueryKey } from '../../workspace/query-keys.js';
 import { getSurfaceDetail, UserVisibleError } from '../../workspace/runtime-data.js';
 import type { ArgValues, PaletteCommand, PaletteContext, ReviewContent } from '../types.js';
 
