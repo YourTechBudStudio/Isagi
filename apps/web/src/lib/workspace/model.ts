@@ -225,6 +225,30 @@ export function resolveActivePaneId(
   return panes[0]?.id ?? null;
 }
 
+export function resolvePaneFocusAfterDetailChange({
+  panes,
+  storedPaneId,
+  detailActivePaneId,
+  previousPaneIds,
+}: {
+  readonly panes: readonly { readonly id: number }[];
+  readonly storedPaneId: number | null | undefined;
+  readonly detailActivePaneId: number | null | undefined;
+  readonly previousPaneIds: ReadonlySet<number> | null;
+}): number | null {
+  if (
+    detailActivePaneId !== null &&
+    detailActivePaneId !== undefined &&
+    previousPaneIds !== null &&
+    !previousPaneIds.has(detailActivePaneId) &&
+    paneExists(panes, detailActivePaneId)
+  ) {
+    return detailActivePaneId;
+  }
+
+  return resolveActivePaneId(panes, storedPaneId, detailActivePaneId);
+}
+
 function projectGlyph(name: string) {
   return (
     name

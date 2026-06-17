@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   activeContextFromSelection,
   resolveActivePaneId,
+  resolvePaneFocusAfterDetailChange,
   selectionFromActiveContext,
 } from './model.js';
 import type { Project } from './types.js';
@@ -53,6 +54,34 @@ test('active pane fallback ignores stale stored pane ids', () => {
   assert.equal(resolveActivePaneId(panes, 999, 30), 30);
   assert.equal(resolveActivePaneId(panes, 999, 888), 10);
   assert.equal(resolveActivePaneId([], 20, 10), null);
+});
+
+test('newly active panes take focus when surface detail adds them', () => {
+  const panes = [{ id: 10 }, { id: 20 }, { id: 30 }];
+
+  assert.equal(
+    resolvePaneFocusAfterDetailChange({
+      panes,
+      storedPaneId: 10,
+      detailActivePaneId: 30,
+      previousPaneIds: new Set([10, 20]),
+    }),
+    30,
+  );
+});
+
+test('stored pane focus still wins when no pane was newly added', () => {
+  const panes = [{ id: 10 }, { id: 20 }, { id: 30 }];
+
+  assert.equal(
+    resolvePaneFocusAfterDetailChange({
+      panes,
+      storedPaneId: 10,
+      detailActivePaneId: 30,
+      previousPaneIds: new Set([10, 20, 30]),
+    }),
+    10,
+  );
 });
 
 function project(input: {

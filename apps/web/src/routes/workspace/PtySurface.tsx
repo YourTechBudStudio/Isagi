@@ -6,7 +6,7 @@ import {
   SquareTerminal,
   TriangleAlert,
 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
@@ -18,7 +18,10 @@ import {
   handleDispatchedCommandError,
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
-import { resolveActivePaneId } from '../../lib/workspace/model.js';
+import {
+  resolveActivePaneId,
+  resolvePaneFocusAfterDetailChange,
+} from '../../lib/workspace/model.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { PaneTerminal } from './PaneTerminal.js';
@@ -33,12 +36,20 @@ export function PtySurface({ detail }: PtySurfaceProps) {
   const focusPane = useWorkspaceStore((state) => state.focusPane);
   const dispatchCommand = useCommandDispatcher();
   const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
+  const previousPaneIds = useRef<ReadonlySet<number> | null>(null);
 
   useEffect(() => {
-    if (focusedPaneId !== null && focusedPaneId !== storedPaneId) {
-      focusPane(detail.id, focusedPaneId);
+    const nextFocusedPaneId = resolvePaneFocusAfterDetailChange({
+      panes: detail.panes,
+      storedPaneId,
+      detailActivePaneId: detail.activePaneId,
+      previousPaneIds: previousPaneIds.current,
+    });
+    previousPaneIds.current = new Set(detail.panes.map((pane) => pane.id));
+    if (nextFocusedPaneId !== null && nextFocusedPaneId !== storedPaneId) {
+      focusPane(detail.id, nextFocusedPaneId);
     }
-  }, [detail.id, focusedPaneId, focusPane, storedPaneId]);
+  }, [detail.id, detail.panes, detail.activePaneId, focusPane, storedPaneId]);
 
   if (detail.panes.length === 0) {
     return (
@@ -106,6 +117,7 @@ function PtyPaneShell({
     surfaceId: surface.id,
     paneId: pane.id,
     paneAttention: pane.attention,
+    autoAttach: focused,
   });
 
   return (

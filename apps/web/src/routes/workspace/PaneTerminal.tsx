@@ -1,6 +1,6 @@
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ptyCopy } from '../../copy/index.js';
 import type {
@@ -50,10 +50,41 @@ export function PaneTerminal({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const focusedRef = useRef(focused);
+  const focusFrameRef = useRef<readonly number[]>([]);
+  // The terminal is constructed asynchronously (after fonts load), so the focus
+  // effect below cannot rely on it existing at mount; this flips once it does.
+  const [terminalReady, setTerminalReady] = useState(false);
   const sessionId = session.id;
   const shimShiftEnter = session.kind === 'agent_session';
   const disableScrollback = session.kind === 'agent_session' && session.harness === 'opencode';
   const initiallyInteractive = session.status === 'running';
+
+  useEffect(() => {
+    focusedRef.current = focused;
+  }, [focused]);
+
+  const cancelScheduledFocus = useCallback(() => {
+    for (const frame of focusFrameRef.current) {
+      window.cancelAnimationFrame(frame);
+    }
+    focusFrameRef.current = [];
+  }, []);
+
+  const scheduleTerminalFocus = useCallback(() => {
+    cancelScheduledFocus();
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      focusFrameRef.current = focusFrameRef.current.filter((frame) => frame !== firstFrame);
+      secondFrame = window.requestAnimationFrame(() => {
+        focusFrameRef.current = focusFrameRef.current.filter((frame) => frame !== secondFrame);
+        terminalRef.current?.focus();
+      });
+      focusFrameRef.current = [...focusFrameRef.current, secondFrame];
+    });
+    focusFrameRef.current = [firstFrame];
+  }, [cancelScheduledFocus]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -249,14 +280,20 @@ export function PaneTerminal({
         write: (data) => terminal.write(data),
         setInteractive: (running) => {
           terminal.options.disableStdin = !running;
+          if (running && focusedRef.current) {
+            scheduleTerminalFocus();
+          }
         },
         onConnected: () => scheduleResize(),
       };
       const disconnect = transport.connect(sink);
+      setTerminalReady(true);
 
       return () => {
         disposed = true;
+        setTerminalReady(false);
         disconnect();
+        cancelScheduledFocus();
         if (pendingResizeFrame !== null) {
           window.cancelAnimationFrame(pendingResizeFrame);
         }
@@ -276,25 +313,20 @@ export function PaneTerminal({
     shimShiftEnter,
     initiallyInteractive,
     sessionId,
+    scheduleTerminalFocus,
+    cancelScheduledFocus,
   ]);
 
+  // Focus on becoming focused, and also once the terminal finishes constructing
+  // while already focused — a freshly-created pane is focused before its terminal
+  // exists, so focusing must wait for `terminalReady` rather than a fixed frame.
   useEffect(() => {
-    if (!focused) {
+    if (!focused || !terminalReady) {
       return;
     }
-    let cancelled = false;
-    const frame = window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        if (!cancelled) {
-          terminalRef.current?.focus();
-        }
-      });
-    });
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(frame);
-    };
-  }, [focused]);
+    scheduleTerminalFocus();
+    return cancelScheduledFocus;
+  }, [focused, terminalReady, scheduleTerminalFocus, cancelScheduledFocus]);
 
   return <div ref={containerRef} className="isagi-xterm isagi-xterm-edge min-h-0 flex-1" />;
 }

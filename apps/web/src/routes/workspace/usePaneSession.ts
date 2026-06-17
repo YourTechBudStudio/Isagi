@@ -46,6 +46,7 @@ export interface UsePaneSessionInput {
   readonly surfaceId: number;
   readonly paneId: number;
   readonly paneAttention: AttentionState;
+  readonly autoAttach?: boolean;
 }
 
 export interface UsePaneSessionResult {
@@ -80,9 +81,11 @@ export function usePaneSession({
   surfaceId,
   paneId,
   paneAttention,
+  autoAttach = false,
 }: UsePaneSessionInput): UsePaneSessionResult {
   const queryClient = useQueryClient();
   const transportRef = useRef<PaneTransportController | null>(null);
+  const autoAttachSessionKeyRef = useRef<string | null>(null);
   if (transportRef.current === null) {
     transportRef.current = createPaneTransport();
   }
@@ -111,6 +114,7 @@ export function usePaneSession({
     setRendererWarning(null);
     setUserAttach(false);
     setAttachEpoch(0);
+    autoAttachSessionKeyRef.current = null;
     setStartFreshError(null);
     // A successful "start fresh" intentionally leaves `creating` set until the new
     // session swaps in (so the button stays disabled across the refetch); clearing
@@ -227,6 +231,20 @@ export function usePaneSession({
     setAttachEpoch((epoch) => epoch + 1);
   }, []);
 
+  useEffect(() => {
+    if (!autoAttach || !isAutoAttachableSession(session)) {
+      return;
+    }
+
+    const sessionKey = `${session.kind}:${session.id}`;
+    if (autoAttachSessionKeyRef.current === sessionKey) {
+      return;
+    }
+
+    autoAttachSessionKeyRef.current = sessionKey;
+    attach();
+  }, [autoAttach, session, attach]);
+
   const startFresh = useCallback(() => {
     if (session === null || creating) {
       return;
@@ -296,6 +314,14 @@ function resolveSessionPtyWebSocketUrl(
       ? resolveAgentSessionPtyWebSocketUrl(session.id, claim.attachToken)
       : resolveTerminalSessionPtyWebSocketUrl(session.id, claim.attachToken);
   });
+}
+
+function isAutoAttachableSession(session: PtyPaneSession | null): session is PtyPaneSession {
+  if (session === null || session.status === 'starting' || session.status === 'running') {
+    return false;
+  }
+
+  return session.kind === 'terminal_session' || session.recoveryAction !== 'create_replacement';
 }
 
 function decodeSocketMessage(data: unknown): PtyWebSocketOutputMessage | null {
