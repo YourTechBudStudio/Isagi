@@ -100,12 +100,57 @@ Companion decision log for `.pi/agent-session-pty-process-refactor.md`. This cap
 - Added simple runtime orphan session GC. Agent and terminal sessions with no pane placement are eligible after a 60 second grace period; the GC skips sessions with active websocket attachments, kills any still-running active PTY process, revokes/supersedes lifecycle state, and deletes the orphan durable session row.
 - The orphan GC is runtime-local cleanup and does not introduce a public session deletion API. Pane/surface/worktree cleanup remains the normal user-driven deletion path.
 
+## Phase 4A: Pi restoration loop end to end
+
+### Decisions made
+
+- Phase 4 is scoped to Pi only. OpenCode, Claude, and Codex remain Phase 5 work, but the adapter registry should keep a narrow plug-in shape so those adapters can be added without changing agent-session or PTY-process ownership.
+- Non-Pi agent sessions may still be created as durable sessions. Launch/attach is where unsupported harnesses fail until their adapters exist; the pane-level unsupported harness state is reserved for the Phase 4B UI slice.
+- A brand-new agent session with no `active_pty_process_id` launches fresh even though no `harness_session_id` has been observed yet. Missing harness session id is only a restoration blocker after a previous active process incarnation existed and is no longer starting/running.
+- An existing `starting` or `running` active PTY process remains non-replaceable and is reused.
+- A dead/missing previous active PTY process resumes only when `agent_sessions.harness_session_id` exists. The latest observed harness session id remains the resume source of truth.
+- Pi hook delivery should be best-effort and non-blocking. The generated Pi extension uses a short one-second POST timeout and swallows delivery failures so runtime observation cannot hang harness interaction.
+- Pi should preserve the user's normal/default extensions. Isagi layers its runtime-owned observation extension into the invocation with `-e`; it must not use `--no-extensions`.
+- The legacy non-Pi launch envelope is not a Phase 4 fallback. Unsupported adapters should fail explicitly instead of pretending to resume without per-invocation observation.
+
+### Implemented in Phase 4A
+
+- Updated agent session lazy-attach lifecycle so never-launched sessions create a fresh PTY process without requiring a harness session id, while dead previous process incarnations still require an observed harness session id for restoration.
+- Removed the legacy non-Pi launch envelope from the harness adapter registry; Pi remains the only launch adapter in Phase 4A.
+- Kept Pi launch/resume envelope generic at the PTY boundary while injecting Isagi harness event env through `envForProcess` after the PTY process row exists.
+- Hardened the generated Pi extension so observations from `session_start`, `agent_start`, and `turn_start` POST to the runtime-internal harness event route with a one-second timeout.
+- Kept normal/default Pi user extensions enabled and layered Isagi's runtime-owned observation extension with `-e`.
+- Added focused automated coverage for Pi launch/resume envelopes, harness event token-to-session observation handling, and fresh-vs-restore agent lifecycle behavior.
+
+## Phase 4B: Unsupported harness pane state
+
+### Decisions made
+
+- Unsupported non-Pi harnesses remain claimable durable agent sessions in Phase 4. Claim/create should not reject them because the pane is the product surface that explains the unsupported state.
+- Unsupported harness launch failures are attach-time operational failures. The websocket protocol exposes a stable `unsupported_harness` error code so the web can render web-owned copy instead of treating the failure as unknown.
+- The unsupported harness state is a pane-local edge state, not durable session metadata and not a public API status projection.
+- The unsupported harness pane state should include an explicit `Delete pane` action. Deleting the pane uses the normal pane/surface cleanup path, including deleting the surface when it is the last pane.
+- Unsupported harness copy may carry light Isagi personality because it is an edge/empty-style state, while normal working chrome remains dry and informative.
+
+### Implemented in Phase 4B
+
+- Added stable `unsupported_harness` to the PTY websocket protocol error contract and runtime websocket error mapping for unsupported harness adapter failures.
+- Added web-owned socket copy for `unsupported_harness` and a pane-local unsupported harness state with an explicit `Delete pane` action.
+- Added focused coverage for runtime websocket unsupported-harness mapping and web copy coverage for the new socket reason.
+
+## Phase 4 completion
+
+- Phase 4A and Phase 4B are complete.
+- Fresh Pi launch, latest-observed session id capture, persistence, and resume are implemented through the runtime-internal harness event route.
+- Non-Pi harnesses remain durable-session claimable but fail honestly at attach time with stable `unsupported_harness` pane UX until Phase 5 adapters exist.
+- Failed unrecoverable durable sessions are not reset in place. Fresh starts create replacement durable sessions for the pane, leaving old sessions to normal orphan cleanup.
+- PTY launches preserve structured `command` plus `args` through the process layer. `node-pty` receives structured argv directly; quoting is isolated to tmux's shell-command boundary.
+- Final verification passed with focused tests, full `pnpm check`, and engineering guidance review reporting no findings.
+
 ### Things left
 
-- Finish provider parity beyond Pi: OpenCode, Claude, and Codex adapters still need the same strict launch/resume/per-invocation integration/session-observation contract.
-- Move any remaining temporary provider-specific resume envelope logic out of session services and into harness adapters.
-- Complete Phase 6 vocabulary cleanup. Some internal `ptySessionId` names may remain inside backend/ref implementation details under `pty-processes`; these should be renamed where safe without obscuring backend semantics.
+- Phase 5: finish provider parity beyond Pi. OpenCode, Claude, and Codex adapters still need the same strict launch/resume/per-invocation integration/session-observation contract.
+- Phase 6: complete vocabulary cleanup. Some internal `ptySessionId` names may remain inside backend/ref implementation details under `pty-processes`; these should be renamed where safe without obscuring backend semantics.
 - Keep public contracts and web code free of PTY process identity/details. Future diagnostic surfaces may expose process facts only deliberately and as diagnostics, not as product continuity state.
 - Preserve the invariant that ordinary reads are projection-only. Future restoration behavior must continue to be triggered by explicit attach/open flows, not workspace or surface reads.
-- Add or extend focused tests for harness event IPC, token lifecycle, adapter launch envelopes, lazy restore failure states, and event projection as the remaining adapters land.
-- Root `pnpm check` passed after Phase 3D changes.
+- Add or extend focused tests for each remaining provider adapter as Phase 5 lands.

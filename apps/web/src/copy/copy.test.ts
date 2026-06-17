@@ -7,7 +7,7 @@ import type {
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
-import { ptyCopy, runtimeErrorCopy } from './index.js';
+import { ptyCopy, ptySocketErrorCopy, runtimeErrorCopy } from './index.js';
 
 test('surface API error reasons map to web-owned copy', () => {
   assert.equal(
@@ -41,6 +41,10 @@ test('session status reasons produce degraded pane status labels', () => {
   assert.equal(ptyCopy.sessionStatus('killed', 'harness_process_killed', exit()), 'Killed');
   assert.equal(ptyCopy.sessionStatus('killed', 'shell_killed', exit()), 'Killed');
   assert.equal(ptyCopy.sessionStatus('killed', 'runtime_shutdown', exit()), 'Killed on shutdown');
+});
+
+test('PTY socket error copy includes unsupported harness state', () => {
+  assert.match(ptySocketErrorCopy.byReason('unsupported_harness'), /not wired/);
 });
 
 test('session status reasons produce restrained pane notices', () => {

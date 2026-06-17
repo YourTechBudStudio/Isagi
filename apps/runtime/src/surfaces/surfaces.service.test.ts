@@ -111,7 +111,7 @@ test('create surface API slice creates and focuses a single empty pane', async (
   }
 });
 
-test('claim pane session start fresh assigns the new agent session to the pane', async () => {
+test('create pane session assigns a new agent session to the pane', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-claim-start-fresh-'));
   let startFreshInput: Parameters<AgentSessionServiceShape['startFresh']>[0] | null = null;
   try {
@@ -124,9 +124,9 @@ test('claim pane session start fresh assigns the new agent session to the pane',
           kind: 'agent',
           titleBase: 'Agent',
         });
-        const claim = yield* surfaces.claimPaneSession({
+        const claim = yield* surfaces.createPaneSession({
           worktreeId,
-          claim: { action: 'start_fresh_agent', paneId: surface.paneId, harness: 'pi' },
+          create: { kind: 'agent_session', paneId: surface.paneId, harness: 'pi' },
         });
         const database = yield* RuntimeDatabase;
         const pane = yield* database.use('test_find_claimed_pane', (db) =>

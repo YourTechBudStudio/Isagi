@@ -183,7 +183,7 @@ These findings came from local read-only CLI/package inspection during brainstor
 
 | Harness  | First capture                        | Per-turn / refresh            | Session ID source                   | Injection path                                                     |
 | -------- | ------------------------------------ | ----------------------------- | ----------------------------------- | ------------------------------------------------------------------ |
-| Pi       | `session_start`                      | `agent_start`, `turn_start`   | `ctx.sessionManager.getSessionId()` | `--no-extensions -e <runtime-owned-extension>`                     |
+| Pi       | `session_start`                      | `agent_start`, `turn_start`   | `ctx.sessionManager.getSessionId()` | `-e <runtime-owned-extension>` layered on top of normal user extensions |
 | Claude   | `SessionStart`                       | `UserPromptSubmit`, `Stop`    | hook stdin `session_id`             | `--settings <json-or-file>` with command hooks                     |
 | OpenCode | plugin `event` for `session.created` | `chat.params`, `chat.message` | `sessionID`                         | `OPENCODE_CONFIG_CONTENT` plugin config                            |
 | Codex    | `SessionStart`                       | `UserPromptSubmit`, `Stop`    | hook stdin `session_id`             | `--enable hooks`, `--dangerously-bypass-hook-trust`, `-c hooks...` |
@@ -333,6 +333,8 @@ Done when:
 
 ## Phase 4: Internal Harness Event IPC And Pi Adapter End To End
 
+Status: complete. Phase 4 was implemented as two vertical slices: Phase 4A proved the Pi restoration loop end to end, and Phase 4B added stable unsupported-harness protocol handling plus pane-local unsupported harness UX.
+
 Goal: implement the harness event path and prove the full restoration loop with one adapter before multiplying provider work.
 
 Choose Pi first because local inspection found strong extension support and a clear session manager API.
@@ -354,11 +356,13 @@ Work involved:
   - inject `ISAGI_AGENT_SESSION_ID`
   - inject `ISAGI_HARNESS_EVENT_URL`
   - inject `ISAGI_HARNESS_EVENT_TOKEN`
-  - include `--no-extensions -e <isagi-extension>`
+  - include `-e <isagi-extension>` while preserving normal/default user Pi extensions
   - use `--session <latestObservedHarnessSessionId>` for resume when available
   - do not rely on `--session-id` as truth; hook observation still owns identity
 - Pi extension should post session observations on `session_start` and refresh on `agent_start` and/or `turn_start`.
 - Runtime updates `agent_sessions.harness_session_id` to the latest observed Pi session ID.
+- Unsupported non-Pi harnesses may create durable agent sessions during Phase 4, but attach fails with stable websocket protocol code `unsupported_harness` and the web renders a pane-local unsupported state with an explicit delete-pane action.
+- PTY process launches preserve structured command and args through the generic process layer; shell quoting is isolated to backend boundaries that require it, such as tmux.
 
 Verification:
 
@@ -373,6 +377,14 @@ Done when:
 
 - A Pi agent session can launch, report its current harness session ID through the internal route, persist that ID, and later lazy attach can resume using the latest observed ID.
 - If the user switches/starts a new Pi session inside the harness, a later hook event replaces the stored harness session ID.
+- Unsupported non-Pi harnesses fail honestly at attach time with pane-local recovery UX instead of pretending to restore.
+
+Completion notes:
+
+- Fresh never-launched agent sessions now launch without requiring an existing `harness_session_id`; missing harness session id blocks only restoration after a previous process incarnation existed and is no longer starting/running.
+- Generated Pi observation hooks are best-effort and use a short timeout so runtime IPC cannot hang Pi interaction.
+- Pi now runs with normal/default user extensions enabled, with Isagi's runtime-owned extension layered in via `-e`.
+- Final verification included focused runtime/web tests, full `pnpm check`, and engineering guidance review with no remaining findings.
 
 ## Phase 5: Add OpenCode, Claude, And Codex Adapters
 

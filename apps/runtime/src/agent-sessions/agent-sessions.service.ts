@@ -71,11 +71,33 @@ export const AgentSessionServiceLive = Layer.effect(
 
     const launchProcessForSession = (session: AgentSessionRow) =>
       Effect.gen(function* () {
+        console.info('[runtime] Agent session launch requested', {
+          agentSessionId: session.id,
+          harness: session.harness,
+          cwd: session.cwd,
+          latestHarnessSessionId: session.harnessSessionId,
+          previousPtyProcessId: session.activePtyProcessId,
+          previousPtyProcessStatus: session.activePtyProcess?.status ?? null,
+          previousPtyProcessStatusReason: session.activePtyProcess?.statusReason ?? null,
+        });
         const launch = yield* agentLaunchEnvelope(harnesses, session);
+        console.info('[runtime] Agent session launch envelope built', {
+          agentSessionId: session.id,
+          harness: session.harness,
+          command: launch.command,
+          args: launch.args,
+          cwd: launch.cwd,
+          injectsProcessEnv: Boolean(launch.envForProcess),
+        });
         const process = yield* pty.launch(launch);
         yield* repository.setActivePtyProcess({
           agentSessionId: session.id,
           ptyProcessId: process.ptyProcessId,
+        });
+        console.info('[runtime] Agent session active PTY process set', {
+          agentSessionId: session.id,
+          ptyProcessId: process.ptyProcessId,
+          harness: session.harness,
         });
         yield* publishChanged(session.id);
         return process.ptyProcessId;
@@ -88,12 +110,42 @@ export const AgentSessionServiceLive = Layer.effect(
           const session = yield* findAgentSessionOrFail(repository, agentSessionId);
           const process = session.activePtyProcess;
           if (session.activePtyProcessId && process?.status === 'running') {
+            console.info('[runtime] Agent session attach reusing running PTY process', {
+              agentSessionId,
+              ptyProcessId: session.activePtyProcessId,
+              harness: session.harness,
+            });
             return session.activePtyProcessId;
           }
           if (session.activePtyProcessId && process?.status === 'starting') {
+            console.info('[runtime] Agent session attach reusing starting PTY process', {
+              agentSessionId,
+              ptyProcessId: session.activePtyProcessId,
+              harness: session.harness,
+            });
             return session.activePtyProcessId;
           }
+          if (!session.activePtyProcessId) {
+            console.info('[runtime] Agent session attach launching fresh PTY process', {
+              agentSessionId,
+              harness: session.harness,
+              cwd: session.cwd,
+            });
+            return yield* launchProcessForSession(session);
+          }
           if (!session.harnessSessionId) {
+            console.warn(
+              '[runtime] Agent session restoration blocked: missing harness session id',
+              {
+                agentSessionId,
+                harness: session.harness,
+                activePtyProcessId: session.activePtyProcessId,
+                activePtyProcessStatus: process?.status ?? null,
+                activePtyProcessStatusReason: process?.statusReason ?? null,
+                activePtyProcessExitCode: process?.exitCode ?? null,
+                activePtyProcessSignal: process?.signal ?? null,
+              },
+            );
             return yield* Effect.fail(
               new AgentSessionError(
                 'harness_session_id_missing',
@@ -101,6 +153,14 @@ export const AgentSessionServiceLive = Layer.effect(
               ),
             );
           }
+          console.info('[runtime] Agent session attach launching resume PTY process', {
+            agentSessionId,
+            harness: session.harness,
+            latestHarnessSessionId: session.harnessSessionId,
+            previousPtyProcessId: session.activePtyProcessId,
+            previousPtyProcessStatus: process?.status ?? null,
+            previousPtyProcessStatusReason: process?.statusReason ?? null,
+          });
           return yield* launchProcessForSession(session);
         }),
       );
@@ -160,6 +220,13 @@ export const AgentSessionServiceLive = Layer.effect(
             agentSessionId: input.agentSessionId,
             harnessSessionId: input.harnessSessionId,
             harnessSessionRefJson: JSON.stringify({ source: input.source }),
+          });
+          console.info('[runtime] Agent harness session observation recorded', {
+            agentSessionId: input.agentSessionId,
+            ptyProcessId: input.ptyProcessId,
+            harness: input.harness,
+            harnessSessionId: input.harnessSessionId,
+            source: input.source,
           });
           yield* publishChanged(input.agentSessionId);
         }),

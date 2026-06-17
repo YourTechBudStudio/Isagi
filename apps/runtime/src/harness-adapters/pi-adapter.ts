@@ -17,11 +17,17 @@ export function buildPiLaunch(
 ) {
   return Effect.gen(function* () {
     const extensionPath = yield* ensurePiExtension(dependencies.dataRoot);
+    console.info('[runtime] Pi harness launch envelope prepared', {
+      agentSessionId: input.agentSessionId,
+      cwd: input.cwd,
+      latestHarnessSessionId: input.latestHarnessSessionId,
+      extensionPath,
+      eventUrl: dependencies.eventUrl,
+    });
     return {
       command: 'pi',
       args: [
         ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
-        '--no-extensions',
         '-e',
         extensionPath,
       ],
@@ -34,12 +40,19 @@ export function buildPiLaunch(
             harness: 'pi' as const,
           })
           .pipe(
-            Effect.map((token) => ({
-              ...launchEnv(),
-              ISAGI_AGENT_SESSION_ID: String(input.agentSessionId),
-              ISAGI_HARNESS_EVENT_URL: dependencies.eventUrl,
-              ISAGI_HARNESS_EVENT_TOKEN: token.token,
-            })),
+            Effect.map((token) => {
+              console.info('[runtime] Pi harness event token created for process launch', {
+                agentSessionId: input.agentSessionId,
+                ptyProcessId,
+                harness: 'pi',
+              });
+              return {
+                ...launchEnv(),
+                ISAGI_AGENT_SESSION_ID: String(input.agentSessionId),
+                ISAGI_HARNESS_EVENT_URL: dependencies.eventUrl,
+                ISAGI_HARNESS_EVENT_TOKEN: token.token,
+              };
+            }),
           ),
     };
   });
@@ -51,6 +64,7 @@ function ensurePiExtension(dataRoot: string) {
       const extensionPath = resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts');
       mkdirSync(dirname(extensionPath), { recursive: true });
       writeFileSync(extensionPath, piExtensionSource(), 'utf8');
+      console.info('[runtime] Pi harness extension artifact written', { extensionPath });
       return extensionPath;
     },
     catch: (cause) =>
@@ -63,18 +77,18 @@ function ensurePiExtension(dataRoot: string) {
 }
 
 function piExtensionSource() {
-  return String.raw`import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-const eventUrl = process.env.ISAGI_HARNESS_EVENT_URL;
+  return String.raw`const eventUrl = process.env.ISAGI_HARNESS_EVENT_URL;
 const eventToken = process.env.ISAGI_HARNESS_EVENT_TOKEN;
 const agentSessionId = Number(process.env.ISAGI_AGENT_SESSION_ID ?? "");
 
-async function observe(source: string, ctx: ExtensionContext) {
+async function observe(source: string, ctx: any) {
   if (!eventUrl || !eventToken || !Number.isSafeInteger(agentSessionId) || agentSessionId <= 0) {
     return;
   }
   const sessionId = ctx.sessionManager.getSessionId();
   if (!sessionId) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1000);
   try {
     await fetch(eventUrl, {
       method: "POST",
@@ -89,13 +103,16 @@ async function observe(source: string, ctx: ExtensionContext) {
         source,
         agentSessionId,
       }),
+      signal: controller.signal,
     });
   } catch {
     // Observation must never block or fail the user's harness interaction.
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: any) {
   pi.on("session_start", async (_event, ctx) => observe("session_start", ctx));
   pi.on("agent_start", async (_event, ctx) => observe("agent_start", ctx));
   pi.on("turn_start", async (_event, ctx) => observe("turn_start", ctx));

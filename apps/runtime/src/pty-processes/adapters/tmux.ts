@@ -70,7 +70,15 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       }
       const sessionName = input.backendSessionName;
       yield* runConfiguredTmux(
-        ['new-session', '-d', '-s', sessionName, '-c', input.cwd, input.command],
+        [
+          'new-session',
+          '-d',
+          '-s',
+          sessionName,
+          '-c',
+          input.cwd,
+          shellCommand(input.command, input.args),
+        ],
         {
           env: input.env,
         },
@@ -237,6 +245,14 @@ function configuredTmuxCommand(args: readonly string[]) {
   }
   command.push(...args);
   return command;
+}
+
+function shellCommand(command: string, args: readonly string[] = []) {
+  return [command, ...args].map(shellQuote).join(' ');
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function tmuxArgs(args: readonly string[]) {

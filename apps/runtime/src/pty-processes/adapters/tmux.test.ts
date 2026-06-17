@@ -48,6 +48,7 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           ptySessionId: 17,
           backendSessionName: 'isagi-session-17',
           command: 'zsh',
+          args: [],
           cwd: '/repo/isagi',
           env: { ...process.env },
           cols: 80,
@@ -103,10 +104,38 @@ test('tmux launch configures Isagi terminal behavior before starting the session
           'isagi-session-17',
           '-c',
           '/repo/isagi',
-          'zsh',
+          "'zsh'",
         ],
       },
     ]);
+  });
+});
+
+test('tmux launch shell-quotes structured command arguments', async () => {
+  await withFakeTmux(async ({ logPath }) => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const backend = yield* TmuxBackend;
+        return yield* backend.launch({
+          ptySessionId: 18,
+          backendSessionName: 'isagi-session-18',
+          command: 'pi',
+          args: ['-e', '/tmp/isagi ext.ts', 'abc$(nope)', "quote'arg", '`ticks`'],
+          cwd: '/repo/isagi',
+          env: { ...process.env },
+          cols: 80,
+          rows: 24,
+          logPath: null,
+          onExit: () => {},
+        });
+      }).pipe(Effect.provide(TmuxBackendLive)),
+    );
+
+    const call = readTmuxCalls(logPath)[0];
+    assert.equal(
+      call?.args.at(-1),
+      "'pi' '-e' '/tmp/isagi ext.ts' 'abc$(nope)' 'quote'\\''arg' '`ticks`'",
+    );
   });
 });
 

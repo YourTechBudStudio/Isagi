@@ -228,16 +228,19 @@ export const worktreeEnvironmentFocusOutputSchema = Schema.Struct({
   activePaneId: Schema.NullOr(positiveIntegerSchema),
 });
 
-export const paneSessionClaimInputSchema = Schema.Union(
+export const paneSessionCreateInputSchema = Schema.Union(
   Schema.Struct({
-    action: Schema.Literal('start_fresh_agent'),
+    kind: Schema.Literal('agent_session'),
     paneId: positiveIntegerSchema,
     harness: agentHarnessSchema,
   }),
   Schema.Struct({
-    action: Schema.Literal('start_fresh_terminal'),
+    kind: Schema.Literal('terminal_session'),
     paneId: positiveIntegerSchema,
   }),
+);
+
+export const paneSessionClaimInputSchema = Schema.Union(
   Schema.Struct({
     action: Schema.Literal('claim_agent_session'),
     paneId: positiveIntegerSchema,
@@ -287,6 +290,7 @@ export const ptyWebSocketErrorCodeSchema = Schema.Literal(
   'active_process_missing',
   'active_process_not_running',
   'harness_session_id_missing',
+  'unsupported_harness',
   'session_already_attached',
   'session_attachment_moved',
   'attach_token_missing',
@@ -374,6 +378,7 @@ export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputS
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
 >;
+export type PaneSessionCreateInput = Schema.Schema.Type<typeof paneSessionCreateInputSchema>;
 export type PaneSessionClaimInput = Schema.Schema.Type<typeof paneSessionClaimInputSchema>;
 export type PaneSessionClaimOutput = Schema.Schema.Type<typeof paneSessionClaimOutputSchema>;
 export type PtyWebSocketInputMessage = Schema.Schema.Type<typeof ptyWebSocketInputMessageSchema>;

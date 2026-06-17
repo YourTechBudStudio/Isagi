@@ -47,6 +47,12 @@ export const HarnessEventServiceLive = Layer.effect(
         Effect.gen(function* () {
           const token = yield* tokens.resolve(input.token);
           if (!token) {
+            console.warn('[runtime] Harness event token lookup failed', {
+              harness: input.event.harness,
+              harnessSessionId: input.event.harnessSessionId,
+              source: input.event.source,
+              eventAgentSessionId: input.event.agentSessionId,
+            });
             return yield* Effect.fail(
               new HarnessEventError({
                 code: 'token_not_found',
@@ -54,6 +60,15 @@ export const HarnessEventServiceLive = Layer.effect(
               }),
             );
           }
+          console.info('[runtime] Harness event token resolved', {
+            tokenAgentSessionId: token.agentSessionId,
+            tokenPtyProcessId: token.ptyProcessId,
+            tokenHarness: token.harness,
+            eventHarness: input.event.harness,
+            eventAgentSessionId: input.event.agentSessionId,
+            harnessSessionId: input.event.harnessSessionId,
+            source: input.event.source,
+          });
           if (token.harness !== input.event.harness) {
             return yield* Effect.fail(
               new HarnessEventError({

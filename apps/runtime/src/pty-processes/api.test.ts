@@ -11,6 +11,7 @@ import {
 } from '@isagi/contracts';
 
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
+import { HarnessAdapterError } from '../harness-adapters/index.js';
 import { SessionLifecycle, SessionLifecycleLive } from '../session-lifecycle/index.js';
 import {
   TerminalSessionService,
@@ -32,6 +33,61 @@ test('PTY websocket API uses durable session-level contract routes', () => {
     terminalSessionPtyWebSocketEndpoint.path,
     '/terminal-sessions/:terminalSessionId/attach',
   );
+});
+
+test('PTY websocket API reports unsupported harness adapter failures with stable protocol code', async () => {
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(
+        AgentSessionService,
+        fakeAgentSessionService({
+          ensureActivePtyProcess: () =>
+            Effect.sleep(1).pipe(
+              Effect.zipRight(
+                Effect.fail(
+                  new HarnessAdapterError(
+                    'unsupported_harness',
+                    'Harness claude is not supported yet.',
+                  ),
+                ),
+              ),
+            ),
+        }),
+      ),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({ onAttachStarted: () => {}, attachPromise: async () => fakeAttachment() }),
+      ),
+      SessionLifecycleLive,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await runtime.runPromise(
+      Effect.gen(function* () {
+        const lifecycle = yield* SessionLifecycle;
+        return yield* lifecycle.issueAttachToken({ kind: 'agent_session', sessionId: 10 });
+      }),
+    );
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const message = await receiveJson(ws);
+    assert.deepEqual(message, {
+      type: 'error',
+      code: 'unsupported_harness',
+      message: 'Harness claude is not supported yet.',
+    });
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
 });
 
 test('PTY websocket API detaches an attachment that resolves after socket close', async () => {
@@ -88,13 +144,16 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
   }
 });
 
-function fakeAgentSessionService(): AgentSessionServiceShape {
+function fakeAgentSessionService(
+  overrides: Partial<AgentSessionServiceShape> = {},
+): AgentSessionServiceShape {
   return {
     startFresh: () => Effect.die('startFresh is not used'),
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
     activePtyProcessId: () => Effect.succeed(20),
     recordHarnessSessionObservation: () => Effect.void,
+    ...overrides,
   } satisfies AgentSessionServiceShape;
 }
 
@@ -133,6 +192,12 @@ function fakePtyService(input: {
     cleanupProcessForDelete: () => Effect.succeed([]),
     cleanupSessionForDelete: () => Effect.succeed([]),
   } satisfies PtyServiceShape;
+}
+
+function receiveJson(ws: { once: (event: 'message', listener: (data: Buffer) => void) => void }) {
+  return new Promise<unknown>((resolve) => {
+    ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+  });
 }
 
 function fakeAttachment(onUnsubscribe: () => void = () => {}) {

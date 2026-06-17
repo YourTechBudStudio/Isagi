@@ -12,6 +12,7 @@ import type {
   DeleteProjectOutput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
+  PaneSessionCreateInput,
   ListProjectBranchesOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
@@ -108,6 +109,13 @@ export function createSurface(
   return getClient().pipe(Effect.flatMap((client) => client.createSurface(worktreeId, kind)));
 }
 
+export function createPaneSession(
+  worktreeId: number,
+  input: PaneSessionCreateInput,
+): Effect.Effect<PaneSessionClaimOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.createPaneSession(worktreeId, input)));
+}
+
 export function claimPaneSession(
   worktreeId: number,
   input: PaneSessionClaimInput,
@@ -121,8 +129,8 @@ export function launchAgentSession(
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return Effect.gen(function* () {
     const surface = yield* createSurface(worktreeId, 'agent');
-    yield* claimPaneSession(worktreeId, {
-      action: 'start_fresh_agent',
+    yield* createPaneSession(worktreeId, {
+      kind: 'agent_session',
       paneId: surface.paneId,
       harness,
     });
@@ -135,8 +143,8 @@ export function launchTerminalSession(
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return Effect.gen(function* () {
     const surface = yield* createSurface(worktreeId, 'terminal');
-    yield* claimPaneSession(worktreeId, {
-      action: 'start_fresh_terminal',
+    yield* createPaneSession(worktreeId, {
+      kind: 'terminal_session',
       paneId: surface.paneId,
     });
     return surface;

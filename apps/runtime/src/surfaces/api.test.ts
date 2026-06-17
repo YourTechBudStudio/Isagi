@@ -217,6 +217,17 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         paneId: 7,
         title: input.kind === 'agent' ? 'Agent' : 'Terminal',
       }),
+    createPaneSession: (input) =>
+      Effect.succeed({
+        worktreeId: input.worktreeId,
+        surfaceId: 42,
+        paneId: input.create.paneId,
+        attachToken: 'test-attach-token',
+        session:
+          input.create.kind === 'terminal_session'
+            ? { kind: 'terminal_session', terminalSessionId: 1 }
+            : { kind: 'agent_session', agentSessionId: 1 },
+      }),
     claimPaneSession: (input) =>
       Effect.succeed({
         worktreeId: input.worktreeId,
@@ -224,20 +235,9 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         paneId: input.claim.paneId,
         attachToken: 'test-attach-token',
         session:
-          input.claim.action === 'start_fresh_terminal' ||
           input.claim.action === 'claim_terminal_session'
-            ? {
-                kind: 'terminal_session',
-                terminalSessionId:
-                  input.claim.action === 'claim_terminal_session'
-                    ? input.claim.terminalSessionId
-                    : 1,
-              }
-            : {
-                kind: 'agent_session',
-                agentSessionId:
-                  input.claim.action === 'claim_agent_session' ? input.claim.agentSessionId : 1,
-              },
+            ? { kind: 'terminal_session', terminalSessionId: input.claim.terminalSessionId }
+            : { kind: 'agent_session', agentSessionId: input.claim.agentSessionId },
       }),
     cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
     createSinglePaneSurface: () =>

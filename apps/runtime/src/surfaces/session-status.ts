@@ -15,7 +15,10 @@ import type {
 
 export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentSessionState {
   const process = session.activePtyProcess;
-  if (!session.activePtyProcessId || !process) {
+  if (!session.activePtyProcessId) {
+    return agentState('starting', null, null, null);
+  }
+  if (!process) {
     return session.harnessSessionId
       ? agentState(
           'failed',
@@ -91,7 +94,10 @@ export function deriveTerminalSessionState(
   session: TerminalSessionRow,
 ): DerivedTerminalSessionState {
   const process = session.activePtyProcess;
-  if (!session.activePtyProcessId || !process) {
+  if (!session.activePtyProcessId) {
+    return terminalState('starting', null, null, null);
+  }
+  if (!process) {
     return terminalState(
       'failed',
       'pty_process_missing',

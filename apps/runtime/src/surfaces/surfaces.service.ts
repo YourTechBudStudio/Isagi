@@ -7,6 +7,7 @@ import type {
   DeleteSurfaceOutput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
+  PaneSessionCreateInput,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
   SurfaceDeleteWarning,
@@ -77,6 +78,10 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly kind: 'agent' | 'terminal';
   }) => Effect.Effect<CreateSurfaceOutput, SurfaceServiceError>;
+  readonly createPaneSession: (input: {
+    readonly worktreeId: number;
+    readonly create: PaneSessionCreateInput;
+  }) => Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError>;
   readonly claimPaneSession: (input: {
     readonly worktreeId: number;
     readonly claim: PaneSessionClaimInput;
@@ -214,6 +219,8 @@ export const SurfaceServiceLive = Layer.effect(
             title: surface.title,
           } satisfies CreateSurfaceOutput;
         }),
+      createPaneSession: (input) =>
+        createPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.create),
       claimPaneSession: (input) =>
         claimPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.claim),
       cleanupWorktreeForDelete: (worktreeId) =>
@@ -272,6 +279,26 @@ function createSinglePaneSurface(
   });
 }
 
+function createPaneSession(
+  repository: SurfaceRepositoryService,
+  agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
+  terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
+  lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  worktreeId: number,
+  create: PaneSessionCreateInput,
+): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
+  return Effect.gen(function* () {
+    const target = yield* loadPaneSessionTarget(repository, worktreeId, create.paneId);
+    const session = yield* resolveCreatedSession(agents, terminals, worktreeId, target.cwd, create);
+    return yield* assignPaneSession(repository, lifecycle, {
+      worktreeId,
+      surfaceId: target.surface.id,
+      paneId: target.pane.id,
+      session,
+    });
+  });
+}
+
 function claimPaneSession(
   repository: SurfaceRepositoryService,
   agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
@@ -281,14 +308,31 @@ function claimPaneSession(
   claim: PaneSessionClaimInput,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
   return Effect.gen(function* () {
-    const pane = yield* repository.findPane(claim.paneId);
+    const target = yield* loadPaneSessionTarget(repository, worktreeId, claim.paneId);
+    const session = yield* resolveClaimSession(agents, terminals, worktreeId, claim);
+    return yield* assignPaneSession(repository, lifecycle, {
+      worktreeId,
+      surfaceId: target.surface.id,
+      paneId: target.pane.id,
+      session,
+    });
+  });
+}
+
+function loadPaneSessionTarget(
+  repository: SurfaceRepositoryService,
+  worktreeId: number,
+  paneId: number,
+) {
+  return Effect.gen(function* () {
+    const pane = yield* repository.findPane(paneId);
     if (!pane)
       return yield* Effect.fail(
         new SurfaceError({
           code: 'pane_not_found',
-          message: `Pane ${claim.paneId} was not found.`,
+          message: `Pane ${paneId} was not found.`,
           worktreeId,
-          paneId: claim.paneId,
+          paneId,
         }),
       );
     const surface = yield* repository.findSurface(pane.surfaceId);
@@ -296,10 +340,10 @@ function claimPaneSession(
       return yield* Effect.fail(
         new SurfaceError({
           code: 'pane_not_found',
-          message: `Pane ${claim.paneId} was not found for worktree ${worktreeId}.`,
+          message: `Pane ${paneId} was not found for worktree ${worktreeId}.`,
           worktreeId,
           surfaceId: pane.surfaceId,
-          paneId: claim.paneId,
+          paneId,
         }),
       );
     const cwd = yield* repository.findWorktreePath(worktreeId);
@@ -311,32 +355,73 @@ function claimPaneSession(
           worktreeId,
         }),
       );
+    return { pane, surface, cwd };
+  });
+}
 
-    const session = yield* resolveClaimSession(agents, terminals, worktreeId, cwd, claim);
-    const key = { kind: session.kind, sessionId: session.sessionId };
+function assignPaneSession(
+  repository: SurfaceRepositoryService,
+  lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly paneId: number;
+    readonly session: {
+      readonly kind: 'agent_session' | 'terminal_session';
+      readonly sessionId: number;
+    };
+  },
+) {
+  return Effect.gen(function* () {
+    const key = { kind: input.session.kind, sessionId: input.session.sessionId };
     yield* repository.claimPaneSession({
-      paneId: claim.paneId,
-      sessionKind: session.kind,
-      sessionId: session.sessionId,
+      paneId: input.paneId,
+      sessionKind: input.session.kind,
+      sessionId: input.session.sessionId,
     });
     yield* lifecycle.supersedeAttachment(key);
     const attachToken = yield* lifecycle.issueAttachToken(key);
     yield* repository.setEnvironmentFocus({
-      worktreeId,
-      activeSurfaceId: surface.id,
-      activePaneId: pane.id,
+      worktreeId: input.worktreeId,
+      activeSurfaceId: input.surfaceId,
+      activePaneId: input.paneId,
     });
 
     return {
-      worktreeId,
-      surfaceId: surface.id,
-      paneId: pane.id,
+      worktreeId: input.worktreeId,
+      surfaceId: input.surfaceId,
+      paneId: input.paneId,
       attachToken: attachToken.token,
       session:
-        session.kind === 'agent_session'
-          ? { kind: 'agent_session', agentSessionId: session.sessionId }
-          : { kind: 'terminal_session', terminalSessionId: session.sessionId },
+        input.session.kind === 'agent_session'
+          ? { kind: 'agent_session', agentSessionId: input.session.sessionId }
+          : { kind: 'terminal_session', terminalSessionId: input.session.sessionId },
     } satisfies PaneSessionClaimOutput;
+  });
+}
+
+function resolveCreatedSession(
+  agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
+  terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
+  worktreeId: number,
+  cwd: string,
+  create: PaneSessionCreateInput,
+): Effect.Effect<
+  { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
+  PaneSessionClaimError
+> {
+  return Effect.gen(function* () {
+    switch (create.kind) {
+      case 'agent_session': {
+        const created = yield* agents.startFresh({ worktreeId, harness: create.harness, cwd });
+        return { kind: 'agent_session' as const, sessionId: created.agentSessionId };
+      }
+      case 'terminal_session': {
+        const created = yield* terminals.startFresh({ worktreeId, cwd });
+        return { kind: 'terminal_session' as const, sessionId: created.terminalSessionId };
+      }
+    }
+    return yield* Effect.die('Unhandled pane session create kind.');
   });
 }
 
@@ -344,7 +429,6 @@ function resolveClaimSession(
   agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
   terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
   worktreeId: number,
-  cwd: string,
   claim: PaneSessionClaimInput,
 ): Effect.Effect<
   { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
@@ -352,14 +436,6 @@ function resolveClaimSession(
 > {
   return Effect.gen(function* () {
     switch (claim.action) {
-      case 'start_fresh_agent': {
-        const created = yield* agents.startFresh({ worktreeId, harness: claim.harness, cwd });
-        return { kind: 'agent_session' as const, sessionId: created.agentSessionId };
-      }
-      case 'start_fresh_terminal': {
-        const created = yield* terminals.startFresh({ worktreeId, cwd });
-        return { kind: 'terminal_session' as const, sessionId: created.terminalSessionId };
-      }
       case 'claim_agent_session': {
         yield* ensureAgentSessionInWorktree(agents, claim.agentSessionId, worktreeId);
         return { kind: 'agent_session' as const, sessionId: claim.agentSessionId };
@@ -369,6 +445,7 @@ function resolveClaimSession(
         return { kind: 'terminal_session' as const, sessionId: claim.terminalSessionId };
       }
     }
+    return yield* Effect.die('Unhandled pane session claim action.');
   });
 }
 

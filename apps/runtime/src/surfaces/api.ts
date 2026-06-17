@@ -91,6 +91,16 @@ export function registerSurfacesApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.createPaneSession, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.createPaneSession({ worktreeId: params.worktreeId, create: input });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.surfaces.claimPaneSession, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {

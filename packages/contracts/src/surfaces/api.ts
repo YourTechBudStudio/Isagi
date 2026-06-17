@@ -7,6 +7,7 @@ import {
   deleteSurfaceOutputSchema,
   paneSessionClaimInputSchema,
   paneSessionClaimOutputSchema,
+  paneSessionCreateInputSchema,
   ptyWebSocketInputMessageSchema,
   ptyWebSocketOutputMessageSchema,
   renameSurfaceInputSchema,
@@ -88,6 +89,15 @@ export const surfacesEndpoints = {
     output: createSurfaceOutputSchema,
     errors: surfaceApiErrorSchema,
   },
+  createPaneSession: {
+    id: 'worktrees.createPaneSession',
+    method: 'POST',
+    path: '/worktrees/:worktreeId/pane-sessions',
+    params: worktreeEnvironmentFocusRouteParamsSchema,
+    body: paneSessionCreateInputSchema,
+    output: paneSessionClaimOutputSchema,
+    errors: surfaceApiErrorSchema,
+  },
   claimPaneSession: {
     id: 'worktrees.claimPaneSession',
     method: 'POST',
@@ -131,6 +141,12 @@ export const surfacesEndpoints = {
   readonly createSurface: ApiEndpoint<
     typeof createSurfaceInputSchema,
     typeof createSurfaceOutputSchema,
+    typeof surfaceApiErrorSchema,
+    typeof worktreeEnvironmentFocusRouteParamsSchema
+  >;
+  readonly createPaneSession: ApiEndpoint<
+    typeof paneSessionCreateInputSchema,
+    typeof paneSessionClaimOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
   >;

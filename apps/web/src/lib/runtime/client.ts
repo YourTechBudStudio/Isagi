@@ -20,6 +20,7 @@ import {
   type DeleteWorktreeOutput,
   type PaneSessionClaimInput,
   type PaneSessionClaimOutput,
+  type PaneSessionCreateInput,
   type SetWorktreeEnvironmentFocusInput,
   type SurfaceDetail,
   type DeleteSurfaceOutput,
@@ -107,6 +108,13 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     CreateSurfaceOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.createSurface>
+  >;
+  readonly createPaneSession: (
+    worktreeId: number,
+    input: PaneSessionCreateInput,
+  ) => Effect.Effect<
+    PaneSessionClaimOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.createPaneSession>
   >;
   readonly claimPaneSession: (
     worktreeId: number,
@@ -205,6 +213,8 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
     createSurface: (worktreeId, kind) =>
       request(apiEndpoints.surfaces.createSurface, { worktreeId }, { kind }),
+    createPaneSession: (worktreeId, input) =>
+      request(apiEndpoints.surfaces.createPaneSession, { worktreeId }, input),
     claimPaneSession: (worktreeId, input) =>
       request(apiEndpoints.surfaces.claimPaneSession, { worktreeId }, input),
     resolveAgentSessionPtyWebSocketUrl: (agentSessionId, attachToken) => {

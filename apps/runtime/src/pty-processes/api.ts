@@ -12,6 +12,7 @@ import {
 } from '@isagi/contracts';
 
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import { HarnessAdapterError } from '../harness-adapters/index.js';
 import { errorMessage } from '../lib/api/index.js';
 import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
 import { DatabaseError } from '../persistence/index.js';
@@ -117,7 +118,18 @@ function registerSessionAttachRoute(
       )
         .then(async (processResult) => {
           if (Either.isLeft(processResult)) {
-            send(socket, { type: 'error', ...websocketError(processResult.left) });
+            const error = websocketError(processResult.left);
+            console.warn(
+              '[runtime] PTY websocket session attach failed before process resolution',
+              {
+                sessionKind: input.sessionKind,
+                sessionId,
+                errorCode: error.code,
+                errorMessage: error.message,
+                cause: processResult.left,
+              },
+            );
+            send(socket, { type: 'error', ...error });
             setImmediate(() => socket.close());
             return;
           }
@@ -129,7 +141,16 @@ function registerSessionAttachRoute(
             }).pipe(Effect.either),
           );
           if (Either.isLeft(planResult)) {
-            send(socket, { type: 'error', ...websocketError(planResult.left) });
+            const error = websocketError(planResult.left);
+            console.warn('[runtime] PTY websocket attachment plan failed', {
+              sessionKind: input.sessionKind,
+              sessionId,
+              ptyProcessId: processResult.right,
+              errorCode: error.code,
+              errorMessage: error.message,
+              cause: planResult.left,
+            });
+            send(socket, { type: 'error', ...error });
             setImmediate(() => socket.close());
             return;
           }
@@ -153,7 +174,16 @@ function registerSessionAttachRoute(
             }).pipe(Effect.either),
           );
           if (Either.isLeft(replayResult)) {
-            send(socket, { type: 'error', ...websocketError(replayResult.left) });
+            const error = websocketError(replayResult.left);
+            console.warn('[runtime] PTY websocket replay failed', {
+              sessionKind: input.sessionKind,
+              sessionId,
+              ptyProcessId: processResult.right,
+              errorCode: error.code,
+              errorMessage: error.message,
+              cause: replayResult.left,
+            });
+            send(socket, { type: 'error', ...error });
             setImmediate(() => socket.close());
             return;
           }
@@ -174,7 +204,16 @@ function registerSessionAttachRoute(
             }).pipe(Effect.either),
           );
           if (Either.isLeft(attachResult)) {
-            send(socket, { type: 'error', ...websocketError(attachResult.left) });
+            const error = websocketError(attachResult.left);
+            console.warn('[runtime] PTY websocket live attach failed', {
+              sessionKind: input.sessionKind,
+              sessionId,
+              ptyProcessId: processResult.right,
+              errorCode: error.code,
+              errorMessage: error.message,
+              cause: attachResult.left,
+            });
+            send(socket, { type: 'error', ...error });
             setImmediate(() => socket.close());
             return;
           }
@@ -210,7 +249,15 @@ function registerSessionAttachRoute(
           flushClientMessages();
         })
         .catch((error: unknown) => {
-          send(socket, { type: 'error', ...websocketError(error) });
+          const socketError = websocketError(error);
+          console.error('[runtime] PTY websocket attach crashed', {
+            sessionKind: input.sessionKind,
+            sessionId,
+            errorCode: socketError.code,
+            errorMessage: socketError.message,
+            cause: error,
+          });
+          send(socket, { type: 'error', ...socketError });
           socket.close();
         });
 
@@ -295,6 +342,9 @@ function websocketError(error: unknown): {
     if (error.code === 'active_process_not_running')
       return { code: 'active_process_not_running', message: error.message };
     return { code: 'session_not_found', message: error.message };
+  }
+  if (error instanceof HarnessAdapterError && error.code === 'unsupported_harness') {
+    return { code: 'unsupported_harness', message: error.message };
   }
   if (error instanceof SessionLifecycleError) {
     if (error.code === 'attach_token_expired')

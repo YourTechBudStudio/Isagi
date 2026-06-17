@@ -52,6 +52,11 @@ export const HarnessEventTokenRegistryLive = Layer.scoped(
             input.ptyProcessId,
             new Set([...(tokensByPtyProcessId.get(input.ptyProcessId) ?? []), token]),
           );
+          console.info('[runtime] Harness event token registered', {
+            agentSessionId: input.agentSessionId,
+            ptyProcessId: input.ptyProcessId,
+            harness: input.harness,
+          });
           return record;
         }),
       resolve: (token) => Effect.sync(() => tokens.get(token) ?? null),
@@ -63,13 +68,23 @@ export const HarnessEventTokenRegistryLive = Layer.scoped(
           const processTokens = tokensByPtyProcessId.get(record.ptyProcessId);
           processTokens?.delete(token);
           if (processTokens?.size === 0) tokensByPtyProcessId.delete(record.ptyProcessId);
+          console.info('[runtime] Harness event token revoked', {
+            agentSessionId: record.agentSessionId,
+            ptyProcessId: record.ptyProcessId,
+            harness: record.harness,
+          });
         }),
       revokeByPtyProcessId: (ptyProcessId) =>
         Effect.sync(() => {
           const processTokens = tokensByPtyProcessId.get(ptyProcessId);
           if (!processTokens) return;
+          const revokedCount = processTokens.size;
           for (const token of processTokens) tokens.delete(token);
           tokensByPtyProcessId.delete(ptyProcessId);
+          console.info('[runtime] Harness event tokens revoked for PTY process', {
+            ptyProcessId,
+            revokedCount,
+          });
         }),
     } satisfies HarnessEventTokenRegistryService;
 

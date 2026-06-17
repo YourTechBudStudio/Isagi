@@ -72,6 +72,12 @@ export const ptyCopy = {
       claim: 'Claim session',
     },
   },
+  unsupportedHarness: {
+    status: 'Unsupported',
+    title: 'Harness not wired yet.',
+    body: "This adapter isn't connected to Isagi's runtime yet. The pane is real; the harness is still a TODO with shoes on.",
+    action: 'Delete pane',
+  },
   renderer: {
     webglFallback: 'WebGL renderer fell back to canvas.',
     webglUnavailable: 'WebGL renderer unavailable; using canvas.',

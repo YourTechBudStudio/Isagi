@@ -574,7 +574,8 @@ function launchWithBackend(input: {
     const startResult = yield* input.backend.launch({
       ptySessionId: input.metadata.ptyProcessId,
       backendSessionName: backendMetadata.backendSessionName,
-      command: shellCommand(input.metadata.command, input.metadata.args),
+      command: input.metadata.command,
+      args: input.metadata.args,
       cwd: input.metadata.cwd,
       env: input.env,
       cols: defaultCols,
@@ -594,12 +595,6 @@ function launchWithBackend(input: {
     });
     return startResult;
   });
-}
-
-function shellCommand(command: string, args: readonly string[]) {
-  return args.length === 0
-    ? command
-    : [command, ...args.map((arg) => JSON.stringify(arg))].join(' ');
 }
 
 function handleAttachFailure(

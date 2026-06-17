@@ -68,6 +68,7 @@ export interface LaunchBackendSessionInput {
   readonly ptySessionId: number;
   readonly backendSessionName: string | null;
   readonly command: string;
+  readonly args: readonly string[];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly cols: number;

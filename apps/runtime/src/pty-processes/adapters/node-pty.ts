@@ -18,6 +18,7 @@ import * as nodePty from 'node-pty';
 
 import type {
   BackendAttachment,
+  LaunchBackendSessionInput,
   NodePtyBackendRef,
   PtyBackend as PtyBackendShape,
 } from '../types.js';
@@ -78,13 +79,7 @@ export const NodePtyBackendLive = Layer.effect(
       launch: (input) =>
         Effect.try({
           try: () => {
-            const pty = nodePty.spawn(input.command, [], {
-              name: 'xterm-256color',
-              cols: input.cols,
-              rows: input.rows,
-              cwd: input.cwd,
-              env: input.env,
-            });
+            const pty = spawnNodePty(input);
             const live: LiveNodePtySession = {
               ptySessionId: input.ptySessionId,
               process: pty,
@@ -214,6 +209,29 @@ export const NodePtyBackendLive = Layer.effect(
     } satisfies PtyBackendShape;
   }),
 );
+
+type NodePtySpawn = typeof nodePty.spawn;
+
+export function spawnNodePty(
+  input: LaunchBackendSessionInput,
+  spawn: NodePtySpawn = nodePty.spawn,
+) {
+  const launch = nodePtyLaunchCommand(input.command, input.args);
+  return spawn(launch.command, launch.args, {
+    name: 'xterm-256color',
+    cols: input.cols,
+    rows: input.rows,
+    cwd: input.cwd,
+    env: input.env,
+  });
+}
+
+export function nodePtyLaunchCommand(command: string, args: readonly string[]) {
+  return {
+    command,
+    args: [...args],
+  };
+}
 
 function appendBackendLog(path: string | null, data: string, ptySessionId: number) {
   if (!path) {

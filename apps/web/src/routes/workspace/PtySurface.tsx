@@ -2,14 +2,22 @@ import { useQueryClient } from '@tanstack/react-query';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import { Effect } from 'effect';
-import { Bot, CirclePlus, RotateCw, SquareTerminal } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Bot,
+  CircleDashed,
+  CirclePlus,
+  RotateCw,
+  SquareTerminal,
+  TriangleAlert,
+} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   AgentSessionMetadata,
   SessionStatus,
   TerminalSessionMetadata,
   PaneSessionClaimInput,
+  PaneSessionCreateInput,
   PtyWebSocketErrorCode,
   PtyWebSocketOutputMessage,
   SurfaceDetail,
@@ -19,7 +27,13 @@ import type {
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
 import { PaneDeleteButton } from '../../components/PaneDeleteButton.js';
-import { ptyCopy, ptySocketErrorCopy } from '../../copy/index.js';
+import {
+  agentPaneAttentionByState,
+  agentSessionCopy,
+  ptyCopy,
+  ptySocketErrorCopy,
+  type AgentPaneRestoreState,
+} from '../../copy/index.js';
 import {
   handleDispatchedCommandError,
   useCommandDispatcher,
@@ -28,6 +42,7 @@ import { resolveActivePaneId } from '../../lib/workspace/model.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/queries.js';
 import {
   claimPaneSession,
+  createPaneSession,
   formatRuntimeError,
   resolveAgentSessionPtyWebSocketUrl,
   resolveTerminalSessionPtyWebSocketUrl,
@@ -125,7 +140,7 @@ function PtyPaneShell({
   readonly onDelete: () => void;
 }) {
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
-  const session = ptyPaneSession(pane.session);
+  const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
   const queryClient = useQueryClient();
   const [movedSession, setMovedSession] = useState<PtyPaneSession | null>(null);
   const [pendingMovedAction, setPendingMovedAction] = useState<'start_fresh' | 'claim' | null>(
@@ -142,6 +157,12 @@ function PtyPaneShell({
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [rendererWarning, setRendererWarning] = useState<string | null>(null);
   const [socketNotice, setSocketNotice] = useState<SocketNotice | null>(null);
+  const [agentSocketRestoreState, setAgentSocketRestoreState] = useState<Exclude<
+    AgentPaneRestoreState,
+    'running' | 'connecting' | 'resuming'
+  > | null>(null);
+  const [agentAttachAttempt, setAgentAttachAttempt] = useState(0);
+  const [retryingAgentRestore, setRetryingAgentRestore] = useState(false);
   const status = liveStatus ?? session?.status ?? null;
   const statusReason = session?.statusReason ?? null;
 
@@ -149,28 +170,47 @@ function PtyPaneShell({
     setLiveStatus(session?.status ?? null);
     setExit({ exitCode: null, signal: null });
     setSocketNotice(null);
+    setAgentSocketRestoreState(null);
     setMovedSession(null);
     setPendingMovedAction(null);
+    setAgentAttachAttempt(0);
+    setRetryingAgentRestore(false);
   }, [session?.id, session?.kind, session?.status, session?.statusReason]);
 
   const moved = movedSession !== null;
-  const dimmed = moved || status === 'exited' || status === 'failed' || status === 'killed';
-  const errored = status === 'failed';
-  const statusReasonNotice = ptyCopy.sessionNotice(status, statusReason);
+  const unsupportedHarness = socketNotice?.code === 'unsupported_harness';
+  const dimmed =
+    moved ||
+    unsupportedHarness ||
+    status === 'exited' ||
+    status === 'failed' ||
+    status === 'killed';
+  const errored = unsupportedHarness || status === 'failed';
+  const agentRestoreState = retryingAgentRestore
+    ? null
+    : (agentSocketRestoreState ??
+      agentPaneRestoreState(session, status, statusReason, socketNotice?.code ?? null));
+  const statusReasonNotice = agentRestoreState
+    ? agentSessionCopy.notice[agentRestoreState]
+    : ptyCopy.sessionNotice(status, statusReason);
   const connectionNotice =
     connection === 'error' || connection === 'disconnected'
       ? ptySocketErrorCopy.byReason(
           connection === 'error' ? 'socket_unavailable' : 'socket_disconnected',
         )
       : null;
-  const paneNotice =
-    movedSession !== null
+  const paneNotice = unsupportedHarness
+    ? null
+    : movedSession !== null
       ? ptySocketErrorCopy.byReason('session_attachment_moved')
-      : ((socketNotice?.kind === 'protocol' ? socketNotice.message : null) ??
-        statusReasonNotice ??
+      : (statusReasonNotice ??
+        (socketNotice?.kind === 'protocol' ? socketNotice.message : null) ??
         socketNotice?.message ??
         connectionNotice ??
         rendererWarning);
+  const attention = agentRestoreState
+    ? agentPaneAttentionByState[agentRestoreState]
+    : pane.attention;
 
   const claimCurrentSession = () => {
     if (!movedSession || pendingMovedAction) return;
@@ -194,7 +234,7 @@ function PtyPaneShell({
     if (!movedSession || pendingMovedAction) return;
     setPendingMovedAction('start_fresh');
     void Effect.runPromise(
-      claimPaneSession(surface.worktreeId, startFreshInputForSession(pane.id, movedSession)),
+      createPaneSession(surface.worktreeId, startFreshInputForSession(pane.id, movedSession)),
     )
       .then(async () => {
         setSocketNotice(null);
@@ -207,6 +247,17 @@ function PtyPaneShell({
       })
       .finally(() => setPendingMovedAction(null));
   };
+
+  const handleSocketNotice = useCallback((notice: SocketNotice | null) => {
+    setSocketNotice(notice);
+    if (notice?.code === 'harness_session_id_missing') {
+      setAgentSocketRestoreState('resume_unavailable');
+      setRetryingAgentRestore(false);
+    }
+    if (notice?.code === 'unsupported_harness') {
+      setRetryingAgentRestore(false);
+    }
+  }, []);
 
   const handleMoved = useCallback(() => {
     if (session) setMovedSession(session);
@@ -224,14 +275,18 @@ function PtyPaneShell({
     >
       <div className="flex min-h-9 items-center gap-2 border-b border-line/15 px-3 py-2">
         <Icon size={13} className="text-fg-subtle" />
-        <AttentionDot state={pane.attention} />
+        <AttentionDot state={attention} />
         <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
         <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {moved
-            ? ptyCopy.movedAttachment.status
-            : session
-              ? ptyCopy.sessionStatus(status, statusReason, exit)
-              : ptyCopy.noSession}
+          {unsupportedHarness
+            ? ptyCopy.unsupportedHarness.status
+            : moved
+              ? ptyCopy.movedAttachment.status
+              : agentRestoreState
+                ? agentSessionCopy.status[agentRestoreState]
+                : session
+                  ? ptyCopy.sessionStatus(status, statusReason, exit)
+                  : ptyCopy.noSession}
         </span>
       </div>
       {paneNotice ? (
@@ -239,7 +294,46 @@ function PtyPaneShell({
           {paneNotice}
         </div>
       ) : null}
-      {movedSession ? (
+      {unsupportedHarness ? (
+        <UnsupportedHarnessState onDelete={onDelete} />
+      ) : agentRestoreState ? (
+        <AgentRestoreStatus
+          state={agentRestoreState}
+          diagnosticDetail={
+            socketNotice?.code === 'harness_session_id_missing'
+              ? socketNotice.message
+              : session?.kind === 'agent_session'
+                ? session.diagnosticDetail
+                : null
+          }
+          onRetry={() => {
+            setSocketNotice(null);
+            setAgentSocketRestoreState(null);
+            setConnection('connecting');
+            setRetryingAgentRestore(true);
+            setAgentAttachAttempt((attempt) => attempt + 1);
+          }}
+          onStartFresh={() => {
+            if (!session || session.kind !== 'agent_session') return;
+            setRetryingAgentRestore(true);
+            void Effect.runPromise(
+              createPaneSession(surface.worktreeId, startFreshInputForSession(pane.id, session)),
+            )
+              .then(async () => {
+                setSocketNotice(null);
+                setAgentSocketRestoreState(null);
+                await queryClient.invalidateQueries({
+                  queryKey: surfaceDetailQueryKey(surface.id),
+                });
+                await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+              })
+              .catch((error: unknown) => {
+                setSocketNotice({ message: formatRuntimeError(error), kind: 'transport' });
+                setRetryingAgentRestore(false);
+              });
+          }}
+        />
+      ) : movedSession ? (
         <MovedAttachmentState
           pendingAction={pendingMovedAction}
           onClaim={claimCurrentSession}
@@ -247,7 +341,7 @@ function PtyPaneShell({
         />
       ) : session ? (
         <XtermPane
-          key={session.id}
+          key={`${session.id}:${agentAttachAttempt}`}
           paneId={pane.id}
           worktreeId={surface.worktreeId}
           session={session}
@@ -256,7 +350,7 @@ function PtyPaneShell({
           onExit={setExit}
           onMoved={handleMoved}
           onRendererWarning={setRendererWarning}
-          onSocketNotice={setSocketNotice}
+          onSocketNotice={handleSocketNotice}
           onStatusChange={setLiveStatus}
         />
       ) : (
@@ -670,10 +764,95 @@ function claimInputForSession(paneId: number, session: PtyPaneSession): PaneSess
     : { action: 'claim_terminal_session', paneId, terminalSessionId: session.id };
 }
 
-function startFreshInputForSession(paneId: number, session: PtyPaneSession): PaneSessionClaimInput {
+function startFreshInputForSession(
+  paneId: number,
+  session: PtyPaneSession,
+): PaneSessionCreateInput {
   return session.kind === 'agent_session'
-    ? { action: 'start_fresh_agent', paneId, harness: session.harness }
-    : { action: 'start_fresh_terminal', paneId };
+    ? { kind: 'agent_session', paneId, harness: session.harness }
+    : { kind: 'terminal_session', paneId };
+}
+
+function agentPaneRestoreState(
+  session: PtyPaneSession | null,
+  status: SessionStatus | null,
+  statusReason: PtyPaneSession['statusReason'] | null,
+  socketCode: PtyWebSocketErrorCode | null,
+): Exclude<AgentPaneRestoreState, 'running' | 'connecting' | 'resuming'> | null {
+  if (!session || session.kind !== 'agent_session') return null;
+  if (socketCode === 'harness_session_id_missing') return 'resume_unavailable';
+  if (statusReason === 'harness_session_id_missing') return 'resume_unavailable';
+  if (statusReason === 'harness_resume_failed') return 'resume_failed';
+  if (status === 'failed' && session.diagnosticCode === 'harness_session_id_missing')
+    return 'resume_unavailable';
+  if (status === 'failed' && session.diagnosticCode === 'harness_resume_failed')
+    return 'resume_failed';
+  return null;
+}
+
+function AgentRestoreStatus({
+  state,
+  diagnosticDetail,
+  onRetry,
+  onStartFresh,
+}: {
+  readonly state: Exclude<AgentPaneRestoreState, 'running' | 'connecting' | 'resuming'>;
+  readonly diagnosticDetail: string | null | undefined;
+  readonly onRetry: () => void;
+  readonly onStartFresh: () => void;
+}) {
+  const Icon = state === 'resume_failed' ? TriangleAlert : CircleDashed;
+  const diagnosticCode = agentSessionCopy.diagnosticCode[state];
+
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <Icon
+          size={18}
+          aria-hidden
+          className={state === 'resume_failed' ? 'text-error' : 'text-waiting'}
+        />
+        <p className="font-mono text-[12px] text-fg-muted">{agentSessionCopy.body[state]}</p>
+        <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+          <span className="text-fg-muted">{diagnosticCode}</span>
+          {diagnosticDetail ? ` · ${diagnosticDetail}` : null}
+        </p>
+        {state === 'resume_failed' ? (
+          <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
+            <Button variant="secondary" size="sm" icon={RotateCw} onClick={onRetry}>
+              {agentSessionCopy.action.retry}
+            </Button>
+            <Button variant="ghost" size="sm" icon={CirclePlus} onClick={onStartFresh}>
+              {agentSessionCopy.action.startFresh}
+            </Button>
+          </div>
+        ) : (
+          <Button variant="secondary" size="sm" icon={CirclePlus} onClick={onStartFresh}>
+            {agentSessionCopy.action.startFresh}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UnsupportedHarnessState({ onDelete }: { readonly onDelete: () => void }) {
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <Bot size={18} aria-hidden className="text-fg-subtle" />
+        <div className="space-y-1">
+          <p className="font-mono text-[12px] text-fg-muted">{ptyCopy.unsupportedHarness.title}</p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+            {ptyCopy.unsupportedHarness.body}
+          </p>
+        </div>
+        <Button variant="danger" size="sm" onClick={onDelete}>
+          {ptyCopy.unsupportedHarness.action}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function MovedAttachmentState({

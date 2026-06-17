@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import process from 'node:process';
 
 import type { AgentHarness } from '@isagi/contracts';
@@ -29,9 +29,17 @@ export function titleForHarness(harness: AgentHarness | null) {
 export function launchEnv() {
   return {
     ...process.env,
+    PATH: pathWithRuntimeNodeBin(process.env.PATH),
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   } satisfies NodeJS.ProcessEnv;
+}
+
+function pathWithRuntimeNodeBin(path: string | undefined) {
+  const nodeBin = dirname(process.execPath);
+  if (!path) return nodeBin;
+  const entries = path.split(delimiter);
+  return entries.includes(nodeBin) ? path : [nodeBin, ...entries].join(delimiter);
 }
 
 export function runtimeNamespace(root: string) {
