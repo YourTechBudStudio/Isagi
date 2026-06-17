@@ -310,9 +310,12 @@ function resolveSessionPtyWebSocketUrl(
 ): Effect.Effect<string, Error> {
   return Effect.gen(function* () {
     const claim = yield* claimPaneSession(worktreeId, claimInputForSession(paneId, session));
-    return yield* session.kind === 'agent_session'
-      ? resolveAgentSessionPtyWebSocketUrl(session.id, claim.attachToken)
-      : resolveTerminalSessionPtyWebSocketUrl(session.id, claim.attachToken);
+    const urlEffect =
+      session.kind === 'agent_session'
+        ? resolveAgentSessionPtyWebSocketUrl(session.id, claim.attachToken)
+        : resolveTerminalSessionPtyWebSocketUrl(session.id, claim.attachToken);
+
+    return yield* urlEffect;
   });
 }
 
