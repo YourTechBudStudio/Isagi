@@ -107,6 +107,12 @@ export const sessionDiagnosticCodeSchema = Schema.Literal(
   'pty_process_not_running',
 );
 
+export const agentSessionRecoveryActionSchema = Schema.Literal(
+  'connect_existing',
+  'resume_existing',
+  'create_replacement',
+);
+
 export const ptyProcessBackendSchema = Schema.Literal('tmux', 'node_pty');
 export const ptyProcessLogModeSchema = Schema.Literal('backend_file', 'none');
 export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');
@@ -128,6 +134,7 @@ export const agentSessionMetadataSchema = Schema.Struct({
   cwd: Schema.String,
   harnessSessionId: Schema.NullOr(Schema.String),
   statusReason: Schema.NullOr(agentSessionStatusReasonSchema),
+  recoveryAction: agentSessionRecoveryActionSchema,
   ...sessionProjectionFields,
 });
 
@@ -355,6 +362,9 @@ export type TerminalSessionStatusReason = Schema.Schema.Type<
   typeof terminalSessionStatusReasonSchema
 >;
 export type SessionDiagnosticCode = Schema.Schema.Type<typeof sessionDiagnosticCodeSchema>;
+export type AgentSessionRecoveryAction = Schema.Schema.Type<
+  typeof agentSessionRecoveryActionSchema
+>;
 export type PtyProcessBackend = Schema.Schema.Type<typeof ptyProcessBackendSchema>;
 export type PtyProcessLogMode = Schema.Schema.Type<typeof ptyProcessLogModeSchema>;
 export type AgentHarness = Schema.Schema.Type<typeof agentHarnessSchema>;

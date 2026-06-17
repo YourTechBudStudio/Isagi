@@ -4,35 +4,35 @@ import type { HarnessEventTokenRegistryService } from '../harness-events/token-r
 import { harnessEnvForProcess } from './env.js';
 import type { HarnessLaunchContext } from './types.js';
 
-export function buildPiLaunch(
+export function buildClaudeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
-    readonly extensionPath: string;
+    readonly settingsPath: string;
     readonly eventUrl: string;
     readonly tokens: HarnessEventTokenRegistryService;
   },
 ) {
   return Effect.sync(() => {
-    console.info('[runtime] Pi harness launch envelope prepared', {
+    console.info('[runtime] Claude harness launch envelope prepared', {
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
-      extensionPath: dependencies.extensionPath,
+      settingsPath: dependencies.settingsPath,
       eventUrl: dependencies.eventUrl,
     });
     return {
-      command: 'pi',
+      command: 'claude',
       args: [
-        ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
-        '-e',
-        dependencies.extensionPath,
+        ...(input.latestHarnessSessionId ? ['--resume', input.latestHarnessSessionId] : []),
+        '--settings',
+        dependencies.settingsPath,
       ],
       cwd: input.cwd,
       envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
           ptyProcessId,
-          harness: 'pi',
+          harness: 'claude',
           eventUrl: dependencies.eventUrl,
           tokens: dependencies.tokens,
         }),

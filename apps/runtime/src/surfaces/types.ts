@@ -1,5 +1,6 @@
 import type {
   AgentHarness,
+  AgentSessionRecoveryAction,
   AgentSessionStatusReason,
   AttentionState,
   PtyProcessBackend,
@@ -114,6 +115,7 @@ export interface DerivedAgentSessionState {
   readonly statusReason: AgentSessionStatusReason | null;
   readonly diagnosticCode: SessionDiagnosticCode | null;
   readonly diagnosticDetail: string | null;
+  readonly recoveryAction: AgentSessionRecoveryAction;
 }
 
 export interface DerivedTerminalSessionState {

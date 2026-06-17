@@ -19,42 +19,45 @@ import {
   type HarnessEventTokenRegistryService,
 } from './token-registry.js';
 
-test('harness event service records an observation against the token-owned agent process', async () => {
-  const observations: Parameters<AgentSessionServiceShape['recordHarnessSessionObservation']>[0][] =
-    [];
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const service = yield* HarnessEventService;
-      yield* service.handle({
-        token: 'valid-token',
-        event: {
-          type: 'harness_session_observed',
-          harness: 'pi',
-          harnessSessionId: 'pi-session-1',
-          source: 'session_start',
-          agentSessionId: 10,
-        },
-      });
-    }).pipe(
-      Effect.provide(
-        testLayer({
-          token: tokenRecord(),
-          observations,
-        }),
+for (const harness of ['pi', 'opencode', 'claude', 'codex'] as const) {
+  test(`harness event service records a ${harness} observation against the token-owned agent process`, async () => {
+    const observations: Parameters<
+      AgentSessionServiceShape['recordHarnessSessionObservation']
+    >[0][] = [];
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* HarnessEventService;
+        yield* service.handle({
+          token: 'valid-token',
+          event: {
+            type: 'harness_session_observed',
+            harness,
+            harnessSessionId: `${harness}-session-1`,
+            source: `${harness}_source`,
+            agentSessionId: 10,
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            token: tokenRecord({ harness }),
+            observations,
+          }),
+        ),
       ),
-    ),
-  );
+    );
 
-  assert.deepEqual(observations, [
-    {
-      agentSessionId: 10,
-      ptyProcessId: 20,
-      harness: 'pi',
-      harnessSessionId: 'pi-session-1',
-      source: 'session_start',
-    },
-  ]);
-});
+    assert.deepEqual(observations, [
+      {
+        agentSessionId: 10,
+        ptyProcessId: 20,
+        harness,
+        harnessSessionId: `${harness}-session-1`,
+        source: `${harness}_source`,
+      },
+    ]);
+  });
+}
 
 test('harness event service rejects a wrong harness for a valid token', async () => {
   const result = await Effect.runPromise(
@@ -164,12 +167,14 @@ function testLayer(input: {
   );
 }
 
-function tokenRecord(): HarnessEventTokenRecord {
+function tokenRecord(
+  input: Partial<Pick<HarnessEventTokenRecord, 'harness'>> = {},
+): HarnessEventTokenRecord {
   return {
     token: 'valid-token',
     agentSessionId: 10,
     ptyProcessId: 20,
-    harness: 'pi',
+    harness: input.harness ?? 'pi',
     createdAt: '2026-06-16T00:00:00.000Z',
   };
 }

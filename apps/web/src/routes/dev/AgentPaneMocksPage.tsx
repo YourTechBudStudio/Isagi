@@ -1,60 +1,73 @@
-import { Bot, CircleDashed, History, Link2, RotateCw, Sparkles, TriangleAlert } from 'lucide-react';
+import { Bot, CircleDashed, CirclePlus, RotateCw, TriangleAlert } from 'lucide-react';
+
+import type { SessionDiagnosticCode } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
 import {
-  agentPaneAttentionByState,
   agentSessionCopy,
-  type AgentPaneRestoreState,
+  paneRestoreAttention,
+  type PaneRestorePrompt,
 } from '../../copy/index.js';
-import type { IconType } from '../../lib/icon.js';
 
 /**
- * Dev-only preview of the agent-pane attach/restore states (plan Phase 1).
+ * Dev-only preview of the agent-pane states.
  *
  * This page is mounted only in development (see App.tsx) so it can never become
  * runtime state. Everything here is presentational: it reproduces the real pane
  * chrome but stands in a faux terminal body instead of a live xterm/websocket.
- * Delete this folder once the states are reviewed and the runtime wiring lands.
+ * The states mirror `derivePaneView` — a live (attached) pane and the three
+ * recovery prompts an agent session can present.
  */
 
+type MockState = PaneRestorePrompt | 'live';
+
 type MockPane = {
-  readonly state: AgentPaneRestoreState;
+  readonly state: MockState;
   readonly title: string;
   readonly caption: string;
-  /** Sample human-readable diagnostic detail for failed/unavailable states. */
+  /** The right-aligned header status label. */
+  readonly status: string;
+  /** The one-line notice bar under the header, when there is one. */
+  readonly notice?: string;
+  /** Sample diagnostic surfaced verbatim in the recovery prompts. */
+  readonly diagnosticCode?: SessionDiagnosticCode;
   readonly diagnosticDetail?: string;
 };
 
 const MOCK_PANES: readonly MockPane[] = [
   {
-    state: 'running',
+    state: 'live',
     title: 'pi · feat/agent-session-tracking',
     caption:
       'Attached to a live process. The harness is interactive — the work surface is the hero.',
+    status: 'Running',
   },
   {
-    state: 'connecting',
-    title: 'pi · feat/agent-session-tracking',
-    caption: 'Reopened a pane whose process is already running. We are reattaching the websocket.',
-  },
-  {
-    state: 'resuming',
-    title: 'claude · fix/scrollback-render',
-    caption:
-      'The runtime restarted; the process is gone. We recreate it and resume the last session.',
-  },
-  {
-    state: 'resume_unavailable',
-    title: 'opencode · spike/harness-events',
-    caption:
-      'No harness session id was ever captured, so there is nothing to resume — only start fresh.',
+    state: 'resume_available',
+    title: 'opencode · chore/runtime-shutdown',
+    caption: 'The process stopped, but claim+attach can resume it on command.',
+    status: agentSessionCopy.status.resume_available,
+    notice: 'The backing process is not running.',
+    diagnosticCode: 'pty_process_not_running',
   },
   {
     state: 'resume_failed',
     title: 'codex · feat/internal-ipc',
     caption: 'Resume was attempted and failed. The pane keeps its evidence and offers a retry.',
+    status: agentSessionCopy.status.resume_failed,
+    notice: 'Could not resume the harness session.',
+    diagnosticCode: 'harness_resume_failed',
     diagnosticDetail: 'harness exited 1 while opening session 0b3f… (no such session)',
+  },
+  {
+    state: 'start_fresh',
+    title: 'opencode · spike/harness-events',
+    caption:
+      'No harness session id was ever captured, so claim+attach would fail — only start fresh.',
+    status: agentSessionCopy.status.start_fresh,
+    notice: 'No harness session was captured for this pane, so a new one will start fresh.',
+    diagnosticCode: 'harness_session_id_missing',
   },
 ];
 
@@ -101,10 +114,10 @@ export function AgentPaneMocksPage() {
 
 function MockAgentPane({ pane, focused }: { readonly pane: MockPane; readonly focused: boolean }) {
   const { state } = pane;
-  const attention = agentPaneAttentionByState[state];
+  const live = state === 'live';
+  const attention = live ? 'working' : paneRestoreAttention[state];
   const errored = state === 'resume_failed';
-  const dimmed = state === 'resume_unavailable' || state === 'resume_failed';
-  const notice = state === 'running' ? null : agentSessionCopy.notice[state];
+  const dimmed = !live;
 
   return (
     <section
@@ -120,79 +133,55 @@ function MockAgentPane({ pane, focused }: { readonly pane: MockPane; readonly fo
         <AttentionDot state={attention} />
         <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
         <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {agentSessionCopy.status[state]}
+          {pane.status}
         </span>
       </div>
-      {notice ? (
+      {pane.notice ? (
         <div className="border-b border-line/12 px-3 py-1.5 font-mono text-[10.5px] text-fg-subtle">
-          {notice}
+          {pane.notice}
         </div>
       ) : null}
-      {state === 'running' ? (
-        <MockTerminalBody />
-      ) : (
-        <RestoreStatus state={state} diagnosticDetail={pane.diagnosticDetail} />
-      )}
+      {live ? <MockTerminalBody /> : <RestorePromptPreview pane={pane} />}
     </section>
   );
 }
 
-/** Per-state indicator icon and tone. Working states breathe (opacity pulse);
- *  the still states hold steady. */
-const RESTORE_INDICATOR: Record<
-  Exclude<AgentPaneRestoreState, 'running'>,
-  { readonly icon: IconType; readonly className: string }
-> = {
-  connecting: { icon: Link2, className: 'text-working animate-breathe' },
-  resuming: { icon: History, className: 'text-working animate-breathe' },
-  resume_unavailable: { icon: CircleDashed, className: 'text-waiting' },
-  resume_failed: { icon: TriangleAlert, className: 'text-error' },
-};
-
 /**
- * A calm stand-in for the live xterm surface in non-running states. Working
- * states get a slow ambient pulse; the still states sit quiet with their
- * diagnostic and the affordance that moves the user forward.
+ * A calm stand-in for the live xterm surface in the recovery states, mirroring
+ * the real `RestorePrompt` in PtySurface.
  */
-function RestoreStatus({
-  state,
-  diagnosticDetail,
-}: {
-  readonly state: Exclude<AgentPaneRestoreState, 'running'>;
-  readonly diagnosticDetail?: string | undefined;
-}) {
-  const indicator = RESTORE_INDICATOR[state];
-  const diagnosticCode =
-    state === 'resume_unavailable' || state === 'resume_failed'
-      ? agentSessionCopy.diagnosticCode[state]
-      : null;
+function RestorePromptPreview({ pane }: { readonly pane: MockPane }) {
+  const prompt = pane.state as PaneRestorePrompt;
+  const Icon = prompt === 'resume_failed' ? TriangleAlert : CircleDashed;
+  const canResume = prompt === 'resume_available' || prompt === 'resume_failed';
 
   return (
     <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
       <div className="flex max-w-sm flex-col items-center gap-3 text-center">
-        <indicator.icon size={18} aria-hidden className={indicator.className} />
-        <p className="font-mono text-[12px] text-fg-muted">{agentSessionCopy.body[state]}</p>
-        {diagnosticCode ? (
+        <Icon
+          size={18}
+          aria-hidden
+          className={prompt === 'resume_failed' ? 'text-error' : 'text-waiting'}
+        />
+        <p className="font-mono text-[12px] text-fg-muted">{agentSessionCopy.body[prompt]}</p>
+        {pane.diagnosticCode ? (
           <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
-            <span className="text-fg-muted">{diagnosticCode}</span>
-            {diagnosticDetail ? ` · ${diagnosticDetail}` : null}
+            <span className="text-fg-muted">{pane.diagnosticCode}</span>
+            {pane.diagnosticDetail ? ` · ${pane.diagnosticDetail}` : null}
           </p>
         ) : null}
-        {state === 'resume_failed' ? (
-          <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
+        <div className="mt-0.5 flex flex-wrap items-center justify-center gap-2">
+          {canResume ? (
             <Button variant="secondary" size="sm" icon={RotateCw}>
-              {agentSessionCopy.action.retry}
+              {prompt === 'resume_failed'
+                ? agentSessionCopy.action.retry
+                : agentSessionCopy.action.resume}
             </Button>
-            <Button variant="ghost" size="sm" icon={Sparkles}>
-              {agentSessionCopy.action.startFresh}
-            </Button>
-          </div>
-        ) : null}
-        {state === 'resume_unavailable' ? (
-          <Button variant="secondary" size="sm" icon={Sparkles}>
+          ) : null}
+          <Button variant={canResume ? 'ghost' : 'secondary'} size="sm" icon={CirclePlus}>
             {agentSessionCopy.action.startFresh}
           </Button>
-        ) : null}
+        </div>
       </div>
     </div>
   );
@@ -204,7 +193,7 @@ function MockTerminalBody() {
     <div className="min-h-0 flex-1 overflow-hidden px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-fg-muted">
       {MOCK_TERMINAL_LINES.map((line) => (
         <div key={line.id} className={line.className}>
-          {line.text || ' '}
+          {line.text || ' '}
         </div>
       ))}
     </div>

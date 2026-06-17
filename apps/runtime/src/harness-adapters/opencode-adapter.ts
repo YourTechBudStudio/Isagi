@@ -1,40 +1,44 @@
+import { pathToFileURL } from 'node:url';
+
 import { Effect } from 'effect';
 
 import type { HarnessEventTokenRegistryService } from '../harness-events/token-registry.js';
 import { harnessEnvForProcess } from './env.js';
 import type { HarnessLaunchContext } from './types.js';
 
-export function buildPiLaunch(
+export function buildOpenCodeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
-    readonly extensionPath: string;
+    readonly pluginPath: string;
     readonly eventUrl: string;
     readonly tokens: HarnessEventTokenRegistryService;
   },
 ) {
   return Effect.sync(() => {
-    console.info('[runtime] Pi harness launch envelope prepared', {
+    const configContent = JSON.stringify({
+      plugin: [pathToFileURL(dependencies.pluginPath).toString()],
+    });
+    console.info('[runtime] OpenCode harness launch envelope prepared', {
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
-      extensionPath: dependencies.extensionPath,
+      pluginPath: dependencies.pluginPath,
       eventUrl: dependencies.eventUrl,
     });
     return {
-      command: 'pi',
-      args: [
-        ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
-        '-e',
-        dependencies.extensionPath,
-      ],
+      command: 'opencode',
+      args: input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : [],
       cwd: input.cwd,
       envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
           ptyProcessId,
-          harness: 'pi',
+          harness: 'opencode',
           eventUrl: dependencies.eventUrl,
           tokens: dependencies.tokens,
+          extraEnv: {
+            OPENCODE_CONFIG_CONTENT: configContent,
+          },
         }),
     };
   });

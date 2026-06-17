@@ -62,6 +62,7 @@ export const missingProjectCopy = {
 export const ptyCopy = {
   emptySurface: 'Nothing running here yet. cmd+k to start something.',
   noSession: 'No session',
+  attaching: 'Attaching',
   emptyPane: "This pane's empty \u2014 nothing's claimed it yet.",
   movedAttachment: {
     status: 'Moved',

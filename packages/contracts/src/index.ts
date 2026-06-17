@@ -161,6 +161,7 @@ export {
 export {
   agentHarnessSchema,
   agentSessionMetadataSchema,
+  agentSessionRecoveryActionSchema,
   agentSessionRouteParamsSchema,
   agentSessionStatusReasonSchema,
   createSurfaceInputSchema,
@@ -199,6 +200,7 @@ export {
 export type {
   AgentHarness,
   AgentSessionMetadata,
+  AgentSessionRecoveryAction,
   AgentSessionRouteParams,
   AgentSessionStatusReason,
   CreateSurfaceInput,

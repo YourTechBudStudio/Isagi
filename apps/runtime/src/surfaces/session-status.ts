@@ -1,4 +1,5 @@
 import type {
+  AgentSessionRecoveryAction,
   AgentSessionStatusReason,
   SessionDiagnosticCode,
   SessionStatus,
@@ -16,7 +17,7 @@ import type {
 export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentSessionState {
   const process = session.activePtyProcess;
   if (!session.activePtyProcessId) {
-    return agentState('starting', null, null, null);
+    return agentState('starting', null, null, null, 'connect_existing');
   }
   if (!process) {
     return session.harnessSessionId
@@ -25,27 +26,36 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
           'pty_process_missing',
           'pty_process_missing',
           'No active PTY process exists for this agent session.',
+          'resume_existing',
         )
       : agentState(
           'failed',
           'harness_session_id_missing',
           'harness_session_id_missing',
           'No harness session id has been captured for this agent session.',
+          'create_replacement',
         );
   }
   switch (process.status) {
     case 'starting':
     case 'running':
-      return agentState(process.status, null, null, null);
+      return agentState(process.status, null, null, null, 'connect_existing');
     case 'killed':
       return agentState(
         'killed',
         process.statusReason === 'runtime_shutdown' ? 'runtime_shutdown' : 'harness_process_killed',
         null,
         null,
+        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
       );
     case 'exited':
-      return agentState('exited', 'harness_process_exited', null, exitDetail(process));
+      return agentState(
+        'exited',
+        'harness_process_exited',
+        null,
+        exitDetail(process),
+        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
+      );
     case 'failed':
       if (process.statusReason === 'backend_launch_failed')
         return session.harnessSessionId
@@ -54,12 +64,14 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
               'harness_resume_failed',
               'harness_resume_failed',
               exitDetail(process),
+              'resume_existing',
             )
           : agentState(
               'failed',
               'harness_launch_failed',
               'harness_launch_failed',
               exitDetail(process),
+              'create_replacement',
             );
       if (process.statusReason === 'backend_attach_failed')
         return agentState(
@@ -67,25 +79,34 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
           'process_attach_failed',
           'pty_process_attach_failed',
           exitDetail(process),
+          session.harnessSessionId ? 'resume_existing' : 'create_replacement',
         );
       if (
         process.statusReason === 'backend_process_missing' ||
         process.statusReason === 'runtime_ephemeral_lost'
       )
         return session.harnessSessionId
-          ? agentState('failed', 'pty_process_missing', 'pty_process_missing', exitDetail(process))
+          ? agentState(
+              'failed',
+              'pty_process_missing',
+              'pty_process_missing',
+              exitDetail(process),
+              'resume_existing',
+            )
           : agentState(
               'failed',
               'harness_session_id_missing',
               'harness_session_id_missing',
               exitDetail(process) ??
                 'No harness session id has been captured for this agent session.',
+              'create_replacement',
             );
       return agentState(
         'failed',
         'harness_process_exited',
         'pty_process_not_running',
         exitDetail(process),
+        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
       );
   }
 }
@@ -157,8 +178,9 @@ function agentState(
   statusReason: AgentSessionStatusReason | null,
   diagnosticCode: SessionDiagnosticCode | null,
   diagnosticDetail: string | null,
+  recoveryAction: AgentSessionRecoveryAction,
 ): DerivedAgentSessionState {
-  return { status, statusReason, diagnosticCode, diagnosticDetail };
+  return { status, statusReason, diagnosticCode, diagnosticDetail, recoveryAction };
 }
 
 function terminalState(

@@ -632,6 +632,7 @@ function sessionForPane(
         harnessSessionId: agent.harnessSessionId,
         status: state.status,
         statusReason: state.statusReason,
+        recoveryAction: state.recoveryAction,
         diagnosticCode: state.diagnosticCode,
         diagnosticDetail: state.diagnosticDetail,
         createdAt: agent.createdAt,
