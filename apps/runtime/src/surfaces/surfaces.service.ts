@@ -1,5 +1,3 @@
-import { unlinkSync } from 'node:fs';
-
 import { Context, Data, Effect, Layer, Schema } from 'effect';
 
 import type {
@@ -11,10 +9,8 @@ import type {
   PaneSessionCreateInput,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
-  SurfaceDeleteWarning,
   SurfaceDetail,
   SurfaceLayoutNode,
-  SurfaceSessionCleanupTarget,
   WorktreeEnvironmentFocusOutput,
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
@@ -22,11 +18,7 @@ import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
 import { displayNameForHarness, HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
-import {
-  PtyService,
-  type PtyLaunchError,
-  type PtyService as PtyServiceShape,
-} from '../pty-processes/pty.service.js';
+import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
@@ -36,7 +28,6 @@ import type {
   AgentSessionRow,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
-  SurfaceDeletePaneTarget,
   SurfacePaneRow,
   TerminalSessionRow,
   WorktreeDeleteCleanupOutput,
@@ -109,7 +100,6 @@ export const SurfaceServiceLive = Layer.effect(
   SurfaceService,
   Effect.gen(function* () {
     const repository = yield* SurfaceRepository;
-    const pty = yield* PtyService;
     const agents = yield* AgentSessionService;
     const terminals = yield* TerminalSessionService;
     const lifecycle = yield* SessionLifecycle;
@@ -169,14 +159,12 @@ export const SurfaceServiceLive = Layer.effect(
       deleteSurface: (surfaceId) =>
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, surfaceId);
-          const cleanup = yield* cleanupLiveSessionsForPanes(pty, target.panes);
           const deleted = yield* repository.deleteSurface(target);
-          const logWarnings = deleteLogsForPanes(target.panes);
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedSessionIds: cleanup.attemptedSessionIds,
-            warnings: [...cleanup.warnings, ...logWarnings],
+            attemptedSessionIds: [],
+            warnings: [],
           } satisfies DeleteSurfaceOutput;
         }),
       deleteSurfacePane: (input) =>
@@ -193,21 +181,12 @@ export const SurfaceServiceLive = Layer.effect(
               }),
             );
           const plan = planSurfacePaneDelete(target, input.paneId);
-          const deletedPaneIds = new Set(plan.deletedPaneIds);
-          const cleanupTarget = {
-            ...target,
-            panes: target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
-          };
-          const cleanup = yield* cleanupLiveSessionsForPanes(pty, cleanupTarget.panes);
           const deleted = yield* repository.deleteSurfacePane({ target, plan });
-          const logWarnings = deleteLogsForPanes(
-            target.panes.filter(({ pane }) => deletedPaneIds.has(pane.id)),
-          );
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedSessionIds: cleanup.attemptedSessionIds,
-            warnings: [...cleanup.warnings, ...logWarnings],
+            attemptedSessionIds: [],
+            warnings: [],
           } satisfies DeleteSurfaceOutput;
         }),
       createSurface: (input) =>
@@ -258,13 +237,9 @@ export const SurfaceServiceLive = Layer.effect(
                 worktreeId,
               }),
             );
-          const targets = yield* repository.listWorktreeDeleteTargets(worktreeId);
-          const panes = targets.flatMap((target) => target.panes);
-          const cleanup = yield* cleanupLiveSessionsForPanes(pty, panes);
-          const logWarnings = deleteLogsForPanes(panes);
           return {
-            attemptedSessionIds: cleanup.attemptedSessionIds,
-            warnings: [...cleanup.warnings, ...logWarnings],
+            attemptedSessionIds: [],
+            warnings: [],
           } satisfies WorktreeDeleteCleanupOutput;
         }),
       createSinglePaneSurface: (input) =>
@@ -571,60 +546,6 @@ function loadDeleteTarget(
       );
     return target;
   });
-}
-
-function cleanupLiveSessionsForPanes(
-  pty: Pick<PtyServiceShape, 'cleanupProcessForDelete'>,
-  panes: readonly SurfaceDeletePaneTarget[],
-) {
-  return Effect.gen(function* () {
-    const attemptedSessionIds: SurfaceSessionCleanupTarget[] = [];
-    const warnings: SurfaceDeleteWarning[] = [];
-    for (const { pane, session } of panes) {
-      if (
-        !session?.activePtyProcess ||
-        (session.activePtyProcess.status !== 'starting' &&
-          session.activePtyProcess.status !== 'running')
-      )
-        continue;
-      attemptedSessionIds.push(session.cleanupTarget);
-      const sessionWarnings = yield* pty.cleanupProcessForDelete({
-        ptyProcessId: session.activePtyProcess.id,
-        paneId: pane.id,
-        session: session.cleanupTarget,
-      });
-      warnings.push(...sessionWarnings);
-    }
-    return { attemptedSessionIds, warnings };
-  });
-}
-
-function deleteLogsForPanes(panes: readonly SurfaceDeletePaneTarget[]) {
-  const warnings: SurfaceDeleteWarning[] = [];
-  for (const { pane, session } of panes) {
-    const logPath = session?.activePtyProcess?.logPath;
-    if (!logPath || !session) continue;
-    try {
-      unlinkSync(logPath);
-    } catch (error) {
-      if (isMissingFileError(error)) continue;
-      warnings.push({
-        code: 'session_log_delete_failed',
-        paneId: pane.id,
-        session: session.cleanupTarget,
-      });
-    }
-  }
-  return warnings;
-}
-
-function isMissingFileError(error: unknown) {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { readonly code?: unknown }).code === 'ENOENT'
-  );
 }
 
 function activePaneForSurface(

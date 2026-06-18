@@ -12,7 +12,7 @@ export interface PtyTerminationState {
   completed: boolean;
   exit: PtyExit | null;
   reason: Extract<PtyProcessStatusReason, 'user_requested' | 'runtime_shutdown'>;
-  outcome: 'persist_killed' | 'delete_session';
+  outcome: 'persist_killed';
 }
 
 export function handleExit(

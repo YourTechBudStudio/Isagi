@@ -11,8 +11,6 @@ import type { PtyRepositoryService } from '../pty.repository.js';
 import { PtyServiceError } from '../types.js';
 
 const orphanLogSampleSize = 5;
-const orphanPtyLogMinAgeMs = 3 * 60 * 60_000;
-const orphanPtyLogGcIntervalMs = 60 * 60_000;
 const replayChunkBytes = 64 * 1024;
 
 export interface OrphanPtyLogCleanupStats {
@@ -63,22 +61,6 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
       .map((path) => relativeProcessLogPath(sessionsPath, path))
       .sort();
   });
-}
-
-export function startOrphanPtyLogGcLoop(repository: PtyRepositoryService, sessionsPath: string) {
-  const timer = setInterval(() => {
-    void Effect.runPromise(
-      cleanupOrphanPtyLogs(repository, sessionsPath, { minAgeMs: orphanPtyLogMinAgeMs }).pipe(
-        Effect.catchAll((error) =>
-          Effect.sync(() => {
-            console.warn('[runtime] PTY orphan log cleanup failed', error);
-          }),
-        ),
-      ),
-    );
-  }, orphanPtyLogGcIntervalMs);
-  timer.unref();
-  return timer;
 }
 
 export function cleanupOrphanPtyLogs(

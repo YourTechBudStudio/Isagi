@@ -188,7 +188,6 @@ function fakePtyService(input: {
     write: () => Effect.void,
     resize: () => Effect.void,
     kill: () => Effect.void,
-    cleanupProcessForDelete: () => Effect.succeed([]),
   } satisfies PtyServiceShape;
 }
 

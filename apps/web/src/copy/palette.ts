@@ -49,9 +49,8 @@ export const paletteCopy = {
 /**
  * Copy for the rename/delete surface + pane actions. Menu and button labels are
  * plain working chrome. The destructive confirmations lean on the danger styling
- * to carry weight, so the words stay flat and factual — and they deliberately do
- * not mention background cleanup, which belongs in the post-delete warning toast
- * (`toastCopy.*CleanupPending`), not a pre-action confirm.
+ * to carry weight, so the words stay flat and factual. Process cleanup is owned
+ * by runtime GC, so confirmation copy does not promise an immediate stop.
  */
 export const surfaceActionsCopy = {
   menu: {
@@ -60,7 +59,7 @@ export const surfaceActionsCopy = {
   },
   deletePane: {
     title: 'Delete this pane?',
-    body: 'This session is still running. Isagi will delete the pane and stop the session.',
+    body: 'This session is still running. Isagi will delete the pane; cleanup runs in the background.',
     confirm: 'Delete pane',
     cancel: 'Cancel',
   },
@@ -76,7 +75,7 @@ export const surfaceActionsCopy = {
     body: (paneCount: number, liveCount: number): string => {
       const panes = paneCount === 1 ? '1 pane' : `${paneCount} panes`;
       const sessions = liveCount === 1 ? '1 session is' : `${liveCount} sessions are`;
-      return `This will delete ${panes}. ${sessions} still running and will be stopped.`;
+      return `This will delete ${panes}. ${sessions} still running; cleanup runs in the background.`;
     },
   },
   renameSurface: {

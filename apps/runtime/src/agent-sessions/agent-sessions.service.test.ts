@@ -228,7 +228,6 @@ function fakePtyService(
     write: () => Effect.die('write is not used'),
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
-    cleanupProcessForDelete: () => Effect.die('cleanupProcessForDelete is not used'),
   } satisfies PtyServiceShape;
 }
 

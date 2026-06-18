@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 
 import { Context, Effect, Either, Layer } from 'effect';
 
-import type { PtyWebSocketOutputMessage, SurfaceDeleteWarning } from '@isagi/contracts';
+import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import {
@@ -19,19 +19,11 @@ import {
 } from './service/attachments.js';
 import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
 import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
-import { runPtyGc, startPtyGcLoop } from './service/gc.js';
+import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
 import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
-import {
-  replayBytesForProcess,
-  replayProcessLog,
-  reportOrphanPtyLogs,
-  startOrphanPtyLogGcLoop,
-} from './service/logs.js';
+import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
 import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
-import {
-  terminatePtyProcessAndPersistKilled,
-  terminatePtyProcessForDelete,
-} from './service/termination.js';
+import { terminatePtyProcessAndPersistKilled } from './service/termination.js';
 import {
   PtyKillError,
   PtyResizeError,
@@ -97,11 +89,6 @@ export interface PtyService {
   readonly kill: (input: {
     readonly ptyProcessId: number;
   }) => Effect.Effect<void, PtyKillProcessError>;
-  readonly cleanupProcessForDelete: (input: {
-    readonly ptyProcessId: number;
-    readonly paneId: number;
-    readonly session: SurfaceDeleteWarning['session'];
-  }) => Effect.Effect<SurfaceDeleteWarning[], DatabaseError>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyProcessService');
@@ -121,10 +108,14 @@ export const PtyServiceLive = Layer.scoped(
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
     yield* reconcilePersistedProcesses(repository, backend, eventBus, { startup: true });
-    yield* runPtyGc(repository, backend, namespace);
+    yield* collectPtyGarbage(repository, backend, namespace, directory.paths.sessionsPath);
     const pollTimer = startStatusPolling(repository, backend, eventBus);
-    const gcTimer = startPtyGcLoop(repository, backend, namespace);
-    const logGcTimer = startOrphanPtyLogGcLoop(repository, directory.paths.sessionsPath);
+    const gcTimer = startPtyGarbageCollector(
+      repository,
+      backend,
+      namespace,
+      directory.paths.sessionsPath,
+    );
 
     const service = {
       launch: (input) =>
@@ -239,24 +230,12 @@ export const PtyServiceLive = Layer.scoped(
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
         }),
-      cleanupProcessForDelete: (input) =>
-        terminatePtyProcessForDelete({
-          repository,
-          backend,
-          eventBus,
-          activeAttachments,
-          terminations,
-          ptyProcessId: input.ptyProcessId,
-          paneId: input.paneId,
-          session: input.session,
-        }),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.gen(function* () {
         clearInterval(pollTimer);
         clearInterval(gcTimer);
-        clearInterval(logGcTimer);
         const sessions = yield* repository
           .listProcesses({ statuses: ['starting', 'running'] })
           .pipe(Effect.orElseSucceed(() => []));

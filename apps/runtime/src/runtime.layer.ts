@@ -91,7 +91,6 @@ const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
 );
 const SessionServicesLayer = Layer.mergeAll(AgentSessionServiceLayer, TerminalSessionServiceLayer);
 const SurfaceServiceLayer = SurfaceServiceLive.pipe(
-  Layer.provide(PtyServiceLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(TerminalSessionServiceLayer),
   Layer.provide(SessionLifecycleLayer),
@@ -100,7 +99,6 @@ const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyService
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
-  Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
 );
 const EventProjectionLayer = RuntimeEventProjectionLive.pipe(

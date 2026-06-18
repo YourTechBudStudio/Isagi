@@ -4,7 +4,7 @@ import { eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
-import { ptyProcesses } from '../persistence/schema.js';
+import { agentSessions, ptyProcesses, terminalSessions } from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
@@ -20,9 +20,11 @@ export interface PtyRepositoryService {
     ptyProcessId: number,
   ) => Effect.Effect<PtyProcessRow | null, DatabaseError>;
   readonly listProcessLogPaths: Effect.Effect<string[], DatabaseError>;
+  readonly listOrphanProcesses: Effect.Effect<PtyProcessRow[], DatabaseError>;
   readonly listProcesses: (input?: {
     readonly statuses?: readonly PtyProcessStatus[];
   }) => Effect.Effect<PtyProcessRow[], DatabaseError>;
+  readonly deleteProcess: (ptyProcessId: number) => Effect.Effect<void, DatabaseError>;
   readonly updateBackendRef: (input: {
     readonly ptyProcessId: number;
     readonly backendRefJson: string;
@@ -100,6 +102,22 @@ export const PtyRepositoryLive = Layer.effect(
           .all()
           .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
+      listOrphanProcesses: database.use('list_orphan_pty_processes', (db) => {
+        const rows = db.select(ptyProcessColumns).from(ptyProcesses).all();
+        const referencedIds = new Set(
+          [
+            ...db
+              .select({ activePtyProcessId: agentSessions.activePtyProcessId })
+              .from(agentSessions)
+              .all(),
+            ...db
+              .select({ activePtyProcessId: terminalSessions.activePtyProcessId })
+              .from(terminalSessions)
+              .all(),
+          ].flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
+        );
+        return rows.filter((row) => !referencedIds.has(row.id)).map(ptyProcessRow);
+      }),
       listProcesses: (input) =>
         database.use('list_pty_processes', (db) => {
           const rows =
@@ -111,6 +129,10 @@ export const PtyRepositoryLive = Layer.effect(
                   .all()
               : db.select(ptyProcessColumns).from(ptyProcesses).all();
           return rows.map(ptyProcessRow);
+        }),
+      deleteProcess: (ptyProcessId) =>
+        database.use('delete_pty_process', (db) => {
+          db.delete(ptyProcesses).where(eq(ptyProcesses.id, ptyProcessId)).run();
         }),
       updateBackendRef: (input) =>
         database.use('update_pty_process_backend_ref', (db) => {
