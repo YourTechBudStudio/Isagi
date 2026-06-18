@@ -127,16 +127,6 @@ export const worktreeActionsCopy = {
       body: 'Git refused to delete the branch safely. The checkout is already gone.',
       diagnosticLabel: 'Git output',
     },
-    cleanupWarning: {
-      title: 'Checkout deleted. Cleanup needs attention.',
-      body: 'The worktree was removed, but Isagi could not finish all session cleanup.',
-      diagnosticLabel: 'Cleanup warnings',
-    },
-    partialWarning: {
-      title: 'Checkout deleted with warnings.',
-      body: 'The branch was not deleted, and Isagi could not finish all session cleanup.',
-      diagnosticLabel: 'Delete details',
-    },
   },
 } as const;
 

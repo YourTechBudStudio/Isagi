@@ -16,7 +16,7 @@ import {
 import { ptyProcesses } from '../persistence/schema.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { collectPtyGarbage } from './service/gc.js';
-import { PtyKillError, type PtyBackend } from './types.js';
+import { PtyInspectError, PtyKillError, type PtyBackend } from './types.js';
 
 function testLayer(dataRoot: string) {
   const dataDirectory = {
@@ -149,6 +149,173 @@ test('PTY GC keeps orphan running processes when backend kill fails', async () =
   }
 });
 
+test('PTY GC keeps orphan running processes when their backend is unavailable in this runtime', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-backend-mismatch-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: oldIso(),
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        // The row was created by the node_pty backend, but the runtime only has
+        // a tmux backend available, so it cannot reach the live process.
+        const backend = fakeBackend({
+          name: 'tmux',
+          inspect: () => Effect.die('a backend must not inspect another backend’s process'),
+          kill: () => Effect.die('a backend must not kill another backend’s process'),
+        });
+
+        yield* collectPtyGarbage(repository, backend, 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC keeps orphan running processes when backend inspection is unavailable', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-inspect-unavailable-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: oldIso(),
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        let kills = 0;
+        const backend = fakeBackend({
+          inspect: () =>
+            Effect.fail(
+              new PtyInspectError({ ptyProcessId: process.id, cause: new Error('down') }),
+            ),
+          kill: () =>
+            Effect.sync(() => {
+              kills += 1;
+            }),
+        });
+
+        yield* collectPtyGarbage(repository, backend, 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+          kills,
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+    assert.equal(output.kills, 0);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC keeps orphan running processes whose backend ref cannot be decoded', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-undecodable-ref-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: oldIso(),
+          backendRefJson: 'not-valid-json',
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        const backend = fakeBackend({
+          inspect: () => Effect.die('an undecodable ref must not be inspected'),
+          kill: () => Effect.die('an undecodable ref must not be killed'),
+        });
+
+        yield* collectPtyGarbage(repository, backend, 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY GC keeps orphan processes whose retention window has not elapsed', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-retention-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: recentIso(),
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        let kills = 0;
+        const backend = fakeBackend({
+          inspect: () => Effect.succeed({ status: 'alive' as const }),
+          kill: () =>
+            Effect.sync(() => {
+              kills += 1;
+            }),
+        });
+
+        yield* collectPtyGarbage(repository, backend, 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+          kills,
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+    assert.equal(output.kills, 0);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('PTY GC deletes old orphan terminal processes without backend inspection', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-terminal-orphan-'));
   try {
@@ -245,6 +412,7 @@ function insertPtyProcess(input: {
   readonly status: 'running' | 'killed';
   readonly logPath: string;
   readonly updatedAt: string;
+  readonly backendRefJson?: string;
 }) {
   return Effect.gen(function* () {
     const repository = yield* PtyRepository;
@@ -257,12 +425,14 @@ function insertPtyProcess(input: {
     yield* repository.updateBackendMetadata({
       ptyProcessId: id,
       backend: 'node_pty',
-      backendRefJson: JSON.stringify({
-        schemaVersion: 1,
-        backend: 'node_pty',
-        ptyProcessId: id,
-        pid: null,
-      }),
+      backendRefJson:
+        input.backendRefJson ??
+        JSON.stringify({
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: id,
+          pid: null,
+        }),
       logMode: 'backend_file',
       logPath: input.logPath,
     });
@@ -282,7 +452,7 @@ function insertPtyProcess(input: {
 }
 
 function fakeBackend(
-  overrides: Partial<Pick<PtyBackend, 'inspect' | 'kill' | 'collectGarbage'>> = {},
+  overrides: Partial<Pick<PtyBackend, 'name' | 'inspect' | 'kill' | 'collectGarbage'>> = {},
 ): PtyBackend {
   return {
     name: 'node_pty',
@@ -304,4 +474,8 @@ function nowMs() {
 
 function oldIso() {
   return new Date(nowMs() - 6 * 60_000).toISOString();
+}
+
+function recentIso() {
+  return new Date(nowMs() - 60_000).toISOString();
 }

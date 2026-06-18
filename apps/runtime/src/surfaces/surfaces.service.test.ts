@@ -522,8 +522,6 @@ test('delete pane updates layout and keeps the remaining pane', async () => {
     assert.deepEqual(output.deleted, {
       deletedSurfaceId: null,
       deletedPaneIds: [output.first.paneId],
-      attemptedSessionIds: [],
-      warnings: [],
     });
     assert.equal(output.deleted.deletedPaneIds.length, 1);
     assert.equal(output.detail.panes.length, 1);
@@ -573,8 +571,6 @@ test('delete last pane deletes the surface and leaves referenced logs for PTY GC
     assert.deepEqual(output.deleted, {
       deletedSurfaceId: output.surface.surfaceId,
       deletedPaneIds: [output.surface.paneId],
-      attemptedSessionIds: [],
-      warnings: [],
     });
     assert.equal(existsSync(output.logPath), true);
     assert.equal(Either.isLeft(output.detail), true);
@@ -620,8 +616,6 @@ test('delete surface leaves log cleanup failures to PTY GC', async () => {
     assert.deepEqual(output.deleted, {
       deletedSurfaceId: output.surface.surfaceId,
       deletedPaneIds: [output.surface.paneId],
-      attemptedSessionIds: [],
-      warnings: [],
     });
     assert.equal(existsSync(output.logPath), true);
     assert.equal(Either.isLeft(output.detail), true);
@@ -659,8 +653,6 @@ test('delete surface leaves live PTY cleanup to PTY GC', async () => {
 
     assert.equal(output.deleted.deletedSurfaceId, output.surface.surfaceId);
     assert.deepEqual(output.deleted.deletedPaneIds, [output.surface.paneId]);
-    assert.deepEqual(output.deleted.attemptedSessionIds, []);
-    assert.deepEqual(output.deleted.warnings, []);
     assert.equal(Either.isLeft(output.detail), true);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -706,56 +698,8 @@ test('delete pane defers every live session when invalid layout escalates to sur
     assert.deepEqual(output.deleted, {
       deletedSurfaceId: output.surface.surfaceId,
       deletedPaneIds: [output.surface.paneId, output.secondPaneId],
-      attemptedSessionIds: [],
-      warnings: [],
     });
     assert.equal(Either.isLeft(output.detail), true);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('cleanup worktree for delete leaves live sessions for PTY GC', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-cleanup-worktree-'));
-  try {
-    const output = await Effect.runPromise(
-      Effect.gen(function* () {
-        const worktreeId = yield* insertWorktree('/repo/isagi');
-        const surfaces = yield* SurfaceService;
-        const first = yield* surfaces.createSinglePaneSurface({
-          worktreeId,
-          kind: 'terminal',
-          titleBase: 'Terminal',
-        });
-        const second = yield* surfaces.createSinglePaneSurface({
-          worktreeId,
-          kind: 'agent',
-          titleBase: 'Agent',
-        });
-        yield* insertPtyProcess({
-          paneId: first.paneId,
-          worktreeId,
-          logPath: null,
-          status: 'running',
-        });
-        yield* insertPtyProcess({
-          paneId: second.paneId,
-          worktreeId,
-          logPath: null,
-          status: 'starting',
-        });
-
-        const cleanup = yield* surfaces.cleanupWorktreeForDelete(worktreeId);
-        const detail = yield* surfaces.getSurfaceDetail(first.surfaceId);
-        return { cleanup, detail };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.deepEqual(output.cleanup, {
-      attemptedSessionIds: [],
-      warnings: [],
-    });
-    assert.equal(output.detail.panes.length, 1);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

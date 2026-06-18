@@ -42,7 +42,7 @@ import {
   type StateFileError,
 } from '../persistence/index.js';
 import { ProjectConfigError } from '../project-config/project-config.service.js';
-import { SurfaceError, SurfaceRepository, SurfaceService } from '../surfaces/index.js';
+import { SurfaceRepository } from '../surfaces/index.js';
 import {
   runPostCreateSetup,
   WorktreeSetupError,
@@ -151,7 +151,6 @@ export const WorkspaceServiceLive = Layer.effect(
     const worktreeSetup = yield* WorktreeSetupService;
     const worktreeSetupRepository = yield* WorktreeSetupRepository;
     const surfaceRepository = yield* SurfaceRepository;
-    const surfaceService = yield* SurfaceService;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -402,23 +401,12 @@ export const WorkspaceServiceLive = Layer.effect(
             );
           }
 
-          const cleanup = yield* surfaceService.cleanupWorktreeForDelete(worktree.id).pipe(
-            Effect.mapError((error) =>
-              error instanceof SurfaceError
-                ? new WorkspaceError({
-                    code: 'worktree_not_found',
-                    message: error.message,
-                    projectId: project.id,
-                    worktreeId: worktree.id,
-                  })
-                : error,
-            ),
-          );
-
-          // Destructive sequencing is deliberate: stop live sessions that may
-          // hold cwd inside the checkout, remove the Git worktree, delete the DB
-          // row so dependent state cascades, then optionally safe-delete the
-          // branch. `checkoutRemovalMode: "force"` does not force branch deletion.
+          // Destructive sequencing is deliberate: the worktree was already
+          // validated above; remove the Git worktree, delete the DB row so
+          // dependent state cascades, then optionally safe-delete the branch.
+          // Live PTY processes are reclaimed asynchronously by the runtime PTY
+          // garbage collector. `checkoutRemovalMode: "force"` does not force
+          // branch deletion.
           yield* git.run(
             input.request.checkoutRemovalMode === 'force'
               ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
@@ -437,7 +425,6 @@ export const WorkspaceServiceLive = Layer.effect(
             deletedWorktreeId: worktree.id,
             selectedWorktreeId: rootWorktree.id,
             branchRemoval,
-            warnings: [...cleanup.warnings],
           } satisfies DeleteWorktreeOutput;
         }),
       registerProject: (input) =>

@@ -74,7 +74,6 @@ const testSurfaceRepository = {
   listTerminalSessionsForPanes: () => Effect.succeed([]),
   findPaneForSession: () => Effect.succeed(null),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
-  listWorktreeDeleteTargets: () => Effect.succeed([]),
   renameSurface: () => Effect.die('surface rename is not used by workspace snapshot tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace snapshot tests'),
   deleteSurfacePane: () =>
@@ -95,7 +94,6 @@ const testSurfaceService = {
   launchAgentSurface: () => Effect.die('agent surface launch is not used by workspace tests'),
   createPaneSession: () => Effect.die('surface pane session create is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
-  cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
 } satisfies SurfaceServiceShape;

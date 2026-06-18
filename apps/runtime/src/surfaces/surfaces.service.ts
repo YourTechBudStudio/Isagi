@@ -30,7 +30,6 @@ import type {
   CreateSinglePaneSurfaceOutput,
   SurfacePaneRow,
   TerminalSessionRow,
-  WorktreeDeleteCleanupOutput,
 } from './types.js';
 
 export class SurfaceError extends Data.TaggedError('SurfaceError')<{
@@ -82,9 +81,6 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly claim: PaneSessionClaimInput;
   }) => Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError>;
-  readonly cleanupWorktreeForDelete: (
-    worktreeId: number,
-  ) => Effect.Effect<WorktreeDeleteCleanupOutput, SurfaceServiceError>;
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, SurfaceServiceError>;
@@ -163,8 +159,6 @@ export const SurfaceServiceLive = Layer.effect(
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedSessionIds: [],
-            warnings: [],
           } satisfies DeleteSurfaceOutput;
         }),
       deleteSurfacePane: (input) =>
@@ -185,8 +179,6 @@ export const SurfaceServiceLive = Layer.effect(
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
-            attemptedSessionIds: [],
-            warnings: [],
           } satisfies DeleteSurfaceOutput;
         }),
       createSurface: (input) =>
@@ -226,22 +218,6 @@ export const SurfaceServiceLive = Layer.effect(
         createPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.create),
       claimPaneSession: (input) =>
         claimPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.claim),
-      cleanupWorktreeForDelete: (worktreeId) =>
-        Effect.gen(function* () {
-          const exists = yield* repository.worktreeExists(worktreeId);
-          if (!exists)
-            return yield* Effect.fail(
-              new SurfaceError({
-                code: 'worktree_not_found',
-                message: `Worktree ${worktreeId} was not found.`,
-                worktreeId,
-              }),
-            );
-          return {
-            attemptedSessionIds: [],
-            warnings: [],
-          } satisfies WorktreeDeleteCleanupOutput;
-        }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
           const exists = yield* repository.worktreeExists(input.worktreeId);

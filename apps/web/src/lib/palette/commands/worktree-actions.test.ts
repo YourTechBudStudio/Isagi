@@ -87,7 +87,6 @@ test('delete-active-worktree renders branch failure as a palette result', async 
       branch: 'feature/delete-me',
       diagnostic: 'error: branch is not fully merged',
     },
-    warnings: [],
   });
 
   const outcome = await deleteActiveWorktreeCommand.run(
@@ -109,55 +108,6 @@ test('delete-active-worktree renders branch failure as a palette result', async 
   assert.equal(
     outcome?.kind === 'result' ? outcome.content.diagnostic?.detail : '',
     'error: branch is not fully merged',
-  );
-});
-
-test('delete-active-worktree combines branch failure and cleanup warnings', async () => {
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { isagi: { getRuntimeUrl: () => Promise.resolve('http://runtime.test') } },
-  });
-  globalThis.fetch = mockDeleteFetch({
-    projectId: 1,
-    deletedWorktreeId: 11,
-    selectedWorktreeId: 10,
-    branchRemoval: {
-      status: 'failed',
-      branch: 'feature/delete-me',
-      diagnostic: 'error: branch is not fully merged',
-    },
-    warnings: [
-      {
-        code: 'session_process_cleanup_failed',
-        paneId: 7,
-        session: { kind: 'terminal_session', terminalSessionId: 70 },
-      },
-    ],
-  });
-
-  const outcome = await deleteActiveWorktreeCommand.run(
-    {
-      projectId: '1',
-      worktreeId: '11',
-      dirty: 'false',
-      deleteMode: 'checkout-and-branch',
-      isRoot: 'false',
-    },
-    ctx({ activeIsRoot: false }),
-  );
-
-  assert.equal(outcome?.kind, 'result');
-  assert.equal(
-    outcome?.kind === 'result' ? outcome.content.title : '',
-    'Checkout deleted with warnings.',
-  );
-  assert.match(
-    outcome?.kind === 'result' ? (outcome.content.diagnostic?.detail ?? '') : '',
-    /error: branch is not fully merged/,
-  );
-  assert.match(
-    outcome?.kind === 'result' ? (outcome.content.diagnostic?.detail ?? '') : '',
-    /session_process_cleanup_failed: pane 7, terminal session 70/,
   );
 });
 

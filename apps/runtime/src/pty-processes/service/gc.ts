@@ -10,6 +10,11 @@ import { cleanupOrphanPtyLogs } from './logs.js';
 
 const ptyGcIntervalMs = 5 * 60_000;
 const orphanPtyProcessRetentionMs = 5 * 60_000;
+// Stray log files (no DB row) share the process retention window by design: a
+// log only reaches this age gate after its row has already been deleted by the
+// orphan-process phase, so the window just absorbs clock skew and a crash
+// between row deletion and log deletion. One retention concept, not two.
+const orphanPtyLogRetentionMs = orphanPtyProcessRetentionMs;
 
 export function startPtyGarbageCollector(
   repository: PtyRepositoryService,
@@ -40,13 +45,30 @@ export function collectPtyGarbage(
   options: { readonly nowMs?: number | undefined } = {},
 ) {
   return Effect.gen(function* () {
-    yield* cleanupBackendProcesses(repository, backend, runtimeNamespace);
-    yield* cleanupOrphanPtyProcesses(repository, backend, options.nowMs ?? Date.now());
+    yield* cleanupBackendProcesses(repository, backend, runtimeNamespace).pipe(
+      tagGcPhaseError('backend_processes'),
+    );
+    yield* cleanupOrphanPtyProcesses(repository, backend, options.nowMs ?? Date.now()).pipe(
+      tagGcPhaseError('orphan_processes'),
+    );
     yield* cleanupOrphanPtyLogs(repository, sessionsPath, {
-      minAgeMs: orphanPtyProcessRetentionMs,
+      minAgeMs: orphanPtyLogRetentionMs,
       nowMs: options.nowMs,
-    });
+    }).pipe(tagGcPhaseError('orphan_logs'));
   });
+}
+
+// Names the phase on the way out so the top-level GC failure log points at the
+// sub-phase that aborted, without swallowing the failure.
+function tagGcPhaseError<A, E, R>(phase: string) {
+  return (effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          console.warn(`[runtime] PTY GC phase failed phase=${phase}`, error);
+        }),
+      ),
+    );
 }
 
 function cleanupBackendProcesses(
@@ -117,7 +139,15 @@ function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow
     }
 
     const ref = yield* decodeBackendRef(process).pipe(Effect.orElseSucceed(() => null));
-    if (!ref) return true;
+    if (!ref) {
+      // The row claims a live process but its backend ref is undecodable, so we
+      // cannot inspect or kill it. Keep the row rather than orphaning a possibly
+      // live backend process with no durable record pointing at it.
+      console.warn(
+        `[runtime] Keeping orphan PTY process because backend ref is undecodable backend=${backend.name} ptyProcessId=${process.id}`,
+      );
+      return false;
+    }
 
     const inspection = yield* backend
       .inspect(ref)
@@ -155,6 +185,10 @@ function cleanupPtyProcessLog(process: PtyProcessRow) {
   }
 }
 
+// Retention is measured from `updatedAt`, which is only bumped on a real status
+// transition (not on session deletion). So the clock effectively starts at the
+// row's last status change, not the moment it became an orphan. This errs toward
+// longer retention for steady-state rows, which is the safe direction.
 function isRetentionElapsed(updatedAt: string, nowMs: number) {
   const updatedMs = Date.parse(updatedAt);
   if (!Number.isFinite(updatedMs)) return true;

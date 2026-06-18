@@ -72,9 +72,6 @@ export interface SurfaceRepositoryService {
   readonly findSurfaceDeleteTarget: (
     surfaceId: number,
   ) => Effect.Effect<SurfaceDeleteTarget | null, DatabaseError>;
-  readonly listWorktreeDeleteTargets: (
-    worktreeId: number,
-  ) => Effect.Effect<SurfaceDeleteTarget[], DatabaseError>;
   readonly renameSurface: (input: {
     readonly surfaceId: number;
     readonly title: string;
@@ -119,14 +116,6 @@ export const SurfaceRepositoryLive = Layer.effect(
     const database = yield* RuntimeDatabase;
     const artifacts = yield* AgentSessionArtifacts;
     const ptyColumns = getTableColumns(ptyProcesses);
-
-    const sessionRowsForPanes = (paneIds: readonly number[]) => {
-      const agents = listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds);
-      const terminals = listTerminalSessionsForPanes(database, ptyColumns, paneIds);
-      return Effect.all([agents, terminals]).pipe(
-        Effect.map(([agentRows, terminalRows]) => ({ agentRows, terminalRows })),
-      );
-    };
 
     return {
       worktreeExists: (worktreeId) =>
@@ -235,50 +224,7 @@ export const SurfaceRepositoryLive = Layer.effect(
               .all()
               .map(paneRow),
           );
-          const { agentRows, terminalRows } = yield* sessionRowsForPanes(
-            panes.map((pane) => pane.id),
-          );
-          return deleteTarget(surface, panes, agentRows, terminalRows);
-        }),
-      listWorktreeDeleteTargets: (worktreeId) =>
-        Effect.gen(function* () {
-          const surfaces = yield* database.use('list_worktree_delete_target_surfaces', (db) =>
-            db
-              .select()
-              .from(worktreeSurfaces)
-              .where(eq(worktreeSurfaces.worktreeId, worktreeId))
-              .orderBy(worktreeSurfaces.sortOrder, worktreeSurfaces.id)
-              .all()
-              .map(surfaceRow),
-          );
-          if (surfaces.length === 0) return [];
-          const panes = yield* database.use('list_worktree_delete_target_panes', (db) =>
-            db
-              .select()
-              .from(surfacePanes)
-              .where(
-                inArray(
-                  surfacePanes.surfaceId,
-                  surfaces.map((surface) => surface.id),
-                ),
-              )
-              .orderBy(surfacePanes.surfaceId, surfacePanes.sortOrder, surfacePanes.id)
-              .all()
-              .map(paneRow),
-          );
-          const { agentRows, terminalRows } = yield* sessionRowsForPanes(
-            panes.map((pane) => pane.id),
-          );
-          const panesBySurfaceId = new Map<number, SurfacePaneRow[]>();
-          for (const pane of panes) {
-            panesBySurfaceId.set(pane.surfaceId, [
-              ...(panesBySurfaceId.get(pane.surfaceId) ?? []),
-              pane,
-            ]);
-          }
-          return surfaces.map((surface) =>
-            deleteTarget(surface, panesBySurfaceId.get(surface.id) ?? [], agentRows, terminalRows),
-          );
+          return deleteTarget(surface, panes);
         }),
       renameSurface: (input) =>
         database.use('rename_surface', (db) => {
@@ -531,45 +477,10 @@ function createSinglePaneSurfaceRows(
   return { surfaceId: surface.id, paneId: pane.id, title };
 }
 
-function deleteTarget(
-  surface: SurfaceRow,
-  panes: readonly SurfacePaneRow[],
-  agents: readonly AgentSessionRow[],
-  terminals: readonly TerminalSessionRow[],
-): SurfaceDeleteTarget {
-  const agentById = new Map(agents.map((session) => [session.id, session]));
-  const terminalById = new Map(terminals.map((session) => [session.id, session]));
+function deleteTarget(surface: SurfaceRow, panes: readonly SurfacePaneRow[]): SurfaceDeleteTarget {
   return {
     surface,
-    panes: panes.map((pane) => {
-      if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
-        const agent = agentById.get(pane.sessionId);
-        if (agent) {
-          return {
-            pane,
-            session: {
-              cleanupTarget: { kind: 'agent_session', agentSessionId: agent.id },
-              activePtyProcessId: agent.activePtyProcessId,
-              activePtyProcess: agent.activePtyProcess,
-            },
-          };
-        }
-      }
-      if (pane.sessionKind === 'terminal_session' && pane.sessionId !== null) {
-        const terminal = terminalById.get(pane.sessionId);
-        if (terminal) {
-          return {
-            pane,
-            session: {
-              cleanupTarget: { kind: 'terminal_session', terminalSessionId: terminal.id },
-              activePtyProcessId: terminal.activePtyProcessId,
-              activePtyProcess: terminal.activePtyProcess,
-            },
-          };
-        }
-      }
-      return { pane, session: null };
-    }),
+    panes: panes.map((pane) => ({ pane })),
   };
 }
 

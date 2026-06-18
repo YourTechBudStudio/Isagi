@@ -159,18 +159,9 @@ test('delete surface success refetches workspace and clears only stale local ove
   await commitDeleteSurfaceSuccess(client, {
     worktreeId: 10,
     surfaceId: 501,
-    operation: 'surface',
     output: {
       deletedSurfaceId: 501,
       deletedPaneIds: [601],
-      attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 701 }],
-      warnings: [
-        {
-          code: 'session_process_cleanup_failed',
-          paneId: 601,
-          session: { kind: 'terminal_session', terminalSessionId: 701 },
-        },
-      ],
     },
     fetchWorkspaceData: async () => ({
       projects: [
@@ -187,12 +178,6 @@ test('delete surface success refetches workspace and clears only stale local ove
   assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 20: 999 });
   assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, { 999: 1001 });
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
-  const toast = useToastStore
-    .getState()
-    .toasts.find((candidate) => candidate.id === 'surface-cleanup-pending:501');
-  assert.equal(toast?.title, 'Surface deleted.');
-  assert.equal(toast?.subtitle, 'Cleanup will retry in the background.');
-  clearToasts();
 });
 
 test('delete pane success clears only the deleted pane override', async () => {
@@ -207,12 +192,9 @@ test('delete pane success clears only the deleted pane override', async () => {
     worktreeId: 10,
     surfaceId: 501,
     paneId: 601,
-    operation: 'pane',
     output: {
       deletedSurfaceId: null,
       deletedPaneIds: [601],
-      attemptedSessionIds: [],
-      warnings: [],
     },
     fetchWorkspaceData: async () => ({
       projects: [
@@ -242,7 +224,6 @@ test('delete worktree success refetches workspace and selects returned root work
       deletedWorktreeId: 11,
       selectedWorktreeId: 10,
       branchRemoval: { status: 'not_requested' },
-      warnings: [],
     },
     async () => {
       events.push(`fetch:${useWorkspaceStore.getState().selection.kind}`);
@@ -282,7 +263,6 @@ test('delete worktree success falls back through selection reconciliation when r
       deletedWorktreeId: 11,
       selectedWorktreeId: 999,
       branchRemoval: { status: 'not_requested' },
-      warnings: [],
     },
     async () => ({
       projects: [
@@ -454,12 +434,9 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
     await commitDeleteSurfaceSuccess(queryClient, {
       worktreeId: 10,
       surfaceId: 101,
-      operation: 'surface',
       output: {
         deletedSurfaceId: 101,
         deletedPaneIds: [201],
-        attemptedSessionIds: [],
-        warnings: [],
       },
       fetchWorkspaceData: async () => ({
         projects: [

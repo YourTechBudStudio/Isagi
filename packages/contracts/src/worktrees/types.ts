@@ -1,7 +1,5 @@
 import { Schema } from 'effect';
 
-import { surfaceDeleteWarningSchema } from '../surfaces/types.js';
-
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const projectWorktreeRouteParamsSchema = Schema.Struct({
@@ -82,7 +80,6 @@ export const deleteWorktreeOutputSchema = Schema.Struct({
   deletedWorktreeId: positiveIntegerSchema,
   selectedWorktreeId: positiveIntegerSchema,
   branchRemoval: worktreeBranchRemovalSchema,
-  warnings: Schema.Array(surfaceDeleteWarningSchema),
 });
 
 export const worktreeSetupLifecycleSchema = Schema.Literal('post_create');

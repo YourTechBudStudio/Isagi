@@ -19,11 +19,9 @@ export type {
   PtyProcessRecord,
   RenameSurfaceOutput,
   SurfaceDeletePaneTarget,
-  SurfaceDeleteSessionTarget,
   SurfaceDeleteTarget,
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
   TerminalSessionRow,
-  WorktreeDeleteCleanupOutput,
 } from './types.js';

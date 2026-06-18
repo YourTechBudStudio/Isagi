@@ -46,14 +46,6 @@ test('surface delete route returns contract delete output', async () => {
         Effect.succeed({
           deletedSurfaceId: surfaceId,
           deletedPaneIds: [7, 8],
-          attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 70 }],
-          warnings: [
-            {
-              code: 'session_process_cleanup_failed',
-              paneId: 7,
-              session: { kind: 'terminal_session', terminalSessionId: 70 },
-            },
-          ],
         }),
     }),
     async (fastify) => {
@@ -67,14 +59,6 @@ test('surface delete route returns contract delete output', async () => {
       assert.deepEqual(payload.data, {
         deletedSurfaceId: 42,
         deletedPaneIds: [7, 8],
-        attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 70 }],
-        warnings: [
-          {
-            code: 'session_process_cleanup_failed',
-            paneId: 7,
-            session: { kind: 'terminal_session', terminalSessionId: 70 },
-          },
-        ],
       });
     },
   );
@@ -90,8 +74,6 @@ test('surface pane delete route decodes both route params', async () => {
           return {
             deletedSurfaceId: null,
             deletedPaneIds: [request.paneId],
-            attemptedSessionIds: [],
-            warnings: [],
           };
         }),
     }),
@@ -107,8 +89,6 @@ test('surface pane delete route decodes both route params', async () => {
       assert.deepEqual(payload.data, {
         deletedSurfaceId: null,
         deletedPaneIds: [7],
-        attemptedSessionIds: [],
-        warnings: [],
       });
     },
   );
@@ -240,15 +220,11 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
       Effect.succeed({
         deletedSurfaceId: surfaceId,
         deletedPaneIds: [],
-        attemptedSessionIds: [],
-        warnings: [],
       }),
     deleteSurfacePane: (input) =>
       Effect.succeed({
         deletedSurfaceId: null,
         deletedPaneIds: [input.paneId],
-        attemptedSessionIds: [],
-        warnings: [],
       }),
     createSurface: (input) =>
       Effect.succeed({
@@ -286,7 +262,6 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
             ? { kind: 'terminal_session', terminalSessionId: input.claim.terminalSessionId }
             : { kind: 'agent_session', agentSessionId: input.claim.agentSessionId },
       }),
-    cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),
     createSinglePaneSurface: () =>
       Effect.die('createSinglePaneSurface is not used by surface API tests'),
     setWorktreeEnvironmentFocus: (input) =>

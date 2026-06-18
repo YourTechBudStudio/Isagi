@@ -12,7 +12,6 @@ import type {
   OpenWorktreeOutput,
   ReconciliationFinding,
   SetActiveContextInput,
-  SurfaceDeleteWarning,
 } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
@@ -173,7 +172,6 @@ export async function deleteSurfaceFromPalette(input: {
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
       output,
-      operation: 'surface',
     });
     return output;
   } catch (error) {
@@ -194,7 +192,6 @@ export async function deleteSurfacePaneFromPalette(input: {
       surfaceId: input.surfaceId,
       paneId: input.paneId,
       output,
-      operation: 'pane',
     });
     return output;
   } catch (error) {
@@ -254,7 +251,6 @@ export async function commitDeleteSurfaceSuccess(
     readonly surfaceId: number;
     readonly paneId?: number | undefined;
     readonly output: DeleteSurfaceOutput;
-    readonly operation: 'pane' | 'surface';
     readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
   },
 ) {
@@ -279,8 +275,6 @@ export async function commitDeleteSurfaceSuccess(
     store.forgetPane(input.surfaceId, input.paneId);
     await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
   }
-
-  showCleanupWarning(input.operation, input.surfaceId, input.output.warnings);
 }
 
 export async function commitDeleteWorktreeSuccess(
@@ -442,25 +436,6 @@ let lastActiveContextRevision = Date.now();
 function nextActiveContextRevision() {
   lastActiveContextRevision = Math.max(Date.now(), lastActiveContextRevision + 1);
   return lastActiveContextRevision;
-}
-
-function showCleanupWarning(
-  operation: 'pane' | 'surface',
-  surfaceId: number,
-  warnings: readonly SurfaceDeleteWarning[],
-) {
-  if (warnings.length === 0) {
-    return;
-  }
-
-  const copy =
-    operation === 'pane' ? toastCopy.paneCleanupPending : toastCopy.surfaceCleanupPending;
-  showToast({
-    id: `${operation}-cleanup-pending:${surfaceId}`,
-    kind: 'warning',
-    title: copy.title,
-    subtitle: copy.subtitle,
-  });
 }
 
 function handleReconciliationFindings(findings: readonly ReconciliationFinding[]) {

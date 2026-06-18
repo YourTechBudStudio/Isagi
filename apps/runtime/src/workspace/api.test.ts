@@ -146,7 +146,6 @@ const deleteWorktreeOutput = {
     status: 'deleted',
     branch: 'feature/delete-me',
   },
-  warnings: [],
 } satisfies DeleteWorktreeOutput;
 
 const workspaceSnapshot = {

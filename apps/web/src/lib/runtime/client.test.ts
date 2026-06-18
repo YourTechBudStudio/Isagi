@@ -60,8 +60,6 @@ const renameSurfaceOutput = {
 const deleteSurfaceOutput = {
   deletedSurfaceId: 7,
   deletedPaneIds: [11],
-  attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 13 }],
-  warnings: [],
 } satisfies DeleteSurfaceOutput;
 
 const launchAgentSurfaceOutput = {

@@ -1,11 +1,7 @@
 import { Effect } from 'effect';
 import { Trash2 } from 'lucide-react';
 
-import type {
-  DeleteWorktreeInput,
-  DeleteWorktreeOutput,
-  SurfaceDeleteWarning,
-} from '@isagi/contracts';
+import type { DeleteWorktreeInput, DeleteWorktreeOutput } from '@isagi/contracts';
 
 import { worktreeActionsCopy } from '../../../copy/index.js';
 import { deleteWorktreeFromPalette } from '../../workspace/queries.js';
@@ -108,7 +104,7 @@ export const deleteActiveWorktreeCommand: PaletteCommand = {
       branchRemovalMode: values.deleteMode === CHECKOUT_AND_BRANCH ? 'delete_if_safe' : 'preserve',
     };
     const output = await deleteWorktreeFromPalette(target.projectId, target.worktreeId, request);
-    const partialWarning = deletePartialWarning(output.branchRemoval, output.warnings);
+    const partialWarning = deletePartialWarning(output.branchRemoval);
     if (partialWarning) {
       return {
         kind: 'result',
@@ -156,41 +152,9 @@ function dirtyCheckoutReview(path: string | undefined): ReviewContent {
   };
 }
 
-function cleanupWarningDetail(warnings: readonly SurfaceDeleteWarning[]) {
-  return warnings
-    .map((warning) => {
-      const pane = `pane ${warning.paneId}`;
-      const session =
-        warning.session.kind === 'agent_session'
-          ? `agent session ${warning.session.agentSessionId}`
-          : `terminal session ${warning.session.terminalSessionId}`;
-      return `${warning.code}: ${pane}, ${session}`;
-    })
-    .join('\n');
-}
-
 function deletePartialWarning(
   branchRemoval: DeleteWorktreeOutput['branchRemoval'],
-  warnings: readonly SurfaceDeleteWarning[],
 ): CommandResultContent | null {
-  if (branchRemoval.status === 'failed' && warnings.length > 0) {
-    return {
-      tone: 'warning',
-      title: worktreeActionsCopy.deleteWorktree.partialWarning.title,
-      body: worktreeActionsCopy.deleteWorktree.partialWarning.body,
-      diagnostic: {
-        label: worktreeActionsCopy.deleteWorktree.partialWarning.diagnosticLabel,
-        detail: [
-          `${worktreeActionsCopy.deleteWorktree.branchDeleteFailed.diagnosticLabel}:`,
-          branchRemoval.diagnostic,
-          '',
-          `${worktreeActionsCopy.deleteWorktree.cleanupWarning.diagnosticLabel}:`,
-          cleanupWarningDetail(warnings),
-        ].join('\n'),
-      },
-    };
-  }
-
   if (branchRemoval.status === 'failed') {
     return {
       tone: 'warning',
@@ -199,18 +163,6 @@ function deletePartialWarning(
       diagnostic: {
         label: worktreeActionsCopy.deleteWorktree.branchDeleteFailed.diagnosticLabel,
         detail: branchRemoval.diagnostic,
-      },
-    };
-  }
-
-  if (warnings.length > 0) {
-    return {
-      tone: 'warning',
-      title: worktreeActionsCopy.deleteWorktree.cleanupWarning.title,
-      body: worktreeActionsCopy.deleteWorktree.cleanupWarning.body,
-      diagnostic: {
-        label: worktreeActionsCopy.deleteWorktree.cleanupWarning.diagnosticLabel,
-        detail: cleanupWarningDetail(warnings),
       },
     };
   }

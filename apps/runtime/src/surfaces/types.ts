@@ -8,8 +8,6 @@ import type {
   RuntimeSurfaceKind,
   SessionDiagnosticCode,
   SessionStatus,
-  SurfaceDeleteWarning,
-  SurfaceSessionCleanupTarget,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
@@ -144,23 +142,11 @@ export interface CreateSinglePaneSurfaceOutput {
 
 export interface SurfaceDeletePaneTarget {
   readonly pane: SurfacePaneRow;
-  readonly session: SurfaceDeleteSessionTarget | null;
-}
-
-export interface SurfaceDeleteSessionTarget {
-  readonly cleanupTarget: SurfaceSessionCleanupTarget;
-  readonly activePtyProcessId: number | null;
-  readonly activePtyProcess: PtyProcessRow | null;
 }
 
 export interface SurfaceDeleteTarget {
   readonly surface: SurfaceRow;
   readonly panes: readonly SurfaceDeletePaneTarget[];
-}
-
-export interface WorktreeDeleteCleanupOutput {
-  readonly attemptedSessionIds: readonly SurfaceSessionCleanupTarget[];
-  readonly warnings: readonly SurfaceDeleteWarning[];
 }
 
 export interface RenameSurfaceOutput {

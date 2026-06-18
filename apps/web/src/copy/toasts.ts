@@ -18,14 +18,6 @@ export const toastCopy = {
   workbenchCommandFailed: {
     title: 'Could not run that command.',
   },
-  paneCleanupPending: {
-    title: 'Pane deleted.',
-    subtitle: 'Cleanup will retry in the background.',
-  },
-  surfaceCleanupPending: {
-    title: 'Surface deleted.',
-    subtitle: 'Cleanup will retry in the background.',
-  },
   surfaceFocusPersistFailed: {
     title: 'Could not save the active surface.',
     subtitle: 'This switch is local; restart may reopen another surface.',

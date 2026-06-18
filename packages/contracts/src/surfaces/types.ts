@@ -211,28 +211,9 @@ export const renameSurfaceOutputSchema = Schema.Struct({
   title: Schema.String,
 });
 
-export const surfaceSessionCleanupTargetSchema = Schema.Union(
-  Schema.Struct({
-    kind: Schema.Literal('agent_session'),
-    agentSessionId: positiveIntegerSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('terminal_session'),
-    terminalSessionId: positiveIntegerSchema,
-  }),
-);
-
-export const surfaceDeleteWarningSchema = Schema.Struct({
-  code: Schema.Literal('session_process_cleanup_failed', 'session_log_delete_failed'),
-  paneId: positiveIntegerSchema,
-  session: surfaceSessionCleanupTargetSchema,
-});
-
 export const deleteSurfaceOutputSchema = Schema.Struct({
   deletedSurfaceId: Schema.NullOr(positiveIntegerSchema),
   deletedPaneIds: Schema.Array(positiveIntegerSchema),
-  attemptedSessionIds: Schema.Array(surfaceSessionCleanupTargetSchema),
-  warnings: Schema.Array(surfaceDeleteWarningSchema),
 });
 
 export const worktreeEnvironmentFocusOutputSchema = Schema.Struct({
@@ -387,10 +368,6 @@ export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputS
 export type LaunchAgentSurfaceInput = Schema.Schema.Type<typeof launchAgentSurfaceInputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
-export type SurfaceSessionCleanupTarget = Schema.Schema.Type<
-  typeof surfaceSessionCleanupTargetSchema
->;
-export type SurfaceDeleteWarning = Schema.Schema.Type<typeof surfaceDeleteWarningSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;
 export type WorktreeEnvironmentFocusOutput = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusOutputSchema
