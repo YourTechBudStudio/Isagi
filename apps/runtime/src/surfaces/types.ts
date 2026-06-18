@@ -2,7 +2,6 @@ import type {
   AgentHarness,
   AgentSessionRecoveryAction,
   AgentSessionStatusReason,
-  AttentionState,
   PtyProcessBackend,
   PtyProcessLogMode,
   RuntimeSurfaceKind,
@@ -22,7 +21,6 @@ export interface SurfaceMetadataRow {
   readonly worktreeId: number;
   readonly kind: RuntimeSurfaceKind;
   readonly title: string;
-  readonly attention: AttentionState;
   readonly sortOrder: number;
 }
 

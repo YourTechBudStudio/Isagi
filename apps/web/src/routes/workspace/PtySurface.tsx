@@ -23,6 +23,7 @@ import {
   syncActivePaneFromSurfaceDetail,
   usePaneFocusTarget,
 } from '../../lib/workspace/activation.js';
+import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
 import {
   resolveActivePaneId,
   resolvePaneFocusAfterDetailChange,
@@ -114,6 +115,7 @@ function PtyPaneShell({
   const shellRef = useRef<HTMLElement>(null);
   const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
+  const paneAttention = useAttentionStore((state) => attentionForPane(state.sourcesByKey, pane.id));
   const focusShell = useCallback(() => {
     shellRef.current?.focus({ preventScroll: true });
   }, []);
@@ -142,7 +144,7 @@ function PtyPaneShell({
     worktreeId: surface.worktreeId,
     surfaceId: surface.id,
     paneId: pane.id,
-    paneAttention: pane.attention,
+    paneAttention,
     autoAttach: focused,
   });
 

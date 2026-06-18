@@ -166,7 +166,6 @@ export const surfacePaneSchema = Schema.Struct({
   id: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
   title: Schema.String,
-  attention: Schema.Literal('idle', 'working', 'waiting', 'error'),
   sortOrder: nonNegativeIntegerSchema,
   session: Schema.NullOr(surfacePaneSessionSchema),
 });
@@ -176,7 +175,6 @@ export const surfaceDetailSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   kind: runtimeSurfaceKindSchema,
   title: Schema.String,
-  attention: Schema.Literal('idle', 'working', 'waiting', 'error'),
   layout: surfaceLayoutNodeSchema,
   activePaneId: Schema.NullOr(positiveIntegerSchema),
   panes: Schema.Array(surfacePaneSchema),

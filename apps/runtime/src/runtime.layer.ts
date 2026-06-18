@@ -5,6 +5,7 @@ import {
   AgentSessionArtifactsLive,
   AgentSessionRepositoryLive,
   AgentSessionServiceLive,
+  type AgentSessionAttentionProjectionService,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
 import { GitLive } from './git/index.js';
@@ -112,11 +113,13 @@ const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
   Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
   SessionServicesLayer,
   EventProjectionLayer,
+  AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
 );
@@ -130,6 +133,7 @@ export type RuntimeServices =
   | SurfaceServiceShape
   | PtyServiceShape
   | AgentSessionServiceShape
+  | AgentSessionAttentionProjectionService
   | TerminalSessionServiceShape
   | RuntimeEventBusService
   | InternalRuntimeEventBusService

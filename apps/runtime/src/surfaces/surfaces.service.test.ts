@@ -948,7 +948,7 @@ function testLayer(
     Layer.provide(agentService),
     Layer.provide(terminalService),
     Layer.provide(sessionLifecycle),
-    Layer.provide(attentionProjection),
+    Layer.provide(internalRuntimeEventBus),
   );
   return Layer.mergeAll(
     database,

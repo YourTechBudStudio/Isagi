@@ -140,16 +140,32 @@ export type {
 } from './projects/types.js';
 export { runtimeEventsWebSocketEndpoint } from './runtime-events/api.js';
 export {
+  attentionSnapshotEventSchema,
+  attentionSourceChangedEventSchema,
+  attentionSourceIdentitySchema,
+  attentionSourceRemovedEventSchema,
+  attentionSourceSchema,
+  attentionStateSchema,
   agentSessionChangedEventSchema,
   runtimeEventBaseSchema,
+  runtimeEventInputMessageSchema,
+  runtimeEventInputTypeSchema,
   runtimeEventSchema,
   runtimeEventTypeSchema,
   terminalSessionChangedEventSchema,
 } from './runtime-events/types.js';
 export type {
   AgentSessionChangedEvent,
+  AttentionSnapshotEvent,
+  AttentionSource,
+  AttentionSourceChangedEvent,
+  AttentionSourceIdentity,
+  AttentionSourceRemovedEvent,
+  AttentionState,
   RuntimeEvent,
   RuntimeEventBase,
+  RuntimeEventInputMessage,
+  RuntimeEventInputType,
   RuntimeEventType,
   TerminalSessionChangedEvent,
 } from './runtime-events/types.js';
@@ -239,7 +255,6 @@ export {
   activeContextOutputSchema,
   activeContextPersistenceInputSchema,
   activeContextSchema,
-  attentionStateSchema,
   commandSchema,
   projectSchema,
   projectStatusSchema,
@@ -255,7 +270,6 @@ export type {
   ActiveContext,
   ActiveContextOutput,
   ActiveContextPersistenceInput,
-  AttentionState,
   Project,
   ProjectStatus,
   ReconcileWorkspaceInput,

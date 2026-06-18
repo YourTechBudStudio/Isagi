@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { toastCopy } from '../../copy/index.js';
 import { showToast } from '../toast/index.js';
 import { activateSurface, restoreActivePaneFocus } from './activation.js';
+import { applyAttentionToProjects, useAttentionStore } from './attention.js';
 import {
   activeContextFromSelection,
   activeWorktreeId,
@@ -110,6 +111,7 @@ export function usePersistActiveContextSelection() {
 export function useWorkspace() {
   const workspace = useWorkspaceQuery();
   const selection = useWorkspaceStore((state) => state.selection);
+  const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
   const activeSurfaceByWorktreeId = useWorkspaceStore((state) => state.activeSurfaceByWorktreeId);
   const selectWorktree = useWorkspaceStore((state) => state.selectWorktree);
   const selectMissingProject = useWorkspaceStore((state) => state.selectMissingProject);
@@ -124,7 +126,10 @@ export function useWorkspace() {
     activateSurface({ worktreeId, surfaceId });
   }, []);
 
-  const projects = workspace.data?.projects ?? [];
+  const projects = useMemo(
+    () => applyAttentionToProjects(workspace.data?.projects ?? [], sourcesByKey),
+    [workspace.data?.projects, sourcesByKey],
+  );
   const currentActiveWorktreeId = activeWorktreeId(selection);
   const currentSelectedProjectId = selectedProjectId(selection);
   const activeWorktree = findWorktree(projects, currentActiveWorktreeId);
@@ -155,7 +160,12 @@ export function useWorkspace() {
 }
 
 export function useActiveWorktree(): Worktree | null {
-  const projects = useWorkspaceQuery().data?.projects ?? [];
+  const workspace = useWorkspaceQuery();
+  const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
+  const projects = useMemo(
+    () => applyAttentionToProjects(workspace.data?.projects ?? [], sourcesByKey),
+    [workspace.data?.projects, sourcesByKey],
+  );
   const selection = useWorkspaceStore((state) => state.selection);
   return findWorktree(projects, activeWorktreeId(selection));
 }

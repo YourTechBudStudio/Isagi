@@ -32,7 +32,7 @@ export interface Surface {
   readonly id: number;
   readonly kind: SurfaceKind;
   readonly title: string;
-  readonly attention?: AttentionState | undefined;
+  readonly attention: AttentionState;
   readonly source?: string | undefined;
   readonly agentSessions?: readonly AgentSession[] | undefined;
   readonly shells?: readonly ShellPane[] | undefined;
@@ -50,6 +50,7 @@ export interface Command {
 }
 
 export type Worktree = Omit<ContractWorktree, 'surfaces' | 'commands'> & {
+  readonly attention: AttentionState;
   readonly surfaces: readonly Surface[];
   readonly commands: readonly Command[];
 };

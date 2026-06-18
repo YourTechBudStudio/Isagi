@@ -40,6 +40,10 @@ Initial setting areas may include:
 - future PTY/runtime lifecycle tuning, including configurable status polling and backend GC intervals with safe defaults
 - future agent harness launch commands/flags for Pi, OpenCode, Claude, Codex,
   and any later harnesses
+- future configurable attention priority order. The current default is
+  `error > working > waiting > idle`; this should become adjustable after a
+  dedicated brainstorm on whether attention semantics belong in global user
+  preferences, project settings, or another settings layer.
 
 For the worktree hook trust model, settings should complement the command-palette approval flow. The palette can ask at the moment of worktree creation; the settings page should let the user inspect and change that decision later.
 

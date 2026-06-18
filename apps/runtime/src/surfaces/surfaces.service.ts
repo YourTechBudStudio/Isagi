@@ -15,14 +15,11 @@ import type {
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
-import {
-  AgentSessionAttentionProjection,
-  AgentSessionError,
-  AgentSessionService,
-} from '../agent-sessions/index.js';
+import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
 import { displayNameForHarness, HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
+import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
@@ -103,7 +100,7 @@ export const SurfaceServiceLive = Layer.effect(
     const agents = yield* AgentSessionService;
     const terminals = yield* TerminalSessionService;
     const lifecycle = yield* SessionLifecycle;
-    const attention = yield* AgentSessionAttentionProjection;
+    const eventBus = yield* InternalRuntimeEventBus;
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -123,12 +120,6 @@ export const SurfaceServiceLive = Layer.effect(
             repository.listAgentSessionsForPanes(paneIds),
             repository.listTerminalSessionsForPanes(paneIds),
           ]);
-          const paneAttentions = yield* paneAttentionMap(
-            attention,
-            panes,
-            agentSessions,
-            terminalSessions,
-          );
           const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
           const activePaneId = activePaneForSurface(surface.id, panes, focus);
           return {
@@ -136,14 +127,12 @@ export const SurfaceServiceLive = Layer.effect(
             worktreeId: surface.worktreeId,
             kind: surface.kind,
             title: surface.title,
-            attention: aggregateAttention([...paneAttentions.values()]),
             layout: decodeLayout(surface.layoutJson),
             activePaneId,
             panes: panes.map((pane) => ({
               id: pane.id,
               surfaceId: pane.surfaceId,
               title: pane.title,
-              attention: paneAttentions.get(pane.id) ?? 'idle',
               sortOrder: pane.sortOrder,
               session: sessionForPane(agentSessions, terminalSessions, pane),
             })),
@@ -167,6 +156,10 @@ export const SurfaceServiceLive = Layer.effect(
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, surfaceId);
           const deleted = yield* repository.deleteSurface(target);
+          yield* publishDeletedPaneSessionChanges(
+            eventBus,
+            target.panes.map(({ pane }) => pane),
+          );
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
@@ -187,6 +180,10 @@ export const SurfaceServiceLive = Layer.effect(
             );
           const plan = planSurfacePaneDelete(target, input.paneId);
           const deleted = yield* repository.deleteSurfacePane({ target, plan });
+          const deletedPanes = target.panes
+            .map(({ pane }) => pane)
+            .filter((pane) => deleted.deletedPaneIds.includes(pane.id));
+          yield* publishDeletedPaneSessionChanges(eventBus, deletedPanes);
           return {
             deletedSurfaceId: deleted.deletedSurfaceId,
             deletedPaneIds: [...deleted.deletedPaneIds],
@@ -213,11 +210,19 @@ export const SurfaceServiceLive = Layer.effect(
             kind: 'agent',
             titleBase: displayNameForHarness(input.launch.harness),
           });
-          yield* createPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, {
-            kind: 'agent_session',
-            paneId: surface.paneId,
-            harness: input.launch.harness,
-          });
+          yield* createPaneSession(
+            repository,
+            agents,
+            terminals,
+            lifecycle,
+            eventBus,
+            input.worktreeId,
+            {
+              kind: 'agent_session',
+              paneId: surface.paneId,
+              harness: input.launch.harness,
+            },
+          );
           return {
             worktreeId: input.worktreeId,
             surfaceId: surface.surfaceId,
@@ -226,9 +231,25 @@ export const SurfaceServiceLive = Layer.effect(
           } satisfies CreateSurfaceOutput;
         }),
       createPaneSession: (input) =>
-        createPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.create),
+        createPaneSession(
+          repository,
+          agents,
+          terminals,
+          lifecycle,
+          eventBus,
+          input.worktreeId,
+          input.create,
+        ),
       claimPaneSession: (input) =>
-        claimPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, input.claim),
+        claimPaneSession(
+          repository,
+          agents,
+          terminals,
+          lifecycle,
+          eventBus,
+          input.worktreeId,
+          input.claim,
+        ),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
           const exists = yield* repository.worktreeExists(input.worktreeId);
@@ -270,18 +291,21 @@ function createPaneSession(
   agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
   terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
   lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   worktreeId: number,
   create: PaneSessionCreateInput,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
   return Effect.gen(function* () {
     const target = yield* loadPaneSessionTarget(repository, worktreeId, create.paneId);
     const session = yield* resolveCreatedSession(agents, terminals, worktreeId, target.cwd, create);
-    return yield* assignPaneSession(repository, lifecycle, {
+    const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
       worktreeId,
       surfaceId: target.surface.id,
       paneId: target.pane.id,
       session,
     });
+    yield* publishReplacedPaneSessionChange(eventBus, target.pane, session);
+    return output;
   });
 }
 
@@ -290,18 +314,21 @@ function claimPaneSession(
   agents: import('../agent-sessions/index.js').AgentSessionServiceShape,
   terminals: import('../terminal-sessions/index.js').TerminalSessionServiceShape,
   lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   worktreeId: number,
   claim: PaneSessionClaimInput,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
   return Effect.gen(function* () {
     const target = yield* loadPaneSessionTarget(repository, worktreeId, claim.paneId);
     const session = yield* resolveClaimSession(agents, terminals, worktreeId, claim);
-    return yield* assignPaneSession(repository, lifecycle, {
+    const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
       worktreeId,
       surfaceId: target.surface.id,
       paneId: target.pane.id,
       session,
     });
+    yield* publishReplacedPaneSessionChange(eventBus, target.pane, session);
+    return output;
   });
 }
 
@@ -348,6 +375,7 @@ function loadPaneSessionTarget(
 function assignPaneSession(
   repository: SurfaceRepositoryService,
   lifecycle: import('../session-lifecycle/index.js').SessionLifecycleService,
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   input: {
     readonly worktreeId: number;
     readonly surfaceId: number;
@@ -372,6 +400,7 @@ function assignPaneSession(
       activeSurfaceId: input.surfaceId,
       activePaneId: input.paneId,
     });
+    yield* publishSessionChanged(eventBus, input.session.kind, input.session.sessionId);
 
     return {
       worktreeId: input.worktreeId,
@@ -544,43 +573,45 @@ function activePaneForSurface(
   return panes.some((pane) => pane.id === focus.activePaneId) ? focus.activePaneId : null;
 }
 
-function paneAttentionMap(
-  attention: import('../agent-sessions/index.js').AgentSessionAttentionProjectionService,
+function publishDeletedPaneSessionChanges(
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   panes: readonly SurfacePaneRow[],
-  agentSessions: readonly AgentSessionRow[],
-  terminalSessions: readonly TerminalSessionRow[],
 ) {
-  return Effect.gen(function* () {
-    const entries = yield* Effect.all(
-      panes.map((pane) =>
-        Effect.gen(function* () {
-          if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
-            const agent = agentSessions.find((candidate) => candidate.id === pane.sessionId);
-            return [
-              pane.id,
-              agent ? yield* attention.agentSessionAttention(agent) : 'error',
-            ] as const;
-          }
-          if (pane.sessionKind === 'terminal_session' && pane.sessionId !== null) {
-            const terminal = terminalSessions.find((candidate) => candidate.id === pane.sessionId);
-            return [
-              pane.id,
-              terminal ? attention.terminalSessionAttention(terminal) : 'error',
-            ] as const;
-          }
-          return [pane.id, 'idle'] as const;
-        }),
-      ),
-    );
-    return new Map(entries);
-  });
+  return Effect.all(
+    panes.flatMap((pane) =>
+      pane.sessionKind && pane.sessionId
+        ? [publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId)]
+        : [],
+    ),
+    { discard: true },
+  );
 }
 
-function aggregateAttention(attentions: readonly import('@isagi/contracts').AttentionState[]) {
-  if (attentions.includes('error')) return 'error';
-  if (attentions.includes('waiting')) return 'waiting';
-  if (attentions.includes('working')) return 'working';
-  return 'idle';
+function publishReplacedPaneSessionChange(
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
+  pane: SurfacePaneRow,
+  next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
+) {
+  if (
+    !pane.sessionKind ||
+    !pane.sessionId ||
+    (pane.sessionKind === next.kind && pane.sessionId === next.sessionId)
+  ) {
+    return Effect.void;
+  }
+  return publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId);
+}
+
+function publishSessionChanged(
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
+  sessionKind: 'agent_session' | 'terminal_session',
+  sessionId: number,
+) {
+  return eventBus.publish(
+    sessionKind === 'agent_session'
+      ? { type: 'agent_session_changed', agentSessionId: sessionId }
+      : { type: 'terminal_session_changed', terminalSessionId: sessionId },
+  );
 }
 
 function sessionForPane(

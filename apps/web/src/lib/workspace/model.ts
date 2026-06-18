@@ -40,8 +40,9 @@ export function projectFromContract(project: ContractProject): Project {
     accent: accents[(project.id - 1) % accents.length] ?? 'blue',
     worktrees: project.worktrees.map((worktree) => ({
       ...worktree,
-      surfaces: worktree.surfaces,
-      commands: worktree.commands,
+      attention: 'idle',
+      surfaces: worktree.surfaces.map((surface) => ({ ...surface, attention: 'idle' })),
+      commands: worktree.commands.map((command) => ({ ...command, attention: 'idle' })),
     })),
   };
 }

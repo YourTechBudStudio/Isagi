@@ -279,7 +279,6 @@ const surfaceDetail = {
   worktreeId: 10,
   kind: 'terminal',
   title: 'Terminal',
-  attention: 'idle',
   layout: {
     kind: 'leaf',
     nodeId: 'pane-7',
@@ -292,7 +291,6 @@ const surfaceDetail = {
       id: 7,
       surfaceId: 42,
       title: 'Terminal',
-      attention: 'idle',
       sortOrder: 0,
       session: null,
     },

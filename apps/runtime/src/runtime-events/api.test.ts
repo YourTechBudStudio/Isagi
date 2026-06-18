@@ -7,6 +7,7 @@ import Fastify from 'fastify';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
+import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
 import { registerRuntimeEventsApi } from './api.js';
 import {
   RuntimeEventBus,
@@ -34,6 +35,64 @@ test('runtime events websocket streams published events through the contract pat
         }),
       );
       assert.deepEqual(await takeMessage(ws), event);
+    } finally {
+      ws.terminate();
+    }
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('runtime events websocket answers explicit attention snapshot requests', async () => {
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      RuntimeEventBusLive,
+      Layer.succeed(AgentSessionAttentionProjection, {
+        reconcileAgentSession: () => Effect.void,
+        agentSessionAttention: () => Effect.succeed('idle' as const),
+        terminalSessionAttention: () => 'idle' as const,
+        listAttentionSources: Effect.succeed([
+          {
+            worktreeId: 2,
+            surfaceId: 3,
+            paneId: 4,
+            source: { kind: 'agent_session' as const, id: 1 },
+            attention: 'working' as const,
+          },
+        ]),
+      }),
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerRuntimeEventsApi(fastify, runtime as never);
+    await fastify.ready();
+
+    const ws = await fastify.injectWS('/api/v1/events');
+    try {
+      ws.send(JSON.stringify({ type: 'attention_snapshot_requested' }));
+      const event = await takeMessage(ws);
+      assert.match(event.id, /^evt_/);
+      assert.match(event.occurredAt, /^\d{4}-\d{2}-\d{2}T/);
+      assert.deepEqual(event, {
+        id: event.id,
+        type: 'attention_snapshot',
+        occurredAt: event.occurredAt,
+        payload: {
+          sources: [
+            {
+              worktreeId: 2,
+              surfaceId: 3,
+              paneId: 4,
+              source: { kind: 'agent_session', id: 1 },
+              attention: 'working',
+            },
+          ],
+        },
+      });
     } finally {
       ws.terminate();
     }

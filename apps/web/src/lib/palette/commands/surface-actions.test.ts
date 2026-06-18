@@ -144,7 +144,6 @@ function surfaceDetail({
     worktreeId: 10,
     kind: 'terminal',
     title: 'Terminal',
-    attention: 'idle',
     activePaneId,
     layout: { kind: 'leaf', nodeId: 'pane-601', paneId: 601, collapsed: false },
     panes: [
@@ -152,7 +151,6 @@ function surfaceDetail({
         id: 601,
         surfaceId: 501,
         title: 'Terminal',
-        attention: 'idle',
         sortOrder: 0,
         session: terminalSession(601, firstStatus),
       },
@@ -160,7 +158,6 @@ function surfaceDetail({
         id: 602,
         surfaceId: 501,
         title: 'Terminal 2',
-        attention: 'idle',
         sortOrder: 1,
         session: terminalSession(602, secondStatus),
       },

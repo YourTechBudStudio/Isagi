@@ -3,14 +3,17 @@ import type { FastifyInstance } from 'fastify';
 
 import {
   apiBasePath,
+  runtimeEventInputMessageSchema,
   runtimeEventSchema,
   runtimeEventsWebSocketEndpoint,
   type RuntimeEvent,
+  type RuntimeEventInputMessage,
 } from '@isagi/contracts';
 
+import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
 import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { RuntimeEventBus } from './event-bus.js';
+import { nextRuntimeEventEnvelope, RuntimeEventBus } from './event-bus.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -124,6 +127,48 @@ export function registerRuntimeEventsApi(
           console.error('[runtime] Runtime event websocket failed', error);
           socket.close();
         });
+
+      socket.on('message', (raw: Buffer) => {
+        const message = decodeClientMessage(raw);
+        if (!message) {
+          console.warn('[runtime] Runtime event websocket received invalid client message');
+          return;
+        }
+        void run(handleClientMessage(message)).then(
+          (event) => {
+            if (!closed) send(event);
+          },
+          (error: unknown) => {
+            console.error('[runtime] Runtime event websocket client message failed', error);
+            socket.close();
+          },
+        );
+      });
     },
   );
+}
+
+function decodeClientMessage(raw: Buffer): RuntimeEventInputMessage | null {
+  try {
+    return Schema.decodeUnknownSync(runtimeEventInputMessageSchema)(JSON.parse(raw.toString()));
+  } catch {
+    return null;
+  }
+}
+
+function handleClientMessage(
+  message: RuntimeEventInputMessage,
+): Effect.Effect<RuntimeEvent, unknown, RuntimeServices> {
+  switch (message.type) {
+    case 'attention_snapshot_requested':
+      return Effect.gen(function* () {
+        const attention = yield* AgentSessionAttentionProjection;
+        const sources = yield* attention.listAttentionSources;
+        return {
+          ...nextRuntimeEventEnvelope(),
+          type: 'attention_snapshot',
+          payload: { sources: [...sources] },
+        } satisfies RuntimeEvent;
+      });
+  }
 }

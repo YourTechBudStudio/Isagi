@@ -150,7 +150,6 @@ function workspaceSnapshot(): WorkspaceSnapshot {
             branch: 'main',
             head: 'abcdef0',
             isRoot: true,
-            attention: 'idle',
             parked: false,
             surfaces: [],
             activeSurfaceId: null,

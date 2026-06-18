@@ -1,5 +1,8 @@
 import { Effect, Layer } from 'effect';
 
+import type { AttentionSource } from '@isagi/contracts';
+
+import { AgentSessionAttentionProjection } from '../agent-sessions/attention-projection.service.js';
 import { AgentSessionRepository } from '../agent-sessions/index.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from '../surfaces/session-status.js';
 import {
@@ -22,6 +25,7 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
     const agents = yield* AgentSessionRepository;
     const terminals = yield* TerminalSessionRepository;
     const surfaces = yield* SurfaceRepository;
+    const attention = yield* AgentSessionAttentionProjection;
     const subscription = yield* internalBus.subscribe({
       types: [
         'agent_session_changed',
@@ -42,24 +46,39 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
             const agent = yield* agents
               .find(event.agentSessionId)
               .pipe(Effect.orElseSucceed(() => null));
-            if (agent) yield* publishAgentSessionChanged(publicBus, surfaces, agent);
+            if (agent) {
+              yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent);
+            } else {
+              yield* publishAttentionSourceRemoved(publicBus, {
+                kind: 'agent_session',
+                id: event.agentSessionId,
+              });
+            }
             return;
           }
           if (event.type === 'terminal_session_changed') {
             const terminal = yield* terminals
               .find(event.terminalSessionId)
               .pipe(Effect.orElseSucceed(() => null));
-            if (terminal) yield* publishTerminalSessionChanged(publicBus, surfaces, terminal);
+            if (terminal) {
+              yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal);
+            } else {
+              yield* publishAttentionSourceRemoved(publicBus, {
+                kind: 'terminal_session',
+                id: event.terminalSessionId,
+              });
+            }
             return;
           }
           const agent = yield* agents
             .findByActivePtyProcessId(event.ptyProcessId)
             .pipe(Effect.orElseSucceed(() => null));
-          if (agent) yield* publishAgentSessionChanged(publicBus, surfaces, agent);
+          if (agent) yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent);
           const terminal = yield* terminals
             .findByActivePtyProcessId(event.ptyProcessId)
             .pipe(Effect.orElseSucceed(() => null));
-          if (terminal) yield* publishTerminalSessionChanged(publicBus, surfaces, terminal);
+          if (terminal)
+            yield* publishTerminalSessionChanged(publicBus, surfaces, attention, terminal);
         }),
       ),
     );
@@ -69,14 +88,19 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
 function publishAgentSessionChanged(
   publicBus: RuntimeEventBusService,
   surfaces: SurfaceRepositoryService,
+  attention: import('../agent-sessions/index.js').AgentSessionAttentionProjectionService,
   agent: AgentSessionRow,
 ) {
   return Effect.gen(function* () {
     const placement = yield* surfaces
       .findPaneForSession({ sessionKind: 'agent_session', sessionId: agent.id })
       .pipe(Effect.orElseSucceed(() => null));
-    if (!placement) return;
+    if (!placement) {
+      yield* publishAttentionSourceRemoved(publicBus, { kind: 'agent_session', id: agent.id });
+      return;
+    }
     const state = deriveAgentSessionState(agent);
+    const attentionState = yield* attention.agentSessionAttention(agent);
     yield* publicBus.publish({
       ...nextRuntimeEventEnvelope(),
       type: 'agent_session_changed',
@@ -90,19 +114,31 @@ function publishAgentSessionChanged(
         diagnosticCode: state.diagnosticCode,
       },
     });
+    yield* publishAttentionSourceChanged(publicBus, {
+      ...placement,
+      source: { kind: 'agent_session', id: agent.id },
+      attention: attentionState,
+    });
   });
 }
 
 function publishTerminalSessionChanged(
   publicBus: RuntimeEventBusService,
   surfaces: SurfaceRepositoryService,
+  attention: import('../agent-sessions/index.js').AgentSessionAttentionProjectionService,
   terminal: TerminalSessionRow,
 ) {
   return Effect.gen(function* () {
     const placement = yield* surfaces
       .findPaneForSession({ sessionKind: 'terminal_session', sessionId: terminal.id })
       .pipe(Effect.orElseSucceed(() => null));
-    if (!placement) return;
+    if (!placement) {
+      yield* publishAttentionSourceRemoved(publicBus, {
+        kind: 'terminal_session',
+        id: terminal.id,
+      });
+      return;
+    }
     const state = deriveTerminalSessionState(terminal);
     yield* publicBus.publish({
       ...nextRuntimeEventEnvelope(),
@@ -117,5 +153,29 @@ function publishTerminalSessionChanged(
         diagnosticCode: state.diagnosticCode,
       },
     });
+    yield* publishAttentionSourceChanged(publicBus, {
+      ...placement,
+      source: { kind: 'terminal_session', id: terminal.id },
+      attention: attention.terminalSessionAttention(terminal),
+    });
+  });
+}
+
+function publishAttentionSourceChanged(publicBus: RuntimeEventBusService, source: AttentionSource) {
+  return publicBus.publish({
+    ...nextRuntimeEventEnvelope(),
+    type: 'attention_source_changed',
+    payload: source,
+  });
+}
+
+function publishAttentionSourceRemoved(
+  publicBus: RuntimeEventBusService,
+  source: AttentionSource['source'],
+) {
+  return publicBus.publish({
+    ...nextRuntimeEventEnvelope(),
+    type: 'attention_source_removed',
+    payload: { source },
   });
 }

@@ -1,9 +1,15 @@
 import { Effect, Schema } from 'effect';
 import { useEffect } from 'react';
 
-import { runtimeEventSchema, type RuntimeEvent } from '@isagi/contracts';
+import {
+  runtimeEventInputMessageSchema,
+  runtimeEventSchema,
+  type RuntimeEvent,
+  type RuntimeEventInputMessage,
+} from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
+import { useAttentionStore } from './attention.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 
@@ -46,21 +52,23 @@ export function useRuntimeEventSubscription() {
             return;
           }
 
-          socket = new WebSocket(url);
-          socket.addEventListener('open', () => {
+          const nextSocket = new WebSocket(url);
+          socket = nextSocket;
+          nextSocket.addEventListener('open', () => {
             reconnectDelayMs = initialReconnectDelayMs;
+            sendRuntimeEventInput(nextSocket, { type: 'attention_snapshot_requested' });
           });
-          socket.addEventListener('message', (event) => {
+          nextSocket.addEventListener('message', (event) => {
             const runtimeEvent = decodeRuntimeEvent(event.data);
             if (runtimeEvent) {
               handleRuntimeEvent(runtimeEvent);
             }
           });
-          socket.addEventListener('close', () => {
+          nextSocket.addEventListener('close', () => {
             socket = null;
             scheduleReconnect();
           });
-          socket.addEventListener('error', () => {
+          nextSocket.addEventListener('error', () => {
             socket?.close();
           });
         },
@@ -92,6 +100,15 @@ function decodeRuntimeEvent(data: unknown): RuntimeEvent | null {
 
 export function handleRuntimeEvent(event: RuntimeEvent) {
   switch (event.type) {
+    case 'attention_snapshot':
+      useAttentionStore.getState().replaceSources(event.payload.sources);
+      break;
+    case 'attention_source_changed':
+      useAttentionStore.getState().upsertSource(event.payload);
+      break;
+    case 'attention_source_removed':
+      useAttentionStore.getState().removeSource(event.payload.source);
+      break;
     case 'agent_session_changed':
     case 'terminal_session_changed':
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -100,4 +117,12 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
       });
       break;
   }
+}
+
+function sendRuntimeEventInput(socket: WebSocket, message: RuntimeEventInputMessage) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const encoded = Schema.decodeUnknownSync(runtimeEventInputMessageSchema)(message);
+  socket.send(JSON.stringify(encoded));
 }

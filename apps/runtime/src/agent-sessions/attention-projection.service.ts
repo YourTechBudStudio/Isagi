@@ -1,15 +1,21 @@
 import { mkdirSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 
-import { and, eq, isNotNull, or } from 'drizzle-orm';
+import { and, eq, getTableColumns, isNotNull, or } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { AttentionState } from '@isagi/contracts';
+import type { AttentionSource, AttentionState } from '@isagi/contracts';
 
-import { DataDirectory, RuntimeDatabase } from '../persistence/index.js';
-import { agentSessions, surfacePanes } from '../persistence/schema.js';
+import { DataDirectory, DatabaseError, RuntimeDatabase } from '../persistence/index.js';
+import {
+  agentSessions,
+  ptyProcesses,
+  surfacePanes,
+  terminalSessions,
+  worktreeSurfaces,
+} from '../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
-import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
+import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './artifacts.js';
 import { deriveLastKnownHarnessAttention } from './harness-observation/attention.js';
 import {
@@ -22,6 +28,7 @@ export interface AgentSessionAttentionProjectionService {
   readonly reconcileAgentSession: (agentSessionId: number) => Effect.Effect<void>;
   readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
   readonly terminalSessionAttention: (session: TerminalSessionRow) => AttentionState;
+  readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
 }
 
 export const AgentSessionAttentionProjection =
@@ -124,7 +131,7 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
     yield* reconcileKnownAgentSessions;
     ensureRootWatcher();
 
-    const service = {
+    const service: AgentSessionAttentionProjectionService = {
       reconcileAgentSession,
       agentSessionAttention: (session) =>
         Effect.gen(function* () {
@@ -134,7 +141,10 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
           return deriveAgentSessionAttention(session, projections.get(session.id));
         }),
       terminalSessionAttention: deriveTerminalSessionAttention,
-    } satisfies AgentSessionAttentionProjectionService;
+      listAttentionSources: Effect.suspend(() =>
+        listAttentionSources(artifacts, database, service),
+      ),
+    };
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.sync(() => {
@@ -178,6 +188,84 @@ function metadataProjectionFingerprint(metadata: AgentSessionHarnessMetadataRead
   }
 }
 
+function listAttentionSources(
+  artifacts: import('./artifacts.js').AgentSessionArtifactsService,
+  database: import('../persistence/index.js').RuntimeDatabaseService,
+  attention: Pick<
+    AgentSessionAttentionProjectionService,
+    'agentSessionAttention' | 'terminalSessionAttention'
+  >,
+) {
+  return Effect.gen(function* () {
+    const rows = yield* database.use('list_attention_sources', (db) => {
+      const ptyColumns = getTableColumns(ptyProcesses);
+      return {
+        agents: db
+          .select({
+            worktreeId: worktreeSurfaces.worktreeId,
+            surfaceId: surfacePanes.surfaceId,
+            paneId: surfacePanes.id,
+            session: agentSessions,
+            process: ptyColumns,
+          })
+          .from(surfacePanes)
+          .innerJoin(worktreeSurfaces, eq(surfacePanes.surfaceId, worktreeSurfaces.id))
+          .innerJoin(agentSessions, eq(surfacePanes.sessionId, agentSessions.id))
+          .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+          .where(eq(surfacePanes.sessionKind, 'agent_session'))
+          .all(),
+        terminals: db
+          .select({
+            worktreeId: worktreeSurfaces.worktreeId,
+            surfaceId: surfacePanes.surfaceId,
+            paneId: surfacePanes.id,
+            session: terminalSessions,
+            process: ptyColumns,
+          })
+          .from(surfacePanes)
+          .innerJoin(worktreeSurfaces, eq(surfacePanes.surfaceId, worktreeSurfaces.id))
+          .innerJoin(terminalSessions, eq(surfacePanes.sessionId, terminalSessions.id))
+          .leftJoin(ptyProcesses, eq(terminalSessions.activePtyProcessId, ptyProcesses.id))
+          .where(eq(surfacePanes.sessionKind, 'terminal_session'))
+          .all(),
+      };
+    });
+
+    const agentSources = yield* Effect.all(
+      rows.agents.map((row) =>
+        Effect.gen(function* () {
+          const session = yield* agentSessionRow(artifacts, row.session, row.process);
+          return {
+            worktreeId: row.worktreeId,
+            surfaceId: row.surfaceId,
+            paneId: row.paneId,
+            source: { kind: 'agent_session', id: session.id },
+            attention: yield* attention.agentSessionAttention(session),
+          } satisfies AttentionSource;
+        }),
+      ),
+    );
+    const terminalSources = rows.terminals.map((row) => {
+      const session = terminalSessionRow(row.session, row.process);
+      return {
+        worktreeId: row.worktreeId,
+        surfaceId: row.surfaceId,
+        paneId: row.paneId,
+        source: { kind: 'terminal_session', id: session.id },
+        attention: attention.terminalSessionAttention(session),
+      } satisfies AttentionSource;
+    });
+
+    return [...agentSources, ...terminalSources].sort((left, right) =>
+      attentionSourceKey(left).localeCompare(attentionSourceKey(right)),
+    );
+  });
+}
+
+function attentionSourceKey(source: AttentionSource) {
+  return `${source.source.kind}:${source.source.id}`;
+}
+
 function readProjection(
   artifacts: import('./artifacts.js').AgentSessionArtifactsService,
   agentSessionId: number,
@@ -186,6 +274,102 @@ function readProjection(
     const jsonlReads = yield* artifacts.readJsonlForAgentSession(agentSessionId);
     return buildHarnessObservationProjection(jsonlReads);
   });
+}
+
+function agentSessionRow(
+  artifacts: import('./artifacts.js').AgentSessionArtifactsService,
+  row: typeof agentSessions.$inferSelect,
+  process: typeof ptyProcesses.$inferSelect | null,
+): Effect.Effect<AgentSessionRow> {
+  return Effect.gen(function* () {
+    const metadata = yield* artifacts.readMetadata(row.id);
+    return {
+      ...agentMetadataFields(metadata),
+      id: row.id,
+      worktreeId: row.worktreeId,
+      harness: row.harness,
+      cwd: row.cwd,
+      activePtyProcessId: row.activePtyProcessId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastSeenAt: row.lastSeenAt,
+      activePtyProcess: process ? ptyProcessRow(process) : null,
+    };
+  });
+}
+
+function agentMetadataFields(metadata: AgentSessionHarnessMetadataRead) {
+  switch (metadata.status) {
+    case 'valid':
+      return {
+        harnessSessionId: metadata.metadata.harnessSessionId,
+        harnessMetadataStatus: 'valid' as const,
+        harnessMetadataDiagnostic: null,
+      };
+    case 'missing':
+      return {
+        harnessSessionId: null,
+        harnessMetadataStatus: 'missing' as const,
+        harnessMetadataDiagnostic: `Harness metadata file is missing: ${metadata.metadataPath}`,
+      };
+    case 'invalid':
+      return {
+        harnessSessionId: null,
+        harnessMetadataStatus: 'invalid' as const,
+        harnessMetadataDiagnostic: metadata.diagnostic,
+      };
+  }
+}
+
+function terminalSessionRow(
+  row: typeof terminalSessions.$inferSelect,
+  process: typeof ptyProcesses.$inferSelect | null,
+): TerminalSessionRow {
+  return {
+    id: row.id,
+    worktreeId: row.worktreeId,
+    cwd: row.cwd,
+    shellCommand: row.shellCommand,
+    shellArgs: decodeArgs(row.shellArgsJson),
+    shellArgsJson: row.shellArgsJson,
+    activePtyProcessId: row.activePtyProcessId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    activePtyProcess: process ? ptyProcessRow(process) : null,
+  };
+}
+
+function ptyProcessRow(row: typeof ptyProcesses.$inferSelect): PtyProcessRow {
+  return {
+    id: row.id,
+    backend: row.backend,
+    backendRefJson: row.backendRefJson,
+    command: row.command,
+    args: decodeArgs(row.argsJson),
+    argsJson: row.argsJson,
+    cwd: row.cwd,
+    status: row.status,
+    statusReason: row.statusReason,
+    exitCode: row.exitCode,
+    signal: row.signal,
+    logMode: row.logMode,
+    logPath: row.logPath,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    exitedAt: row.exitedAt,
+    lastSeenAt: row.lastSeenAt,
+  };
+}
+
+function decodeArgs(json: string) {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === 'string')
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function deriveAgentSessionAttention(
