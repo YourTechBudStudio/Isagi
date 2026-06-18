@@ -13,7 +13,8 @@ test('fresh never-launched agent sessions project as attachable instead of missi
     harness: 'pi',
     cwd: '/repo',
     harnessSessionId: null,
-    harnessSessionRefJson: null,
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
     activePtyProcessId: null,
     createdAt: now,
     updatedAt: now,
@@ -37,7 +38,8 @@ test('agent sessions with a missing previous process and no observed harness id 
     harness: 'pi',
     cwd: '/repo',
     harnessSessionId: null,
-    harnessSessionRefJson: null,
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
     activePtyProcessId: 99,
     createdAt: now,
     updatedAt: now,
@@ -58,7 +60,8 @@ test('agent sessions with a dead previous process and no observed harness id req
     harness: 'opencode',
     cwd: '/repo',
     harnessSessionId: null,
-    harnessSessionRefJson: null,
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
     activePtyProcessId: 99,
     createdAt: now,
     updatedAt: now,
@@ -96,7 +99,8 @@ test('agent sessions with a dead previous process and observed harness id requir
     harness: 'opencode',
     cwd: '/repo',
     harnessSessionId: 'opencode-session-1',
-    harnessSessionRefJson: null,
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
     activePtyProcessId: 99,
     createdAt: now,
     updatedAt: now,
@@ -125,6 +129,50 @@ test('agent sessions with a dead previous process and observed harness id requir
   assert.equal(state.status, 'killed');
   assert.equal(state.statusReason, 'runtime_shutdown');
   assert.equal(state.recoveryAction, 'resume_existing');
+});
+
+test('agent sessions with invalid harness metadata require replacement', () => {
+  const state = deriveAgentSessionState({
+    id: 1,
+    worktreeId: 1,
+    harness: 'pi',
+    cwd: '/repo',
+    harnessSessionId: null,
+    harnessMetadataStatus: 'invalid',
+    harnessMetadataDiagnostic: 'Invalid harness metadata: bad json',
+    activePtyProcessId: null,
+    createdAt: now,
+    updatedAt: now,
+    lastSeenAt: null,
+    activePtyProcess: null,
+  } satisfies AgentSessionRow);
+
+  assert.equal(state.status, 'failed');
+  assert.equal(state.statusReason, 'harness_metadata_invalid');
+  assert.equal(state.diagnosticCode, 'harness_metadata_invalid');
+  assert.equal(state.recoveryAction, 'create_replacement');
+});
+
+test('agent sessions with missing harness metadata require replacement', () => {
+  const state = deriveAgentSessionState({
+    id: 1,
+    worktreeId: 1,
+    harness: 'pi',
+    cwd: '/repo',
+    harnessSessionId: null,
+    harnessMetadataStatus: 'missing',
+    harnessMetadataDiagnostic: 'Harness metadata file is missing.',
+    activePtyProcessId: null,
+    createdAt: now,
+    updatedAt: now,
+    lastSeenAt: null,
+    activePtyProcess: null,
+  } satisfies AgentSessionRow);
+
+  assert.equal(state.status, 'failed');
+  assert.equal(state.statusReason, 'harness_session_id_missing');
+  assert.equal(state.diagnosticCode, 'harness_session_id_missing');
+  assert.equal(state.recoveryAction, 'create_replacement');
 });
 
 test('fresh never-launched terminal sessions project as attachable', () => {

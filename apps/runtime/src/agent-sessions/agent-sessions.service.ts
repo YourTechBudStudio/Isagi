@@ -28,13 +28,6 @@ export interface AgentSessionService {
   readonly activePtyProcessId: (
     agentSessionId: number,
   ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
-  readonly recordHarnessSessionObservation: (input: {
-    readonly agentSessionId: number;
-    readonly ptyProcessId: number;
-    readonly harness: AgentHarness;
-    readonly harnessSessionId: string;
-    readonly source: string | null;
-  }) => Effect.Effect<void, DatabaseError | AgentSessionError>;
 }
 
 export class AgentSessionError extends Error {
@@ -45,6 +38,7 @@ export class AgentSessionError extends Error {
       | 'active_process_missing'
       | 'active_process_not_running'
       | 'harness_session_id_missing'
+      | 'harness_metadata_invalid'
       | 'harness_mismatch'
       | 'active_process_mismatch',
     message: string,
@@ -108,6 +102,7 @@ export const AgentSessionServiceLive = Layer.effect(
         { kind: 'agent_session', sessionId: agentSessionId },
         Effect.gen(function* () {
           const session = yield* findAgentSessionOrFail(repository, agentSessionId);
+          yield* validateHarnessMetadata(session);
           const process = session.activePtyProcess;
           if (session.activePtyProcessId && process?.status === 'running') {
             console.info('[runtime] Agent session attach reusing running PTY process', {
@@ -197,39 +192,6 @@ export const AgentSessionServiceLive = Layer.effect(
             );
           return session.activePtyProcessId;
         }),
-      recordHarnessSessionObservation: (input) =>
-        Effect.gen(function* () {
-          const session = yield* findAgentSessionOrFail(repository, input.agentSessionId);
-          if (session.harness !== input.harness) {
-            return yield* Effect.fail(
-              new AgentSessionError(
-                'harness_mismatch',
-                `Agent session ${input.agentSessionId} uses ${session.harness}, not ${input.harness}.`,
-              ),
-            );
-          }
-          if (session.activePtyProcessId !== input.ptyProcessId) {
-            return yield* Effect.fail(
-              new AgentSessionError(
-                'active_process_mismatch',
-                `Harness event for PTY process ${input.ptyProcessId} does not match agent session ${input.agentSessionId}.`,
-              ),
-            );
-          }
-          yield* repository.recordHarnessSessionObservation({
-            agentSessionId: input.agentSessionId,
-            harnessSessionId: input.harnessSessionId,
-            harnessSessionRefJson: JSON.stringify({ source: input.source }),
-          });
-          console.info('[runtime] Agent harness session observation recorded', {
-            agentSessionId: input.agentSessionId,
-            ptyProcessId: input.ptyProcessId,
-            harness: input.harness,
-            harnessSessionId: input.harnessSessionId,
-            source: input.source,
-          });
-          yield* publishChanged(input.agentSessionId);
-        }),
     } satisfies AgentSessionService;
   }),
 );
@@ -250,6 +212,36 @@ function findAgentSessionOrFail(
     }
     return session;
   });
+}
+
+function validateHarnessMetadata(session: AgentSessionRow) {
+  if (session.harnessMetadataStatus === 'missing') {
+    console.warn('[runtime] Agent session restoration blocked: missing harness metadata', {
+      agentSessionId: session.id,
+      harness: session.harness,
+      diagnostic: session.harnessMetadataDiagnostic,
+    });
+    return Effect.fail(
+      new AgentSessionError(
+        'harness_session_id_missing',
+        `Agent session ${session.id} cannot be restored because harness metadata is missing.`,
+      ),
+    );
+  }
+  if (session.harnessMetadataStatus === 'invalid') {
+    console.warn('[runtime] Agent session restoration blocked: invalid harness metadata', {
+      agentSessionId: session.id,
+      harness: session.harness,
+      diagnostic: session.harnessMetadataDiagnostic,
+    });
+    return Effect.fail(
+      new AgentSessionError(
+        'harness_metadata_invalid',
+        `Agent session ${session.id} cannot be restored because harness metadata is invalid.`,
+      ),
+    );
+  }
+  return Effect.void;
 }
 
 function agentLaunchEnvelope(

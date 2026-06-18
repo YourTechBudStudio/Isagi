@@ -92,7 +92,8 @@ export interface AgentSessionRow {
   readonly harness: AgentHarness;
   readonly cwd: string;
   readonly harnessSessionId: string | null;
-  readonly harnessSessionRefJson: string | null;
+  readonly harnessMetadataStatus: 'valid' | 'missing' | 'invalid';
+  readonly harnessMetadataDiagnostic: string | null;
   readonly activePtyProcessId: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;

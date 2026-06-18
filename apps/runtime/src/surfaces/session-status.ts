@@ -16,6 +16,24 @@ import type {
 
 export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentSessionState {
   const process = session.activePtyProcess;
+  if (session.harnessMetadataStatus === 'invalid') {
+    return agentState(
+      'failed',
+      'harness_metadata_invalid',
+      'harness_metadata_invalid',
+      session.harnessMetadataDiagnostic ?? 'Harness metadata is invalid.',
+      'create_replacement',
+    );
+  }
+  if (session.harnessMetadataStatus === 'missing') {
+    return agentState(
+      'failed',
+      'harness_session_id_missing',
+      'harness_session_id_missing',
+      'Harness metadata is missing.',
+      'create_replacement',
+    );
+  }
   if (!session.activePtyProcessId) {
     return agentState('starting', null, null, null, 'connect_existing');
   }

@@ -9,7 +9,12 @@ import { Effect, Either, Layer } from 'effect';
 
 import type { SurfaceDeleteWarning } from '@isagi/contracts';
 
-import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
+import {
+  AgentSessionArtifacts,
+  AgentSessionArtifactsLive,
+  AgentSessionService,
+  type AgentSessionServiceShape,
+} from '../agent-sessions/index.js';
 import {
   DataDirectory,
   DatabaseError,
@@ -913,7 +918,8 @@ function insertAgentSessionForWorktree(input: {
 }) {
   return Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
-    return yield* database.use('test_insert_agent_session_for_pane', (db) => {
+    const artifacts = yield* AgentSessionArtifacts;
+    const sessionId = yield* database.use('test_insert_agent_session_for_pane', (db) => {
       const now = new Date().toISOString();
       const session = db
         .insert(agentSessions)
@@ -921,8 +927,6 @@ function insertAgentSessionForWorktree(input: {
           worktreeId: input.worktreeId,
           harness: 'pi',
           cwd: '/repo/isagi',
-          harnessSessionId: null,
-          harnessSessionRefJson: null,
           activePtyProcessId: null,
           createdAt: now,
           updatedAt: now,
@@ -936,6 +940,8 @@ function insertAgentSessionForWorktree(input: {
         .run();
       return session.id;
     });
+    yield* artifacts.initializeMetadata(sessionId);
+    return sessionId;
   });
 }
 
@@ -1031,6 +1037,7 @@ function testLayer(
   } satisfies DataDirectoryService;
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
+  const agentSessionArtifacts = AgentSessionArtifactsLive.pipe(Layer.provide(dataDirectoryLayer));
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const ptyService = Layer.succeed(PtyService, fakePtyService(options));
@@ -1044,7 +1051,7 @@ function testLayer(
   );
   const surfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
-    Layer.provide(dataDirectoryLayer),
+    Layer.provide(agentSessionArtifacts),
   );
   const sessionLifecycle = SessionLifecycleLive;
   const surfaceService = SurfaceServiceLive.pipe(
@@ -1056,6 +1063,7 @@ function testLayer(
   );
   return Layer.mergeAll(
     database,
+    agentSessionArtifacts,
     workspaceRepository,
     surfaceRepository,
     surfaceService,
@@ -1073,8 +1081,6 @@ function fakeAgentSessionService(
       Effect.die('agent ensureActivePtyProcess is not used by surface service tests'),
     activePtyProcessId: () =>
       Effect.die('agent activePtyProcessId is not used by surface service tests'),
-    recordHarnessSessionObservation: () =>
-      Effect.die('agent recordHarnessSessionObservation is not used by surface service tests'),
     ...overrides,
   } satisfies AgentSessionServiceShape;
 }
@@ -1100,7 +1106,8 @@ function agentSessionRowForTest(input: { readonly id: number; readonly worktreeI
     harness: 'pi' as const,
     cwd: '/repo/isagi',
     harnessSessionId: null,
-    harnessSessionRefJson: null,
+    harnessMetadataStatus: 'valid' as const,
+    harnessMetadataDiagnostic: null,
     activePtyProcessId: null,
     createdAt: '2026-06-15T00:00:00.000Z',
     updatedAt: '2026-06-15T00:00:00.000Z',

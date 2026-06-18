@@ -82,6 +82,7 @@ export const agentSessionStatusReasonSchema = Schema.Literal(
   'runtime_shutdown',
   'process_attach_failed',
   'harness_session_id_missing',
+  'harness_metadata_invalid',
   'harness_resume_failed',
   'pty_process_missing',
   'pty_process_not_running',
@@ -99,6 +100,7 @@ export const terminalSessionStatusReasonSchema = Schema.Literal(
 
 export const sessionDiagnosticCodeSchema = Schema.Literal(
   'harness_session_id_missing',
+  'harness_metadata_invalid',
   'harness_resume_failed',
   'harness_launch_failed',
   'pty_process_launch_failed',

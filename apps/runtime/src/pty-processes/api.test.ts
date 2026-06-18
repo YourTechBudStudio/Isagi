@@ -152,7 +152,6 @@ function fakeAgentSessionService(
     get: () => Effect.die('get is not used'),
     ensureActivePtyProcess: () => Effect.succeed(20),
     activePtyProcessId: () => Effect.succeed(20),
-    recordHarnessSessionObservation: () => Effect.void,
     ...overrides,
   } satisfies AgentSessionServiceShape;
 }

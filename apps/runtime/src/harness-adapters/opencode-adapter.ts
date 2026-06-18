@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 
 import { Effect } from 'effect';
 
-import type { HarnessEventTokenRegistryService } from '../harness-events/token-registry.js';
+import type { AgentSessionArtifactsService } from '../agent-sessions/index.js';
 import { harnessEnvForProcess } from './env.js';
 import type { HarnessLaunchContext } from './types.js';
 
@@ -10,8 +10,7 @@ export function buildOpenCodeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly pluginPath: string;
-    readonly eventUrl: string;
-    readonly tokens: HarnessEventTokenRegistryService;
+    readonly artifacts: AgentSessionArtifactsService;
   },
 ) {
   return Effect.sync(() => {
@@ -23,7 +22,6 @@ export function buildOpenCodeLaunch(
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
       pluginPath: dependencies.pluginPath,
-      eventUrl: dependencies.eventUrl,
     });
     return {
       command: 'opencode',
@@ -33,9 +31,7 @@ export function buildOpenCodeLaunch(
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
           ptyProcessId,
-          harness: 'opencode',
-          eventUrl: dependencies.eventUrl,
-          tokens: dependencies.tokens,
+          artifacts: dependencies.artifacts,
           extraEnv: {
             OPENCODE_CONFIG_CONTENT: configContent,
           },

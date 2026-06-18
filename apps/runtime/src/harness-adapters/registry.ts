@@ -2,8 +2,7 @@ import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { HarnessEventEndpoint } from '../harness-events/endpoint.service.js';
-import { HarnessEventTokenRegistry } from '../harness-events/token-registry.js';
+import { AgentSessionArtifacts } from '../agent-sessions/index.js';
 import { DataDirectory } from '../persistence/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
@@ -27,41 +26,33 @@ export const HarnessAdapterRegistryLive = Layer.effect(
   HarnessAdapterRegistry,
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
-    const endpoint = yield* HarnessEventEndpoint;
-    const tokens = yield* HarnessEventTokenRegistry;
+    const sessionArtifacts = yield* AgentSessionArtifacts;
     const artifacts = yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
 
     const adapterFactories = {
-      pi: (input, eventUrl) =>
+      pi: (input) =>
         buildPiLaunch(input, {
           extensionPath: artifacts.piExtensionPath,
-          eventUrl,
-          tokens,
+          artifacts: sessionArtifacts,
         }),
-      opencode: (input, eventUrl) =>
+      opencode: (input) =>
         buildOpenCodeLaunch(input, {
           pluginPath: artifacts.opencodePluginPath,
-          eventUrl,
-          tokens,
+          artifacts: sessionArtifacts,
         }),
-      claude: (input, eventUrl) =>
+      claude: (input) =>
         buildClaudeLaunch(input, {
           settingsPath: artifacts.claudeSettingsPath,
-          eventUrl,
-          tokens,
+          artifacts: sessionArtifacts,
         }),
-      codex: (input, eventUrl) =>
+      codex: (input) =>
         buildCodexLaunch(input, {
           hookPath: artifacts.codexHookPath,
-          eventUrl,
-          tokens,
+          artifacts: sessionArtifacts,
         }),
     } satisfies Record<
       AgentHarness,
-      (
-        input: HarnessLaunchContext,
-        eventUrl: string,
-      ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>
+      (input: HarnessLaunchContext) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>
     >;
 
     return {
@@ -82,17 +73,7 @@ export const HarnessAdapterRegistryLive = Layer.effect(
               ),
             );
           }
-          const eventUrl = yield* endpoint.eventUrl.pipe(
-            Effect.mapError(
-              (cause) =>
-                new HarnessAdapterError(
-                  'event_endpoint_unavailable',
-                  'Harness event endpoint has not been initialized.',
-                  cause,
-                ),
-            ),
-          );
-          return yield* build(input, eventUrl);
+          return yield* build(input);
         }),
     } satisfies HarnessAdapterRegistryService;
   }),

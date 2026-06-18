@@ -60,6 +60,7 @@ test('session status reasons produce restrained pane notices', () => {
     shell_killed: ptyCopy.sessionNotice('killed', 'shell_killed'),
     process_attach_failed: ptyCopy.sessionNotice('failed', 'process_attach_failed'),
     harness_session_id_missing: ptyCopy.sessionNotice('failed', 'harness_session_id_missing'),
+    harness_metadata_invalid: ptyCopy.sessionNotice('failed', 'harness_metadata_invalid'),
     harness_resume_failed: ptyCopy.sessionNotice('failed', 'harness_resume_failed'),
     pty_process_missing: ptyCopy.sessionNotice('failed', 'pty_process_missing'),
     pty_process_not_running: ptyCopy.sessionNotice('failed', 'pty_process_not_running'),
@@ -74,6 +75,7 @@ test('session status reasons produce restrained pane notices', () => {
   assert.equal(notices.shell_killed, null);
   assert.match(notices.process_attach_failed ?? '', /attach/);
   assert.match(notices.harness_session_id_missing ?? '', /No harness session/);
+  assert.match(notices.harness_metadata_invalid ?? '', /unreadable/);
   assert.match(notices.harness_resume_failed ?? '', /resume/);
   assert.match(notices.pty_process_missing ?? '', /backing process/);
   assert.match(notices.pty_process_not_running ?? '', /not running/);

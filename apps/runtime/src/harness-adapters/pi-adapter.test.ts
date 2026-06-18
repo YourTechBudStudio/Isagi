@@ -6,9 +6,7 @@ import test from 'node:test';
 
 import { Effect, Either } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
-
-import type { HarnessEventTokenRegistryService } from '../harness-events/index.js';
+import type { AgentSessionArtifactsService } from '../agent-sessions/index.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
 import { buildClaudeLaunch } from './claude-adapter.js';
 import { buildCodexLaunch } from './codex-adapter.js';
@@ -18,13 +16,9 @@ import { HarnessAdapterError } from './types.js';
 
 test('Pi adapter builds a fresh launch envelope with runtime-owned extension injection', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-harness-artifacts-'));
-  const createdTokens: Array<{
-    agentSessionId: number;
-    ptyProcessId: number;
-    harness: AgentHarness;
-  }> = [];
   try {
     const artifacts = await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
+    const sessionArtifacts = fakeArtifacts(dataRoot);
     const launch = await Effect.runPromise(
       buildPiLaunch(
         {
@@ -35,8 +29,7 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
         },
         {
           extensionPath: artifacts.piExtensionPath,
-          eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-          tokens: fakeTokenRegistry(createdTokens),
+          artifacts: sessionArtifacts,
         },
       ),
     );
@@ -47,20 +40,27 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
     assert.equal(launch.cwd, '/repo/isagi');
 
     const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
-    assert.match(extensionSource, /session_start/);
     assert.match(extensionSource, /agent_start/);
-    assert.match(extensionSource, /turn_start/);
-    assert.match(extensionSource, /AbortController/);
-    assert.match(extensionSource, /setTimeout\(\(\) => controller\.abort\(\), 1000\)/);
+    assert.doesNotMatch(extensionSource, /session_start/);
+    assert.doesNotMatch(extensionSource, /turn_start/);
+    assert.match(extensionSource, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.match(extensionSource, /writeHarnessMetadata/);
+    assert.doesNotMatch(extensionSource, /ISAGI_HARNESS_EVENT_URL/);
     assert.doesNotMatch(extensionSource, /@earendil-works\/pi-coding-agent/);
 
     const env = await Effect.runPromise(
       launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
     );
     assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-    assert.equal(env.ISAGI_HARNESS_EVENT_URL, 'http://127.0.0.1:17373/internal/harness-events');
-    assert.equal(env.ISAGI_HARNESS_EVENT_TOKEN, 'token-20');
-    assert.deepEqual(createdTokens, [{ agentSessionId: 10, ptyProcessId: 20, harness: 'pi' }]);
+    assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
+    assert.equal(
+      env.ISAGI_HARNESS_METADATA_PATH,
+      resolve(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json'),
+    );
+    assert.equal(
+      env.ISAGI_HARNESS_JSONL_PATH,
+      resolve(dataRoot, 'sessions', 'agent-sessions', '10', '20.harness.jsonl'),
+    );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -80,8 +80,7 @@ test('Pi adapter resumes using the latest observed harness session id', async ()
         },
         {
           extensionPath: artifacts.piExtensionPath,
-          eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-          tokens: fakeTokenRegistry([]),
+          artifacts: fakeArtifacts(dataRoot),
         },
       ),
     );
@@ -118,25 +117,29 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /chat\.params/);
-    assert.match(opencodeSource, /harness: "opencode"/);
-    assert.match(opencodeSource, /AbortController/);
+    assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_EVENT_URL/);
 
     const claudeSettings = JSON.parse(readFileSync(artifacts.claudeSettingsPath, 'utf8'));
-    assert.equal(claudeSettings.hooks.SessionStart[0].hooks[0].type, 'command');
-    assert.match(claudeSettings.hooks.SessionStart[0].hooks[0].command, /isagi-claude-hook\.mjs/);
-    assert.equal(claudeSettings.hooks.SessionStart[0].hooks[0].timeout, 2);
     assert.equal(claudeSettings.hooks.UserPromptSubmit[0].hooks[0].type, 'command');
-    assert.equal(claudeSettings.hooks.Stop[0].hooks[0].type, 'command');
+    assert.match(
+      claudeSettings.hooks.UserPromptSubmit[0].hooks[0].command,
+      /isagi-claude-hook\.mjs/,
+    );
+    assert.equal(claudeSettings.hooks.UserPromptSubmit[0].hooks[0].timeout, 2);
+    assert.equal(claudeSettings.hooks.SessionStart, undefined);
+    assert.equal(claudeSettings.hooks.Stop, undefined);
+    assert.equal(claudeSettings.hooks.SessionEnd, undefined);
 
     const claudeHook = readFileSync(artifacts.claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
-    assert.match(claudeHook, /harness: "claude"/);
-    assert.match(claudeHook, /AbortController/);
+    assert.match(claudeHook, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.doesNotMatch(claudeHook, /ISAGI_HARNESS_EVENT_URL/);
 
     const codexHook = readFileSync(artifacts.codexHookPath, 'utf8');
     assert.match(codexHook, /session_id/);
-    assert.match(codexHook, /harness: "codex"/);
-    assert.match(codexHook, /AbortController/);
+    assert.match(codexHook, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.doesNotMatch(codexHook, /ISAGI_HARNESS_EVENT_URL/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -162,11 +165,7 @@ test('harness artifact preparation fails when the runtime data root cannot host 
 });
 
 test('OpenCode adapter launches from cwd and injects runtime config content', async () => {
-  const createdTokens: Array<{
-    agentSessionId: number;
-    ptyProcessId: number;
-    harness: AgentHarness;
-  }> = [];
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-opencode-adapter-'));
   const launch = await Effect.runPromise(
     buildOpenCodeLaunch(
       {
@@ -177,8 +176,7 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
       },
       {
         pluginPath: '/runtime/harness-integrations/opencode/isagi-session-plugin.js',
-        eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-        tokens: fakeTokenRegistry(createdTokens),
+        artifacts: fakeArtifacts(dataRoot),
       },
     ),
   );
@@ -187,15 +185,18 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
   assert.deepEqual(launch.args, []);
   assert.equal(launch.cwd, '/repo/isagi');
 
-  const env = await Effect.runPromise(
+  const env = (await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
-  );
-  assert.equal(env.ISAGI_HARNESS_EVENT_TOKEN, 'token-20');
+  )) as NodeJS.ProcessEnv;
+  assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
+  assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
+  assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
+  assert.match(env.ISAGI_HARNESS_JSONL_PATH ?? '', /20\.harness\.jsonl$/);
   assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}'), {
     plugin: ['file:///runtime/harness-integrations/opencode/isagi-session-plugin.js'],
   });
   assert.equal(env.OPENCODE_PURE, undefined);
-  assert.deepEqual(createdTokens, [{ agentSessionId: 10, ptyProcessId: 20, harness: 'opencode' }]);
+  rmSync(dataRoot, { recursive: true, force: true });
 });
 
 test('OpenCode adapter resumes using --session from cwd without a project argument', async () => {
@@ -209,8 +210,7 @@ test('OpenCode adapter resumes using --session from cwd without a project argume
       },
       {
         pluginPath: '/runtime/harness-integrations/opencode/isagi-session-plugin.js',
-        eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-        tokens: fakeTokenRegistry([]),
+        artifacts: fakeArtifacts('/runtime'),
       },
     ),
   );
@@ -220,11 +220,6 @@ test('OpenCode adapter resumes using --session from cwd without a project argume
 });
 
 test('Claude adapter uses runtime-owned settings and resumes from cwd', async () => {
-  const createdTokens: Array<{
-    agentSessionId: number;
-    ptyProcessId: number;
-    harness: AgentHarness;
-  }> = [];
   const launch = await Effect.runPromise(
     buildClaudeLaunch(
       {
@@ -235,8 +230,7 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
       },
       {
         settingsPath: '/runtime/harness-integrations/claude/settings.json',
-        eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-        tokens: fakeTokenRegistry(createdTokens),
+        artifacts: fakeArtifacts('/runtime'),
       },
     ),
   );
@@ -254,16 +248,12 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
   const env = await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
-  assert.equal(env.ISAGI_HARNESS_EVENT_TOKEN, 'token-20');
-  assert.deepEqual(createdTokens, [{ agentSessionId: 10, ptyProcessId: 20, harness: 'claude' }]);
+  assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
+  assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
+  assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
 
 test('Codex adapter injects process-scoped hooks and resumes from cwd', async () => {
-  const createdTokens: Array<{
-    agentSessionId: number;
-    ptyProcessId: number;
-    harness: AgentHarness;
-  }> = [];
   const launch = await Effect.runPromise(
     buildCodexLaunch(
       {
@@ -274,8 +264,7 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
       },
       {
         hookPath: '/runtime/harness-integrations/codex/isagi-codex-hook.mjs',
-        eventUrl: 'http://127.0.0.1:17373/internal/harness-events',
-        tokens: fakeTokenRegistry(createdTokens),
+        artifacts: fakeArtifacts('/runtime'),
       },
     ),
   );
@@ -295,27 +284,35 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   const env = await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
-  assert.equal(env.ISAGI_HARNESS_EVENT_TOKEN, 'token-20');
-  assert.deepEqual(createdTokens, [{ agentSessionId: 10, ptyProcessId: 20, harness: 'codex' }]);
+  assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
+  assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
+  assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
 
-function fakeTokenRegistry(
-  created: Array<{ agentSessionId: number; ptyProcessId: number; harness: AgentHarness }>,
-): HarnessEventTokenRegistryService {
+function fakeArtifacts(root: string): AgentSessionArtifactsService {
   return {
-    create: (input) =>
-      Effect.sync(() => {
-        created.push(input);
-        return {
-          token: `token-${input.ptyProcessId}`,
-          agentSessionId: input.agentSessionId,
-          ptyProcessId: input.ptyProcessId,
-          harness: input.harness,
-          createdAt: '2026-06-16T00:00:00.000Z',
-        };
+    paths: (input) => {
+      const directory = resolve(root, 'sessions', 'agent-sessions', String(input.agentSessionId));
+      return {
+        directory,
+        metadataPath: resolve(directory, 'harness.json'),
+        jsonlPath: input.ptyProcessId
+          ? resolve(directory, `${input.ptyProcessId}.harness.jsonl`)
+          : null,
+      };
+    },
+    initializeMetadata: () => Effect.void,
+    readMetadata: () =>
+      Effect.succeed({
+        status: 'valid',
+        metadataPath: resolve(root, 'sessions', 'agent-sessions', '10', 'harness.json'),
+        metadata: {
+          schemaVersion: 1,
+          harnessSessionId: null,
+          updatedAt: '2026-06-16T00:00:00.000Z',
+        },
       }),
-    resolve: () => Effect.succeed(null),
-    revoke: () => Effect.void,
-    revokeByPtyProcessId: () => Effect.void,
-  } satisfies HarnessEventTokenRegistryService;
+    writeHarnessSessionId: () => Effect.void,
+    removeDirectory: () => Effect.void,
+  } satisfies AgentSessionArtifactsService;
 }

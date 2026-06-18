@@ -21,7 +21,7 @@ export interface HarnessAdapter {
 export class HarnessAdapterError extends Error {
   readonly _tag = 'HarnessAdapterError';
   constructor(
-    readonly code: 'unsupported_harness' | 'artifact_write_failed' | 'event_endpoint_unavailable',
+    readonly code: 'unsupported_harness' | 'artifact_write_failed',
     message: string,
     readonly cause?: unknown,
   ) {

@@ -2,6 +2,11 @@ import { and, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzl
 import { Context, Effect, Layer } from 'effect';
 
 import {
+  AgentSessionArtifacts,
+  type AgentSessionArtifactsService,
+  type AgentSessionHarnessMetadataRead,
+} from '../agent-sessions/artifacts.js';
+import {
   DatabaseError,
   RuntimeDatabase,
   type RuntimeDatabaseService,
@@ -112,10 +117,11 @@ export const SurfaceRepositoryLive = Layer.effect(
   SurfaceRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
+    const artifacts = yield* AgentSessionArtifacts;
     const ptyColumns = getTableColumns(ptyProcesses);
 
     const sessionRowsForPanes = (paneIds: readonly number[]) => {
-      const agents = listAgentSessionsForPanes(database, ptyColumns, paneIds);
+      const agents = listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds);
       const terminals = listTerminalSessionsForPanes(database, ptyColumns, paneIds);
       return Effect.all([agents, terminals]).pipe(
         Effect.map(([agentRows, terminalRows]) => ({ agentRows, terminalRows })),
@@ -187,7 +193,7 @@ export const SurfaceRepositoryLive = Layer.effect(
             .map(paneRow),
         ),
       listAgentSessionsForPanes: (paneIds) =>
-        listAgentSessionsForPanes(database, ptyColumns, paneIds),
+        listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds),
       listTerminalSessionsForPanes: (paneIds) =>
         listTerminalSessionsForPanes(database, ptyColumns, paneIds),
       findPaneForSession: (input) =>
@@ -408,22 +414,30 @@ export const SurfaceRepositoryLive = Layer.effect(
 );
 
 function listAgentSessionsForPanes(
+  artifacts: AgentSessionArtifactsService,
   database: RuntimeDatabaseService,
   ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
   paneIds: readonly number[],
 ) {
-  return database.use('list_agent_sessions_for_panes', (db) => {
-    if (paneIds.length === 0) return [];
-    return db
-      .select({ session: agentSessions, process: ptyColumns })
-      .from(surfacePanes)
-      .innerJoin(agentSessions, eq(surfacePanes.sessionId, agentSessions.id))
-      .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
-      .where(
-        and(inArray(surfacePanes.id, [...paneIds]), eq(surfacePanes.sessionKind, 'agent_session')),
-      )
-      .all()
-      .map((row) => agentSessionRow(row.session, row.process));
+  return Effect.gen(function* () {
+    const rows = yield* database.use('list_agent_sessions_for_panes', (db) => {
+      if (paneIds.length === 0) return [];
+      return db
+        .select({ session: agentSessions, process: ptyColumns })
+        .from(surfacePanes)
+        .innerJoin(agentSessions, eq(surfacePanes.sessionId, agentSessions.id))
+        .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+        .where(
+          and(
+            inArray(surfacePanes.id, [...paneIds]),
+            eq(surfacePanes.sessionKind, 'agent_session'),
+          ),
+        )
+        .all();
+    });
+    return yield* Effect.all(
+      rows.map((row) => agentSessionRow(artifacts, row.session, row.process)),
+    );
   });
 }
 
@@ -613,22 +627,48 @@ function ptyProcessRow(row: PtyProcessRecord | null): PtyProcessRow | null {
   };
 }
 function agentSessionRow(
+  artifacts: AgentSessionArtifactsService,
   row: AgentSessionRecord,
   process: PtyProcessRecord | null,
-): AgentSessionRow {
-  return {
-    id: row.id,
-    worktreeId: row.worktreeId,
-    harness: row.harness,
-    cwd: row.cwd,
-    harnessSessionId: row.harnessSessionId,
-    harnessSessionRefJson: row.harnessSessionRefJson,
-    activePtyProcessId: row.activePtyProcessId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    lastSeenAt: row.lastSeenAt,
-    activePtyProcess: ptyProcessRow(process),
-  };
+): Effect.Effect<AgentSessionRow> {
+  return Effect.gen(function* () {
+    const metadata = yield* artifacts.readMetadata(row.id);
+    return {
+      ...agentMetadataFields(metadata),
+      id: row.id,
+      worktreeId: row.worktreeId,
+      harness: row.harness,
+      cwd: row.cwd,
+      activePtyProcessId: row.activePtyProcessId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastSeenAt: row.lastSeenAt,
+      activePtyProcess: ptyProcessRow(process),
+    };
+  });
+}
+
+function agentMetadataFields(metadata: AgentSessionHarnessMetadataRead) {
+  switch (metadata.status) {
+    case 'valid':
+      return {
+        harnessSessionId: metadata.metadata.harnessSessionId,
+        harnessMetadataStatus: 'valid' as const,
+        harnessMetadataDiagnostic: null,
+      };
+    case 'missing':
+      return {
+        harnessSessionId: null,
+        harnessMetadataStatus: 'missing' as const,
+        harnessMetadataDiagnostic: `Harness metadata file is missing: ${metadata.metadataPath}`,
+      };
+    case 'invalid':
+      return {
+        harnessSessionId: null,
+        harnessMetadataStatus: 'invalid' as const,
+        harnessMetadataDiagnostic: metadata.diagnostic,
+      };
+  }
 }
 function terminalSessionRow(
   row: TerminalSessionRecord,

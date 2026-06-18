@@ -19,12 +19,12 @@ export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
       const artifacts = artifactPaths(dataRoot);
       writeArtifact(artifacts.piExtensionPath, piExtensionSource());
       writeArtifact(artifacts.opencodePluginPath, opencodePluginSource());
-      writeArtifact(artifacts.claudeHookPath, commandHookSource('claude'));
+      writeArtifact(artifacts.claudeHookPath, commandHookSource());
       writeArtifact(
         artifacts.claudeSettingsPath,
         `${JSON.stringify(claudeSettings(artifacts.claudeHookPath), null, 2)}\n`,
       );
-      writeArtifact(artifacts.codexHookPath, commandHookSource('codex'));
+      writeArtifact(artifacts.codexHookPath, commandHookSource());
       console.info('[runtime] Harness integration artifacts prepared', {
         piExtensionPath: artifacts.piExtensionPath,
         opencodePluginPath: artifacts.opencodePluginPath,
@@ -67,32 +67,27 @@ function claudeSettings(hookPath: string) {
   const hookEntry = { hooks: [hook] } as const;
   return {
     hooks: {
-      SessionStart: [hookEntry],
       UserPromptSubmit: [hookEntry],
-      Stop: [hookEntry],
-      SessionEnd: [hookEntry],
     },
   };
 }
 
 function piExtensionSource() {
-  return String.raw`${postObservationSource('pi', { typescript: true })}
+  return String.raw`${writeHarnessMetadataSource({ typescript: true })}
 
 async function observe(source: string, ctx: any) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
-  await postObservation(sessionId, source);
+  await writeHarnessMetadata(sessionId);
 }
 
 export default function (pi: any) {
-  pi.on("session_start", async (_event, ctx) => observe("session_start", ctx));
   pi.on("agent_start", async (_event, ctx) => observe("agent_start", ctx));
-  pi.on("turn_start", async (_event, ctx) => observe("turn_start", ctx));
 }
 `;
 }
 
 function opencodePluginSource() {
-  return String.raw`${postObservationSource('opencode')}
+  return String.raw`${writeHarnessMetadataSource()}
 
 function sessionIdFromEvent(event) {
   const properties = event?.properties;
@@ -119,22 +114,22 @@ export const IsagiSessionObserver = async () => {
         event.type === "session.idle" ||
         event.type === "session.status"
       ) {
-        await postObservation(sessionIdFromEvent(event), event.type);
+        await writeHarnessMetadata(sessionIdFromEvent(event));
       }
     },
     "chat.params": async (input) => {
-      await postObservation(sessionIdFromHookInput(input), "chat.params");
+      await writeHarnessMetadata(sessionIdFromHookInput(input));
     },
     "chat.message": async (input) => {
-      await postObservation(sessionIdFromHookInput(input), "chat.message");
+      await writeHarnessMetadata(sessionIdFromHookInput(input));
     },
   };
 };
 `;
 }
 
-function commandHookSource(harness: 'claude' | 'codex') {
-  return String.raw`${postObservationSource(harness)}
+function commandHookSource() {
+  return String.raw`${writeHarnessMetadataSource()}
 
 async function readStdinJson() {
   const chunks = [];
@@ -150,54 +145,47 @@ async function readStdinJson() {
 
 const input = await readStdinJson();
 const sessionId = typeof input.session_id === "string" ? input.session_id : null;
-const source = typeof input.hook_event_name === "string" ? input.hook_event_name : null;
-await postObservation(sessionId, source);
+await writeHarnessMetadata(sessionId);
 `;
 }
 
-function postObservationSource(
-  harness: 'pi' | 'opencode' | 'claude' | 'codex',
-  options: { readonly typescript?: boolean } = {},
-) {
+function writeHarnessMetadataSource(options: { readonly typescript?: boolean } = {}) {
   const params = options.typescript
-    ? 'harnessSessionId: string | null | undefined, source: string | null'
-    : 'harnessSessionId, source';
-  return String.raw`const eventUrl = process.env.ISAGI_HARNESS_EVENT_URL;
-const eventToken = process.env.ISAGI_HARNESS_EVENT_TOKEN;
+    ? 'harnessSessionId: string | null | undefined'
+    : 'harnessSessionId';
+  return String.raw`const metadataPath = process.env.ISAGI_HARNESS_METADATA_PATH;
 const agentSessionId = Number(process.env.ISAGI_AGENT_SESSION_ID ?? "");
+const ptyProcessId = Number(process.env.ISAGI_PTY_PROCESS_ID ?? "");
 
-async function postObservation(${params}) {
+async function writeHarnessMetadata(${params}) {
   if (
-    !eventUrl ||
-    !eventToken ||
+    !metadataPath ||
     !harnessSessionId ||
     !Number.isSafeInteger(agentSessionId) ||
-    agentSessionId <= 0
+    agentSessionId <= 0 ||
+    !Number.isSafeInteger(ptyProcessId) ||
+    ptyProcessId <= 0
   ) {
     return;
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1000);
   try {
-    await fetch(eventUrl, {
-      method: "POST",
-      headers: {
-        "authorization": "Bearer " + eventToken,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "harness_session_observed",
-        harness: "${harness}",
-        harnessSessionId,
-        source: source ?? null,
-        agentSessionId,
-      }),
-      signal: controller.signal,
-    });
+    const fs = await import("node:fs/promises");
+    await fs.access(metadataPath);
+    await fs.writeFile(
+      metadataPath,
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          harnessSessionId,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
   } catch {
     // Observation must never block or fail the user's harness interaction.
-  } finally {
-    clearTimeout(timeout);
   }
 }
 `;

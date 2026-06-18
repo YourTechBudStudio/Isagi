@@ -1,20 +1,13 @@
 import { Layer } from 'effect';
 
 import {
+  AgentSessionArtifactsLive,
   AgentSessionRepositoryLive,
   AgentSessionServiceLive,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
 import { GitLive } from './git/index.js';
 import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
-import {
-  HarnessEventEndpointLive,
-  HarnessEventServiceLive,
-  HarnessEventTokenRegistryLive,
-  type HarnessEventEndpointService,
-  type HarnessEventServiceShape,
-  type HarnessEventTokenRegistryService,
-} from './harness-events/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import {
   NodePtyBackendLive,
@@ -55,7 +48,11 @@ const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
+const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(AgentSessionArtifactsLayer),
+);
 const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
@@ -67,13 +64,14 @@ const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(TmuxBackendLive),
   Layer.provide(DataDirectoryLive),
 );
-const HarnessEventTokenRegistryLayer = HarnessEventTokenRegistryLive;
 const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
   Layer.provide(DataDirectoryLive),
-  Layer.provide(HarnessEventEndpointLive),
-  Layer.provide(HarnessEventTokenRegistryLayer),
+  Layer.provide(AgentSessionArtifactsLayer),
 );
-const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(AgentSessionArtifactsLayer),
+);
 const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
 );
@@ -109,17 +107,10 @@ const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
 );
-const HarnessEventServiceLayer = HarnessEventServiceLive.pipe(
-  Layer.provide(HarnessEventTokenRegistryLayer),
-  Layer.provide(AgentSessionServiceLayer),
-);
 const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
   SessionServicesLayer,
   EventProjectionLayer,
-  HarnessEventServiceLayer,
-  HarnessEventEndpointLive,
-  HarnessEventTokenRegistryLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
 );
@@ -133,9 +124,6 @@ export type RuntimeServices =
   | TerminalSessionServiceShape
   | RuntimeEventBusService
   | InternalRuntimeEventBusService
-  | HarnessEventServiceShape
-  | HarnessEventEndpointService
-  | HarnessEventTokenRegistryService
   | SessionLifecycleService
   | SessionGcService;
 

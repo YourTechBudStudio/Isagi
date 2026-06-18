@@ -93,6 +93,62 @@ test('agent session lifecycle refuses to restore a dead previous process without
   assert.deepEqual(ptyLaunches, []);
 });
 
+test('agent session lifecycle refuses to launch when harness metadata is missing', async () => {
+  const state = mutableAgentSession({
+    activePtyProcessId: null,
+    activePtyProcess: null,
+    harnessMetadataStatus: 'missing',
+    harnessMetadataDiagnostic: 'Harness metadata file is missing.',
+  });
+  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+    }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
+  );
+
+  assert.equal(Either.isLeft(result), true);
+  assert.equal(
+    Either.isLeft(result) && result.left instanceof AgentSessionError
+      ? result.left.code
+      : undefined,
+    'harness_session_id_missing',
+  );
+  assert.deepEqual(launchInputs, []);
+  assert.deepEqual(ptyLaunches, []);
+});
+
+test('agent session lifecycle refuses to launch when harness metadata is invalid', async () => {
+  const state = mutableAgentSession({
+    activePtyProcessId: null,
+    activePtyProcess: null,
+    harnessMetadataStatus: 'invalid',
+    harnessMetadataDiagnostic: 'Invalid harness metadata.',
+  });
+  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+    }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
+  );
+
+  assert.equal(Either.isLeft(result), true);
+  assert.equal(
+    Either.isLeft(result) && result.left instanceof AgentSessionError
+      ? result.left.code
+      : undefined,
+    'harness_metadata_invalid',
+  );
+  assert.deepEqual(launchInputs, []);
+  assert.deepEqual(ptyLaunches, []);
+});
+
 test('agent session lifecycle reuses an active running process', async () => {
   const state = mutableAgentSession({
     activePtyProcessId: 20,
@@ -148,8 +204,6 @@ function fakeRepository(
     findByActivePtyProcessId: () => Effect.die('findByActivePtyProcessId is not used'),
     listOrphans: () => Effect.die('listOrphans is not used'),
     delete: () => Effect.die('delete is not used'),
-    recordHarnessSessionObservation: () =>
-      Effect.die('recordHarnessSessionObservation is not used'),
   } satisfies AgentSessionRepositoryService;
 }
 
@@ -196,7 +250,14 @@ function fakeHarnesses(
 
 function mutableAgentSession(
   input: Partial<
-    Pick<AgentSessionRow, 'activePtyProcessId' | 'harnessSessionId' | 'activePtyProcess'>
+    Pick<
+      AgentSessionRow,
+      | 'activePtyProcessId'
+      | 'harnessSessionId'
+      | 'harnessMetadataStatus'
+      | 'harnessMetadataDiagnostic'
+      | 'activePtyProcess'
+    >
   >,
 ) {
   return {
@@ -206,7 +267,8 @@ function mutableAgentSession(
       harness: 'pi',
       cwd: '/repo/isagi',
       harnessSessionId: input.harnessSessionId ?? null,
-      harnessSessionRefJson: null,
+      harnessMetadataStatus: input.harnessMetadataStatus ?? 'valid',
+      harnessMetadataDiagnostic: input.harnessMetadataDiagnostic ?? null,
       activePtyProcessId: input.activePtyProcessId ?? null,
       createdAt: '2026-06-16T00:00:00.000Z',
       updatedAt: '2026-06-16T00:00:00.000Z',

@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { HarnessEventTokenRegistryService } from '../harness-events/token-registry.js';
+import type { AgentSessionArtifactsService } from '../agent-sessions/index.js';
 import { harnessEnvForProcess } from './env.js';
 import type { HarnessLaunchContext } from './types.js';
 
@@ -8,8 +8,7 @@ export function buildCodexLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly hookPath: string;
-    readonly eventUrl: string;
-    readonly tokens: HarnessEventTokenRegistryService;
+    readonly artifacts: AgentSessionArtifactsService;
   },
 ) {
   return Effect.sync(() => {
@@ -18,7 +17,6 @@ export function buildCodexLaunch(
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
       hookPath: dependencies.hookPath,
-      eventUrl: dependencies.eventUrl,
     });
     return {
       command: 'codex',
@@ -31,9 +29,7 @@ export function buildCodexLaunch(
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
           ptyProcessId,
-          harness: 'codex',
-          eventUrl: dependencies.eventUrl,
-          tokens: dependencies.tokens,
+          artifacts: dependencies.artifacts,
         }),
     };
   });

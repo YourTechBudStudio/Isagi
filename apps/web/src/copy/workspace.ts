@@ -155,6 +155,8 @@ export const ptyCopy = {
         return 'Isagi could not attach to this session. The pane keeps the evidence it still has.';
       case 'harness_session_id_missing':
         return 'No harness session was captured for this pane, so a new one will start fresh.';
+      case 'harness_metadata_invalid':
+        return 'The harness session record is unreadable, so a new one will start fresh.';
       case 'harness_resume_failed':
         return 'Could not resume the harness session.';
       case 'pty_process_missing':

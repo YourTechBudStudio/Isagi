@@ -1,0 +1,126 @@
+import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import { Effect, Layer } from 'effect';
+
+import { DataDirectory, type DataDirectoryService } from '../persistence/index.js';
+import { AgentSessionArtifacts, AgentSessionArtifactsLive } from './artifacts.js';
+
+test('agent session artifacts initialize and read harness metadata', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifacts-'));
+  try {
+    const metadata = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        yield* artifacts.initializeMetadata(10);
+        return yield* artifacts.readMetadata(10);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(metadata.status, 'valid');
+    if (metadata.status === 'valid') {
+      assert.equal(metadata.metadata.schemaVersion, 1);
+      assert.equal(metadata.metadata.harnessSessionId, null);
+      assert.equal(typeof metadata.metadata.updatedAt, 'string');
+    }
+    assert.equal(
+      existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json')),
+      true,
+    );
+    assert.equal(
+      existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10', '20.harness.jsonl')),
+      false,
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts expose reserved JSONL paths without creating files', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-paths-'));
+  try {
+    const paths = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        return artifacts.paths({ agentSessionId: 10, ptyProcessId: 20 });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(paths.directory, join(dataRoot, 'sessions', 'agent-sessions', '10'));
+    assert.equal(paths.metadataPath, join(paths.directory, 'harness.json'));
+    assert.equal(paths.jsonlPath, join(paths.directory, '20.harness.jsonl'));
+    assert.equal(existsSync(paths.jsonlPath), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts distinguish missing and invalid metadata', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-invalid-'));
+  try {
+    const [missingRead, invalidRead] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const missingResult = yield* artifacts.readMetadata(10);
+        yield* artifacts.initializeMetadata(11);
+        writeFileSync(
+          join(dataRoot, 'sessions', 'agent-sessions', '11', 'harness.json'),
+          '{ nope',
+          'utf8',
+        );
+        const invalidResult = yield* artifacts.readMetadata(11);
+        return [missingResult, invalidResult] as const;
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(missingRead.status, 'missing');
+    assert.equal(invalidRead.status, 'invalid');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts write observed harness session ids and remove directories', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-write-'));
+  try {
+    const existsAfterRemove = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        yield* artifacts.initializeMetadata(10);
+        yield* artifacts.writeHarnessSessionId({
+          agentSessionId: 10,
+          harnessSessionId: 'pi-session-1',
+        });
+        const raw = JSON.parse(
+          readFileSync(join(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json'), 'utf8'),
+        ) as { readonly harnessSessionId?: unknown };
+        assert.equal(raw.harnessSessionId, 'pi-session-1');
+        yield* artifacts.removeDirectory(10);
+        return existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10'));
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(existsAfterRemove, false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function testLayer(dataRoot: string) {
+  return AgentSessionArtifactsLive.pipe(
+    Layer.provide(
+      Layer.succeed(DataDirectory, {
+        paths: {
+          root: dataRoot,
+          databasePath: join(dataRoot, 'isagi.db'),
+          statePath: join(dataRoot, 'state.json'),
+          worktreesPath: join(dataRoot, 'worktrees'),
+          sessionsPath: join(dataRoot, 'sessions'),
+        },
+      } satisfies DataDirectoryService),
+    ),
+  );
+}

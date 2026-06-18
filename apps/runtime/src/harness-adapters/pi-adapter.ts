@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 
-import type { HarnessEventTokenRegistryService } from '../harness-events/token-registry.js';
+import type { AgentSessionArtifactsService } from '../agent-sessions/index.js';
 import { harnessEnvForProcess } from './env.js';
 import type { HarnessLaunchContext } from './types.js';
 
@@ -8,8 +8,7 @@ export function buildPiLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly extensionPath: string;
-    readonly eventUrl: string;
-    readonly tokens: HarnessEventTokenRegistryService;
+    readonly artifacts: AgentSessionArtifactsService;
   },
 ) {
   return Effect.sync(() => {
@@ -18,7 +17,6 @@ export function buildPiLaunch(
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
       extensionPath: dependencies.extensionPath,
-      eventUrl: dependencies.eventUrl,
     });
     return {
       command: 'pi',
@@ -32,9 +30,7 @@ export function buildPiLaunch(
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
           ptyProcessId,
-          harness: 'pi',
-          eventUrl: dependencies.eventUrl,
-          tokens: dependencies.tokens,
+          artifacts: dependencies.artifacts,
         }),
     };
   });

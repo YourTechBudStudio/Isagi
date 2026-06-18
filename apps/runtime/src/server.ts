@@ -3,7 +3,6 @@ import websocket from '@fastify/websocket';
 import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
-import { registerHarnessEventsApi, HarnessEventEndpoint } from './harness-events/index.js';
 import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
@@ -73,7 +72,6 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerSurfacesApi(fastify, runtime);
       registerPtyApi(fastify, runtime);
       registerRuntimeEventsApi(fastify, runtime);
-      registerHarnessEventsApi(fastify, runtime);
       registerPathsApi(fastify);
 
       const url = yield* tryPromise(() =>
@@ -82,17 +80,6 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
           port: options.port ?? 0,
         }),
       ).pipe(Effect.uninterruptible);
-
-      yield* Effect.tryPromise({
-        try: () =>
-          runtime.runPromise(
-            Effect.gen(function* () {
-              const endpoint = yield* HarnessEventEndpoint;
-              yield* endpoint.setRuntimeUrl(url);
-            }),
-          ),
-        catch: toError,
-      });
 
       startupOwnsResources = false;
       return { server: fastify, url };

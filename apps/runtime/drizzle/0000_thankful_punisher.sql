@@ -3,8 +3,6 @@ CREATE TABLE `agent_sessions` (
 	`worktree_id` integer NOT NULL,
 	`harness` text NOT NULL,
 	`cwd` text NOT NULL,
-	`harness_session_id` text,
-	`harness_session_ref_json` text,
 	`active_pty_process_id` integer,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,

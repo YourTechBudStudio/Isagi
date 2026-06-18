@@ -150,8 +150,6 @@ export const agentSessions = sqliteTable('agent_sessions', {
     .references(() => worktrees.id, { onDelete: 'cascade' }),
   harness: text('harness', { enum: ['pi', 'opencode', 'claude', 'codex'] }).notNull(),
   cwd: text('cwd').notNull(),
-  harnessSessionId: text('harness_session_id'),
-  harnessSessionRefJson: text('harness_session_ref_json'),
   activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
