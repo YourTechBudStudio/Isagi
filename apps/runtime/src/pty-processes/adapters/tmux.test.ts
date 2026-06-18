@@ -45,7 +45,7 @@ test('tmux launch configures Isagi terminal behavior before starting the session
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
         return yield* backend.launch({
-          ptySessionId: 17,
+          ptyProcessId: 17,
           backendSessionName: 'isagi-session-17',
           command: 'zsh',
           args: [],
@@ -117,7 +117,7 @@ test('tmux launch shell-quotes structured command arguments', async () => {
       Effect.gen(function* () {
         const backend = yield* TmuxBackend;
         return yield* backend.launch({
-          ptySessionId: 18,
+          ptyProcessId: 18,
           backendSessionName: 'isagi-session-18',
           command: 'pi',
           args: ['-e', '/tmp/isagi ext.ts', 'abc$(nope)', "quote'arg", '`ticks`'],

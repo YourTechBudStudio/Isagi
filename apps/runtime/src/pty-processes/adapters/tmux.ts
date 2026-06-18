@@ -61,7 +61,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
       if (!input.backendSessionName) {
         return yield* Effect.fail(
           new PtyStartError({
-            ptySessionId: input.ptySessionId,
+            ptyProcessId: input.ptyProcessId,
             command: input.command,
             cwd: input.cwd,
             cause: new Error('Tmux launch requires a deterministic backend session name.'),
@@ -86,7 +86,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
         Effect.mapError(
           (cause) =>
             new PtyStartError({
-              ptySessionId: input.ptySessionId,
+              ptyProcessId: input.ptyProcessId,
               command: input.command,
               cwd: input.cwd,
               cause,

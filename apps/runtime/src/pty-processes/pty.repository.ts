@@ -8,7 +8,7 @@ import { ptyProcesses } from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
-type PtyProcessRecord = InferSelectModel<typeof ptyProcesses>;
+type PtyProcessTableRow = InferSelectModel<typeof ptyProcesses>;
 
 export interface PtyRepositoryService {
   readonly createProcessMetadata: (input: {
@@ -16,29 +16,26 @@ export interface PtyRepositoryService {
     readonly args: readonly string[];
     readonly cwd: string;
   }) => Effect.Effect<number, DatabaseError>;
-  readonly findSession: (
-    ptySessionId: number,
-  ) => Effect.Effect<PtyProcessRow | null, DatabaseError>;
   readonly findProcess: (
     ptyProcessId: number,
   ) => Effect.Effect<PtyProcessRow | null, DatabaseError>;
-  readonly listSessionLogPaths: Effect.Effect<string[], DatabaseError>;
-  readonly listSessions: (input?: {
+  readonly listProcessLogPaths: Effect.Effect<string[], DatabaseError>;
+  readonly listProcesses: (input?: {
     readonly statuses?: readonly PtyProcessStatus[];
   }) => Effect.Effect<PtyProcessRow[], DatabaseError>;
   readonly updateBackendRef: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly backendRefJson: string;
   }) => Effect.Effect<void, DatabaseError>;
   readonly updateBackendMetadata: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly backend: import('@isagi/contracts').PtyProcessBackend;
     readonly backendRefJson: string;
     readonly logMode: import('@isagi/contracts').PtyProcessLogMode;
     readonly logPath: string | null;
   }) => Effect.Effect<void, DatabaseError>;
-  readonly transitionSession: (input: {
-    readonly ptySessionId: number;
+  readonly transitionProcess: (input: {
+    readonly ptyProcessId: number;
     readonly status: PtyProcessStatus;
     readonly statusReason?: PtyProcessStatusReason | null | undefined;
     readonly exitCode?: number | null | undefined;
@@ -62,7 +59,7 @@ export const PtyRepositoryLive = Layer.effect(
           const placeholderRef = {
             schemaVersion: 1,
             backend: 'node_pty' as const,
-            ptySessionId: 0,
+            ptyProcessId: 0,
             pid: null,
           };
           const row = db
@@ -88,23 +85,22 @@ export const PtyRepositoryLive = Layer.effect(
             .get();
           db.update(ptyProcesses)
             .set({
-              backendRefJson: JSON.stringify({ ...placeholderRef, ptySessionId: row.id }),
+              backendRefJson: JSON.stringify({ ...placeholderRef, ptyProcessId: row.id }),
               updatedAt: now,
             })
             .where(eq(ptyProcesses.id, row.id))
             .run();
           return row.id;
         }),
-      findSession: (ptySessionId) => findProcess(database, ptySessionId, 'find_pty_process'),
       findProcess: (ptyProcessId) => findProcess(database, ptyProcessId, 'find_pty_process'),
-      listSessionLogPaths: database.use('list_pty_process_log_paths', (db) =>
+      listProcessLogPaths: database.use('list_pty_process_log_paths', (db) =>
         db
           .select({ logPath: ptyProcesses.logPath })
           .from(ptyProcesses)
           .all()
           .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
-      listSessions: (input) =>
+      listProcesses: (input) =>
         database.use('list_pty_processes', (db) => {
           const rows =
             input?.statuses && input.statuses.length > 0
@@ -120,7 +116,7 @@ export const PtyRepositoryLive = Layer.effect(
         database.use('update_pty_process_backend_ref', (db) => {
           db.update(ptyProcesses)
             .set({ backendRefJson: input.backendRefJson, updatedAt: timestamp() })
-            .where(eq(ptyProcesses.id, input.ptySessionId))
+            .where(eq(ptyProcesses.id, input.ptyProcessId))
             .run();
         }),
       updateBackendMetadata: (input) =>
@@ -133,10 +129,10 @@ export const PtyRepositoryLive = Layer.effect(
               logPath: input.logPath,
               updatedAt: timestamp(),
             })
-            .where(eq(ptyProcesses.id, input.ptySessionId))
+            .where(eq(ptyProcesses.id, input.ptyProcessId))
             .run();
         }),
-      transitionSession: (input) =>
+      transitionProcess: (input) =>
         database.use('transition_pty_process', (db) => {
           const now = timestamp();
           db.update(ptyProcesses)
@@ -152,7 +148,7 @@ export const PtyRepositoryLive = Layer.effect(
                   : null,
               ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
-            .where(eq(ptyProcesses.id, input.ptySessionId))
+            .where(eq(ptyProcesses.id, input.ptyProcessId))
             .run();
         }),
     } satisfies PtyRepositoryService;
@@ -181,7 +177,7 @@ export function appendLog(path: string, data: string) {
   return Buffer.byteLength(data, 'utf8');
 }
 
-function ptyProcessRow(row: PtyProcessRecord): PtyProcessRow {
+function ptyProcessRow(row: PtyProcessTableRow): PtyProcessRow {
   return {
     id: row.id,
     backend: row.backend,

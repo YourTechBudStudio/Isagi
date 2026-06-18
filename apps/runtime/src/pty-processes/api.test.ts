@@ -190,7 +190,6 @@ function fakePtyService(input: {
     resize: () => Effect.void,
     kill: () => Effect.void,
     cleanupProcessForDelete: () => Effect.succeed([]),
-    cleanupSessionForDelete: () => Effect.succeed([]),
   } satisfies PtyServiceShape;
 }
 
@@ -220,7 +219,7 @@ function fakeRunningProcess() {
     backendRefJson: JSON.stringify({
       schemaVersion: 1,
       backend: 'node_pty',
-      ptySessionId: 20,
+      ptyProcessId: 20,
       pid: 1234,
     }),
     command: 'bash',

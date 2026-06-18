@@ -55,14 +55,14 @@ export function runPtyGc(
 
 function collectGcSessions(repository: PtyRepositoryService) {
   return Effect.gen(function* () {
-    const sessions = yield* repository.listSessions();
+    const sessions = yield* repository.listProcesses();
     const decoded: PtyBackendGcSession[] = [];
     for (const session of sessions) {
       const ref = yield* decodeBackendRef(session).pipe(Effect.orElseSucceed(() => null));
       if (!ref) {
         continue;
       }
-      decoded.push({ ptySessionId: session.id, ref, status: session.status });
+      decoded.push({ ptyProcessId: session.id, ref, status: session.status });
     }
     return decoded;
   });
@@ -74,13 +74,13 @@ function applyGcFinding(backend: PtyBackend, finding: PtyBackendGcFinding) {
       ? 'orphan backend session'
       : `terminal ${finding.status} PTY row`;
   console.warn(
-    `[runtime] Killing ${reason} during PTY backend GC backend=${backend.name} ptySessionId=${finding.ptySessionId}`,
+    `[runtime] Killing ${reason} during PTY backend GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,
   );
   return backend.kill(finding.ref).pipe(
     Effect.catchAll((error) =>
       Effect.sync(() => {
         console.warn(
-          `[runtime] Failed to kill PTY backend session during GC backend=${backend.name} ptySessionId=${finding.ptySessionId}`,
+          `[runtime] Failed to kill PTY backend session during GC backend=${backend.name} ptyProcessId=${finding.ptyProcessId}`,
           error,
         );
       }),

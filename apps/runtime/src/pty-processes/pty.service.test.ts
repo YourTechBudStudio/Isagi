@@ -89,8 +89,8 @@ test('PTY process repository transitions process lifecycle facts only', async ()
           args: [],
           cwd: '/repo/isagi',
         });
-        yield* repository.transitionSession({
-          ptySessionId: id,
+        yield* repository.transitionProcess({
+          ptyProcessId: id,
           status: 'failed',
           statusReason: 'backend_launch_failed',
           exitCode: 1,
@@ -120,8 +120,8 @@ test('PTY process service rejects concurrent websocket attachments for the same 
         const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
         return yield* Effect.all(
           [
-            pty.attach({ ptySessionId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
-            pty.attach({ ptySessionId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
+            pty.attach({ ptyProcessId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
+            pty.attach({ ptyProcessId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
           ],
           { concurrency: 'unbounded' },
         );
@@ -155,7 +155,7 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
       Effect.succeed({
         schemaVersion: 1,
         backend: 'node_pty',
-        ptySessionId: input.ptySessionId,
+        ptyProcessId: input.ptyProcessId,
         pid: 1234,
       }),
     attach: () =>

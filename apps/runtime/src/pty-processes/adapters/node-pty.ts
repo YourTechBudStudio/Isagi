@@ -33,8 +33,8 @@ import { collectNodePtyGarbage } from './node-pty-gc.js';
 
 const replayChunkBytes = 64 * 1024;
 
-interface LiveNodePtySession {
-  readonly ptySessionId: number;
+interface LiveNodePtyProcess {
+  readonly ptyProcessId: number;
   readonly process: nodePty.IPty;
   readonly logPath: string | null;
   attachment: NodePtyAttachment | null;
@@ -57,7 +57,7 @@ export const NodePtyBackendLive = Layer.effect(
   NodePtyBackend,
   Effect.sync(() => {
     ensureNodePtyDarwinHelperExecutable();
-    const liveSessions = new Map<number, LiveNodePtySession>();
+    const liveSessions = new Map<number, LiveNodePtyProcess>();
     const listSessions = Effect.sync(() =>
       [...liveSessions.values()].flatMap((session) =>
         session.running
@@ -65,7 +65,7 @@ export const NodePtyBackendLive = Layer.effect(
               {
                 schemaVersion: 1,
                 backend: 'node_pty' as const,
-                ptySessionId: session.ptySessionId,
+                ptyProcessId: session.ptyProcessId,
                 pid: session.process.pid,
               } satisfies NodePtyBackendRef,
             ]
@@ -80,24 +80,24 @@ export const NodePtyBackendLive = Layer.effect(
         Effect.try({
           try: () => {
             const pty = spawnNodePty(input);
-            const live: LiveNodePtySession = {
-              ptySessionId: input.ptySessionId,
+            const live: LiveNodePtyProcess = {
+              ptyProcessId: input.ptyProcessId,
               process: pty,
               logPath: input.logPath,
               attachment: null,
               running: true,
               suppressExitCallback: false,
             };
-            liveSessions.set(input.ptySessionId, live);
+            liveSessions.set(input.ptyProcessId, live);
             pty.onData((data) => {
-              appendBackendLog(input.logPath, data, input.ptySessionId);
+              appendBackendLog(input.logPath, data, input.ptyProcessId);
               live.attachment?.onOutput(data);
             });
             pty.onExit((event) => {
               // `kill` marks and removes the process-local live entry before
               // node-pty can emit exit. Ignore that callback so GC/delete cleanup
               // cannot rewrite an already-terminal or already-deleted durable row.
-              if (live.suppressExitCallback || liveSessions.get(input.ptySessionId) !== live) {
+              if (live.suppressExitCallback || liveSessions.get(input.ptyProcessId) !== live) {
                 return;
               }
               live.running = false;
@@ -106,19 +106,19 @@ export const NodePtyBackendLive = Layer.effect(
                 signal: event.signal ? String(event.signal) : null,
               };
               live.attachment?.onExit(exit);
-              liveSessions.delete(input.ptySessionId);
+              liveSessions.delete(input.ptyProcessId);
               input.onExit(exit);
             });
             return {
               schemaVersion: 1,
               backend: 'node_pty',
-              ptySessionId: input.ptySessionId,
+              ptyProcessId: input.ptyProcessId,
               pid: pty.pid,
             } satisfies NodePtyBackendRef;
           },
           catch: (cause) =>
             new PtyStartError({
-              ptySessionId: input.ptySessionId,
+              ptyProcessId: input.ptyProcessId,
               command: input.command,
               cwd: input.cwd,
               cause,
@@ -131,13 +131,13 @@ export const NodePtyBackendLive = Layer.effect(
               throw new Error(`Cannot attach node-pty backend to ${input.ref.backend} ref.`);
             }
             const ref = input.ref;
-            const live = liveSessions.get(ref.ptySessionId);
+            const live = liveSessions.get(ref.ptyProcessId);
             if (!live?.running) {
-              throw new Error(`node-pty session ${ref.ptySessionId} is not live.`);
+              throw new Error(`node-pty process ${ref.ptyProcessId} is not live.`);
             }
             live.process.resize(input.cols, input.rows);
             const attachment = {
-              id: Symbol(`node-pty-attachment-${ref.ptySessionId}`),
+              id: Symbol(`node-pty-attachment-${ref.ptyProcessId}`),
               onOutput: input.onOutput,
               onExit: input.onSessionExit,
             } satisfies NodePtyAttachment;
@@ -146,12 +146,12 @@ export const NodePtyBackendLive = Layer.effect(
               write: (data) =>
                 Effect.try({
                   try: () => live.process.write(data),
-                  catch: (cause) => new PtyWriteError({ ptySessionId: ref.ptySessionId, cause }),
+                  catch: (cause) => new PtyWriteError({ ptyProcessId: ref.ptyProcessId, cause }),
                 }),
               resize: (size) =>
                 Effect.try({
                   try: () => live.process.resize(size.cols, size.rows),
-                  catch: (cause) => new PtyResizeError({ ptySessionId: ref.ptySessionId, cause }),
+                  catch: (cause) => new PtyResizeError({ ptyProcessId: ref.ptyProcessId, cause }),
                 }),
               detach: Effect.sync(() => {
                 if (live.attachment?.id === attachment.id) {
@@ -162,7 +162,7 @@ export const NodePtyBackendLive = Layer.effect(
           },
           catch: (cause) =>
             new PtyStartError({
-              ptySessionId: input.ref.backend === 'node_pty' ? input.ref.ptySessionId : undefined,
+              ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
               command: 'node_pty_attach',
               cwd: '',
               cause,
@@ -171,7 +171,7 @@ export const NodePtyBackendLive = Layer.effect(
       replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
       inspect: (ref) =>
         Effect.succeed(
-          ref.backend === 'node_pty' && liveSessions.get(ref.ptySessionId)?.running
+          ref.backend === 'node_pty' && liveSessions.get(ref.ptyProcessId)?.running
             ? { status: 'alive' as const }
             : { status: 'missing' as const },
         ),
@@ -184,25 +184,25 @@ export const NodePtyBackendLive = Layer.effect(
               throw new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`);
             }
             const nodeRef = ref;
-            const live = liveSessions.get(nodeRef.ptySessionId);
+            const live = liveSessions.get(nodeRef.ptyProcessId);
             if (!live) {
               return;
             }
             live.suppressExitCallback = true;
-            liveSessions.delete(nodeRef.ptySessionId);
+            liveSessions.delete(nodeRef.ptyProcessId);
             try {
               live.process.kill();
             } catch (error) {
               live.suppressExitCallback = false;
               if (live.running) {
-                liveSessions.set(nodeRef.ptySessionId, live);
+                liveSessions.set(nodeRef.ptyProcessId, live);
               }
               throw error;
             }
           },
           catch: (cause) =>
             new PtyKillError({
-              ptySessionId: ref.backend === 'node_pty' ? ref.ptySessionId : undefined,
+              ptyProcessId: ref.backend === 'node_pty' ? ref.ptyProcessId : undefined,
               cause,
             }),
         }),
@@ -233,14 +233,14 @@ export function nodePtyLaunchCommand(command: string, args: readonly string[]) {
   };
 }
 
-function appendBackendLog(path: string | null, data: string, ptySessionId: number) {
+function appendBackendLog(path: string | null, data: string, ptyProcessId: number) {
   if (!path) {
     return;
   }
   try {
     appendFileSync(path, data, 'utf8');
   } catch (error) {
-    console.error(`[runtime] Failed to append PTY output for session ${ptySessionId}`, error);
+    console.error(`[runtime] Failed to append PTY output for session ${ptyProcessId}`, error);
   }
 }
 

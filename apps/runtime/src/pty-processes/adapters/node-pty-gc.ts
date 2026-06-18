@@ -13,16 +13,16 @@ export function collectNodePtyGarbage(
 ) {
   return Effect.gen(function* () {
     const backendSessions = yield* listSessions;
-    const persisted = new Map(input.sessions.map((session) => [session.ptySessionId, session]));
+    const persisted = new Map(input.sessions.map((session) => [session.ptyProcessId, session]));
     const findings: PtyBackendGcFinding[] = [];
 
     for (const ref of backendSessions) {
-      const session = persisted.get(ref.ptySessionId);
+      const session = persisted.get(ref.ptyProcessId);
       if (!session || session.ref.backend !== 'node_pty') {
         findings.push({
           type: 'orphan_backend_session',
           ref,
-          ptySessionId: ref.ptySessionId,
+          ptyProcessId: ref.ptyProcessId,
         });
         continue;
       }
@@ -35,7 +35,7 @@ export function collectNodePtyGarbage(
         findings.push({
           type: 'terminal_backend_session',
           ref,
-          ptySessionId: session.ptySessionId,
+          ptyProcessId: session.ptyProcessId,
           status: session.status,
         });
       }

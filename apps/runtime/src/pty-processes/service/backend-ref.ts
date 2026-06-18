@@ -2,18 +2,13 @@ import { join } from 'node:path';
 
 import { Effect, Schema } from 'effect';
 
-import type { PtySessionRow } from '../../surfaces/index.js';
-import {
-  PtyServiceError,
-  type BackendSessionRef,
-  type PtyBackend,
-  type PtySessionLaunchMetadata,
-} from '../types.js';
+import type { PtyProcessRecord } from '../../surfaces/index.js';
+import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../types.js';
 
 const nodePtyBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   backend: Schema.Literal('node_pty'),
-  ptySessionId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  ptyProcessId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   pid: Schema.NullOr(Schema.Number.pipe(Schema.int())),
 });
 
@@ -24,7 +19,7 @@ const tmuxBackendRefSchema = Schema.Struct({
 });
 
 export function decodeBackendRef(
-  session: PtySessionRow,
+  session: PtyProcessRecord,
 ): Effect.Effect<BackendSessionRef, PtyServiceError> {
   return Effect.try({
     try: () => {
@@ -33,18 +28,18 @@ export function decodeBackendRef(
         return Schema.decodeUnknownSync(tmuxBackendRefSchema)(raw);
       }
       const ref = Schema.decodeUnknownSync(nodePtyBackendRefSchema)(raw);
-      if (ref.ptySessionId === session.id) {
+      if (ref.ptyProcessId === session.id) {
         return ref;
       }
       throw new Error(
-        `Backend ref ptySessionId ${ref.ptySessionId} does not match row id ${session.id}.`,
+        `Backend ref ptyProcessId ${ref.ptyProcessId} does not match row id ${session.id}.`,
       );
     },
     catch: (cause) =>
       new PtyServiceError({
         code: 'backend_session_missing',
-        message: `PTY session ${session.id} has an invalid or unsupported backend ref.`,
-        ptySessionId: session.id,
+        message: `PTY process ${session.id} has an invalid or unsupported backend ref.`,
+        ptyProcessId: session.id,
         cause,
       }),
   });
@@ -52,12 +47,12 @@ export function decodeBackendRef(
 
 export function backendMetadataForLaunch(
   backend: PtyBackend,
-  metadata: PtySessionLaunchMetadata,
+  metadata: { readonly ptyProcessId: number; readonly logPath: string | null },
   runtimeNamespace: string,
   sessionsPath: string,
 ) {
   if (backend.name === 'tmux') {
-    const sessionName = `isagi_${runtimeNamespace}_${metadata.ptySessionId}`;
+    const sessionName = `isagi_${runtimeNamespace}_${metadata.ptyProcessId}`;
     return {
       backendSessionName: sessionName,
       logMode: 'none' as const,
@@ -69,7 +64,7 @@ export function backendMetadataForLaunch(
       } as const,
     };
   }
-  const logPath = join(sessionsPath, `${metadata.ptySessionId}.ptylog`);
+  const logPath = join(sessionsPath, `${metadata.ptyProcessId}.ptylog`);
   return {
     backendSessionName: null,
     logMode: 'backend_file' as const,
@@ -77,7 +72,7 @@ export function backendMetadataForLaunch(
     ref: {
       schemaVersion: 1,
       backend: 'node_pty',
-      ptySessionId: metadata.ptySessionId,
+      ptyProcessId: metadata.ptyProcessId,
       pid: null,
     } as const,
   };

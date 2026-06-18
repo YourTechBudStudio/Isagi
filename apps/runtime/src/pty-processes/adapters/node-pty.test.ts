@@ -34,7 +34,7 @@ test('node-pty backend launch boundary passes structured args to spawn', () => {
 
   const spawned = spawnNodePty(
     {
-      ptySessionId: 1,
+      ptyProcessId: 1,
       backendSessionName: null,
       command: 'pi',
       args: ['-e', '/tmp/ext.ts', '--session', 'abc$(nope)'],

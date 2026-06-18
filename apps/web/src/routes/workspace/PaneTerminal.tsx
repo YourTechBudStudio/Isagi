@@ -190,7 +190,7 @@ export function PaneTerminal({
           if (hostVisible && !warnedFitUnavailable) {
             warnedFitUnavailable = true;
             console.warn('xterm fit skipped because render cell dimensions were unavailable.', {
-              ptySessionId: sessionId,
+              sessionId,
               hostWidth: hostRect.width,
               hostHeight: hostRect.height,
             });

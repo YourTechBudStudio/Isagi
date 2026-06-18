@@ -442,7 +442,7 @@ test('delete last pane deletes the surface and removes referenced logs', async (
         mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
         const logPath = join(dataRoot, 'sessions', 'delete-last-pane.ptylog');
         writeFileSync(logPath, 'session log', 'utf8');
-        const ptySessionId = yield* insertPtySession({
+        const ptyProcessId = yield* insertPtyProcess({
           paneId: surface.paneId,
           worktreeId,
           logPath,
@@ -454,7 +454,7 @@ test('delete last pane deletes the surface and removes referenced logs', async (
           paneId: surface.paneId,
         });
         const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
-        return { deleted, detail, logPath, ptySessionId, surface };
+        return { deleted, detail, logPath, ptyProcessId, surface };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -492,7 +492,7 @@ test('delete surface warns but still deletes rows when log deletion fails', asyn
         mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
         const logPath = join(dataRoot, 'sessions', 'log-path-is-directory.ptylog');
         mkdirSync(logPath);
-        const ptySessionId = yield* insertPtySession({
+        const ptyProcessId = yield* insertPtyProcess({
           paneId: surface.paneId,
           worktreeId,
           logPath,
@@ -501,7 +501,7 @@ test('delete surface warns but still deletes rows when log deletion fails', asyn
 
         const deleted = yield* surfaces.deleteSurface(surface.surfaceId);
         const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
-        return { deleted, detail, logPath, ptySessionId, surface };
+        return { deleted, detail, logPath, ptyProcessId, surface };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -513,7 +513,7 @@ test('delete surface warns but still deletes rows when log deletion fails', asyn
         {
           code: 'session_log_delete_failed',
           paneId: output.surface.paneId,
-          session: { kind: 'terminal_session', terminalSessionId: output.ptySessionId },
+          session: { kind: 'terminal_session', terminalSessionId: output.ptyProcessId },
         },
       ],
     });
@@ -538,7 +538,7 @@ test('delete surface continues after live PTY cleanup warning', async () => {
           kind: 'terminal',
           titleBase: 'Terminal',
         });
-        const ptySessionId = yield* insertPtySession({
+        const ptyProcessId = yield* insertPtyProcess({
           paneId: surface.paneId,
           worktreeId,
           logPath: null,
@@ -547,7 +547,7 @@ test('delete surface continues after live PTY cleanup warning', async () => {
 
         const deleted = yield* surfaces.deleteSurface(surface.surfaceId);
         const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId).pipe(Effect.either);
-        return { deleted, detail, surface, ptySessionId };
+        return { deleted, detail, surface, ptyProcessId };
       }).pipe(
         Effect.provide(
           testLayer(dataRoot, {
@@ -566,13 +566,13 @@ test('delete surface continues after live PTY cleanup warning', async () => {
     assert.equal(output.deleted.deletedSurfaceId, output.surface.surfaceId);
     assert.deepEqual(output.deleted.deletedPaneIds, [output.surface.paneId]);
     assert.deepEqual(output.deleted.attemptedSessionIds, [
-      { kind: 'terminal_session', terminalSessionId: output.ptySessionId },
+      { kind: 'terminal_session', terminalSessionId: output.ptyProcessId },
     ]);
     assert.deepEqual(output.deleted.warnings, [
       {
         code: 'session_process_cleanup_failed',
         paneId: output.surface.paneId,
-        session: { kind: 'terminal_session', terminalSessionId: output.ptySessionId },
+        session: { kind: 'terminal_session', terminalSessionId: output.ptyProcessId },
       },
     ]);
     assert.equal(Either.isLeft(output.detail), true);
@@ -596,13 +596,13 @@ test('delete pane cleans up every live session when invalid layout escalates to 
           titleBase: 'Terminal',
         });
         const secondPaneId = yield* addPaneToSurface(surface.surfaceId);
-        const firstSessionId = yield* insertPtySession({
+        const firstSessionId = yield* insertPtyProcess({
           paneId: surface.paneId,
           worktreeId,
           logPath: null,
           status: 'running',
         });
-        const secondSessionId = yield* insertPtySession({
+        const secondSessionId = yield* insertPtyProcess({
           paneId: secondPaneId,
           worktreeId,
           logPath: null,
@@ -663,13 +663,13 @@ test('cleanup worktree for delete cleans live sessions across surfaces without d
           kind: 'agent',
           titleBase: 'Agent',
         });
-        const firstSessionId = yield* insertPtySession({
+        const firstSessionId = yield* insertPtyProcess({
           paneId: first.paneId,
           worktreeId,
           logPath: null,
           status: 'running',
         });
-        const secondSessionId = yield* insertPtySession({
+        const secondSessionId = yield* insertPtyProcess({
           paneId: second.paneId,
           worktreeId,
           logPath: null,
@@ -827,7 +827,7 @@ function insertAgentSessionForWorktree(input: {
   });
 }
 
-function insertPtySession(input: {
+function insertPtyProcess(input: {
   readonly paneId: number;
   readonly worktreeId: number;
   readonly logPath: string | null;
@@ -844,7 +844,7 @@ function insertPtySession(input: {
           backendRefJson: JSON.stringify({
             schemaVersion: 1,
             backend: 'node_pty',
-            ptySessionId: 0,
+            ptyProcessId: 0,
             pid: null,
           }),
           command: 'bash',
@@ -871,7 +871,7 @@ function insertPtySession(input: {
           backendRefJson: JSON.stringify({
             schemaVersion: 1,
             backend: 'node_pty',
-            ptySessionId: process.id,
+            ptyProcessId: process.id,
             pid: null,
           }),
         })
@@ -1010,7 +1010,5 @@ function fakePtyService(options: {
     kill: () => Effect.die('kill is not used by surface service tests'),
     cleanupProcessForDelete: (input) =>
       Effect.succeed([...(options.cleanupWarnings?.(input.ptyProcessId) ?? [])]),
-    cleanupSessionForDelete: () =>
-      Effect.die('cleanupSessionForDelete is not used by surface service tests'),
   };
 }

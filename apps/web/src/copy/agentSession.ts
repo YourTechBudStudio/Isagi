@@ -1,5 +1,3 @@
-import type { AttentionState } from '../lib/workspace/types.js';
-
 /**
  * The recovery prompts an agent pane shows when no live process is attached and
  * the durable agent session needs the user to choose how to proceed. These are
@@ -11,14 +9,6 @@ import type { AttentionState } from '../lib/workspace/types.js';
  *  - start_fresh       nothing can be recovered; only a fresh session can start
  */
 export type PaneRestorePrompt = 'resume_available' | 'resume_failed' | 'start_fresh';
-
-/** Attention tone for each restore prompt: a failed resume is a still error, the
- *  others wait on the user. */
-export const paneRestoreAttention: Record<PaneRestorePrompt, AttentionState> = {
-  resume_available: 'waiting',
-  resume_failed: 'error',
-  start_fresh: 'waiting',
-};
 
 export const agentSessionCopy = {
   // The compact status that sits right-aligned in the pane header. Dry, since

@@ -3,14 +3,14 @@ import { Effect, Either } from 'effect';
 import type { SurfaceDeleteWarning } from '@isagi/contracts';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtySessionRow } from '../../surfaces/index.js';
+import type { PtyProcessRecord } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
-import type { PtySessionStatusReason } from '../types.js';
+import type { PtyProcessStatusReason } from '../types.js';
 import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { detachActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
-import { transitionSessionAndPublish } from './events.js';
+import { transitionProcessAndPublish } from './events.js';
 import {
   persistExit,
   retryPersistKilledUntilSuccess,
@@ -18,31 +18,31 @@ import {
 } from './lifecycle.js';
 
 export type DurablePtyTerminationReason = Extract<
-  PtySessionStatusReason,
+  PtyProcessStatusReason,
   'user_requested' | 'runtime_shutdown'
 >;
 
 export type PtyTerminationOutcome = 'persist_killed' | 'delete_session';
 
-export function terminatePtySessionAndPersistKilled(input: {
+export function terminatePtyProcessAndPersistKilled(input: {
   readonly repository: PtyRepositoryService;
   readonly backend: PtyBackend;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: Map<number, PtyTerminationState>;
-  readonly ptySessionId: number;
+  readonly ptyProcessId: number;
   readonly reason: DurablePtyTerminationReason;
   readonly killFailurePolicy?: 'fail' | 'persist_killed';
 }) {
   return Effect.gen(function* () {
-    const session = yield* findPtySessionOrFail(input.repository, input.ptySessionId);
+    const session = yield* findPtyProcessOrFail(input.repository, input.ptyProcessId);
     const ref = yield* decodeBackendRef(session);
     if (session.backend !== input.backend.name) {
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
           message: `PTY backend ${session.backend} is not active in this runtime process.`,
-          ptySessionId: session.id,
+          ptyProcessId: session.id,
         }),
       );
     }
@@ -57,7 +57,7 @@ export function terminatePtySessionAndPersistKilled(input: {
     if (Either.isLeft(killResult)) {
       if (input.killFailurePolicy === 'persist_killed') {
         console.warn(
-          `[runtime] PTY backend termination failed; persisting terminal state ptySessionId=${session.id} reason=${input.reason}`,
+          `[runtime] PTY backend termination failed; persisting terminal state ptyProcessId=${session.id} reason=${input.reason}`,
           killResult.left,
         );
       } else {
@@ -90,23 +90,23 @@ export function terminatePtySessionAndPersistKilled(input: {
 
     completePtyTermination(input.terminations, session, termination);
     console.info(
-      `[runtime] PTY session terminated ptySessionId=${session.id} reason=${input.reason} outcome=persist_killed`,
+      `[runtime] PTY process terminated ptyProcessId=${session.id} reason=${input.reason} outcome=persist_killed`,
     );
   });
 }
 
-export function terminatePtySessionForDelete(input: {
+export function terminatePtyProcessForDelete(input: {
   readonly repository: PtyRepositoryService;
   readonly backend: PtyBackend;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: Map<number, PtyTerminationState>;
-  readonly ptySessionId: number;
+  readonly ptyProcessId: number;
   readonly paneId: number;
   readonly session: SurfaceDeleteWarning['session'];
 }) {
   return Effect.gen(function* () {
-    const session = yield* input.repository.findSession(input.ptySessionId);
+    const session = yield* input.repository.findProcess(input.ptyProcessId);
     if (!session || (session.status !== 'starting' && session.status !== 'running')) {
       return [];
     }
@@ -144,7 +144,7 @@ export function terminatePtySessionForDelete(input: {
     if (Either.isLeft(killResult)) {
       input.terminations.delete(session.id);
       console.warn(
-        `[runtime] PTY delete cleanup could not terminate backend session ptySessionId=${session.id}`,
+        `[runtime] PTY delete cleanup could not terminate backend session ptyProcessId=${session.id}`,
         killResult.left,
       );
       return [deleteCleanupWarning('session_process_cleanup_failed', input.paneId, input.session)];
@@ -159,21 +159,21 @@ export function terminatePtySessionForDelete(input: {
       statusReason: 'user_requested',
     });
     console.info(
-      `[runtime] PTY session terminated for delete ptySessionId=${session.id} reason=user_requested outcome=delete_session`,
+      `[runtime] PTY process terminated for delete ptyProcessId=${session.id} reason=user_requested outcome=delete_session`,
     );
     return [];
   });
 }
 
-function findPtySessionOrFail(repository: PtyRepositoryService, ptySessionId: number) {
+function findPtyProcessOrFail(repository: PtyRepositoryService, ptyProcessId: number) {
   return Effect.gen(function* () {
-    const session = yield* repository.findSession(ptySessionId);
+    const session = yield* repository.findProcess(ptyProcessId);
     if (!session) {
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'session_not_found',
-          message: `PTY session ${ptySessionId} was not found.`,
-          ptySessionId,
+          message: `PTY process ${ptyProcessId} was not found.`,
+          ptyProcessId,
         }),
       );
     }
@@ -183,7 +183,7 @@ function findPtySessionOrFail(repository: PtyRepositoryService, ptySessionId: nu
 
 function beginPtyTermination(
   terminations: Map<number, PtyTerminationState>,
-  ptySessionId: number,
+  ptyProcessId: number,
   input: {
     readonly reason: DurablePtyTerminationReason;
     readonly outcome: PtyTerminationOutcome;
@@ -195,7 +195,7 @@ function beginPtyTermination(
     reason: input.reason,
     outcome: input.outcome,
   };
-  terminations.set(ptySessionId, termination);
+  terminations.set(ptyProcessId, termination);
   return termination;
 }
 
@@ -205,10 +205,10 @@ function persistKilledTransition(
     readonly eventBus: InternalRuntimeEventBusService;
     readonly reason: DurablePtyTerminationReason;
   },
-  session: PtySessionRow,
+  session: PtyProcessRecord,
 ) {
-  return transitionSessionAndPublish(input.repository, input.eventBus, session, {
-    ptySessionId: session.id,
+  return transitionProcessAndPublish(input.repository, input.eventBus, session, {
+    ptyProcessId: session.id,
     status: 'killed',
     statusReason: input.reason,
     exitCode: null,
@@ -218,7 +218,7 @@ function persistKilledTransition(
 
 function completePtyTermination(
   terminations: Map<number, PtyTerminationState>,
-  session: PtySessionRow,
+  session: PtyProcessRecord,
   termination: PtyTerminationState,
 ) {
   termination.completed = true;

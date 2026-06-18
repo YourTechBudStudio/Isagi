@@ -175,7 +175,6 @@ function fakePtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     cleanupProcessForDelete: () => Effect.die('cleanupProcessForDelete is not used'),
-    cleanupSessionForDelete: () => Effect.die('cleanupSessionForDelete is not used'),
   } satisfies PtyServiceShape;
 }
 
@@ -228,7 +227,7 @@ function ptyProcess(input: {
     backendRefJson: JSON.stringify({
       schemaVersion: 1,
       backend: 'node_pty',
-      ptySessionId: input.id,
+      ptyProcessId: input.id,
       pid: 1234,
     }),
     command: 'pi',

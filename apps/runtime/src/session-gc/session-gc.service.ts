@@ -39,7 +39,7 @@ export const SessionGcLive = Layer.scoped(
           (session.activePtyProcess?.status === 'starting' ||
             session.activePtyProcess?.status === 'running')
         ) {
-          yield* pty.kill({ ptySessionId: session.activePtyProcessId }).pipe(Effect.ignore);
+          yield* pty.kill({ ptyProcessId: session.activePtyProcessId }).pipe(Effect.ignore);
         }
         yield* agents.delete(session.id);
       }
@@ -53,7 +53,7 @@ export const SessionGcLive = Layer.scoped(
           (session.activePtyProcess?.status === 'starting' ||
             session.activePtyProcess?.status === 'running')
         ) {
-          yield* pty.kill({ ptySessionId: session.activePtyProcessId }).pipe(Effect.ignore);
+          yield* pty.kill({ ptyProcessId: session.activePtyProcessId }).pipe(Effect.ignore);
         }
         yield* terminals.delete(session.id);
       }

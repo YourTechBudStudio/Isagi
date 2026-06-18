@@ -13,7 +13,7 @@ export function collectTmuxGarbage(
 ) {
   return Effect.gen(function* () {
     const backendSessions = yield* listSessions;
-    const persisted = new Map(input.sessions.map((session) => [session.ptySessionId, session]));
+    const persisted = new Map(input.sessions.map((session) => [session.ptyProcessId, session]));
     const findings: PtyBackendGcFinding[] = [];
 
     for (const ref of backendSessions) {
@@ -21,12 +21,12 @@ export function collectTmuxGarbage(
       if (!parsed) {
         continue;
       }
-      const session = persisted.get(parsed.ptySessionId);
+      const session = persisted.get(parsed.ptyProcessId);
       if (!session) {
         findings.push({
           type: 'orphan_backend_session',
           ref,
-          ptySessionId: parsed.ptySessionId,
+          ptyProcessId: parsed.ptyProcessId,
         });
         continue;
       }
@@ -37,7 +37,7 @@ export function collectTmuxGarbage(
         findings.push({
           type: 'terminal_backend_session',
           ref,
-          ptySessionId: session.ptySessionId,
+          ptyProcessId: session.ptyProcessId,
           status: session.status,
         });
       }
@@ -52,8 +52,8 @@ function parseRuntimeTmuxSessionName(sessionName: string, runtimeNamespace: stri
   if (!match?.[1]) {
     return null;
   }
-  const ptySessionId = Number(match[1]);
-  return Number.isSafeInteger(ptySessionId) && ptySessionId > 0 ? { ptySessionId } : null;
+  const ptyProcessId = Number(match[1]);
+  return Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? { ptyProcessId } : null;
 }
 
 function escapeRegExp(value: string) {

@@ -137,7 +137,7 @@ function registerSessionAttachRoute(
           const planResult = await run(
             Effect.gen(function* () {
               const pty = yield* PtyService;
-              return yield* pty.getAttachmentPlan({ ptySessionId: processResult.right });
+              return yield* pty.getAttachmentPlan({ ptyProcessId: processResult.right });
             }).pipe(Effect.either),
           );
           if (Either.isLeft(planResult)) {
@@ -198,7 +198,7 @@ function registerSessionAttachRoute(
               yield* lifecycle.supersedeAttachment(sessionKey);
               const pty = yield* PtyService;
               return yield* pty.attach({
-                ptySessionId: processResult.right,
+                ptyProcessId: processResult.right,
                 send: (message) => send(socket, message),
               });
             }).pipe(Effect.either),
@@ -285,9 +285,9 @@ function registerSessionAttachRoute(
         const effect = Effect.gen(function* () {
           const pty = yield* PtyService;
           if (parsed.type === 'input')
-            return yield* pty.write({ ptySessionId: processId, attachmentId, data: parsed.data });
+            return yield* pty.write({ ptyProcessId: processId, attachmentId, data: parsed.data });
           return yield* pty.resize({
-            ptySessionId: processId,
+            ptyProcessId: processId,
             attachmentId,
             cols: parsed.cols,
             rows: parsed.rows,

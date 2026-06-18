@@ -9,7 +9,7 @@ import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
 } from '../runtime-events/index.js';
-import type { PtySessionRow } from '../surfaces/index.js';
+import type { PtyProcessRecord } from '../surfaces/index.js';
 import { PtyBackend } from './backend.js';
 import { appendLog, PtyRepository, type PtyRepositoryService } from './pty.repository.js';
 import {
@@ -18,19 +18,19 @@ import {
   type ActiveAttachment,
 } from './service/attachments.js';
 import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
-import { transitionSessionAndPublish, transitionSessionByIdAndPublish } from './service/events.js';
+import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
 import { runPtyGc, startPtyGcLoop } from './service/gc.js';
 import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
 import {
-  replayBytesForSession,
-  replaySessionLog,
+  replayBytesForProcess,
+  replayProcessLog,
   reportOrphanPtyLogs,
   startOrphanPtyLogGcLoop,
 } from './service/logs.js';
 import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
 import {
-  terminatePtySessionAndPersistKilled,
-  terminatePtySessionForDelete,
+  terminatePtyProcessAndPersistKilled,
+  terminatePtyProcessForDelete,
 } from './service/termination.js';
 import {
   PtyKillError,
@@ -50,10 +50,10 @@ const statusPollIntervalMs = 10_000;
 export type PtyLaunchError = DatabaseError | PtyServiceError;
 export type PtyAttachError = DatabaseError | PtyServiceError;
 export type PtyInputError = DatabaseError | PtyServiceError | PtyWriteError | PtyResizeError;
-export type PtyKillSessionError = DatabaseError | PtyServiceError | PtyKillError;
+export type PtyKillProcessError = DatabaseError | PtyServiceError | PtyKillError;
 
 export interface PtyAttachment {
-  readonly session: PtySessionRow;
+  readonly session: PtyProcessRecord;
   readonly attachmentId: symbol | null;
   readonly replayBytes: number | null;
   readonly live: boolean;
@@ -61,7 +61,7 @@ export interface PtyAttachment {
 }
 
 export interface PtyAttachmentPlan {
-  readonly session: PtySessionRow;
+  readonly session: PtyProcessRecord;
   readonly replayBytes: number | null;
   readonly live: boolean;
   readonly replaySource: 'backend' | 'file_log';
@@ -72,40 +72,35 @@ export interface PtyService {
     input: LaunchPtyProcessInput,
   ) => Effect.Effect<PtyProcessLaunchMetadata, PtyLaunchError>;
   readonly getAttachmentPlan: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
   }) => Effect.Effect<PtyAttachmentPlan, PtyAttachError>;
   readonly attach: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   }) => Effect.Effect<PtyAttachment, PtyAttachError>;
   readonly replay: (input: {
-    readonly session: PtySessionRow;
+    readonly session: PtyProcessRecord;
     readonly bytes: number | null;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   }) => Effect.Effect<void, PtyAttachError>;
   readonly write: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly attachmentId: symbol | null;
     readonly data: string;
   }) => Effect.Effect<void, PtyInputError>;
   readonly resize: (input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly attachmentId: symbol | null;
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyInputError>;
   readonly kill: (input: {
-    readonly ptySessionId: number;
-  }) => Effect.Effect<void, PtyKillSessionError>;
+    readonly ptyProcessId: number;
+  }) => Effect.Effect<void, PtyKillProcessError>;
   readonly cleanupProcessForDelete: (input: {
     readonly ptyProcessId: number;
     readonly paneId: number;
     readonly session: SurfaceDeleteWarning['session'];
-  }) => Effect.Effect<SurfaceDeleteWarning[], DatabaseError>;
-  // Compatibility method used by some old tests/callers during the folder rename.
-  readonly cleanupSessionForDelete: (input: {
-    readonly ptySessionId: number;
-    readonly paneId: number;
   }) => Effect.Effect<SurfaceDeleteWarning[], DatabaseError>;
 }
 
@@ -125,7 +120,7 @@ export const PtyServiceLive = Layer.scoped(
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedSessions(repository, backend, eventBus, { startup: true });
+    yield* reconcilePersistedProcesses(repository, backend, eventBus, { startup: true });
     yield* runPtyGc(repository, backend, namespace);
     const pollTimer = startStatusPolling(repository, backend, eventBus);
     const gcTimer = startPtyGcLoop(repository, backend, namespace);
@@ -169,11 +164,11 @@ export const PtyServiceLive = Layer.scoped(
               startResult.left,
             );
             const failedProcess = yield* repository
-              .findSession(metadata.ptyProcessId)
+              .findProcess(metadata.ptyProcessId)
               .pipe(Effect.orElseSucceed(() => null));
             if (failedProcess?.logPath) appendLog(failedProcess.logPath, message);
-            yield* transitionSessionByIdAndPublish(repository, eventBus, {
-              ptySessionId: metadata.ptyProcessId,
+            yield* transitionProcessByIdAndPublish(repository, eventBus, {
+              ptyProcessId: metadata.ptyProcessId,
               status: 'failed',
               statusReason: 'backend_launch_failed',
               exitCode: null,
@@ -182,13 +177,13 @@ export const PtyServiceLive = Layer.scoped(
           } else {
             yield* repository
               .updateBackendRef({
-                ptySessionId: metadata.ptyProcessId,
+                ptyProcessId: metadata.ptyProcessId,
                 backendRefJson: JSON.stringify(startResult.right),
               })
               .pipe(
                 Effect.zipRight(
-                  transitionSessionByIdAndPublish(repository, eventBus, {
-                    ptySessionId: metadata.ptyProcessId,
+                  transitionProcessByIdAndPublish(repository, eventBus, {
+                    ptyProcessId: metadata.ptyProcessId,
                     status: 'running',
                     statusReason: null,
                     exitCode: null,
@@ -202,10 +197,10 @@ export const PtyServiceLive = Layer.scoped(
                 ),
               );
           }
-          const row = yield* repository.findSession(metadata.ptyProcessId);
+          const row = yield* repository.findProcess(metadata.ptyProcessId);
           return { ...metadata, logPath: row?.logPath ?? null } satisfies PtyProcessLaunchMetadata;
         }),
-      getAttachmentPlan: (input) => getAttachmentPlan(repository, backend, input.ptySessionId),
+      getAttachmentPlan: (input) => getAttachmentPlan(repository, backend, input.ptyProcessId),
       attach: (input) =>
         attachToProcess(
           repository,
@@ -220,7 +215,7 @@ export const PtyServiceLive = Layer.scoped(
         Effect.gen(function* () {
           const active = yield* requireActiveAttachment(
             activeAttachments,
-            input.ptySessionId,
+            input.ptyProcessId,
             input.attachmentId,
           );
           yield* active.attachment.write(input.data);
@@ -229,42 +224,31 @@ export const PtyServiceLive = Layer.scoped(
         Effect.gen(function* () {
           const active = yield* requireActiveAttachment(
             activeAttachments,
-            input.ptySessionId,
+            input.ptyProcessId,
             input.attachmentId,
           );
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
       kill: (input) =>
-        terminatePtySessionAndPersistKilled({
+        terminatePtyProcessAndPersistKilled({
           repository,
           backend,
           eventBus,
           activeAttachments,
           terminations,
-          ptySessionId: input.ptySessionId,
+          ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
         }),
       cleanupProcessForDelete: (input) =>
-        terminatePtySessionForDelete({
+        terminatePtyProcessForDelete({
           repository,
           backend,
           eventBus,
           activeAttachments,
           terminations,
-          ptySessionId: input.ptyProcessId,
+          ptyProcessId: input.ptyProcessId,
           paneId: input.paneId,
           session: input.session,
-        }),
-      cleanupSessionForDelete: (input) =>
-        terminatePtySessionForDelete({
-          repository,
-          backend,
-          eventBus,
-          activeAttachments,
-          terminations,
-          ptySessionId: input.ptySessionId,
-          paneId: input.paneId,
-          session: { kind: 'terminal_session', terminalSessionId: input.ptySessionId },
         }),
     } satisfies PtyService;
 
@@ -274,19 +258,19 @@ export const PtyServiceLive = Layer.scoped(
         clearInterval(gcTimer);
         clearInterval(logGcTimer);
         const sessions = yield* repository
-          .listSessions({ statuses: ['starting', 'running'] })
+          .listProcesses({ statuses: ['starting', 'running'] })
           .pipe(Effect.orElseSucceed(() => []));
         for (const active of activeAttachments.values()) yield* active.attachment.detach;
         activeAttachments.clear();
         for (const session of sessions) {
           if (session.backend !== 'node_pty') continue;
-          yield* terminatePtySessionAndPersistKilled({
+          yield* terminatePtyProcessAndPersistKilled({
             repository,
             backend,
             eventBus,
             activeAttachments,
             terminations,
-            ptySessionId: session.id,
+            ptyProcessId: session.id,
             reason: 'runtime_shutdown',
             killFailurePolicy: 'persist_killed',
           }).pipe(Effect.ignore);
@@ -303,12 +287,12 @@ function attachToProcess(
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
   input: {
-    readonly ptySessionId: number;
+    readonly ptyProcessId: number;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   },
 ) {
   return Effect.gen(function* () {
-    const plan = yield* getAttachmentPlan(repository, backend, input.ptySessionId);
+    const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
     if (!plan.live)
       return {
         session: plan.session,
@@ -324,7 +308,7 @@ function attachToProcess(
         new PtyServiceError({
           code: 'session_already_attached',
           message: `PTY process ${session.id} already has an active websocket attachment.`,
-          ptySessionId: session.id,
+          ptyProcessId: session.id,
         }),
       );
     }
@@ -345,14 +329,14 @@ function attachToProcess(
           new PtyServiceError({
             code: 'backend_attach_failed',
             message: `Could not attach to PTY process ${session.id}.`,
-            ptySessionId: session.id,
+            ptyProcessId: session.id,
             cause: attachResult.left,
           }),
         );
       }
       if (session.statusReason === 'backend_unavailable') {
-        yield* transitionSessionAndPublish(repository, eventBus, session, {
-          ptySessionId: session.id,
+        yield* transitionProcessAndPublish(repository, eventBus, session, {
+          ptyProcessId: session.id,
           status: 'running',
           statusReason: null,
           exitCode: session.exitCode,
@@ -361,7 +345,7 @@ function attachToProcess(
       }
       const attachmentId = Symbol(`pty-attachment-${session.id}`);
       activeAttachments.set(session.id, {
-        ptySessionId: session.id,
+        ptyProcessId: session.id,
         attachmentId,
         attachment: attachResult.right,
       });
@@ -383,14 +367,14 @@ function attachToProcess(
 function replayProcess(
   backend: PtyBackendShape,
   input: {
-    readonly session: PtySessionRow;
+    readonly session: PtyProcessRecord;
     readonly bytes: number | null;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   },
 ) {
   return Effect.gen(function* () {
     if (input.session.logMode === 'backend_file') {
-      yield* replaySessionLog({
+      yield* replayProcessLog({
         logPath: input.session.logPath,
         bytes: input.bytes,
         send: input.send,
@@ -408,7 +392,7 @@ function replayProcess(
         new PtyServiceError({
           code: 'backend_unavailable',
           message: `PTY backend ${input.session.backend} is not active in this runtime process.`,
-          ptySessionId: input.session.id,
+          ptyProcessId: input.session.id,
         }),
       );
     yield* backend.replay({
@@ -423,16 +407,16 @@ function replayProcess(
 function getAttachmentPlan(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
-  ptySessionId: number,
+  ptyProcessId: number,
 ) {
   return Effect.gen(function* () {
-    const session = yield* repository.findSession(ptySessionId);
+    const session = yield* repository.findProcess(ptyProcessId);
     if (!session)
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'session_not_found',
-          message: `PTY process ${ptySessionId} was not found.`,
-          ptySessionId,
+          message: `PTY process ${ptyProcessId} was not found.`,
+          ptyProcessId,
         }),
       );
     const live = session.status === 'running';
@@ -441,12 +425,12 @@ function getAttachmentPlan(
         new PtyServiceError({
           code: 'backend_unavailable',
           message: `PTY backend ${session.backend} is not active in this runtime process.`,
-          ptySessionId: session.id,
+          ptyProcessId: session.id,
         }),
       );
     return {
       session,
-      replayBytes: replayBytesForSession(session),
+      replayBytes: replayBytesForProcess(session),
       live,
       replaySource: session.logMode === 'backend_file' ? 'file_log' : 'backend',
     } satisfies PtyAttachmentPlan;
@@ -460,7 +444,7 @@ function startStatusPolling(
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedSessions(repository, backend, eventBus, { startup: false }).pipe(
+      reconcilePersistedProcesses(repository, backend, eventBus, { startup: false }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => console.warn('[runtime] PTY status polling failed', error)),
         ),
@@ -471,14 +455,14 @@ function startStatusPolling(
   return timer;
 }
 
-function reconcilePersistedSessions(
+function reconcilePersistedProcesses(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
   eventBus: InternalRuntimeEventBusService,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
-    const sessions = yield* repository.listSessions({ statuses: ['starting', 'running'] });
+    const sessions = yield* repository.listProcesses({ statuses: ['starting', 'running'] });
     for (const session of sessions) {
       if (session.backend === 'node_pty' && options.startup) {
         yield* transitionIfChanged(repository, eventBus, session, {
@@ -547,32 +531,23 @@ function launchWithBackend(input: {
   readonly env: NodeJS.ProcessEnv;
 }) {
   return Effect.gen(function* () {
-    const compat = {
-      worktreeId: 0,
-      surfaceId: 0,
-      paneId: 0,
-      ptySessionId: input.metadata.ptyProcessId,
-      command: input.metadata.command,
-      cwd: input.metadata.cwd,
-      logPath: input.metadata.logPath,
-    };
     const backendMetadata = backendMetadataForLaunch(
       input.backend,
-      compat,
+      input.metadata,
       input.runtimeNamespace,
       input.sessionsPath,
     );
     if (backendMetadata.logPath && !existsSync(backendMetadata.logPath))
       appendLog(backendMetadata.logPath, '');
     yield* input.repository.updateBackendMetadata({
-      ptySessionId: input.metadata.ptyProcessId,
+      ptyProcessId: input.metadata.ptyProcessId,
       backend: input.backend.name,
       backendRefJson: JSON.stringify(backendMetadata.ref),
       logMode: backendMetadata.logMode,
       logPath: backendMetadata.logPath,
     });
     const startResult = yield* input.backend.launch({
-      ptySessionId: input.metadata.ptyProcessId,
+      ptyProcessId: input.metadata.ptyProcessId,
       backendSessionName: backendMetadata.backendSessionName,
       command: input.metadata.command,
       args: input.metadata.args,
@@ -601,7 +576,7 @@ function handleAttachFailure(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
   eventBus: InternalRuntimeEventBusService,
-  session: PtySessionRow,
+  session: PtyProcessRecord,
   ref: BackendSessionRef,
 ) {
   return Effect.gen(function* () {
@@ -634,10 +609,10 @@ function handleAttachFailure(
 function transitionIfChanged(
   repository: PtyRepositoryService,
   eventBus: InternalRuntimeEventBusService,
-  session: PtySessionRow,
+  session: PtyProcessRecord,
   next: {
-    readonly status: PtySessionRow['status'];
-    readonly statusReason: PtySessionRow['statusReason'];
+    readonly status: PtyProcessRecord['status'];
+    readonly statusReason: PtyProcessRecord['statusReason'];
   },
   lastSeenAt?: string,
 ) {
@@ -647,8 +622,8 @@ function transitionIfChanged(
     lastSeenAt === undefined
   )
     return Effect.void;
-  return transitionSessionAndPublish(repository, eventBus, session, {
-    ptySessionId: session.id,
+  return transitionProcessAndPublish(repository, eventBus, session, {
+    ptyProcessId: session.id,
     status: next.status,
     statusReason: next.statusReason,
     exitCode: next.status === 'running' ? null : session.exitCode,

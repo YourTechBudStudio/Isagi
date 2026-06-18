@@ -74,8 +74,11 @@ export interface PtyProcessRow {
   readonly lastSeenAt: string | null;
 }
 
-// Compatibility alias for old internal files while the folder is being renamed.
-export type PtySessionRow = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
+// The PTY process row as the process service consumes it: args/argsJson are
+// optional (some call sites build the record before structured args land) and
+// it may carry the placement context (pane/surface/worktree) resolved at read
+// time. A bare `PtyProcessRow` is the strict persisted shape.
+export type PtyProcessRecord = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
   readonly args?: readonly string[] | undefined;
   readonly argsJson?: string | undefined;
   readonly paneId?: number | undefined;

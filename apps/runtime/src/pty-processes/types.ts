@@ -1,11 +1,6 @@
 import { Data, type Effect } from 'effect';
 
-import type {
-  PtyProcessBackend,
-  PtyProcessLogMode,
-  PtyWebSocketOutputMessage,
-  SessionStatus,
-} from '@isagi/contracts';
+import type { PtyProcessBackend, PtyWebSocketOutputMessage, SessionStatus } from '@isagi/contracts';
 
 export type PtyBackendName = PtyProcessBackend;
 export type PtyProcessStatus = SessionStatus;
@@ -18,17 +13,10 @@ export type PtyProcessStatusReason =
   | 'backend_launch_failed'
   | 'runtime_ephemeral_lost';
 
-// Compatibility aliases used while the old PTY internals are being renamed.
-// These names are internal only; public contracts no longer expose PTY sessions.
-export type PtySessionStatus = PtyProcessStatus;
-export type PtySessionStatusReason = PtyProcessStatusReason;
-export type PtySessionBackend = PtyProcessBackend;
-export type PtySessionLogMode = PtyProcessLogMode;
-
 export interface NodePtyBackendRef {
   readonly schemaVersion: 1;
   readonly backend: 'node_pty';
-  readonly ptySessionId: number;
+  readonly ptyProcessId: number;
   readonly pid: number | null;
 }
 
@@ -41,7 +29,7 @@ export interface TmuxBackendRef {
 export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
 
 export interface PtyBackendGcSession {
-  readonly ptySessionId: number;
+  readonly ptyProcessId: number;
   readonly ref: BackendSessionRef;
   readonly status: PtyProcessStatus;
 }
@@ -55,17 +43,17 @@ export type PtyBackendGcFinding =
   | {
       readonly type: 'orphan_backend_session';
       readonly ref: BackendSessionRef;
-      readonly ptySessionId: number;
+      readonly ptyProcessId: number;
     }
   | {
       readonly type: 'terminal_backend_session';
       readonly ref: BackendSessionRef;
-      readonly ptySessionId: number;
+      readonly ptyProcessId: number;
       readonly status: 'exited' | 'failed' | 'killed';
     };
 
 export interface LaunchBackendSessionInput {
-  readonly ptySessionId: number;
+  readonly ptyProcessId: number;
   readonly backendSessionName: string | null;
   readonly command: string;
   readonly args: readonly string[];
@@ -83,24 +71,24 @@ export interface PtyExit {
 }
 
 export class PtyStartError extends Data.TaggedError('PtyStartError')<{
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly command: string;
   readonly cwd: string;
   readonly cause: unknown;
 }> {}
 
 export class PtyWriteError extends Data.TaggedError('PtyWriteError')<{
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
 
 export class PtyResizeError extends Data.TaggedError('PtyResizeError')<{
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
 
 export class PtyKillError extends Data.TaggedError('PtyKillError')<{
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
 
@@ -118,12 +106,12 @@ export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
     | 'log_read_failed';
   readonly message: string;
   readonly worktreeId?: number | undefined;
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly cause?: unknown;
 }> {}
 
 export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
-  readonly ptySessionId?: number | undefined;
+  readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
 
@@ -182,17 +170,6 @@ export interface PtyProcessLaunchMetadata {
   readonly ptyProcessId: number;
   readonly command: string;
   readonly args: readonly string[];
-  readonly cwd: string;
-  readonly logPath: string | null;
-}
-
-// Internal compatibility shape for old backend helpers.
-export interface PtySessionLaunchMetadata {
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly paneId: number;
-  readonly ptySessionId: number;
-  readonly command: string;
   readonly cwd: string;
   readonly logPath: string | null;
 }

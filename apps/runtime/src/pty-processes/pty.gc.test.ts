@@ -41,18 +41,18 @@ test('PTY process repository lists process log paths for cleanup scans', async (
           cwd: '/repo/isagi',
         });
         yield* repository.updateBackendMetadata({
-          ptySessionId: id,
+          ptyProcessId: id,
           backend: 'node_pty',
           backendRefJson: JSON.stringify({
             schemaVersion: 1,
             backend: 'node_pty',
-            ptySessionId: id,
+            ptyProcessId: id,
             pid: null,
           }),
           logMode: 'backend_file',
           logPath: join(dataRoot, 'sessions', `${id}.ptylog`),
         });
-        return yield* repository.listSessionLogPaths;
+        return yield* repository.listProcessLogPaths;
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 

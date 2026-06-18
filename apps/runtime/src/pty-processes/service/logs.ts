@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 
 import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 
-import type { PtySessionRow } from '../../surfaces/index.js';
+import type { PtyProcessRecord } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import { PtyServiceError } from '../types.js';
 
@@ -38,7 +38,7 @@ export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
     ),
     Effect.catchAll((error) =>
       Effect.sync(() => {
-        console.warn('[runtime] Could not inspect PTY session logs for orphans', error);
+        console.warn('[runtime] Could not inspect PTY process logs for orphans', error);
       }),
     ),
   );
@@ -46,13 +46,13 @@ export function reportOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
 
 export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPath: string) {
   return Effect.gen(function* () {
-    const referencedLogPaths = new Set((yield* repository.listSessionLogPaths).map(normalizePath));
+    const referencedLogPaths = new Set((yield* repository.listProcessLogPaths).map(normalizePath));
     const entries = yield* Effect.try({
       try: () => readdirSync(sessionsPath, { withFileTypes: true }),
       catch: (cause) =>
         new PtyServiceError({
           code: 'log_read_failed',
-          message: 'Could not inspect PTY session logs.',
+          message: 'Could not inspect PTY process logs.',
           cause,
         }),
     });
@@ -60,7 +60,7 @@ export function detectOrphanPtyLogs(repository: PtyRepositoryService, sessionsPa
       .filter((entry) => entry.isFile() && entry.name.endsWith('.ptylog'))
       .map((entry) => join(sessionsPath, entry.name))
       .filter((path) => !referencedLogPaths.has(normalizePath(path)))
-      .map((path) => relativeSessionLogPath(sessionsPath, path))
+      .map((path) => relativeProcessLogPath(sessionsPath, path))
       .sort();
   });
 }
@@ -88,13 +88,13 @@ export function cleanupOrphanPtyLogs(
 ) {
   return Effect.gen(function* () {
     const nowMs = options.nowMs ?? Date.now();
-    const referencedLogPaths = new Set((yield* repository.listSessionLogPaths).map(normalizePath));
+    const referencedLogPaths = new Set((yield* repository.listProcessLogPaths).map(normalizePath));
     const entries = yield* Effect.try({
       try: () => readdirSync(sessionsPath, { withFileTypes: true }),
       catch: (cause) =>
         new PtyServiceError({
           code: 'log_read_failed',
-          message: 'Could not inspect PTY session logs.',
+          message: 'Could not inspect PTY process logs.',
           cause,
         }),
     });
@@ -108,7 +108,7 @@ export function cleanupOrphanPtyLogs(
     const failed: string[] = [];
 
     for (const path of candidates) {
-      const relativePath = relativeSessionLogPath(sessionsPath, path);
+      const relativePath = relativeProcessLogPath(sessionsPath, path);
       if (referencedLogPaths.has(normalizePath(path))) {
         continue;
       }
@@ -151,7 +151,7 @@ export function cleanupOrphanPtyLogs(
   });
 }
 
-export function replayBytesForSession(session: PtySessionRow) {
+export function replayBytesForProcess(session: PtyProcessRecord) {
   if (session.logMode !== 'backend_file' || !session.logPath) {
     return null;
   }
@@ -162,7 +162,7 @@ export function replayBytesForSession(session: PtySessionRow) {
   }
 }
 
-export function replaySessionLog(input: {
+export function replayProcessLog(input: {
   readonly logPath: string | null;
   readonly bytes: number | null;
   readonly send: (message: PtyWebSocketOutputMessage) => void;
@@ -204,7 +204,7 @@ function normalizePath(path: string) {
   return relative(process.cwd(), path);
 }
 
-function relativeSessionLogPath(sessionsPath: string, path: string) {
+function relativeProcessLogPath(sessionsPath: string, path: string) {
   const relativePath = relative(sessionsPath, path);
   return relativePath.startsWith('..') ? basename(path) : `sessions/${relativePath}`;
 }

@@ -1,12 +1,12 @@
 import { Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtySessionRow } from '../../surfaces/index.js';
+import type { PtyProcessRecord } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from '../types.js';
 
-export interface PtySessionTransitionInput {
-  readonly ptySessionId: number;
+export interface PtyProcessTransitionInput {
+  readonly ptyProcessId: number;
   readonly status: PtyProcessStatus;
   readonly statusReason?: PtyProcessStatusReason | null | undefined;
   readonly exitCode?: number | null | undefined;
@@ -14,13 +14,13 @@ export interface PtySessionTransitionInput {
   readonly lastSeenAt?: string | null | undefined;
 }
 
-export function transitionSessionAndPublish(
+export function transitionProcessAndPublish(
   repository: PtyRepositoryService,
   eventBus: InternalRuntimeEventBusService,
-  previous: PtySessionRow,
-  input: PtySessionTransitionInput,
+  previous: PtyProcessRecord,
+  input: PtyProcessTransitionInput,
 ) {
-  return repository.transitionSession(input).pipe(
+  return repository.transitionProcess(input).pipe(
     Effect.zipRight(
       publishPtyProcessChangedIfNeeded(eventBus, previous, {
         status: input.status,
@@ -32,14 +32,14 @@ export function transitionSessionAndPublish(
   );
 }
 
-export function transitionSessionByIdAndPublish(
+export function transitionProcessByIdAndPublish(
   repository: PtyRepositoryService,
   eventBus: InternalRuntimeEventBusService,
-  input: PtySessionTransitionInput,
+  input: PtyProcessTransitionInput,
 ) {
   return Effect.gen(function* () {
-    const previous = yield* repository.findSession(input.ptySessionId);
-    yield* repository.transitionSession(input);
+    const previous = yield* repository.findProcess(input.ptyProcessId);
+    yield* repository.transitionProcess(input);
     if (previous) {
       yield* publishPtyProcessChangedIfNeeded(eventBus, previous, {
         status: input.status,
@@ -53,7 +53,7 @@ export function transitionSessionByIdAndPublish(
 
 function publishPtyProcessChangedIfNeeded(
   eventBus: InternalRuntimeEventBusService,
-  previous: PtySessionRow,
+  previous: PtyProcessRecord,
   next: {
     readonly status: PtyProcessStatus;
     readonly statusReason: PtyProcessStatusReason | null;
