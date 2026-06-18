@@ -20,7 +20,7 @@ Updated: 2026-06-12
    - Remove DB rows and `.ptylog` files only on user-caused deletion.
    - Keep failed/exited evidence visible until the user cleans it up.
 
-2. [ ] Attention signals slice — `.pi/tasks/worktree-continuity-attention-signals.md`
+2. [x] Attention signals slice — `.pi/tasks/worktree-continuity-attention-signals.md`
    - First tighten rail honesty: aggregate PTY lifecycle state to worktree rows and show surface-row attention dots.
    - Refresh/patch rail metadata when visible PTY sessions exit or fail.
    - Then explore reliable waiting-for-user detection per harness.

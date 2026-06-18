@@ -40,6 +40,7 @@ import {
   type RuntimeClient,
 } from '../runtime/client.js';
 import { resolveRuntimeUrl } from '../runtime/resolve.js';
+import { unwrapRuntimeFailure } from '../runtime/run.js';
 
 let cachedClient: RuntimeClient | null = null;
 let cachedRuntimeUrl: string | null = null;
@@ -248,20 +249,32 @@ function getClient() {
   );
 }
 
-export function formatRuntimeError(error: unknown) {
-  if (error instanceof UserVisibleError) {
-    return error.userMessage;
+function runtimeErrorCopyFor(error: unknown, options: { readonly diagnostic: boolean }) {
+  const failure = unwrapRuntimeFailure(error);
+  if (failure instanceof UserVisibleError) {
+    return failure.userMessage;
   }
-  if (error instanceof RuntimeApiError) {
-    return `${runtimeErrorCopy.fromApiError(error.apiError)} (${runtimeErrorCopy.diagnostic(error.apiError)})`;
+  if (failure instanceof RuntimeApiError) {
+    const summary = runtimeErrorCopy.fromApiError(failure.apiError);
+    return options.diagnostic
+      ? `${summary} (${runtimeErrorCopy.diagnostic(failure.apiError)})`
+      : summary;
   }
-  if (error instanceof RuntimeTransportError) {
+  if (failure instanceof RuntimeTransportError) {
     return runtimeErrorCopy.transport;
   }
-  if (error instanceof RuntimeDecodeError) {
+  if (failure instanceof RuntimeDecodeError) {
     return runtimeErrorCopy.decode;
   }
   return runtimeErrorCopy.unknown;
+}
+
+export function formatRuntimeError(error: unknown) {
+  return runtimeErrorCopyFor(error, { diagnostic: true });
+}
+
+export function formatRuntimeErrorSummary(error: unknown) {
+  return runtimeErrorCopyFor(error, { diagnostic: false });
 }
 
 export type { WorkspaceSnapshot };

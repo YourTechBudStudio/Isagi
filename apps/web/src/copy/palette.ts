@@ -15,6 +15,7 @@ export const paletteCopy = {
   pathStep: {
     addPath: 'Press enter to add this path:',
     typeRepositoryRoot: 'Type a repository root path.',
+    searching: 'Searching…',
     goDeeper: '/ to go deeper',
   },
   reviewStep: {

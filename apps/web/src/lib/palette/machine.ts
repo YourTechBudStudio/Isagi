@@ -38,6 +38,8 @@ export type StepData =
   | {
       readonly kind: 'path';
       readonly suggestions: readonly PathSuggestionLike[];
+      readonly suggestionsQuery: string;
+      readonly loading: boolean;
       readonly error: string | null;
       readonly attemptId: number;
     }
@@ -624,7 +626,14 @@ function makeStepData(
   if (spec.kind === 'path') {
     const { attemptId, nextAttemptId } = nextAttempt(state);
     return {
-      stepData: { kind: 'path', suggestions: [], error: null, attemptId },
+      stepData: {
+        kind: 'path',
+        suggestions: [],
+        suggestionsQuery: query,
+        loading: true,
+        error: null,
+        attemptId,
+      },
       effect: { kind: 'suggestPaths', attemptId, query },
       nextAttemptId,
     };
@@ -647,15 +656,21 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
   }
 
   const { attemptId, nextAttemptId } = nextAttempt(state);
+  const previousSuggestions = state.stepData.kind === 'path' ? state.stepData.suggestions : [];
+  const previousSuggestionsQuery =
+    state.stepData.kind === 'path' ? state.stepData.suggestionsQuery : '';
   const next = {
     ...state,
     query,
+    selectedIndex: null,
     inlineError: null,
     lastFilledPath: null,
     nextAttemptId,
     stepData: {
       kind: 'path' as const,
-      suggestions: [],
+      suggestions: previousSuggestions,
+      suggestionsQuery: previousSuggestionsQuery,
+      loading: true,
       error: null,
       attemptId,
     },
@@ -675,7 +690,8 @@ function snapSelection(
   if (state.viewKey === viewKey) {
     return state;
   }
-  const selectedIndex = state.query === '' ? defaultIndex : length > 0 ? 0 : null;
+  const selectedIndex =
+    defaultIndex === null ? null : state.query === '' ? defaultIndex : length > 0 ? 0 : null;
   return { ...state, viewKey, selectedIndex };
 }
 
@@ -742,11 +758,14 @@ function fillPath(state: PaletteState, path: string): PaletteState {
   const next = {
     ...state,
     query: path,
+    selectedIndex: null,
     lastFilledPath: path,
     nextAttemptId,
     stepData: {
       kind: 'path' as const,
-      suggestions: [],
+      suggestions: state.stepData.suggestions,
+      suggestionsQuery: state.stepData.suggestionsQuery,
+      loading: true,
       error: null,
       attemptId,
     },
@@ -982,9 +1001,12 @@ function updatePaths(
   }
   return {
     ...state,
+    selectedIndex: input.suggestions.length > 0 ? 0 : null,
     stepData: {
       ...state.stepData,
       suggestions: input.suggestions,
+      suggestionsQuery: state.query,
+      loading: false,
       error: input.error,
     },
   };

@@ -16,6 +16,7 @@ import type {
 
 import { toastCopy } from '../../copy/index.js';
 import { queryClient } from '../query/client.js';
+import { runRuntimeEffect } from '../runtime/run.js';
 import { showToast } from '../toast/index.js';
 import {
   activatePane,
@@ -55,28 +56,28 @@ export function useWorkspaceQuery() {
   return useQuery({
     queryKey: workspaceQueryKey,
     queryFn: ({ signal }) =>
-      Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+      runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
   });
 }
 
 export function useActiveContextQuery() {
   return useQuery({
     queryKey: activeContextQueryKey,
-    queryFn: ({ signal }) => Effect.runPromise(fetchActiveContext(), { signal }),
+    queryFn: ({ signal }) => runRuntimeEffect(fetchActiveContext(), { signal }),
   });
 }
 
 export function useSurfaceDetailQuery(surfaceId: number) {
   return useQuery({
     queryKey: surfaceDetailQueryKey(surfaceId),
-    queryFn: ({ signal }) => Effect.runPromise(getSurfaceDetail(surfaceId), { signal }),
+    queryFn: ({ signal }) => runRuntimeEffect(getSurfaceDetail(surfaceId), { signal }),
   });
 }
 
 export function useAddProjectMutation() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => Effect.runPromise(addProject(path)),
+    mutationFn: (path: string) => runRuntimeEffect(addProject(path)),
     onSuccess: (output) => commitAddProjectSuccess(client, { projectId: output.projectId }),
   });
 }
@@ -84,7 +85,7 @@ export function useAddProjectMutation() {
 export function useDeleteProjectMutation() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (projectId: number) => Effect.runPromise(deleteProject(projectId)),
+    mutationFn: (projectId: number) => runRuntimeEffect(deleteProject(projectId)),
     onError: (error, projectId) => {
       showToast({
         id: `delete-project-failed:${projectId}`,
@@ -99,17 +100,17 @@ export function useDeleteProjectMutation() {
 }
 
 export async function addProjectPath(path: string) {
-  const output = await Effect.runPromise(addProject(path));
+  const output = await runRuntimeEffect(addProject(path));
   await commitAddProjectSuccess(queryClient, { projectId: output.projectId });
 }
 
 export async function relocateProjectPath(projectId: number, path: string) {
-  const output = await Effect.runPromise(relocateProject(projectId, path));
+  const output = await runRuntimeEffect(relocateProject(projectId, path));
   await commitRelocateProjectSuccess(queryClient, output.findings);
 }
 
 export async function openWorktreeFromPalette(projectId: number, input: OpenWorktreeInput) {
-  const output = await Effect.runPromise(openWorktree(projectId, input));
+  const output = await runRuntimeEffect(openWorktree(projectId, input));
   await commitOpenWorktreeSuccess(queryClient, output);
   return output;
 }
@@ -120,7 +121,7 @@ export async function deleteWorktreeFromPalette(
   input: DeleteWorktreeInput,
 ) {
   try {
-    const output = await Effect.runPromise(deleteWorktree(projectId, worktreeId, input));
+    const output = await runRuntimeEffect(deleteWorktree(projectId, worktreeId, input));
     await commitDeleteWorktreeSuccess(queryClient, output);
     return output;
   } catch (error) {
@@ -136,7 +137,7 @@ export async function startAgentSessionFromPalette(
   client: QueryClient = queryClient,
 ) {
   try {
-    const output = await Effect.runPromise(launch(worktreeId, harness));
+    const output = await runRuntimeEffect(launch(worktreeId, harness));
     await commitLaunchSessionSuccess(client, output);
     return output;
   } catch (error) {
@@ -146,14 +147,14 @@ export async function startAgentSessionFromPalette(
 }
 
 export async function startTerminalSessionFromPalette(worktreeId: number) {
-  const output = await Effect.runPromise(launchTerminalSession(worktreeId));
+  const output = await runRuntimeEffect(launchTerminalSession(worktreeId));
   await commitLaunchSessionSuccess(queryClient, output);
   return output;
 }
 
 export async function renameSurfaceTitleFromPalette(surfaceId: number, title: string) {
   try {
-    const output = await Effect.runPromise(renameSurfaceTitle(surfaceId, title));
+    const output = await runRuntimeEffect(renameSurfaceTitle(surfaceId, title));
     await commitRenameSurfaceSuccess(queryClient, output.surfaceId);
     return output;
   } catch (error) {
@@ -167,7 +168,7 @@ export async function deleteSurfaceFromPalette(input: {
   readonly surfaceId: number;
 }) {
   try {
-    const output = await Effect.runPromise(deleteSurface(input.surfaceId));
+    const output = await runRuntimeEffect(deleteSurface(input.surfaceId));
     await commitDeleteSurfaceSuccess(queryClient, {
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
@@ -186,7 +187,7 @@ export async function deleteSurfacePaneFromPalette(input: {
   readonly paneId: number;
 }) {
   try {
-    const output = await Effect.runPromise(deleteSurfacePane(input.surfaceId, input.paneId));
+    const output = await runRuntimeEffect(deleteSurfacePane(input.surfaceId, input.paneId));
     await commitDeleteSurfaceSuccess(queryClient, {
       worktreeId: input.worktreeId,
       surfaceId: input.surfaceId,
@@ -204,7 +205,7 @@ export async function commitOpenWorktreeSuccess(
   client: QueryClient,
   output: OpenWorktreeOutput,
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -222,7 +223,7 @@ export async function commitLaunchSessionSuccess(
   client: QueryClient,
   output: CreateSurfaceOutput,
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -257,7 +258,7 @@ export async function commitDeleteSurfaceSuccess(
   const fetchWorkspaceData =
     input.fetchWorkspaceData ??
     ((signal?: AbortSignal | undefined) =>
-      Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }));
+      runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }));
 
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -281,7 +282,7 @@ export async function commitDeleteWorktreeSuccess(
   client: QueryClient,
   output: DeleteWorktreeOutput,
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    Effect.runPromise(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {
   const data = await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -361,7 +362,7 @@ function flushActiveContextPersistence() {
   activeContextInFlight = activeContext;
   activeContextAbortController = abortController;
 
-  void Effect.runPromise(
+  void runRuntimeEffect(
     updateActiveContext(activeContext).pipe(
       Effect.timeoutFail({
         duration: Duration.seconds(5),
@@ -416,7 +417,7 @@ export function scheduleWorkspaceReconcile(
 
   workspaceReconcileInFlightProjectIds.add(input.projectId);
 
-  void Effect.runPromise(reconcileWorkspace(input))
+  void runRuntimeEffect(reconcileWorkspace(input))
     .then(
       async (output) => {
         handleReconciliationFindings(output.findings);

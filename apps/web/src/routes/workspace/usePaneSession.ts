@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
 
 import { ptySocketErrorCopy } from '../../copy/index.js';
+import { runRuntimeEffect } from '../../lib/runtime/run.js';
 import {
   initialPaneConnectionState,
   paneConnectionEventForMessage,
@@ -147,7 +148,7 @@ export function usePaneSession({
     dispatch({ type: 'attach_started' });
     transport.beginAttach(session.status);
 
-    void Effect.runPromise(resolveSessionPtyWebSocketUrl(worktreeId, paneId, session)).then(
+    void runRuntimeEffect(resolveSessionPtyWebSocketUrl(worktreeId, paneId, session)).then(
       (url) => {
         if (disposed) {
           return;
@@ -251,7 +252,7 @@ export function usePaneSession({
     }
     setCreating(true);
     setStartFreshError(null);
-    void Effect.runPromise(
+    void runRuntimeEffect(
       createPaneSession(worktreeId, startFreshInputForSession(paneId, session)),
     ).then(
       async () => {

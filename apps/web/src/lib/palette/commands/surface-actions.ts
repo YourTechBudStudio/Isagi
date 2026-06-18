@@ -1,10 +1,10 @@
-import { Effect } from 'effect';
 import { Pencil, Trash2 } from 'lucide-react';
 
 import type { SessionStatus, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
 import { surfaceActionsCopy } from '../../../copy/index.js';
 import { queryClient } from '../../query/client.js';
+import { runRuntimeEffect } from '../../runtime/run.js';
 import { resolveActivePaneId } from '../../workspace/model.js';
 import {
   deleteSurfaceFromPalette,
@@ -204,7 +204,7 @@ function readSurfaceId(values: ArgValues, ctx: PaletteContext) {
 async function fetchSurfaceDetail(surfaceId: number) {
   return queryClient.fetchQuery({
     queryKey: surfaceDetailQueryKey(surfaceId),
-    queryFn: ({ signal }) => Effect.runPromise(getSurfaceDetail(surfaceId), { signal }),
+    queryFn: ({ signal }) => runRuntimeEffect(getSurfaceDetail(surfaceId), { signal }),
     staleTime: 0,
   });
 }

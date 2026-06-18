@@ -1,10 +1,10 @@
-import { Effect } from 'effect';
 import { useEffect, useRef } from 'react';
 
 import type { SurfaceDetail } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
 import { queryClient } from '../query/client.js';
+import { runRuntimeEffect } from '../runtime/run.js';
 import { showToast } from '../toast/index.js';
 import { resolveActivePaneId, type WorkspaceData } from './model.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
@@ -57,7 +57,7 @@ export function activateSurface(input: ActivateSurfaceInput) {
   void queryClient
     .fetchQuery({
       queryKey: surfaceDetailQueryKey(input.surfaceId),
-      queryFn: ({ signal }) => Effect.runPromise(getSurfaceDetail(input.surfaceId), { signal }),
+      queryFn: ({ signal }) => runRuntimeEffect(getSurfaceDetail(input.surfaceId), { signal }),
       staleTime: 0,
     })
     .then(
@@ -267,7 +267,7 @@ function persistEnvironmentFocus(
   input: ActivateSurfaceInput & { readonly activePaneId: number | null },
   revision: number,
 ) {
-  void Effect.runPromise(
+  void runRuntimeEffect(
     setWorktreeEnvironmentFocus(input.worktreeId, {
       activeSurfaceId: input.surfaceId,
       activePaneId: input.activePaneId,

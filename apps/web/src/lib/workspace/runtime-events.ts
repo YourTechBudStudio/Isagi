@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Schema } from 'effect';
 import { useEffect } from 'react';
 
 import {
@@ -9,6 +9,7 @@ import {
 } from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
+import { runRuntimeEffect } from '../runtime/run.js';
 import { useAttentionStore } from './attention.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
@@ -46,7 +47,7 @@ export function useRuntimeEventSubscription() {
         return;
       }
 
-      void Effect.runPromise(resolveRuntimeEventsWebSocketUrl()).then(
+      void runRuntimeEffect(resolveRuntimeEventsWebSocketUrl()).then(
         (url) => {
           if (stopped) {
             return;

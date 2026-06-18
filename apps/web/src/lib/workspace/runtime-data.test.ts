@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { Effect } from 'effect';
+
+import type { ApiError } from '@isagi/contracts';
+
+import { RuntimeApiError } from '../runtime/client.js';
+import { formatRuntimeError, formatRuntimeErrorSummary } from './runtime-data.js';
+
+test('runtime error summary maps project path rejections to user copy without diagnostics', () => {
+  const error = new RuntimeApiError({
+    code: 'project_path_rejected',
+    status: 400,
+    message: 'Not a Git repository: /repo/nope',
+    requestId: 'req-path-rejected',
+    data: { reason: 'not_git_repository', path: '/repo/nope' },
+  } satisfies ApiError);
+
+  assert.equal(formatRuntimeErrorSummary(error), "That folder isn't a Git repository.");
+  assert.equal(
+    formatRuntimeError(error),
+    "That folder isn't a Git repository. (project_path_rejected · request req-path-rejected)",
+  );
+});
+
+test('runtime error formatting unwraps Effect promise failures before mapping copy', async () => {
+  const error = new RuntimeApiError({
+    code: 'project_path_rejected',
+    status: 400,
+    message: 'Not a Git repository: /repo/nope',
+    requestId: 'req-path-rejected',
+    data: { reason: 'not_git_repository', path: '/repo/nope' },
+  } satisfies ApiError);
+  const wrapped = await Effect.runPromise(Effect.fail(error)).catch((cause: unknown) => cause);
+
+  assert.equal(formatRuntimeErrorSummary(wrapped), "That folder isn't a Git repository.");
+  assert.equal(
+    formatRuntimeError(wrapped),
+    "That folder isn't a Git repository. (project_path_rejected · request req-path-rejected)",
+  );
+});

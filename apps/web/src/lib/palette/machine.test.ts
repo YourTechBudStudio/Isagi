@@ -282,6 +282,69 @@ test('stale option loads are ignored', () => {
   assert.deepEqual(state.stepData.options, [{ value: '1', label: 'One' }]);
 });
 
+test('path queries keep previous suggestions while loading newer results', () => {
+  const command = fakeCommand({
+    args: [{ kind: 'path', key: 'path', label: 'Project path' }],
+  });
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command,
+    ctx,
+    values: {},
+  });
+
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  assert.equal(state.stepData.loading, true);
+  const firstAttempt = state.stepData.attemptId;
+
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: firstAttempt,
+    suggestions: [{ label: 'isagi', path: '/repo/isagi' }],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  assert.equal(state.stepData.loading, false);
+  assert.equal(state.stepData.suggestionsQuery, '');
+  assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi', path: '/repo/isagi' }]);
+
+  state = paletteReducer(state, {
+    type: 'query-changed',
+    query: '/repo/i',
+    spec: command.args?.[0],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  assert.equal(state.stepData.loading, true);
+  assert.equal(state.stepData.suggestionsQuery, '');
+  assert.equal(state.selectedIndex, null);
+  assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi', path: '/repo/isagi' }]);
+  const secondAttempt = state.stepData.attemptId;
+
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: firstAttempt,
+    suggestions: [{ label: 'stale', path: '/repo/stale' }],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi', path: '/repo/isagi' }]);
+
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: secondAttempt,
+    suggestions: [{ label: 'isagi-web', path: '/repo/isagi-web' }],
+  });
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  assert.equal(state.stepData.loading, false);
+  assert.equal(state.stepData.suggestionsQuery, '/repo/i');
+  assert.equal(state.selectedIndex, 0);
+  assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi-web', path: '/repo/isagi-web' }]);
+});
+
 test('run success closes or shows structured result/error outcomes', () => {
   let state = paletteReducer(initialPaletteState, { type: 'opened' });
   state = paletteReducer(state, { type: 'activate-entry', entry: fakeEntry(null), ctx });

@@ -1,9 +1,9 @@
-import { Effect } from 'effect';
 import { Trash2 } from 'lucide-react';
 
 import type { DeleteWorktreeInput, DeleteWorktreeOutput } from '@isagi/contracts';
 
 import { worktreeActionsCopy } from '../../../copy/index.js';
+import { runRuntimeEffect } from '../../runtime/run.js';
 import { deleteWorktreeFromPalette } from '../../workspace/queries.js';
 import { preflightDeleteWorktree } from '../../workspace/runtime-data.js';
 import type {
@@ -34,7 +34,7 @@ export const deleteActiveWorktreeCommand: PaletteCommand = {
       return { mode: 'unavailable' };
     }
 
-    const preflight = await Effect.runPromise(
+    const preflight = await runRuntimeEffect(
       preflightDeleteWorktree(target.projectId, target.worktreeId),
     );
     const nextValues = {

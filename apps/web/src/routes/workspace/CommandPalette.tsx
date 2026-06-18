@@ -1,4 +1,3 @@
-import { Effect } from 'effect';
 import { Plus } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -51,9 +50,13 @@ import type {
   ReviewContent,
 } from '../../lib/palette/types.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
+import { runRuntimeEffect } from '../../lib/runtime/run.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import { formatRuntimeError, suggestProjectPaths } from '../../lib/workspace/runtime-data.js';
+import {
+  formatRuntimeErrorSummary,
+  suggestProjectPaths,
+} from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 
 export function CommandPalette() {
@@ -199,6 +202,8 @@ export function CommandPalette() {
           kind: 'path' as const,
           value: machine.query.trim(),
           suggestions: machine.stepData.suggestions as readonly PathSuggestion[],
+          loading: machine.stepData.loading,
+          stale: machine.stepData.suggestionsQuery !== machine.query,
           error: machine.stepData.error,
           placeholder: spec.placeholder,
         };
@@ -251,7 +256,7 @@ export function CommandPalette() {
     });
   }, [machine.effects, allEntries, ctx, pushRecent]);
 
-  const length =
+  const renderedLength =
     view.kind === 'wizard'
       ? view.options.length
       : view.kind === 'list'
@@ -263,6 +268,7 @@ export function CommandPalette() {
             : view.kind === 'result' || view.kind === 'error'
               ? outcomeActions(view.content).length
               : 0;
+  const selectableLength = view.kind === 'path' && view.stale ? 0 : renderedLength;
   const baseViewKey =
     machine.kind === 'step'
       ? `wizard-${machine.flow.stepIndex}:${query}`
@@ -273,16 +279,23 @@ export function CommandPalette() {
         : machine.kind === 'result' || machine.kind === 'error'
           ? machine.viewKey
           : 'closed';
-  const defaultIndex = view.kind === 'wizard' ? stepDefaultIndex(spec, view.options) : 0;
-  const viewKey = `${baseViewKey}:${length}:${defaultIndex ?? 'none'}`;
+  const defaultIndex =
+    view.kind === 'wizard'
+      ? stepDefaultIndex(spec, view.options)
+      : view.kind === 'path' && view.stale
+        ? null
+        : 0;
+  const viewKey = `${baseViewKey}:${selectableLength}:${defaultIndex ?? 'none'}`;
+  const panelKey =
+    machine.kind === 'step' && view.kind === 'path' ? `path-${machine.flow.stepIndex}` : viewKey;
 
   // Snap the selection to the default whenever the view changes shape.
   useEffect(() => {
     if (!open) {
       return;
     }
-    send({ type: 'view-snap', viewKey, length, defaultIndex });
-  }, [open, viewKey, length, defaultIndex]);
+    send({ type: 'view-snap', viewKey, length: selectableLength, defaultIndex });
+  }, [open, viewKey, selectableLength, defaultIndex]);
 
   useEffect(() => {
     if (open && (machine.kind === 'search' || machine.kind === 'step')) {
@@ -330,7 +343,7 @@ export function CommandPalette() {
       return;
     }
     const highlighted = sel === null ? undefined : view.suggestions[sel];
-    if (highlighted && highlighted.path !== view.value) {
+    if (!view.stale && highlighted && highlighted.path !== view.value) {
       send({ type: 'fill-path', path: highlighted.path });
       return;
     }
@@ -375,10 +388,10 @@ export function CommandPalette() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        send({ type: 'move-selection', delta: 1, length });
+        send({ type: 'move-selection', delta: 1, length: selectableLength });
       } else if (event.key === 'ArrowUp') {
         event.preventDefault();
-        send({ type: 'move-selection', delta: -1, length });
+        send({ type: 'move-selection', delta: -1, length: selectableLength });
       } else if (event.key === 'Enter') {
         event.preventDefault();
         const action = outcomeActions(view.content)[sel ?? 0];
@@ -393,20 +406,23 @@ export function CommandPalette() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [ctx, length, open, sel, view]);
+  }, [ctx, open, selectableLength, sel, view]);
 
   const back = () => {
     send({ type: 'back', command: command ?? undefined, ctx });
   };
 
   const cycleSel = (delta: number) => {
-    send({ type: 'move-selection', delta, length });
+    send({ type: 'move-selection', delta, length: selectableLength });
   };
 
   // Tab fills the buffer with the highlighted directory without submitting, so
   // Enter afterwards commits it. Path-step only.
   const fillPath = () => {
     if (view.kind !== 'path') {
+      return;
+    }
+    if (view.stale) {
       return;
     }
     const highlighted = sel === null ? undefined : view.suggestions[sel];
@@ -530,13 +546,13 @@ export function CommandPalette() {
             </div>
 
             {commandError && (
-              <p className="border-b border-error/18 bg-error/8 px-4 py-2.5 font-mono text-[11.5px] text-error">
+              <p className="wrap-break-word whitespace-pre-wrap border-b border-error/18 bg-error/8 px-4 py-2.5 font-mono text-[11.5px] text-error">
                 {commandError}
               </p>
             )}
 
             <motion.div
-              key={viewKey}
+              key={panelKey}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={uiTransition}
@@ -560,9 +576,14 @@ export function CommandPalette() {
                 <PathOptions
                   suggestions={view.suggestions}
                   value={view.value}
+                  loading={view.loading}
+                  stale={view.stale}
                   error={view.error}
                   sel={sel}
                   onPick={(index) => {
+                    if (view.stale) {
+                      return;
+                    }
                     const suggestion = view.suggestions[index];
                     if (suggestion) {
                       acceptValue(suggestion.path, suggestion.path);
@@ -688,7 +709,7 @@ function runPaletteEffect(
         options.send({
           type: 'preflight-failed',
           attemptId: effect.attemptId,
-          error: formatRuntimeError(error),
+          error: formatRuntimeErrorSummary(error),
         }),
     );
     return;
@@ -754,7 +775,7 @@ function runPaletteEffect(
     }
     options.pathSuggestTimer.current = window.setTimeout(() => {
       options.pathSuggestTimer.current = null;
-      void Effect.runPromise(suggestProjectPaths(effect.query)).then(
+      void runRuntimeEffect(suggestProjectPaths(effect.query)).then(
         (output) =>
           options.send({
             type: 'paths-loaded',
@@ -765,7 +786,7 @@ function runPaletteEffect(
           options.send({
             type: 'paths-failed',
             attemptId: effect.attemptId,
-            error: error instanceof Error ? error.message : String(error),
+            error: formatRuntimeErrorSummary(error),
           }),
       );
     }, 80);
@@ -800,7 +821,7 @@ function runPaletteEffect(
       options.send({
         type: 'run-failed',
         attemptId: effect.attemptId,
-        error: formatRuntimeError(error),
+        error: formatRuntimeErrorSummary(error),
       }),
   );
 }
@@ -1001,25 +1022,33 @@ function TextStep({ value, placeholder }: { value: string; placeholder: string |
 function PathOptions({
   suggestions,
   value,
+  loading,
+  stale,
   error,
   sel,
   onPick,
 }: {
   suggestions: readonly PathSuggestion[];
   value: string;
+  loading: boolean;
+  stale: boolean;
   error: string | null;
   sel: number | null;
   onPick: (index: number) => void;
 }) {
   if (error) {
-    return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
+    return <p className="wrap-break-word px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
   }
 
   if (suggestions.length === 0) {
     return (
-      <div className="px-3 py-4">
+      <div className="px-3 py-4" aria-busy={loading}>
         <p className="font-mono text-[11px] text-fg-subtle">
-          {value ? paletteCopy.pathStep.addPath : paletteCopy.pathStep.typeRepositoryRoot}
+          {loading
+            ? paletteCopy.pathStep.searching
+            : value
+              ? paletteCopy.pathStep.addPath
+              : paletteCopy.pathStep.typeRepositoryRoot}
         </p>
         {value && (
           <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
@@ -1031,18 +1060,19 @@ function PathOptions({
   }
 
   return (
-    <>
+    <div aria-busy={loading}>
       {suggestions.map((suggestion, index) => (
         <button
           type="button"
           key={suggestion.path}
+          disabled={stale}
           onClick={() => onPick(index)}
-          className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
-            index === sel ? 'bg-white/8' : 'hover:bg-white/4'
+          className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo ${
+            stale ? 'opacity-55' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
           }`}
         >
           <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-            {index === sel ? '●' : '○'}
+            {!stale && index === sel ? '●' : '○'}
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13.5px] text-fg">{suggestion.label}</span>
@@ -1055,7 +1085,7 @@ function PathOptions({
           )}
         </button>
       ))}
-    </>
+    </div>
   );
 }
 

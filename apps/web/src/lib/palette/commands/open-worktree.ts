@@ -1,9 +1,9 @@
-import { Effect } from 'effect';
 import { GitBranch } from 'lucide-react';
 
 import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
 
 import { worktreeSetupReviewCopy } from '../../../copy/index.js';
+import { runRuntimeEffect } from '../../runtime/run.js';
 import { restoreActivePaneFocus } from '../../workspace/activation.js';
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
 import {
@@ -75,7 +75,7 @@ export const openWorktreeCommand: PaletteCommand = {
           return [];
         }
 
-        const branchList = await Effect.runPromise(listProjectBranches(project.id));
+        const branchList = await runRuntimeEffect(listProjectBranches(project.id));
         const worktreeOptions = [...project.worktrees].map((worktree) => ({
           value: worktree.branch ?? String(worktree.id),
           label: worktreeOptionLabel(worktree),
@@ -125,7 +125,7 @@ export const openWorktreeCommand: PaletteCommand = {
           return [];
         }
 
-        const branchList = await Effect.runPromise(listProjectBranches(project.id));
+        const branchList = await runRuntimeEffect(listProjectBranches(project.id));
         const branchOptions = branchList.branches.map((branch) => ({
           value: `branch:${branch.name}`,
           label: branch.name,
@@ -171,7 +171,7 @@ export const openWorktreeCommand: PaletteCommand = {
       label: 'Setup hooks',
       load: async (_ctx, values) => {
         const projectId = Number(values.projectId);
-        const preflight = await Effect.runPromise(preflightWorktreeSetup(projectId));
+        const preflight = await runRuntimeEffect(preflightWorktreeSetup(projectId));
         if (preflight.status === 'needs_approval' && preflight.hash) {
           return {
             title: worktreeSetupReviewCopy.title,
@@ -239,7 +239,7 @@ export const openWorktreeCommand: PaletteCommand = {
 
     const review = payloads?.setupTrust;
     if (isSetupReviewPayload(review) && review.trust) {
-      await Effect.runPromise(trustWorktreeSetup(project.id, review.trust));
+      await runRuntimeEffect(trustWorktreeSetup(project.id, review.trust));
     }
 
     const base = payloads?.base;
