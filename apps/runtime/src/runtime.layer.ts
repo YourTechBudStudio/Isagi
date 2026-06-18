@@ -1,6 +1,7 @@
 import { Layer } from 'effect';
 
 import {
+  AgentSessionAttentionProjectionLive,
   AgentSessionArtifactsLive,
   AgentSessionRepositoryLive,
   AgentSessionServiceLive,
@@ -49,9 +50,14 @@ const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
+const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjectionLive.pipe(
+  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(DataDirectoryLive),
+);
 const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
@@ -78,22 +84,22 @@ const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
 const SessionLifecycleLayer = SessionLifecycleLive;
 const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
-  Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(SessionLifecycleLayer),
 );
 const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
   Layer.provide(TerminalSessionRepositoryLayer),
-  Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
 );
 const SessionServicesLayer = Layer.mergeAll(AgentSessionServiceLayer, TerminalSessionServiceLayer);
 const SurfaceServiceLayer = SurfaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(TerminalSessionServiceLayer),
   Layer.provide(SessionLifecycleLayer),
+  Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
 const SessionGcLayer = SessionGcLive.pipe(
@@ -104,6 +110,7 @@ const SessionGcLayer = SessionGcLive.pipe(
 const EventProjectionLayer = RuntimeEventProjectionLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),
+  Layer.provide(SurfaceRepositoryLayer),
 );
 const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
@@ -112,7 +119,10 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionLifecycleLayer,
   SessionGcLayer,
 );
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(Layer.provide(SurfaceAndPtyServiceLayer));
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(SurfaceAndPtyServiceLayer),
+);
 
 export type RuntimeServices =
   | WorkspaceServiceShape
@@ -134,7 +144,6 @@ export const RuntimeLayer = ServicesLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
       RepositoryLive,
-      SurfaceRepositoryLayer,
       SetupRepositoryLive,
       SetupServiceLive,
       StateLive,

@@ -195,6 +195,9 @@ function SurfaceRow({
             className="absolute inset-0 rounded-lg bg-white/8"
           />
         )}
+        <span className="relative z-10">
+          <AttentionDot state={surface.attention ?? 'idle'} />
+        </span>
         <Icon size={14} className={`relative z-10 ${active ? 'text-fg' : 'text-fg-subtle'}`} />
         <span className="relative z-10 truncate">{surface.title}</span>
       </button>

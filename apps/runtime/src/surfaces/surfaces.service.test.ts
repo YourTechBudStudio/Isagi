@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { Effect, Either, Layer } from 'effect';
 
 import {
+  AgentSessionAttentionProjectionLive,
   AgentSessionArtifacts,
   AgentSessionArtifactsLive,
   AgentSessionService,
@@ -27,6 +28,7 @@ import {
   terminalSessions,
   worktreeSurfaces,
 } from '../persistence/schema.js';
+import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { SessionLifecycleLive } from '../session-lifecycle/index.js';
 import {
   TerminalSessionService,
@@ -752,7 +754,6 @@ function addPaneToSurface(surfaceId: number) {
         .values({
           surfaceId,
           title: 'Second pane',
-          attention: 'idle',
           sortOrder: 1,
           createdAt: now,
           updatedAt: now,
@@ -918,7 +919,13 @@ function testLayer(
   } satisfies DataDirectoryService;
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
+  const internalRuntimeEventBus = InternalRuntimeEventBusLive;
   const agentSessionArtifacts = AgentSessionArtifactsLive.pipe(Layer.provide(dataDirectoryLayer));
+  const attentionProjection = AgentSessionAttentionProjectionLive.pipe(
+    Layer.provide(dataDirectoryLayer),
+    Layer.provide(agentSessionArtifacts),
+    Layer.provide(internalRuntimeEventBus),
+  );
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const agentService = Layer.succeed(
@@ -932,6 +939,7 @@ function testLayer(
   const surfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
+    Layer.provide(attentionProjection),
   );
   const sessionLifecycle = SessionLifecycleLive;
   const surfaceService = SurfaceServiceLive.pipe(
@@ -939,10 +947,13 @@ function testLayer(
     Layer.provide(agentService),
     Layer.provide(terminalService),
     Layer.provide(sessionLifecycle),
+    Layer.provide(attentionProjection),
   );
   return Layer.mergeAll(
     database,
     agentSessionArtifacts,
+    attentionProjection,
+    internalRuntimeEventBus,
     workspaceRepository,
     surfaceRepository,
     surfaceService,

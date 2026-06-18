@@ -1,11 +1,17 @@
 import { and, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
+import type { AttentionState } from '@isagi/contracts';
+
 import {
   AgentSessionArtifacts,
   type AgentSessionArtifactsService,
   type AgentSessionHarnessMetadataRead,
 } from '../agent-sessions/artifacts.js';
+import {
+  AgentSessionAttentionProjection,
+  type AgentSessionAttentionProjectionService,
+} from '../agent-sessions/index.js';
 import {
   DatabaseError,
   RuntimeDatabase,
@@ -115,6 +121,7 @@ export const SurfaceRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const artifacts = yield* AgentSessionArtifacts;
+    const attention = yield* AgentSessionAttentionProjection;
     const ptyColumns = getTableColumns(ptyProcesses);
 
     return {
@@ -160,14 +167,7 @@ export const SurfaceRepositoryLive = Layer.effect(
             .get();
           return row ? focusRow(row) : null;
         }),
-      listWorkspaceSurfaceMetadata: database.use('list_workspace_surface_metadata', (db) =>
-        db
-          .select()
-          .from(worktreeSurfaces)
-          .orderBy(worktreeSurfaces.worktreeId, worktreeSurfaces.sortOrder, worktreeSurfaces.id)
-          .all()
-          .map(surfaceMetadataRow),
-      ),
+      listWorkspaceSurfaceMetadata: listWorkspaceSurfaceMetadata(attention, artifacts, database),
       listEnvironmentFocusStates: database.use('list_worktree_environment_focus_states', (db) =>
         db.select().from(worktreeEnvironmentStates).all().map(focusRow),
       ),
@@ -387,6 +387,41 @@ function listAgentSessionsForPanes(
   });
 }
 
+function listWorkspaceSurfaceMetadata(
+  attention: AgentSessionAttentionProjectionService,
+  artifacts: AgentSessionArtifactsService,
+  database: RuntimeDatabaseService,
+): Effect.Effect<SurfaceMetadataRow[], DatabaseError> {
+  return Effect.gen(function* () {
+    const rows = yield* database.use('list_workspace_surface_metadata_rows', (db) => ({
+      surfaces: db
+        .select()
+        .from(worktreeSurfaces)
+        .orderBy(worktreeSurfaces.worktreeId, worktreeSurfaces.sortOrder, worktreeSurfaces.id)
+        .all(),
+      panes: db.select().from(surfacePanes).all(),
+    }));
+    const panes = rows.panes.map(paneRow);
+    const paneIds = panes.map((pane) => pane.id);
+    const ptyColumns = getTableColumns(ptyProcesses);
+    const [agentRows, terminalRows] = yield* Effect.all([
+      listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds),
+      listTerminalSessionsForPanes(database, ptyColumns, paneIds),
+    ]);
+    const paneAttention = yield* paneAttentionMap(attention, panes, agentRows, terminalRows);
+    return rows.surfaces.map((surface) =>
+      surfaceMetadataRow(
+        surface,
+        aggregateAttention(
+          panes
+            .filter((pane) => pane.surfaceId === surface.id)
+            .map((pane) => paneAttention.get(pane.id) ?? 'idle'),
+        ),
+      ),
+    );
+  });
+}
+
 function listTerminalSessionsForPanes(
   database: RuntimeDatabaseService,
   ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
@@ -440,7 +475,6 @@ function createSinglePaneSurfaceRows(
       worktreeId: input.worktreeId,
       kind: input.kind,
       title,
-      attention: 'idle',
       layoutJson: '{}',
       sortOrder,
       createdAt: now,
@@ -453,7 +487,6 @@ function createSinglePaneSurfaceRows(
     .values({
       surfaceId: surface.id,
       title,
-      attention: 'idle',
       sortOrder: 0,
       sessionKind: null,
       sessionId: null,
@@ -484,13 +517,16 @@ function deleteTarget(surface: SurfaceRow, panes: readonly SurfacePaneRow[]): Su
   };
 }
 
-function surfaceMetadataRow(row: WorktreeSurfaceRecord): SurfaceMetadataRow {
+function surfaceMetadataRow(
+  row: WorktreeSurfaceRecord,
+  attention: AttentionState = 'idle',
+): SurfaceMetadataRow {
   return {
     id: row.id,
     worktreeId: row.worktreeId,
     kind: row.kind,
     title: row.title,
-    attention: row.attention,
+    attention,
     sortOrder: row.sortOrder,
   };
 }
@@ -507,13 +543,51 @@ function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
     id: row.id,
     surfaceId: row.surfaceId,
     title: row.title,
-    attention: row.attention,
     sortOrder: row.sortOrder,
     sessionKind: row.sessionKind,
     sessionId: row.sessionId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function paneAttentionMap(
+  attention: AgentSessionAttentionProjectionService,
+  panes: readonly SurfacePaneRow[],
+  agentRows: readonly AgentSessionRow[],
+  terminalRows: readonly TerminalSessionRow[],
+) {
+  return Effect.gen(function* () {
+    const entries = yield* Effect.all(
+      panes.map((pane) =>
+        Effect.gen(function* () {
+          if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
+            const agent = agentRows.find((candidate) => candidate.id === pane.sessionId);
+            return [
+              pane.id,
+              agent ? yield* attention.agentSessionAttention(agent) : 'error',
+            ] as const;
+          }
+          if (pane.sessionKind === 'terminal_session' && pane.sessionId !== null) {
+            const terminal = terminalRows.find((candidate) => candidate.id === pane.sessionId);
+            return [
+              pane.id,
+              terminal ? attention.terminalSessionAttention(terminal) : 'error',
+            ] as const;
+          }
+          return [pane.id, 'idle'] as const;
+        }),
+      ),
+    );
+    return new Map(entries);
+  });
+}
+
+function aggregateAttention(attentions: readonly AttentionState[]): AttentionState {
+  if (attentions.includes('error')) return 'error';
+  if (attentions.includes('waiting')) return 'waiting';
+  if (attentions.includes('working')) return 'working';
+  return 'idle';
 }
 function ptyProcessRow(row: PtyProcessRecord | null): PtyProcessRow | null {
   if (!row) return null;

@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -53,6 +60,43 @@ test('agent session artifacts expose reserved JSONL paths without creating files
     assert.equal(paths.metadataPath, join(paths.directory, 'harness.json'));
     assert.equal(paths.jsonlPath, join(paths.directory, '20.harness.jsonl'));
     assert.equal(existsSync(paths.jsonlPath), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts prepare process JSONL files and tolerate bad lines', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-jsonl-'));
+  try {
+    const read = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        assert.equal(existsSync(paths.jsonlPath ?? ''), true);
+        appendFileSync(paths.jsonlPath ?? '', '{ nope\n', 'utf8');
+        appendFileSync(
+          paths.jsonlPath ?? '',
+          `${JSON.stringify({
+            schemaVersion: 1,
+            recordedAt: '2026-06-18T00:00:00.000Z',
+            agentSessionId: 10,
+            ptyProcessId: 20,
+            harness: 'pi',
+            nativeEvent: 'agent_start',
+            event: { nativeEvent: 'agent_start' },
+          })}\n`,
+          'utf8',
+        );
+        return yield* artifacts.readJsonl({ agentSessionId: 10, ptyProcessId: 20 });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(read.ignoredLineCount, 1);
+    assert.equal(read.records.length, 1);
+    assert.equal(read.records[0]?.nativeEvent, 'agent_start');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

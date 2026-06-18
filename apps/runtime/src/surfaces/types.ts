@@ -36,7 +36,6 @@ export interface SurfacePaneRow {
   readonly id: number;
   readonly surfaceId: number;
   readonly title: string;
-  readonly attention: AttentionState;
   readonly sortOrder: number;
   readonly sessionKind: 'agent_session' | 'terminal_session' | null;
   readonly sessionId: number | null;

@@ -41,8 +41,11 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
 
     const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
     assert.match(extensionSource, /agent_start/);
+    assert.match(extensionSource, /agent_end/);
     assert.doesNotMatch(extensionSource, /session_start/);
     assert.doesNotMatch(extensionSource, /turn_start/);
+    assert.doesNotMatch(extensionSource, /turn_end/);
+    assert.match(extensionSource, /ISAGI_HARNESS_JSONL_PATH/);
     assert.match(extensionSource, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(extensionSource, /writeHarnessMetadata/);
     assert.doesNotMatch(extensionSource, /ISAGI_HARNESS_EVENT_URL/);
@@ -302,6 +305,7 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
       };
     },
     initializeMetadata: () => Effect.void,
+    prepareProcessArtifacts: (input) => Effect.succeed(fakeArtifacts(root).paths(input)),
     readMetadata: () =>
       Effect.succeed({
         status: 'valid',
@@ -312,6 +316,18 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
           updatedAt: '2026-06-16T00:00:00.000Z',
         },
       }),
+    readJsonl: (input) =>
+      Effect.succeed({
+        path:
+          fakeArtifacts(root).paths({
+            agentSessionId: input.agentSessionId,
+            ptyProcessId: input.ptyProcessId,
+          }).jsonlPath ?? root,
+        records: [],
+        ignoredLineCount: 0,
+      }),
+    readJsonlForAgentSession: () => Effect.succeed([]),
+    listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.void,
     removeDirectory: () => Effect.void,
   } satisfies AgentSessionArtifactsService;

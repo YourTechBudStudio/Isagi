@@ -138,7 +138,7 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
-test('workspace snapshots include persisted surface rail metadata and active surface id', () => {
+test('workspace snapshots include derived surface rail metadata, worktree attention, and active surface id', () => {
   const snapshot = buildWorkspaceSnapshot(
     [project],
     [worktreeBase],
@@ -158,6 +158,7 @@ test('workspace snapshots include persisted surface rail metadata and active sur
   assert.deepEqual(snapshot.projects[0]?.worktrees[0]?.surfaces, [
     { id: 101, kind: 'agent', title: 'Pi', attention: 'waiting' },
   ]);
+  assert.equal(snapshot.projects[0]?.worktrees[0]?.attention, 'waiting');
   assert.equal(snapshot.projects[0]?.worktrees[0]?.activeSurfaceId, 101);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });

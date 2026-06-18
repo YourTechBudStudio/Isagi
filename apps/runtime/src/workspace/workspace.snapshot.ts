@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 
 import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
+import type { AttentionState } from '@isagi/contracts';
 
 import type { EnvironmentFocusRow, ProjectRow, SurfaceMetadataRow, WorktreeRow } from './types.js';
 
@@ -79,8 +80,15 @@ function buildWorktreeSnapshot(
       ? (focus?.activeSurfaceId ?? null)
       : null,
     commands: [],
-    attention: 'idle',
+    attention: aggregateAttention(worktreeSurfaces.map((surface) => surface.attention)),
   };
+}
+
+function aggregateAttention(attentions: readonly AttentionState[]): AttentionState {
+  if (attentions.includes('error')) return 'error';
+  if (attentions.includes('waiting')) return 'waiting';
+  if (attentions.includes('working')) return 'working';
+  return 'idle';
 }
 
 function worktreeTitle(worktree: WorktreeRow) {

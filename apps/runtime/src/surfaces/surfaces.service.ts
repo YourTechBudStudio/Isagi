@@ -15,7 +15,11 @@ import type {
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
-import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import {
+  AgentSessionAttentionProjection,
+  AgentSessionError,
+  AgentSessionService,
+} from '../agent-sessions/index.js';
 import { displayNameForHarness, HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
@@ -99,6 +103,7 @@ export const SurfaceServiceLive = Layer.effect(
     const agents = yield* AgentSessionService;
     const terminals = yield* TerminalSessionService;
     const lifecycle = yield* SessionLifecycle;
+    const attention = yield* AgentSessionAttentionProjection;
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -118,6 +123,12 @@ export const SurfaceServiceLive = Layer.effect(
             repository.listAgentSessionsForPanes(paneIds),
             repository.listTerminalSessionsForPanes(paneIds),
           ]);
+          const paneAttentions = yield* paneAttentionMap(
+            attention,
+            panes,
+            agentSessions,
+            terminalSessions,
+          );
           const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
           const activePaneId = activePaneForSurface(surface.id, panes, focus);
           return {
@@ -125,14 +136,14 @@ export const SurfaceServiceLive = Layer.effect(
             worktreeId: surface.worktreeId,
             kind: surface.kind,
             title: surface.title,
-            attention: surface.attention,
+            attention: aggregateAttention([...paneAttentions.values()]),
             layout: decodeLayout(surface.layoutJson),
             activePaneId,
             panes: panes.map((pane) => ({
               id: pane.id,
               surfaceId: pane.surfaceId,
               title: pane.title,
-              attention: pane.attention,
+              attention: paneAttentions.get(pane.id) ?? 'idle',
               sortOrder: pane.sortOrder,
               session: sessionForPane(agentSessions, terminalSessions, pane),
             })),
@@ -531,6 +542,45 @@ function activePaneForSurface(
 ) {
   if (focus?.activeSurfaceId !== surfaceId || focus.activePaneId === null) return null;
   return panes.some((pane) => pane.id === focus.activePaneId) ? focus.activePaneId : null;
+}
+
+function paneAttentionMap(
+  attention: import('../agent-sessions/index.js').AgentSessionAttentionProjectionService,
+  panes: readonly SurfacePaneRow[],
+  agentSessions: readonly AgentSessionRow[],
+  terminalSessions: readonly TerminalSessionRow[],
+) {
+  return Effect.gen(function* () {
+    const entries = yield* Effect.all(
+      panes.map((pane) =>
+        Effect.gen(function* () {
+          if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
+            const agent = agentSessions.find((candidate) => candidate.id === pane.sessionId);
+            return [
+              pane.id,
+              agent ? yield* attention.agentSessionAttention(agent) : 'error',
+            ] as const;
+          }
+          if (pane.sessionKind === 'terminal_session' && pane.sessionId !== null) {
+            const terminal = terminalSessions.find((candidate) => candidate.id === pane.sessionId);
+            return [
+              pane.id,
+              terminal ? attention.terminalSessionAttention(terminal) : 'error',
+            ] as const;
+          }
+          return [pane.id, 'idle'] as const;
+        }),
+      ),
+    );
+    return new Map(entries);
+  });
+}
+
+function aggregateAttention(attentions: readonly import('@isagi/contracts').AttentionState[]) {
+  if (attentions.includes('error')) return 'error';
+  if (attentions.includes('waiting')) return 'waiting';
+  if (attentions.includes('working')) return 'working';
+  return 'idle';
 }
 
 function sessionForPane(

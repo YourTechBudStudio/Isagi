@@ -1,7 +1,18 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  type Dirent,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
+
+import type { AgentHarness } from '@isagi/contracts';
 
 import { DataDirectory } from '../persistence/index.js';
 
@@ -15,6 +26,22 @@ export interface AgentSessionHarnessMetadata {
   readonly schemaVersion: 1;
   readonly harnessSessionId: string | null;
   readonly updatedAt: string;
+}
+
+export interface AgentSessionHarnessJsonlRecord {
+  readonly schemaVersion: 1;
+  readonly recordedAt: string;
+  readonly agentSessionId: number;
+  readonly ptyProcessId: number;
+  readonly harness: AgentHarness;
+  readonly nativeEvent: string;
+  readonly event: unknown;
+}
+
+export interface AgentSessionHarnessJsonlRead {
+  readonly path: string;
+  readonly records: readonly AgentSessionHarnessJsonlRecord[];
+  readonly ignoredLineCount: number;
 }
 
 export type AgentSessionHarnessMetadataRead =
@@ -34,7 +61,12 @@ export type AgentSessionHarnessMetadataRead =
     };
 
 export class AgentSessionArtifactError extends Data.TaggedError('AgentSessionArtifactError')<{
-  readonly code: 'metadata_init_failed' | 'metadata_write_failed' | 'artifact_cleanup_failed';
+  readonly code:
+    | 'metadata_init_failed'
+    | 'metadata_write_failed'
+    | 'jsonl_init_failed'
+    | 'jsonl_read_failed'
+    | 'artifact_cleanup_failed';
   readonly agentSessionId: number;
   readonly path: string;
   readonly cause: unknown;
@@ -48,7 +80,19 @@ export interface AgentSessionArtifactsService {
   readonly initializeMetadata: (
     agentSessionId: number,
   ) => Effect.Effect<void, AgentSessionArtifactError>;
+  readonly prepareProcessArtifacts: (input: {
+    readonly agentSessionId: number;
+    readonly ptyProcessId: number;
+  }) => Effect.Effect<AgentSessionArtifactPaths, AgentSessionArtifactError>;
   readonly readMetadata: (agentSessionId: number) => Effect.Effect<AgentSessionHarnessMetadataRead>;
+  readonly readJsonl: (input: {
+    readonly agentSessionId: number;
+    readonly ptyProcessId: number;
+  }) => Effect.Effect<AgentSessionHarnessJsonlRead, AgentSessionArtifactError>;
+  readonly readJsonlForAgentSession: (
+    agentSessionId: number,
+  ) => Effect.Effect<readonly AgentSessionHarnessJsonlRead[], AgentSessionArtifactError>;
+  readonly listAgentSessionIds: Effect.Effect<readonly number[]>;
   readonly writeHarnessSessionId: (input: {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
@@ -85,6 +129,24 @@ export const AgentSessionArtifactsLive = Layer.effect(
               cause,
             }),
         }),
+      prepareProcessArtifacts: (input) =>
+        Effect.try({
+          try: () => {
+            const paths = artifactPaths(root, input);
+            mkdirSync(paths.directory, { recursive: true });
+            if (paths.jsonlPath) {
+              closeSync(openSync(paths.jsonlPath, 'a'));
+            }
+            return paths;
+          },
+          catch: (cause) =>
+            new AgentSessionArtifactError({
+              code: 'jsonl_init_failed',
+              agentSessionId: input.agentSessionId,
+              path: artifactPaths(root, input).jsonlPath ?? artifactPaths(root, input).directory,
+              cause,
+            }),
+        }),
       readMetadata: (agentSessionId) =>
         Effect.sync(() => {
           const paths = artifactPaths(root, { agentSessionId });
@@ -107,6 +169,79 @@ export const AgentSessionArtifactsLive = Layer.effect(
             } satisfies AgentSessionHarnessMetadataRead;
           }
         }),
+      readJsonl: (input) =>
+        Effect.try({
+          try: () => {
+            const paths = artifactPaths(root, input);
+            if (!paths.jsonlPath)
+              return { path: paths.directory, records: [], ignoredLineCount: 0 };
+            return parseJsonl(paths.jsonlPath, readFileSync(paths.jsonlPath, 'utf8'));
+          },
+          catch: (cause) => {
+            const paths = artifactPaths(root, input);
+            if (isMissingFileError(cause) && paths.jsonlPath) {
+              return new AgentSessionArtifactError({
+                code: 'jsonl_read_failed',
+                agentSessionId: input.agentSessionId,
+                path: paths.jsonlPath,
+                cause,
+              });
+            }
+            return new AgentSessionArtifactError({
+              code: 'jsonl_read_failed',
+              agentSessionId: input.agentSessionId,
+              path: paths.jsonlPath ?? paths.directory,
+              cause,
+            });
+          },
+        }).pipe(
+          Effect.catchTag('AgentSessionArtifactError', (error) =>
+            isMissingFileError(error.cause)
+              ? Effect.succeed({ path: error.path, records: [], ignoredLineCount: 0 })
+              : Effect.fail(error),
+          ),
+        ),
+      readJsonlForAgentSession: (agentSessionId) =>
+        Effect.try({
+          try: () => {
+            const paths = artifactPaths(root, { agentSessionId });
+            let entries: Dirent[];
+            try {
+              entries = readdirSync(paths.directory, { withFileTypes: true });
+            } catch (error) {
+              if (isMissingFileError(error)) return [];
+              throw error;
+            }
+            return entries
+              .filter((entry) => entry.isFile())
+              .map((entry) => ptyProcessIdFromJsonlFileName(entry.name))
+              .filter((ptyProcessId): ptyProcessId is number => ptyProcessId !== null)
+              .map((ptyProcessId) => {
+                const filePath = artifactPaths(root, { agentSessionId, ptyProcessId }).jsonlPath;
+                if (!filePath) return null;
+                return parseJsonl(filePath, readFileSync(filePath, 'utf8'));
+              })
+              .filter((read): read is AgentSessionHarnessJsonlRead => read !== null);
+          },
+          catch: (error) =>
+            new AgentSessionArtifactError({
+              code: 'jsonl_read_failed',
+              agentSessionId,
+              path: artifactPaths(root, { agentSessionId }).directory,
+              cause: error,
+            }),
+        }),
+      listAgentSessionIds: Effect.sync(() => {
+        try {
+          return readdirSync(root, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => Number(entry.name))
+            .filter((id) => Number.isSafeInteger(id) && id > 0);
+        } catch (error) {
+          if (isMissingFileError(error)) return [];
+          throw error;
+        }
+      }),
       writeHarnessSessionId: (input) =>
         Effect.try({
           try: () => {
@@ -165,6 +300,59 @@ function artifactPaths(
     metadataPath: join(directory, 'harness.json'),
     jsonlPath: input.ptyProcessId ? join(directory, `${input.ptyProcessId}.harness.jsonl`) : null,
   };
+}
+
+export function parseJsonl(path: string, raw: string): AgentSessionHarnessJsonlRead {
+  const records: AgentSessionHarnessJsonlRecord[] = [];
+  let ignoredLineCount = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = parseJsonlRecord(line);
+      if (record) records.push(record);
+      else ignoredLineCount += 1;
+    } catch {
+      ignoredLineCount += 1;
+    }
+  }
+  return { path, records, ignoredLineCount };
+}
+
+function parseJsonlRecord(line: string): AgentSessionHarnessJsonlRecord | null {
+  const parsed = JSON.parse(line) as unknown;
+  if (!parsed || typeof parsed !== 'object') return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.schemaVersion !== 1) return null;
+  if (typeof record.recordedAt !== 'string' || !record.recordedAt) return null;
+  if (!isPositiveInteger(record.agentSessionId)) return null;
+  if (!isPositiveInteger(record.ptyProcessId)) return null;
+  if (!isAgentHarness(record.harness)) return null;
+  if (typeof record.nativeEvent !== 'string' || !record.nativeEvent) return null;
+  if (!('event' in record)) return null;
+  return {
+    schemaVersion: 1,
+    recordedAt: record.recordedAt,
+    agentSessionId: record.agentSessionId,
+    ptyProcessId: record.ptyProcessId,
+    harness: record.harness,
+    nativeEvent: record.nativeEvent,
+    event: record.event,
+  };
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isAgentHarness(value: unknown): value is AgentHarness {
+  return value === 'pi' || value === 'opencode' || value === 'claude' || value === 'codex';
+}
+
+function ptyProcessIdFromJsonlFileName(fileName: string) {
+  const match = /^([1-9]\d*)\.harness\.jsonl$/.exec(fileName);
+  if (!match?.[1]) return null;
+  const ptyProcessId = Number(match[1]);
+  return Number.isSafeInteger(ptyProcessId) ? ptyProcessId : null;
 }
 
 function initialMetadata(): AgentSessionHarnessMetadata {

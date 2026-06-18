@@ -91,7 +91,6 @@ export const worktreeSurfaces = sqliteTable('worktree_surfaces', {
     .references(() => worktrees.id, { onDelete: 'cascade' }),
   kind: text('kind', { enum: ['agent', 'terminal'] }).notNull(),
   title: text('title').notNull(),
-  attention: text('attention', { enum: ['idle', 'working', 'waiting', 'error'] }).notNull(),
   layoutJson: text('layout_json').notNull(),
   sortOrder: integer('sort_order').notNull(),
   createdAt: text('created_at').notNull(),
@@ -104,7 +103,6 @@ export const surfacePanes = sqliteTable('surface_panes', {
     .notNull()
     .references(() => worktreeSurfaces.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
-  attention: text('attention', { enum: ['idle', 'working', 'waiting', 'error'] }).notNull(),
   sortOrder: integer('sort_order').notNull(),
   sessionKind: text('session_kind', { enum: ['agent_session', 'terminal_session'] }),
   sessionId: integer('session_id'),
