@@ -1,15 +1,16 @@
-import { writeHarnessMetadataSource } from './artifacts.common.js';
+import { appendHarnessEventSource, writeHarnessMetadataSource } from './artifacts.common.js';
 
 export function piExtensionSource() {
   return String.raw`${writeHarnessMetadataSource({ typescript: true })}
-${writePiHarnessEventSource()}
+${appendHarnessEventSource('pi')}
+${writePiContextSource()}
 
 let lastBeforeAgentStart: unknown = null;
 
 async function observeStart(event: unknown, ctx: any) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   await writeHarnessMetadata(sessionId);
-  await appendPiHarnessEvent(sessionId, "agent_start", {
+  await appendHarnessEvent(sessionId, "agent_start", {
     nativeEvent: "agent_start",
     event: safeJsonValue(event),
     beforeAgentStart: lastBeforeAgentStart,
@@ -21,7 +22,7 @@ async function observeStart(event: unknown, ctx: any) {
 async function observeEnd(event: unknown, ctx: any) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   await writeHarnessMetadata(sessionId);
-  await appendPiHarnessEvent(sessionId, "agent_end", {
+  await appendHarnessEvent(sessionId, "agent_end", {
     nativeEvent: "agent_end",
     event: safeJsonValue(event),
     context: piContext(ctx),
@@ -38,16 +39,8 @@ export default function (pi: any) {
 `;
 }
 
-function writePiHarnessEventSource() {
-  return String.raw`function safeJsonValue(value) {
-  try {
-    return JSON.parse(JSON.stringify(value ?? null));
-  } catch {
-    return null;
-  }
-}
-
-function callBoolean(fn) {
+function writePiContextSource() {
+  return String.raw`function callBoolean(fn) {
   try {
     const value = fn?.();
     return typeof value === "boolean" ? value : null;
@@ -61,46 +54,6 @@ function piContext(ctx) {
     isIdle: callBoolean(ctx?.isIdle?.bind?.(ctx) ?? ctx?.isIdle),
     hasPendingMessages: callBoolean(ctx?.hasPendingMessages?.bind?.(ctx) ?? ctx?.hasPendingMessages),
   };
-}
-
-function harnessSessionLogFileName(harnessSessionId) {
-  return Buffer.from(harnessSessionId, "utf8").toString("hex") + ".harness.jsonl";
-}
-
-async function appendPiHarnessEvent(harnessSessionId, nativeEvent, event) {
-  if (
-    !harnessArtifactDirectory ||
-    !harnessSessionId ||
-    !Number.isSafeInteger(agentSessionId) ||
-    agentSessionId <= 0
-  ) {
-    return;
-  }
-  try {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    await fs.mkdir(harnessArtifactDirectory, { recursive: true });
-    const jsonlPath = path.join(
-      harnessArtifactDirectory,
-      harnessSessionLogFileName(harnessSessionId),
-    );
-    await fs.appendFile(
-      jsonlPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        recordedAt: new Date().toISOString(),
-        agentSessionId,
-        harnessSessionId,
-        ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
-        harness: "pi",
-        nativeEvent,
-        event,
-      }) + "\n",
-      "utf8",
-    );
-  } catch {
-    // Observation must never block or fail the user's harness interaction.
-  }
 }
 `;
 }

@@ -1,6 +1,8 @@
+import type { AgentHarness } from '@isagi/contracts';
+
 export function commandHookSource(harness: 'claude' | 'codex') {
   return String.raw`${writeHarnessMetadataSource()}
-${writeCommandHarnessEventSource(harness)}
+${appendHarnessEventSource(harness)}
 
 async function readStdinJson() {
   const chunks = [];
@@ -18,7 +20,7 @@ const input = await readStdinJson();
 const sessionId = typeof input.session_id === "string" ? input.session_id : null;
 const nativeEvent = typeof input.hook_event_name === "string" ? input.hook_event_name : null;
 await writeHarnessMetadata(sessionId);
-await appendCommandHarnessEvent(sessionId, nativeEvent, {
+await appendHarnessEvent(sessionId, nativeEvent, {
   nativeEvent,
   notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
   input: safeJsonValue(input),
@@ -67,7 +69,12 @@ async function writeHarnessMetadata(${params}) {
 `;
 }
 
-function writeCommandHarnessEventSource(harness: 'claude' | 'codex') {
+// Single source of truth for the harness JSONL record shape. Every harness hook
+// (command-based and plugin-based) emits this same `appendHarnessEvent` plus its
+// `safeJsonValue`/`harnessSessionLogFileName` helpers, so the on-disk record
+// schema and the log-file naming live in exactly one place. The reader in
+// `agent-sessions/artifacts.ts` (`parseJsonlRecord`) must stay in lockstep.
+export function appendHarnessEventSource(harness: AgentHarness) {
   return String.raw`function safeJsonValue(value) {
   try {
     return JSON.parse(JSON.stringify(value ?? null));
@@ -80,7 +87,7 @@ function harnessSessionLogFileName(harnessSessionId) {
   return Buffer.from(harnessSessionId, "utf8").toString("hex") + ".harness.jsonl";
 }
 
-async function appendCommandHarnessEvent(harnessSessionId, nativeEvent, event) {
+async function appendHarnessEvent(harnessSessionId, nativeEvent, event) {
   if (
     !harnessArtifactDirectory ||
     !harnessSessionId ||

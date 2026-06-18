@@ -350,6 +350,131 @@ test('agent attention preserves last-known waiting state when the PTY is dead', 
   }
 });
 
+test('agent attention treats only deliberate kill reasons as idle, all others as error', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-killed-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        // Idle observed harness state (no records yet) overlaid with a killed PTY.
+        yield* attention.reconcileAgentSession(10);
+        const killedByUser = yield* attention.agentSessionAttention(
+          agentSession({
+            activePtyProcess: ptyProcess({
+              id: 20,
+              status: 'killed',
+              statusReason: 'user_requested',
+            }),
+          }),
+        );
+        const killedByShutdown = yield* attention.agentSessionAttention(
+          agentSession({
+            activePtyProcess: ptyProcess({
+              id: 20,
+              status: 'killed',
+              statusReason: 'runtime_shutdown',
+            }),
+          }),
+        );
+        const killedByFailure = yield* attention.agentSessionAttention(
+          agentSession({
+            activePtyProcess: ptyProcess({
+              id: 20,
+              status: 'killed',
+              statusReason: 'backend_process_missing',
+            }),
+          }),
+        );
+        const killedWithoutReason = yield* attention.agentSessionAttention(
+          agentSession({
+            activePtyProcess: ptyProcess({ id: 20, status: 'killed', statusReason: null }),
+          }),
+        );
+
+        // A waiting-for-user signal must survive any kind of kill.
+        appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
+        yield* attention.reconcileAgentSession(10);
+        const waitingSurvivesFailureKill = yield* attention.agentSessionAttention(
+          agentSession({
+            activePtyProcess: ptyProcess({
+              id: 20,
+              status: 'killed',
+              statusReason: 'backend_process_missing',
+            }),
+          }),
+        );
+
+        return {
+          killedByUser,
+          killedByShutdown,
+          killedByFailure,
+          killedWithoutReason,
+          waitingSurvivesFailureKill,
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, {
+      killedByUser: 'idle',
+      killedByShutdown: 'idle',
+      killedByFailure: 'error',
+      killedWithoutReason: 'error',
+      waitingSurvivesFailureKill: 'waiting',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('terminal attention treats only deliberate kill reasons as idle, all others as error', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-terminal-killed-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const attention = yield* AgentSessionAttentionProjection;
+        return {
+          killedByUser: attention.terminalSessionAttention(
+            terminalSession({
+              activePtyProcess: ptyProcess({
+                id: 30,
+                status: 'killed',
+                statusReason: 'user_requested',
+              }),
+            }),
+          ),
+          killedByFailure: attention.terminalSessionAttention(
+            terminalSession({
+              activePtyProcess: ptyProcess({
+                id: 30,
+                status: 'killed',
+                statusReason: 'runtime_ephemeral_lost',
+              }),
+            }),
+          ),
+          killedWithoutReason: attention.terminalSessionAttention(
+            terminalSession({
+              activePtyProcess: ptyProcess({ id: 30, status: 'killed', statusReason: null }),
+            }),
+          ),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, {
+      killedByUser: 'idle',
+      killedByFailure: 'error',
+      killedWithoutReason: 'error',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('startup attention reads pre-existing harness logs before applying process lifecycle', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-startup-overlay-'));
   try {

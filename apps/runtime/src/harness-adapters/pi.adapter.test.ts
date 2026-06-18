@@ -122,7 +122,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /session\.status/);
-    assert.match(opencodeSource, /appendOpenCodeHarnessEvent/);
+    assert.match(opencodeSource, /appendHarnessEvent/);
+    assert.match(opencodeSource, /harness: "opencode"/);
     assert.match(opencodeSource, /chat\.params/);
     assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(opencodeSource, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
@@ -146,7 +147,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const claudeHook = readFileSync(artifacts.claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
     assert.match(claudeHook, /hook_event_name/);
-    assert.match(claudeHook, /appendCommandHarnessEvent/);
+    assert.match(claudeHook, /appendHarnessEvent/);
     assert.match(claudeHook, /harness: "claude"/);
     assert.match(claudeHook, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(claudeHook, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
@@ -156,7 +157,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const codexHook = readFileSync(artifacts.codexHookPath, 'utf8');
     assert.match(codexHook, /session_id/);
     assert.match(codexHook, /hook_event_name/);
-    assert.match(codexHook, /appendCommandHarnessEvent/);
+    assert.match(codexHook, /appendHarnessEvent/);
     assert.match(codexHook, /harness: "codex"/);
     assert.match(codexHook, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(codexHook, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);

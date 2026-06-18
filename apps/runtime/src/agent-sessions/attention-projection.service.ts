@@ -2,7 +2,7 @@ import { mkdirSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 
 import { and, eq, getTableColumns, isNotNull, or } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Cause, Context, Effect, Layer } from 'effect';
 
 import type { AttentionSource, AttentionState } from '@isagi/contracts';
 
@@ -53,10 +53,27 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
 
     const reconcileAgentSession = (agentSessionId: number) =>
       Effect.gen(function* () {
+        // `projections` and `artifactFingerprints` are always written together
+        // below, so a cache miss implies `previous === null`. That makes the
+        // read path (`agentSessionAttention` reconciling on a miss) publish-free
+        // by construction: only a watcher-driven reconcile of an already-known
+        // session can flip the fingerprint and emit an event.
         const previous = artifactFingerprints.get(agentSessionId) ?? null;
         const metadata = yield* artifacts.readMetadata(agentSessionId);
         const projection = yield* readProjection(artifacts, agentSessionId).pipe(
-          Effect.orElseSucceed(() => emptyHarnessObservationProjection()),
+          // A missing directory is already mapped to an empty projection inside
+          // the artifact reader; reaching here means a genuine read failure
+          // (e.g. permissions). Fall back to empty so attention stays derivable,
+          // but leave a breadcrumb so a stuck dot is diagnosable.
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              console.warn(
+                `[runtime] attention projection could not read harness logs for agent session ${agentSessionId}`,
+                error,
+              );
+              return emptyHarnessObservationProjection();
+            }),
+          ),
         );
         const fingerprint = JSON.stringify([
           metadataProjectionFingerprint(metadata),
@@ -85,15 +102,35 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
       }
     });
 
+    // These scans are fired detached from any request fiber and outside the
+    // layer scope, so a failure or defect would otherwise vanish into a
+    // discarded promise. Log the full cause before discarding so silently
+    // stalled attention is traceable (extends the PTY GC timer pattern to also
+    // capture defects and interruptions, not just typed failures).
+    const runDetachedScan = (label: string, scan: Effect.Effect<void>) => {
+      void Effect.runPromise(
+        scan.pipe(
+          Effect.catchAllCause((cause) =>
+            Effect.sync(() => {
+              console.warn(
+                `[runtime] attention reconciliation failed (${label})`,
+                Cause.pretty(cause),
+              );
+            }),
+          ),
+        ),
+      );
+    };
+
     const scheduleRootScan = () => {
       schedule('root', () => {
-        void Effect.runPromise(reconcileKnownAgentSessions);
+        runDetachedScan('root scan', reconcileKnownAgentSessions);
       });
     };
 
     const scheduleAgentScan = (agentSessionId: number) => {
       schedule(agentSessionId, () => {
-        void Effect.runPromise(reconcileAgentSession(agentSessionId));
+        runDetachedScan(`agent session ${agentSessionId}`, reconcileAgentSession(agentSessionId));
       });
     };
 
@@ -430,9 +467,18 @@ function overlayKilledProcess(
 ): AttentionState {
   if (observed === 'working') return 'error';
   if (observed === 'waiting') return 'waiting';
-  return statusReason === 'user_requested' || statusReason === 'runtime_shutdown'
-    ? 'idle'
-    : 'error';
+  return isBenignKillReason(statusReason) ? 'idle' : 'error';
+}
+
+// A killed PTY is only "clean" when the stop was deliberate. `user_requested`
+// and `runtime_shutdown` are the sole benign reasons in `PtyProcessStatusReason`;
+// every failure reason (`backend_unavailable`, `backend_process_missing`,
+// `backend_attach_failed`, `backend_launch_failed`, `runtime_ephemeral_lost`)
+// and an absent reason are genuine errors and surface as `error`. Kept in one
+// place so the agent overlay and terminal derivation never drift, and so a newly
+// added kill reason defaults to `error` until someone decides otherwise here.
+function isBenignKillReason(statusReason: string | null): boolean {
+  return statusReason === 'user_requested' || statusReason === 'runtime_shutdown';
 }
 
 function deriveTerminalSessionAttention(session: TerminalSessionRow): AttentionState {
@@ -446,10 +492,7 @@ function deriveTerminalSessionAttention(session: TerminalSessionRow): AttentionS
     case 'exited':
       return 'idle';
     case 'killed':
-      return process.statusReason === 'user_requested' ||
-        process.statusReason === 'runtime_shutdown'
-        ? 'idle'
-        : 'error';
+      return isBenignKillReason(process.statusReason) ? 'idle' : 'error';
     case 'failed':
       return 'error';
   }
