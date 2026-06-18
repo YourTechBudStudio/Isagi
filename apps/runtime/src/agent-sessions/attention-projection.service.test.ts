@@ -32,18 +32,19 @@ test('Pi attention derives idle, working, waiting, and pending-message working f
           agentSessionId: 10,
           ptyProcessId: 20,
         });
+        const jsonlPath = harnessLogPath(paths.directory);
         const session = agentSession({ activePtyProcess: ptyProcess({ id: 20 }) });
         const idle = yield* attention.agentSessionAttention(session);
 
-        appendRecord(paths.jsonlPath ?? '', 'agent_start', null);
+        appendRecord(jsonlPath, 'agent_start', null);
         yield* attention.reconcileAgentSession(10);
         const working = yield* attention.agentSessionAttention(session);
 
-        appendRecord(paths.jsonlPath ?? '', 'agent_end', false);
+        appendRecord(jsonlPath, 'agent_end', false);
         yield* attention.reconcileAgentSession(10);
         const waiting = yield* attention.agentSessionAttention(session);
 
-        appendRecord(paths.jsonlPath ?? '', 'agent_end', true);
+        appendRecord(jsonlPath, 'agent_end', true);
         yield* attention.reconcileAgentSession(10);
         const pendingWorking = yield* attention.agentSessionAttention(session);
 
@@ -62,19 +63,19 @@ test('Pi attention derives idle, working, waiting, and pending-message working f
   }
 });
 
-test('Pi attention ignores stale JSONL from a previous PTY process', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-stale-'));
+test('Pi attention preserves harness history across PTY process replacement', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-pty-replace-'));
   try {
     const state = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
         const attention = yield* AgentSessionAttentionProjection;
-        const oldPaths = yield* artifacts.prepareProcessArtifacts({
+        const paths = yield* artifacts.prepareProcessArtifacts({
           agentSessionId: 10,
           ptyProcessId: 20,
         });
         yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 21 });
-        appendRecord(oldPaths.jsonlPath ?? '', 'agent_end', false);
+        appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
         yield* attention.reconcileAgentSession(10);
         return yield* attention.agentSessionAttention(
           agentSession({ activePtyProcessId: 21, activePtyProcess: ptyProcess({ id: 21 }) }),
@@ -82,7 +83,47 @@ test('Pi attention ignores stale JSONL from a previous PTY process', async () =>
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(state, 'idle');
+    assert.equal(state, 'waiting');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('Pi attention refreshes when the harness session id changes inside an agent session', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-new-harness-session-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        appendRecord(harnessLogPath(paths.directory, 'pi-session-1'), 'agent_end', false);
+        yield* attention.reconcileAgentSession(10);
+        const oldWaiting = yield* attention.agentSessionAttention(
+          agentSession({ harnessSessionId: 'pi-session-1' }),
+        );
+        const newIdle = yield* attention.agentSessionAttention(
+          agentSession({ harnessSessionId: 'pi-session-2' }),
+        );
+        appendRecord(harnessLogPath(paths.directory, 'pi-session-2'), 'agent_start', null, {
+          harnessSessionId: 'pi-session-2',
+        });
+        yield* attention.reconcileAgentSession(10);
+        const newWorking = yield* attention.agentSessionAttention(
+          agentSession({ harnessSessionId: 'pi-session-2' }),
+        );
+        return { oldWaiting, newIdle, newWorking };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, {
+      oldWaiting: 'waiting',
+      newIdle: 'idle',
+      newWorking: 'working',
+    });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -99,17 +140,19 @@ test('OpenCode attention derives working and waiting from session.status JSONL',
           agentSessionId: 10,
           ptyProcessId: 20,
         });
+        const jsonlPath = harnessLogPath(paths.directory, 'opencode-session-1');
         const session = agentSession({
           harness: 'opencode',
+          harnessSessionId: 'opencode-session-1',
           activePtyProcess: ptyProcess({ id: 20, command: 'opencode' }),
         });
         const idle = yield* attention.agentSessionAttention(session);
 
-        appendOpenCodeRecord(paths.jsonlPath ?? '', 'busy');
+        appendOpenCodeRecord(jsonlPath, 'busy');
         yield* attention.reconcileAgentSession(10);
         const working = yield* attention.agentSessionAttention(session);
 
-        appendOpenCodeRecord(paths.jsonlPath ?? '', 'idle');
+        appendOpenCodeRecord(jsonlPath, 'idle');
         yield* attention.reconcileAgentSession(10);
         const waiting = yield* attention.agentSessionAttention(session);
 
@@ -130,8 +173,9 @@ test('OpenCode attention derives working and waiting from session.status JSONL',
 test('OpenCode attention recovers waiting from pre-existing nested session.status logs', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-opencode-restart-'));
   try {
-    const jsonlPath = join(dataRoot, 'sessions', 'agent-sessions', '10', '20.harness.jsonl');
-    mkdirSync(join(dataRoot, 'sessions', 'agent-sessions', '10'), { recursive: true });
+    const directory = join(dataRoot, 'sessions', 'agent-sessions', '10');
+    const jsonlPath = harnessLogPath(directory, 'opencode-session-1');
+    mkdirSync(directory, { recursive: true });
     appendNestedOpenCodeRecord(jsonlPath, 'idle');
 
     const state = await Effect.runPromise(
@@ -140,6 +184,7 @@ test('OpenCode attention recovers waiting from pre-existing nested session.statu
         return yield* attention.agentSessionAttention(
           agentSession({
             harness: 'opencode',
+            harnessSessionId: 'opencode-session-1',
             activePtyProcess: ptyProcess({ id: 20, command: 'opencode' }),
           }),
         );
@@ -147,6 +192,92 @@ test('OpenCode attention recovers waiting from pre-existing nested session.statu
     );
 
     assert.equal(state, 'waiting');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent attention reports error when last-known harness state was working but the PTY is dead', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-working-dead-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        appendRecord(harnessLogPath(paths.directory), 'agent_start', null);
+        yield* attention.reconcileAgentSession(10);
+        const exited = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
+        );
+        const missing = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcessId: 20, activePtyProcess: null }),
+        );
+        const failed = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'failed' }) }),
+        );
+        return { exited, missing, failed };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, { exited: 'error', missing: 'error', failed: 'error' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent attention preserves last-known waiting state when the PTY is dead', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-waiting-dead-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
+        yield* attention.reconcileAgentSession(10);
+        const exited = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
+        );
+        const missing = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcessId: 20, activePtyProcess: null }),
+        );
+        const failed = yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'failed' }) }),
+        );
+        return { exited, missing, failed };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, { exited: 'waiting', missing: 'waiting', failed: 'waiting' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup attention reads pre-existing harness logs before applying process lifecycle', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-startup-overlay-'));
+  try {
+    const directory = join(dataRoot, 'sessions', 'agent-sessions', '10');
+    mkdirSync(directory, { recursive: true });
+    appendRecord(harnessLogPath(directory), 'agent_start', null);
+
+    const state = await Effect.runPromise(
+      Effect.gen(function* () {
+        const attention = yield* AgentSessionAttentionProjection;
+        return yield* attention.agentSessionAttention(
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
+        );
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(state, 'error');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -222,8 +353,37 @@ test('attention projection publishes an internal agent change when artifact proj
           agentSessionId: 10,
           ptyProcessId: 20,
         });
+        const jsonlPath = harnessLogPath(paths.directory);
         yield* attention.reconcileAgentSession(10);
-        appendRecord(paths.jsonlPath ?? '', 'agent_start', null);
+        appendRecord(jsonlPath, 'agent_start', null);
+        yield* attention.reconcileAgentSession(10);
+        const changedEvent = yield* subscription.take;
+        yield* subscription.unsubscribe;
+        return changedEvent;
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(event, { type: 'agent_session_changed', agentSessionId: 10 });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('attention projection publishes an internal agent change when harness session metadata changes', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-metadata-event-'));
+  try {
+    const event = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const bus = yield* InternalRuntimeEventBus;
+        const subscription = yield* bus.subscribe({ types: ['agent_session_changed'] });
+        yield* artifacts.initializeMetadata(10);
+        yield* attention.reconcileAgentSession(10);
+        yield* artifacts.writeHarnessSessionId({
+          agentSessionId: 10,
+          harnessSessionId: 'pi-session-1',
+        });
         yield* attention.reconcileAgentSession(10);
         const changedEvent = yield* subscription.take;
         yield* subscription.unsubscribe;
@@ -251,7 +411,7 @@ test('attention projection preloads DB-relevant sessions so first artifact chang
           agentSessionId: 10,
           ptyProcessId: 20,
         });
-        appendRecord(paths.jsonlPath ?? '', 'agent_start', null);
+        appendRecord(harnessLogPath(paths.directory), 'agent_start', null);
         yield* attention.reconcileAgentSession(10);
         const changedEvent = yield* subscription.take;
         yield* subscription.unsubscribe;
@@ -269,13 +429,16 @@ function appendRecord(
   path: string,
   nativeEvent: 'agent_start' | 'agent_end',
   pending: boolean | null,
+  options: { readonly harnessSessionId?: string } = {},
 ) {
+  const harnessSessionId = options.harnessSessionId ?? 'pi-session-1';
   appendFileSync(
     path,
     `${JSON.stringify({
       schemaVersion: 1,
       recordedAt: new Date().toISOString(),
       agentSessionId: 10,
+      harnessSessionId,
       ptyProcessId: 20,
       harness: 'pi',
       nativeEvent,
@@ -295,6 +458,7 @@ function appendOpenCodeRecord(path: string, status: 'busy' | 'idle') {
       schemaVersion: 1,
       recordedAt: new Date().toISOString(),
       agentSessionId: 10,
+      harnessSessionId: 'opencode-session-1',
       ptyProcessId: 20,
       harness: 'opencode',
       nativeEvent: 'session.status',
@@ -314,6 +478,7 @@ function appendNestedOpenCodeRecord(path: string, status: 'busy' | 'idle') {
       schemaVersion: 1,
       recordedAt: new Date().toISOString(),
       agentSessionId: 10,
+      harnessSessionId: 'opencode-session-1',
       ptyProcessId: 20,
       harness: 'opencode',
       nativeEvent: 'session.status',
@@ -332,6 +497,10 @@ function appendNestedOpenCodeRecord(path: string, status: 'busy' | 'idle') {
     })}\n`,
     'utf8',
   );
+}
+
+function harnessLogPath(directory: string, harnessSessionId = 'pi-session-1') {
+  return join(directory, `${Buffer.from(harnessSessionId, 'utf8').toString('hex')}.harness.jsonl`);
 }
 
 function agentSession(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {

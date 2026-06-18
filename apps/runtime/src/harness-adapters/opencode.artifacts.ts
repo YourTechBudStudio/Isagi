@@ -24,8 +24,9 @@ export const IsagiSessionObserver = async () => {
     event: async ({ event }) => {
       if (!event) return;
       if (event.type === "session.status") {
-        await writeHarnessMetadata(sessionIdFromEvent(event));
-        await appendOpenCodeHarnessEvent("session.status", {
+        const sessionId = sessionIdFromEvent(event);
+        await writeHarnessMetadata(sessionId);
+        await appendOpenCodeHarnessEvent(sessionId, "session.status", {
           nativeEvent: "session.status",
           event: safeJsonValue(event),
           status: sessionStatusFromEvent(event),
@@ -48,9 +49,7 @@ export const IsagiSessionObserver = async () => {
 }
 
 function writeOpenCodeHarnessEventSource() {
-  return String.raw`const jsonlPath = process.env.ISAGI_HARNESS_JSONL_PATH;
-
-function safeJsonValue(value) {
+  return String.raw`function safeJsonValue(value) {
   try {
     return JSON.parse(JSON.stringify(value ?? null));
   } catch {
@@ -67,26 +66,35 @@ function sessionStatusFromEvent(event) {
   return null;
 }
 
-async function appendOpenCodeHarnessEvent(nativeEvent, event) {
+function harnessSessionLogFileName(harnessSessionId) {
+  return Buffer.from(harnessSessionId, "utf8").toString("hex") + ".harness.jsonl";
+}
+
+async function appendOpenCodeHarnessEvent(harnessSessionId, nativeEvent, event) {
   if (
-    !jsonlPath ||
+    !harnessArtifactDirectory ||
+    !harnessSessionId ||
     !Number.isSafeInteger(agentSessionId) ||
-    agentSessionId <= 0 ||
-    !Number.isSafeInteger(ptyProcessId) ||
-    ptyProcessId <= 0
+    agentSessionId <= 0
   ) {
     return;
   }
   try {
     const fs = await import("node:fs/promises");
-    await fs.access(jsonlPath);
+    const path = await import("node:path");
+    await fs.mkdir(harnessArtifactDirectory, { recursive: true });
+    const jsonlPath = path.join(
+      harnessArtifactDirectory,
+      harnessSessionLogFileName(harnessSessionId),
+    );
     await fs.appendFile(
       jsonlPath,
       JSON.stringify({
         schemaVersion: 1,
         recordedAt: new Date().toISOString(),
         agentSessionId,
-        ptyProcessId,
+        harnessSessionId,
+        ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
         harness: "opencode",
         nativeEvent,
         event,

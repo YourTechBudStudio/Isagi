@@ -38,7 +38,7 @@ test('agent session artifacts initialize and read harness metadata', async () =>
       true,
     );
     assert.equal(
-      existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10', '20.harness.jsonl')),
+      existsSync(join(dataRoot, 'sessions', 'agent-sessions', '10', harnessLogFileName())),
       false,
     );
   } finally {
@@ -46,43 +46,44 @@ test('agent session artifacts initialize and read harness metadata', async () =>
   }
 });
 
-test('agent session artifacts expose reserved JSONL paths without creating files', async () => {
+test('agent session artifacts expose the harness artifact directory without creating JSONL files', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-paths-'));
   try {
     const paths = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
-        return artifacts.paths({ agentSessionId: 10, ptyProcessId: 20 });
+        return artifacts.paths({ agentSessionId: 10 });
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
     assert.equal(paths.directory, join(dataRoot, 'sessions', 'agent-sessions', '10'));
     assert.equal(paths.metadataPath, join(paths.directory, 'harness.json'));
-    assert.equal(paths.jsonlPath, join(paths.directory, '20.harness.jsonl'));
-    assert.equal(existsSync(paths.jsonlPath), false);
+    assert.equal(existsSync(join(paths.directory, harnessLogFileName())), false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
-test('agent session artifacts prepare process JSONL files and tolerate bad lines', async () => {
+test('agent session artifacts discover hook-owned JSONL files and tolerate bad lines', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-jsonl-'));
   try {
-    const read = await Effect.runPromise(
+    const reads = await Effect.runPromise(
       Effect.gen(function* () {
         const artifacts = yield* AgentSessionArtifacts;
         const paths = yield* artifacts.prepareProcessArtifacts({
           agentSessionId: 10,
           ptyProcessId: 20,
         });
-        assert.equal(existsSync(paths.jsonlPath ?? ''), true);
-        appendFileSync(paths.jsonlPath ?? '', '{ nope\n', 'utf8');
+        const jsonlPath = join(paths.directory, harnessLogFileName());
+        assert.equal(existsSync(jsonlPath), false);
+        appendFileSync(jsonlPath, '{ nope\n', 'utf8');
         appendFileSync(
-          paths.jsonlPath ?? '',
+          jsonlPath,
           `${JSON.stringify({
             schemaVersion: 1,
             recordedAt: '2026-06-18T00:00:00.000Z',
             agentSessionId: 10,
+            harnessSessionId: 'pi-session-1',
             ptyProcessId: 20,
             harness: 'pi',
             nativeEvent: 'agent_start',
@@ -90,13 +91,16 @@ test('agent session artifacts prepare process JSONL files and tolerate bad lines
           })}\n`,
           'utf8',
         );
-        return yield* artifacts.readJsonl({ agentSessionId: 10, ptyProcessId: 20 });
+        return yield* artifacts.readJsonlForAgentSession(10);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
+    const read = reads[0];
+    assert.ok(read);
     assert.equal(read.ignoredLineCount, 1);
     assert.equal(read.records.length, 1);
     assert.equal(read.records[0]?.nativeEvent, 'agent_start');
+    assert.equal(read.records[0]?.harnessSessionId, 'pi-session-1');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -167,4 +171,8 @@ function testLayer(dataRoot: string) {
       } satisfies DataDirectoryService),
     ),
   );
+}
+
+function harnessLogFileName(harnessSessionId = 'pi-session-1') {
+  return `${Buffer.from(harnessSessionId, 'utf8').toString('hex')}.harness.jsonl`;
 }

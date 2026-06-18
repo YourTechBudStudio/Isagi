@@ -24,6 +24,7 @@ export function writeHarnessMetadataSource(options: { readonly typescript?: bool
     ? 'harnessSessionId: string | null | undefined'
     : 'harnessSessionId';
   return String.raw`const metadataPath = process.env.ISAGI_HARNESS_METADATA_PATH;
+const harnessArtifactDirectory = process.env.ISAGI_HARNESS_ARTIFACT_DIRECTORY;
 const agentSessionId = Number(process.env.ISAGI_AGENT_SESSION_ID ?? "");
 const ptyProcessId = Number(process.env.ISAGI_PTY_PROCESS_ID ?? "");
 
@@ -32,9 +33,7 @@ async function writeHarnessMetadata(${params}) {
     !metadataPath ||
     !harnessSessionId ||
     !Number.isSafeInteger(agentSessionId) ||
-    agentSessionId <= 0 ||
-    !Number.isSafeInteger(ptyProcessId) ||
-    ptyProcessId <= 0
+    agentSessionId <= 0
   ) {
     return;
   }

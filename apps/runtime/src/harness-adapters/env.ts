@@ -37,8 +37,8 @@ export function harnessEnvForProcess(input: {
       ...input.extraEnv,
       ISAGI_AGENT_SESSION_ID: String(input.agentSessionId),
       ISAGI_PTY_PROCESS_ID: String(input.ptyProcessId),
+      ISAGI_HARNESS_ARTIFACT_DIRECTORY: paths.directory,
       ISAGI_HARNESS_METADATA_PATH: paths.metadataPath,
-      ...(paths.jsonlPath ? { ISAGI_HARNESS_JSONL_PATH: paths.jsonlPath } : {}),
     } satisfies NodeJS.ProcessEnv;
   });
 }

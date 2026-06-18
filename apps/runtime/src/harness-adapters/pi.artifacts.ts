@@ -9,7 +9,7 @@ let lastBeforeAgentStart: unknown = null;
 async function observeStart(event: unknown, ctx: any) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   await writeHarnessMetadata(sessionId);
-  await appendPiHarnessEvent("agent_start", {
+  await appendPiHarnessEvent(sessionId, "agent_start", {
     nativeEvent: "agent_start",
     event: safeJsonValue(event),
     beforeAgentStart: lastBeforeAgentStart,
@@ -19,7 +19,9 @@ async function observeStart(event: unknown, ctx: any) {
 }
 
 async function observeEnd(event: unknown, ctx: any) {
-  await appendPiHarnessEvent("agent_end", {
+  const sessionId = ctx?.sessionManager?.getSessionId?.();
+  await writeHarnessMetadata(sessionId);
+  await appendPiHarnessEvent(sessionId, "agent_end", {
     nativeEvent: "agent_end",
     event: safeJsonValue(event),
     context: piContext(ctx),
@@ -37,9 +39,7 @@ export default function (pi: any) {
 }
 
 function writePiHarnessEventSource() {
-  return String.raw`const jsonlPath = process.env.ISAGI_HARNESS_JSONL_PATH;
-
-function safeJsonValue(value) {
+  return String.raw`function safeJsonValue(value) {
   try {
     return JSON.parse(JSON.stringify(value ?? null));
   } catch {
@@ -63,26 +63,35 @@ function piContext(ctx) {
   };
 }
 
-async function appendPiHarnessEvent(nativeEvent, event) {
+function harnessSessionLogFileName(harnessSessionId) {
+  return Buffer.from(harnessSessionId, "utf8").toString("hex") + ".harness.jsonl";
+}
+
+async function appendPiHarnessEvent(harnessSessionId, nativeEvent, event) {
   if (
-    !jsonlPath ||
+    !harnessArtifactDirectory ||
+    !harnessSessionId ||
     !Number.isSafeInteger(agentSessionId) ||
-    agentSessionId <= 0 ||
-    !Number.isSafeInteger(ptyProcessId) ||
-    ptyProcessId <= 0
+    agentSessionId <= 0
   ) {
     return;
   }
   try {
     const fs = await import("node:fs/promises");
-    await fs.access(jsonlPath);
+    const path = await import("node:path");
+    await fs.mkdir(harnessArtifactDirectory, { recursive: true });
+    const jsonlPath = path.join(
+      harnessArtifactDirectory,
+      harnessSessionLogFileName(harnessSessionId),
+    );
     await fs.appendFile(
       jsonlPath,
       JSON.stringify({
         schemaVersion: 1,
         recordedAt: new Date().toISOString(),
         agentSessionId,
-        ptyProcessId,
+        harnessSessionId,
+        ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
         harness: "pi",
         nativeEvent,
         event,

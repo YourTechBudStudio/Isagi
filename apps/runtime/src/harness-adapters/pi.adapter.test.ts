@@ -45,7 +45,8 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
     assert.doesNotMatch(extensionSource, /session_start/);
     assert.doesNotMatch(extensionSource, /turn_start/);
     assert.doesNotMatch(extensionSource, /turn_end/);
-    assert.match(extensionSource, /ISAGI_HARNESS_JSONL_PATH/);
+    assert.match(extensionSource, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
+    assert.doesNotMatch(extensionSource, /ISAGI_HARNESS_JSONL_PATH/);
     assert.match(extensionSource, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(extensionSource, /writeHarnessMetadata/);
     assert.doesNotMatch(extensionSource, /ISAGI_HARNESS_EVENT_URL/);
@@ -61,9 +62,10 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
       resolve(dataRoot, 'sessions', 'agent-sessions', '10', 'harness.json'),
     );
     assert.equal(
-      env.ISAGI_HARNESS_JSONL_PATH,
-      resolve(dataRoot, 'sessions', 'agent-sessions', '10', '20.harness.jsonl'),
+      env.ISAGI_HARNESS_ARTIFACT_DIRECTORY,
+      resolve(dataRoot, 'sessions', 'agent-sessions', '10'),
     );
+    assert.equal('ISAGI_HARNESS_JSONL_PATH' in env, false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -123,7 +125,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.match(opencodeSource, /appendOpenCodeHarnessEvent/);
     assert.match(opencodeSource, /chat\.params/);
     assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
-    assert.match(opencodeSource, /ISAGI_HARNESS_JSONL_PATH/);
+    assert.match(opencodeSource, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
+    assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_JSONL_PATH/);
     assert.doesNotMatch(opencodeSource, /session\.idle/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_EVENT_URL/);
 
@@ -198,7 +201,8 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
-  assert.match(env.ISAGI_HARNESS_JSONL_PATH ?? '', /20\.harness\.jsonl$/);
+  assert.match(env.ISAGI_HARNESS_ARTIFACT_DIRECTORY ?? '', /agent-sessions\/10$/);
+  assert.equal(env.ISAGI_HARNESS_JSONL_PATH, undefined);
   assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}'), {
     plugin: ['file:///runtime/harness-integrations/opencode/isagi-session-plugin.js'],
   });
@@ -303,9 +307,6 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
       return {
         directory,
         metadataPath: resolve(directory, 'harness.json'),
-        jsonlPath: input.ptyProcessId
-          ? resolve(directory, `${input.ptyProcessId}.harness.jsonl`)
-          : null,
       };
     },
     initializeMetadata: () => Effect.void,
@@ -319,16 +320,6 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
           harnessSessionId: null,
           updatedAt: '2026-06-16T00:00:00.000Z',
         },
-      }),
-    readJsonl: (input) =>
-      Effect.succeed({
-        path:
-          fakeArtifacts(root).paths({
-            agentSessionId: input.agentSessionId,
-            ptyProcessId: input.ptyProcessId,
-          }).jsonlPath ?? root,
-        records: [],
-        ignoredLineCount: 0,
       }),
     readJsonlForAgentSession: () => Effect.succeed([]),
     listAgentSessionIds: Effect.succeed([]),

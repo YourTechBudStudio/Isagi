@@ -10,9 +10,8 @@ import { DataDirectory, RuntimeDatabase } from '../persistence/index.js';
 import { agentSessions, surfacePanes } from '../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
-import { AgentSessionArtifacts } from './artifacts.js';
-import { deriveOpenCodeRunningAttention } from './harness-observation/opencode.js';
-import { derivePiRunningAttention } from './harness-observation/pi.js';
+import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './artifacts.js';
+import { deriveLastKnownHarnessAttention } from './harness-observation/attention.js';
 import {
   buildHarnessObservationProjection,
   emptyHarnessObservationProjection,
@@ -39,6 +38,7 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
     const database = yield* RuntimeDatabase;
     const root = join(dataDirectory.paths.sessionsPath, 'agent-sessions');
     const projections = new Map<number, HarnessObservationProjection>();
+    const artifactFingerprints = new Map<number, string>();
     const watchers = new Map<number | 'root', FSWatcher>();
     const timers = new Map<number | 'root', NodeJS.Timeout>();
 
@@ -46,12 +46,18 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
 
     const reconcileAgentSession = (agentSessionId: number) =>
       Effect.gen(function* () {
-        const previous = projections.get(agentSessionId)?.fingerprint ?? null;
+        const previous = artifactFingerprints.get(agentSessionId) ?? null;
+        const metadata = yield* artifacts.readMetadata(agentSessionId);
         const projection = yield* readProjection(artifacts, agentSessionId).pipe(
           Effect.orElseSucceed(() => emptyHarnessObservationProjection()),
         );
+        const fingerprint = JSON.stringify([
+          metadataProjectionFingerprint(metadata),
+          projection.fingerprint,
+        ]);
         projections.set(agentSessionId, projection);
-        if (previous !== null && previous !== projection.fingerprint) {
+        artifactFingerprints.set(agentSessionId, fingerprint);
+        if (previous !== null && previous !== fingerprint) {
           yield* eventBus.publish({ type: 'agent_session_changed', agentSessionId });
         }
       });
@@ -161,6 +167,17 @@ function listRelevantAgentSessionIds(
   );
 }
 
+function metadataProjectionFingerprint(metadata: AgentSessionHarnessMetadataRead) {
+  switch (metadata.status) {
+    case 'valid':
+      return ['valid', metadata.metadata.harnessSessionId] as const;
+    case 'missing':
+      return ['missing'] as const;
+    case 'invalid':
+      return ['invalid', metadata.diagnostic] as const;
+  }
+}
+
 function readProjection(
   artifacts: import('./artifacts.js').AgentSessionArtifactsService,
   agentSessionId: number,
@@ -178,28 +195,60 @@ function deriveAgentSessionAttention(
   if (session.harnessMetadataStatus === 'missing' || session.harnessMetadataStatus === 'invalid') {
     return 'error';
   }
+  const observed = deriveObservedHarnessAttention(session, projection);
+  return applyAgentProcessOverlay(session, observed);
+}
+
+function deriveObservedHarnessAttention(
+  session: AgentSessionRow,
+  projection: HarnessObservationProjection | undefined,
+): AttentionState {
+  const records = session.harnessSessionId
+    ? (projection?.recordsByHarnessSessionId.get(session.harnessSessionId) ?? [])
+    : [];
+  return deriveLastKnownHarnessAttention(session.harness, records);
+}
+
+function applyAgentProcessOverlay(
+  session: AgentSessionRow,
+  observed: AttentionState,
+): AttentionState {
+  if (observed === 'error') return 'error';
   const process = session.activePtyProcess;
-  if (!session.activePtyProcessId) return 'idle';
-  if (!process) return 'error';
+  if (!session.activePtyProcessId) return overlayMissingOrDeadProcess(null, observed);
+  if (!process) return overlayMissingOrDeadProcess('missing', observed);
   switch (process.status) {
-    case 'failed':
-      return 'error';
-    case 'exited':
-      return 'idle';
-    case 'killed':
-      return process.statusReason === 'user_requested' ||
-        process.statusReason === 'runtime_shutdown'
-        ? 'idle'
-        : 'error';
     case 'starting':
-      return 'idle';
-    case 'running': {
-      const records = projection?.recordsByPtyProcessId.get(session.activePtyProcessId) ?? [];
-      if (session.harness === 'pi') return derivePiRunningAttention(records);
-      if (session.harness === 'opencode') return deriveOpenCodeRunningAttention(records);
-      return 'idle';
-    }
+    case 'running':
+      return observed;
+    case 'exited':
+      return overlayMissingOrDeadProcess('exited', observed);
+    case 'killed':
+      return overlayKilledProcess(process.statusReason, observed);
+    case 'failed':
+      return overlayMissingOrDeadProcess('failed', observed);
   }
+}
+
+function overlayMissingOrDeadProcess(
+  reason: 'missing' | 'exited' | 'failed' | null,
+  observed: AttentionState,
+): AttentionState {
+  if (observed === 'working') return 'error';
+  if (observed === 'waiting') return 'waiting';
+  if (reason === 'missing' || reason === 'failed') return 'error';
+  return 'idle';
+}
+
+function overlayKilledProcess(
+  statusReason: string | null,
+  observed: AttentionState,
+): AttentionState {
+  if (observed === 'working') return 'error';
+  if (observed === 'waiting') return 'waiting';
+  return statusReason === 'user_requested' || statusReason === 'runtime_shutdown'
+    ? 'idle'
+    : 'error';
 }
 
 function deriveTerminalSessionAttention(session: TerminalSessionRow): AttentionState {

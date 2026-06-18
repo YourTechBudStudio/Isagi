@@ -11,32 +11,35 @@ export interface HarnessObservationRecord {
 
 export interface HarnessObservationProjection {
   readonly fingerprint: string;
-  readonly recordsByPtyProcessId: ReadonlyMap<number, readonly HarnessObservationRecord[]>;
+  readonly recordsByHarnessSessionId: ReadonlyMap<string, readonly HarnessObservationRecord[]>;
 }
 
 export function buildHarnessObservationProjection(
   jsonlReads: readonly AgentSessionHarnessJsonlRead[],
 ): HarnessObservationProjection {
-  const recordsByPtyProcessId = new Map<number, HarnessObservationRecord[]>();
+  const recordsByHarnessSessionId = new Map<string, HarnessObservationRecord[]>();
   for (const read of jsonlReads) {
     for (const record of read.records) {
-      const existing = recordsByPtyProcessId.get(record.ptyProcessId) ?? [];
+      const existing = recordsByHarnessSessionId.get(record.harnessSessionId) ?? [];
       existing.push({
         recordedAt: record.recordedAt,
         harness: record.harness,
         nativeEvent: record.nativeEvent,
         event: record.event,
       });
-      recordsByPtyProcessId.set(record.ptyProcessId, existing);
+      recordsByHarnessSessionId.set(record.harnessSessionId, existing);
     }
   }
-  for (const records of recordsByPtyProcessId.values()) {
+  for (const records of recordsByHarnessSessionId.values()) {
     records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
   }
+  const sortedEntries = [...recordsByHarnessSessionId.entries()].sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
   return {
     fingerprint: JSON.stringify(
-      [...recordsByPtyProcessId.entries()].map(([ptyProcessId, records]) => [
-        ptyProcessId,
+      sortedEntries.map(([harnessSessionId, records]) => [
+        harnessSessionId,
         records.map((record) => [
           record.recordedAt,
           record.harness,
@@ -45,10 +48,10 @@ export function buildHarnessObservationProjection(
         ]),
       ]),
     ),
-    recordsByPtyProcessId,
+    recordsByHarnessSessionId,
   };
 }
 
 export function emptyHarnessObservationProjection(): HarnessObservationProjection {
-  return { fingerprint: '[]', recordsByPtyProcessId: new Map() };
+  return { fingerprint: '[]', recordsByHarnessSessionId: new Map() };
 }
