@@ -137,18 +137,30 @@ test('harness integration artifacts are prepared once under the runtime data roo
       /isagi-claude-hook\.mjs/,
     );
     assert.equal(claudeSettings.hooks.UserPromptSubmit[0].hooks[0].timeout, 2);
+    assert.equal(claudeSettings.hooks.Notification[0].matcher, 'idle_prompt');
+    assert.match(claudeSettings.hooks.Notification[0].hooks[0].command, /isagi-claude-hook\.mjs/);
+    assert.match(claudeSettings.hooks.Stop[0].hooks[0].command, /isagi-claude-hook\.mjs/);
     assert.equal(claudeSettings.hooks.SessionStart, undefined);
-    assert.equal(claudeSettings.hooks.Stop, undefined);
     assert.equal(claudeSettings.hooks.SessionEnd, undefined);
 
     const claudeHook = readFileSync(artifacts.claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
+    assert.match(claudeHook, /hook_event_name/);
+    assert.match(claudeHook, /appendCommandHarnessEvent/);
+    assert.match(claudeHook, /harness: "claude"/);
     assert.match(claudeHook, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.match(claudeHook, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
+    assert.doesNotMatch(claudeHook, /ISAGI_HARNESS_JSONL_PATH/);
     assert.doesNotMatch(claudeHook, /ISAGI_HARNESS_EVENT_URL/);
 
     const codexHook = readFileSync(artifacts.codexHookPath, 'utf8');
     assert.match(codexHook, /session_id/);
+    assert.match(codexHook, /hook_event_name/);
+    assert.match(codexHook, /appendCommandHarnessEvent/);
+    assert.match(codexHook, /harness: "codex"/);
     assert.match(codexHook, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.match(codexHook, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
+    assert.doesNotMatch(codexHook, /ISAGI_HARNESS_JSONL_PATH/);
     assert.doesNotMatch(codexHook, /ISAGI_HARNESS_EVENT_URL/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });

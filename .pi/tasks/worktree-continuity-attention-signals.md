@@ -1,9 +1,9 @@
 ---
 title: Attention signals slice
-status: todo
+status: done
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-06-12
+updated: 2026-06-18
 depends_on: [worktree-continuity-agent-sessions]
 ---
 
@@ -20,6 +20,14 @@ Waiting detection is non-negotiable as a product goal, but the detection method 
 # Done condition
 
 Done when at least one reliable waiting-for-user path has been implemented or validated, sidebar/worktree/agent-session attention indicators exist, and the state model has been refined based on what harnesses can expose.
+
+# Completion
+
+Completed with file-backed harness observation and runtime-owned attention projection.
+Pi, OpenCode, Claude, and Codex now write harness event logs and project agent
+attention into pane, surface, and worktree indicators. Waiting detection is live
+for Pi, OpenCode, Claude, and Codex, with Claude/Codex currently treating `Stop`
+as waiting based on product testing.
 
 # Notes
 

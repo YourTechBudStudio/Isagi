@@ -1,7 +1,7 @@
 import { commandHookSource, shellQuote } from './artifacts.common.js';
 
 export function claudeHookSource() {
-  return commandHookSource();
+  return commandHookSource('claude');
 }
 
 export function claudeSettings(hookPath: string) {
@@ -14,6 +14,8 @@ export function claudeSettings(hookPath: string) {
   return {
     hooks: {
       UserPromptSubmit: [hookEntry],
+      Notification: [{ matcher: 'idle_prompt', hooks: [hook] }],
+      Stop: [hookEntry],
     },
   };
 }

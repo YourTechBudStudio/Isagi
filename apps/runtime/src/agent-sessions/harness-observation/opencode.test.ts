@@ -25,6 +25,16 @@ test('OpenCode running attention ignores non-status and non-OpenCode records', (
   );
 });
 
+test('OpenCode running attention orders native events when async JSONL appends invert records', () => {
+  assert.equal(
+    deriveOpenCodeRunningAttention([
+      nestedRecord({ type: 'idle' }, 'evt_edc18e4690011k2xiktqEoZ1ZO'),
+      nestedRecord({ type: 'busy' }, 'evt_edc18e467001l6dAVUPbMoHzSd'),
+    ]),
+    'waiting',
+  );
+});
+
 function record(status: string | { readonly type: string }): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
@@ -37,15 +47,18 @@ function record(status: string | { readonly type: string }): HarnessObservationR
   };
 }
 
-function nestedRecord(status: string | { readonly type: string }): HarnessObservationRecord {
+function nestedRecord(
+  status: string | { readonly type: string },
+  id = 'evt_1',
+): HarnessObservationRecord {
   return {
-    recordedAt: new Date().toISOString(),
+    recordedAt: '2026-06-18T18:57:59.420Z',
     harness: 'opencode',
     nativeEvent: 'session.status',
     event: {
       nativeEvent: 'session.status',
       event: {
-        id: 'evt_1',
+        id,
         type: 'session.status',
         properties: {
           sessionID: 'ses_1',

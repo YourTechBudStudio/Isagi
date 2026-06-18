@@ -1,5 +1,6 @@
-export function commandHookSource() {
+export function commandHookSource(harness: 'claude' | 'codex') {
   return String.raw`${writeHarnessMetadataSource()}
+${writeCommandHarnessEventSource(harness)}
 
 async function readStdinJson() {
   const chunks = [];
@@ -15,7 +16,13 @@ async function readStdinJson() {
 
 const input = await readStdinJson();
 const sessionId = typeof input.session_id === "string" ? input.session_id : null;
+const nativeEvent = typeof input.hook_event_name === "string" ? input.hook_event_name : null;
 await writeHarnessMetadata(sessionId);
+await appendCommandHarnessEvent(sessionId, nativeEvent, {
+  nativeEvent,
+  notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
+  input: safeJsonValue(input),
+});
 `;
 }
 
@@ -51,6 +58,58 @@ async function writeHarnessMetadata(${params}) {
         null,
         2,
       ) + "\n",
+      "utf8",
+    );
+  } catch {
+    // Observation must never block or fail the user's harness interaction.
+  }
+}
+`;
+}
+
+function writeCommandHarnessEventSource(harness: 'claude' | 'codex') {
+  return String.raw`function safeJsonValue(value) {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return null;
+  }
+}
+
+function harnessSessionLogFileName(harnessSessionId) {
+  return Buffer.from(harnessSessionId, "utf8").toString("hex") + ".harness.jsonl";
+}
+
+async function appendCommandHarnessEvent(harnessSessionId, nativeEvent, event) {
+  if (
+    !harnessArtifactDirectory ||
+    !harnessSessionId ||
+    !nativeEvent ||
+    !Number.isSafeInteger(agentSessionId) ||
+    agentSessionId <= 0
+  ) {
+    return;
+  }
+  try {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    await fs.mkdir(harnessArtifactDirectory, { recursive: true });
+    const jsonlPath = path.join(
+      harnessArtifactDirectory,
+      harnessSessionLogFileName(harnessSessionId),
+    );
+    await fs.appendFile(
+      jsonlPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        recordedAt: new Date().toISOString(),
+        agentSessionId,
+        harnessSessionId,
+        ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
+        harness: ${JSON.stringify(harness)},
+        nativeEvent,
+        event,
+      }) + "\n",
       "utf8",
     );
   } catch {

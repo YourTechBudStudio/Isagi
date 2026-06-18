@@ -197,6 +197,95 @@ test('OpenCode attention recovers waiting from pre-existing nested session.statu
   }
 });
 
+test('Claude attention derives working and waiting from hook JSONL', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-claude-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        const jsonlPath = harnessLogPath(paths.directory, 'claude-session-1');
+        const session = agentSession({
+          harness: 'claude',
+          harnessSessionId: 'claude-session-1',
+          activePtyProcess: ptyProcess({ id: 20, command: 'claude' }),
+        });
+        const idle = yield* attention.agentSessionAttention(session);
+
+        appendCommandHookRecord(jsonlPath, 'claude', 'claude-session-1', 'UserPromptSubmit');
+        yield* attention.reconcileAgentSession(10);
+        const working = yield* attention.agentSessionAttention(session);
+
+        appendCommandHookRecord(jsonlPath, 'claude', 'claude-session-1', 'Stop');
+        yield* attention.reconcileAgentSession(10);
+        const stopWaiting = yield* attention.agentSessionAttention(session);
+
+        appendCommandHookRecord(jsonlPath, 'claude', 'claude-session-1', 'Notification', {
+          notification_type: 'idle_prompt',
+        });
+        yield* attention.reconcileAgentSession(10);
+        const notificationWaiting = yield* attention.agentSessionAttention(session);
+
+        return { idle, working, stopWaiting, notificationWaiting };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, {
+      idle: 'idle',
+      working: 'working',
+      stopWaiting: 'waiting',
+      notificationWaiting: 'waiting',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('Codex attention derives working and waiting from hook JSONL', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-codex-'));
+  try {
+    const states = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        const jsonlPath = harnessLogPath(paths.directory, 'codex-session-1');
+        const session = agentSession({
+          harness: 'codex',
+          harnessSessionId: 'codex-session-1',
+          activePtyProcess: ptyProcess({ id: 20, command: 'codex' }),
+        });
+        const idle = yield* attention.agentSessionAttention(session);
+
+        appendCommandHookRecord(jsonlPath, 'codex', 'codex-session-1', 'UserPromptSubmit');
+        yield* attention.reconcileAgentSession(10);
+        const working = yield* attention.agentSessionAttention(session);
+
+        appendCommandHookRecord(jsonlPath, 'codex', 'codex-session-1', 'Stop');
+        yield* attention.reconcileAgentSession(10);
+        const waiting = yield* attention.agentSessionAttention(session);
+
+        return { idle, working, waiting };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(states, {
+      idle: 'idle',
+      working: 'working',
+      waiting: 'waiting',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('agent attention reports error when last-known harness state was working but the PTY is dead', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-working-dead-'));
   try {
@@ -493,6 +582,38 @@ function appendNestedOpenCodeRecord(path: string, status: 'busy' | 'idle') {
           },
         },
         status: null,
+      },
+    })}\n`,
+    'utf8',
+  );
+}
+
+function appendCommandHookRecord(
+  path: string,
+  harness: 'claude' | 'codex',
+  harnessSessionId: string,
+  nativeEvent: string,
+  input: Record<string, unknown> = {},
+) {
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: new Date().toISOString(),
+      agentSessionId: 10,
+      harnessSessionId,
+      ptyProcessId: 20,
+      harness,
+      nativeEvent,
+      event: {
+        nativeEvent,
+        notificationType:
+          typeof input.notification_type === 'string' ? input.notification_type : null,
+        input: {
+          hook_event_name: nativeEvent,
+          session_id: harnessSessionId,
+          ...input,
+        },
       },
     })}\n`,
     'utf8',
