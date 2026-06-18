@@ -34,6 +34,14 @@ export type InternalRuntimeEvent =
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
       readonly statusReason: string | null;
+    }
+  | {
+      readonly type: 'pty_foreground_command_started';
+      readonly ptyProcessId: number;
+    }
+  | {
+      readonly type: 'pty_foreground_command_ended';
+      readonly ptyProcessId: number;
     };
 
 export interface InternalRuntimeEventSubscription {

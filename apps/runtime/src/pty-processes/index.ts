@@ -1,5 +1,7 @@
 export { registerPtyApi } from './api.js';
 export { PtyBackend, PtyBackendLive } from './backend.js';
+export { PtyForegroundState, PtyForegroundStateLive } from './foreground-state.js';
+export type { PtyForegroundStateService } from './foreground-state.js';
 export { NodePtyBackend, NodePtyBackendLive } from './adapters/node-pty.js';
 export { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 export type { PtyRepositoryService } from './pty.repository.js';

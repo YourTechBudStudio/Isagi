@@ -4,6 +4,12 @@ import { promisify } from 'node:util';
 import { Context, Effect, Layer } from 'effect';
 import * as nodePty from 'node-pty';
 
+import {
+  createShellIntegrationParser,
+  foregroundStateFromEvent,
+  shellIntegrationTokenFromRef,
+  stripShellIntegrationMarkers,
+} from '../service/shell-integration.js';
 import type { BackendAttachment, PtyBackend as PtyBackendShape, TmuxBackendRef } from '../types.js';
 import {
   PtyInspectError,
@@ -97,6 +103,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
         schemaVersion: 1,
         backend: 'tmux',
         sessionName,
+        shellIntegrationToken: input.shellIntegration?.token ?? null,
       } satisfies TmuxBackendRef;
     }),
   attach: (input) =>
@@ -127,7 +134,29 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
               },
             },
           );
-          client.onData(input.onOutput);
+          // The parser is created per attach, so a command already running when a
+          // client (re)attaches — or any command alive across a runtime restart —
+          // emits no start marker the runtime can observe and reads as idle until it
+          // ends. tmux is a legacy/optional backend; under-reporting to idle is the
+          // safe direction (never a false "working"). node-pty binds the parser at
+          // launch and does not have this gap.
+          const parser = createShellIntegrationParser({
+            shellIntegration: shellIntegrationTokenFromRef(input.ref),
+            onEvent: (event) => {
+              if (input.ref.backend !== 'tmux') return;
+              const ptyProcessId = ptyProcessIdFromTmuxSessionName(input.ref.sessionName);
+              if (ptyProcessId > 0) {
+                input.onForegroundCommand?.({
+                  ptyProcessId,
+                  state: foregroundStateFromEvent(event),
+                });
+              }
+            },
+          });
+          client.onData((data) => {
+            const visible = parser.push(data);
+            if (visible.length > 0) input.onOutput(visible);
+          });
           client.onExit(() => {
             // The tmux client is only the runtime attachment. Its exit is not durable
             // session exit; startup reconciliation and polling own tmux session state.
@@ -185,7 +214,10 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
             }),
         ),
       );
-      const data = terminalReplayDataFromCapturePane(stdout);
+      const replayData = terminalReplayDataFromCapturePane(stdout);
+      const data = ref.shellIntegrationToken
+        ? stripShellIntegrationMarkers(replayData, shellIntegrationTokenFromRef(ref))
+        : replayData;
       const bytes = Buffer.byteLength(data);
       input.send({ type: 'replay_start', bytes });
       if (bytes > 0) {
@@ -257,6 +289,11 @@ function shellQuote(value: string) {
 
 function tmuxArgs(args: readonly string[]) {
   return ['-L', isagiTmuxSocketName, ...args];
+}
+
+function ptyProcessIdFromTmuxSessionName(sessionName: string) {
+  const match = /_(\d+)$/.exec(sessionName);
+  return match ? Number(match[1]) : 0;
 }
 
 function classifyTmuxInspectFailure(cause: unknown) {

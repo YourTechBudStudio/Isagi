@@ -55,6 +55,7 @@ export const TerminalSessionServiceLive = Layer.effect(
           command: session.shellCommand,
           args: session.shellArgs,
           cwd: session.cwd,
+          shellIntegration: true,
         });
         yield* repository.setActivePtyProcess({
           terminalSessionId: session.id,

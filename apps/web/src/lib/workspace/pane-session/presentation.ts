@@ -7,13 +7,21 @@ export type ExitInfo = { readonly exitCode: number | null; readonly signal: stri
 export const NO_EXIT: ExitInfo = { exitCode: null, signal: null };
 
 /** Attention dot semantics for each non-live pane view; live panes keep the pane's own attention. */
-export function paneViewAttention(view: PaneView, fallback: AttentionState): AttentionState {
+export function paneViewAttention(
+  view: PaneView,
+  fallback: AttentionState,
+  session: PtyPaneSession | null,
+): AttentionState {
   switch (view.kind) {
     case 'attachable':
       return view.resumeFailed ? 'error' : 'waiting';
     case 'needs_fresh':
-    case 'moved':
       return 'waiting';
+    case 'moved':
+      // A moved agent session is waiting to be re-homed (it has continuity worth
+      // resuming). A moved terminal carries no resumable work, so it stays idle
+      // rather than nagging for attention it doesn't need.
+      return session?.kind === 'terminal_session' ? 'idle' : 'waiting';
     case 'unsupported':
       return 'error';
     default:

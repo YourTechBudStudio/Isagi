@@ -14,6 +14,7 @@ import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persist
 import {
   NodePtyBackendLive,
   PtyBackendLive,
+  PtyForegroundStateLive,
   PtyRepositoryLive,
   PtyServiceLive,
   TmuxBackendLive,
@@ -51,8 +52,10 @@ const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
+const PtyForegroundStateLayer = PtyForegroundStateLive;
 const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjectionLive.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(PtyForegroundStateLayer),
   Layer.provide(DataDirectoryLive),
   Layer.provide(DatabaseLive),
 );
@@ -67,6 +70,7 @@ const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
+  Layer.provide(PtyForegroundStateLayer),
   Layer.provide(RuntimeConfigLayer),
   Layer.provide(NodePtyBackendLive),
   Layer.provide(TmuxBackendLive),

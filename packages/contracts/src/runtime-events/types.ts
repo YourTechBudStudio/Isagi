@@ -10,25 +10,41 @@ import {
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const attentionStateSchema = Schema.Literal('idle', 'working', 'waiting', 'error');
+export const terminalAttentionStateSchema = Schema.Literal('idle', 'working', 'error');
+
+export const agentAttentionSourceIdentitySchema = Schema.Struct({
+  kind: Schema.Literal('agent_session'),
+  id: positiveIntegerSchema,
+});
+
+export const terminalAttentionSourceIdentitySchema = Schema.Struct({
+  kind: Schema.Literal('terminal_session'),
+  id: positiveIntegerSchema,
+});
 
 export const attentionSourceIdentitySchema = Schema.Union(
-  Schema.Struct({
-    kind: Schema.Literal('agent_session'),
-    id: positiveIntegerSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('terminal_session'),
-    id: positiveIntegerSchema,
-  }),
+  agentAttentionSourceIdentitySchema,
+  terminalAttentionSourceIdentitySchema,
 );
 
-export const attentionSourceSchema = Schema.Struct({
+const attentionSourceBaseFields = {
   worktreeId: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
   paneId: positiveIntegerSchema,
-  source: attentionSourceIdentitySchema,
-  attention: attentionStateSchema,
-});
+} as const;
+
+export const attentionSourceSchema = Schema.Union(
+  Schema.Struct({
+    ...attentionSourceBaseFields,
+    source: agentAttentionSourceIdentitySchema,
+    attention: attentionStateSchema,
+  }),
+  Schema.Struct({
+    ...attentionSourceBaseFields,
+    source: terminalAttentionSourceIdentitySchema,
+    attention: terminalAttentionStateSchema,
+  }),
+);
 
 export const runtimeEventTypeSchema = Schema.Literal(
   'agent_session_changed',
@@ -114,6 +130,7 @@ export const runtimeEventSchema = Schema.Union(
 );
 
 export type AttentionState = Schema.Schema.Type<typeof attentionStateSchema>;
+export type TerminalAttentionState = Schema.Schema.Type<typeof terminalAttentionStateSchema>;
 export type AttentionSourceIdentity = Schema.Schema.Type<typeof attentionSourceIdentitySchema>;
 export type AttentionSource = Schema.Schema.Type<typeof attentionSourceSchema>;
 export type RuntimeEventInputType = Schema.Schema.Type<typeof runtimeEventInputTypeSchema>;

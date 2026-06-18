@@ -10,12 +10,14 @@ const nodePtyBackendRefSchema = Schema.Struct({
   backend: Schema.Literal('node_pty'),
   ptyProcessId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   pid: Schema.NullOr(Schema.Number.pipe(Schema.int())),
+  shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const tmuxBackendRefSchema = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   backend: Schema.Literal('tmux'),
   sessionName: Schema.String.pipe(Schema.minLength(1)),
+  shellIntegrationToken: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export function decodeBackendRef(

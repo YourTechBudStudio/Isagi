@@ -277,7 +277,7 @@ export function usePaneSession({
     [session, connection],
   );
 
-  const attention = paneViewAttention(view, paneAttention);
+  const attention = paneViewAttention(view, paneAttention, session);
   const dimmed =
     view.kind === 'attachable' ||
     view.kind === 'needs_fresh' ||

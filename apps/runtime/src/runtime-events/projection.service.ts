@@ -34,6 +34,8 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
         'pty_process_exited',
         'pty_process_failed',
         'pty_process_killed',
+        'pty_foreground_command_started',
+        'pty_foreground_command_ended',
       ],
     });
 

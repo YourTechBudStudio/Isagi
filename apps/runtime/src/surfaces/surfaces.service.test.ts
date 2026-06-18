@@ -28,6 +28,7 @@ import {
   terminalSessions,
   worktreeSurfaces,
 } from '../persistence/schema.js';
+import { PtyForegroundStateLive } from '../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { SessionLifecycleLive } from '../session-lifecycle/index.js';
 import {
@@ -926,6 +927,7 @@ function testLayer(
     Layer.provide(dataDirectoryLayer),
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
+    Layer.provide(PtyForegroundStateLive),
     Layer.provide(internalRuntimeEventBus),
   );
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));

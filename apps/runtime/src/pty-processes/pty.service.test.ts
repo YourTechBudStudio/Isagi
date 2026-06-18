@@ -13,6 +13,7 @@ import {
 } from '../persistence/index.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { PtyBackend } from './backend.js';
+import { PtyForegroundStateLive } from './foreground-state.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { PtyService, PtyServiceLive } from './pty.service.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from './types.js';
@@ -45,6 +46,7 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const service = PtyServiceLive.pipe(
     Layer.provide(repository),
     Layer.provide(backendLayer),
+    Layer.provide(PtyForegroundStateLive),
     Layer.provide(directory),
     Layer.provide(InternalRuntimeEventBusLive),
   );

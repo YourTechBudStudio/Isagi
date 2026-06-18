@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { and, eq, getTableColumns, isNotNull, or } from 'drizzle-orm';
 import { Cause, Context, Effect, Layer } from 'effect';
 
-import type { AttentionSource, AttentionState } from '@isagi/contracts';
+import type { AttentionSource, AttentionState, TerminalAttentionState } from '@isagi/contracts';
 
 import { DataDirectory, DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import {
@@ -14,6 +14,7 @@ import {
   terminalSessions,
   worktreeSurfaces,
 } from '../persistence/schema.js';
+import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './artifacts.js';
@@ -27,7 +28,7 @@ import {
 export interface AgentSessionAttentionProjectionService {
   readonly reconcileAgentSession: (agentSessionId: number) => Effect.Effect<void>;
   readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
-  readonly terminalSessionAttention: (session: TerminalSessionRow) => AttentionState;
+  readonly terminalSessionAttention: (session: TerminalSessionRow) => TerminalAttentionState;
   readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
 }
 
@@ -41,6 +42,7 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
   Effect.gen(function* () {
     const artifacts = yield* AgentSessionArtifacts;
     const eventBus = yield* InternalRuntimeEventBus;
+    const foreground = yield* PtyForegroundState;
     const dataDirectory = yield* DataDirectory;
     const database = yield* RuntimeDatabase;
     const root = join(dataDirectory.paths.sessionsPath, 'agent-sessions');
@@ -177,7 +179,7 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
           }
           return deriveAgentSessionAttention(session, projections.get(session.id));
         }),
-      terminalSessionAttention: deriveTerminalSessionAttention,
+      terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
       listAttentionSources: Effect.suspend(() =>
         listAttentionSources(artifacts, database, service),
       ),
@@ -481,14 +483,18 @@ function isBenignKillReason(statusReason: string | null): boolean {
   return statusReason === 'user_requested' || statusReason === 'runtime_shutdown';
 }
 
-function deriveTerminalSessionAttention(session: TerminalSessionRow): AttentionState {
+function deriveTerminalSessionAttention(
+  session: TerminalSessionRow,
+  foreground: PtyForegroundStateService,
+): TerminalAttentionState {
   const process = session.activePtyProcess;
   if (!session.activePtyProcessId) return 'idle';
   if (!process) return 'error';
   switch (process.status) {
     case 'starting':
+      return 'idle';
     case 'running':
-      return 'working';
+      return foreground.isWorking(process.id) ? 'working' : 'idle';
     case 'exited':
       return 'idle';
     case 'killed':

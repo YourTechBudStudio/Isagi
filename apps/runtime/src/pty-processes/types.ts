@@ -18,12 +18,14 @@ export interface NodePtyBackendRef {
   readonly backend: 'node_pty';
   readonly ptyProcessId: number;
   readonly pid: number | null;
+  readonly shellIntegrationToken?: string | null | undefined;
 }
 
 export interface TmuxBackendRef {
   readonly schemaVersion: 1;
   readonly backend: 'tmux';
   readonly sessionName: string;
+  readonly shellIntegrationToken?: string | null | undefined;
 }
 
 export type BackendSessionRef = NodePtyBackendRef | TmuxBackendRef;
@@ -59,6 +61,13 @@ export interface LaunchBackendSessionInput {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly shellIntegration?: ShellIntegrationConfig | null | undefined;
+  readonly onForegroundCommand?:
+    | ((event: {
+        readonly ptyProcessId: number;
+        readonly state: PtyForegroundCommandState;
+      }) => void)
+    | undefined;
   readonly cols: number;
   readonly rows: number;
   readonly logPath: string | null;
@@ -140,6 +149,12 @@ export interface PtyBackend {
     readonly cols: number;
     readonly rows: number;
     readonly onOutput: (data: string) => void;
+    readonly onForegroundCommand?:
+      | ((event: {
+          readonly ptyProcessId: number;
+          readonly state: PtyForegroundCommandState;
+        }) => void)
+      | undefined;
     readonly onSessionExit: (exit: PtyExit) => void;
   }) => Effect.Effect<BackendAttachment, PtyStartError>;
   readonly replay: (input: {
@@ -161,6 +176,7 @@ export interface LaunchPtyProcessInput {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly shellIntegration?: boolean | undefined;
   readonly envForProcess?:
     | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
     | undefined;
@@ -172,4 +188,10 @@ export interface PtyProcessLaunchMetadata {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly logPath: string | null;
+}
+
+export type PtyForegroundCommandState = 'idle' | 'working';
+
+export interface ShellIntegrationConfig {
+  readonly token: string;
 }

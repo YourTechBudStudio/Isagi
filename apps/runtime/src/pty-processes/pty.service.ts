@@ -11,6 +11,7 @@ import {
 } from '../runtime-events/index.js';
 import type { PtyProcessRecord } from '../surfaces/index.js';
 import { PtyBackend } from './backend.js';
+import { PtyForegroundState, type PtyForegroundStateService } from './foreground-state.js';
 import { appendLog, PtyRepository, type PtyRepositoryService } from './pty.repository.js';
 import {
   detachActiveAttachment,
@@ -23,6 +24,11 @@ import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
 import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
 import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
 import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
+import {
+  prepareShellIntegration,
+  refWithShellIntegrationToken,
+} from './service/shell-integration.js';
+import type { ShellIntegrationConfig } from './service/shell-integration.js';
 import { terminatePtyProcessAndPersistKilled } from './service/termination.js';
 import {
   PtyKillError,
@@ -32,6 +38,7 @@ import {
   type BackendSessionRef,
   type LaunchPtyProcessInput,
   type PtyBackend as PtyBackendShape,
+  type PtyForegroundCommandState,
   type PtyProcessLaunchMetadata,
 } from './types.js';
 
@@ -98,6 +105,7 @@ export const PtyServiceLive = Layer.scoped(
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
     const backend = yield* PtyBackend;
+    const foreground = yield* PtyForegroundState;
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
     const activeAttachments = new Map<number, ActiveAttachment>();
@@ -135,18 +143,32 @@ export const PtyServiceLive = Layer.scoped(
             cwd: input.cwd,
             logPath: null,
           };
+          yield* foreground.clear(ptyProcessId);
+          const baseEnv = input.envForProcess
+            ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
+            : (input.env ?? launchEnv());
+          const launch = prepareShellIntegration({
+            launch: input,
+            ptyProcessId,
+            sessionsPath: directory.paths.sessionsPath,
+            env: baseEnv,
+          });
           const startResult = yield* launchWithBackend({
             backend,
-            metadata,
+            metadata: {
+              ...metadata,
+              command: launch.command,
+              args: launch.args,
+            },
             repository,
             activeAttachments,
             runtimeNamespace: namespace,
             sessionsPath: directory.paths.sessionsPath,
             terminations,
             eventBus,
-            env: input.envForProcess
-              ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
-              : (input.env ?? launchEnv()),
+            foreground,
+            shellIntegration: launch.shellIntegration,
+            env: launch.env,
           }).pipe(Effect.either);
           if (Either.isLeft(startResult)) {
             const message = spawnFailureMessage(metadata.command, metadata.cwd, startResult.left);
@@ -197,6 +219,7 @@ export const PtyServiceLive = Layer.scoped(
           repository,
           backend,
           eventBus,
+          foreground,
           activeAttachments,
           pendingAttachments,
           input,
@@ -263,6 +286,7 @@ function attachToProcess(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
   eventBus: InternalRuntimeEventBusService,
+  foreground: PtyForegroundStateService,
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
   input: {
@@ -299,6 +323,10 @@ function attachToProcess(
           cols: defaultCols,
           rows: defaultRows,
           onOutput: (data) => input.send({ type: 'output', data }),
+          onForegroundCommand: (event) =>
+            void Effect.runPromise(
+              recordForegroundCommandState(foreground, eventBus, event.ptyProcessId, event.state),
+            ),
           onSessionExit: (exit) => input.send({ type: 'exit', ...exit }),
         })
         .pipe(Effect.either);
@@ -507,6 +535,8 @@ function launchWithBackend(input: {
   readonly sessionsPath: string;
   readonly terminations: Map<number, PtyTerminationState>;
   readonly eventBus: InternalRuntimeEventBusService;
+  readonly foreground: PtyForegroundStateService;
+  readonly shellIntegration: ShellIntegrationConfig | null;
   readonly env: NodeJS.ProcessEnv;
 }) {
   return Effect.gen(function* () {
@@ -532,23 +562,60 @@ function launchWithBackend(input: {
       args: input.metadata.args,
       cwd: input.metadata.cwd,
       env: input.env,
+      shellIntegration: input.shellIntegration,
+      onForegroundCommand: (event) =>
+        void Effect.runPromise(
+          recordForegroundCommandState(
+            input.foreground,
+            input.eventBus,
+            event.ptyProcessId,
+            event.state,
+          ),
+        ),
       cols: defaultCols,
       rows: defaultRows,
       logPath: backendMetadata.logPath,
       onExit: (exit) =>
         void Effect.runPromise(
-          handleExit(
-            input.repository,
-            input.eventBus,
-            input.activeAttachments,
-            input.terminations,
-            input.metadata.ptyProcessId,
-            exit,
-          ),
+          input.foreground
+            .clear(input.metadata.ptyProcessId)
+            .pipe(
+              Effect.zipRight(
+                handleExit(
+                  input.repository,
+                  input.eventBus,
+                  input.activeAttachments,
+                  input.terminations,
+                  input.metadata.ptyProcessId,
+                  exit,
+                ),
+              ),
+            ),
         ),
     });
-    return startResult;
+    return refWithShellIntegrationToken(startResult, input.shellIntegration);
   });
+}
+
+function recordForegroundCommandState(
+  foreground: PtyForegroundStateService,
+  eventBus: InternalRuntimeEventBusService,
+  ptyProcessId: number,
+  state: PtyForegroundCommandState,
+) {
+  return foreground.set(ptyProcessId, state).pipe(
+    Effect.flatMap((changed) =>
+      changed
+        ? eventBus.publish({
+            type:
+              state === 'working'
+                ? 'pty_foreground_command_started'
+                : 'pty_foreground_command_ended',
+            ptyProcessId,
+          })
+        : Effect.void,
+    ),
+  );
 }
 
 function handleAttachFailure(

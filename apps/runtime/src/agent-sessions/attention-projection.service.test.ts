@@ -13,6 +13,7 @@ import {
   type DataDirectoryService,
 } from '../persistence/index.js';
 import { agentSessions, projects, ptyProcesses, worktrees } from '../persistence/schema.js';
+import { PtyForegroundState, PtyForegroundStateLive } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus, InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts, AgentSessionArtifactsLive } from './artifacts.js';
@@ -534,9 +535,14 @@ test('terminal attention derives from PTY lifecycle', async () => {
     const states = await Effect.runPromise(
       Effect.gen(function* () {
         const attention = yield* AgentSessionAttentionProjection;
+        const foreground = yield* PtyForegroundState;
+        yield* foreground.set(30, 'working');
         return {
-          running: attention.terminalSessionAttention(
+          runningForeground: attention.terminalSessionAttention(
             terminalSession({ activePtyProcess: ptyProcess({ id: 30, status: 'running' }) }),
+          ),
+          runningPromptReady: attention.terminalSessionAttention(
+            terminalSession({ activePtyProcess: ptyProcess({ id: 31, status: 'running' }) }),
           ),
           exited: attention.terminalSessionAttention(
             terminalSession({ activePtyProcess: ptyProcess({ id: 30, status: 'exited' }) }),
@@ -548,7 +554,12 @@ test('terminal attention derives from PTY lifecycle', async () => {
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(states, { running: 'working', exited: 'idle', failed: 'error' });
+    assert.deepEqual(states, {
+      runningForeground: 'working',
+      runningPromptReady: 'idle',
+      exited: 'idle',
+      failed: 'error',
+    });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -883,13 +894,15 @@ function testLayer(dataRoot: string) {
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directoryLayer));
   const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directoryLayer));
   const internalBus = InternalRuntimeEventBusLive;
+  const foreground = PtyForegroundStateLive;
   const attention = AgentSessionAttentionProjectionLive.pipe(
     Layer.provide(directoryLayer),
     Layer.provide(database),
     Layer.provide(artifacts),
+    Layer.provide(foreground),
     Layer.provide(internalBus),
   );
-  return Layer.mergeAll(attention, artifacts, internalBus, database);
+  return Layer.mergeAll(attention, artifacts, foreground, internalBus, database);
 }
 
 function dataDirectoryLayer(dataRoot: string) {

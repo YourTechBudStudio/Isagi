@@ -16,6 +16,10 @@ import process from 'node:process';
 import { Context, Effect, Layer } from 'effect';
 import * as nodePty from 'node-pty';
 
+import {
+  createShellIntegrationParser,
+  foregroundStateFromEvent,
+} from '../service/shell-integration.js';
 import type {
   BackendAttachment,
   LaunchBackendSessionInput,
@@ -89,9 +93,19 @@ export const NodePtyBackendLive = Layer.effect(
               suppressExitCallback: false,
             };
             liveSessions.set(input.ptyProcessId, live);
+            const parser = createShellIntegrationParser({
+              shellIntegration: input.shellIntegration ?? null,
+              onEvent: (event) =>
+                input.onForegroundCommand?.({
+                  ptyProcessId: input.ptyProcessId,
+                  state: foregroundStateFromEvent(event),
+                }),
+            });
             pty.onData((data) => {
-              appendBackendLog(input.logPath, data, input.ptyProcessId);
-              live.attachment?.onOutput(data);
+              const visible = parser.push(data);
+              if (visible.length === 0) return;
+              appendBackendLog(input.logPath, visible, input.ptyProcessId);
+              live.attachment?.onOutput(visible);
             });
             pty.onExit((event) => {
               // `kill` marks and removes the process-local live entry before
@@ -101,6 +115,14 @@ export const NodePtyBackendLive = Layer.effect(
                 return;
               }
               live.running = false;
+              // Release any bytes the parser was holding back as a potential
+              // partial marker prefix so a mid-escape exit doesn't drop them from
+              // the log/replay (mirrors tmux's push+flush on replay).
+              const trailing = parser.flush();
+              if (trailing.length > 0) {
+                appendBackendLog(input.logPath, trailing, input.ptyProcessId);
+                live.attachment?.onOutput(trailing);
+              }
               const exit = {
                 exitCode: event.exitCode ?? null,
                 signal: event.signal ? String(event.signal) : null,
@@ -114,6 +136,7 @@ export const NodePtyBackendLive = Layer.effect(
               backend: 'node_pty',
               ptyProcessId: input.ptyProcessId,
               pid: pty.pid,
+              shellIntegrationToken: input.shellIntegration?.token ?? null,
             } satisfies NodePtyBackendRef;
           },
           catch: (cause) =>
