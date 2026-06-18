@@ -91,6 +91,19 @@ export function registerSurfacesApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.launchAgentSurface, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.launchAgentSurface({
+          worktreeId: params.worktreeId,
+          launch: input,
+        });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.surfaces.createPaneSession, {
     handle: (input, _context, params) =>
       Effect.gen(function* () {
@@ -114,32 +127,31 @@ export function registerSurfacesApi(
 
 function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof SurfaceError) {
-    if (context.endpointId.startsWith('surfaces.')) {
+    if (context.endpointId === apiEndpoints.surfaces.setWorktreeEnvironmentFocus.id)
       return {
-        code: 'surface_rejected',
+        code: 'worktree_environment_focus_rejected',
         status: 400,
         message: error.message,
         requestId: context.requestId,
         data: {
-          reason: surfaceRejectionReason(error),
+          reason: error.code,
           ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
           ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
           ...(error.paneId ? { paneId: error.paneId } : {}),
-          ...(error.sessionId ? { sessionId: error.sessionId } : {}),
         },
       };
-    }
 
     return {
-      code: 'worktree_environment_focus_rejected',
+      code: 'surface_rejected',
       status: 400,
       message: error.message,
       requestId: context.requestId,
       data: {
-        reason: error.code,
+        reason: surfaceRejectionReason(error),
         ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
         ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
         ...(error.paneId ? { paneId: error.paneId } : {}),
+        ...(error.sessionId ? { sessionId: error.sessionId } : {}),
       },
     };
   }

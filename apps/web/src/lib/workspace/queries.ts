@@ -130,10 +130,20 @@ export async function deleteWorktreeFromPalette(
   }
 }
 
-export async function startAgentSessionFromPalette(worktreeId: number, harness: AgentHarness) {
-  const output = await Effect.runPromise(launchAgentSession(worktreeId, harness));
-  await commitLaunchSessionSuccess(queryClient, output);
-  return output;
+export async function startAgentSessionFromPalette(
+  worktreeId: number,
+  harness: AgentHarness,
+  launch: typeof launchAgentSession = launchAgentSession,
+  client: QueryClient = queryClient,
+) {
+  try {
+    const output = await Effect.runPromise(launch(worktreeId, harness));
+    await commitLaunchSessionSuccess(client, output);
+    return output;
+  } catch (error) {
+    await commitLaunchSessionFailure(client);
+    throw error;
+  }
 }
 
 export async function startTerminalSessionFromPalette(worktreeId: number) {
@@ -226,6 +236,10 @@ export async function commitLaunchSessionSuccess(
     { worktreeId: output.worktreeId, surfaceId: output.surfaceId, paneId: output.paneId },
     { persist: false },
   );
+}
+
+export async function commitLaunchSessionFailure(client: QueryClient) {
+  await client.invalidateQueries({ queryKey: workspaceQueryKey });
 }
 
 export async function commitRenameSurfaceSuccess(client: QueryClient, surfaceId: number) {

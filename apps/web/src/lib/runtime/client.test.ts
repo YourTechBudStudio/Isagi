@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 import type {
   AddProjectOutput,
   ApiError,
+  CreateSurfaceOutput,
   DeleteSurfaceOutput,
   Project,
   RenameSurfaceOutput,
@@ -62,6 +63,13 @@ const deleteSurfaceOutput = {
   attemptedSessionIds: [{ kind: 'terminal_session', terminalSessionId: 13 }],
   warnings: [],
 } satisfies DeleteSurfaceOutput;
+
+const launchAgentSurfaceOutput = {
+  worktreeId: 10,
+  surfaceId: 42,
+  paneId: 7,
+  title: 'OpenCode',
+} satisfies CreateSurfaceOutput;
 
 const originalFetch = globalThis.fetch;
 
@@ -156,6 +164,35 @@ test('runtime client calls surface title and delete endpoints', async () => {
       body: '',
     },
   ]);
+});
+
+test('runtime client calls agent surface launch endpoint with harness', async () => {
+  let request: { readonly url: string; readonly method: string; readonly body: string } | null =
+    null;
+  globalThis.fetch = ((input, init) => {
+    request = {
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: String(init?.body ?? ''),
+    };
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ data: launchAgentSurfaceOutput, meta: { requestId: 'req-launch' } }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').launchAgentSurface(10, { harness: 'opencode' }),
+  );
+
+  assert.deepEqual(output, launchAgentSurfaceOutput);
+  assert.deepEqual(request, {
+    url: 'http://runtime.test/api/v1/worktrees/10/agent-surfaces',
+    method: 'POST',
+    body: JSON.stringify({ harness: 'opencode' }),
+  });
 });
 
 test('runtime client decodes endpoint API errors before base API errors', async () => {

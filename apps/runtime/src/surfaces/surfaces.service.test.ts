@@ -12,6 +12,7 @@ import type { SurfaceDeleteWarning } from '@isagi/contracts';
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
 import {
   DataDirectory,
+  DatabaseError,
   RuntimeDatabase,
   RuntimeDatabaseLive,
   type DataDirectoryService,
@@ -106,6 +107,117 @@ test('create surface API slice creates and focuses a single empty pane', async (
       activeSurfaceId: output.created.surfaceId,
       activePaneId: output.created.paneId,
     });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('launch agent surface uses harness display names with duplicate-safe titles', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-'));
+  const startFreshInputs: Parameters<AgentSessionServiceShape['startFresh']>[0][] = [];
+  let nextAgentSessionId = 900;
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const first = yield* surfaces.launchAgentSurface({
+          worktreeId,
+          launch: { harness: 'pi' },
+        });
+        const second = yield* surfaces.launchAgentSurface({
+          worktreeId,
+          launch: { harness: 'pi' },
+        });
+        const third = yield* surfaces.launchAgentSurface({
+          worktreeId,
+          launch: { harness: 'opencode' },
+        });
+        const database = yield* RuntimeDatabase;
+        const panes = yield* database.use('test_find_launched_agent_panes', (db) =>
+          db.select().from(surfacePanes).where(eq(surfacePanes.sessionKind, 'agent_session')).all(),
+        );
+        return { first, second, third, panes };
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            agentService: {
+              startFresh: (input) =>
+                Effect.sync(() => {
+                  startFreshInputs.push(input);
+                  nextAgentSessionId += 1;
+                  return { agentSessionId: nextAgentSessionId };
+                }),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.deepEqual(
+      [output.first.title, output.second.title, output.third.title],
+      ['Pi', 'Pi 2', 'OpenCode'],
+    );
+    assert.deepEqual(
+      startFreshInputs.map((input) => input.harness),
+      ['pi', 'pi', 'opencode'],
+    );
+    assert.equal(output.panes.length, 3);
+    assert.deepEqual(
+      output.panes.map((pane) => pane.sessionId),
+      [901, 902, 903],
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('failed agent surface launch leaves the harness-titled empty surface visible', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-failed-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const result = yield* surfaces
+          .launchAgentSurface({ worktreeId, launch: { harness: 'pi' } })
+          .pipe(Effect.either);
+        const database = yield* RuntimeDatabase;
+        const persistedSurface = yield* database.use('test_find_failed_launch_surface', (db) =>
+          db
+            .select()
+            .from(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.worktreeId, worktreeId))
+            .get(),
+        );
+        assert.ok(persistedSurface);
+        return {
+          result,
+          detail: yield* surfaces.getSurfaceDetail(persistedSurface.id),
+        };
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            agentService: {
+              startFresh: () =>
+                Effect.fail(
+                  new DatabaseError({
+                    operation: 'test_agent_start_fresh',
+                    cause: new Error('agent session creation failed'),
+                  }),
+                ),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.ok(Either.isLeft(output.result));
+    assert.equal(output.detail.title, 'Pi');
+    assert.equal(output.detail.kind, 'agent');
+    assert.equal(output.detail.panes.length, 1);
+    assert.equal(output.detail.panes[0]?.title, 'Pi');
+    assert.equal(output.detail.panes[0]?.session, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

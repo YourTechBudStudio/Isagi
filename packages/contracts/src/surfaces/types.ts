@@ -196,6 +196,10 @@ export const createSurfaceOutputSchema = Schema.Struct({
   title: Schema.String,
 });
 
+export const launchAgentSurfaceInputSchema = Schema.Struct({
+  harness: agentHarnessSchema,
+});
+
 export const renameSurfaceInputSchema = Schema.Struct({
   title: Schema.String,
 });
@@ -378,6 +382,7 @@ export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
 >;
 export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSchema>;
 export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
+export type LaunchAgentSurfaceInput = Schema.Schema.Type<typeof launchAgentSurfaceInputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type SurfaceSessionCleanupTarget = Schema.Schema.Type<

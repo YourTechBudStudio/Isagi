@@ -4,7 +4,12 @@ import test from 'node:test';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import Fastify from 'fastify';
 
-import type { DeleteSurfaceOutput, RenameSurfaceOutput, SurfaceDetail } from '@isagi/contracts';
+import type {
+  CreateSurfaceOutput,
+  DeleteSurfaceOutput,
+  RenameSurfaceOutput,
+  SurfaceDetail,
+} from '@isagi/contracts';
 
 import { registerSurfacesApi } from './api.js';
 import { SurfaceError, SurfaceService, type SurfaceServiceShape } from './index.js';
@@ -104,6 +109,41 @@ test('surface pane delete route decodes both route params', async () => {
         deletedPaneIds: [7],
         attemptedSessionIds: [],
         warnings: [],
+      });
+    },
+  );
+});
+
+test('agent surface launch route decodes harness through the contract path', async () => {
+  let input: Parameters<SurfaceServiceShape['launchAgentSurface']>[0] | null = null;
+  await withSurfacesApi(
+    fakeSurfaceService({
+      launchAgentSurface: (request) =>
+        Effect.sync(() => {
+          input = request;
+          return {
+            worktreeId: request.worktreeId,
+            surfaceId: 42,
+            paneId: 7,
+            title: 'OpenCode',
+          };
+        }),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/worktrees/10/agent-surfaces',
+        payload: { harness: 'opencode' },
+      });
+      const payload = response.json() as { data?: CreateSurfaceOutput };
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(input, { worktreeId: 10, launch: { harness: 'opencode' } });
+      assert.deepEqual(payload.data, {
+        worktreeId: 10,
+        surfaceId: 42,
+        paneId: 7,
+        title: 'OpenCode',
       });
     },
   );
@@ -216,6 +256,13 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         surfaceId: 42,
         paneId: 7,
         title: input.kind === 'agent' ? 'Agent' : 'Terminal',
+      }),
+    launchAgentSurface: (input) =>
+      Effect.succeed({
+        worktreeId: input.worktreeId,
+        surfaceId: 42,
+        paneId: 7,
+        title: input.launch.harness === 'opencode' ? 'OpenCode' : 'Pi',
       }),
     createPaneSession: (input) =>
       Effect.succeed({

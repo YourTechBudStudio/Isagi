@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { QueryClient } from '@tanstack/react-query';
+import { Effect } from 'effect';
 
 import type { ReconciliationFinding } from '@isagi/contracts';
 
@@ -16,6 +17,7 @@ import {
   commitLaunchSessionSuccess,
   commitOpenWorktreeSuccess,
   commitRelocateProjectSuccess,
+  startAgentSessionFromPalette,
 } from './queries.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
@@ -113,6 +115,27 @@ test('launch success refetches workspace and selects the new surface locally', a
   assert.deepEqual(events, ['fetch:none', 'select:501']);
   assert.equal(useWorkspaceStore.getState().activePaneBySurfaceId[501], 601);
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
+});
+
+test('failed agent launch invalidates workspace so persisted empty surfaces can appear', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, {
+    projects: [
+      project({
+        id: 1,
+        name: 'stale',
+        surfaces: [],
+      }),
+    ],
+  });
+  const launchError = new Error('agent session creation failed');
+
+  await assert.rejects(
+    () => startAgentSessionFromPalette(10, 'pi', () => Effect.fail(launchError), client),
+    { message: launchError.message },
+  );
+
+  assert.equal(client.getQueryState(workspaceQueryKey)?.isInvalidated, true);
 });
 
 test('delete surface success refetches workspace and clears only stale local overrides', async () => {

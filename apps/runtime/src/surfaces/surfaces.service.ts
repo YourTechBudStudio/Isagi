@@ -5,6 +5,7 @@ import { Context, Data, Effect, Layer, Schema } from 'effect';
 import type {
   CreateSurfaceOutput,
   DeleteSurfaceOutput,
+  LaunchAgentSurfaceInput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
   PaneSessionCreateInput,
@@ -19,7 +20,7 @@ import type {
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
-import { HarnessAdapterError } from '../harness-adapters/index.js';
+import { displayNameForHarness, HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import {
   PtyService,
@@ -78,6 +79,10 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly kind: 'agent' | 'terminal';
   }) => Effect.Effect<CreateSurfaceOutput, SurfaceServiceError>;
+  readonly launchAgentSurface: (input: {
+    readonly worktreeId: number;
+    readonly launch: LaunchAgentSurfaceInput;
+  }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
   readonly createPaneSession: (input: {
     readonly worktreeId: number;
     readonly create: PaneSessionCreateInput;
@@ -211,6 +216,25 @@ export const SurfaceServiceLive = Layer.effect(
             worktreeId: input.worktreeId,
             kind: input.kind,
             titleBase: input.kind === 'agent' ? 'Agent' : 'Terminal',
+          });
+          return {
+            worktreeId: input.worktreeId,
+            surfaceId: surface.surfaceId,
+            paneId: surface.paneId,
+            title: surface.title,
+          } satisfies CreateSurfaceOutput;
+        }),
+      launchAgentSurface: (input) =>
+        Effect.gen(function* () {
+          const surface = yield* createSinglePaneSurface(repository, {
+            worktreeId: input.worktreeId,
+            kind: 'agent',
+            titleBase: displayNameForHarness(input.launch.harness),
+          });
+          yield* createPaneSession(repository, agents, terminals, lifecycle, input.worktreeId, {
+            kind: 'agent_session',
+            paneId: surface.paneId,
+            harness: input.launch.harness,
           });
           return {
             worktreeId: input.worktreeId,

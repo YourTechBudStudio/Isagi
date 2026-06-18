@@ -92,6 +92,7 @@ const testSurfaceService = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  launchAgentSurface: () => Effect.die('agent surface launch is not used by workspace tests'),
   createPaneSession: () => Effect.die('surface pane session create is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   cleanupWorktreeForDelete: () => Effect.succeed({ attemptedSessionIds: [], warnings: [] }),

@@ -2,28 +2,8 @@ import { createHash } from 'node:crypto';
 import { delimiter, dirname, resolve } from 'node:path';
 import process from 'node:process';
 
-import type { AgentHarness } from '@isagi/contracts';
-
 export function terminalShellCommand() {
   return process.env.SHELL || 'bash';
-}
-
-export function commandForHarness(harness: AgentHarness) {
-  return harness;
-}
-
-export function titleForHarness(harness: AgentHarness | null) {
-  switch (harness) {
-    case 'opencode':
-      return 'OpenCode';
-    case 'claude':
-      return 'Claude';
-    case 'codex':
-      return 'Codex';
-    case 'pi':
-    default:
-      return 'Pi';
-  }
 }
 
 export function launchEnv() {

@@ -127,15 +127,9 @@ export function launchAgentSession(
   worktreeId: number,
   harness: AgentHarness,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
-  return Effect.gen(function* () {
-    const surface = yield* createSurface(worktreeId, 'agent');
-    yield* createPaneSession(worktreeId, {
-      kind: 'agent_session',
-      paneId: surface.paneId,
-      harness,
-    });
-    return surface;
-  });
+  return getClient().pipe(
+    Effect.flatMap((client) => client.launchAgentSurface(worktreeId, { harness })),
+  );
 }
 
 export function launchTerminalSession(
