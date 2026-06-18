@@ -6,10 +6,10 @@ import { AgentSessionArtifacts } from '../agent-sessions/index.js';
 import { DataDirectory } from '../persistence/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
-import { buildClaudeLaunch } from './claude-adapter.js';
-import { buildCodexLaunch } from './codex-adapter.js';
-import { buildOpenCodeLaunch } from './opencode-adapter.js';
-import { buildPiLaunch } from './pi-adapter.js';
+import { buildClaudeLaunch } from './claude.adapter.js';
+import { buildCodexLaunch } from './codex.adapter.js';
+import { buildOpenCodeLaunch } from './opencode.adapter.js';
+import { buildPiLaunch } from './pi.adapter.js';
 import { HarnessAdapterError, type HarnessLaunchContext } from './types.js';
 
 export interface HarnessAdapterRegistryService {

@@ -10,7 +10,7 @@ export function derivePiRunningAttention(
   if (latest.nativeEvent === 'agent_start') return 'working';
   if (latest.nativeEvent === 'agent_end') {
     const pending = pendingState(latest);
-    return pending === false ? 'waiting' : pending === true ? 'working' : 'idle';
+    return pending === true ? 'working' : 'waiting';
   }
   return 'idle';
 }

@@ -53,6 +53,7 @@ const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(
 const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjectionLive.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(DataDirectoryLive),
+  Layer.provide(DatabaseLive),
 );
 const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
   Layer.provide(DatabaseLive),

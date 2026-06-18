@@ -9,7 +9,7 @@ test('Pi running attention uses agent_start and agent_end pending-message semant
   assert.equal(derivePiRunningAttention([record('agent_start')]), 'working');
   assert.equal(derivePiRunningAttention([record('agent_end', false)]), 'waiting');
   assert.equal(derivePiRunningAttention([record('agent_end', true)]), 'working');
-  assert.equal(derivePiRunningAttention([record('agent_end', null)]), 'idle');
+  assert.equal(derivePiRunningAttention([record('agent_end', null)]), 'waiting');
 });
 
 test('Pi running attention ignores non-Pi records', () => {

@@ -1,14 +1,17 @@
 import { mkdirSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 
+import { and, eq, isNotNull, or } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type { AttentionState } from '@isagi/contracts';
 
-import { DataDirectory } from '../persistence/index.js';
+import { DataDirectory, RuntimeDatabase } from '../persistence/index.js';
+import { agentSessions, surfacePanes } from '../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts } from './artifacts.js';
+import { deriveOpenCodeRunningAttention } from './harness-observation/opencode.js';
 import { derivePiRunningAttention } from './harness-observation/pi.js';
 import {
   buildHarnessObservationProjection,
@@ -33,6 +36,7 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
     const artifacts = yield* AgentSessionArtifacts;
     const eventBus = yield* InternalRuntimeEventBus;
     const dataDirectory = yield* DataDirectory;
+    const database = yield* RuntimeDatabase;
     const root = join(dataDirectory.paths.sessionsPath, 'agent-sessions');
     const projections = new Map<number, HarnessObservationProjection>();
     const watchers = new Map<number | 'root', FSWatcher>();
@@ -53,9 +57,15 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
       });
 
     const reconcileKnownAgentSessions = Effect.gen(function* () {
-      const agentSessionIds = yield* artifacts.listAgentSessionIds.pipe(
+      const artifactAgentSessionIds = yield* artifacts.listAgentSessionIds.pipe(
         Effect.orElseSucceed(() => []),
       );
+      const relevantAgentSessionIds = yield* listRelevantAgentSessionIds(database).pipe(
+        Effect.orElseSucceed(() => []),
+      );
+      const agentSessionIds = [
+        ...new Set([...artifactAgentSessionIds, ...relevantAgentSessionIds]),
+      ];
       for (const agentSessionId of agentSessionIds) {
         ensureAgentWatcher(agentSessionId);
         yield* reconcileAgentSession(agentSessionId);
@@ -131,6 +141,26 @@ export const AgentSessionAttentionProjectionLive = Layer.scoped(
   }),
 );
 
+function listRelevantAgentSessionIds(
+  database: import('../persistence/index.js').RuntimeDatabaseService,
+) {
+  return database.use('list_attention_relevant_agent_sessions', (db) =>
+    db
+      .select({ id: agentSessions.id })
+      .from(agentSessions)
+      .leftJoin(
+        surfacePanes,
+        and(
+          eq(surfacePanes.sessionKind, 'agent_session'),
+          eq(surfacePanes.sessionId, agentSessions.id),
+        ),
+      )
+      .where(or(isNotNull(agentSessions.activePtyProcessId), isNotNull(surfacePanes.id)))
+      .all()
+      .map((row) => row.id),
+  );
+}
+
 function readProjection(
   artifacts: import('./artifacts.js').AgentSessionArtifactsService,
   agentSessionId: number,
@@ -162,11 +192,12 @@ function deriveAgentSessionAttention(
         ? 'idle'
         : 'error';
     case 'starting':
-      return session.harness === 'pi' ? 'idle' : 'idle';
+      return 'idle';
     case 'running': {
-      if (session.harness !== 'pi') return 'idle';
       const records = projection?.recordsByPtyProcessId.get(session.activePtyProcessId) ?? [];
-      return derivePiRunningAttention(records);
+      if (session.harness === 'pi') return derivePiRunningAttention(records);
+      if (session.harness === 'opencode') return deriveOpenCodeRunningAttention(records);
+      return 'idle';
     }
   }
 }

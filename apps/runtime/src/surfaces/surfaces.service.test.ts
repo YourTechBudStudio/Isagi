@@ -921,12 +921,13 @@ function testLayer(
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
   const internalRuntimeEventBus = InternalRuntimeEventBusLive;
   const agentSessionArtifacts = AgentSessionArtifactsLive.pipe(Layer.provide(dataDirectoryLayer));
+  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const attentionProjection = AgentSessionAttentionProjectionLive.pipe(
     Layer.provide(dataDirectoryLayer),
+    Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(internalRuntimeEventBus),
   );
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const agentService = Layer.succeed(
     AgentSessionService,

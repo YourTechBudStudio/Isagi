@@ -8,10 +8,10 @@ import { Effect, Either } from 'effect';
 
 import type { AgentSessionArtifactsService } from '../agent-sessions/index.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
-import { buildClaudeLaunch } from './claude-adapter.js';
-import { buildCodexLaunch } from './codex-adapter.js';
-import { buildOpenCodeLaunch } from './opencode-adapter.js';
-import { buildPiLaunch } from './pi-adapter.js';
+import { buildClaudeLaunch } from './claude.adapter.js';
+import { buildCodexLaunch } from './codex.adapter.js';
+import { buildOpenCodeLaunch } from './opencode.adapter.js';
+import { buildPiLaunch } from './pi.adapter.js';
 import { HarnessAdapterError } from './types.js';
 
 test('Pi adapter builds a fresh launch envelope with runtime-owned extension injection', async () => {
@@ -119,8 +119,12 @@ test('harness integration artifacts are prepared once under the runtime data roo
 
     const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
+    assert.match(opencodeSource, /session\.status/);
+    assert.match(opencodeSource, /appendOpenCodeHarnessEvent/);
     assert.match(opencodeSource, /chat\.params/);
     assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
+    assert.match(opencodeSource, /ISAGI_HARNESS_JSONL_PATH/);
+    assert.doesNotMatch(opencodeSource, /session\.idle/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_EVENT_URL/);
 
     const claudeSettings = JSON.parse(readFileSync(artifacts.claudeSettingsPath, 'utf8'));
