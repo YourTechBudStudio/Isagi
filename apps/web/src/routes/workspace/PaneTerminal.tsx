@@ -241,22 +241,6 @@ export function PaneTerminal({
       };
       container.addEventListener('keydown', handleTerminalKeyDown, true);
 
-      const forcePrimaryMouseSelection = (event: MouseEvent) => {
-        // Isagi favors ordinary drag-to-select/copy for terminal text. Users can
-        // still send primary mouse events to tmux-aware apps with Shift-click on
-        // macOS or Alt-click elsewhere.
-        if (event.button !== 0 || event.altKey || event.shiftKey) {
-          return;
-        }
-        try {
-          Object.defineProperty(event, isMacPlatform() ? 'altKey' : 'shiftKey', { value: true });
-        } catch {
-          // If the browser marks the modifier property non-configurable, users can
-          // still force xterm selection with Option on macOS or Shift elsewhere.
-        }
-      };
-      container.addEventListener('mousedown', forcePrimaryMouseSelection, true);
-
       const handleTerminalCopy = (event: ClipboardEvent) => {
         const selection = terminal.getSelection();
         if (!selection) {
@@ -292,7 +276,6 @@ export function PaneTerminal({
         resizeObserver?.disconnect();
         inputDisposable.dispose();
         container.removeEventListener('keydown', handleTerminalKeyDown, true);
-        container.removeEventListener('mousedown', forcePrimaryMouseSelection, true);
         container.removeEventListener('copy', handleTerminalCopy);
         terminalRef.current = null;
         terminal.dispose();
