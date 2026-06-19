@@ -54,11 +54,13 @@ export const worktreeCommandsOutputSchema = Schema.Union(
     status: Schema.Literal('configured'),
     worktreeId: positiveIntegerSchema,
     commands: Schema.Array(commandSummarySchema),
+    removedCommands: Schema.Array(commandSummarySchema),
   }),
   Schema.Struct({
     status: Schema.Literal('config_error'),
     worktreeId: positiveIntegerSchema,
     diagnostic: commandConfigDiagnosticSchema,
+    managedCommands: Schema.Array(commandSummarySchema),
   }),
 );
 

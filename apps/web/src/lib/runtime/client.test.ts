@@ -131,7 +131,7 @@ test('runtime client calls the worktree commands endpoint', async () => {
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          data: { status: 'configured', worktreeId: 10, commands: [] },
+          data: { status: 'configured', worktreeId: 10, commands: [], removedCommands: [] },
           meta: { requestId: 'req-commands' },
         }),
         { status: 200 },
@@ -144,7 +144,12 @@ test('runtime client calls the worktree commands endpoint', async () => {
   );
 
   assert.equal(requestedUrl, 'http://runtime.test/api/v1/worktrees/10/commands');
-  assert.deepEqual(output, { status: 'configured', worktreeId: 10, commands: [] });
+  assert.deepEqual(output, {
+    status: 'configured',
+    worktreeId: 10,
+    commands: [],
+    removedCommands: [],
+  });
 });
 
 test('runtime client calls surface title and delete endpoints', async () => {

@@ -1,0 +1,13 @@
+worktrees:
+  hooks:
+    postCreate:
+      - type: command
+        run: pnpm install
+
+commands:
+  - name: pnpm fix
+    command: pnpm fix
+  - name: pnpm check
+    command: pnpm check
+  - name: pnpm dev
+    command: pnpm dev

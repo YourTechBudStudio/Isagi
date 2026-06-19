@@ -38,6 +38,12 @@ import type { AttentionState } from '../../lib/workspace/types.js';
 
 const MIN_WIDTH = 380;
 
+type CommandPresentation = 'configured' | 'removed' | 'managed';
+
+type CommandListItem = CommandSummary & {
+  readonly presentation: CommandPresentation;
+};
+
 /**
  * The workbench drawer — a dedicated monitor for the worktree's commands. Slides
  * in from the right at full height; master-detail command list and detail.
@@ -168,74 +174,63 @@ function CommandsView() {
   }
 
   if (commandRead?.status === 'config_error') {
+    const managedCommands = commandRead.managedCommands.map((command) =>
+      commandItem(command, 'managed'),
+    );
+    const selected =
+      managedCommands.find((command) => command.name === selectedId) ?? managedCommands[0] ?? null;
+
     return (
-      <CommandDiagnosticState
-        title={workbenchCopy.commandConfigDiagnosticTitle}
-        body={workbenchCopy.commandConfigDiagnosticBody}
-        diagnostic={`${commandRead.diagnostic.path}\n${commandRead.diagnostic.message}`}
-        onRefresh={() => void commandsQuery.refetch()}
-      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <CommandDiagnosticPanel
+          title={workbenchCopy.commandConfigDiagnosticTitle}
+          body={workbenchCopy.commandConfigDiagnosticBody}
+          diagnostic={`${commandRead.diagnostic.path}\n${commandRead.diagnostic.message}`}
+          onRefresh={() => void commandsQuery.refetch()}
+        />
+        {managedCommands.length > 0 ? (
+          <div className="flex min-h-0 flex-1 border-t border-line/12">
+            <CommandList
+              sections={[{ title: workbenchCopy.commandManagedSection, commands: managedCommands }]}
+              selected={selected}
+              onSelect={selectCommand}
+              runCommand={runCommand}
+              stopCommand={stopCommand}
+            />
+            <div className="flex min-w-0 flex-1 flex-col">
+              {selected ? <CommandDetail command={selected} worktreeId={worktree.id} /> : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
     );
   }
 
-  const commands = configuredCommands(commandRead);
+  const configured = configuredCommands(commandRead).map((command) =>
+    commandItem(command, 'configured'),
+  );
+  const removed =
+    commandRead?.status === 'configured'
+      ? commandRead.removedCommands.map((command) => commandItem(command, 'removed'))
+      : [];
+  const commands = [...configured, ...removed];
   const selected = commands.find((command) => command.name === selectedId) ?? commands[0] ?? null;
 
   return (
     <>
-      <div className="flex w-52 flex-none flex-col overflow-auto border-r border-line/12 p-2">
-        {commandsQuery.isPending ? (
-          <p className="px-2 pt-1 font-mono text-[11px] text-fg-subtle opacity-55">
-            {workbenchCopy.commandsLoading}
-          </p>
-        ) : commands.length === 0 ? (
-          <p className="px-2 pt-1 font-mono text-[11px] text-fg-subtle opacity-55">
-            {workbenchCopy.emptyCommands}
-          </p>
-        ) : (
-          commands.map((command) => (
-            <div
-              key={command.name}
-              className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 transition-colors ${
-                command.name === selected?.name ? 'bg-white/8' : 'hover:bg-white/4'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  command.status === 'running'
-                    ? stopCommand.mutate(command.name)
-                    : runCommand.mutate(command.name)
-                }
-                disabled={runCommand.isPending || stopCommand.isPending}
-                title={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
-                aria-label={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
-                className="grid size-5 flex-none place-items-center rounded-md border border-line/20 text-fg-subtle transition-colors hover:border-blue/45 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                {command.status === 'running' ? <Square size={9} /> : <Play size={9} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => selectCommand(command.name)}
-                aria-current={command.name === selected?.name ? 'true' : undefined}
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-              >
-                <AttentionDot state={attentionForCommandStatus(command.status)} />
-                <span className="truncate font-mono text-[12px] text-fg">{command.name}</span>
-              </button>
-            </div>
-          ))
-        )}
-        <button
-          type="button"
-          disabled
-          title={workbenchCopy.commandAuthoringTitle}
-          className="mt-0.5 flex w-full cursor-not-allowed items-center gap-2 rounded-lg px-2 py-2 font-mono text-[11.5px] text-fg-subtle opacity-55"
-        >
-          <Plus size={13} />
-          new command
-        </button>
-      </div>
+      <CommandList
+        sections={[
+          { commands: configured },
+          ...(removed.length > 0
+            ? [{ title: workbenchCopy.commandRemovedSection, commands: removed }]
+            : []),
+        ]}
+        selected={selected}
+        onSelect={selectCommand}
+        loading={commandsQuery.isPending}
+        runCommand={runCommand}
+        stopCommand={stopCommand}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         {selected && worktree ? (
@@ -246,13 +241,139 @@ function CommandsView() {
   );
 }
 
-function CommandDetail({ command, worktreeId }: { command: CommandSummary; worktreeId: number }) {
+function CommandList({
+  sections,
+  selected,
+  onSelect,
+  loading = false,
+  runCommand,
+  stopCommand,
+}: {
+  readonly sections: readonly {
+    readonly title?: string | undefined;
+    readonly commands: readonly CommandListItem[];
+  }[];
+  readonly selected: CommandListItem | null;
+  readonly onSelect: (commandName: string) => void;
+  readonly loading?: boolean | undefined;
+  readonly runCommand: ReturnType<typeof useRunCommandMutation>;
+  readonly stopCommand: ReturnType<typeof useStopCommandMutation>;
+}) {
+  const hasCommands = sections.some((section) => section.commands.length > 0);
+
+  return (
+    <div className="flex w-52 flex-none flex-col overflow-auto border-r border-line/12 p-2">
+      {loading ? (
+        <p className="px-2 pt-1 font-mono text-[11px] text-fg-subtle opacity-55">
+          {workbenchCopy.commandsLoading}
+        </p>
+      ) : !hasCommands ? (
+        <p className="px-2 pt-1 font-mono text-[11px] text-fg-subtle opacity-55">
+          {workbenchCopy.emptyCommands}
+        </p>
+      ) : (
+        sections.map((section, sectionIndex) =>
+          section.commands.length > 0 ? (
+            <div key={section.title ?? `commands-${sectionIndex}`} className="mb-1 last:mb-0">
+              {section.title && (
+                <p className="px-2 pb-1 pt-2 font-mono text-[10px] tracking-widest text-fg-subtle uppercase opacity-70">
+                  {section.title}
+                </p>
+              )}
+              {section.commands.map((command) => (
+                <CommandListRow
+                  key={`${command.presentation}:${command.name}`}
+                  command={command}
+                  selected={command.name === selected?.name}
+                  onSelect={onSelect}
+                  runCommand={runCommand}
+                  stopCommand={stopCommand}
+                />
+              ))}
+            </div>
+          ) : null,
+        )
+      )}
+      <button
+        type="button"
+        disabled
+        title={workbenchCopy.commandAuthoringTitle}
+        className="mt-0.5 flex w-full cursor-not-allowed items-center gap-2 rounded-lg px-2 py-2 font-mono text-[11.5px] text-fg-subtle opacity-55"
+      >
+        <Plus size={13} />
+        new command
+      </button>
+    </div>
+  );
+}
+
+function CommandListRow({
+  command,
+  selected,
+  onSelect,
+  runCommand,
+  stopCommand,
+}: {
+  readonly command: CommandListItem;
+  readonly selected: boolean;
+  readonly onSelect: (commandName: string) => void;
+  readonly runCommand: ReturnType<typeof useRunCommandMutation>;
+  readonly stopCommand: ReturnType<typeof useStopCommandMutation>;
+}) {
+  const canRun = command.presentation === 'configured' && command.status !== 'running';
+  const canStop = command.status === 'running';
+  const showAction = canRun || canStop;
+
+  return (
+    <div
+      className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 transition-colors ${
+        selected ? 'bg-white/8' : 'hover:bg-white/4'
+      }`}
+    >
+      {showAction ? (
+        <button
+          type="button"
+          onClick={() =>
+            canStop ? stopCommand.mutate(command.name) : runCommand.mutate(command.name)
+          }
+          disabled={runCommand.isPending || stopCommand.isPending}
+          title={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
+          aria-label={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
+          className="grid size-5 flex-none place-items-center rounded-md border border-line/20 text-fg-subtle transition-colors hover:border-blue/45 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          {canStop ? <Square size={9} /> : <Play size={9} />}
+        </button>
+      ) : (
+        <span className="size-5 flex-none" />
+      )}
+      <button
+        type="button"
+        onClick={() => onSelect(command.name)}
+        aria-current={selected ? 'true' : undefined}
+        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+      >
+        <AttentionDot state={attentionForCommandStatus(command.status)} />
+        <span className="truncate font-mono text-[12px] text-fg">{command.name}</span>
+        {command.presentation === 'removed' && (
+          <span className="rounded-md border border-amber/24 bg-amber/10 px-1.5 py-px font-mono text-[9.5px] text-amber">
+            {workbenchCopy.commandRemovedMarker}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function CommandDetail({ command, worktreeId }: { command: CommandListItem; worktreeId: number }) {
   const logsQuery = useCommandLogsQuery(worktreeId, command.name);
   const restartCommand = useRestartCommandMutation(worktreeId);
   const runCommand = useRunCommandMutation(worktreeId);
   const stopCommand = useStopCommandMutation(worktreeId);
   const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
   const logs = logsQuery.data?.latestRun;
+  const canRun = command.presentation === 'configured' && command.status !== 'running';
+  const canRestart = command.presentation === 'configured';
+  const canStop = command.status === 'running';
 
   return (
     <>
@@ -260,8 +381,14 @@ function CommandDetail({ command, worktreeId }: { command: CommandSummary; workt
         <AttentionDot state={attentionForCommandStatus(command.status)} />
         <span className="font-mono text-[12px] text-fg">{command.name}</span>
         <span className="font-mono text-[10.5px] text-fg-subtle">{command.status}</span>
+        {command.presentation === 'removed' && (
+          <span className="rounded-md border border-amber/24 bg-amber/10 px-1.5 py-px font-mono text-[10px] text-amber">
+            {workbenchCopy.commandRemovedMarker}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-1.5">
           {command.status === 'running' &&
+            command.presentation === 'configured' &&
             command.ports.map((port) => (
               <span
                 key={port}
@@ -270,31 +397,43 @@ function CommandDetail({ command, worktreeId }: { command: CommandSummary; workt
                 :{port}
               </span>
             ))}
-          <button
-            type="button"
-            onClick={() => restartCommand.mutate(command.name)}
-            disabled={restartCommand.isPending}
-            title={`Restart ${command.name}`}
-            className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <RotateCcw size={12} />
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              command.status === 'running'
-                ? stopCommand.mutate(command.name)
-                : runCommand.mutate(command.name)
-            }
-            disabled={runCommand.isPending || stopCommand.isPending}
-            title={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
-            className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            {command.status === 'running' ? <Square size={12} /> : <Play size={12} />}
-          </button>
+          {canRestart && (
+            <button
+              type="button"
+              onClick={() => restartCommand.mutate(command.name)}
+              disabled={restartCommand.isPending}
+              title={`Restart ${command.name}`}
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <RotateCcw size={12} />
+            </button>
+          )}
+          {(canRun || canStop) && (
+            <button
+              type="button"
+              onClick={() =>
+                canStop ? stopCommand.mutate(command.name) : runCommand.mutate(command.name)
+              }
+              disabled={runCommand.isPending || stopCommand.isPending}
+              title={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {canStop ? <Square size={12} /> : <Play size={12} />}
+            </button>
+          )}
         </span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+        {command.presentation === 'removed' && (
+          <p className="mb-3 rounded-md border border-amber/18 bg-amber/8 px-2.5 py-2 text-[12px] text-fg-muted">
+            {workbenchCopy.commandRemovedDetail}
+          </p>
+        )}
+        {command.presentation === 'managed' && (
+          <p className="mb-3 rounded-md border border-line/16 bg-white/4 px-2.5 py-2 text-[12px] text-fg-muted">
+            {workbenchCopy.commandManagedDetail}
+          </p>
+        )}
         {mutationError && (
           <p className="mb-3 rounded-md border border-error/20 bg-error/8 px-2.5 py-2 text-[12px] text-error">
             {formatRuntimeError(mutationError)}
@@ -367,8 +506,45 @@ function CommandDiagnosticState({
   );
 }
 
+function CommandDiagnosticPanel({
+  title,
+  body,
+  diagnostic,
+  onRefresh,
+}: {
+  readonly title: string;
+  readonly body: string;
+  readonly diagnostic: string;
+  readonly onRefresh: () => void;
+}) {
+  return (
+    <div className="flex-none p-4">
+      <div className="flex items-center gap-2">
+        <AlertTriangle size={15} className="text-error" />
+        <h2 className="font-mono text-[12px] text-fg">{title}</h2>
+      </div>
+      <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-fg-muted">{body}</p>
+      <pre className="mt-4 max-h-32 overflow-auto rounded-md border border-line/18 bg-black/15 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-subtle">
+        {diagnostic}
+      </pre>
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="mt-4 flex w-fit items-center gap-2 rounded-md border border-line/24 px-2.5 py-1.5 font-mono text-[11px] text-fg-muted transition-colors hover:border-blue/45 hover:text-fg"
+      >
+        <RefreshCw size={12} />
+        {workbenchCopy.refreshCommands}
+      </button>
+    </div>
+  );
+}
+
 function configuredCommands(output: WorktreeCommandsOutput | undefined) {
   return output?.status === 'configured' ? output.commands : [];
+}
+
+function commandItem(command: CommandSummary, presentation: CommandPresentation): CommandListItem {
+  return { ...command, presentation };
 }
 
 function attentionForCommandStatus(status: CommandStatus): AttentionState {

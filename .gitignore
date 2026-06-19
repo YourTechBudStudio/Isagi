@@ -11,6 +11,6 @@ coverage/
 .env
 .env.*
 !.env.example
-.isagi/
+data/.isagi/
 scratch
 TODO.md

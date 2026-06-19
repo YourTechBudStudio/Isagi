@@ -17,6 +17,7 @@ import { Context, Data, Effect, Either, Layer } from 'effect';
 import type {
   CommandActionOutput,
   CommandLogsOutput,
+  CommandSummary,
   CommandStatus,
   WorktreeCommandsOutput,
   WorktreeCommandsRejectionReason,
@@ -183,15 +184,18 @@ export const CommandServiceLive = Layer.scoped(
           });
 
           if (catalog.status === 'config_error') {
+            const states = yield* commandRepository.listStatesForWorktree(worktreeId);
             return {
               status: 'config_error',
               worktreeId,
               diagnostic: catalog.diagnostic,
+              managedCommands: commandStatesNeedingAttention(states),
             } satisfies WorktreeCommandsOutput;
           }
 
           const states = yield* commandRepository.listStatesForWorktree(worktreeId);
           const stateByName = new Map(states.map((state) => [state.commandName, state]));
+          const configuredNames = new Set(catalog.config.commands.map((command) => command.name));
           return {
             status: 'configured',
             worktreeId,
@@ -200,11 +204,14 @@ export const CommandServiceLive = Layer.scoped(
               status: stateByName.get(command.name)?.status ?? 'idle',
               ports: stateByName.get(command.name)?.status === 'running' ? [...command.ports] : [],
             })),
+            removedCommands: commandStatesNeedingAttention(
+              states.filter((state) => !configuredNames.has(state.commandName)),
+            ),
           } satisfies WorktreeCommandsOutput;
         }),
       readLatestLogs: (input) =>
         Effect.gen(function* () {
-          yield* resolveConfiguredCommand(workspaceRepository, input);
+          yield* resolveReadableCommand(workspaceRepository, commandRepository, input);
           const state = yield* commandRepository.findState(input);
           const run = yield* commandRepository.findLatestRun(input);
           return {
@@ -402,6 +409,7 @@ function runCommand(input: {
     if (Either.isLeft(launch)) {
       const logPath = commandLogPath(input.commandLogsPath, run.id);
       appendFileSync(logPath, `[isagi] Command launch failed before PTY metadata was available.\n`);
+      yield* input.commandRepository.updateRunLogPath({ runId: run.id, logPath });
       yield* input.commandRepository.completeRun({ runId: run.id, status: 'failed' });
       yield* input.commandRepository.transitionState({
         worktreeId: target.worktree.id,
@@ -458,10 +466,14 @@ function stopCommand(input: {
   readonly suppressChangedEvent?: boolean | undefined;
 }) {
   return Effect.gen(function* () {
-    const target = yield* resolveConfiguredCommand(input.workspaceRepository, input.input);
+    const target = yield* resolveStoppableCommand(
+      input.workspaceRepository,
+      input.commandRepository,
+      input.input,
+    );
     const state = yield* input.commandRepository.findState(input.input);
     if (!state || state.status !== 'running' || !state.activePtyProcessId) {
-      return actionOutput(target.command, state?.status ?? 'idle', target.worktree.id);
+      return commandActionOutput(target, state?.status ?? 'idle');
     }
 
     const terminate = yield* input.pty
@@ -474,9 +486,9 @@ function stopCommand(input: {
       return yield* Effect.fail(
         new CommandError({
           code: 'command_action_failed',
-          message: `Could not stop command ${target.command.name}.`,
+          message: `Could not stop command ${target.commandName}.`,
           worktreeId: target.worktree.id,
-          commandName: target.command.name,
+          commandName: target.commandName,
           cause: terminate.left,
         }),
       );
@@ -495,14 +507,14 @@ function stopCommand(input: {
     );
     yield* input.commandRepository.transitionState({
       worktreeId: target.worktree.id,
-      commandName: target.command.name,
+      commandName: target.commandName,
       status: 'stopped',
       activePtyProcessId: null,
     });
     if (!input.suppressChangedEvent) {
-      yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.command.name);
+      yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.commandName);
     }
-    return actionOutput(target.command, 'stopped', target.worktree.id);
+    return commandActionOutput(target, 'stopped');
   });
 }
 
@@ -514,7 +526,9 @@ function reconcilePtyProcessEvent(
   return Effect.gen(function* () {
     const status =
       event.type === 'pty_process_exited'
-        ? 'exited'
+        ? event.exitCode === 0
+          ? 'exited'
+          : 'failed'
         : event.type === 'pty_process_killed' && event.statusReason === 'user_requested'
           ? 'stopped'
           : 'failed';
@@ -835,6 +849,12 @@ interface CommandTarget {
   readonly command: WorktreeCommandConfig;
 }
 
+interface ManagedCommandTarget {
+  readonly worktree: { readonly id: number; readonly path: string };
+  readonly commandName: string;
+  readonly ports: readonly number[];
+}
+
 function resolveConfiguredCommand(
   workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService,
   input: { readonly worktreeId: number; readonly commandName: string },
@@ -866,6 +886,75 @@ function resolveConfiguredCommand(
       );
     }
     return { worktree: target.worktree, command };
+  });
+}
+
+function resolveReadableCommand(
+  workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService,
+  commandRepository: CommandRepositoryService,
+  input: { readonly worktreeId: number; readonly commandName: string },
+): Effect.Effect<void, CommandServiceError> {
+  return Effect.gen(function* () {
+    const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+    const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
+    if (catalog.status === 'configured') {
+      const configured = catalog.config.commands.some(
+        (candidate) => candidate.name === input.commandName,
+      );
+      if (configured) return;
+    }
+
+    const state = yield* commandRepository.findState(input);
+    const run = yield* commandRepository.findLatestRun(input);
+    if (state || run) return;
+
+    return yield* Effect.fail(
+      new CommandError({
+        code: catalog.status === 'config_error' ? 'command_config_invalid' : 'command_not_found',
+        message:
+          catalog.status === 'config_error'
+            ? catalog.diagnostic.message
+            : `Command ${input.commandName} was not found.`,
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+      }),
+    );
+  });
+}
+
+function resolveStoppableCommand(
+  workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService,
+  commandRepository: CommandRepositoryService,
+  input: { readonly worktreeId: number; readonly commandName: string },
+): Effect.Effect<ManagedCommandTarget, CommandServiceError> {
+  return Effect.gen(function* () {
+    const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+    const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
+    if (catalog.status === 'configured') {
+      const command = catalog.config.commands.find(
+        (candidate) => candidate.name === input.commandName,
+      );
+      if (command) {
+        return { worktree: target.worktree, commandName: command.name, ports: command.ports };
+      }
+    }
+
+    const state = yield* commandRepository.findState(input);
+    if (state?.status === 'running') {
+      return { worktree: target.worktree, commandName: state.commandName, ports: [] };
+    }
+
+    return yield* Effect.fail(
+      new CommandError({
+        code: catalog.status === 'config_error' ? 'command_config_invalid' : 'command_not_found',
+        message:
+          catalog.status === 'config_error'
+            ? catalog.diagnostic.message
+            : `Command ${input.commandName} was not found.`,
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+      }),
+    );
   });
 }
 
@@ -920,18 +1009,16 @@ function withCommandLock<A, E, R>(
       const current = new Promise<void>((resolveRelease) => {
         release = resolveRelease;
       });
-      locks.set(
-        key,
-        previous.then(() => current),
-      );
+      const queued = previous.then(() => current);
+      locks.set(key, queued);
       await previous;
-      return { release, current };
+      return { release, queued };
     }),
     () => effect,
-    ({ release, current }) =>
+    ({ release, queued }) =>
       Effect.sync(() => {
         release();
-        if (locks.get(key) === current) {
+        if (locks.get(key) === queued) {
           locks.delete(key);
         }
       }),
@@ -952,6 +1039,33 @@ function actionOutput(
       ports: status === 'running' ? [...command.ports] : [],
     },
   };
+}
+
+function commandActionOutput(
+  target: ManagedCommandTarget,
+  status: CommandStatus,
+): CommandActionOutput {
+  return {
+    worktreeId: target.worktree.id,
+    commandName: target.commandName,
+    summary: {
+      name: target.commandName,
+      status,
+      ports: status === 'running' ? [...target.ports] : [],
+    },
+  };
+}
+
+function commandStatesNeedingAttention(
+  states: readonly import('./commands.repository.js').CommandStateRow[],
+): CommandSummary[] {
+  return states
+    .filter((state) => state.status === 'running' || state.status === 'failed')
+    .map((state) => ({
+      name: state.commandName,
+      status: state.status,
+      ports: [],
+    }));
 }
 
 function publishCommandChanged(

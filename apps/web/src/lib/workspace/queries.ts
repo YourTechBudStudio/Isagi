@@ -148,7 +148,7 @@ export async function invalidateCommandQueries(
   worktreeId: number | null,
   commandName?: string | null,
 ) {
-  await client.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId) });
+  await client.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId), exact: true });
   if (commandName) {
     await client.invalidateQueries({ queryKey: commandLogsQueryKey(worktreeId, commandName) });
   }

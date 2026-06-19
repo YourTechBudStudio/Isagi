@@ -125,6 +125,7 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
     case 'command_changed':
       void queryClient.invalidateQueries({
         queryKey: worktreeCommandsQueryKey(event.payload.worktreeId),
+        exact: true,
       });
       void queryClient.invalidateQueries({
         queryKey: commandLogsQueryKey(event.payload.worktreeId, event.payload.commandName),

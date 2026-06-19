@@ -10,6 +10,10 @@ import { branchLabel } from '../../lib/workspace/selectors.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
 
+type CommandChipItem = CommandSummary & {
+  readonly presentation: 'configured' | 'removed' | 'managed';
+};
+
 /**
  * The always-on status strip — the worktree's running commands at a glance plus
  * the active branch. Commands sit beside each other (horizontal is cheap).
@@ -27,25 +31,41 @@ export function StatusStrip() {
   const commandRead = commandsQuery.data;
   const visible =
     commandRead?.status === 'configured'
-      ? commandRead.commands.filter(
-          (command) => command.status === 'running' || command.status === 'failed',
-        )
-      : [];
+      ? [
+          ...visibleCommandChips(commandRead.commands, 'configured'),
+          ...visibleCommandChips(commandRead.removedCommands, 'removed'),
+        ]
+      : commandRead?.status === 'config_error'
+        ? visibleCommandChips(commandRead.managedCommands, 'managed')
+        : [];
   const commandReadFailed = commandRead?.status === 'config_error' || Boolean(commandsQuery.error);
 
   return (
     <div className="flex h-7.5 flex-none items-center gap-3 border-t border-line/15 bg-elevated/50 px-3.5 text-left transition-colors duration-micro ease-expo hover:bg-elevated/70">
       {commandReadFailed ? (
-        <button
-          type="button"
-          onClick={() => openDrawer()}
-          className="flex items-center gap-2 font-mono text-[11px] text-fg-subtle opacity-75 hover:text-fg hover:opacity-100"
-        >
-          <AttentionDot state="error" />
-          {commandRead?.status === 'config_error'
-            ? workbenchCopy.commandsConfigError
-            : workbenchCopy.commandsUnavailable}
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => openDrawer()}
+            className="flex items-center gap-2 font-mono text-[11px] text-fg-subtle opacity-75 hover:text-fg hover:opacity-100"
+          >
+            <AttentionDot state="error" />
+            {commandRead?.status === 'config_error'
+              ? workbenchCopy.commandsConfigError
+              : workbenchCopy.commandsUnavailable}
+          </button>
+          {visible.length > 0 && (
+            <span className="flex min-w-0 items-center gap-3 overflow-hidden opacity-75">
+              {visible.map((command) => (
+                <CommandChip
+                  key={command.name}
+                  command={command}
+                  onOpen={() => openDrawer(command.name)}
+                />
+              ))}
+            </span>
+          )}
+        </>
       ) : visible.length > 0 ? (
         <>
           <button
@@ -85,7 +105,7 @@ export function StatusStrip() {
   );
 }
 
-function CommandChip({ command, onOpen }: { command: CommandSummary; onOpen: () => void }) {
+function CommandChip({ command, onOpen }: { command: CommandChipItem; onOpen: () => void }) {
   const attention = attentionForCommandStatus(command.status);
   return (
     <button
@@ -101,7 +121,13 @@ function CommandChip({ command, onOpen }: { command: CommandSummary; onOpen: () 
           {command.status}
         </span>
       )}
+      {command.presentation === 'removed' && (
+        <span className="rounded-md border border-amber/24 bg-amber/10 px-1.5 py-px font-mono text-[10px] text-amber">
+          {workbenchCopy.commandRemovedMarker}
+        </span>
+      )}
       {command.status === 'running' &&
+        command.presentation === 'configured' &&
         command.ports.map((port) => (
           <span
             key={port}
@@ -112,6 +138,15 @@ function CommandChip({ command, onOpen }: { command: CommandSummary; onOpen: () 
         ))}
     </button>
   );
+}
+
+function visibleCommandChips(
+  commands: readonly CommandSummary[],
+  presentation: CommandChipItem['presentation'],
+): CommandChipItem[] {
+  return commands
+    .filter((command) => command.status === 'running' || command.status === 'failed')
+    .map((command) => ({ ...command, presentation }));
 }
 
 function attentionForCommandStatus(status: CommandStatus): AttentionState {

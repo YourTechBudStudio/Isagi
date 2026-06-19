@@ -25,7 +25,7 @@ Updated: 2026-06-12
    - Refresh/patch rail metadata when visible PTY sessions exit or fail.
    - Then explore reliable waiting-for-user detection per harness.
 
-3. [ ] Command runner slice — `.pi/tasks/worktree-continuity-command-runner.md`
+3. [x] Command runner slice — `.pi/tasks/worktree-continuity-command-runner.md`
    - Define/run named project commands in the active worktree.
    - Show logs/output in the commands drawer/status strip.
    - Prototype persistent vs non-persistent lifecycle.

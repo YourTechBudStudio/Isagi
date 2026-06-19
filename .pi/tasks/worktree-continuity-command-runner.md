@@ -1,9 +1,9 @@
 ---
 title: Command runner slice
-status: todo
+status: done
 milestone: worktree-continuity
 created: 2026-05-29
-updated: 2026-06-12
+updated: 2026-06-19
 depends_on: [worktree-continuity-project-worktree-navigation]
 ---
 
@@ -20,6 +20,18 @@ Commands are non-persistent by default. Users/projects may opt commands into per
 # Done condition
 
 Done when project commands can be defined minimally, run in the correct worktree, show logs/output, and support or prototype the persistent vs non-persistent lifecycle direction.
+
+# Completion notes
+
+Implemented through the worktree command runner slice:
+
+- Worktree-local `.isagi/config.yaml` command catalog parsing with strict command validation.
+- Command-specific runtime contracts/APIs for summaries, logs, run, stop, and restart.
+- Runtime-owned command state/history above disposable PTY process incarnations.
+- Manual command run/stop/restart with cwd, env files, env overrides, declared ports, and retained latest logs.
+- Runtime lifecycle policy handling for `postCreate`, `activate`, `deactivate`, `preDelete`, startup activation, and stale running command reconciliation.
+- Drawer and status-strip command presentation, including malformed config diagnostics and removed/runtime-managed command visibility.
+- PTY GC protection for command-referenced logs/process rows while command history references them.
 
 # Notes
 

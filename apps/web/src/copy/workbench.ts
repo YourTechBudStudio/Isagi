@@ -8,6 +8,11 @@ export const workbenchCopy = {
   commandAuthoringTitle: 'Add commands in .isagi/config.yaml',
   commandExecutionUnavailableTitle: 'Command execution lands in the next phase',
   commandIdleDetail: 'This command has not run yet.',
+  commandRemovedDetail: 'This command is no longer in .isagi/config.yaml.',
+  commandRemovedSection: 'removed commands',
+  commandManagedSection: 'runtime-managed commands',
+  commandManagedDetail: 'Config is broken, but this managed command still has runtime state.',
+  commandRemovedMarker: 'removed',
   commandEmptyLog: '[isagi] No output recorded for this run.',
   commandConfigDiagnosticTitle: 'Command config needs a look.',
   commandConfigDiagnosticBody:
