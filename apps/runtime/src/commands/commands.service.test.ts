@@ -6,7 +6,16 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
+import { DataDirectory } from '../persistence/index.js';
+import {
+  PtyRepository,
+  PtyService,
+  type PtyRepositoryService,
+  type PtyServiceShape,
+} from '../pty-processes/index.js';
+import { InternalRuntimeEventBusLive, RuntimeEventBusLive } from '../runtime-events/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace/index.js';
+import { CommandRepository, type CommandRepositoryService } from './commands.repository.js';
 import { CommandService, CommandServiceLive } from './commands.service.js';
 
 test('command service returns an empty configured catalog when config is missing', async () => {
@@ -40,7 +49,7 @@ commands:
     assert.deepEqual(output, {
       status: 'configured',
       worktreeId: 10,
-      commands: [{ name: 'dev server', status: 'idle', ports: [5173] }],
+      commands: [{ name: 'dev server', status: 'idle', ports: [] }],
     });
   } finally {
     fixture.cleanup();
@@ -99,8 +108,68 @@ async function runCommandService(rootPath: string) {
       Effect.flatMap((service) => service.listForWorktree(10)),
       Effect.provide(CommandServiceLive),
       Effect.provide(Layer.succeed(WorkspaceRepository, repository(rootPath))),
+      Effect.provide(Layer.succeed(CommandRepository, commandRepository())),
+      Effect.provide(Layer.succeed(PtyRepository, ptyRepository())),
+      Effect.provide(Layer.succeed(PtyService, ptyService())),
+      Effect.provide(
+        Layer.succeed(DataDirectory, {
+          paths: {
+            root: rootPath,
+            databasePath: join(rootPath, 'isagi.db'),
+            statePath: join(rootPath, 'state.json'),
+            worktreesPath: join(rootPath, 'worktrees'),
+            sessionsPath: join(rootPath, 'sessions'),
+          },
+        }),
+      ),
+      Effect.provide(RuntimeEventBusLive),
+      Effect.provide(InternalRuntimeEventBusLive),
     ),
   );
+}
+
+function commandRepository(): CommandRepositoryService {
+  return {
+    listStatesForWorktree: () => Effect.succeed([]),
+    findState: () => Effect.succeed(null),
+    ensureState: () => Effect.die('ensureState is not used'),
+    transitionState: () => Effect.die('transitionState is not used'),
+    createRun: () => Effect.die('createRun is not used'),
+    updateRunPty: () => Effect.die('updateRunPty is not used'),
+    completeRun: () => Effect.die('completeRun is not used'),
+    completeRunByPtyProcess: () => Effect.succeed(null),
+    findLatestRun: () => Effect.succeed(null),
+    findRunByPtyProcess: () => Effect.succeed(null),
+    listReferencedPtyProcessIds: Effect.succeed([]),
+    listReferencedCommandLogPaths: Effect.succeed([]),
+  };
+}
+
+function ptyRepository(): PtyRepositoryService {
+  return {
+    createProcessMetadata: () => Effect.die('createProcessMetadata is not used'),
+    findProcess: () => Effect.succeed(null),
+    listProcessLogPaths: Effect.succeed([]),
+    listOrphanProcesses: Effect.succeed([]),
+    listProcesses: () => Effect.succeed([]),
+    deleteProcess: () => Effect.void,
+    updateBackendRef: () => Effect.void,
+    updateBackendMetadata: () => Effect.void,
+    transitionProcess: () => Effect.void,
+  };
+}
+
+function ptyService(): PtyServiceShape {
+  return {
+    launch: () => Effect.die('launch is not used'),
+    getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
+    attach: () => Effect.die('attach is not used'),
+    replay: () => Effect.void,
+    write: () => Effect.void,
+    resize: () => Effect.void,
+    kill: () => Effect.void,
+    terminate: () => Effect.void,
+  };
 }
 
 function repository(rootPath: string): WorkspaceRepositoryService {

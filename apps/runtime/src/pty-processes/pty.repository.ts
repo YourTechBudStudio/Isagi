@@ -4,7 +4,12 @@ import { eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
-import { agentSessions, ptyProcesses, terminalSessions } from '../persistence/schema.js';
+import {
+  agentSessions,
+  ptyProcesses,
+  terminalSessions,
+  worktreeCommandRuns,
+} from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
@@ -113,6 +118,10 @@ export const PtyRepositoryLive = Layer.effect(
             ...db
               .select({ activePtyProcessId: terminalSessions.activePtyProcessId })
               .from(terminalSessions)
+              .all(),
+            ...db
+              .select({ activePtyProcessId: worktreeCommandRuns.ptyProcessId })
+              .from(worktreeCommandRuns)
               .all(),
           ].flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
         );

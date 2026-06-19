@@ -26,6 +26,7 @@ import {
 import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
 import {
   activeContextQueryKey,
+  commandLogsQueryKey,
   surfaceDetailQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
@@ -37,6 +38,7 @@ import {
   deleteProject,
   deleteWorktree,
   fetchActiveContext,
+  fetchCommandLogs,
   fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
@@ -46,7 +48,10 @@ import {
   openWorktree,
   reconcileWorkspace,
   renameSurfaceTitle,
+  restartCommand,
+  runCommand,
   relocateProject,
+  stopCommand,
   updateActiveContext,
 } from './runtime-data.js';
 import { showWorktreeSetupFailure } from './setup-failure.js';
@@ -79,11 +84,74 @@ export function useWorktreeCommandsQuery(worktreeId: number | null) {
   });
 }
 
+export function useCommandLogsQuery(worktreeId: number | null, commandName: string | null) {
+  return useQuery({
+    queryKey: commandLogsQueryKey(worktreeId, commandName),
+    enabled: worktreeId !== null && commandName !== null,
+    queryFn: ({ signal }) => {
+      if (worktreeId === null || commandName === null) {
+        throw new Error('Command logs query requires a worktree and command name.');
+      }
+      return runRuntimeEffect(fetchCommandLogs(worktreeId, commandName), { signal });
+    },
+  });
+}
+
+export function useRunCommandMutation(worktreeId: number | null) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (commandName: string) => {
+      if (worktreeId === null) throw new Error('Command run requires an active worktree.');
+      return runRuntimeEffect(runCommand(worktreeId, commandName));
+    },
+    onSettled: async (_output, _error, commandName) => {
+      await invalidateCommandQueries(client, worktreeId, commandName);
+    },
+  });
+}
+
+export function useStopCommandMutation(worktreeId: number | null) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (commandName: string) => {
+      if (worktreeId === null) throw new Error('Command stop requires an active worktree.');
+      return runRuntimeEffect(stopCommand(worktreeId, commandName));
+    },
+    onSettled: async (_output, _error, commandName) => {
+      await invalidateCommandQueries(client, worktreeId, commandName);
+    },
+  });
+}
+
+export function useRestartCommandMutation(worktreeId: number | null) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (commandName: string) => {
+      if (worktreeId === null) throw new Error('Command restart requires an active worktree.');
+      return runRuntimeEffect(restartCommand(worktreeId, commandName));
+    },
+    onSettled: async (_output, _error, commandName) => {
+      await invalidateCommandQueries(client, worktreeId, commandName);
+    },
+  });
+}
+
 export function useActiveContextQuery() {
   return useQuery({
     queryKey: activeContextQueryKey,
     queryFn: ({ signal }) => runRuntimeEffect(fetchActiveContext(), { signal }),
   });
+}
+
+export async function invalidateCommandQueries(
+  client: QueryClient,
+  worktreeId: number | null,
+  commandName?: string | null,
+) {
+  await client.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId) });
+  if (commandName) {
+    await client.invalidateQueries({ queryKey: commandLogsQueryKey(worktreeId, commandName) });
+  }
 }
 
 export function useSurfaceDetailQuery(surfaceId: number) {

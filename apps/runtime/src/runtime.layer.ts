@@ -8,7 +8,11 @@ import {
   type AgentSessionAttentionProjectionService,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
-import { CommandServiceLive, type CommandServiceShape } from './commands/index.js';
+import {
+  CommandRepositoryLive,
+  CommandServiceLive,
+  type CommandServiceShape,
+} from './commands/index.js';
 import { GitLive } from './git/index.js';
 import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
@@ -68,6 +72,7 @@ const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(
 const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
@@ -132,7 +137,13 @@ const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(SurfaceAndPtyServiceLayer),
 );
-const CommandServiceLayer = CommandServiceLive.pipe(Layer.provide(RepositoryLive));
+const CommandServiceLayer = CommandServiceLive.pipe(
+  Layer.provide(CommandRepositoryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(PtyRepositoryLayer),
+  Layer.provide(DataDirectoryLive),
+);
 
 export type RuntimeServices =
   | CommandServiceShape

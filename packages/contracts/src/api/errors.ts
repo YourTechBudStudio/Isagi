@@ -58,7 +58,12 @@ export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
 
 export const sessionLaunchRejectionReasonSchema = Schema.Literal('worktree_not_found');
 
-export const worktreeCommandsRejectionReasonSchema = Schema.Literal('worktree_not_found');
+export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
+  'worktree_not_found',
+  'command_config_invalid',
+  'command_not_found',
+  'command_action_failed',
+);
 
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
@@ -206,6 +211,7 @@ export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: worktreeCommandsRejectionReasonSchema,
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    commandName: Schema.optional(Schema.String),
   }),
 });
 

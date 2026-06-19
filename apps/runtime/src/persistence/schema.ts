@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const projects = sqliteTable(
   'projects',
@@ -166,6 +166,56 @@ export const terminalSessions = sqliteTable('terminal_sessions', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const worktreeCommandStates = sqliteTable(
+  'worktree_command_states',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    commandName: text('command_name').notNull(),
+    status: text('status', { enum: ['idle', 'running', 'exited', 'stopped', 'failed'] }).notNull(),
+    activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('worktree_command_states_worktree_command_unique').on(
+      table.worktreeId,
+      table.commandName,
+    ),
+    index('worktree_command_states_active_pty_idx').on(table.activePtyProcessId),
+  ],
+);
+
+export const worktreeCommandRuns = sqliteTable(
+  'worktree_command_runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    commandName: text('command_name').notNull(),
+    ptyProcessId: integer('pty_process_id').references(() => ptyProcesses.id),
+    commandText: text('command_text').notNull(),
+    cwd: text('cwd').notNull(),
+    status: text('status', { enum: ['running', 'exited', 'stopped', 'failed'] }).notNull(),
+    trigger: text('trigger', { enum: ['manual_run', 'manual_restart'] }).notNull(),
+    logPath: text('log_path'),
+    exitCode: integer('exit_code'),
+    signal: text('signal'),
+    startedAt: text('started_at').notNull(),
+    completedAt: text('completed_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('worktree_command_runs_latest_idx').on(table.worktreeId, table.commandName, table.id),
+    index('worktree_command_runs_pty_idx').on(table.ptyProcessId),
+    index('worktree_command_runs_log_path_idx').on(table.logPath),
+  ],
+);
 
 export const worktreeEnvironmentStates = sqliteTable(
   'worktree_environment_states',

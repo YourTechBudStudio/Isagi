@@ -43,6 +43,7 @@ export type {
   ApiEndpointError,
   ApiEndpointOutput,
   ApiEndpointParams,
+  ApiEndpointQuery,
   ApiEndpointRequestArgs,
   ApiMethod,
 } from './api/types.js';
@@ -119,15 +120,25 @@ export type {
 export { commandsEndpoints } from './commands/api.js';
 export {
   commandConfigDiagnosticSchema,
+  commandActionOutputSchema,
+  commandLatestRunSchema,
+  commandLogsOutputSchema,
   commandStatusSchema,
   commandSummarySchema,
+  worktreeCommandActionInputSchema,
+  worktreeCommandQuerySchema,
   worktreeCommandsOutputSchema,
   worktreeCommandsRouteParamsSchema,
 } from './commands/types.js';
 export type {
+  CommandActionOutput,
   CommandConfigDiagnostic,
+  CommandLatestRun,
+  CommandLogsOutput,
   CommandStatus,
   CommandSummary,
+  WorktreeCommandActionInput,
+  WorktreeCommandQuery,
   WorktreeCommandsOutput,
   WorktreeCommandsRouteParams,
 } from './commands/types.js';
@@ -169,6 +180,7 @@ export {
   attentionSourceRemovedEventSchema,
   attentionSourceSchema,
   attentionStateSchema,
+  commandChangedEventSchema,
   terminalAttentionStateSchema,
   agentSessionChangedEventSchema,
   runtimeEventBaseSchema,
@@ -180,6 +192,7 @@ export {
 } from './runtime-events/types.js';
 export type {
   AgentSessionChangedEvent,
+  CommandChangedEvent,
   AttentionSnapshotEvent,
   AttentionSource,
   AttentionSourceChangedEvent,

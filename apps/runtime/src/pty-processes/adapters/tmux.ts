@@ -232,6 +232,19 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
     ),
   listSessions: listTmuxSessions,
   collectGarbage: (input) => collectTmuxGarbage(input, listTmuxSessions),
+  terminate: (input) => {
+    console.warn(
+      '[runtime] tmux PTY backend does not support reliable graceful termination; killing tmux session directly.',
+    );
+    return runTmux([
+      'kill-session',
+      '-t',
+      input.ref.backend === 'tmux' ? input.ref.sessionName : '',
+    ]).pipe(
+      Effect.asVoid,
+      Effect.mapError((cause) => new PtyKillError({ cause })),
+    );
+  },
   kill: (ref) =>
     runTmux(['kill-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
       Effect.asVoid,

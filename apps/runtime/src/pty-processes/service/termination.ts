@@ -28,6 +28,7 @@ export function terminatePtyProcessAndPersistKilled(input: {
   readonly terminations: Map<number, PtyTerminationState>;
   readonly ptyProcessId: number;
   readonly reason: DurablePtyTerminationReason;
+  readonly gracefulTimeoutMs?: number | undefined;
   readonly killFailurePolicy?: 'fail' | 'persist_killed';
 }) {
   return Effect.gen(function* () {
@@ -48,7 +49,14 @@ export function terminatePtyProcessAndPersistKilled(input: {
     });
     yield* detachActiveAttachment(input.activeAttachments, session.id);
 
-    const killResult = yield* input.backend.kill(ref).pipe(Effect.either);
+    const killResult = yield* (
+      input.backend.terminate
+        ? input.backend.terminate({
+            ref,
+            gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000,
+          })
+        : input.backend.kill(ref)
+    ).pipe(Effect.either);
     if (Either.isLeft(killResult)) {
       if (input.killFailurePolicy === 'persist_killed') {
         console.warn(

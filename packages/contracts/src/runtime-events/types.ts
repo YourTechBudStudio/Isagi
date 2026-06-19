@@ -49,6 +49,7 @@ export const attentionSourceSchema = Schema.Union(
 export const runtimeEventTypeSchema = Schema.Literal(
   'agent_session_changed',
   'terminal_session_changed',
+  'command_changed',
   'attention_snapshot',
   'attention_source_changed',
   'attention_source_removed',
@@ -96,6 +97,16 @@ export const terminalSessionChangedEventSchema = Schema.Struct({
   }),
 });
 
+export const commandChangedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('command_changed'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Struct({
+    worktreeId: positiveIntegerSchema,
+    commandName: Schema.String.pipe(Schema.minLength(1)),
+  }),
+});
+
 export const attentionSnapshotEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('attention_snapshot'),
@@ -124,6 +135,7 @@ export const attentionSourceRemovedEventSchema = Schema.Struct({
 export const runtimeEventSchema = Schema.Union(
   agentSessionChangedEventSchema,
   terminalSessionChangedEventSchema,
+  commandChangedEventSchema,
   attentionSnapshotEventSchema,
   attentionSourceChangedEventSchema,
   attentionSourceRemovedEventSchema,
@@ -141,6 +153,7 @@ export type AgentSessionChangedEvent = Schema.Schema.Type<typeof agentSessionCha
 export type TerminalSessionChangedEvent = Schema.Schema.Type<
   typeof terminalSessionChangedEventSchema
 >;
+export type CommandChangedEvent = Schema.Schema.Type<typeof commandChangedEventSchema>;
 export type AttentionSnapshotEvent = Schema.Schema.Type<typeof attentionSnapshotEventSchema>;
 export type AttentionSourceChangedEvent = Schema.Schema.Type<
   typeof attentionSourceChangedEventSchema

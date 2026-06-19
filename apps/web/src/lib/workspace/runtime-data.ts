@@ -27,6 +27,8 @@ import type {
   WorktreeSetupTrustInput,
   WorktreeSetupTrustOutput,
   WorktreeCommandsOutput,
+  CommandActionOutput,
+  CommandLogsOutput,
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
@@ -61,6 +63,38 @@ export function fetchWorktreeCommands(
   worktreeId: number,
 ): Effect.Effect<WorktreeCommandsOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorktreeCommands(worktreeId)));
+}
+
+export function fetchCommandLogs(
+  worktreeId: number,
+  commandName: string,
+): Effect.Effect<CommandLogsOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.fetchCommandLogs(worktreeId, commandName)),
+  );
+}
+
+export function runCommand(
+  worktreeId: number,
+  commandName: string,
+): Effect.Effect<CommandActionOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.runCommand(worktreeId, commandName)));
+}
+
+export function stopCommand(
+  worktreeId: number,
+  commandName: string,
+): Effect.Effect<CommandActionOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.stopCommand(worktreeId, commandName)));
+}
+
+export function restartCommand(
+  worktreeId: number,
+  commandName: string,
+): Effect.Effect<CommandActionOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.restartCommand(worktreeId, commandName)),
+  );
 }
 
 export function fetchActiveContext(): Effect.Effect<ActiveContextOutput, Error> {

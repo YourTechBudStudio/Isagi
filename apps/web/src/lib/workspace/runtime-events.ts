@@ -11,7 +11,12 @@ import {
 import { queryClient } from '../query/client.js';
 import { runRuntimeEffect } from '../runtime/run.js';
 import { useAttentionStore } from './attention.js';
-import { surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
+import {
+  commandLogsQueryKey,
+  surfaceDetailQueryKey,
+  workspaceQueryKey,
+  worktreeCommandsQueryKey,
+} from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 
 const initialReconnectDelayMs = 500;
@@ -115,6 +120,14 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
       void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
       void queryClient.invalidateQueries({
         queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
+      });
+      break;
+    case 'command_changed':
+      void queryClient.invalidateQueries({
+        queryKey: worktreeCommandsQueryKey(event.payload.worktreeId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: commandLogsQueryKey(event.payload.worktreeId, event.payload.commandName),
       });
       break;
   }

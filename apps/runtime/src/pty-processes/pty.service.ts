@@ -96,6 +96,10 @@ export interface PtyService {
   readonly kill: (input: {
     readonly ptyProcessId: number;
   }) => Effect.Effect<void, PtyKillProcessError>;
+  readonly terminate: (input: {
+    readonly ptyProcessId: number;
+    readonly gracefulTimeoutMs: number;
+  }) => Effect.Effect<void, PtyKillProcessError>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyProcessService');
@@ -252,6 +256,17 @@ export const PtyServiceLive = Layer.scoped(
           terminations,
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
+        }),
+      terminate: (input) =>
+        terminatePtyProcessAndPersistKilled({
+          repository,
+          backend,
+          eventBus,
+          activeAttachments,
+          terminations,
+          ptyProcessId: input.ptyProcessId,
+          reason: 'user_requested',
+          gracefulTimeoutMs: input.gracefulTimeoutMs,
         }),
     } satisfies PtyService;
 

@@ -13,6 +13,13 @@ import {
   type CommandService as CommandServiceShape,
 } from './commands.service.js';
 
+const idleAction = {
+  worktreeId: 10,
+  commandName: 'dev',
+  summary: { name: 'dev', status: 'idle' as const, ports: [] },
+};
+const idleLogs = { worktreeId: 10, commandName: 'dev', status: 'idle' as const, latestRun: null };
+
 test('command route returns configured command reads through the contract path', async () => {
   await withCommandsApi(
     {
@@ -22,6 +29,10 @@ test('command route returns configured command reads through the contract path',
           worktreeId,
           commands: [{ name: 'dev', status: 'idle', ports: [5173] }],
         }),
+      readLatestLogs: () => Effect.succeed(idleLogs),
+      run: () => Effect.succeed(idleAction),
+      stop: () => Effect.succeed(idleAction),
+      restart: () => Effect.succeed(idleAction),
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -51,6 +62,10 @@ test('command route maps missing worktree to command rejection envelope', async 
             worktreeId,
           }),
         ),
+      readLatestLogs: () => Effect.succeed(idleLogs),
+      run: () => Effect.succeed(idleAction),
+      stop: () => Effect.succeed(idleAction),
+      restart: () => Effect.succeed(idleAction),
     },
     async (fastify) => {
       const response = await fastify.inject({

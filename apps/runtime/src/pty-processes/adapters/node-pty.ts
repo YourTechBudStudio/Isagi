@@ -200,6 +200,37 @@ export const NodePtyBackendLive = Layer.effect(
         ),
       listSessions,
       collectGarbage: (input) => collectNodePtyGarbage(input, listSessions),
+      terminate: (input) =>
+        Effect.tryPromise({
+          try: async () => {
+            const ref = input.ref;
+            if (ref.backend !== 'node_pty') {
+              throw new Error(`Cannot terminate node-pty backend for ${ref.backend} ref.`);
+            }
+            const live = liveSessions.get(ref.ptyProcessId);
+            if (!live) {
+              return;
+            }
+            try {
+              live.process.kill('SIGTERM');
+            } catch {
+              live.process.kill();
+              return;
+            }
+            await delay(input.gracefulTimeoutMs);
+            const current = liveSessions.get(ref.ptyProcessId);
+            if (current?.running) {
+              current.suppressExitCallback = true;
+              liveSessions.delete(ref.ptyProcessId);
+              current.process.kill('SIGKILL');
+            }
+          },
+          catch: (cause) =>
+            new PtyKillError({
+              ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
+              cause,
+            }),
+        }),
       kill: (ref) =>
         Effect.try({
           try: () => {
@@ -232,6 +263,10 @@ export const NodePtyBackendLive = Layer.effect(
     } satisfies PtyBackendShape;
   }),
 );
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type NodePtySpawn = typeof nodePty.spawn;
 

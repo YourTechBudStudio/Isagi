@@ -31,6 +31,58 @@ export function registerCommandsApi(
     mapError: (error, context) => toCommandApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.commands.logs, {
+    handle: (_input, _context, params, query) =>
+      Effect.gen(function* () {
+        const commands = yield* CommandService;
+        return yield* commands.readLatestLogs({
+          worktreeId: params.worktreeId,
+          commandName: query.commandName,
+        });
+      }),
+    mapError: (error, context) => toCommandApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.commands.run, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const commands = yield* CommandService;
+        return yield* commands.run({
+          worktreeId: params.worktreeId,
+          commandName: input.commandName,
+        });
+      }),
+    mapError: (error, context) => toCommandApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.commands.stop, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const commands = yield* CommandService;
+        return yield* commands.stop({
+          worktreeId: params.worktreeId,
+          commandName: input.commandName,
+        });
+      }),
+    mapError: (error, context) => toCommandApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.commands.restart, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const commands = yield* CommandService;
+        return yield* commands.restart({
+          worktreeId: params.worktreeId,
+          commandName: input.commandName,
+        });
+      }),
+    mapError: (error, context) => toCommandApiError(error, context),
+    run,
+  });
 }
 
 function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
@@ -43,6 +95,7 @@ function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
       data: {
         reason: error.code,
         ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+        ...(error.commandName ? { commandName: error.commandName } : {}),
       },
     };
   }

@@ -25,7 +25,13 @@ import { workbenchCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
-import { useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
+import {
+  useCommandLogsQuery,
+  useRestartCommandMutation,
+  useRunCommandMutation,
+  useStopCommandMutation,
+  useWorktreeCommandsQuery,
+} from '../../lib/workspace/queries.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
@@ -143,6 +149,8 @@ function CommandsView() {
   const selectedId = useWorkspaceStore((state) => state.drawer.selectedCommandId);
   const selectCommand = useWorkspaceStore((state) => state.selectCommand);
   const commandsQuery = useWorktreeCommandsQuery(worktree?.id ?? null);
+  const runCommand = useRunCommandMutation(worktree?.id ?? null);
+  const stopCommand = useStopCommandMutation(worktree?.id ?? null);
   const commandRead = commandsQuery.data;
 
   if (!worktree) {
@@ -194,10 +202,15 @@ function CommandsView() {
             >
               <button
                 type="button"
-                disabled
-                title={workbenchCopy.commandExecutionUnavailableTitle}
+                onClick={() =>
+                  command.status === 'running'
+                    ? stopCommand.mutate(command.name)
+                    : runCommand.mutate(command.name)
+                }
+                disabled={runCommand.isPending || stopCommand.isPending}
+                title={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
                 aria-label={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
-                className="grid size-5 flex-none cursor-not-allowed place-items-center rounded-md border border-line/20 text-fg-subtle opacity-45"
+                className="grid size-5 flex-none place-items-center rounded-md border border-line/20 text-fg-subtle transition-colors hover:border-blue/45 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {command.status === 'running' ? <Square size={9} /> : <Play size={9} />}
               </button>
@@ -225,13 +238,22 @@ function CommandsView() {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {selected ? <CommandDetail command={selected} /> : null}
+        {selected && worktree ? (
+          <CommandDetail command={selected} worktreeId={worktree.id} />
+        ) : null}
       </div>
     </>
   );
 }
 
-function CommandDetail({ command }: { command: CommandSummary }) {
+function CommandDetail({ command, worktreeId }: { command: CommandSummary; worktreeId: number }) {
+  const logsQuery = useCommandLogsQuery(worktreeId, command.name);
+  const restartCommand = useRestartCommandMutation(worktreeId);
+  const runCommand = useRunCommandMutation(worktreeId);
+  const stopCommand = useStopCommandMutation(worktreeId);
+  const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
+  const logs = logsQuery.data?.latestRun;
+
   return (
     <>
       <div className="flex h-11 flex-none items-center gap-2.5 border-b border-line/12 px-3.5">
@@ -250,18 +272,53 @@ function CommandDetail({ command }: { command: CommandSummary }) {
             ))}
           <button
             type="button"
-            disabled
-            title={workbenchCopy.commandExecutionUnavailableTitle}
-            className="grid size-6 cursor-not-allowed place-items-center rounded-md text-fg-subtle opacity-45"
+            onClick={() => restartCommand.mutate(command.name)}
+            disabled={restartCommand.isPending}
+            title={`Restart ${command.name}`}
+            className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
           >
             <RotateCcw size={12} />
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              command.status === 'running'
+                ? stopCommand.mutate(command.name)
+                : runCommand.mutate(command.name)
+            }
+            disabled={runCommand.isPending || stopCommand.isPending}
+            title={`${command.status === 'running' ? 'Stop' : 'Run'} ${command.name}`}
+            className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {command.status === 'running' ? <Square size={12} /> : <Play size={12} />}
+          </button>
         </span>
       </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-3">
-        <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
-          {workbenchCopy.commandIdleDetail}
-        </p>
+      <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+        {mutationError && (
+          <p className="mb-3 rounded-md border border-error/20 bg-error/8 px-2.5 py-2 text-[12px] text-error">
+            {formatRuntimeError(mutationError)}
+          </p>
+        )}
+        {logsQuery.error ? (
+          <p className="font-mono text-[11.5px] text-error">
+            {formatRuntimeError(logsQuery.error)}
+          </p>
+        ) : logsQuery.isPending ? (
+          <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
+            {workbenchCopy.commandsLoading}
+          </p>
+        ) : logs ? (
+          <pre className="min-h-0 flex-1 overflow-auto rounded-md border border-line/16 bg-black/18 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-muted">
+            {logs.text || workbenchCopy.commandEmptyLog}
+          </pre>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
+              {workbenchCopy.commandIdleDetail}
+            </p>
+          </div>
+        )}
       </div>
     </>
   );

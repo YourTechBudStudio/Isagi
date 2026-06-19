@@ -43,6 +43,8 @@ import {
   type ReconcileWorkspaceOutput,
   type RelocateProjectOutput,
   type WorktreeCommandsOutput,
+  type CommandActionOutput,
+  type CommandLogsOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -63,6 +65,25 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     WorktreeCommandsOutput,
     RuntimeEndpointError<typeof apiEndpoints.commands.listForWorktree>
+  >;
+  readonly fetchCommandLogs: (
+    worktreeId: number,
+    commandName: string,
+  ) => Effect.Effect<CommandLogsOutput, RuntimeEndpointError<typeof apiEndpoints.commands.logs>>;
+  readonly runCommand: (
+    worktreeId: number,
+    commandName: string,
+  ) => Effect.Effect<CommandActionOutput, RuntimeEndpointError<typeof apiEndpoints.commands.run>>;
+  readonly stopCommand: (
+    worktreeId: number,
+    commandName: string,
+  ) => Effect.Effect<CommandActionOutput, RuntimeEndpointError<typeof apiEndpoints.commands.stop>>;
+  readonly restartCommand: (
+    worktreeId: number,
+    commandName: string,
+  ) => Effect.Effect<
+    CommandActionOutput,
+    RuntimeEndpointError<typeof apiEndpoints.commands.restart>
   >;
   readonly fetchActiveContext: () => Effect.Effect<
     ActiveContextOutput,
@@ -217,6 +238,14 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
     fetchWorktreeCommands: (worktreeId) =>
       request(apiEndpoints.commands.listForWorktree, { worktreeId }),
+    fetchCommandLogs: (worktreeId, commandName) =>
+      request(apiEndpoints.commands.logs, { worktreeId }, { commandName }),
+    runCommand: (worktreeId, commandName) =>
+      request(apiEndpoints.commands.run, { worktreeId }, { commandName }),
+    stopCommand: (worktreeId, commandName) =>
+      request(apiEndpoints.commands.stop, { worktreeId }, { commandName }),
+    restartCommand: (worktreeId, commandName) =>
+      request(apiEndpoints.commands.restart, { worktreeId }, { commandName }),
     fetchActiveContext: () => request(apiEndpoints.workspace.getActiveContext),
     updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
     reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),
@@ -284,6 +313,7 @@ function createEndpointRequester(runtimeUrl: string) {
       Schema.Schema.AnyNoContext | undefined,
       Schema.Schema.AnyNoContext,
       Schema.Schema.AnyNoContext,
+      Schema.Schema.AnyNoContext | undefined,
       Schema.Schema.AnyNoContext | undefined
     >,
   >(
@@ -295,15 +325,20 @@ function createEndpointRequester(runtimeUrl: string) {
         try: (signal) => {
           const init: RequestInit = { method: endpoint.method, signal };
           const params = endpoint.params ? (args[0] as ApiEndpointParams<Endpoint>) : undefined;
-          const body = endpoint.body ? args[endpoint.params ? 1 : 0] : undefined;
+          const query = endpoint.query ? args[endpoint.params ? 1 : 0] : undefined;
+          const body = endpoint.body
+            ? args[(endpoint.params ? 1 : 0) + (endpoint.query ? 1 : 0)]
+            : undefined;
           if (endpoint.body) {
             init.headers = { 'Content-Type': 'application/json' };
             init.body = JSON.stringify(body);
           }
-          return fetch(
-            new URL(`${apiBasePath}${interpolatePath(endpoint.path, params)}`, runtimeUrl),
-            init,
+          const url = new URL(
+            `${apiBasePath}${interpolatePath(endpoint.path, params)}`,
+            runtimeUrl,
           );
+          appendQuery(url, query);
+          return fetch(url, init);
         },
         catch: (cause) =>
           new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
@@ -335,6 +370,17 @@ function createEndpointRequester(runtimeUrl: string) {
       return decoded.data as ApiEndpointOutput<Endpoint>;
     });
   };
+}
+
+function appendQuery(url: URL, query: unknown) {
+  if (!query || typeof query !== 'object') {
+    return;
+  }
+
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined) continue;
+    url.searchParams.set(key, String(value));
+  }
 }
 
 function interpolatePath(path: string, params: unknown) {

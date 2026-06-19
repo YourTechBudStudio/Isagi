@@ -165,6 +165,10 @@ export interface PtyBackend {
   }) => Effect.Effect<void, PtyServiceError>;
   readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection, PtyInspectError>;
   readonly listSessions: Effect.Effect<readonly BackendSessionRef[], PtyInspectError>;
+  readonly terminate?: (input: {
+    readonly ref: BackendSessionRef;
+    readonly gracefulTimeoutMs: number;
+  }) => Effect.Effect<void, PtyKillError>;
   readonly kill: (ref: BackendSessionRef) => Effect.Effect<void, PtyKillError>;
   readonly collectGarbage?: (
     input: PtyBackendGcInput,
