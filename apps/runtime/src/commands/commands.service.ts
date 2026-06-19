@@ -1,41 +1,32 @@
-import { randomUUID } from 'node:crypto';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-} from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import process from 'node:process';
 
 import { Context, Data, Effect, Either, Layer } from 'effect';
 
 import type {
   CommandActionOutput,
-  CommandLogsOutput,
+  CommandLogMetadataOutput,
+  CommandRunDiagnosticReason,
   CommandSummary,
   CommandStatus,
   WorktreeCommandsOutput,
   WorktreeCommandsRejectionReason,
 } from '@isagi/contracts';
 
-import { DataDirectory, type DatabaseError } from '../persistence/index.js';
+import type { DatabaseError } from '../persistence/index.js';
 import type { WorktreeCommandConfig } from '../project-config/command-config.schema.js';
 import { loadWorktreeCommandCatalog } from '../project-config/project-config.service.js';
-import { PtyRepository, PtyService, type PtyServiceShape } from '../pty-processes/index.js';
-import {
-  nextRuntimeEventEnvelope,
-  RuntimeEventBus,
-  type RuntimeEventBusService,
-} from '../runtime-events/event-bus.js';
+import { PtyRepository, PtyService } from '../pty-processes/index.js';
+import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../runtime-events/event-bus.js';
 import { InternalRuntimeEventBus } from '../runtime-events/internal-event-bus.js';
 import { WorkspaceRepository } from '../workspace/index.js';
-import { CommandRepository, type CommandRepositoryService } from './commands.repository.js';
-import type { CommandRunTrigger } from './commands.repository.js';
+import {
+  CommandRepository,
+  type CommandRepositoryService,
+  type CommandStateRow,
+} from './commands.repository.js';
 import { parseDotenv } from './dotenv.js';
 
 export class CommandError extends Data.TaggedError('CommandError')<{
@@ -52,10 +43,10 @@ export interface CommandService {
   readonly listForWorktree: (
     worktreeId: number,
   ) => Effect.Effect<WorktreeCommandsOutput, CommandServiceError>;
-  readonly readLatestLogs: (input: {
+  readonly readLogMetadata: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
-  }) => Effect.Effect<CommandLogsOutput, CommandServiceError>;
+  }) => Effect.Effect<CommandLogMetadataOutput, CommandServiceError>;
   readonly run: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
@@ -84,7 +75,11 @@ export const CommandService = Context.GenericTag<CommandService>('isagi/CommandS
 
 const commandStopGracefulTimeoutMs = 2_000;
 
-type CommandStopReason = 'manual_stop' | 'lifecycle_deactivate' | 'lifecycle_pre_delete';
+// Keep only the newest run per command. Each retained run pins a PTY row + log
+// for GC, and only the latest run is ever read, so one is the right bound.
+const latestCommandRunsToRetain = 1;
+
+type TerminalCommandStatus = Exclude<CommandStatus, 'idle' | 'running'>;
 
 type PtyCommandEvent =
   | {
@@ -111,19 +106,419 @@ export const CommandServiceLive = Layer.scoped(
     const commandRepository = yield* CommandRepository;
     const ptyRepository = yield* PtyRepository;
     const pty = yield* PtyService;
-    const dataDirectory = yield* DataDirectory;
     const publicEvents = yield* RuntimeEventBus;
     const internalEvents = yield* InternalRuntimeEventBus;
-    const commandLogsPath = join(dataDirectory.paths.root, 'command-logs');
-    const locks = new Map<string, Promise<void>>();
+    const locks: CommandLocks = new Map();
 
-    mkdirSync(commandLogsPath, { recursive: true });
-    yield* cleanupOrphanCommandLogs(commandRepository, commandLogsPath).pipe(Effect.ignore);
-    yield* reconcileStaleRunningCommands({
-      commandRepository,
-      publicEvents,
-      commandLogsPath,
-    }).pipe(
+    const publishCommandChanged = (
+      worktreeId: number,
+      commandName: string,
+      status: CommandStatus,
+    ) =>
+      publicEvents.publish({
+        ...nextRuntimeEventEnvelope(),
+        type: 'command_changed',
+        payload: { worktreeId, commandName, status },
+      });
+
+    // The single writer of a run's terminal state from a live PTY incarnation:
+    // complete the run, append an optional marker, clear the command's active
+    // pointer when it still points at this PTY, and announce the change. Both the
+    // synchronous stop paths and the async PTY-exit reconciler funnel through
+    // here so the sequence can never drift between them. Callers hold the command
+    // lock for the (worktreeId, commandName) being finalized.
+    const finalizeCommandRunByPty = (input: {
+      readonly worktreeId: number;
+      readonly commandName: string;
+      readonly ptyProcessId: number;
+      readonly status: TerminalCommandStatus;
+      readonly publishChange?: boolean | undefined;
+    }) =>
+      Effect.gen(function* () {
+        yield* commandRepository.completeRunByPtyProcess({
+          ptyProcessId: input.ptyProcessId,
+          status: input.status,
+        });
+        const state = yield* commandRepository.findState({
+          worktreeId: input.worktreeId,
+          commandName: input.commandName,
+        });
+        if (state?.activePtyProcessId === input.ptyProcessId) {
+          yield* commandRepository.transitionState({
+            worktreeId: input.worktreeId,
+            commandName: input.commandName,
+            status: input.status,
+            activePtyProcessId: null,
+          });
+        }
+        if (input.publishChange ?? true) {
+          yield* publishCommandChanged(input.worktreeId, input.commandName, input.status);
+        }
+      });
+
+    const runCommand = (input: { readonly worktreeId: number; readonly commandName: string }) =>
+      Effect.gen(function* () {
+        const target = yield* resolveConfiguredCommand(workspaceRepository, input);
+        const current = yield* commandRepository.findState(input);
+        if (current?.status === 'running') {
+          return actionOutput(target.command, current.status, target.worktree.id);
+        }
+
+        const cwd = resolve(target.worktree.path, target.command.cwd ?? '.');
+        if (!directoryExists(cwd)) {
+          return yield* failedRun(target, 'missing_cwd', target.command.cwd ?? '.');
+        }
+
+        const envResult = yield* buildCommandEnv(target.worktree.path, target.command).pipe(
+          Effect.either,
+        );
+        if (Either.isLeft(envResult)) {
+          return yield* failedRun(target, 'env_invalid', envResult.left.message);
+        }
+
+        const run = yield* commandRepository.createRun({
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+          status: 'running',
+        });
+        yield* pruneCommandRunHistory(commandRepository, {
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+        });
+        yield* commandRepository.transitionState({
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+          status: 'running',
+          activePtyProcessId: null,
+        });
+
+        const shell = process.env.SHELL && process.env.SHELL.trim() ? process.env.SHELL : '/bin/sh';
+        const launch = yield* pty
+          .launch({
+            command: shell,
+            args: ['-lc', target.command.command],
+            cwd,
+            env: envResult.right,
+            shellIntegration: false,
+          })
+          .pipe(Effect.either);
+
+        if (Either.isLeft(launch)) {
+          yield* commandRepository.completeRun({
+            runId: run.id,
+            status: 'failed',
+            diagnosticReason: 'pty_launch_failed',
+            diagnosticDetail: diagnosticDetailForCause(launch.left),
+          });
+          yield* commandRepository.transitionState({
+            worktreeId: target.worktree.id,
+            commandName: target.command.name,
+            status: 'failed',
+            activePtyProcessId: null,
+          });
+          yield* publishCommandChanged(target.worktree.id, target.command.name, 'failed');
+          return actionOutput(target.command, 'failed', target.worktree.id);
+        }
+
+        yield* commandRepository.updateRunPty({
+          runId: run.id,
+          ptyProcessId: launch.right.ptyProcessId,
+        });
+        const processRow = yield* ptyRepository.findProcess(launch.right.ptyProcessId);
+        if (processRow?.status === 'failed') {
+          yield* commandRepository.completeRun({
+            runId: run.id,
+            status: 'failed',
+            diagnosticReason: 'pty_launch_failed',
+            diagnosticDetail: processRow.statusReason,
+          });
+          yield* commandRepository.transitionState({
+            worktreeId: target.worktree.id,
+            commandName: target.command.name,
+            status: 'failed',
+            activePtyProcessId: null,
+          });
+          yield* publishCommandChanged(target.worktree.id, target.command.name, 'failed');
+          return actionOutput(target.command, 'failed', target.worktree.id);
+        }
+
+        yield* commandRepository.transitionState({
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+          status: 'running',
+          activePtyProcessId: launch.right.ptyProcessId,
+        });
+        yield* publishCommandChanged(target.worktree.id, target.command.name, 'running');
+        return actionOutput(target.command, 'running', target.worktree.id);
+      });
+
+    const failedRun = (
+      target: CommandTarget,
+      diagnosticReason: CommandRunDiagnosticReason,
+      diagnosticDetail: string,
+    ) =>
+      Effect.gen(function* () {
+        yield* commandRepository.createRun({
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+          status: 'failed',
+          diagnosticReason,
+          diagnosticDetail,
+          completedAt: new Date().toISOString(),
+        });
+        yield* pruneCommandRunHistory(commandRepository, {
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+        });
+        yield* commandRepository.transitionState({
+          worktreeId: target.worktree.id,
+          commandName: target.command.name,
+          status: 'failed',
+          activePtyProcessId: null,
+        });
+        yield* publishCommandChanged(target.worktree.id, target.command.name, 'failed');
+        return actionOutput(target.command, 'failed', target.worktree.id);
+      });
+
+    const stopCommand = (
+      input: { readonly worktreeId: number; readonly commandName: string },
+      options: {
+        readonly suppressChangedEvent?: boolean | undefined;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const target = yield* resolveStoppableCommand(
+          workspaceRepository,
+          commandRepository,
+          input,
+        );
+        const state = yield* commandRepository.findState(input);
+        if (!state || state.status !== 'running' || !state.activePtyProcessId) {
+          return commandActionOutput(target, state?.status ?? 'idle');
+        }
+
+        const terminate = yield* pty
+          .terminate({
+            ptyProcessId: state.activePtyProcessId,
+            gracefulTimeoutMs: commandStopGracefulTimeoutMs,
+          })
+          .pipe(Effect.either);
+        if (Either.isLeft(terminate)) {
+          return yield* Effect.fail(
+            new CommandError({
+              code: 'command_action_failed',
+              message: `Could not stop command ${target.commandName}.`,
+              worktreeId: target.worktree.id,
+              commandName: target.commandName,
+              cause: terminate.left,
+            }),
+          );
+        }
+
+        yield* finalizeCommandRunByPty({
+          worktreeId: target.worktree.id,
+          commandName: target.commandName,
+          ptyProcessId: state.activePtyProcessId,
+          status: 'stopped',
+          publishChange: !options.suppressChangedEvent,
+        });
+        return commandActionOutput(target, 'stopped');
+      });
+
+    // Bulk stop of a command we already know is running (no config lookup), used
+    // when tearing a worktree down. Routes through the same finalizer as manual
+    // stop so the completion/event sequence stays identical.
+    const stopRunningCommand = (input: {
+      readonly worktreeId: number;
+      readonly commandName: string;
+    }) =>
+      Effect.gen(function* () {
+        const state = yield* commandRepository.findState(input);
+        if (!state || state.status !== 'running') return;
+        if (state.activePtyProcessId) {
+          const terminate = yield* pty
+            .terminate({
+              ptyProcessId: state.activePtyProcessId,
+              gracefulTimeoutMs: commandStopGracefulTimeoutMs,
+            })
+            .pipe(Effect.either);
+          if (Either.isLeft(terminate)) {
+            return yield* Effect.fail(
+              new CommandError({
+                code: 'command_action_failed',
+                message: `Could not stop command ${state.commandName}.`,
+                worktreeId: state.worktreeId,
+                commandName: state.commandName,
+                cause: terminate.left,
+              }),
+            );
+          }
+          yield* finalizeCommandRunByPty({
+            worktreeId: state.worktreeId,
+            commandName: state.commandName,
+            ptyProcessId: state.activePtyProcessId,
+            status: 'stopped',
+          });
+          return;
+        }
+        yield* commandRepository.transitionState({
+          worktreeId: state.worktreeId,
+          commandName: state.commandName,
+          status: 'stopped',
+          activePtyProcessId: null,
+        });
+        yield* publishCommandChanged(state.worktreeId, state.commandName, 'stopped');
+      });
+
+    const runConfiguredLifecycleStarts = (input: {
+      readonly worktreeId: number;
+      readonly lifecycle: 'postCreate' | 'activate';
+    }) =>
+      Effect.gen(function* () {
+        const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+        const catalog = yield* loadWorktreeCommandCatalog({
+          worktreeRootPath: target.worktree.path,
+        });
+        if (catalog.status === 'config_error') {
+          console.warn(
+            `[runtime] Command ${input.lifecycle} lifecycle skipped for worktree ${input.worktreeId}: ${catalog.diagnostic.message}`,
+          );
+          return;
+        }
+        for (const command of catalog.config.commands) {
+          if (!command.lifecycle[input.lifecycle].start) continue;
+          yield* withCommandLock(
+            locks,
+            { worktreeId: target.worktree.id, commandName: command.name },
+            runCommand({ worktreeId: target.worktree.id, commandName: command.name }),
+          ).pipe(Effect.catchAll(logLifecycleError(`${input.lifecycle}:${command.name}`)));
+        }
+      });
+
+    const stopConfiguredLifecycleCommands = (input: {
+      readonly worktreeId: number;
+      readonly lifecycle: 'deactivate' | 'preDelete';
+      // `deactivate` is best-effort: a stalled stop must not block the activation
+      // change, so we log and continue. `preDelete` must propagate, so a worktree
+      // delete can report `command_cleanup_failed` rather than silently orphan a
+      // still-running process.
+      readonly onCommandStopError: 'log' | 'propagate';
+    }) =>
+      Effect.gen(function* () {
+        const target = yield* loadCommandTarget(workspaceRepository, input.worktreeId);
+        const catalog = yield* loadWorktreeCommandCatalog({
+          worktreeRootPath: target.worktree.path,
+        });
+        if (catalog.status === 'config_error') {
+          console.warn(
+            `[runtime] Command ${input.lifecycle} lifecycle skipped for worktree ${input.worktreeId}: ${catalog.diagnostic.message}`,
+          );
+          return;
+        }
+        for (const command of catalog.config.commands) {
+          if (!command.lifecycle[input.lifecycle].stop) continue;
+          const stop = withCommandLock(
+            locks,
+            { worktreeId: target.worktree.id, commandName: command.name },
+            stopCommand({ worktreeId: target.worktree.id, commandName: command.name }, {}),
+          );
+          yield* input.onCommandStopError === 'log'
+            ? stop.pipe(Effect.catchAll(logLifecycleError(`${input.lifecycle}:${command.name}`)))
+            : stop;
+        }
+      });
+
+    const stopAllRunningCommandsForWorktree = (input: { readonly worktreeId: number }) =>
+      Effect.gen(function* () {
+        const states = yield* commandRepository.listRunningStatesForWorktree(input.worktreeId);
+        for (const state of states) {
+          yield* withCommandLock(
+            locks,
+            { worktreeId: state.worktreeId, commandName: state.commandName },
+            stopRunningCommand({
+              worktreeId: state.worktreeId,
+              commandName: state.commandName,
+            }),
+          );
+        }
+      });
+
+    const applyActivationLifecycle = (
+      previousWorktreeId: number | null,
+      nextWorktreeId: number | null,
+    ) =>
+      Effect.gen(function* () {
+        if (previousWorktreeId !== null) {
+          yield* stopConfiguredLifecycleCommands({
+            worktreeId: previousWorktreeId,
+            lifecycle: 'deactivate',
+            onCommandStopError: 'log',
+          }).pipe(Effect.catchAll(logLifecycleError('deactivate')));
+        }
+        if (nextWorktreeId !== null) {
+          yield* runConfiguredLifecycleStarts({
+            worktreeId: nextWorktreeId,
+            lifecycle: 'activate',
+          }).pipe(Effect.catchAll(logLifecycleError('activate')));
+        }
+      });
+
+    const reconcilePtyProcessEvent = (event: PtyCommandEvent) =>
+      Effect.gen(function* () {
+        const status: TerminalCommandStatus =
+          event.type === 'pty_process_exited'
+            ? event.exitCode === 0
+              ? 'exited'
+              : 'failed'
+            : event.type === 'pty_process_killed' && event.statusReason === 'user_requested'
+              ? 'stopped'
+              : 'failed';
+        // Find the owning command without the lock to derive the lock key, then
+        // finalize under the lock so we serialize against in-flight run/stop. A
+        // superseded (already-pruned) run resolves to null and we skip.
+        const run = yield* commandRepository.findRunByPtyProcess(event.ptyProcessId);
+        if (!run) return;
+        yield* withCommandLock(
+          locks,
+          { worktreeId: run.worktreeId, commandName: run.commandName },
+          finalizeCommandRunByPty({
+            worktreeId: run.worktreeId,
+            commandName: run.commandName,
+            ptyProcessId: event.ptyProcessId,
+            status,
+          }),
+        );
+      });
+
+    // Startup recovery: any command still marked running was orphaned by a
+    // runtime restart (its ephemeral PTY is gone and no exit event will arrive),
+    // so mark it failed directly. Not a live-PTY path, so it bypasses the
+    // finalizer.
+    const reconcileStaleRunningCommands = Effect.gen(function* () {
+      const states = yield* commandRepository.listRunningStates;
+      for (const state of states) {
+        const run = state.activePtyProcessId
+          ? yield* commandRepository.findRunByPtyProcess(state.activePtyProcessId)
+          : yield* commandRepository.findLatestRun(state);
+        if (run?.status === 'running') {
+          yield* commandRepository.completeRun({
+            runId: run.id,
+            status: 'failed',
+            diagnosticReason: 'runtime_stopped',
+            diagnosticDetail: 'Runtime stopped while this command was running. Not restarted.',
+          });
+        }
+        yield* commandRepository.transitionState({
+          worktreeId: state.worktreeId,
+          commandName: state.commandName,
+          status: 'failed',
+          activePtyProcessId: null,
+        });
+        yield* publishCommandChanged(state.worktreeId, state.commandName, 'failed');
+      }
+    });
+
+    yield* reconcileStaleRunningCommands.pipe(
       Effect.catchAll((error) =>
         Effect.sync(() => {
           console.warn('[runtime] Command stale-running reconciliation failed', error);
@@ -140,6 +535,10 @@ export const CommandServiceLive = Layer.scoped(
       ],
     });
     yield* Effect.addFinalizer(() => subscription.unsubscribe);
+    const logEventError = (error: unknown) =>
+      Effect.sync(() => {
+        console.warn('[runtime] Command process event reconciliation failed', error);
+      });
     yield* Effect.forkScoped(
       Effect.forever(
         Effect.gen(function* () {
@@ -149,29 +548,23 @@ export const CommandServiceLive = Layer.scoped(
             event.type === 'pty_process_failed' ||
             event.type === 'pty_process_killed'
           ) {
-            yield* reconcilePtyProcessEvent(commandRepository, publicEvents, event);
+            // Fork so a PTY-exit event for a command whose lock is currently
+            // held (e.g. by an in-flight restart's graceful terminate) cannot
+            // stall reconciliation of other commands' events behind it in the
+            // queue. The per-command lock still serializes same-command work.
+            yield* Effect.forkScoped(
+              reconcilePtyProcessEvent(event).pipe(Effect.catchAll(logEventError)),
+            );
             return;
           }
+          // Activation changes stay inline so consecutive worktree switches keep
+          // their deactivate-then-activate ordering.
           if (event.type === 'worktree_activation_change') {
-            yield* applyActivationLifecycle({
-              commandRepository,
-              ptyRepository,
-              pty,
-              publicEvents,
-              workspaceRepository,
-              commandLogsPath,
-              locks,
-              previousWorktreeId: event.previousWorktreeId,
-              nextWorktreeId: event.nextWorktreeId,
-            });
+            yield* applyActivationLifecycle(event.previousWorktreeId, event.nextWorktreeId).pipe(
+              Effect.catchAll(logEventError),
+            );
           }
-        }).pipe(
-          Effect.catchAll((error) =>
-            Effect.sync(() => {
-              console.warn('[runtime] Command process event reconciliation failed', error);
-            }),
-          ),
-        ),
+        }).pipe(Effect.catchAll(logEventError)),
       ),
     );
 
@@ -209,7 +602,7 @@ export const CommandServiceLive = Layer.scoped(
             ),
           } satisfies WorktreeCommandsOutput;
         }),
-      readLatestLogs: (input) =>
+      readLogMetadata: (input) =>
         Effect.gen(function* () {
           yield* resolveReadableCommand(workspaceRepository, commandRepository, input);
           const state = yield* commandRepository.findState(input);
@@ -220,121 +613,49 @@ export const CommandServiceLive = Layer.scoped(
             status: state?.status ?? 'idle',
             latestRun: run
               ? {
+                  id: run.id,
                   startedAt: run.startedAt,
                   completedAt: run.completedAt,
-                  command: run.commandText,
-                  cwd: run.cwd,
-                  text: readLogText(run.logPath),
+                  status: run.status,
+                  ptyProcessId: run.ptyProcessId,
+                  hasPtyProcess: run.ptyProcessId !== null,
+                  diagnostic: run.diagnosticReason
+                    ? {
+                        reason: run.diagnosticReason,
+                        detail: run.diagnosticDetail,
+                      }
+                    : null,
                 }
               : null,
-          } satisfies CommandLogsOutput;
+          } satisfies CommandLogMetadataOutput;
         }),
-      run: (input) =>
-        withCommandLock(
-          locks,
-          input,
-          runCommand({
-            commandRepository,
-            ptyRepository,
-            pty,
-            publicEvents,
-            workspaceRepository,
-            commandLogsPath,
-            input,
-            trigger: 'manual_run',
-          }),
-        ),
-      stop: (input) =>
-        withCommandLock(
-          locks,
-          input,
-          stopCommand({
-            commandRepository,
-            pty,
-            publicEvents,
-            workspaceRepository,
-            commandLogsPath,
-            input,
-            stopReason: 'manual_stop',
-          }),
-        ),
+      run: (input) => withCommandLock(locks, input, runCommand(input)),
+      stop: (input) => withCommandLock(locks, input, stopCommand(input, {})),
       restart: (input) =>
         withCommandLock(
           locks,
           input,
-          stopCommand({
-            commandRepository,
-            pty,
-            publicEvents,
-            workspaceRepository,
-            commandLogsPath,
-            input,
-            suppressChangedEvent: true,
-            stopReason: 'manual_stop',
-          }).pipe(
-            Effect.zipRight(
-              runCommand({
-                commandRepository,
-                ptyRepository,
-                pty,
-                publicEvents,
-                workspaceRepository,
-                commandLogsPath,
-                input,
-                trigger: 'manual_restart',
-              }),
-            ),
+          stopCommand(input, { suppressChangedEvent: true }).pipe(
+            Effect.zipRight(runCommand(input)),
           ),
         ),
       runPostCreateLifecycle: (input) =>
         runConfiguredLifecycleStarts({
-          commandRepository,
-          ptyRepository,
-          pty,
-          publicEvents,
-          workspaceRepository,
-          commandLogsPath,
-          locks,
           worktreeId: input.worktreeId,
           lifecycle: 'postCreate',
-          trigger: 'lifecycle_post_create',
         }).pipe(Effect.catchAll(logLifecycleError('postCreate'))),
       cleanupBeforeWorktreeDelete: (input) =>
         Effect.gen(function* () {
-          yield* stopConfiguredPreDeleteCommands({
-            commandRepository,
-            pty,
-            publicEvents,
-            workspaceRepository,
-            commandLogsPath,
-            locks,
+          yield* stopConfiguredLifecycleCommands({
             worktreeId: input.worktreeId,
+            lifecycle: 'preDelete',
+            onCommandStopError: 'propagate',
           });
-          yield* stopAllRunningCommandsForWorktree({
-            commandRepository,
-            pty,
-            publicEvents,
-            commandLogsPath,
-            locks,
-            worktreeId: input.worktreeId,
-            marker: '[isagi] Command stopped by lifecycle: lifecycle_pre_delete\n',
-          });
+          yield* stopAllRunningCommandsForWorktree({ worktreeId: input.worktreeId });
         }),
       cleanupBeforeWorktreePrune: (input) =>
-        stopAllRunningCommandsForWorktree({
-          commandRepository,
-          pty,
-          publicEvents,
-          commandLogsPath,
-          locks,
-          worktreeId: input.worktreeId,
-          marker: '[isagi] Command stopped before pruning missing worktree.\n',
-        }),
-      reconcileStaleRunningCommands: reconcileStaleRunningCommands({
-        commandRepository,
-        publicEvents,
-        commandLogsPath,
-      }).pipe(
+        stopAllRunningCommandsForWorktree({ worktreeId: input.worktreeId }),
+      reconcileStaleRunningCommands: reconcileStaleRunningCommands.pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn('[runtime] Command stale-running reconciliation failed', error);
@@ -346,503 +667,6 @@ export const CommandServiceLive = Layer.scoped(
     return service;
   }),
 );
-
-function runCommand(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly ptyRepository: import('../pty-processes/pty.repository.js').PtyRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly input: { readonly worktreeId: number; readonly commandName: string };
-  readonly trigger: CommandRunTrigger;
-}) {
-  return Effect.gen(function* () {
-    const target = yield* resolveConfiguredCommand(input.workspaceRepository, input.input);
-    const current = yield* input.commandRepository.findState(input.input);
-    if (current?.status === 'running') {
-      return actionOutput(target.command, current.status, target.worktree.id);
-    }
-
-    const cwd = resolve(target.worktree.path, target.command.cwd ?? '.');
-    if (!directoryExists(cwd)) {
-      return yield* failedRun(
-        input,
-        target,
-        `[isagi] Missing command cwd: ${target.command.cwd ?? '.'}\n`,
-      );
-    }
-
-    const envResult = yield* buildCommandEnv(target.worktree.path, target.command).pipe(
-      Effect.either,
-    );
-    if (Either.isLeft(envResult)) {
-      return yield* failedRun(input, target, `[isagi] ${envResult.left.message}\n`);
-    }
-
-    const run = yield* input.commandRepository.createRun({
-      worktreeId: target.worktree.id,
-      commandName: target.command.name,
-      commandText: target.command.command,
-      cwd,
-      trigger: input.trigger,
-      status: 'running',
-    });
-    yield* input.commandRepository.transitionState({
-      worktreeId: target.worktree.id,
-      commandName: target.command.name,
-      status: 'running',
-      activePtyProcessId: null,
-    });
-
-    const shell = process.env.SHELL && process.env.SHELL.trim() ? process.env.SHELL : '/bin/sh';
-    const launch = yield* input.pty
-      .launch({
-        command: shell,
-        args: ['-lc', target.command.command],
-        cwd,
-        env: envResult.right,
-        shellIntegration: false,
-      })
-      .pipe(Effect.either);
-
-    if (Either.isLeft(launch)) {
-      const logPath = commandLogPath(input.commandLogsPath, run.id);
-      appendFileSync(logPath, `[isagi] Command launch failed before PTY metadata was available.\n`);
-      yield* input.commandRepository.updateRunLogPath({ runId: run.id, logPath });
-      yield* input.commandRepository.completeRun({ runId: run.id, status: 'failed' });
-      yield* input.commandRepository.transitionState({
-        worktreeId: target.worktree.id,
-        commandName: target.command.name,
-        status: 'failed',
-        activePtyProcessId: null,
-      });
-      yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.command.name);
-      return actionOutput(target.command, 'failed', target.worktree.id);
-    }
-
-    yield* input.commandRepository.updateRunPty({
-      runId: run.id,
-      ptyProcessId: launch.right.ptyProcessId,
-      logPath: launch.right.logPath,
-    });
-    const processRow = yield* input.ptyRepository.findProcess(launch.right.ptyProcessId);
-    if (processRow?.status === 'failed') {
-      yield* input.commandRepository.completeRun({
-        runId: run.id,
-        status: 'failed',
-        exitCode: processRow.exitCode,
-        signal: processRow.signal,
-      });
-      yield* input.commandRepository.transitionState({
-        worktreeId: target.worktree.id,
-        commandName: target.command.name,
-        status: 'failed',
-        activePtyProcessId: null,
-      });
-      yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.command.name);
-      return actionOutput(target.command, 'failed', target.worktree.id);
-    }
-
-    yield* input.commandRepository.transitionState({
-      worktreeId: target.worktree.id,
-      commandName: target.command.name,
-      status: 'running',
-      activePtyProcessId: launch.right.ptyProcessId,
-    });
-    yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.command.name);
-    return actionOutput(target.command, 'running', target.worktree.id);
-  });
-}
-
-function stopCommand(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly input: { readonly worktreeId: number; readonly commandName: string };
-  readonly stopReason: CommandStopReason;
-  readonly suppressChangedEvent?: boolean | undefined;
-}) {
-  return Effect.gen(function* () {
-    const target = yield* resolveStoppableCommand(
-      input.workspaceRepository,
-      input.commandRepository,
-      input.input,
-    );
-    const state = yield* input.commandRepository.findState(input.input);
-    if (!state || state.status !== 'running' || !state.activePtyProcessId) {
-      return commandActionOutput(target, state?.status ?? 'idle');
-    }
-
-    const terminate = yield* input.pty
-      .terminate({
-        ptyProcessId: state.activePtyProcessId,
-        gracefulTimeoutMs: commandStopGracefulTimeoutMs,
-      })
-      .pipe(Effect.either);
-    if (Either.isLeft(terminate)) {
-      return yield* Effect.fail(
-        new CommandError({
-          code: 'command_action_failed',
-          message: `Could not stop command ${target.commandName}.`,
-          worktreeId: target.worktree.id,
-          commandName: target.commandName,
-          cause: terminate.left,
-        }),
-      );
-    }
-
-    yield* input.commandRepository.completeRunByPtyProcess({
-      ptyProcessId: state.activePtyProcessId,
-      status: 'stopped',
-    });
-    const run = yield* input.commandRepository.findRunByPtyProcess(state.activePtyProcessId);
-    yield* appendMarkerToRun(
-      input.commandRepository,
-      input.commandLogsPath,
-      run,
-      stopReasonMarker(input.stopReason),
-    );
-    yield* input.commandRepository.transitionState({
-      worktreeId: target.worktree.id,
-      commandName: target.commandName,
-      status: 'stopped',
-      activePtyProcessId: null,
-    });
-    if (!input.suppressChangedEvent) {
-      yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.commandName);
-    }
-    return commandActionOutput(target, 'stopped');
-  });
-}
-
-function reconcilePtyProcessEvent(
-  commandRepository: CommandRepositoryService,
-  publicEvents: RuntimeEventBusService,
-  event: PtyCommandEvent,
-) {
-  return Effect.gen(function* () {
-    const status =
-      event.type === 'pty_process_exited'
-        ? event.exitCode === 0
-          ? 'exited'
-          : 'failed'
-        : event.type === 'pty_process_killed' && event.statusReason === 'user_requested'
-          ? 'stopped'
-          : 'failed';
-    const run = yield* commandRepository.completeRunByPtyProcess({
-      ptyProcessId: event.ptyProcessId,
-      status,
-      exitCode: event.type === 'pty_process_exited' ? event.exitCode : null,
-      signal: event.type === 'pty_process_exited' ? event.signal : null,
-    });
-    if (!run) return;
-    const state = yield* commandRepository.findState({
-      worktreeId: run.worktreeId,
-      commandName: run.commandName,
-    });
-    if (state?.activePtyProcessId === event.ptyProcessId) {
-      yield* commandRepository.transitionState({
-        worktreeId: run.worktreeId,
-        commandName: run.commandName,
-        status,
-        activePtyProcessId: null,
-      });
-    }
-    yield* publishCommandChanged(publicEvents, run.worktreeId, run.commandName);
-  });
-}
-
-function applyActivationLifecycle(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly ptyRepository: import('../pty-processes/pty.repository.js').PtyRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly locks: Map<string, Promise<void>>;
-  readonly previousWorktreeId: number | null;
-  readonly nextWorktreeId: number | null;
-}) {
-  return Effect.gen(function* () {
-    if (input.previousWorktreeId !== null) {
-      yield* stopConfiguredLifecycleCommands({
-        ...input,
-        worktreeId: input.previousWorktreeId,
-        lifecycle: 'deactivate',
-        stopReason: 'lifecycle_deactivate',
-      }).pipe(Effect.catchAll(logLifecycleError('deactivate')));
-    }
-    if (input.nextWorktreeId !== null) {
-      yield* runConfiguredLifecycleStarts({
-        ...input,
-        worktreeId: input.nextWorktreeId,
-        lifecycle: 'activate',
-        trigger: 'lifecycle_activate',
-      }).pipe(Effect.catchAll(logLifecycleError('activate')));
-    }
-  });
-}
-
-function runConfiguredLifecycleStarts(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly ptyRepository: import('../pty-processes/pty.repository.js').PtyRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly locks: Map<string, Promise<void>>;
-  readonly worktreeId: number;
-  readonly lifecycle: 'postCreate' | 'activate';
-  readonly trigger: Extract<CommandRunTrigger, 'lifecycle_post_create' | 'lifecycle_activate'>;
-}) {
-  return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(input.workspaceRepository, input.worktreeId);
-    const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
-    if (catalog.status === 'config_error') {
-      console.warn(
-        `[runtime] Command ${input.lifecycle} lifecycle skipped for worktree ${input.worktreeId}: ${catalog.diagnostic.message}`,
-      );
-      return;
-    }
-    for (const command of catalog.config.commands) {
-      if (!command.lifecycle[input.lifecycle].start) continue;
-      yield* withCommandLock(
-        input.locks,
-        { worktreeId: target.worktree.id, commandName: command.name },
-        runCommand({
-          commandRepository: input.commandRepository,
-          ptyRepository: input.ptyRepository,
-          pty: input.pty,
-          publicEvents: input.publicEvents,
-          workspaceRepository: input.workspaceRepository,
-          commandLogsPath: input.commandLogsPath,
-          input: { worktreeId: target.worktree.id, commandName: command.name },
-          trigger: input.trigger,
-        }),
-      ).pipe(Effect.catchAll(logLifecycleError(`${input.lifecycle}:${command.name}`)));
-    }
-  });
-}
-
-function stopConfiguredLifecycleCommands(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly locks: Map<string, Promise<void>>;
-  readonly worktreeId: number;
-  readonly lifecycle: 'deactivate';
-  readonly stopReason: Extract<CommandStopReason, 'lifecycle_deactivate'>;
-}) {
-  return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(input.workspaceRepository, input.worktreeId);
-    const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
-    if (catalog.status === 'config_error') {
-      console.warn(
-        `[runtime] Command deactivate lifecycle skipped for worktree ${input.worktreeId}: ${catalog.diagnostic.message}`,
-      );
-      return;
-    }
-    for (const command of catalog.config.commands) {
-      if (!command.lifecycle.deactivate.stop) continue;
-      yield* withCommandLock(
-        input.locks,
-        { worktreeId: target.worktree.id, commandName: command.name },
-        stopCommand({
-          commandRepository: input.commandRepository,
-          pty: input.pty,
-          publicEvents: input.publicEvents,
-          workspaceRepository: input.workspaceRepository,
-          commandLogsPath: input.commandLogsPath,
-          input: { worktreeId: target.worktree.id, commandName: command.name },
-          stopReason: input.stopReason,
-        }),
-      ).pipe(Effect.catchAll(logLifecycleError(`deactivate:${command.name}`)));
-    }
-  });
-}
-
-function stopConfiguredPreDeleteCommands(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly workspaceRepository: import('../workspace/index.js').WorkspaceRepositoryService;
-  readonly commandLogsPath: string;
-  readonly locks: Map<string, Promise<void>>;
-  readonly worktreeId: number;
-}) {
-  return Effect.gen(function* () {
-    const target = yield* loadCommandTarget(input.workspaceRepository, input.worktreeId);
-    const catalog = yield* loadWorktreeCommandCatalog({ worktreeRootPath: target.worktree.path });
-    if (catalog.status === 'config_error') {
-      console.warn(
-        `[runtime] Command preDelete lifecycle skipped for worktree ${input.worktreeId}: ${catalog.diagnostic.message}`,
-      );
-      return;
-    }
-    for (const command of catalog.config.commands) {
-      if (!command.lifecycle.preDelete.stop) continue;
-      yield* withCommandLock(
-        input.locks,
-        { worktreeId: target.worktree.id, commandName: command.name },
-        stopCommand({
-          commandRepository: input.commandRepository,
-          pty: input.pty,
-          publicEvents: input.publicEvents,
-          workspaceRepository: input.workspaceRepository,
-          commandLogsPath: input.commandLogsPath,
-          input: { worktreeId: target.worktree.id, commandName: command.name },
-          stopReason: 'lifecycle_pre_delete',
-        }),
-      );
-    }
-  });
-}
-
-function stopAllRunningCommandsForWorktree(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly commandLogsPath: string;
-  readonly locks: Map<string, Promise<void>>;
-  readonly worktreeId: number;
-  readonly marker: string;
-}) {
-  return Effect.gen(function* () {
-    const states = yield* input.commandRepository.listRunningStatesForWorktree(input.worktreeId);
-    for (const state of states) {
-      yield* withCommandLock(
-        input.locks,
-        { worktreeId: state.worktreeId, commandName: state.commandName },
-        stopKnownRunningCommand({
-          commandRepository: input.commandRepository,
-          pty: input.pty,
-          publicEvents: input.publicEvents,
-          commandLogsPath: input.commandLogsPath,
-          worktreeId: state.worktreeId,
-          commandName: state.commandName,
-          marker: input.marker,
-        }),
-      );
-    }
-  });
-}
-
-function stopKnownRunningCommand(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly pty: PtyServiceShape;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly commandLogsPath: string;
-  readonly worktreeId: number;
-  readonly commandName: string;
-  readonly marker: string;
-}) {
-  return Effect.gen(function* () {
-    const state = yield* input.commandRepository.findState(input);
-    if (!state || state.status !== 'running') return;
-    if (state.activePtyProcessId) {
-      const terminate = yield* input.pty
-        .terminate({
-          ptyProcessId: state.activePtyProcessId,
-          gracefulTimeoutMs: commandStopGracefulTimeoutMs,
-        })
-        .pipe(Effect.either);
-      if (Either.isLeft(terminate)) {
-        return yield* Effect.fail(
-          new CommandError({
-            code: 'command_action_failed',
-            message: `Could not stop command ${state.commandName}.`,
-            worktreeId: state.worktreeId,
-            commandName: state.commandName,
-            cause: terminate.left,
-          }),
-        );
-      }
-      yield* input.commandRepository.completeRunByPtyProcess({
-        ptyProcessId: state.activePtyProcessId,
-        status: 'stopped',
-      });
-      const run = yield* input.commandRepository.findRunByPtyProcess(state.activePtyProcessId);
-      yield* appendMarkerToRun(input.commandRepository, input.commandLogsPath, run, input.marker);
-    }
-    yield* input.commandRepository.transitionState({
-      worktreeId: state.worktreeId,
-      commandName: state.commandName,
-      status: 'stopped',
-      activePtyProcessId: null,
-    });
-    yield* publishCommandChanged(input.publicEvents, state.worktreeId, state.commandName);
-  });
-}
-
-function reconcileStaleRunningCommands(input: {
-  readonly commandRepository: CommandRepositoryService;
-  readonly publicEvents: RuntimeEventBusService;
-  readonly commandLogsPath: string;
-}) {
-  return Effect.gen(function* () {
-    const states = yield* input.commandRepository.listRunningStates;
-    for (const state of states) {
-      const run = state.activePtyProcessId
-        ? yield* input.commandRepository.findRunByPtyProcess(state.activePtyProcessId)
-        : yield* input.commandRepository.findLatestRun(state);
-      if (run?.status === 'running') {
-        yield* input.commandRepository.completeRun({ runId: run.id, status: 'failed' });
-      }
-      yield* appendMarkerToRun(
-        input.commandRepository,
-        input.commandLogsPath,
-        run,
-        '[isagi] Runtime stopped while this command was running. Not restarted.\n',
-      );
-      yield* input.commandRepository.transitionState({
-        worktreeId: state.worktreeId,
-        commandName: state.commandName,
-        status: 'failed',
-        activePtyProcessId: null,
-      });
-      yield* publishCommandChanged(input.publicEvents, state.worktreeId, state.commandName);
-    }
-  });
-}
-
-function failedRun(
-  input: {
-    readonly commandRepository: CommandRepositoryService;
-    readonly publicEvents: RuntimeEventBusService;
-    readonly commandLogsPath: string;
-    readonly trigger: CommandRunTrigger;
-  },
-  target: CommandTarget,
-  message: string,
-) {
-  return Effect.gen(function* () {
-    const logPath = commandLogPath(input.commandLogsPath);
-    appendFileSync(logPath, message);
-    yield* input.commandRepository.createRun({
-      worktreeId: target.worktree.id,
-      commandName: target.command.name,
-      commandText: target.command.command,
-      cwd: resolve(target.worktree.path, target.command.cwd ?? '.'),
-      trigger: input.trigger,
-      status: 'failed',
-      logPath,
-      completedAt: new Date().toISOString(),
-    });
-    yield* input.commandRepository.transitionState({
-      worktreeId: target.worktree.id,
-      commandName: target.command.name,
-      status: 'failed',
-      activePtyProcessId: null,
-    });
-    yield* publishCommandChanged(input.publicEvents, target.worktree.id, target.command.name);
-    return actionOutput(target.command, 'failed', target.worktree.id);
-  });
-}
 
 interface CommandTarget {
   readonly worktree: { readonly id: number; readonly path: string };
@@ -996,33 +820,30 @@ function buildCommandEnv(worktreeRoot: string, command: WorktreeCommandConfig) {
   });
 }
 
+// One mutex per (worktree, command) so concurrent run/stop/restart/lifecycle
+// actions on the same command serialize, while different commands stay parallel.
+// An Effect semaphore (rather than a hand-rolled promise chain) keeps the lock
+// interruption-safe: an aborted request releases its permit on the way out.
+// Entries are kept for the runtime's lifetime (one tiny semaphore per distinct
+// command key ever seen, including after its worktree is deleted) rather than
+// reference-counted away — a deliberate, negligible, desktop-scale tradeoff that
+// avoids racing entry teardown against an in-flight lock.
+type CommandLocks = Map<string, Effect.Semaphore>;
+
 function withCommandLock<A, E, R>(
-  locks: Map<string, Promise<void>>,
+  locks: CommandLocks,
   input: { readonly worktreeId: number; readonly commandName: string },
   effect: Effect.Effect<A, E, R>,
 ) {
-  const key = `${input.worktreeId}\u0000${input.commandName}`;
-  return Effect.acquireUseRelease(
-    Effect.promise(async () => {
-      const previous = locks.get(key) ?? Promise.resolve();
-      let release!: () => void;
-      const current = new Promise<void>((resolveRelease) => {
-        release = resolveRelease;
-      });
-      const queued = previous.then(() => current);
-      locks.set(key, queued);
-      await previous;
-      return { release, queued };
-    }),
-    () => effect,
-    ({ release, queued }) =>
-      Effect.sync(() => {
-        release();
-        if (locks.get(key) === queued) {
-          locks.delete(key);
-        }
-      }),
-  );
+  const key = `${input.worktreeId}\0${input.commandName}`;
+  return Effect.gen(function* () {
+    let semaphore = locks.get(key);
+    if (!semaphore) {
+      semaphore = yield* Effect.makeSemaphore(1);
+      locks.set(key, semaphore);
+    }
+    return yield* semaphore.withPermits(1)(effect);
+  });
 }
 
 function actionOutput(
@@ -1056,9 +877,7 @@ function commandActionOutput(
   };
 }
 
-function commandStatesNeedingAttention(
-  states: readonly import('./commands.repository.js').CommandStateRow[],
-): CommandSummary[] {
+function commandStatesNeedingAttention(states: readonly CommandStateRow[]): CommandSummary[] {
   return states
     .filter((state) => state.status === 'running' || state.status === 'failed')
     .map((state) => ({
@@ -1068,58 +887,11 @@ function commandStatesNeedingAttention(
     }));
 }
 
-function publishCommandChanged(
-  publicEvents: RuntimeEventBusService,
-  worktreeId: number,
-  commandName: string,
-) {
-  return publicEvents.publish({
-    ...nextRuntimeEventEnvelope(),
-    type: 'command_changed',
-    payload: { worktreeId, commandName },
-  });
-}
-
 function logLifecycleError(operation: string) {
   return (error: unknown) =>
     Effect.sync(() => {
       console.warn(`[runtime] Command lifecycle ${operation} failed`, error);
     });
-}
-
-function stopReasonMarker(reason: CommandStopReason) {
-  switch (reason) {
-    case 'manual_stop':
-      return '[isagi] Command stopped: manual_stop\n';
-    case 'lifecycle_deactivate':
-      return '[isagi] Command stopped by lifecycle: lifecycle_deactivate\n';
-    case 'lifecycle_pre_delete':
-      return '[isagi] Command stopped by lifecycle: lifecycle_pre_delete\n';
-  }
-}
-
-function appendMarkerToRun(
-  commandRepository: CommandRepositoryService,
-  commandLogsPath: string,
-  run: import('./commands.repository.js').CommandRunRow | null,
-  marker: string,
-) {
-  return Effect.sync(() => {
-    if (!run) return null;
-    const logPath = run.logPath ?? commandLogPath(commandLogsPath, run.id);
-    appendFileSync(logPath, marker);
-    return { run, logPath };
-  }).pipe(
-    Effect.flatMap((result) => {
-      if (!result || result.run.logPath) return Effect.void;
-      return commandRepository
-        .updateRunLogPath({
-          runId: result.run.id,
-          logPath: result.logPath,
-        })
-        .pipe(Effect.asVoid);
-    }),
-  );
 }
 
 function directoryExists(path: string) {
@@ -1130,35 +902,19 @@ function directoryExists(path: string) {
   }
 }
 
-function commandLogPath(commandLogsPath: string, runId?: number) {
-  return join(commandLogsPath, `${runId ?? randomUUID()}.log`);
-}
-
-function readLogText(path: string | null) {
-  if (!path) return '';
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '[isagi] Command log is missing.\n';
-  }
-}
-
-function cleanupOrphanCommandLogs(
+function pruneCommandRunHistory(
   commandRepository: CommandRepositoryService,
-  commandLogsPath: string,
+  input: { readonly worktreeId: number; readonly commandName: string },
 ) {
-  return Effect.gen(function* () {
-    const referenced = new Set(yield* commandRepository.listReferencedCommandLogPaths);
-    const entries = readdirSync(commandLogsPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.log')) continue;
-      const path = join(commandLogsPath, entry.name);
-      if (referenced.has(path)) continue;
-      try {
-        unlinkSync(path);
-      } catch (error) {
-        console.warn(`[runtime] Could not delete orphan command log ${entry.name}`, error);
-      }
-    }
-  });
+  return commandRepository
+    .pruneRunHistory({
+      ...input,
+      keep: latestCommandRunsToRetain,
+    })
+    .pipe(Effect.asVoid);
+}
+
+function diagnosticDetailForCause(cause: unknown) {
+  if (cause instanceof Error) return cause.message;
+  return String(cause);
 }

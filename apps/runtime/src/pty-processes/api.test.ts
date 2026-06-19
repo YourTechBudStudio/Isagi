@@ -185,6 +185,8 @@ function fakePtyService(input: {
         return promise;
       }),
     replay: () => Effect.void,
+    canObserveOutput: () => Effect.die('canObserveOutput is not used'),
+    observeOutput: () => Effect.die('observeOutput is not used'),
     write: () => Effect.void,
     resize: () => Effect.void,
     kill: () => Effect.void,

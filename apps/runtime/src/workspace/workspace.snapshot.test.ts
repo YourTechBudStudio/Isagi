@@ -105,7 +105,7 @@ const testSurfaceService = {
 
 const testCommandService = {
   listForWorktree: () => Effect.die('command list is not used by workspace snapshot tests'),
-  readLatestLogs: () => Effect.die('command logs are not used by workspace snapshot tests'),
+  readLogMetadata: () => Effect.die('command log metadata is not used by workspace snapshot tests'),
   run: () => Effect.die('command run is not used by workspace snapshot tests'),
   stop: () => Effect.die('command stop is not used by workspace snapshot tests'),
   restart: () => Effect.die('command restart is not used by workspace snapshot tests'),

@@ -83,6 +83,7 @@ export class PtyStartError extends Data.TaggedError('PtyStartError')<{
   readonly ptyProcessId?: number | undefined;
   readonly command: string;
   readonly cwd: string;
+  readonly reason?: 'backend_session_not_live' | undefined;
   readonly cause: unknown;
 }> {}
 
@@ -138,6 +139,11 @@ export interface BackendAttachment {
   readonly detach: Effect.Effect<void, never>;
 }
 
+export interface BackendOutputObserver {
+  readonly replayBytes: number | null;
+  readonly unsubscribe: Effect.Effect<void, never>;
+}
+
 export interface PtyBackend {
   readonly name: PtyBackendName;
   readonly available: Effect.Effect<boolean, never>;
@@ -163,6 +169,11 @@ export interface PtyBackend {
     readonly bytes: number | null;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   }) => Effect.Effect<void, PtyServiceError>;
+  readonly observeOutput?: (input: {
+    readonly ref: BackendSessionRef;
+    readonly onOutput: (data: string) => void;
+    readonly onExit: (exit: PtyExit) => void;
+  }) => Effect.Effect<BackendOutputObserver, PtyStartError>;
   readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection, PtyInspectError>;
   readonly listSessions: Effect.Effect<readonly BackendSessionRef[], PtyInspectError>;
   readonly terminate?: (input: {

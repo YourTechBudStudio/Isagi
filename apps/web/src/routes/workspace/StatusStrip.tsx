@@ -47,6 +47,7 @@ export function StatusStrip() {
           <button
             type="button"
             onClick={() => openDrawer()}
+            title={commandRead?.status === 'config_error' ? commandRead.diagnostic.path : undefined}
             className="flex items-center gap-2 font-mono text-[11px] text-fg-subtle opacity-75 hover:text-fg hover:opacity-100"
           >
             <AttentionDot state="error" />

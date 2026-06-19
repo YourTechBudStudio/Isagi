@@ -9,6 +9,7 @@ import {
   ptyProcesses,
   terminalSessions,
   worktreeCommandRuns,
+  worktreeCommandStates,
 } from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
@@ -122,6 +123,10 @@ export const PtyRepositoryLive = Layer.effect(
             ...db
               .select({ activePtyProcessId: worktreeCommandRuns.ptyProcessId })
               .from(worktreeCommandRuns)
+              .all(),
+            ...db
+              .select({ activePtyProcessId: worktreeCommandStates.activePtyProcessId })
+              .from(worktreeCommandStates)
               .all(),
           ].flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
         );

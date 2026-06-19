@@ -4,6 +4,7 @@ import {
   apiBasePath,
   apiEndpoints,
   agentSessionPtyWebSocketEndpoint,
+  commandLogStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   apiErrorResponseSchema,
@@ -44,7 +45,7 @@ import {
   type RelocateProjectOutput,
   type WorktreeCommandsOutput,
   type CommandActionOutput,
-  type CommandLogsOutput,
+  type CommandLogMetadataOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -66,10 +67,14 @@ export interface RuntimeClient {
     WorktreeCommandsOutput,
     RuntimeEndpointError<typeof apiEndpoints.commands.listForWorktree>
   >;
-  readonly fetchCommandLogs: (
+  readonly fetchCommandLogMetadata: (
     worktreeId: number,
     commandName: string,
-  ) => Effect.Effect<CommandLogsOutput, RuntimeEndpointError<typeof apiEndpoints.commands.logs>>;
+  ) => Effect.Effect<
+    CommandLogMetadataOutput,
+    RuntimeEndpointError<typeof apiEndpoints.commands.logMetadata>
+  >;
+  readonly resolveCommandLogStreamWebSocketUrl: (worktreeId: number, commandName: string) => string;
   readonly runCommand: (
     worktreeId: number,
     commandName: string,
@@ -238,8 +243,17 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
     fetchWorktreeCommands: (worktreeId) =>
       request(apiEndpoints.commands.listForWorktree, { worktreeId }),
-    fetchCommandLogs: (worktreeId, commandName) =>
-      request(apiEndpoints.commands.logs, { worktreeId }, { commandName }),
+    fetchCommandLogMetadata: (worktreeId, commandName) =>
+      request(apiEndpoints.commands.logMetadata, { worktreeId }, { commandName }),
+    resolveCommandLogStreamWebSocketUrl: (worktreeId, commandName) => {
+      const httpUrl = new URL(
+        `${apiBasePath}${interpolatePath(commandLogStreamWebSocketEndpoint.path, { worktreeId })}`,
+        runtimeUrl,
+      );
+      httpUrl.searchParams.set('commandName', commandName);
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      return httpUrl.toString();
+    },
     runCommand: (worktreeId, commandName) =>
       request(apiEndpoints.commands.run, { worktreeId }, { commandName }),
     stopCommand: (worktreeId, commandName) =>

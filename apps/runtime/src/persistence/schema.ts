@@ -198,15 +198,11 @@ export const worktreeCommandRuns = sqliteTable(
       .references(() => worktrees.id, { onDelete: 'cascade' }),
     commandName: text('command_name').notNull(),
     ptyProcessId: integer('pty_process_id').references(() => ptyProcesses.id),
-    commandText: text('command_text').notNull(),
-    cwd: text('cwd').notNull(),
     status: text('status', { enum: ['running', 'exited', 'stopped', 'failed'] }).notNull(),
-    trigger: text('trigger', {
-      enum: ['manual_run', 'manual_restart', 'lifecycle_post_create', 'lifecycle_activate'],
-    }).notNull(),
-    logPath: text('log_path'),
-    exitCode: integer('exit_code'),
-    signal: text('signal'),
+    diagnosticReason: text('diagnostic_reason', {
+      enum: ['missing_cwd', 'env_invalid', 'pty_launch_failed', 'runtime_stopped'],
+    }),
+    diagnosticDetail: text('diagnostic_detail'),
     startedAt: text('started_at').notNull(),
     completedAt: text('completed_at'),
     createdAt: text('created_at').notNull(),
@@ -215,7 +211,6 @@ export const worktreeCommandRuns = sqliteTable(
   (table) => [
     index('worktree_command_runs_latest_idx').on(table.worktreeId, table.commandName, table.id),
     index('worktree_command_runs_pty_idx').on(table.ptyProcessId),
-    index('worktree_command_runs_log_path_idx').on(table.logPath),
   ],
 );
 

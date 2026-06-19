@@ -117,9 +117,12 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     },
   },
   worktree_commands_rejected: {
-    summary: "Couldn't read commands for that worktree.",
+    summary: "Isagi couldn't complete that command action.",
     byReason: {
       worktree_not_found: worktreeGone,
+      command_config_invalid: "This worktree's command config is malformed.",
+      command_not_found: "Isagi doesn't know that command anymore.",
+      command_action_failed: "Couldn't stop that command — it may still be running.",
     },
   },
   project_relocation_rejected: {

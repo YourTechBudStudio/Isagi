@@ -10,6 +10,7 @@ export { TmuxBackend, TmuxBackendLive } from './adapters/tmux.js';
 export type { PtyService as PtyServiceShape } from './pty.service.js';
 export type {
   BackendAttachment,
+  BackendOutputObserver,
   LaunchBackendSessionInput,
   PtyBackend as PtyBackendShape,
   PtyExit,

@@ -239,7 +239,10 @@ export const sessionLaunchRejectedErrorSchema = Schema.Struct({
 
 export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('worktree_commands_rejected'),
-  status: Schema.Literal(400),
+  // 400 for validation/not-found reasons the caller can fix; 500 for
+  // `command_action_failed`, which is a degraded-runtime failure (e.g. a PTY
+  // termination that did not go through), not a rejected request.
+  status: Schema.Union(Schema.Literal(400), Schema.Literal(500)),
   message: Schema.String,
   requestId: Schema.String,
   data: Schema.Struct({

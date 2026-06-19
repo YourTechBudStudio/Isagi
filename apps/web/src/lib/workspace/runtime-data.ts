@@ -28,7 +28,7 @@ import type {
   WorktreeSetupTrustOutput,
   WorktreeCommandsOutput,
   CommandActionOutput,
-  CommandLogsOutput,
+  CommandLogMetadataOutput,
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
@@ -65,12 +65,12 @@ export function fetchWorktreeCommands(
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorktreeCommands(worktreeId)));
 }
 
-export function fetchCommandLogs(
+export function fetchCommandLogMetadata(
   worktreeId: number,
   commandName: string,
-): Effect.Effect<CommandLogsOutput, Error> {
+): Effect.Effect<CommandLogMetadataOutput, Error> {
   return getClient().pipe(
-    Effect.flatMap((client) => client.fetchCommandLogs(worktreeId, commandName)),
+    Effect.flatMap((client) => client.fetchCommandLogMetadata(worktreeId, commandName)),
   );
 }
 
@@ -204,6 +204,15 @@ export function resolveTerminalSessionPtyWebSocketUrl(
     Effect.map((client) =>
       client.resolveTerminalSessionPtyWebSocketUrl(terminalSessionId, attachToken),
     ),
+  );
+}
+
+export function resolveCommandLogStreamWebSocketUrl(
+  worktreeId: number,
+  commandName: string,
+): Effect.Effect<string, Error> {
+  return getClient().pipe(
+    Effect.map((client) => client.resolveCommandLogStreamWebSocketUrl(worktreeId, commandName)),
   );
 }
 

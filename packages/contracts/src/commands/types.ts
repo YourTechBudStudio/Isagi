@@ -1,6 +1,7 @@
 import { Schema } from 'effect';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
+const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 
 export const worktreeCommandsRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
@@ -28,20 +29,85 @@ export const commandActionOutputSchema = Schema.Struct({
   summary: commandSummarySchema,
 });
 
-export const commandLatestRunSchema = Schema.Struct({
-  startedAt: Schema.String,
-  completedAt: Schema.NullOr(Schema.String),
-  command: Schema.String,
-  cwd: Schema.String,
-  text: Schema.String,
+export const commandRunDiagnosticReasonSchema = Schema.Literal(
+  'missing_cwd',
+  'env_invalid',
+  'pty_launch_failed',
+  'runtime_stopped',
+);
+
+export const commandRunDiagnosticSchema = Schema.Struct({
+  reason: commandRunDiagnosticReasonSchema,
+  detail: Schema.NullOr(Schema.String),
 });
 
-export const commandLogsOutputSchema = Schema.Struct({
+export const commandLogMetadataLatestRunSchema = Schema.Struct({
+  id: positiveIntegerSchema,
+  startedAt: Schema.String,
+  completedAt: Schema.NullOr(Schema.String),
+  status: Schema.Literal('running', 'exited', 'stopped', 'failed'),
+  ptyProcessId: Schema.NullOr(positiveIntegerSchema),
+  hasPtyProcess: Schema.Boolean,
+  diagnostic: Schema.NullOr(commandRunDiagnosticSchema),
+});
+
+export const commandLogMetadataOutputSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   commandName: Schema.String.pipe(Schema.minLength(1)),
   status: commandStatusSchema,
-  latestRun: Schema.NullOr(commandLatestRunSchema),
+  latestRun: Schema.NullOr(commandLogMetadataLatestRunSchema),
 });
+
+export const commandLogStreamErrorCodeSchema = Schema.Literal(
+  'invalid_message',
+  'read_only_stream',
+  'worktree_not_found',
+  'command_config_invalid',
+  'command_not_found',
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
+  'log_read_failed',
+  'pty_state_load_failed',
+  'unknown',
+);
+
+export const commandLogStreamStateMessageSchema = Schema.Struct({
+  type: Schema.Literal('command_log_state'),
+  worktreeId: positiveIntegerSchema,
+  commandName: Schema.String.pipe(Schema.minLength(1)),
+  status: commandStatusSchema,
+  latestRun: Schema.NullOr(commandLogMetadataLatestRunSchema),
+  live: Schema.Boolean,
+});
+
+export const commandLogStreamErrorMessageSchema = Schema.Struct({
+  type: Schema.Literal('error'),
+  code: commandLogStreamErrorCodeSchema,
+  message: Schema.optional(Schema.String),
+});
+
+export const commandLogStreamOutputMessageSchema = Schema.Union(
+  commandLogStreamStateMessageSchema,
+  Schema.Struct({
+    type: Schema.Literal('replay_start'),
+    bytes: nonNegativeIntegerSchema,
+  }),
+  Schema.Struct({
+    type: Schema.Literal('output'),
+    data: Schema.String,
+    replay: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('replay_end'),
+  }),
+  Schema.Struct({
+    type: Schema.Literal('exit'),
+    exitCode: Schema.NullOr(nonNegativeIntegerSchema),
+    signal: Schema.NullOr(Schema.String),
+  }),
+  commandLogStreamErrorMessageSchema,
+);
 
 export const commandConfigDiagnosticSchema = Schema.Struct({
   code: Schema.Literal('command_config_invalid'),
@@ -74,7 +140,20 @@ export type WorktreeCommandActionInput = Schema.Schema.Type<
 export type CommandStatus = Schema.Schema.Type<typeof commandStatusSchema>;
 export type CommandSummary = Schema.Schema.Type<typeof commandSummarySchema>;
 export type CommandActionOutput = Schema.Schema.Type<typeof commandActionOutputSchema>;
-export type CommandLatestRun = Schema.Schema.Type<typeof commandLatestRunSchema>;
-export type CommandLogsOutput = Schema.Schema.Type<typeof commandLogsOutputSchema>;
+export type CommandRunDiagnosticReason = Schema.Schema.Type<
+  typeof commandRunDiagnosticReasonSchema
+>;
+export type CommandRunDiagnostic = Schema.Schema.Type<typeof commandRunDiagnosticSchema>;
+export type CommandLogMetadataLatestRun = Schema.Schema.Type<
+  typeof commandLogMetadataLatestRunSchema
+>;
+export type CommandLogMetadataOutput = Schema.Schema.Type<typeof commandLogMetadataOutputSchema>;
+export type CommandLogStreamErrorCode = Schema.Schema.Type<typeof commandLogStreamErrorCodeSchema>;
+export type CommandLogStreamStateMessage = Schema.Schema.Type<
+  typeof commandLogStreamStateMessageSchema
+>;
+export type CommandLogStreamOutputMessage = Schema.Schema.Type<
+  typeof commandLogStreamOutputMessageSchema
+>;
 export type CommandConfigDiagnostic = Schema.Schema.Type<typeof commandConfigDiagnosticSchema>;
 export type WorktreeCommandsOutput = Schema.Schema.Type<typeof worktreeCommandsOutputSchema>;

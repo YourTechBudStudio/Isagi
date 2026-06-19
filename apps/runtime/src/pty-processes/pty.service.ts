@@ -66,6 +66,12 @@ export interface PtyAttachmentPlan {
   readonly replaySource: 'backend' | 'file_log';
 }
 
+export interface PtyOutputObservation {
+  readonly session: PtyProcessRecord;
+  readonly replayBytes: number | null;
+  readonly unsubscribe: () => void;
+}
+
 export interface PtyService {
   readonly launch: (
     input: LaunchPtyProcessInput,
@@ -82,6 +88,13 @@ export interface PtyService {
     readonly bytes: number | null;
     readonly send: (message: PtyWebSocketOutputMessage) => void;
   }) => Effect.Effect<void, PtyAttachError>;
+  readonly canObserveOutput: (input: {
+    readonly ptyProcessId: number;
+  }) => Effect.Effect<boolean, PtyAttachError>;
+  readonly observeOutput: (input: {
+    readonly ptyProcessId: number;
+    readonly send: (message: PtyWebSocketOutputMessage) => void;
+  }) => Effect.Effect<PtyOutputObservation, PtyAttachError>;
   readonly write: (input: {
     readonly ptyProcessId: number;
     readonly attachmentId: symbol | null;
@@ -113,6 +126,7 @@ export const PtyServiceLive = Layer.scoped(
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
     const activeAttachments = new Map<number, ActiveAttachment>();
+    const activeOutputObservers = new Set<() => Effect.Effect<void, never>>();
     const pendingAttachments = new Set<number>();
     const terminations = new Map<number, PtyTerminationState>();
     const namespace = runtimeNamespace(directory.paths.root);
@@ -229,6 +243,9 @@ export const PtyServiceLive = Layer.scoped(
           input,
         ),
       replay: (input) => replayProcess(backend, input),
+      canObserveOutput: (input) => canObserveOutput(repository, backend, input.ptyProcessId),
+      observeOutput: (input) =>
+        observeProcessOutput(repository, backend, activeOutputObservers, input),
       write: (input) =>
         Effect.gen(function* () {
           const active = yield* requireActiveAttachment(
@@ -277,6 +294,8 @@ export const PtyServiceLive = Layer.scoped(
         const sessions = yield* repository
           .listProcesses({ statuses: ['starting', 'running'] })
           .pipe(Effect.orElseSucceed(() => []));
+        for (const unsubscribe of activeOutputObservers) yield* unsubscribe();
+        activeOutputObservers.clear();
         for (const active of activeAttachments.values()) yield* active.attachment.detach;
         activeAttachments.clear();
         for (const session of sessions) {
@@ -423,6 +442,84 @@ function replayProcess(
       bytes: input.bytes,
       send: input.send,
     });
+  });
+}
+
+function canObserveOutput(
+  repository: PtyRepositoryService,
+  backend: PtyBackendShape,
+  ptyProcessId: number,
+) {
+  return Effect.gen(function* () {
+    const plan = yield* getAttachmentPlan(repository, backend, ptyProcessId);
+    return plan.live && plan.session.backend === backend.name && Boolean(backend.observeOutput);
+  });
+}
+
+function observeProcessOutput(
+  repository: PtyRepositoryService,
+  backend: PtyBackendShape,
+  activeOutputObservers: Set<() => Effect.Effect<void, never>>,
+  input: {
+    readonly ptyProcessId: number;
+    readonly send: (message: PtyWebSocketOutputMessage) => void;
+  },
+) {
+  return Effect.gen(function* () {
+    const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+    if (!plan.live)
+      return yield* Effect.fail(
+        new PtyServiceError({
+          code: 'session_not_running',
+          message: `PTY process ${input.ptyProcessId} is not running.`,
+          ptyProcessId: input.ptyProcessId,
+        }),
+      );
+    if (!backend.observeOutput)
+      return yield* Effect.fail(
+        new PtyServiceError({
+          code: 'backend_attach_failed',
+          message: `PTY backend ${plan.session.backend} does not support read-only output observation.`,
+          ptyProcessId: plan.session.id,
+        }),
+      );
+    const ref = yield* decodeBackendRef(plan.session);
+    const observer = yield* backend
+      .observeOutput({
+        ref,
+        onOutput: (data) => input.send({ type: 'output', data }),
+        onExit: (exit) => input.send({ type: 'exit', ...exit }),
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new PtyServiceError({
+              code:
+                cause.reason === 'backend_session_not_live'
+                  ? 'session_not_running'
+                  : 'backend_attach_failed',
+              message:
+                cause.reason === 'backend_session_not_live'
+                  ? `PTY process ${plan.session.id} is not running.`
+                  : `Could not observe PTY process ${plan.session.id}.`,
+              ptyProcessId: plan.session.id,
+              cause,
+            }),
+        ),
+      );
+    const unsubscribeEffect = observer.unsubscribe;
+    const trackedUnsubscribe = () =>
+      unsubscribeEffect.pipe(
+        Effect.ensuring(Effect.sync(() => activeOutputObservers.delete(trackedUnsubscribe))),
+      );
+    activeOutputObservers.add(trackedUnsubscribe);
+    return {
+      session: plan.session,
+      replayBytes: observer.replayBytes,
+      unsubscribe: () => {
+        void Effect.runPromise(trackedUnsubscribe());
+      },
+    } satisfies PtyOutputObservation;
   });
 }
 

@@ -225,6 +225,8 @@ function fakePtyService(
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
     attach: () => Effect.die('attach is not used'),
     replay: () => Effect.die('replay is not used'),
+    canObserveOutput: () => Effect.die('canObserveOutput is not used'),
+    observeOutput: () => Effect.die('observeOutput is not used'),
     write: () => Effect.die('write is not used'),
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),

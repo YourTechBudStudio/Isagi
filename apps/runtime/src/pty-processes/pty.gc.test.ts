@@ -12,8 +12,9 @@ import {
   RuntimeDatabase,
   RuntimeDatabaseLive,
   type DataDirectoryService,
+  type RuntimeDatabaseService,
 } from '../persistence/index.js';
-import { ptyProcesses } from '../persistence/schema.js';
+import { projects, ptyProcesses, worktreeCommandStates, worktrees } from '../persistence/schema.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { collectPtyGarbage } from './service/gc.js';
 import { PtyInspectError, PtyKillError, type PtyBackend } from './types.js';
@@ -407,6 +408,86 @@ test('PTY GC deletes stray orphan log files without a process row', async () => 
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('PTY GC keeps PTY rows referenced only by a running command state', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-command-state-ref-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const database = yield* RuntimeDatabase;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        // A terminal, orphan-aged row that the GC would otherwise delete...
+        const process = yield* insertPtyProcess({
+          status: 'killed',
+          logPath: join(sessionsPath, 'command.ptylog'),
+          updatedAt: oldIso(),
+        });
+        writeFileSync(process.logPath, 'command log', 'utf8');
+        // ...but a running command state points at it as its active PTY, so it
+        // must survive (and its log too) until the command releases it.
+        yield* seedCommandStateReference(database, process.id);
+
+        yield* collectPtyGarbage(repository, fakeBackend(), 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function seedCommandStateReference(database: RuntimeDatabaseService, ptyProcessId: number) {
+  return database.use('seed_command_state_reference_for_gc_test', (db) => {
+    const now = '2026-06-18T00:00:00.000Z';
+    const project = db
+      .insert(projects)
+      .values({
+        name: 'isagi',
+        rootPath: `/repo/isagi-${ptyProcessId}`,
+        status: 'present',
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: now,
+      })
+      .returning({ id: projects.id })
+      .get();
+    const worktree = db
+      .insert(worktrees)
+      .values({
+        projectId: project.id,
+        path: `/repo/isagi-${ptyProcessId}/wt`,
+        branch: 'main',
+        head: 'abcdef0',
+        createdAt: now,
+        updatedAt: now,
+        firstSeenAt: now,
+        lastSeenAt: now,
+      })
+      .returning({ id: worktrees.id })
+      .get();
+    db.insert(worktreeCommandStates)
+      .values({
+        worktreeId: worktree.id,
+        commandName: 'dev',
+        status: 'running',
+        activePtyProcessId: ptyProcessId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  });
+}
 
 function insertPtyProcess(input: {
   readonly status: 'running' | 'killed';

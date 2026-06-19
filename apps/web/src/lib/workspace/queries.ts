@@ -26,7 +26,7 @@ import {
 import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
 import {
   activeContextQueryKey,
-  commandLogsQueryKey,
+  commandLogMetadataQueryKey,
   surfaceDetailQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
@@ -38,7 +38,7 @@ import {
   deleteProject,
   deleteWorktree,
   fetchActiveContext,
-  fetchCommandLogs,
+  fetchCommandLogMetadata,
   fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
@@ -84,15 +84,15 @@ export function useWorktreeCommandsQuery(worktreeId: number | null) {
   });
 }
 
-export function useCommandLogsQuery(worktreeId: number | null, commandName: string | null) {
+export function useCommandLogMetadataQuery(worktreeId: number | null, commandName: string | null) {
   return useQuery({
-    queryKey: commandLogsQueryKey(worktreeId, commandName),
+    queryKey: commandLogMetadataQueryKey(worktreeId, commandName),
     enabled: worktreeId !== null && commandName !== null,
     queryFn: ({ signal }) => {
       if (worktreeId === null || commandName === null) {
-        throw new Error('Command logs query requires a worktree and command name.');
+        throw new Error('Command log metadata query requires a worktree and command name.');
       }
-      return runRuntimeEffect(fetchCommandLogs(worktreeId, commandName), { signal });
+      return runRuntimeEffect(fetchCommandLogMetadata(worktreeId, commandName), { signal });
     },
   });
 }
@@ -150,7 +150,9 @@ export async function invalidateCommandQueries(
 ) {
   await client.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId), exact: true });
   if (commandName) {
-    await client.invalidateQueries({ queryKey: commandLogsQueryKey(worktreeId, commandName) });
+    await client.invalidateQueries({
+      queryKey: commandLogMetadataQueryKey(worktreeId, commandName),
+    });
   }
 }
 

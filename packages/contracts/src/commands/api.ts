@@ -1,13 +1,22 @@
 import { worktreeCommandsApiErrorSchema } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
+  commandLogStreamOutputMessageSchema,
   commandActionOutputSchema,
-  commandLogsOutputSchema,
+  commandLogMetadataOutputSchema,
   worktreeCommandActionInputSchema,
   worktreeCommandQuerySchema,
   worktreeCommandsOutputSchema,
   worktreeCommandsRouteParamsSchema,
 } from './types.js';
+
+export const commandLogStreamWebSocketEndpoint = {
+  id: 'commands.logStream',
+  path: '/worktrees/:worktreeId/commands/log-stream',
+  params: worktreeCommandsRouteParamsSchema,
+  query: worktreeCommandQuerySchema,
+  serverMessages: commandLogStreamOutputMessageSchema,
+} as const;
 
 export const commandsEndpoints = {
   listForWorktree: {
@@ -18,13 +27,13 @@ export const commandsEndpoints = {
     output: worktreeCommandsOutputSchema,
     errors: worktreeCommandsApiErrorSchema,
   },
-  logs: {
-    id: 'commands.logs',
+  logMetadata: {
+    id: 'commands.logMetadata',
     method: 'GET',
-    path: '/worktrees/:worktreeId/commands/logs',
+    path: '/worktrees/:worktreeId/commands/log-metadata',
     params: worktreeCommandsRouteParamsSchema,
     query: worktreeCommandQuerySchema,
-    output: commandLogsOutputSchema,
+    output: commandLogMetadataOutputSchema,
     errors: worktreeCommandsApiErrorSchema,
   },
   run: {
@@ -61,9 +70,9 @@ export const commandsEndpoints = {
     typeof worktreeCommandsApiErrorSchema,
     typeof worktreeCommandsRouteParamsSchema
   >;
-  readonly logs: ApiEndpoint<
+  readonly logMetadata: ApiEndpoint<
     undefined,
-    typeof commandLogsOutputSchema,
+    typeof commandLogMetadataOutputSchema,
     typeof worktreeCommandsApiErrorSchema,
     typeof worktreeCommandsRouteParamsSchema,
     typeof worktreeCommandQuerySchema

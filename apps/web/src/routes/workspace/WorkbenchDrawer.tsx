@@ -18,15 +18,23 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
-import type { CommandStatus, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
+import type {
+  CommandRunDiagnosticReason,
+  CommandLogStreamErrorCode,
+  CommandStatus,
+  CommandSummary,
+  WorktreeCommandsOutput,
+} from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
+import type { CommandLogStreamState } from '../../lib/workspace/command-log/stream.js';
+import { useCommandLogStream } from '../../lib/workspace/command-log/stream.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import {
-  useCommandLogsQuery,
+  useCommandLogMetadataQuery,
   useRestartCommandMutation,
   useRunCommandMutation,
   useStopCommandMutation,
@@ -35,6 +43,7 @@ import {
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
+import { XtermSurface } from './XtermSurface.js';
 
 const MIN_WIDTH = 380;
 
@@ -365,12 +374,12 @@ function CommandListRow({
 }
 
 function CommandDetail({ command, worktreeId }: { command: CommandListItem; worktreeId: number }) {
-  const logsQuery = useCommandLogsQuery(worktreeId, command.name);
+  const logMetadataQuery = useCommandLogMetadataQuery(worktreeId, command.name);
   const restartCommand = useRestartCommandMutation(worktreeId);
   const runCommand = useRunCommandMutation(worktreeId);
   const stopCommand = useStopCommandMutation(worktreeId);
   const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
-  const logs = logsQuery.data?.latestRun;
+  const latestRun = logMetadataQuery.data?.latestRun;
   const canRun = command.presentation === 'configured' && command.status !== 'running';
   const canRestart = command.presentation === 'configured';
   const canStop = command.status === 'running';
@@ -439,18 +448,28 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
             {formatRuntimeError(mutationError)}
           </p>
         )}
-        {logsQuery.error ? (
+        {logMetadataQuery.error ? (
           <p className="font-mono text-[11.5px] text-error">
-            {formatRuntimeError(logsQuery.error)}
+            {formatRuntimeError(logMetadataQuery.error)}
           </p>
-        ) : logsQuery.isPending ? (
+        ) : logMetadataQuery.isPending ? (
           <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
             {workbenchCopy.commandsLoading}
           </p>
-        ) : logs ? (
-          <pre className="min-h-0 flex-1 overflow-auto rounded-md border border-line/16 bg-black/18 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-muted">
-            {logs.text || workbenchCopy.commandEmptyLog}
-          </pre>
+        ) : latestRun?.hasPtyProcess ? (
+          <CommandLogTerminal
+            worktreeId={worktreeId}
+            commandName={command.name}
+            latestRunId={latestRun.id}
+            fallbackStatus={latestRun.status}
+          />
+        ) : latestRun ? (
+          <CommandRunMetadataState
+            status={latestRun.status}
+            hasPtyProcess={latestRun.hasPtyProcess}
+            diagnosticReason={latestRun.diagnostic?.reason ?? null}
+            diagnosticDetail={latestRun.diagnostic?.detail ?? null}
+          />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center">
             <p className="font-mono text-[11.5px] text-fg-subtle opacity-70">
@@ -461,6 +480,144 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
       </div>
     </>
   );
+}
+
+function CommandLogTerminal({
+  worktreeId,
+  commandName,
+  latestRunId,
+  fallbackStatus,
+}: {
+  readonly worktreeId: number;
+  readonly commandName: string;
+  readonly latestRunId: number;
+  readonly fallbackStatus: Exclude<CommandStatus, 'idle'>;
+}) {
+  const { transport, streamKey, state, rendererWarning, setRendererWarning } = useCommandLogStream({
+    worktreeId,
+    commandName,
+    latestRunId,
+  });
+  const status = state.exit ? fallbackStatus : (state.status ?? fallbackStatus);
+  const notice = commandLogNotice(state, rendererWarning);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-line/14">
+        <XtermSurface
+          key={streamKey}
+          transport={transport}
+          initiallyInteractive={false}
+          className="isagi-xterm isagi-xterm-edge h-full min-h-0"
+          onRendererWarning={setRendererWarning}
+        />
+      </div>
+      <div className="flex flex-none items-start gap-2 font-mono text-[10.5px] text-fg-subtle">
+        <AttentionDot state={attentionForCommandStatus(status)} />
+        <p className="min-w-0 flex-1 leading-relaxed">
+          <span className="text-fg-muted">{commandLogStatusLabel(state)}</span>
+          {notice ? <span className="ml-2 opacity-70">{notice.summary}</span> : null}
+          {notice?.detail ? (
+            <span className="ml-2 opacity-55">
+              {workbenchCopy.commandRunDiagnosticDetailLabel}: {notice.detail}
+            </span>
+          ) : null}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CommandRunMetadataState({
+  status,
+  hasPtyProcess,
+  diagnosticReason,
+  diagnosticDetail,
+}: {
+  readonly status: Exclude<CommandStatus, 'idle'>;
+  readonly hasPtyProcess: boolean;
+  readonly diagnosticReason: CommandRunDiagnosticReason | null;
+  readonly diagnosticDetail: string | null;
+}) {
+  const primary = diagnosticReason
+    ? workbenchCopy.commandRunDiagnostic[diagnosticReason]
+    : hasPtyProcess
+      ? workbenchCopy.commandOutputWillStream
+      : workbenchCopy.commandOutputStreamingPending;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded-md border border-line/14 bg-black/12 px-3.5 py-3">
+      <div className="flex items-center gap-2">
+        <AttentionDot state={attentionForCommandStatus(status)} />
+        <p className="font-mono text-[11.5px] text-fg-muted">{primary}</p>
+      </div>
+      <p className="font-mono text-[10.5px] text-fg-subtle opacity-65">
+        {workbenchCopy.commandOutputStatusCurrent}
+      </p>
+      {diagnosticDetail && (
+        <div className="rounded-md border border-line/16 bg-black/14 p-2.5">
+          <p className="mb-1 font-mono text-[10px] text-fg-subtle opacity-65">
+            {workbenchCopy.commandRunDiagnosticDetailLabel}
+          </p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+            {diagnosticDetail}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function commandLogStatusLabel(state: CommandLogStreamState) {
+  if (state.exit) {
+    return workbenchCopy.commandLogExit(state.exit.exitCode, state.exit.signal);
+  }
+  switch (state.phase) {
+    case 'idle':
+    case 'connecting':
+      return workbenchCopy.commandLogConnecting;
+    case 'replaying':
+      return workbenchCopy.commandLogReplaying;
+    case 'streaming':
+      return workbenchCopy.commandLogStreaming;
+    case 'frozen':
+      return workbenchCopy.commandLogFrozen;
+    case 'closed':
+      return workbenchCopy.commandLogClosed;
+    case 'errored':
+      return workbenchCopy.commandLogUnavailable;
+  }
+}
+
+type CommandLogNotice = {
+  readonly summary: string;
+  readonly detail?: string | undefined;
+};
+
+function commandLogNotice(
+  state: CommandLogStreamState,
+  rendererWarning: string | null,
+): CommandLogNotice | null {
+  if (state.notice?.kind === 'transport') {
+    return { summary: state.notice.message };
+  }
+  if (state.notice?.kind === 'protocol') {
+    return commandLogStreamErrorCopy(state.notice.code, state.notice.message);
+  }
+  return rendererWarning ? { summary: rendererWarning } : null;
+}
+
+function commandLogStreamErrorCopy(
+  code: CommandLogStreamErrorCode,
+  message?: string | undefined,
+): CommandLogNotice {
+  if (code === 'invalid_message') {
+    return { summary: workbenchCopy.commandLogProtocolError };
+  }
+  if (code === 'read_only_stream') {
+    return { summary: workbenchCopy.commandLogReadOnlyRejected };
+  }
+  return { summary: workbenchCopy.commandLogErrorCode(code), detail: message };
 }
 
 function EmptyCommandsState({ label }: { readonly label: string }) {

@@ -173,7 +173,7 @@ commands:
   }
 });
 
-test('command service reads logs for a removed managed command', async () => {
+test('command service reads metadata for a removed managed command', async () => {
   const fixture = createFixture();
   try {
     writeConfig(
@@ -184,20 +184,18 @@ commands:
     command: pnpm dev
 `,
     );
-    const logPath = join(fixture.rootPath, 'removed.log');
-    writeFileSync(logPath, 'old command output\n');
-
     const output = await runCommandServiceEffect(
       fixture.rootPath,
-      (service) => service.readLatestLogs({ worktreeId: 10, commandName: 'old dev' }),
+      (service) => service.readLogMetadata({ worktreeId: 10, commandName: 'old dev' }),
       {
         states: [commandState({ commandName: 'old dev', status: 'failed' })],
-        latestRun: commandRun({ commandName: 'old dev', status: 'failed', logPath }),
+        latestRun: commandRun({ commandName: 'old dev', status: 'failed' }),
       },
     );
 
     assert.equal(output.status, 'failed');
-    assert.equal(output.latestRun?.text, 'old command output\n');
+    assert.equal(output.latestRun?.status, 'failed');
+    assert.equal(output.latestRun?.hasPtyProcess, false);
   } finally {
     fixture.cleanup();
   }
@@ -249,7 +247,7 @@ commands:
   }
 });
 
-test('command service keeps launch-failure diagnostics readable in latest logs', async () => {
+test('command service keeps launch-failure diagnostics readable in latest metadata', async () => {
   const fixture = createFixture();
   try {
     writeConfig(
@@ -266,8 +264,11 @@ commands:
       (service) =>
         Effect.gen(function* () {
           const action = yield* service.run({ worktreeId: 10, commandName: 'dev' });
-          const logs = yield* service.readLatestLogs({ worktreeId: 10, commandName: 'dev' });
-          return { action, logs };
+          const metadata = yield* service.readLogMetadata({
+            worktreeId: 10,
+            commandName: 'dev',
+          });
+          return { action, metadata };
         }),
       {
         pty: {
@@ -283,11 +284,9 @@ commands:
     );
 
     assert.equal(output.action.summary.status, 'failed');
-    assert.equal(output.logs.status, 'failed');
-    assert.match(
-      output.logs.latestRun?.text ?? '',
-      /\[isagi\] Command launch failed before PTY metadata was available\./,
-    );
+    assert.equal(output.metadata.status, 'failed');
+    assert.equal(output.metadata.latestRun?.diagnostic?.reason, 'pty_launch_failed');
+    assert.equal(output.metadata.latestRun?.diagnostic?.detail, 'launch failed');
   } finally {
     fixture.cleanup();
   }
@@ -359,6 +358,143 @@ test('command service returns config diagnostics when the config path exists but
   }
 });
 
+test('command service records a successful run and retains its log after the process exits', async () => {
+  const fixture = createFixture();
+  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const runs: CommandRunRow[] = [];
+  const ptyLogPath = join(fixture.rootPath, 'sessions', 'cmd-901.ptylog');
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+    mkdirSync(join(fixture.rootPath, 'sessions'), { recursive: true });
+    writeFileSync(ptyLogPath, 'dev server ready on 5173\n');
+
+    const output = await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) =>
+        Effect.gen(function* () {
+          const action = yield* service.run({ worktreeId: 10, commandName: 'dev' });
+          const bus = yield* InternalRuntimeEventBus;
+          yield* bus.publish({
+            type: 'pty_process_exited',
+            ptyProcessId: 901,
+            status: 'exited',
+            exitCode: 0,
+            signal: null,
+          });
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
+          const metadata = yield* service.readLogMetadata({
+            worktreeId: 10,
+            commandName: 'dev',
+          });
+          return { action, metadata };
+        }),
+      {
+        runs,
+        pty: {
+          launch: () =>
+            Effect.succeed({
+              ptyProcessId: 901,
+              command: '/bin/sh',
+              args: ['-lc', 'pnpm dev'],
+              cwd: fixture.rootPath,
+              logPath: ptyLogPath,
+            }),
+        },
+        onTransition: (input) => transitioned.push(input),
+      },
+    );
+
+    assert.equal(output.action.summary.status, 'running');
+    assert.equal(runs.at(-1)?.status, 'exited');
+    assert.equal(output.metadata.status, 'exited');
+    assert.equal(output.metadata.latestRun?.ptyProcessId, 901);
+    assert.equal(output.metadata.latestRun?.hasPtyProcess, true);
+    assert.equal(output.metadata.latestRun?.diagnostic, null);
+    assert.ok(
+      transitioned.some(
+        (transition) => transition.commandName === 'dev' && transition.status === 'exited',
+      ),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('command service marks stale running commands as failed on reconcile', async () => {
+  const fixture = createFixture();
+  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.reconcileStaleRunningCommands,
+      {
+        states: [commandState({ commandName: 'dev', status: 'running' })],
+        runningStates: [commandState({ commandName: 'dev', status: 'running' })],
+        runs,
+        onTransition: (input) => transitioned.push(input),
+      },
+    );
+
+    assert.equal(runs[0]?.status, 'failed');
+    assert.equal(runs[0]?.diagnosticReason, 'runtime_stopped');
+    assert.ok(
+      transitioned.some(
+        (transition) => transition.commandName === 'dev' && transition.status === 'failed',
+      ),
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('command service prunes superseded runs without touching PTY log retention', async () => {
+  const fixture = createFixture();
+  const runs: CommandRunRow[] = [
+    commandRun({ commandName: 'dev', status: 'exited', ptyProcessId: 900 }),
+  ];
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+    cwd: missing-dir
+`,
+    );
+
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.run({ worktreeId: 10, commandName: 'dev' }),
+      { runs },
+    );
+
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]?.status, 'failed');
+    assert.equal(runs[0]?.diagnosticReason, 'missing_cwd');
+    assert.equal(runs[0]?.ptyProcessId, null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 async function runCommandService(rootPath: string, options: CommandRepositoryOptions = {}) {
   return runCommandServiceEffect(rootPath, (service) => service.listForWorktree(10), options);
 }
@@ -401,6 +537,7 @@ async function runCommandServiceEffect<A>(
 
 interface CommandRepositoryOptions {
   readonly states?: readonly CommandStateRow[];
+  readonly runningStates?: readonly CommandStateRow[] | undefined;
   readonly runs?: CommandRunRow[] | undefined;
   readonly latestRun?: CommandRunRow | null | undefined;
   readonly pty?: Partial<PtyServiceShape> | undefined;
@@ -425,8 +562,11 @@ function commandRepository(options: CommandRepositoryOptions = {}): CommandRepos
             state.worktreeId === input.worktreeId && state.commandName === input.commandName,
         ) ?? null,
       ),
-    listRunningStates: Effect.succeed([]),
-    listRunningStatesForWorktree: () => Effect.succeed([]),
+    listRunningStates: Effect.succeed([...(options.runningStates ?? [])]),
+    listRunningStatesForWorktree: (worktreeId) =>
+      Effect.succeed(
+        (options.runningStates ?? []).filter((state) => state.worktreeId === worktreeId),
+      ),
     ensureState: () => Effect.die('ensureState is not used'),
     transitionState: (input) =>
       Effect.sync(() => {
@@ -453,25 +593,22 @@ function commandRepository(options: CommandRepositoryOptions = {}): CommandRepos
           commandName: input.commandName,
           status: input.status,
           ptyProcessId: input.ptyProcessId,
-          logPath: input.logPath,
+          diagnosticReason: input.diagnosticReason,
+          diagnosticDetail: input.diagnosticDetail,
         });
         runs.push({
           ...run,
           id: runs.length + 1,
           worktreeId: input.worktreeId,
-          commandText: input.commandText,
-          cwd: input.cwd,
-          trigger: input.trigger,
           completedAt: input.completedAt ?? run.completedAt,
         });
         return runs.at(-1)!;
       }),
-    updateRunPty: () => Effect.die('updateRunPty is not used'),
-    updateRunLogPath: (input) =>
+    updateRunPty: (input) =>
       Effect.sync(() => {
         const run = runs.find((candidate) => candidate.id === input.runId);
         if (!run) return options.latestRun ?? null;
-        const updated = { ...run, logPath: input.logPath };
+        const updated = { ...run, ptyProcessId: input.ptyProcessId };
         runs.splice(runs.indexOf(run), 1, updated);
         return updated;
       }),
@@ -482,8 +619,8 @@ function commandRepository(options: CommandRepositoryOptions = {}): CommandRepos
         const updated = {
           ...run,
           status: input.status,
-          exitCode: input.exitCode ?? null,
-          signal: input.signal ?? null,
+          diagnosticReason: input.diagnosticReason ?? null,
+          diagnosticDetail: input.diagnosticDetail ?? null,
           completedAt: '2026-06-19T00:00:01.000Z',
         };
         runs.splice(runs.indexOf(run), 1, updated);
@@ -496,8 +633,8 @@ function commandRepository(options: CommandRepositoryOptions = {}): CommandRepos
         const updated = {
           ...run,
           status: input.status,
-          exitCode: input.exitCode ?? null,
-          signal: input.signal ?? null,
+          diagnosticReason: input.diagnosticReason ?? null,
+          diagnosticDetail: input.diagnosticDetail ?? null,
           completedAt: '2026-06-19T00:00:01.000Z',
         };
         runs.splice(runs.indexOf(run), 1, updated);
@@ -517,8 +654,21 @@ function commandRepository(options: CommandRepositoryOptions = {}): CommandRepos
       Effect.succeed(
         runs.find((run) => run.ptyProcessId === ptyProcessId) ?? options.latestRun ?? null,
       ),
+    pruneRunHistory: (input) =>
+      Effect.sync(() => {
+        const matching = runs
+          .filter(
+            (run) => run.worktreeId === input.worktreeId && run.commandName === input.commandName,
+          )
+          .sort((a, b) => b.id - a.id);
+        const stale = matching.slice(Math.max(input.keep, 0));
+        for (const run of stale) {
+          const index = runs.indexOf(run);
+          if (index >= 0) runs.splice(index, 1);
+        }
+        return stale;
+      }),
     listReferencedPtyProcessIds: Effect.succeed([]),
-    listReferencedCommandLogPaths: Effect.succeed([]),
   };
 }
 
@@ -541,20 +691,17 @@ function commandRun(input: {
   readonly commandName: string;
   readonly status: CommandRunRow['status'];
   readonly ptyProcessId?: number | null | undefined;
-  readonly logPath?: string | null | undefined;
+  readonly diagnosticReason?: CommandRunRow['diagnosticReason'] | undefined;
+  readonly diagnosticDetail?: string | null | undefined;
 }): CommandRunRow {
   return {
     id: 1,
     worktreeId: 10,
     commandName: input.commandName,
     ptyProcessId: input.ptyProcessId ?? null,
-    commandText: 'pnpm old',
-    cwd: '/repo',
     status: input.status,
-    trigger: 'manual_run',
-    logPath: input.logPath ?? null,
-    exitCode: null,
-    signal: null,
+    diagnosticReason: input.diagnosticReason ?? null,
+    diagnosticDetail: input.diagnosticDetail ?? null,
     startedAt: '2026-06-19T00:00:00.000Z',
     completedAt: input.status === 'running' ? null : '2026-06-19T00:00:01.000Z',
     createdAt: '2026-06-19T00:00:00.000Z',
@@ -582,6 +729,8 @@ function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
     attach: () => Effect.die('attach is not used'),
     replay: () => Effect.void,
+    canObserveOutput: () => Effect.die('canObserveOutput is not used'),
+    observeOutput: () => Effect.die('observeOutput is not used'),
     write: () => Effect.void,
     resize: () => Effect.void,
     kill: () => Effect.void,

@@ -125,12 +125,18 @@ export type {
   WorktreeSetupRejectionReason,
 } from './api/errors.js';
 
-export { commandsEndpoints } from './commands/api.js';
+export { commandLogStreamWebSocketEndpoint, commandsEndpoints } from './commands/api.js';
 export {
   commandConfigDiagnosticSchema,
   commandActionOutputSchema,
-  commandLatestRunSchema,
-  commandLogsOutputSchema,
+  commandLogMetadataLatestRunSchema,
+  commandLogMetadataOutputSchema,
+  commandLogStreamErrorCodeSchema,
+  commandLogStreamErrorMessageSchema,
+  commandLogStreamOutputMessageSchema,
+  commandLogStreamStateMessageSchema,
+  commandRunDiagnosticReasonSchema,
+  commandRunDiagnosticSchema,
   commandStatusSchema,
   commandSummarySchema,
   worktreeCommandActionInputSchema,
@@ -141,8 +147,13 @@ export {
 export type {
   CommandActionOutput,
   CommandConfigDiagnostic,
-  CommandLatestRun,
-  CommandLogsOutput,
+  CommandLogMetadataLatestRun,
+  CommandLogMetadataOutput,
+  CommandLogStreamErrorCode,
+  CommandLogStreamOutputMessage,
+  CommandLogStreamStateMessage,
+  CommandRunDiagnostic,
+  CommandRunDiagnosticReason,
   CommandStatus,
   CommandSummary,
   WorktreeCommandActionInput,

@@ -1,19 +1,21 @@
-import { and, desc, eq, getTableColumns, isNotNull, type InferSelectModel } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  type InferSelectModel,
+} from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { CommandStatus } from '@isagi/contracts';
+import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schema.js';
 
 type CommandStateRecord = InferSelectModel<typeof worktreeCommandStates>;
 type CommandRunRecord = InferSelectModel<typeof worktreeCommandRuns>;
-
-export type CommandRunTrigger =
-  | 'manual_run'
-  | 'manual_restart'
-  | 'lifecycle_post_create'
-  | 'lifecycle_activate';
 
 export interface CommandStateRow {
   readonly id: number;
@@ -30,13 +32,9 @@ export interface CommandRunRow {
   readonly worktreeId: number;
   readonly commandName: string;
   readonly ptyProcessId: number | null;
-  readonly commandText: string;
-  readonly cwd: string;
   readonly status: Exclude<CommandStatus, 'idle'>;
-  readonly trigger: CommandRunTrigger;
-  readonly logPath: string | null;
-  readonly exitCode: number | null;
-  readonly signal: string | null;
+  readonly diagnosticReason: CommandRunDiagnosticReason | null;
+  readonly diagnosticDetail: string | null;
   readonly startedAt: string;
   readonly completedAt: string | null;
   readonly createdAt: string;
@@ -70,36 +68,27 @@ export interface CommandRepositoryService {
   readonly createRun: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
-    readonly commandText: string;
-    readonly cwd: string;
-    readonly trigger: CommandRunTrigger;
     readonly status: Exclude<CommandStatus, 'idle'>;
     readonly ptyProcessId?: number | null | undefined;
-    readonly logPath?: string | null | undefined;
+    readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
+    readonly diagnosticDetail?: string | null | undefined;
     readonly completedAt?: string | null | undefined;
-    readonly exitCode?: number | null | undefined;
-    readonly signal?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow, DatabaseError>;
   readonly updateRunPty: (input: {
     readonly runId: number;
     readonly ptyProcessId: number;
-    readonly logPath: string | null;
-  }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
-  readonly updateRunLogPath: (input: {
-    readonly runId: number;
-    readonly logPath: string;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly completeRun: (input: {
     readonly runId: number;
     readonly status: Exclude<CommandStatus, 'idle' | 'running'>;
-    readonly exitCode?: number | null | undefined;
-    readonly signal?: string | null | undefined;
+    readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
+    readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly completeRunByPtyProcess: (input: {
     readonly ptyProcessId: number;
     readonly status: Exclude<CommandStatus, 'idle' | 'running'>;
-    readonly exitCode?: number | null | undefined;
-    readonly signal?: string | null | undefined;
+    readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
+    readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly findLatestRun: (input: {
     readonly worktreeId: number;
@@ -108,8 +97,12 @@ export interface CommandRepositoryService {
   readonly findRunByPtyProcess: (
     ptyProcessId: number,
   ) => Effect.Effect<CommandRunRow | null, DatabaseError>;
+  readonly pruneRunHistory: (input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly keep: number;
+  }) => Effect.Effect<CommandRunRow[], DatabaseError>;
   readonly listReferencedPtyProcessIds: Effect.Effect<number[], DatabaseError>;
-  readonly listReferencedCommandLogPaths: Effect.Effect<string[], DatabaseError>;
 }
 
 export const CommandRepository =
@@ -248,14 +241,10 @@ export const CommandRepositoryLive = Layer.effect(
             .values({
               worktreeId: input.worktreeId,
               commandName: input.commandName,
-              commandText: input.commandText,
-              cwd: input.cwd,
-              trigger: input.trigger,
               status: input.status,
               ptyProcessId: input.ptyProcessId ?? null,
-              logPath: input.logPath ?? null,
-              exitCode: input.exitCode ?? null,
-              signal: input.signal ?? null,
+              diagnosticReason: input.diagnosticReason ?? null,
+              diagnosticDetail: input.diagnosticDetail ?? null,
               startedAt: now,
               completedAt,
               createdAt: now,
@@ -271,20 +260,6 @@ export const CommandRepositoryLive = Layer.effect(
             .update(worktreeCommandRuns)
             .set({
               ptyProcessId: input.ptyProcessId,
-              logPath: input.logPath,
-              updatedAt: timestamp(),
-            })
-            .where(eq(worktreeCommandRuns.id, input.runId))
-            .returning(runColumns)
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
-      updateRunLogPath: (input) =>
-        database.use('update_worktree_command_run_log_path', (db) => {
-          const row = db
-            .update(worktreeCommandRuns)
-            .set({
-              logPath: input.logPath,
               updatedAt: timestamp(),
             })
             .where(eq(worktreeCommandRuns.id, input.runId))
@@ -299,8 +274,8 @@ export const CommandRepositoryLive = Layer.effect(
             .update(worktreeCommandRuns)
             .set({
               status: input.status,
-              exitCode: input.exitCode ?? null,
-              signal: input.signal ?? null,
+              diagnosticReason: input.diagnosticReason ?? null,
+              diagnosticDetail: input.diagnosticDetail ?? null,
               completedAt: now,
               updatedAt: now,
             })
@@ -323,8 +298,8 @@ export const CommandRepositoryLive = Layer.effect(
             .update(worktreeCommandRuns)
             .set({
               status: input.status,
-              exitCode: input.exitCode ?? null,
-              signal: input.signal ?? null,
+              diagnosticReason: input.diagnosticReason ?? null,
+              diagnosticDetail: input.diagnosticDetail ?? null,
               completedAt: now,
               updatedAt: now,
             })
@@ -358,6 +333,36 @@ export const CommandRepositoryLive = Layer.effect(
             .get();
           return row ? commandRunRow(row) : null;
         }),
+      // Keep only the newest `keep` runs for a command and delete the rest,
+      // returning the deleted rows so the caller can reclaim their command-log
+      // files. This is what stops historical runs from pinning PTY rows/logs
+      // forever (each retained run is a GC reference); pruned runs let the PTY
+      // GC reclaim their now-unreferenced process rows and session logs.
+      pruneRunHistory: (input) =>
+        database.transaction('prune_worktree_command_runs', (db) => {
+          const rows = db
+            .select(runColumns)
+            .from(worktreeCommandRuns)
+            .where(
+              and(
+                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                eq(worktreeCommandRuns.commandName, input.commandName),
+              ),
+            )
+            .orderBy(desc(worktreeCommandRuns.id))
+            .all();
+          const stale = rows.slice(Math.max(input.keep, 0));
+          if (stale.length === 0) return [];
+          db.delete(worktreeCommandRuns)
+            .where(
+              inArray(
+                worktreeCommandRuns.id,
+                stale.map((row) => row.id),
+              ),
+            )
+            .run();
+          return stale.map(commandRunRow);
+        }),
       listReferencedPtyProcessIds: database.use('list_command_run_pty_process_ids', (db) =>
         db
           .select({ ptyProcessId: worktreeCommandRuns.ptyProcessId })
@@ -365,14 +370,6 @@ export const CommandRepositoryLive = Layer.effect(
           .where(isNotNull(worktreeCommandRuns.ptyProcessId))
           .all()
           .flatMap((row) => (row.ptyProcessId ? [row.ptyProcessId] : [])),
-      ),
-      listReferencedCommandLogPaths: database.use('list_command_run_log_paths', (db) =>
-        db
-          .select({ logPath: worktreeCommandRuns.logPath })
-          .from(worktreeCommandRuns)
-          .where(isNotNull(worktreeCommandRuns.logPath))
-          .all()
-          .flatMap((row) => (row.logPath ? [row.logPath] : [])),
       ),
     } satisfies CommandRepositoryService;
   }),
@@ -396,13 +393,9 @@ function commandRunRow(row: CommandRunRecord): CommandRunRow {
     worktreeId: row.worktreeId,
     commandName: row.commandName,
     ptyProcessId: row.ptyProcessId,
-    commandText: row.commandText,
-    cwd: row.cwd,
     status: row.status,
-    trigger: row.trigger,
-    logPath: row.logPath,
-    exitCode: row.exitCode,
-    signal: row.signal,
+    diagnosticReason: row.diagnosticReason,
+    diagnosticDetail: row.diagnosticDetail,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
     createdAt: row.createdAt,

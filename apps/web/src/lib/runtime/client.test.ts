@@ -152,6 +152,15 @@ test('runtime client calls the worktree commands endpoint', async () => {
   });
 });
 
+test('runtime client resolves command log stream websocket URLs', () => {
+  const client = createRuntimeClient('https://runtime.test/base/');
+
+  assert.equal(
+    client.resolveCommandLogStreamWebSocketUrl(10, 'dev server'),
+    'wss://runtime.test/api/v1/worktrees/10/commands/log-stream?commandName=dev+server',
+  );
+});
+
 test('runtime client calls surface title and delete endpoints', async () => {
   const requests: Array<{ readonly url: string; readonly method: string; readonly body: string }> =
     [];

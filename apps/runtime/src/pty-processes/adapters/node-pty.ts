@@ -42,11 +42,21 @@ interface LiveNodePtyProcess {
   readonly process: nodePty.IPty;
   readonly logPath: string | null;
   attachment: NodePtyAttachment | null;
+  readonly observers: Map<symbol, NodePtyOutputObserver>;
   running: boolean;
   suppressExitCallback: boolean;
 }
 
 interface NodePtyAttachment {
+  readonly id: symbol;
+  readonly onOutput: (data: string) => void;
+  readonly onExit: (exit: {
+    readonly exitCode: number | null;
+    readonly signal: string | null;
+  }) => void;
+}
+
+interface NodePtyOutputObserver {
   readonly id: symbol;
   readonly onOutput: (data: string) => void;
   readonly onExit: (exit: {
@@ -89,6 +99,7 @@ export const NodePtyBackendLive = Layer.effect(
               process: pty,
               logPath: input.logPath,
               attachment: null,
+              observers: new Map(),
               running: true,
               suppressExitCallback: false,
             };
@@ -106,6 +117,7 @@ export const NodePtyBackendLive = Layer.effect(
               if (visible.length === 0) return;
               appendBackendLog(input.logPath, visible, input.ptyProcessId);
               live.attachment?.onOutput(visible);
+              for (const observer of live.observers.values()) observer.onOutput(visible);
             });
             pty.onExit((event) => {
               // `kill` marks and removes the process-local live entry before
@@ -122,12 +134,15 @@ export const NodePtyBackendLive = Layer.effect(
               if (trailing.length > 0) {
                 appendBackendLog(input.logPath, trailing, input.ptyProcessId);
                 live.attachment?.onOutput(trailing);
+                for (const observer of live.observers.values()) observer.onOutput(trailing);
               }
               const exit = {
                 exitCode: event.exitCode ?? null,
                 signal: event.signal ? String(event.signal) : null,
               };
               live.attachment?.onExit(exit);
+              for (const observer of live.observers.values()) observer.onExit(exit);
+              live.observers.clear();
               liveSessions.delete(input.ptyProcessId);
               input.onExit(exit);
             });
@@ -192,6 +207,39 @@ export const NodePtyBackendLive = Layer.effect(
             }),
         }),
       replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
+      observeOutput: (input) =>
+        Effect.try({
+          try: () => {
+            if (input.ref.backend !== 'node_pty') {
+              throw new Error(`Cannot observe node-pty backend for ${input.ref.backend} ref.`);
+            }
+            const ref = input.ref;
+            const live = liveSessions.get(ref.ptyProcessId);
+            if (!live?.running) {
+              throw new Error(`node-pty process ${ref.ptyProcessId} is not live.`);
+            }
+            const observer = {
+              id: Symbol(`node-pty-output-observer-${ref.ptyProcessId}`),
+              onOutput: input.onOutput,
+              onExit: input.onExit,
+            } satisfies NodePtyOutputObserver;
+            live.observers.set(observer.id, observer);
+            return {
+              replayBytes: replayBytesForLog(live.logPath),
+              unsubscribe: Effect.sync(() => {
+                live.observers.delete(observer.id);
+              }),
+            };
+          },
+          catch: (cause) =>
+            new PtyStartError({
+              ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
+              command: 'node_pty_observe_output',
+              cwd: '',
+              reason: isNodePtyNotLiveError(cause) ? 'backend_session_not_live' : undefined,
+              cause,
+            }),
+        }),
       inspect: (ref) =>
         Effect.succeed(
           ref.backend === 'node_pty' && liveSessions.get(ref.ptyProcessId)?.running
@@ -338,6 +386,21 @@ function replayBackendLog(
         cause,
       }),
   });
+}
+
+function replayBytesForLog(path: string | null) {
+  if (!path) {
+    return null;
+  }
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+function isNodePtyNotLiveError(cause: unknown) {
+  return cause instanceof Error && /node-pty process \d+ is not live\./.test(cause.message);
 }
 
 function ensureNodePtyDarwinHelperExecutable() {

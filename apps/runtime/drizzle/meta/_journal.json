@@ -22,6 +22,13 @@
       "when": 1781899939665,
       "tag": "0002_clean_gravity",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781912747950,
+      "tag": "0003_zippy_punisher",
+      "breakpoints": true
     }
   ]
 }

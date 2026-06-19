@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { commandStatusSchema } from '../commands/types.js';
 import {
   agentSessionStatusReasonSchema,
   sessionDiagnosticCodeSchema,
@@ -104,6 +105,9 @@ export const commandChangedEventSchema = Schema.Struct({
   payload: Schema.Struct({
     worktreeId: positiveIntegerSchema,
     commandName: Schema.String.pipe(Schema.minLength(1)),
+    // The command's status after the change, so clients can flip the command's
+    // attention dot immediately instead of waiting on a catalog refetch.
+    status: commandStatusSchema,
   }),
 });
 

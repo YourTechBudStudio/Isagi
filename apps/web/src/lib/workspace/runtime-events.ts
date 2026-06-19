@@ -4,15 +4,18 @@ import { useEffect } from 'react';
 import {
   runtimeEventInputMessageSchema,
   runtimeEventSchema,
+  type CommandStatus,
+  type CommandSummary,
   type RuntimeEvent,
   type RuntimeEventInputMessage,
+  type WorktreeCommandsOutput,
 } from '@isagi/contracts';
 
 import { queryClient } from '../query/client.js';
 import { runRuntimeEffect } from '../runtime/run.js';
 import { useAttentionStore } from './attention.js';
 import {
-  commandLogsQueryKey,
+  commandLogMetadataQueryKey,
   surfaceDetailQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
@@ -123,15 +126,44 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
       });
       break;
     case 'command_changed':
+      // Flip the command's status in the cached catalog right away so its
+      // attention dot is honest immediately, then invalidate to reconcile the
+      // facts the event does not carry (ports, removed/managed membership).
+      queryClient.setQueryData<WorktreeCommandsOutput>(
+        worktreeCommandsQueryKey(event.payload.worktreeId),
+        (data) => patchCommandStatus(data, event.payload.commandName, event.payload.status),
+      );
       void queryClient.invalidateQueries({
         queryKey: worktreeCommandsQueryKey(event.payload.worktreeId),
         exact: true,
       });
       void queryClient.invalidateQueries({
-        queryKey: commandLogsQueryKey(event.payload.worktreeId, event.payload.commandName),
+        queryKey: commandLogMetadataQueryKey(event.payload.worktreeId, event.payload.commandName),
       });
       break;
   }
+}
+
+function patchCommandStatus(
+  data: WorktreeCommandsOutput | undefined,
+  commandName: string,
+  status: CommandStatus,
+): WorktreeCommandsOutput | undefined {
+  if (!data) return data;
+  const patch = (commands: readonly CommandSummary[]): CommandSummary[] =>
+    commands.map((command) =>
+      command.name === commandName
+        ? { ...command, status, ports: status === 'running' ? command.ports : [] }
+        : command,
+    );
+  if (data.status === 'configured') {
+    return {
+      ...data,
+      commands: patch(data.commands),
+      removedCommands: patch(data.removedCommands),
+    };
+  }
+  return { ...data, managedCommands: patch(data.managedCommands) };
 }
 
 function sendRuntimeEventInput(socket: WebSocket, message: RuntimeEventInputMessage) {
