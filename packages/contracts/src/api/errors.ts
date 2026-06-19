@@ -39,7 +39,12 @@ export const workspaceActiveContextRejectedErrorSchema = Schema.Struct({
   }),
 });
 
-export const workspaceReconcileRejectionReasonSchema = Schema.Literal('project_not_found');
+export const workspaceReconcileRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'command_cleanup_failed',
+);
+
+export const projectOperationRejectionReasonSchema = Schema.Literal('command_cleanup_failed');
 
 export const surfaceRejectionReasonSchema = Schema.Literal(
   'surface_not_found',
@@ -69,6 +74,7 @@ export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_missing',
   'project_path_already_registered',
+  'command_cleanup_failed',
 );
 
 export const worktreeOperationRejectionReasonSchema = Schema.Literal(
@@ -85,6 +91,7 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
   'setup_config_invalid',
   'setup_trust_required',
   'setup_trust_mismatch',
+  'command_cleanup_failed',
 );
 
 export const worktreeSetupRejectionReasonSchema = Schema.Literal(
@@ -102,7 +109,10 @@ export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
   'root_worktree_not_deletable',
   'dirty_checkout_requires_force',
   'root_worktree_not_found',
+  'command_cleanup_failed',
 );
+
+export const projectDeleteRejectionReasonSchema = Schema.Literal('command_cleanup_failed');
 
 export const worktreeBranchListRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('worktree_branch_list_rejected'),
@@ -162,6 +172,30 @@ export const workspaceReconcileRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: workspaceReconcileRejectionReasonSchema,
     projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  }),
+});
+
+export const projectOperationRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('project_operation_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: projectOperationRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const projectDeleteRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('project_delete_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: projectDeleteRejectionReasonSchema,
+    projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 
@@ -313,6 +347,7 @@ export const worktreeCommandsApiErrorSchema = Schema.Union(
 );
 
 export const projectApiErrorSchema = Schema.Union(
+  projectOperationRejectedErrorSchema,
   projectPathRejectedErrorSchema,
   gitCommandFailedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
@@ -329,6 +364,7 @@ export const projectRelocateApiErrorSchema = Schema.Union(
 );
 
 export const projectDeleteApiErrorSchema = Schema.Union(
+  projectDeleteRejectedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
   runtimeDataDirectoryFailedErrorSchema,
 );
@@ -382,6 +418,12 @@ export type WorktreeCommandsRejectionReason = Schema.Schema.Type<
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;
+export type ProjectOperationRejectionReason = Schema.Schema.Type<
+  typeof projectOperationRejectionReasonSchema
+>;
+export type ProjectDeleteRejectionReason = Schema.Schema.Type<
+  typeof projectDeleteRejectionReasonSchema
+>;
 export type WorktreeOperationRejectionReason = Schema.Schema.Type<
   typeof worktreeOperationRejectionReasonSchema
 >;
@@ -410,6 +452,12 @@ export type WorktreeCommandsRejectedError = Schema.Schema.Type<
 >;
 export type ProjectRelocationRejectedError = Schema.Schema.Type<
   typeof projectRelocationRejectedErrorSchema
+>;
+export type ProjectOperationRejectedError = Schema.Schema.Type<
+  typeof projectOperationRejectedErrorSchema
+>;
+export type ProjectDeleteRejectedError = Schema.Schema.Type<
+  typeof projectDeleteRejectedErrorSchema
 >;
 export type WorktreeBranchListRejectedError = Schema.Schema.Type<
   typeof worktreeBranchListRejectedErrorSchema

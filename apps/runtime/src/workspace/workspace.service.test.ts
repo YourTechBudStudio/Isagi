@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { CommandService, type CommandServiceShape } from '../commands/index.js';
 import { branchPathHash, Git, GitCommandError, type GitService } from '../git/index.js';
 import {
   DataDirectory,
@@ -14,6 +15,10 @@ import {
   type DataDirectoryService,
   type StateFileService,
 } from '../persistence/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../runtime-events/index.js';
 import {
   SurfaceService,
   SurfaceRepository,
@@ -129,6 +134,27 @@ const testSurfaceService = {
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
 
+const testCommandService = {
+  listForWorktree: () => Effect.die('command list is not used by workspace tests'),
+  readLatestLogs: () => Effect.die('command logs are not used by workspace tests'),
+  run: () => Effect.die('command run is not used by workspace tests'),
+  stop: () => Effect.die('command stop is not used by workspace tests'),
+  restart: () => Effect.die('command restart is not used by workspace tests'),
+  runPostCreateLifecycle: () => Effect.void,
+  cleanupBeforeWorktreeDelete: () => Effect.void,
+  cleanupBeforeWorktreePrune: () => Effect.void,
+  reconcileStaleRunningCommands: Effect.void,
+} satisfies CommandServiceShape;
+
+const testInternalEvents = {
+  publish: () => Effect.void,
+  subscribe: () =>
+    Effect.succeed({
+      take: Effect.never,
+      unsubscribe: Effect.void,
+    }),
+} satisfies InternalRuntimeEventBusService;
+
 test('active context persistence validates before writing state', async () => {
   let writeCalls = 0;
   const stateFile = stateFileWithWriteCounter(() => {
@@ -146,6 +172,8 @@ test('active context persistence validates before writing state', async () => {
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -182,6 +210,8 @@ test('project deletion does not touch frontend-owned active context persistence'
       return yield* workspace.deleteProject(project.id);
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -217,6 +247,8 @@ test('project relocation rejects projects that are not missing before touching g
         return yield* workspace.relocateProject({ projectId: project.id, path: '/repo/elsewhere' });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -284,6 +316,8 @@ test('project relocation restores the same project id and reconciles discovered 
         return yield* workspace.relocateProject({ projectId: project.id, path: projectRoot });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -355,6 +389,8 @@ test('project branch listing rejects a present project whose path disappeared be
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -410,6 +446,8 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -459,6 +497,13 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         return { stdout: '', stderr: '' };
       }),
   } satisfies GitService;
+  const commandService = {
+    ...testCommandService,
+    cleanupBeforeWorktreeDelete: (input: { readonly worktreeId: number }) =>
+      Effect.sync(() => {
+        events.push(`commands:${input.worktreeId}`);
+      }),
+  } satisfies CommandServiceShape;
 
   const output = await Effect.runPromise(
     Effect.gen(function* () {
@@ -470,6 +515,8 @@ test('delete worktree force removes checkout before deleting DB row and returns 
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, commandService),
+      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -491,6 +538,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     branchRemoval: { status: 'not_requested' },
   });
   assert.deepEqual(events, [
+    `commands:${fixtures.targetWorktree.id}`,
     `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
     `db:${fixtures.targetWorktree.id}`,
   ]);
@@ -532,6 +580,8 @@ test('delete worktree reports safe branch deletion failure as partial success', 
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -575,6 +625,8 @@ test('delete worktree rejects before destructive work when root fallback is miss
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -621,6 +673,8 @@ test('project branch listing combines local branches with known open worktrees',
         return yield* workspace.listProjectBranches({ projectId: project.id });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -650,6 +704,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
   let createdPath: string | null = null;
   let nextWorktreeId = 11;
   let worktreeRows: WorktreeRow[] = [{ ...worktree, path: projectRoot }];
+  const lifecycleCalls: number[] = [];
   const testProject = { ...project, rootPath: projectRoot };
   const dataDirectory = {
     paths: {
@@ -731,6 +786,13 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         return { stdout: '', stderr: '' };
       }),
   } satisfies GitService;
+  const commandService = {
+    ...testCommandService,
+    runPostCreateLifecycle: (input: { readonly worktreeId: number }) =>
+      Effect.sync(() => {
+        lifecycleCalls.push(input.worktreeId);
+      }),
+  } satisfies CommandServiceShape;
 
   try {
     const output = await Effect.runPromise(
@@ -739,6 +801,8 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
         return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, commandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -753,6 +817,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
     assert.equal(output.projectId, project.id);
     assert.equal(output.branch, branch);
     assert.equal(output.worktreeId, 11);
+    assert.deepEqual(lifecycleCalls, [11]);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
     rmSync(dataRoot, { recursive: true, force: true });
@@ -802,6 +867,8 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -864,6 +931,8 @@ test('opening a missing branch without a base asks the client for base selection
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -975,6 +1044,8 @@ test('opening a missing branch creates it from a local branch base', async () =>
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -1078,6 +1149,8 @@ test('opening a missing branch can create it from the current detached worktree'
         });
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),
@@ -1198,6 +1271,8 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
             });
           }).pipe(
             Effect.provide(WorkspaceServiceLive),
+            Effect.provideService(CommandService, testCommandService),
+            Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
             Effect.provideService(WorkspaceRepository, repository),
             Effect.provideService(SurfaceRepository, testSurfaceRepository),
             Effect.provideService(SurfaceService, testSurfaceService),
@@ -1270,6 +1345,8 @@ test('opening an existing local branch rejects an occupied deterministic checkou
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -1341,6 +1418,8 @@ test('opening an existing local branch rejects a stale registered deterministic 
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -1408,6 +1487,8 @@ test('opening an existing local branch distinguishes checkout parent preparation
           return yield* workspace.openWorktree({ projectId: project.id, request: { branch } });
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
+          Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
           Effect.provideService(SurfaceService, testSurfaceService),
@@ -1444,6 +1525,8 @@ test('valid active context persistence writes after validation', async () => {
       });
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
       Effect.provideService(SurfaceService, testSurfaceService),
@@ -1457,6 +1540,57 @@ test('valid active context persistence writes after validation', async () => {
 
   assert.equal(writeCalls, 1);
   assert.deepEqual(output.activeContext, { projectId: project.id, worktreeId: worktree.id });
+});
+
+test('active context persistence publishes internal activation changes for accepted transitions', async () => {
+  const previous = { ...featureWorktree, id: 11 };
+  const stateFile = stateFileWithWriteCounter(
+    () => {},
+    stateFromActiveContext(project.id, previous.id, 1),
+  );
+  const repository = repositoryWithWorktrees({
+    project,
+    worktrees: [worktree, previous],
+  });
+  const events: unknown[] = [];
+  const internalEvents = {
+    ...testInternalEvents,
+    publish: (event: unknown) =>
+      Effect.sync(() => {
+        events.push(event);
+      }),
+  } satisfies InternalRuntimeEventBusService;
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService;
+      return yield* workspace.setActiveContext({
+        activeContext: { projectId: project.id, worktreeId: worktree.id },
+        revision: 2,
+      });
+    }).pipe(
+      Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(InternalRuntimeEventBus, internalEvents),
+      Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(StateFile, stateFile),
+      Effect.provideService(Git, git),
+      Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+    ),
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'worktree_activation_change',
+      previousWorktreeId: previous.id,
+      nextWorktreeId: worktree.id,
+      cause: 'active_context_changed',
+    },
+  ]);
 });
 
 function repositoryWith(input: {
@@ -1563,8 +1697,11 @@ function deleteFixtures() {
   };
 }
 
-function stateFileWithWriteCounter(onWrite: () => void): StateFileService {
-  let state = stateFromActiveContext(null, null, 0);
+function stateFileWithWriteCounter(
+  onWrite: () => void,
+  initialState = stateFromActiveContext(null, null, 0),
+): StateFileService {
+  let state = initialState;
 
   return {
     read: Effect.sync(() => state),

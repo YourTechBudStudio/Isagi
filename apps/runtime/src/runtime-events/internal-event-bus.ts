@@ -8,6 +8,12 @@ export type InternalRuntimeEvent =
       readonly agentSessionId: number;
     }
   | {
+      readonly type: 'worktree_activation_change';
+      readonly previousWorktreeId: number | null;
+      readonly nextWorktreeId: number | null;
+      readonly cause: 'active_context_changed' | 'startup_restored';
+    }
+  | {
       readonly type: 'terminal_session_changed';
       readonly terminalSessionId: number;
     }

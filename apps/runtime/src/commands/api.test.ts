@@ -33,6 +33,10 @@ test('command route returns configured command reads through the contract path',
       run: () => Effect.succeed(idleAction),
       stop: () => Effect.succeed(idleAction),
       restart: () => Effect.succeed(idleAction),
+      runPostCreateLifecycle: () => Effect.void,
+      cleanupBeforeWorktreeDelete: () => Effect.void,
+      cleanupBeforeWorktreePrune: () => Effect.void,
+      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -66,6 +70,10 @@ test('command route maps missing worktree to command rejection envelope', async 
       run: () => Effect.succeed(idleAction),
       stop: () => Effect.succeed(idleAction),
       restart: () => Effect.succeed(idleAction),
+      runPostCreateLifecycle: () => Effect.void,
+      cleanupBeforeWorktreeDelete: () => Effect.void,
+      cleanupBeforeWorktreePrune: () => Effect.void,
+      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({

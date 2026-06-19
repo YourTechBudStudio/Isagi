@@ -26,6 +26,7 @@ import type {
   WorktreeBaseRef,
 } from '@isagi/contracts';
 
+import { CommandService } from '../commands/index.js';
 import {
   branchPathHash,
   Git,
@@ -42,6 +43,7 @@ import {
   type StateFileError,
 } from '../persistence/index.js';
 import { ProjectConfigError } from '../project-config/project-config.service.js';
+import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SurfaceRepository } from '../surfaces/index.js';
 import {
   runPostCreateSetup,
@@ -74,6 +76,7 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'root_worktree_not_deletable'
     | 'dirty_checkout_requires_force'
     | 'root_worktree_not_found'
+    | 'command_cleanup_failed'
     | 'setup_config_invalid'
     | 'setup_trust_required'
     | 'setup_trust_mismatch';
@@ -83,6 +86,7 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly path?: string | undefined;
   readonly projectId?: number | undefined;
   readonly worktreeId?: number | undefined;
+  readonly cause?: unknown;
 }> {}
 
 export type WorkspaceServiceError =
@@ -151,6 +155,8 @@ export const WorkspaceServiceLive = Layer.effect(
     const worktreeSetup = yield* WorktreeSetupService;
     const worktreeSetupRepository = yield* WorktreeSetupRepository;
     const surfaceRepository = yield* SurfaceRepository;
+    const commands = yield* CommandService;
+    const internalEvents = yield* InternalRuntimeEventBus;
 
     const get = Effect.gen(function* () {
       const rows = yield* loadWorkspaceRows(repository);
@@ -171,6 +177,16 @@ export const WorkspaceServiceLive = Layer.effect(
           // frontend-owned restoration state; stale project/worktree references
           // are intentionally reconciled by the frontend during startup and
           // workspace refresh.
+          const worktrees = (yield* repository.listWorktrees).filter(
+            (worktree) => worktree.projectId === projectId,
+          );
+          for (const worktree of worktrees) {
+            yield* commandCleanup(
+              commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
+              worktree.id,
+              projectId,
+            );
+          }
           const deleted = yield* repository.deleteProject(projectId);
           return { projectId, deleted };
         }),
@@ -224,7 +240,9 @@ export const WorkspaceServiceLive = Layer.effect(
 
           yield* ensureProjectPathAvailable(repository, project);
           yield* validateBranchName(git, project, branch);
-          yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
+          yield* reconcileProjectWithGit(repository, commands, project).pipe(
+            Effect.provideService(Git, git),
+          );
           const existing = yield* repository.findProjectWorktreeByBranch({
             projectId: project.id,
             branch,
@@ -286,7 +304,9 @@ export const WorkspaceServiceLive = Layer.effect(
               baseRef,
             ]);
           }
-          yield* reconcileProjectWithGit(repository, project).pipe(Effect.provideService(Git, git));
+          yield* reconcileProjectWithGit(repository, commands, project).pipe(
+            Effect.provideService(Git, git),
+          );
           const created = yield* repository.findProjectWorktreeByBranch({
             projectId: project.id,
             branch,
@@ -303,6 +323,7 @@ export const WorkspaceServiceLive = Layer.effect(
           }
 
           if (setupPlan.status === 'disabled') {
+            yield* commands.runPostCreateLifecycle({ worktreeId: created.id });
             return {
               projectId: project.id,
               worktreeId: created.id,
@@ -313,6 +334,7 @@ export const WorkspaceServiceLive = Layer.effect(
           }
 
           if (setupPlan.status === 'not_configured') {
+            yield* commands.runPostCreateLifecycle({ worktreeId: created.id });
             return {
               projectId: project.id,
               worktreeId: created.id,
@@ -339,6 +361,8 @@ export const WorkspaceServiceLive = Layer.effect(
               setup,
             } satisfies OpenWorktreeOutput;
           }
+
+          yield* commands.runPostCreateLifecycle({ worktreeId: created.id });
 
           return {
             projectId: project.id,
@@ -402,11 +426,15 @@ export const WorkspaceServiceLive = Layer.effect(
           }
 
           // Destructive sequencing is deliberate: the worktree was already
-          // validated above; remove the Git worktree, delete the DB row so
-          // dependent state cascades, then optionally safe-delete the branch.
-          // Live PTY processes are reclaimed asynchronously by the runtime PTY
-          // garbage collector. `checkoutRemovalMode: "force"` does not force
-          // branch deletion.
+          // validated above; stop command processes, remove the Git worktree,
+          // delete the DB row so dependent state cascades, then optionally
+          // safe-delete the branch. `checkoutRemovalMode: "force"` does not
+          // force branch deletion.
+          yield* commandCleanup(
+            commands.cleanupBeforeWorktreeDelete({ worktreeId: worktree.id }),
+            worktree.id,
+            project.id,
+          );
           yield* git.run(
             input.request.checkoutRemovalMode === 'force'
               ? ['-C', project.rootPath, 'worktree', 'remove', '--force', worktree.path]
@@ -443,7 +471,7 @@ export const WorkspaceServiceLive = Layer.effect(
           const project = existing ?? (yield* repository.findProject(projectId));
 
           if (project) {
-            yield* reconcileProjectWithGit(repository, project).pipe(
+            yield* reconcileProjectWithGit(repository, commands, project).pipe(
               Effect.provideService(Git, git),
             );
           }
@@ -488,6 +516,7 @@ export const WorkspaceServiceLive = Layer.effect(
             projectId: input.projectId,
             rootPath: projectRoot.rootPath,
           });
+          yield* pruneMissingWorktrees(repository, commands, input.projectId, worktrees.missing);
 
           return {
             projectId: input.projectId,
@@ -506,7 +535,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
           for (const project of projects) {
             findings.push(
-              ...(yield* reconcileProjectWithGit(repository, project).pipe(
+              ...(yield* reconcileProjectWithGit(repository, commands, project).pipe(
                 Effect.provideService(Git, git),
               )),
             );
@@ -531,6 +560,19 @@ export const WorkspaceServiceLive = Layer.effect(
             activeWorktreeId: accepted.worktreeId,
             revision: input.revision,
           });
+          const previousWorktreeId = state.workspace.activeWorktreeId;
+          const nextWorktreeId = nextState.workspace.activeWorktreeId;
+          if (
+            nextState.workspace.activeContextRevision === input.revision &&
+            previousWorktreeId !== nextWorktreeId
+          ) {
+            yield* internalEvents.publish({
+              type: 'worktree_activation_change',
+              previousWorktreeId,
+              nextWorktreeId,
+              cause: 'active_context_changed',
+            });
+          }
           return { activeContext: activeContextFromState(nextState) };
         }),
     } satisfies WorkspaceService;
@@ -669,6 +711,27 @@ function projectNotPresent(projectId: number) {
   });
 }
 
+function commandCleanup<A>(
+  effect: Effect.Effect<A, unknown>,
+  worktreeId: number,
+  projectId: number,
+): Effect.Effect<A, WorkspaceError> {
+  return effect.pipe(
+    Effect.mapError(
+      (error) =>
+        new WorkspaceError({
+          code: 'command_cleanup_failed',
+          message: `Could not stop running commands for worktree ${worktreeId}.`,
+          projectId,
+          worktreeId,
+          // Keep the command-domain error as diagnostic cause without making it
+          // part of the workspace API contract.
+          cause: error,
+        }),
+    ),
+  );
+}
+
 function activeContextFromState(state: {
   readonly workspace: {
     readonly activeProjectId: number | null;
@@ -732,7 +795,11 @@ function validateActiveContextPersistenceTarget(
   });
 }
 
-function reconcileProjectWithGit(repository: WorkspaceRepositoryService, project: ProjectRow) {
+function reconcileProjectWithGit(
+  repository: WorkspaceRepositoryService,
+  commands: import('../commands/index.js').CommandServiceShape,
+  project: ProjectRow,
+) {
   return Effect.gen(function* () {
     const findings: ReconciliationFinding[] = [];
 
@@ -779,10 +846,32 @@ function reconcileProjectWithGit(repository: WorkspaceRepositoryService, project
       projectId: project.id,
       discovered: discovery.discovered,
     });
+    yield* pruneMissingWorktrees(repository, commands, project.id, worktrees.missing);
 
     findings.push(...reconciliationFindingsFromWorktreeResult(project.id, worktrees));
 
     return findings;
+  });
+}
+
+function pruneMissingWorktrees(
+  repository: WorkspaceRepositoryService,
+  commands: import('../commands/index.js').CommandServiceShape,
+  projectId: number,
+  worktrees: readonly Pick<WorktreeRow, 'id'>[],
+) {
+  return Effect.gen(function* () {
+    for (const worktree of worktrees) {
+      yield* commandCleanup(
+        commands.cleanupBeforeWorktreePrune({ worktreeId: worktree.id }),
+        worktree.id,
+        projectId,
+      );
+      const current = yield* repository.findWorktree(worktree.id);
+      if (current) {
+        yield* repository.deleteWorktree(worktree.id);
+      }
+    }
   });
 }
 

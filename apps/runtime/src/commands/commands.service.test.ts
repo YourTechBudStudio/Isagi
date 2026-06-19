@@ -132,10 +132,13 @@ function commandRepository(): CommandRepositoryService {
   return {
     listStatesForWorktree: () => Effect.succeed([]),
     findState: () => Effect.succeed(null),
+    listRunningStates: Effect.succeed([]),
+    listRunningStatesForWorktree: () => Effect.succeed([]),
     ensureState: () => Effect.die('ensureState is not used'),
     transitionState: () => Effect.die('transitionState is not used'),
     createRun: () => Effect.die('createRun is not used'),
     updateRunPty: () => Effect.die('updateRunPty is not used'),
+    updateRunLogPath: () => Effect.die('updateRunLogPath is not used'),
     completeRun: () => Effect.die('completeRun is not used'),
     completeRunByPtyProcess: () => Effect.succeed(null),
     findLatestRun: () => Effect.succeed(null),

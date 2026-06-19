@@ -9,6 +9,12 @@ import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schem
 type CommandStateRecord = InferSelectModel<typeof worktreeCommandStates>;
 type CommandRunRecord = InferSelectModel<typeof worktreeCommandRuns>;
 
+export type CommandRunTrigger =
+  | 'manual_run'
+  | 'manual_restart'
+  | 'lifecycle_post_create'
+  | 'lifecycle_activate';
+
 export interface CommandStateRow {
   readonly id: number;
   readonly worktreeId: number;
@@ -27,7 +33,7 @@ export interface CommandRunRow {
   readonly commandText: string;
   readonly cwd: string;
   readonly status: Exclude<CommandStatus, 'idle'>;
-  readonly trigger: 'manual_run' | 'manual_restart';
+  readonly trigger: CommandRunTrigger;
   readonly logPath: string | null;
   readonly exitCode: number | null;
   readonly signal: string | null;
@@ -45,6 +51,10 @@ export interface CommandRepositoryService {
     readonly worktreeId: number;
     readonly commandName: string;
   }) => Effect.Effect<CommandStateRow | null, DatabaseError>;
+  readonly listRunningStates: Effect.Effect<CommandStateRow[], DatabaseError>;
+  readonly listRunningStatesForWorktree: (
+    worktreeId: number,
+  ) => Effect.Effect<CommandStateRow[], DatabaseError>;
   readonly ensureState: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
@@ -62,7 +72,7 @@ export interface CommandRepositoryService {
     readonly commandName: string;
     readonly commandText: string;
     readonly cwd: string;
-    readonly trigger: 'manual_run' | 'manual_restart';
+    readonly trigger: CommandRunTrigger;
     readonly status: Exclude<CommandStatus, 'idle'>;
     readonly ptyProcessId?: number | null | undefined;
     readonly logPath?: string | null | undefined;
@@ -74,6 +84,10 @@ export interface CommandRepositoryService {
     readonly runId: number;
     readonly ptyProcessId: number;
     readonly logPath: string | null;
+  }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
+  readonly updateRunLogPath: (input: {
+    readonly runId: number;
+    readonly logPath: string;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly completeRun: (input: {
     readonly runId: number;
@@ -132,6 +146,28 @@ export const CommandRepositoryLive = Layer.effect(
             .get();
           return row ? commandStateRow(row) : null;
         }),
+      listRunningStates: database.use('list_running_worktree_command_states', (db) =>
+        db
+          .select(stateColumns)
+          .from(worktreeCommandStates)
+          .where(eq(worktreeCommandStates.status, 'running'))
+          .all()
+          .map(commandStateRow),
+      ),
+      listRunningStatesForWorktree: (worktreeId) =>
+        database.use('list_running_worktree_command_states_for_worktree', (db) =>
+          db
+            .select(stateColumns)
+            .from(worktreeCommandStates)
+            .where(
+              and(
+                eq(worktreeCommandStates.worktreeId, worktreeId),
+                eq(worktreeCommandStates.status, 'running'),
+              ),
+            )
+            .all()
+            .map(commandStateRow),
+        ),
       ensureState: (input) =>
         database.transaction('ensure_worktree_command_state', (db) => {
           const existing = db
@@ -235,6 +271,19 @@ export const CommandRepositoryLive = Layer.effect(
             .update(worktreeCommandRuns)
             .set({
               ptyProcessId: input.ptyProcessId,
+              logPath: input.logPath,
+              updatedAt: timestamp(),
+            })
+            .where(eq(worktreeCommandRuns.id, input.runId))
+            .returning(runColumns)
+            .get();
+          return row ? commandRunRow(row) : null;
+        }),
+      updateRunLogPath: (input) =>
+        database.use('update_worktree_command_run_log_path', (db) => {
+          const row = db
+            .update(worktreeCommandRuns)
+            .set({
               logPath: input.logPath,
               updatedAt: timestamp(),
             })

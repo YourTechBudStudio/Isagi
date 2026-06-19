@@ -8,6 +8,7 @@ import { Effect, Schema } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
+import { CommandService, type CommandServiceShape } from '../commands/index.js';
 import { Git, GitCommandError } from '../git/index.js';
 import {
   DataDirectory,
@@ -16,6 +17,10 @@ import {
   type DataDirectoryService,
   type WorkspaceState,
 } from '../persistence/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../runtime-events/index.js';
 import {
   SurfaceService,
   SurfaceRepository,
@@ -97,6 +102,27 @@ const testSurfaceService = {
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
+
+const testCommandService = {
+  listForWorktree: () => Effect.die('command list is not used by workspace snapshot tests'),
+  readLatestLogs: () => Effect.die('command logs are not used by workspace snapshot tests'),
+  run: () => Effect.die('command run is not used by workspace snapshot tests'),
+  stop: () => Effect.die('command stop is not used by workspace snapshot tests'),
+  restart: () => Effect.die('command restart is not used by workspace snapshot tests'),
+  runPostCreateLifecycle: () => Effect.void,
+  cleanupBeforeWorktreeDelete: () => Effect.void,
+  cleanupBeforeWorktreePrune: () => Effect.void,
+  reconcileStaleRunningCommands: Effect.void,
+} satisfies CommandServiceShape;
+
+const testInternalEvents = {
+  publish: () => Effect.void,
+  subscribe: () =>
+    Effect.succeed({
+      take: Effect.never,
+      unsubscribe: Effect.void,
+    }),
+} satisfies InternalRuntimeEventBusService;
 
 const project: ProjectRow = {
   id: 1,
@@ -288,6 +314,8 @@ test('workspace reads known rows without reconciling Git state', async () => {
         return yield* service.get;
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
         Effect.provideService(SurfaceService, testSurfaceService),

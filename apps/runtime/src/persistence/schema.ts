@@ -201,7 +201,9 @@ export const worktreeCommandRuns = sqliteTable(
     commandText: text('command_text').notNull(),
     cwd: text('cwd').notNull(),
     status: text('status', { enum: ['running', 'exited', 'stopped', 'failed'] }).notNull(),
-    trigger: text('trigger', { enum: ['manual_run', 'manual_restart'] }).notNull(),
+    trigger: text('trigger', {
+      enum: ['manual_run', 'manual_restart', 'lifecycle_post_create', 'lifecycle_activate'],
+    }).notNull(),
     logPath: text('log_path'),
     exitCode: integer('exit_code'),
     signal: text('signal'),

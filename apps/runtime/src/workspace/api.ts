@@ -168,6 +168,7 @@ function relocationRejectionReason(error: WorkspaceError) {
     case 'project_not_found':
     case 'project_not_missing':
     case 'project_path_already_registered':
+    case 'command_cleanup_failed':
       return error.code;
     default:
       return 'project_not_found';
@@ -200,6 +201,7 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'setup_config_invalid':
     case 'setup_trust_required':
     case 'setup_trust_mismatch':
+    case 'command_cleanup_failed':
       return error.code;
     default:
       return 'project_not_found';
@@ -214,6 +216,7 @@ function worktreeDeleteRejectionReason(error: WorkspaceError) {
     case 'root_worktree_not_deletable':
     case 'dirty_checkout_requires_force':
     case 'root_worktree_not_found':
+    case 'command_cleanup_failed':
       return error.code;
     default:
       return 'project_not_found';
@@ -280,6 +283,34 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
   }
 
   if (error instanceof WorkspaceError) {
+    if (context.endpointId === 'projects.add' && error.code === 'command_cleanup_failed') {
+      return {
+        code: 'project_operation_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: 'command_cleanup_failed',
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+        },
+      };
+    }
+
+    if (context.endpointId === 'projects.delete' && error.code === 'command_cleanup_failed') {
+      return {
+        code: 'project_delete_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: 'command_cleanup_failed',
+          ...(error.projectId ? { projectId: error.projectId } : {}),
+          ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
+        },
+      };
+    }
+
     if (context.endpointId === 'projects.relocate' && error.projectId) {
       return {
         code: 'project_relocation_rejected',
@@ -308,6 +339,23 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
         message: error.message,
         requestId: context.requestId,
         data: { reason: 'project_not_found', projectId: error.projectId },
+      };
+    }
+
+    if (
+      context.endpointId === 'workspace.reconcile' &&
+      error.code === 'command_cleanup_failed' &&
+      error.projectId
+    ) {
+      return {
+        code: 'workspace_reconcile_rejected',
+        status: 400,
+        message: error.message,
+        requestId: context.requestId,
+        data: {
+          reason: 'command_cleanup_failed',
+          projectId: error.projectId,
+        },
       };
     }
 

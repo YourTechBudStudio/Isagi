@@ -256,10 +256,6 @@ function reconcileProjectWorktreesInTransaction(
     .filter((worktree): worktree is WorktreeRecord => Boolean(worktree))
     .map((worktree) => ({ id: worktree.id, path: worktree.path, branch: worktree.branch }));
 
-  for (const worktree of missing) {
-    db.delete(worktrees).where(eq(worktrees.id, worktree.id)).run();
-  }
-
   return { added, missing } satisfies WorkspaceReconcileProjectWorktreesResult;
 }
 

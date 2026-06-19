@@ -1,4 +1,4 @@
-import { Layer } from 'effect';
+import { Effect, Layer } from 'effect';
 
 import {
   AgentSessionAttentionProjectionLive,
@@ -10,12 +10,14 @@ import {
 } from './agent-sessions/index.js';
 import {
   CommandRepositoryLive,
+  CommandService,
   CommandServiceLive,
   type CommandServiceShape,
 } from './commands/index.js';
 import { GitLive } from './git/index.js';
 import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
+import { StateFile } from './persistence/index.js';
 import {
   NodePtyBackendLive,
   PtyBackendLive,
@@ -27,6 +29,7 @@ import {
 } from './pty-processes/index.js';
 import { RuntimeConfigLive } from './runtime-config/index.js';
 import {
+  InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
   RuntimeEventBusLive,
   RuntimeEventProjectionLive,
@@ -46,6 +49,7 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
+  WorkspaceRepository,
   WorkspaceRepositoryLive,
   WorkspaceServiceLive,
   type WorkspaceServiceShape,
@@ -133,10 +137,6 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionLifecycleLayer,
   SessionGcLayer,
 );
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(SurfaceRepositoryLayer),
-  Layer.provide(SurfaceAndPtyServiceLayer),
-);
 const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(CommandRepositoryLayer),
   Layer.provide(RepositoryLive),
@@ -144,6 +144,30 @@ const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(DataDirectoryLive),
 );
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(SurfaceAndPtyServiceLayer),
+  Layer.provide(CommandServiceLayer),
+);
+const StartupActivationLayer = Layer.scopedDiscard(
+  Effect.gen(function* () {
+    yield* CommandService;
+    const stateFile = yield* StateFile;
+    const repository = yield* WorkspaceRepository;
+    const internalEvents = yield* InternalRuntimeEventBus;
+    const state = yield* stateFile.read;
+    const worktreeId = state.workspace.activeWorktreeId;
+    if (worktreeId === null) return;
+    const worktree = yield* repository.findWorktree(worktreeId);
+    if (!worktree) return;
+    yield* internalEvents.publish({
+      type: 'worktree_activation_change',
+      previousWorktreeId: null,
+      nextWorktreeId: worktree.id,
+      cause: 'startup_restored',
+    });
+  }),
+).pipe(Layer.provide(CommandServiceLayer), Layer.provide(RepositoryLive), Layer.provide(StateLive));
 
 export type RuntimeServices =
   | CommandServiceShape
@@ -161,6 +185,7 @@ export type RuntimeServices =
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
   CommandServiceLayer,
+  StartupActivationLayer,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 

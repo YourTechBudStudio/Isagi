@@ -72,6 +72,16 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
             }
             return;
           }
+          if (
+            event.type !== 'pty_process_started' &&
+            event.type !== 'pty_process_exited' &&
+            event.type !== 'pty_process_failed' &&
+            event.type !== 'pty_process_killed' &&
+            event.type !== 'pty_foreground_command_started' &&
+            event.type !== 'pty_foreground_command_ended'
+          ) {
+            return;
+          }
           const agent = yield* agents
             .findByActivePtyProcessId(event.ptyProcessId)
             .pipe(Effect.orElseSucceed(() => null));
