@@ -58,6 +58,8 @@ export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
 
 export const sessionLaunchRejectionReasonSchema = Schema.Literal('worktree_not_found');
 
+export const worktreeCommandsRejectionReasonSchema = Schema.Literal('worktree_not_found');
+
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_missing',
@@ -196,6 +198,17 @@ export const sessionLaunchRejectedErrorSchema = Schema.Struct({
   }),
 });
 
+export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_commands_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeCommandsRejectionReasonSchema,
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
 export const projectRelocationRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('project_relocation_rejected'),
   status: Schema.Union(Schema.Literal(400), Schema.Literal(409)),
@@ -287,6 +300,12 @@ export const sessionLaunchApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const worktreeCommandsApiErrorSchema = Schema.Union(
+  worktreeCommandsRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export const projectApiErrorSchema = Schema.Union(
   projectPathRejectedErrorSchema,
   gitCommandFailedErrorSchema,
@@ -351,6 +370,9 @@ export type WorktreeEnvironmentFocusRejectionReason = Schema.Schema.Type<
 export type SessionLaunchRejectionReason = Schema.Schema.Type<
   typeof sessionLaunchRejectionReasonSchema
 >;
+export type WorktreeCommandsRejectionReason = Schema.Schema.Type<
+  typeof worktreeCommandsRejectionReasonSchema
+>;
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;
@@ -376,6 +398,9 @@ export type WorktreeEnvironmentFocusRejectedError = Schema.Schema.Type<
 >;
 export type SessionLaunchRejectedError = Schema.Schema.Type<
   typeof sessionLaunchRejectedErrorSchema
+>;
+export type WorktreeCommandsRejectedError = Schema.Schema.Type<
+  typeof worktreeCommandsRejectedErrorSchema
 >;
 export type ProjectRelocationRejectedError = Schema.Schema.Type<
   typeof projectRelocationRejectedErrorSchema

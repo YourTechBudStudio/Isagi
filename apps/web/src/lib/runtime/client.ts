@@ -42,6 +42,7 @@ import {
   type ReconcileWorkspaceInput,
   type ReconcileWorkspaceOutput,
   type RelocateProjectOutput,
+  type WorktreeCommandsOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -56,6 +57,12 @@ export interface RuntimeClient {
   readonly fetchWorkspace: () => Effect.Effect<
     WorkspaceSnapshot,
     RuntimeEndpointError<typeof apiEndpoints.workspace.get>
+  >;
+  readonly fetchWorktreeCommands: (
+    worktreeId: number,
+  ) => Effect.Effect<
+    WorktreeCommandsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.commands.listForWorktree>
   >;
   readonly fetchActiveContext: () => Effect.Effect<
     ActiveContextOutput,
@@ -208,6 +215,8 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
 
   return {
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
+    fetchWorktreeCommands: (worktreeId) =>
+      request(apiEndpoints.commands.listForWorktree, { worktreeId }),
     fetchActiveContext: () => request(apiEndpoints.workspace.getActiveContext),
     updateActiveContext: (input) => request(apiEndpoints.workspace.setActiveContext, input),
     reconcileWorkspace: (input) => request(apiEndpoints.workspace.reconcile, input),

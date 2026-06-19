@@ -41,7 +41,6 @@ const project = {
       parked: false,
       surfaces: [],
       activeSurfaceId: null,
-      commands: [],
     },
   ],
 } satisfies Project;
@@ -123,6 +122,29 @@ test('runtime client interpolates path params', async () => {
 
   assert.equal(requestedUrl, 'http://runtime.test/api/v1/projects/42');
   assert.deepEqual(output, { projectId: 42, deleted: true });
+});
+
+test('runtime client calls the worktree commands endpoint', async () => {
+  let requestedUrl = '';
+  globalThis.fetch = ((input) => {
+    requestedUrl = String(input);
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          data: { status: 'configured', worktreeId: 10, commands: [] },
+          meta: { requestId: 'req-commands' },
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').fetchWorktreeCommands(10),
+  );
+
+  assert.equal(requestedUrl, 'http://runtime.test/api/v1/worktrees/10/commands');
+  assert.deepEqual(output, { status: 'configured', worktreeId: 10, commands: [] });
 });
 
 test('runtime client calls surface title and delete endpoints', async () => {

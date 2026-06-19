@@ -9,14 +9,6 @@ export const surfaceSchema = Schema.Struct({
   title: Schema.String,
 });
 
-export const commandSchema = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  status: Schema.Literal('running', 'stopped', 'exited'),
-  ports: Schema.Array(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
-  log: Schema.Array(Schema.String),
-});
-
 export const worktreeSchema = Schema.Struct({
   id: positiveIntegerSchema,
   projectId: positiveIntegerSchema,
@@ -28,7 +20,6 @@ export const worktreeSchema = Schema.Struct({
   parked: Schema.Boolean,
   surfaces: Schema.Array(surfaceSchema),
   activeSurfaceId: Schema.NullOr(positiveIntegerSchema),
-  commands: Schema.Array(commandSchema),
 });
 
 const projectBaseFields = {

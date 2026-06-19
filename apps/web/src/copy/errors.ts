@@ -116,6 +116,12 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       worktree_not_found: worktreeGone,
     },
   },
+  worktree_commands_rejected: {
+    summary: "Couldn't read commands for that worktree.",
+    byReason: {
+      worktree_not_found: worktreeGone,
+    },
+  },
   project_relocation_rejected: {
     summary: "Couldn't move that project.",
     byReason: {

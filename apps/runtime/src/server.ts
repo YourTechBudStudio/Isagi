@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { registerCommandsApi } from './commands/index.js';
 import { registerHealthApi } from './health/api.js';
 import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
@@ -68,6 +69,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       yield* tryPromise(() => fastify.register(websocket));
 
       registerHealthApi(fastify);
+      registerCommandsApi(fastify, runtime);
       registerWorkspaceApi(fastify, runtime);
       registerSurfacesApi(fastify, runtime);
       registerPtyApi(fastify, runtime);

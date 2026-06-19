@@ -26,6 +26,7 @@ import type {
   WorktreeSetupPreflightOutput,
   WorktreeSetupTrustInput,
   WorktreeSetupTrustOutput,
+  WorktreeCommandsOutput,
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
@@ -54,6 +55,12 @@ export class UserVisibleError extends Error {
 
 export function fetchWorkspace() {
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorkspace()));
+}
+
+export function fetchWorktreeCommands(
+  worktreeId: number,
+): Effect.Effect<WorktreeCommandsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.fetchWorktreeCommands(worktreeId)));
 }
 
 export function fetchActiveContext(): Effect.Effect<ActiveContextOutput, Error> {

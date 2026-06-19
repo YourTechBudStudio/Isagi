@@ -8,6 +8,7 @@ import {
   type AgentSessionAttentionProjectionService,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
+import { CommandServiceLive, type CommandServiceShape } from './commands/index.js';
 import { GitLive } from './git/index.js';
 import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
@@ -131,8 +132,10 @@ const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(SurfaceAndPtyServiceLayer),
 );
+const CommandServiceLayer = CommandServiceLive.pipe(Layer.provide(RepositoryLive));
 
 export type RuntimeServices =
+  | CommandServiceShape
   | WorkspaceServiceShape
   | SurfaceServiceShape
   | PtyServiceShape
@@ -144,10 +147,11 @@ export type RuntimeServices =
   | SessionLifecycleService
   | SessionGcService;
 
-const ServicesLayer = Layer.mergeAll(WorkspaceServiceLayer, ApiServicesLayer).pipe(
-  Layer.provideMerge(InternalRuntimeEventBusLive),
-  Layer.provideMerge(RuntimeEventBusLive),
-);
+const ServicesLayer = Layer.mergeAll(
+  WorkspaceServiceLayer,
+  CommandServiceLayer,
+  ApiServicesLayer,
+).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 
 export const RuntimeLayer = ServicesLayer.pipe(
   Layer.provide(

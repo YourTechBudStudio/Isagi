@@ -117,7 +117,6 @@ function project(input: {
         parked: false,
         surfaces: [],
         activeSurfaceId: null,
-        commands: [],
       },
     ],
   };

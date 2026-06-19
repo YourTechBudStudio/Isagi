@@ -42,7 +42,6 @@ export function projectFromContract(project: ContractProject): Project {
       ...worktree,
       attention: 'idle',
       surfaces: worktree.surfaces.map((surface) => ({ ...surface, attention: 'idle' })),
-      commands: worktree.commands.map((command) => ({ ...command, attention: 'idle' })),
     })),
   };
 }

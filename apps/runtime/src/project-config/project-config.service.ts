@@ -1,9 +1,13 @@
 import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { Data, Effect } from 'effect';
+import { Data, Effect, Either } from 'effect';
 import { parse } from 'yaml';
 
+import {
+  normalizeCommandCatalogConfig,
+  type WorktreeCommandCatalogConfig,
+} from './command-config.schema.js';
 import { hashWorktreeHooks } from './project-config.hash.js';
 import {
   normalizeWorktreeHooksConfig,
@@ -26,6 +30,21 @@ export type LoadedWorktreeHooks =
       readonly config: WorktreeHooksConfig;
       readonly hash: string;
       readonly summary: ReturnType<typeof summarizeWorktreeHooks>;
+    };
+
+export type LoadedWorktreeCommandCatalog =
+  | {
+      readonly status: 'configured';
+      readonly config: WorktreeCommandCatalogConfig;
+      readonly path: string;
+    }
+  | {
+      readonly status: 'config_error';
+      readonly diagnostic: {
+        readonly code: 'command_config_invalid';
+        readonly path: string;
+        readonly message: string;
+      };
     };
 
 export function loadWorktreeHooks(input: {
@@ -88,11 +107,80 @@ export function loadWorktreeHooks(input: {
   });
 }
 
+export function loadWorktreeCommandCatalog(input: {
+  readonly worktreeRootPath: string;
+}): Effect.Effect<LoadedWorktreeCommandCatalog> {
+  const configPath = join(input.worktreeRootPath, '.isagi', 'config.yaml');
+  return Effect.gen(function* () {
+    const contents = yield* Effect.tryPromise({
+      try: () => readFile(configPath, 'utf8'),
+      catch: (cause) =>
+        isNodeErrorCode(cause, 'ENOENT')
+          ? {
+              status: 'configured' as const,
+              config: { commands: [] },
+              path: configPath,
+            }
+          : commandConfigDiagnostic(configPath, 'Could not read command config.', cause),
+    }).pipe(Effect.either);
+    if (Either.isLeft(contents)) {
+      return contents.left;
+    }
+
+    const parsed = yield* Effect.try({
+      try: () => parse(contents.right),
+      catch: (cause) =>
+        commandConfigDiagnostic(configPath, 'Could not parse command config.', cause),
+    }).pipe(Effect.either);
+    if (Either.isLeft(parsed)) {
+      return parsed.left;
+    }
+
+    const config = yield* Effect.try({
+      try: () =>
+        normalizeCommandCatalogConfig(parsed.right, {
+          worktreeRootPath: input.worktreeRootPath,
+        }),
+      catch: (cause) => commandConfigDiagnostic(configPath, 'Invalid command config.', cause),
+    }).pipe(Effect.either);
+    if (Either.isLeft(config)) {
+      return config.left;
+    }
+
+    return {
+      status: 'configured' as const,
+      config: config.right,
+      path: configPath,
+    };
+  });
+}
+
 function pathExists(path: string) {
   return Effect.promise(() =>
     access(path).then(
       () => true,
       () => false,
     ),
+  );
+}
+
+function commandConfigDiagnostic(path: string, fallback: string, cause: unknown) {
+  const detail = cause instanceof Error && cause.message ? cause.message : fallback;
+  return {
+    status: 'config_error' as const,
+    diagnostic: {
+      code: 'command_config_invalid' as const,
+      path,
+      message: detail,
+    },
+  };
+}
+
+function isNodeErrorCode(cause: unknown, code: string) {
+  return Boolean(
+    cause &&
+    typeof cause === 'object' &&
+    'code' in cause &&
+    (cause as { readonly code?: unknown }).code === code,
   );
 }

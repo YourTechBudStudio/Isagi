@@ -135,6 +135,7 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   const snapshot = buildWorkspaceSnapshot([project], [worktreeBase]);
 
   assert.equal(snapshot.projects[0]?.worktrees[0]?.id, worktreeBase.id);
+  assert.equal('commands' in snapshot.projects[0]!.worktrees[0]!, false);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 

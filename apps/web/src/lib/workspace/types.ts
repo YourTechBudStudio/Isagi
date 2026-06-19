@@ -38,21 +38,9 @@ export interface Surface {
   readonly shells?: readonly ShellPane[] | undefined;
 }
 
-export type CommandStatus = 'running' | 'stopped' | 'exited';
-
-export interface Command {
-  readonly id: string;
-  readonly label: string;
-  readonly status: CommandStatus;
-  readonly attention: AttentionState;
-  readonly ports: readonly number[];
-  readonly log: readonly string[];
-}
-
-export type Worktree = Omit<ContractWorktree, 'surfaces' | 'commands'> & {
+export type Worktree = Omit<ContractWorktree, 'surfaces'> & {
   readonly attention: AttentionState;
   readonly surfaces: readonly Surface[];
-  readonly commands: readonly Command[];
 };
 
 /** `Omit` that distributes over a union so the discriminant is preserved. */

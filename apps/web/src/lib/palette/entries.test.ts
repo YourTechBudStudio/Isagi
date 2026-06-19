@@ -35,7 +35,6 @@ function ctx(): PaletteContext {
       parked: false,
       surfaces: [],
       activeSurfaceId: null,
-      commands: [],
     },
     activeSurface: null,
     activePaneId: null,

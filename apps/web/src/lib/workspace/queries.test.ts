@@ -617,7 +617,6 @@ function project(input: {
         parked: false,
         surfaces: input.surfaces ?? [],
         activeSurfaceId: null,
-        commands: [],
       },
     ],
   };

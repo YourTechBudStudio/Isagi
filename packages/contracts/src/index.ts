@@ -1,3 +1,4 @@
+import { commandsEndpoints } from './commands/api.js';
 import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
@@ -7,6 +8,7 @@ import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
 
 export const apiEndpoints = {
+  commands: commandsEndpoints,
   health: healthEndpoint,
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
@@ -75,6 +77,9 @@ export {
   worktreeEnvironmentFocusRejectionReasonSchema,
   worktreeBranchListApiErrorSchema,
   worktreeBranchListRejectedErrorSchema,
+  worktreeCommandsApiErrorSchema,
+  worktreeCommandsRejectedErrorSchema,
+  worktreeCommandsRejectionReasonSchema,
   worktreeDeleteApiErrorSchema,
   worktreeDeleteRejectedErrorSchema,
   worktreeDeleteRejectionReasonSchema,
@@ -94,6 +99,8 @@ export type {
   SessionLaunchRejectionReason,
   SurfaceRejectedError,
   SurfaceRejectionReason,
+  WorktreeCommandsRejectedError,
+  WorktreeCommandsRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,
   WorkspaceReconcileRejectedError,
@@ -108,6 +115,22 @@ export type {
   WorktreeSetupRejectedError,
   WorktreeSetupRejectionReason,
 } from './api/errors.js';
+
+export { commandsEndpoints } from './commands/api.js';
+export {
+  commandConfigDiagnosticSchema,
+  commandStatusSchema,
+  commandSummarySchema,
+  worktreeCommandsOutputSchema,
+  worktreeCommandsRouteParamsSchema,
+} from './commands/types.js';
+export type {
+  CommandConfigDiagnostic,
+  CommandStatus,
+  CommandSummary,
+  WorktreeCommandsOutput,
+  WorktreeCommandsRouteParams,
+} from './commands/types.js';
 
 export { healthEndpoint } from './health/api.js';
 export { healthOutputSchema } from './health/types.js';
@@ -257,7 +280,6 @@ export {
   activeContextOutputSchema,
   activeContextPersistenceInputSchema,
   activeContextSchema,
-  commandSchema,
   projectSchema,
   projectStatusSchema,
   reconcileWorkspaceInputSchema,

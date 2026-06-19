@@ -24,6 +24,19 @@ test('surface API error reasons map to web-owned copy', () => {
   );
 });
 
+test('command API error reasons map to web-owned copy', () => {
+  assert.equal(
+    runtimeErrorCopy.fromApiError({
+      code: 'worktree_commands_rejected',
+      status: 400,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason: 'worktree_not_found', worktreeId: 10 },
+    } satisfies ApiError),
+    "Can't find that worktree. Did it get removed?",
+  );
+});
+
 test('session status reasons produce degraded pane status labels', () => {
   assert.equal(ptyCopy.sessionStatus('failed', 'harness_launch_failed', exit()), 'Launch failed');
   assert.equal(ptyCopy.sessionStatus('failed', 'shell_launch_failed', exit()), 'Launch failed');

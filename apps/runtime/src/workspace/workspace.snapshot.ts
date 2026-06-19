@@ -77,7 +77,6 @@ function buildWorktreeSnapshot(
     activeSurfaceId: worktreeSurfaces.some((surface) => surface.id === focus?.activeSurfaceId)
       ? (focus?.activeSurfaceId ?? null)
       : null,
-    commands: [],
   };
 }
 

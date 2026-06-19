@@ -33,7 +33,7 @@ src/
     ui/                   # Base UI primitives wrapped + styled with Tailwind
   copy/                   # Reviewable sentence-level UI prose
   hooks/                  # Reusable React hooks
-  lib/                    # client.ts, runtime.ts, Effect workflows, pure helpers
+  lib/
 ```
 
 - Keep the root of `src/` as empty as possible — only `main.tsx`, `App.tsx`, and `styles.css` live there. Client and runtime wiring goes in `lib/`.

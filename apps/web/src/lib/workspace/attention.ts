@@ -70,10 +70,7 @@ function applyAttentionToWorktree(
   return {
     ...worktree,
     surfaces,
-    attention: aggregateAttention([
-      ...surfaces.map((surface) => surface.attention),
-      ...worktree.commands.map((command) => command.attention),
-    ]),
+    attention: aggregateAttention(surfaces.map((surface) => surface.attention)),
   };
 }
 

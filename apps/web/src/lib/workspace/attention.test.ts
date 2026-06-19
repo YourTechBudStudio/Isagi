@@ -65,7 +65,6 @@ function projectFixture(): Project {
           { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
         ],
         activeSurfaceId: null,
-        commands: [],
       },
     ],
   };

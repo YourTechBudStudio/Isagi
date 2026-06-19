@@ -24,7 +24,12 @@ import {
   restoreActivePaneFocus,
 } from './activation.js';
 import { reconcileSelection, workspaceDataFromSnapshot, type WorkspaceData } from './model.js';
-import { activeContextQueryKey, surfaceDetailQueryKey, workspaceQueryKey } from './query-keys.js';
+import {
+  activeContextQueryKey,
+  surfaceDetailQueryKey,
+  workspaceQueryKey,
+  worktreeCommandsQueryKey,
+} from './query-keys.js';
 import {
   addProject,
   deleteSurface,
@@ -32,6 +37,7 @@ import {
   deleteProject,
   deleteWorktree,
   fetchActiveContext,
+  fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
   getSurfaceDetail,
@@ -57,6 +63,19 @@ export function useWorkspaceQuery() {
     queryKey: workspaceQueryKey,
     queryFn: ({ signal }) =>
       runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+  });
+}
+
+export function useWorktreeCommandsQuery(worktreeId: number | null) {
+  return useQuery({
+    queryKey: worktreeCommandsQueryKey(worktreeId),
+    enabled: worktreeId !== null,
+    queryFn: ({ signal }) => {
+      if (worktreeId === null) {
+        throw new Error('Worktree command query requires an active worktree.');
+      }
+      return runRuntimeEffect(fetchWorktreeCommands(worktreeId), { signal });
+    },
   });
 }
 
