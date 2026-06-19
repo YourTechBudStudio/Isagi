@@ -180,6 +180,8 @@ export function usePaneSession({
                 message.exitCode === 0 && message.signal === null ? 'exited' : 'failed',
               );
               setExit({ exitCode: message.exitCode, signal: message.signal });
+              dispatch({ type: 'session_stopped' });
+              transport.closeSocket();
               return;
             default: {
               const phaseEvent = paneConnectionEventForMessage(message);

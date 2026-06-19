@@ -52,6 +52,8 @@ export type PaneConnectionEvent =
   | { readonly type: 'replay_start' }
   /** Replay finished; the stream is now live. */
   | { readonly type: 'replay_end' }
+  /** The attached process exited while this socket was live. */
+  | { readonly type: 'session_stopped' }
   /** The websocket closed without an error we surfaced. */
   | { readonly type: 'socket_closed' }
   /** A claim, transport, or protocol failure. */
@@ -77,6 +79,8 @@ export function paneConnectionReducer(
       return { phase: 'replaying', notice: state.notice };
     case 'replay_end':
       return { phase: 'attached', notice: state.notice };
+    case 'session_stopped':
+      return { phase: 'disconnected', notice: state.notice };
     case 'socket_closed':
       // Preserve any error notice that arrived just before the close so the pane
       // keeps explaining why the connection dropped (e.g. a moved attachment).
@@ -103,9 +107,11 @@ export function paneConnectionSnapshot(state: PaneConnectionState): PaneConnecti
 
 /**
  * Map an incoming PTY socket message to a connection event, when one applies.
- * `output`, `session`, and `exit` carry terminal data / status rather than
- * connection-phase transitions, so they return `null` and are handled by the
- * attachment owner directly.
+ * `output` and `session` carry terminal data / status rather than connection
+ * phase transitions, so they return `null` and are handled by the attachment
+ * owner directly. `exit` is both data and lifecycle: the local attachment is no
+ * longer active, even before the surface detail refetch returns the stopped
+ * backend projection.
  */
 export function paneConnectionEventForMessage(
   message: PtyWebSocketOutputMessage,
@@ -117,9 +123,10 @@ export function paneConnectionEventForMessage(
       return { type: 'replay_end' };
     case 'error':
       return { type: 'errored', notice: { kind: 'protocol', code: message.code } };
+    case 'exit':
+      return { type: 'session_stopped' };
     case 'output':
     case 'session':
-    case 'exit':
       return null;
   }
 }

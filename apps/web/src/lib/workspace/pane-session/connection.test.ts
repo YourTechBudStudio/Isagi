@@ -53,6 +53,13 @@ describe('paneConnectionReducer', () => {
     });
   });
 
+  it('marks a process exit as disconnected with no active attach request', () => {
+    const state = run([{ type: 'socket_open' }, { type: 'session_stopped' }]);
+
+    assert.deepEqual(state, { phase: 'disconnected', notice: null });
+    assert.equal(paneConnectionSnapshot(state).attachRequested, false);
+  });
+
   it('keeps the error notice when a close follows it (so "moved" persists)', () => {
     const state = run([
       { type: 'socket_open' },
@@ -109,11 +116,16 @@ describe('paneConnectionEventForMessage', () => {
     });
   });
 
-  it('ignores output, session, and exit messages (they carry data, not phase)', () => {
+  it('maps a process exit to a stopped session event', () => {
+    assert.deepEqual(paneConnectionEventForMessage({ type: 'exit', exitCode: 0, signal: null }), {
+      type: 'session_stopped',
+    });
+  });
+
+  it('ignores output and session messages (they carry data, not phase)', () => {
     const messages: readonly PtyWebSocketOutputMessage[] = [
       { type: 'output', data: 'hi' },
       { type: 'session', status: 'running' },
-      { type: 'exit', exitCode: 0, signal: null },
     ];
     for (const message of messages) {
       assert.equal(paneConnectionEventForMessage(message), null);
