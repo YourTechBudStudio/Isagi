@@ -318,7 +318,7 @@ function terminalThemeFromTokens() {
   const token = (name: string) => styles.getPropertyValue(name).trim();
   const canvas = token('--color-canvas');
   const elevated = token('--color-elevated');
-  const terminalSurface = blendHex(elevated, canvas, 0.5);
+  const terminalSurface = token('--color-terminal-surface') || blendHex(elevated, canvas, 0.5);
   const fg = token('--color-fg');
   const fgSubtle = token('--color-fg-subtle');
   const line = token('--color-line');
