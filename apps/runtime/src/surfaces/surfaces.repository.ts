@@ -32,6 +32,7 @@ import type {
   EnvironmentFocusRow,
   PtyProcessRow,
   RenameSurfaceOutput,
+  SetSurfaceLayoutOutput,
   SurfaceDeleteTarget,
   SurfaceMetadataRow,
   SurfacePaneRow,
@@ -94,6 +95,10 @@ export interface SurfaceRepositoryService {
   readonly splitSurfacePane: (
     input: SplitSurfacePaneInput,
   ) => Effect.Effect<SplitSurfacePaneOutput | null, DatabaseError>;
+  readonly setSurfaceLayout: (input: {
+    readonly surfaceId: number;
+    readonly layout: SurfaceLayoutNode;
+  }) => Effect.Effect<SetSurfaceLayoutOutput, DatabaseError>;
   readonly setPaneSession: (input: {
     readonly paneId: number;
     readonly sessionKind: 'agent_session' | 'terminal_session' | null;
@@ -346,6 +351,14 @@ export const SurfaceRepositoryLive = Layer.effect(
             .where(eq(worktreeSurfaces.id, input.surfaceId))
             .run();
           return { surfaceId: input.surfaceId, paneId: pane.id, title };
+        }),
+      setSurfaceLayout: (input) =>
+        database.use('set_surface_layout', (db) => {
+          db.update(worktreeSurfaces)
+            .set({ layoutJson: JSON.stringify(input.layout), updatedAt: timestamp() })
+            .where(eq(worktreeSurfaces.id, input.surfaceId))
+            .run();
+          return { surfaceId: input.surfaceId, layout: input.layout };
         }),
       setPaneSession: (input) =>
         database.use('set_surface_pane_session', (db) => {

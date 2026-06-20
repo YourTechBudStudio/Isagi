@@ -221,6 +221,16 @@ export const splitPaneInputSchema = Schema.Struct({
   newPane: paneSessionSpecSchema,
 });
 
+export const setSplitWeightsInputSchema = Schema.Struct({
+  nodeId: Schema.String.pipe(Schema.minLength(1)),
+  weights: Schema.Array(Schema.Number.pipe(Schema.nonNegative())),
+});
+
+export const setSplitWeightsOutputSchema = Schema.Struct({
+  surfaceId: positiveIntegerSchema,
+  layout: surfaceLayoutNodeSchema,
+});
+
 export const renameSurfaceInputSchema = Schema.Struct({
   title: Schema.String,
 });
@@ -371,6 +381,8 @@ export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSch
 export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
 export type SplitPaneDirection = Schema.Schema.Type<typeof splitPaneDirectionSchema>;
 export type SplitPaneInput = Schema.Schema.Type<typeof splitPaneInputSchema>;
+export type SetSplitWeightsInput = Schema.Schema.Type<typeof setSplitWeightsInputSchema>;
+export type SetSplitWeightsOutput = Schema.Schema.Type<typeof setSplitWeightsOutputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;

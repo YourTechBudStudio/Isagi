@@ -8,6 +8,8 @@ import type {
   PaneSessionCreateInput,
   PaneSessionSpec,
   RenameSurfaceOutput,
+  SetSplitWeightsInput,
+  SetSplitWeightsOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
   SurfaceDetail,
@@ -24,6 +26,7 @@ import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
 import { planSurfacePaneDelete } from './delete-plan.js';
+import { setNodeWeights } from './layout.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
 import type {
@@ -41,7 +44,8 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
     | 'pane_not_found'
     | 'session_not_found'
     | 'session_worktree_mismatch'
-    | 'invalid_surface_title';
+    | 'invalid_surface_title'
+    | 'layout_node_stale';
   readonly message: string;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
@@ -75,6 +79,10 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly split: SplitPaneInput;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
+  readonly setSplitWeights: (input: {
+    readonly surfaceId: number;
+    readonly weights: SetSplitWeightsInput;
+  }) => Effect.Effect<SetSplitWeightsOutput, SurfaceServiceError>;
   readonly createPaneSession: (input: {
     readonly worktreeId: number;
     readonly create: PaneSessionCreateInput;
@@ -249,6 +257,32 @@ export const SurfaceServiceLive = Layer.effect(
             paneId: split.paneId,
             title: split.title,
           } satisfies CreateSurfaceOutput;
+        }),
+      setSplitWeights: (input) =>
+        Effect.gen(function* () {
+          const surface = yield* repository.findSurface(input.surfaceId);
+          if (!surface)
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'surface_not_found',
+                message: `Surface ${input.surfaceId} was not found.`,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          const layout = decodeLayout(surface.layoutJson);
+          const nextLayout = setNodeWeights(layout, input.weights.nodeId, input.weights.weights);
+          if (!nextLayout)
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'layout_node_stale',
+                message: `Layout node ${input.weights.nodeId} is no longer valid for surface ${input.surfaceId}.`,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          return yield* repository.setSurfaceLayout({
+            surfaceId: input.surfaceId,
+            layout: nextLayout,
+          });
         }),
       createPaneSession: (input) =>
         createPaneSession(

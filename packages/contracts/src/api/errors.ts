@@ -53,6 +53,7 @@ export const surfaceRejectionReasonSchema = Schema.Literal(
   'session_not_found',
   'session_worktree_mismatch',
   'invalid_surface_title',
+  'layout_node_stale',
 );
 
 export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(

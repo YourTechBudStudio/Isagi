@@ -12,7 +12,9 @@ import type {
   OpenWorktreeOutput,
   ReconciliationFinding,
   SetActiveContextInput,
+  SetSplitWeightsInput,
   SplitPaneInput,
+  SurfaceDetail,
 } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
@@ -52,6 +54,7 @@ import {
   restartCommand,
   runCommand,
   relocateProject,
+  setSplitWeights,
   splitPane,
   stopCommand,
   updateActiveContext,
@@ -305,6 +308,24 @@ export async function splitPaneFromPalette(input: {
     return output;
   } catch (error) {
     await client.invalidateQueries({ queryKey: workspaceQueryKey });
+    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
+    throw error;
+  }
+}
+
+export async function setSplitWeightsFromSurface(input: {
+  readonly surfaceId: number;
+  readonly weights: SetSplitWeightsInput;
+  readonly client?: QueryClient | undefined;
+}) {
+  const client = input.client ?? queryClient;
+  try {
+    const output = await runRuntimeEffect(setSplitWeights(input.surfaceId, input.weights));
+    client.setQueryData<SurfaceDetail>(surfaceDetailQueryKey(output.surfaceId), (detail) =>
+      detail ? { ...detail, layout: output.layout } : detail,
+    );
+    return output;
+  } catch (error) {
     await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
     throw error;
   }

@@ -1,11 +1,22 @@
-import { Bot, CircleDashed, CirclePlus, RotateCw, TriangleAlert } from 'lucide-react';
+import {
+  Bot,
+  CircleDashed,
+  CirclePlus,
+  PanelBottom,
+  PanelRight,
+  RotateCw,
+  Trash2,
+  TriangleAlert,
+} from 'lucide-react';
+import type { ReactElement } from 'react';
 import { useCallback, useMemo, useRef } from 'react';
 
 import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
-import { PaneDeleteButton } from '../../components/PaneDeleteButton.js';
+import { ContextMenu } from '../../components/ContextMenu.js';
+import { PaneActionCluster } from '../../components/PaneActionCluster.js';
 import { agentSessionCopy, ptyCopy, type PaneRestorePrompt } from '../../copy/index.js';
 import {
   handleDispatchedCommandError,
@@ -37,6 +48,13 @@ export function PtyPane({
   const focusShell = useCallback(() => {
     shellRef.current?.focus({ preventScroll: true });
   }, []);
+  const focusPane = useCallback(() => {
+    activatePane({
+      worktreeId: surface.worktreeId,
+      surfaceId: surface.id,
+      paneId: pane.id,
+    });
+  }, [pane.id, surface.id, surface.worktreeId]);
   usePaneFocusTarget({
     surfaceId: surface.id,
     paneId: pane.id,
@@ -65,18 +83,38 @@ export function PtyPane({
     paneAttention,
     autoAttach: focused,
   });
-  const onDelete = () => {
-    activatePane({
-      worktreeId: surface.worktreeId,
-      surfaceId: surface.id,
-      paneId: pane.id,
-    });
-    void dispatchCommand('delete-active-pane', {
-      worktreeId: String(surface.worktreeId),
-      surfaceId: String(surface.id),
-      paneId: String(pane.id),
-    }).catch(handleDispatchedCommandError);
-  };
+  const dispatchPaneCommand = useCallback(
+    (commandId: 'split-pane-right' | 'split-pane-down' | 'delete-active-pane') => {
+      focusPane();
+      void dispatchCommand(commandId, {
+        worktreeId: String(surface.worktreeId),
+        surfaceId: String(surface.id),
+        paneId: String(pane.id),
+      }).catch(handleDispatchedCommandError);
+    },
+    [dispatchCommand, focusPane, pane.id, surface.id, surface.worktreeId],
+  );
+  const onSplitRight = useCallback(() => {
+    dispatchPaneCommand('split-pane-right');
+  }, [dispatchPaneCommand]);
+  const onSplitDown = useCallback(() => {
+    dispatchPaneCommand('split-pane-down');
+  }, [dispatchPaneCommand]);
+  const onDelete = useCallback(() => {
+    dispatchPaneCommand('delete-active-pane');
+  }, [dispatchPaneCommand]);
+  const paneMenuItems = useMemo(
+    () => [
+      { label: 'Split Right', icon: PanelRight, onSelect: onSplitRight },
+      { label: 'Split Down', icon: PanelBottom, onSelect: onSplitDown },
+      { label: 'Delete pane', icon: Trash2, danger: true, onSelect: onDelete },
+    ],
+    [onDelete, onSplitDown, onSplitRight],
+  );
+  const withPaneMenu = useCallback(
+    (children: ReactElement) => <ContextMenu items={paneMenuItems}>{children}</ContextMenu>,
+    [paneMenuItems],
+  );
 
   return (
     <section
@@ -88,48 +126,66 @@ export function PtyPane({
         errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'
       } ${dimmed ? 'bg-elevated/38' : ''}`}
     >
-      <div className="flex min-h-9 items-center gap-2 border-b border-line/15 px-3 py-2">
-        <Icon size={13} className="text-fg-subtle" />
-        <AttentionDot state={attention} />
-        <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
-        <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
-          {statusLabel}
-        </span>
-      </div>
+      {withPaneMenu(
+        <div className="flex min-h-9 items-center gap-2 border-b border-line/15 px-3 py-2">
+          <Icon size={13} className="text-fg-subtle" />
+          <AttentionDot state={attention} />
+          <span className="truncate font-mono text-[11.5px] text-fg-muted">{pane.title}</span>
+          <span className="ml-auto truncate font-mono text-[10.5px] text-fg-subtle">
+            {statusLabel}
+          </span>
+        </div>,
+      )}
       {notice ? (
         <div className="border-b border-line/12 px-3 py-1.5 font-mono text-[10.5px] text-fg-subtle">
           {notice}
         </div>
       ) : null}
       {view.kind === 'unsupported' ? (
-        <UnsupportedPrompt onDelete={onDelete} />
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <UnsupportedPrompt onDelete={onDelete} />
+          </div>,
+        )
       ) : view.kind === 'moved' ? (
-        <MovedPrompt
-          onReclaim={attach}
-          onStartFresh={startFresh}
-          pending={startFreshPending}
-          startFreshError={startFreshError}
-        />
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <MovedPrompt
+              onReclaim={attach}
+              onStartFresh={startFresh}
+              pending={startFreshPending}
+              startFreshError={startFreshError}
+            />
+          </div>,
+        )
       ) : view.kind === 'attachable' ? (
-        <RestorePrompt
-          prompt={view.resumeFailed ? 'resume_failed' : 'resume_available'}
-          diagnosticCode={session?.diagnosticCode ?? null}
-          diagnosticDetail={session?.diagnosticDetail ?? null}
-          onResume={attach}
-          onStartFresh={startFresh}
-          startFreshPending={startFreshPending}
-          startFreshError={startFreshError}
-        />
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <RestorePrompt
+              prompt={view.resumeFailed ? 'resume_failed' : 'resume_available'}
+              diagnosticCode={session?.diagnosticCode ?? null}
+              diagnosticDetail={session?.diagnosticDetail ?? null}
+              onResume={attach}
+              onStartFresh={startFresh}
+              startFreshPending={startFreshPending}
+              startFreshError={startFreshError}
+            />
+          </div>,
+        )
       ) : view.kind === 'needs_fresh' ? (
-        <RestorePrompt
-          prompt="start_fresh"
-          diagnosticCode={session?.diagnosticCode ?? null}
-          diagnosticDetail={session?.diagnosticDetail ?? null}
-          onResume={null}
-          onStartFresh={startFresh}
-          startFreshPending={startFreshPending}
-          startFreshError={startFreshError}
-        />
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <RestorePrompt
+              prompt="start_fresh"
+              diagnosticCode={session?.diagnosticCode ?? null}
+              diagnosticDetail={session?.diagnosticDetail ?? null}
+              onResume={null}
+              onStartFresh={startFresh}
+              startFreshPending={startFreshPending}
+              startFreshError={startFreshError}
+            />
+          </div>,
+        )
       ) : view.kind === 'live' && session ? (
         <PaneTerminal
           key={terminalKey}
@@ -141,11 +197,17 @@ export function PtyPane({
           onRendererWarning={onRendererWarning}
         />
       ) : (
-        <div className="grid min-h-0 flex-1 place-items-center px-4">
-          <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptyPane}</span>
-        </div>
+        withPaneMenu(
+          <div className="grid min-h-0 flex-1 place-items-center px-4">
+            <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptyPane}</span>
+          </div>,
+        )
       )}
-      <PaneDeleteButton onDelete={onDelete} />
+      <PaneActionCluster
+        onSplitRight={onSplitRight}
+        onSplitDown={onSplitDown}
+        onDelete={onDelete}
+      />
     </section>
   );
 }

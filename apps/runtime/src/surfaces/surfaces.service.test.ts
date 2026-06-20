@@ -360,6 +360,93 @@ test('failed split session creation leaves the split pane recoverable and sessio
   }
 });
 
+test('set split weights persists normalized manual layout weights', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-set-split-weights-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Terminal',
+        });
+        const paneId = yield* addPaneToSurface(surface.surfaceId);
+        const updated = yield* surfaces.setSplitWeights({
+          surfaceId: surface.surfaceId,
+          weights: { nodeId: `split-${surface.surfaceId}`, weights: [2, 1] },
+        });
+        const detail = yield* surfaces.getSurfaceDetail(surface.surfaceId);
+        return { surface, paneId, updated, detail };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.updated.layout, {
+      kind: 'split',
+      nodeId: `split-${output.surface.surfaceId}`,
+      axis: 'row',
+      sizing: 'manual',
+      children: [
+        {
+          kind: 'leaf',
+          nodeId: `pane-${output.surface.paneId}`,
+          paneId: output.surface.paneId,
+          collapsed: false,
+        },
+        {
+          kind: 'leaf',
+          nodeId: `pane-${output.paneId}`,
+          paneId: output.paneId,
+          collapsed: false,
+        },
+      ],
+      weights: [0.666667, 0.333333],
+    });
+    assert.deepEqual(output.detail.layout, output.updated.layout);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('set split weights rejects stale layout nodes and changed child shapes', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-stale-split-weights-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Terminal',
+        });
+        yield* addPaneToSurface(surface.surfaceId);
+        const missing = yield* surfaces
+          .setSplitWeights({
+            surfaceId: surface.surfaceId,
+            weights: { nodeId: 'split-missing', weights: [0.5, 0.5] },
+          })
+          .pipe(Effect.either);
+        const changedShape = yield* surfaces
+          .setSplitWeights({
+            surfaceId: surface.surfaceId,
+            weights: { nodeId: `split-${surface.surfaceId}`, weights: [0.2, 0.3, 0.5] },
+          })
+          .pipe(Effect.either);
+        return { missing, changedShape };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.ok(Either.isLeft(output.missing));
+    assert.ok(output.missing.left instanceof SurfaceError);
+    assert.equal(output.missing.left.code, 'layout_node_stale');
+    assert.ok(Either.isLeft(output.changedShape));
+    assert.ok(output.changedShape.left instanceof SurfaceError);
+    assert.equal(output.changedShape.left.code, 'layout_node_stale');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('failed agent surface creation leaves the harness-titled empty surface visible', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-failed-'));
   try {

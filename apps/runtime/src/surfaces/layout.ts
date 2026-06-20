@@ -52,6 +52,58 @@ export function layoutContainsPane(layout: SurfaceLayoutNode, paneId: number): b
   return layout.children.some((child) => layoutContainsPane(child, paneId));
 }
 
+export function setNodeWeights(
+  layout: SurfaceLayoutNode,
+  nodeId: string,
+  weights: readonly number[],
+): SurfaceLayoutNode | null {
+  const result = setNodeWeightsInNode(layout, nodeId, weights);
+  return result.found ? result.layout : null;
+}
+
+function setNodeWeightsInNode(
+  layout: SurfaceLayoutNode,
+  nodeId: string,
+  weights: readonly number[],
+): { readonly found: true; readonly layout: SurfaceLayoutNode } | { readonly found: false } {
+  if (layout.nodeId === nodeId) {
+    if (layout.kind !== 'split' || weights.length !== layout.children.length) {
+      return { found: false };
+    }
+    return {
+      found: true,
+      layout: {
+        ...layout,
+        sizing: 'manual',
+        weights: normalizeWeights(weights),
+      },
+    };
+  }
+
+  if (layout.kind === 'leaf') {
+    return { found: false };
+  }
+
+  const children: SurfaceLayoutNode[] = [];
+  for (const child of layout.children) {
+    const result = setNodeWeightsInNode(child, nodeId, weights);
+    if (!result.found) {
+      children.push(child);
+      continue;
+    }
+    children.push(result.layout);
+    return {
+      found: true,
+      layout: {
+        ...layout,
+        children: [...children, ...layout.children.slice(children.length)],
+      },
+    };
+  }
+
+  return { found: false };
+}
+
 function insertIntoNode(
   node: SurfaceLayoutNode,
   sourcePaneId: number,

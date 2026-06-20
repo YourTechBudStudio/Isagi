@@ -7,6 +7,7 @@ import type {
   SessionDiagnosticCode,
   SessionStatus,
   SplitPaneDirection,
+  SurfaceLayoutNode,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
@@ -147,6 +148,11 @@ export interface SplitSurfacePaneOutput {
   readonly surfaceId: number;
   readonly paneId: number;
   readonly title: string;
+}
+
+export interface SetSurfaceLayoutOutput {
+  readonly surfaceId: number;
+  readonly layout: SurfaceLayoutNode;
 }
 
 export interface SurfaceDeletePaneTarget {

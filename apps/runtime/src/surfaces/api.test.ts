@@ -8,6 +8,7 @@ import type {
   CreateSurfaceOutput,
   DeleteSurfaceOutput,
   RenameSurfaceOutput,
+  SetSplitWeightsOutput,
   SurfaceDetail,
 } from '@isagi/contracts';
 
@@ -178,6 +179,57 @@ test('split pane route decodes the source pane and new pane spec through the con
   );
 });
 
+test('set split weights route decodes body and params through the contract path', async () => {
+  let input: Parameters<SurfaceServiceShape['setSplitWeights']>[0] | null = null;
+  await withSurfacesApi(
+    fakeSurfaceService({
+      setSplitWeights: (request) =>
+        Effect.sync(() => {
+          input = request;
+          return {
+            surfaceId: request.surfaceId,
+            layout: {
+              kind: 'split',
+              nodeId: request.weights.nodeId,
+              axis: 'row',
+              sizing: 'manual',
+              children: [
+                { kind: 'leaf', nodeId: 'pane-7', paneId: 7, collapsed: false },
+                { kind: 'leaf', nodeId: 'pane-8', paneId: 8, collapsed: false },
+              ],
+              weights: request.weights.weights,
+            },
+          };
+        }),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/surfaces/42/layout/weights',
+        payload: { nodeId: 'split-8', weights: [0.25, 0.75] },
+      });
+      const payload = response.json() as { data?: SetSplitWeightsOutput };
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(input, {
+        surfaceId: 42,
+        weights: { nodeId: 'split-8', weights: [0.25, 0.75] },
+      });
+      assert.deepEqual(payload.data?.layout, {
+        kind: 'split',
+        nodeId: 'split-8',
+        axis: 'row',
+        sizing: 'manual',
+        children: [
+          { kind: 'leaf', nodeId: 'pane-7', paneId: 7, collapsed: false },
+          { kind: 'leaf', nodeId: 'pane-8', paneId: 8, collapsed: false },
+        ],
+        weights: [0.25, 0.75],
+      });
+    },
+  );
+});
+
 test('surface API maps invalid title failures to surface_rejected contract errors', async () => {
   await withSurfacesApi(
     fakeSurfaceService({
@@ -205,6 +257,39 @@ test('surface API maps invalid title failures to surface_rejected contract error
       assert.equal(typeof payload.error?.requestId, 'string');
       assert.deepEqual(payload.error?.data, {
         reason: 'invalid_surface_title',
+        surfaceId: 42,
+      });
+    },
+  );
+});
+
+test('surface API maps stale layout nodes to surface_rejected contract errors', async () => {
+  await withSurfacesApi(
+    fakeSurfaceService({
+      setSplitWeights: (request) =>
+        Effect.fail(
+          new SurfaceError({
+            code: 'layout_node_stale',
+            message: `Layout node ${request.weights.nodeId} is stale.`,
+            surfaceId: request.surfaceId,
+          }),
+        ),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/surfaces/42/layout/weights',
+        payload: { nodeId: 'split-8', weights: [0.25, 0.75] },
+      });
+      const payload = response.json() as {
+        error?: { readonly code?: string; readonly data?: unknown; readonly requestId?: unknown };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(payload.error?.code, 'surface_rejected');
+      assert.equal(typeof payload.error?.requestId, 'string');
+      assert.deepEqual(payload.error?.data, {
+        reason: 'layout_node_stale',
         surfaceId: 42,
       });
     },
@@ -291,6 +376,21 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         surfaceId: 42,
         paneId: 8,
         title: input.split.newPane.kind === 'agent_session' ? 'Pi 2' : 'Terminal 2',
+      }),
+    setSplitWeights: (input) =>
+      Effect.succeed({
+        surfaceId: input.surfaceId,
+        layout: {
+          kind: 'split',
+          nodeId: input.weights.nodeId,
+          axis: 'row',
+          sizing: 'manual',
+          children: [
+            { kind: 'leaf', nodeId: 'pane-7', paneId: 7, collapsed: false },
+            { kind: 'leaf', nodeId: 'pane-8', paneId: 8, collapsed: false },
+          ],
+          weights: input.weights.weights,
+        },
       }),
     createPaneSession: (input) =>
       Effect.succeed({

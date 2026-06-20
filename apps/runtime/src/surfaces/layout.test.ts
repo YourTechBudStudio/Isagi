@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { SurfaceLayoutNode } from '@isagi/contracts';
 
-import { insertPaneIntoLayout, prunePaneFromLayout } from './layout.js';
+import { insertPaneIntoLayout, prunePaneFromLayout, setNodeWeights } from './layout.js';
 
 test('layout pruning removes a matching leaf', () => {
   const layout = leaf(1);
@@ -160,6 +160,53 @@ test('layout insertion wraps a source leaf when parent axis differs', () => {
       },
       leaf(2),
     ],
+  });
+});
+
+test('layout weight setting fails when the node is missing', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.5, 0.5],
+  };
+
+  assert.equal(setNodeWeights(layout, 'split-missing', [0.2, 0.8]), null);
+});
+
+test('layout weight setting fails when the target node is not a split', () => {
+  assert.equal(setNodeWeights(leaf(1), 'pane-1', [1]), null);
+});
+
+test('layout weight setting fails when the node child shape changed', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.5, 0.5],
+  };
+
+  assert.equal(setNodeWeights(layout, 'split-1', [0.2, 0.3, 0.5]), null);
+});
+
+test('layout weight setting normalizes weights and marks the split manual', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'auto',
+    children: [leaf(1), leaf(2), leaf(3)],
+    weights: [0.5, 0.25, 0.25],
+  };
+
+  assert.deepEqual(setNodeWeights(layout, 'split-1', [2, 0, Number.NaN]), {
+    ...layout,
+    sizing: 'manual',
+    weights: [1, 0, 0],
   });
 });
 

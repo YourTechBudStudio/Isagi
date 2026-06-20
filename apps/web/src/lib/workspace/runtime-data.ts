@@ -21,6 +21,8 @@ import type {
   PathSuggestOutput,
   RenameSurfaceOutput,
   ReconcileWorkspaceInput,
+  SetSplitWeightsInput,
+  SetSplitWeightsOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
   SurfaceDetail,
@@ -158,6 +160,13 @@ export function splitPane(
   input: SplitPaneInput,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.splitPane(worktreeId, input)));
+}
+
+export function setSplitWeights(
+  surfaceId: number,
+  input: SetSplitWeightsInput,
+): Effect.Effect<SetSplitWeightsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.setSplitWeights(surfaceId, input)));
 }
 
 export function createPaneSession(

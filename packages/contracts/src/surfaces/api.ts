@@ -12,6 +12,8 @@ import {
   ptyWebSocketOutputMessageSchema,
   renameSurfaceInputSchema,
   renameSurfaceOutputSchema,
+  setSplitWeightsInputSchema,
+  setSplitWeightsOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
   splitPaneInputSchema,
   surfaceDetailSchema,
@@ -99,6 +101,15 @@ export const surfacesEndpoints = {
     output: createSurfaceOutputSchema,
     errors: surfaceApiErrorSchema,
   },
+  setSplitWeights: {
+    id: 'surfaces.setSplitWeights',
+    method: 'PUT',
+    path: '/surfaces/:surfaceId/layout/weights',
+    params: surfaceRouteParamsSchema,
+    body: setSplitWeightsInputSchema,
+    output: setSplitWeightsOutputSchema,
+    errors: surfaceApiErrorSchema,
+  },
   createPaneSession: {
     id: 'worktrees.createPaneSession',
     method: 'POST',
@@ -159,6 +170,12 @@ export const surfacesEndpoints = {
     typeof createSurfaceOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
+  >;
+  readonly setSplitWeights: ApiEndpoint<
+    typeof setSplitWeightsInputSchema,
+    typeof setSplitWeightsOutputSchema,
+    typeof surfaceApiErrorSchema,
+    typeof surfaceRouteParamsSchema
   >;
   readonly createPaneSession: ApiEndpoint<
     typeof paneSessionCreateInputSchema,
