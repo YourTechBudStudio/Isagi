@@ -7,7 +7,20 @@ import {
   startAgentSessionFromPalette,
   startTerminalSessionFromPalette,
 } from '../../workspace/queries.js';
-import type { ArgValues, PaletteCommand, PaletteContext } from '../types.js';
+import type { ArgSpec, ArgValues, PaletteCommand, PaletteContext } from '../types.js';
+
+export const harnessSelectArg: Extract<ArgSpec, { readonly kind: 'select' }> = {
+  kind: 'select',
+  key: 'harness',
+  label: 'Harness',
+  defaultSelection: 'none',
+  options: () => [
+    { value: 'pi', label: 'Pi' },
+    { value: 'opencode', label: 'OpenCode' },
+    { value: 'claude', label: 'Claude' },
+    { value: 'codex', label: 'Codex' },
+  ],
+};
 
 /**
  * Launch a fresh terminal in the target worktree. Zero-arg: it runs the moment
@@ -42,19 +55,7 @@ export const startAgentSessionCommand: PaletteCommand = {
   icon: Bot,
   group: 'worktree-actions',
   available: (ctx) => Boolean(ctx.activeWorktree),
-  args: [
-    {
-      kind: 'select',
-      key: 'harness',
-      label: 'Harness',
-      options: () => [
-        { value: 'pi', label: 'Pi' },
-        { value: 'opencode', label: 'OpenCode' },
-        { value: 'claude', label: 'Claude' },
-        { value: 'codex', label: 'Codex' },
-      ],
-    },
-  ],
+  args: [harnessSelectArg],
   run: async (values, ctx) => {
     const worktreeId = worktreeIdFromValues(values, ctx);
     if (worktreeId === null) {

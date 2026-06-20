@@ -2,8 +2,9 @@ import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
 import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
-import { PtySurface } from './PtySurface.js';
+import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
+import { SurfaceLayout } from './SurfaceLayout.js';
 
 export function Surface({ surface }: { surface: WorkspaceSurface }) {
   const detail = useSurfaceDetailQuery(surface.id);
@@ -24,5 +25,12 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
     );
   }
 
-  return <PtySurface detail={detail.data} />;
+  return (
+    <SurfaceLayout
+      detail={detail.data}
+      renderPane={({ pane, focused, onFocus }) => (
+        <PtyPane pane={pane} surface={detail.data} focused={focused} onFocus={onFocus} />
+      )}
+    />
+  );
 }

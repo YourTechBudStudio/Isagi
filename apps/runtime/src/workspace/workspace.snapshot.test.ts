@@ -84,6 +84,7 @@ const testSurfaceRepository = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  splitSurfacePane: () => Effect.die('surface split is not used by workspace tests'),
   setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
@@ -96,6 +97,7 @@ const testSurfaceService = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSurface: () => Effect.die('surface creation is not used by workspace tests'),
+  splitPane: () => Effect.die('surface split is not used by workspace tests'),
   createPaneSession: () => Effect.die('surface pane session create is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),

@@ -57,18 +57,14 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
     }
 
     for (const command of activeSurfaceCommands) {
-      const sub =
-        command.id === 'delete-active-pane'
-          ? (activeSurfaceTitle ?? 'active pane')
-          : activeSurfaceTitle;
+      const paneTargeted = isPaneTargetedSurfaceCommand(command.id);
+      const sub = paneTargeted ? (activeSurfaceTitle ?? 'active pane') : activeSurfaceTitle;
       const values = ctx.activeSurface
         ? {
             worktreeId: String(worktree.id),
             surfaceId: String(ctx.activeSurface.id),
             ...(command.id === 'rename-active-surface' ? { title: ctx.activeSurface.title } : {}),
-            ...(command.id === 'delete-active-pane' && ctx.activePaneId
-              ? { paneId: String(ctx.activePaneId) }
-              : {}),
+            ...(paneTargeted && ctx.activePaneId ? { paneId: String(ctx.activePaneId) } : {}),
           }
         : { worktreeId: String(worktree.id) };
       entries.push({
@@ -132,4 +128,12 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
   }
 
   return entries;
+}
+
+function isPaneTargetedSurfaceCommand(commandId: string) {
+  return (
+    commandId === 'delete-active-pane' ||
+    commandId === 'split-pane-right' ||
+    commandId === 'split-pane-down'
+  );
 }

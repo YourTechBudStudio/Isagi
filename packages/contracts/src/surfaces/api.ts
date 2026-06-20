@@ -13,6 +13,7 @@ import {
   renameSurfaceInputSchema,
   renameSurfaceOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
+  splitPaneInputSchema,
   surfaceDetailSchema,
   surfacePaneRouteParamsSchema,
   surfaceRouteParamsSchema,
@@ -89,6 +90,15 @@ export const surfacesEndpoints = {
     output: createSurfaceOutputSchema,
     errors: surfaceApiErrorSchema,
   },
+  splitPane: {
+    id: 'worktrees.splitPane',
+    method: 'POST',
+    path: '/worktrees/:worktreeId/pane-splits',
+    params: worktreeEnvironmentFocusRouteParamsSchema,
+    body: splitPaneInputSchema,
+    output: createSurfaceOutputSchema,
+    errors: surfaceApiErrorSchema,
+  },
   createPaneSession: {
     id: 'worktrees.createPaneSession',
     method: 'POST',
@@ -140,6 +150,12 @@ export const surfacesEndpoints = {
   >;
   readonly createSurface: ApiEndpoint<
     typeof createSurfaceInputSchema,
+    typeof createSurfaceOutputSchema,
+    typeof surfaceApiErrorSchema,
+    typeof worktreeEnvironmentFocusRouteParamsSchema
+  >;
+  readonly splitPane: ApiEndpoint<
+    typeof splitPaneInputSchema,
     typeof createSurfaceOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema

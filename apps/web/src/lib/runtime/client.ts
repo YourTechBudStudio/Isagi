@@ -24,6 +24,7 @@ import {
   type PaneSessionClaimOutput,
   type PaneSessionCreateInput,
   type SetWorktreeEnvironmentFocusInput,
+  type SplitPaneInput,
   type SurfaceDetail,
   type DeleteSurfaceOutput,
   type RenameSurfaceOutput,
@@ -142,6 +143,13 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     CreateSurfaceOutput,
     RuntimeEndpointError<typeof apiEndpoints.surfaces.createSurface>
+  >;
+  readonly splitPane: (
+    worktreeId: number,
+    input: SplitPaneInput,
+  ) => Effect.Effect<
+    CreateSurfaceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.splitPane>
   >;
   readonly createPaneSession: (
     worktreeId: number,
@@ -266,6 +274,8 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.surfaces.setWorktreeEnvironmentFocus, { worktreeId }, input),
     createSurface: (worktreeId, input) =>
       request(apiEndpoints.surfaces.createSurface, { worktreeId }, input),
+    splitPane: (worktreeId, input) =>
+      request(apiEndpoints.surfaces.splitPane, { worktreeId }, input),
     createPaneSession: (worktreeId, input) =>
       request(apiEndpoints.surfaces.createPaneSession, { worktreeId }, input),
     claimPaneSession: (worktreeId, input) =>

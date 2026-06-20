@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { SurfaceLayoutNode } from '@isagi/contracts';
 
-import { prunePaneFromLayout } from './layout.js';
+import { insertPaneIntoLayout, prunePaneFromLayout } from './layout.js';
 
 test('layout pruning removes a matching leaf', () => {
   const layout = leaf(1);
@@ -61,6 +61,105 @@ test('layout pruning assigns equal weights when remaining weights are unusable',
     sizing: 'manual',
     children: [leaf(2), leaf(3)],
     weights: [0.5, 0.5],
+  });
+});
+
+test('layout insertion wraps a root leaf for a right split', () => {
+  assert.deepEqual(insertPaneIntoLayout(leaf(1), 1, 2, 'right'), {
+    kind: 'split',
+    nodeId: 'split-2',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.5, 0.5],
+  });
+});
+
+test('layout insertion wraps a root leaf for an up split', () => {
+  assert.deepEqual(insertPaneIntoLayout(leaf(1), 1, 2, 'up'), {
+    kind: 'split',
+    nodeId: 'split-2',
+    axis: 'column',
+    sizing: 'manual',
+    children: [leaf(2), leaf(1)],
+    weights: [0.5, 0.5],
+  });
+});
+
+test('layout insertion flattens into a matching row split after the source', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.25, 0.75],
+  };
+
+  assert.deepEqual(insertPaneIntoLayout(layout, 1, 3, 'right'), {
+    ...layout,
+    children: [leaf(1), leaf(3), leaf(2)],
+    weights: [0.125, 0.125, 0.75],
+  });
+});
+
+test('layout insertion flattens into a matching row split before the source', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.25, 0.75],
+  };
+
+  assert.deepEqual(insertPaneIntoLayout(layout, 2, 3, 'left'), {
+    ...layout,
+    children: [leaf(1), leaf(3), leaf(2)],
+    weights: [0.25, 0.375, 0.375],
+  });
+});
+
+test('layout insertion flattens into a matching column split before the source', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'column',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2), leaf(3)],
+    weights: [0.2, 0.3, 0.5],
+  };
+
+  assert.deepEqual(insertPaneIntoLayout(layout, 2, 4, 'up'), {
+    ...layout,
+    children: [leaf(1), leaf(4), leaf(2), leaf(3)],
+    weights: [0.2, 0.15, 0.15, 0.5],
+  });
+});
+
+test('layout insertion wraps a source leaf when parent axis differs', () => {
+  const layout: SurfaceLayoutNode = {
+    kind: 'split',
+    nodeId: 'split-1',
+    axis: 'row',
+    sizing: 'manual',
+    children: [leaf(1), leaf(2)],
+    weights: [0.25, 0.75],
+  };
+
+  assert.deepEqual(insertPaneIntoLayout(layout, 1, 3, 'down'), {
+    ...layout,
+    children: [
+      {
+        kind: 'split',
+        nodeId: 'split-3',
+        axis: 'column',
+        sizing: 'manual',
+        children: [leaf(1), leaf(3)],
+        weights: [0.5, 0.5],
+      },
+      leaf(2),
+    ],
   });
 });
 

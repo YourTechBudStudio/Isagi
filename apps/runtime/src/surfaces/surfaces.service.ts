@@ -9,6 +9,7 @@ import type {
   PaneSessionSpec,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
+  SplitPaneInput,
   SurfaceDetail,
   SurfaceLayoutNode,
   WorktreeEnvironmentFocusOutput,
@@ -69,6 +70,10 @@ export interface SurfaceService {
   readonly createSurface: (input: {
     readonly worktreeId: number;
     readonly initialPane: PaneSessionSpec;
+  }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
+  readonly splitPane: (input: {
+    readonly worktreeId: number;
+    readonly split: SplitPaneInput;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
   readonly createPaneSession: (input: {
     readonly worktreeId: number;
@@ -204,6 +209,45 @@ export const SurfaceServiceLive = Layer.effect(
             surfaceId: surface.surfaceId,
             paneId: surface.paneId,
             title: surface.title,
+          } satisfies CreateSurfaceOutput;
+        }),
+      splitPane: (input) =>
+        Effect.gen(function* () {
+          const target = yield* loadPaneSessionTarget(
+            repository,
+            input.worktreeId,
+            input.split.paneId,
+          );
+          const split = yield* repository.splitSurfacePane({
+            surfaceId: target.surface.id,
+            sourcePaneId: target.pane.id,
+            titleBase: titleBaseForInitialPane(input.split.newPane),
+            direction: input.split.direction,
+          });
+          if (!split)
+            return yield* Effect.fail(
+              new SurfaceError({
+                code: 'pane_not_found',
+                message: `Pane ${input.split.paneId} was not found in the surface layout.`,
+                worktreeId: input.worktreeId,
+                surfaceId: target.surface.id,
+                paneId: input.split.paneId,
+              }),
+            );
+          yield* createPaneSession(
+            repository,
+            agents,
+            terminals,
+            lifecycle,
+            eventBus,
+            input.worktreeId,
+            paneSessionCreateInput(split.paneId, input.split.newPane),
+          );
+          return {
+            worktreeId: input.worktreeId,
+            surfaceId: split.surfaceId,
+            paneId: split.paneId,
+            title: split.title,
           } satisfies CreateSurfaceOutput;
         }),
       createPaneSession: (input) =>

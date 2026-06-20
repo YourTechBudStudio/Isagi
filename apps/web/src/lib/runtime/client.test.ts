@@ -230,6 +230,43 @@ test('runtime client calls surface creation endpoint with initial pane', async (
   });
 });
 
+test('runtime client calls split pane endpoint with source pane and new pane spec', async () => {
+  let request: { readonly url: string; readonly method: string; readonly body: string } | null =
+    null;
+  globalThis.fetch = ((input, init) => {
+    request = {
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: String(init?.body ?? ''),
+    };
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ data: createSurfaceOutput, meta: { requestId: 'req-split-pane' } }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').splitPane(10, {
+      paneId: 7,
+      direction: 'right',
+      newPane: { kind: 'terminal_session' },
+    }),
+  );
+
+  assert.deepEqual(output, createSurfaceOutput);
+  assert.deepEqual(request, {
+    url: 'http://runtime.test/api/v1/worktrees/10/pane-splits',
+    method: 'POST',
+    body: JSON.stringify({
+      paneId: 7,
+      direction: 'right',
+      newPane: { kind: 'terminal_session' },
+    }),
+  });
+});
+
 test('runtime client decodes endpoint API errors before base API errors', async () => {
   const apiError = {
     code: 'project_path_rejected',

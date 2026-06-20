@@ -1,5 +1,5 @@
 import { Bot, CircleDashed, CirclePlus, RotateCw, TriangleAlert } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
@@ -11,101 +11,25 @@ import {
   handleDispatchedCommandError,
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
-import {
-  activatePane,
-  syncActivePaneFromSurfaceDetail,
-  usePaneFocusTarget,
-} from '../../lib/workspace/activation.js';
+import { activatePane, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
-import {
-  resolveActivePaneId,
-  resolvePaneFocusAfterDetailChange,
-} from '../../lib/workspace/model.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
-import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneSession } from './usePaneSession.js';
 
-interface PtySurfaceProps {
-  readonly detail: SurfaceDetail;
-}
-
-export function PtySurface({ detail }: PtySurfaceProps) {
-  const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
-  const dispatchCommand = useCommandDispatcher();
-  const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
-  const previousPaneIds = useRef<ReadonlySet<number> | null>(null);
-
-  useEffect(() => {
-    const nextFocusedPaneId = resolvePaneFocusAfterDetailChange({
-      panes: detail.panes,
-      storedPaneId,
-      detailActivePaneId: detail.activePaneId,
-      previousPaneIds: previousPaneIds.current,
-    });
-    previousPaneIds.current = new Set(detail.panes.map((pane) => pane.id));
-    if (nextFocusedPaneId !== null) {
-      syncActivePaneFromSurfaceDetail({
-        worktreeId: detail.worktreeId,
-        surfaceId: detail.id,
-        panes: detail.panes,
-        detailActivePaneId: detail.activePaneId,
-        preferredPaneId: nextFocusedPaneId,
-      });
-    }
-  }, [detail.id, detail.worktreeId, detail.panes, detail.activePaneId, storedPaneId]);
-
-  if (detail.panes.length === 0) {
-    return (
-      <div className="grid h-full place-items-center rounded-md border border-line/20 bg-elevated/50 backdrop-blur-sm">
-        <span className="font-mono text-[12px] text-fg-subtle">{ptyCopy.emptySurface}</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full min-h-0 gap-2">
-      {detail.panes.map((pane) => (
-        <PtyPaneShell
-          key={pane.id}
-          pane={pane}
-          surface={detail}
-          focused={pane.id === focusedPaneId}
-          onFocus={() =>
-            activatePane({ worktreeId: detail.worktreeId, surfaceId: detail.id, paneId: pane.id })
-          }
-          onDelete={() => {
-            activatePane({
-              worktreeId: detail.worktreeId,
-              surfaceId: detail.id,
-              paneId: pane.id,
-            });
-            void dispatchCommand('delete-active-pane', {
-              worktreeId: String(detail.worktreeId),
-              surfaceId: String(detail.id),
-              paneId: String(pane.id),
-            }).catch(handleDispatchedCommandError);
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function PtyPaneShell({
+export function PtyPane({
   pane,
   surface,
   focused,
   onFocus,
-  onDelete,
 }: {
   readonly pane: SurfacePane;
   readonly surface: SurfaceDetail;
   readonly focused: boolean;
   readonly onFocus: () => void;
-  readonly onDelete: () => void;
 }) {
+  const dispatchCommand = useCommandDispatcher();
   const shellRef = useRef<HTMLElement>(null);
   const Icon = paneSessionIcon(pane.session?.kind);
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
@@ -141,6 +65,18 @@ function PtyPaneShell({
     paneAttention,
     autoAttach: focused,
   });
+  const onDelete = () => {
+    activatePane({
+      worktreeId: surface.worktreeId,
+      surfaceId: surface.id,
+      paneId: pane.id,
+    });
+    void dispatchCommand('delete-active-pane', {
+      worktreeId: String(surface.worktreeId),
+      surfaceId: String(surface.id),
+      paneId: String(pane.id),
+    }).catch(handleDispatchedCommandError);
+  };
 
   return (
     <section
@@ -148,11 +84,9 @@ function PtyPaneShell({
       aria-label={pane.title}
       tabIndex={-1}
       onPointerDown={onFocus}
-      className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-opacity duration-ui ease-expo ${
-        focused ? 'opacity-100' : 'opacity-55'
-      } ${errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'} ${
-        dimmed ? 'bg-elevated/38' : ''
-      }`}
+      className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-colors duration-ui ease-expo ${
+        errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'
+      } ${dimmed ? 'bg-elevated/38' : ''}`}
     >
       <div className="flex min-h-9 items-center gap-2 border-b border-line/15 px-3 py-2">
         <Icon size={13} className="text-fg-subtle" />

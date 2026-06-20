@@ -6,6 +6,7 @@ import type {
   PtyProcessLogMode,
   SessionDiagnosticCode,
   SessionStatus,
+  SplitPaneDirection,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
@@ -133,6 +134,19 @@ export interface CreateSinglePaneSurfaceOutput {
   readonly paneId: number;
   readonly title: string;
   readonly cwd: string;
+}
+
+export interface SplitSurfacePaneInput {
+  readonly surfaceId: number;
+  readonly sourcePaneId: number;
+  readonly titleBase: string;
+  readonly direction: SplitPaneDirection;
+}
+
+export interface SplitSurfacePaneOutput {
+  readonly surfaceId: number;
+  readonly paneId: number;
+  readonly title: string;
 }
 
 export interface SurfaceDeletePaneTarget {

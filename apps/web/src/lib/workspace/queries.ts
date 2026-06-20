@@ -12,6 +12,7 @@ import type {
   OpenWorktreeOutput,
   ReconciliationFinding,
   SetActiveContextInput,
+  SplitPaneInput,
 } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
@@ -51,6 +52,7 @@ import {
   restartCommand,
   runCommand,
   relocateProject,
+  splitPane,
   stopCommand,
   updateActiveContext,
 } from './runtime-data.js';
@@ -290,6 +292,24 @@ export async function deleteSurfacePaneFromPalette(input: {
   }
 }
 
+export async function splitPaneFromPalette(input: {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly split: SplitPaneInput;
+  readonly client?: QueryClient | undefined;
+}) {
+  const client = input.client ?? queryClient;
+  try {
+    const output = await runRuntimeEffect(splitPane(input.worktreeId, input.split));
+    await commitSplitPaneSuccess(client, output);
+    return output;
+  } catch (error) {
+    await client.invalidateQueries({ queryKey: workspaceQueryKey });
+    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
+    throw error;
+  }
+}
+
 export async function commitOpenWorktreeSuccess(
   client: QueryClient,
   output: OpenWorktreeOutput,
@@ -327,6 +347,15 @@ export async function commitLaunchSessionSuccess(
 
 export async function commitLaunchSessionFailure(client: QueryClient) {
   await client.invalidateQueries({ queryKey: workspaceQueryKey });
+}
+
+export async function commitSplitPaneSuccess(client: QueryClient, output: CreateSurfaceOutput) {
+  await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(output.surfaceId) });
+  await client.invalidateQueries({ queryKey: workspaceQueryKey });
+  activatePane(
+    { worktreeId: output.worktreeId, surfaceId: output.surfaceId, paneId: output.paneId },
+    { persist: false },
+  );
 }
 
 export async function commitRenameSurfaceSuccess(client: QueryClient, surfaceId: number) {

@@ -132,6 +132,52 @@ test('surface creation route decodes initial pane through the contract path', as
   );
 });
 
+test('split pane route decodes the source pane and new pane spec through the contract path', async () => {
+  let input: Parameters<SurfaceServiceShape['splitPane']>[0] | null = null;
+  await withSurfacesApi(
+    fakeSurfaceService({
+      splitPane: (request) =>
+        Effect.sync(() => {
+          input = request;
+          return {
+            worktreeId: request.worktreeId,
+            surfaceId: 42,
+            paneId: 8,
+            title: 'Terminal 2',
+          };
+        }),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'POST',
+        url: '/api/v1/worktrees/10/pane-splits',
+        payload: {
+          paneId: 7,
+          direction: 'right',
+          newPane: { kind: 'terminal_session' },
+        },
+      });
+      const payload = response.json() as { data?: CreateSurfaceOutput };
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(input, {
+        worktreeId: 10,
+        split: {
+          paneId: 7,
+          direction: 'right',
+          newPane: { kind: 'terminal_session' },
+        },
+      });
+      assert.deepEqual(payload.data, {
+        worktreeId: 10,
+        surfaceId: 42,
+        paneId: 8,
+        title: 'Terminal 2',
+      });
+    },
+  );
+});
+
 test('surface API maps invalid title failures to surface_rejected contract errors', async () => {
   await withSurfacesApi(
     fakeSurfaceService({
@@ -238,6 +284,13 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
           input.initialPane.kind === 'agent_session' && input.initialPane.harness === 'opencode'
             ? 'OpenCode'
             : 'Terminal',
+      }),
+    splitPane: (input) =>
+      Effect.succeed({
+        worktreeId: input.worktreeId,
+        surfaceId: 42,
+        paneId: 8,
+        title: input.split.newPane.kind === 'agent_session' ? 'Pi 2' : 'Terminal 2',
       }),
     createPaneSession: (input) =>
       Effect.succeed({

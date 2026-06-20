@@ -22,6 +22,7 @@ import type {
   RenameSurfaceOutput,
   ReconcileWorkspaceInput,
   SetWorktreeEnvironmentFocusInput,
+  SplitPaneInput,
   SurfaceDetail,
   WorktreeEnvironmentFocusOutput,
   WorktreeSetupPreflightOutput,
@@ -150,6 +151,13 @@ export function createSurface(
   input: CreateSurfaceInput,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.createSurface(worktreeId, input)));
+}
+
+export function splitPane(
+  worktreeId: number,
+  input: SplitPaneInput,
+): Effect.Effect<CreateSurfaceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.splitPane(worktreeId, input)));
 }
 
 export function createPaneSession(

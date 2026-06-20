@@ -1,5 +1,7 @@
 import { and, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Schema } from 'effect';
+
+import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contracts';
 
 import {
   AgentSessionArtifacts,
@@ -21,6 +23,7 @@ import {
   worktreeSurfaces,
 } from '../persistence/schema.js';
 import type { SurfacePaneDeletePlan } from './delete-plan.js';
+import { insertPaneIntoLayout, layoutContainsPane } from './layout.js';
 import type {
   AgentSessionRow,
   CreateSinglePaneSurfaceInput,
@@ -33,6 +36,8 @@ import type {
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
+  SplitSurfacePaneInput,
+  SplitSurfacePaneOutput,
   TerminalSessionRow,
 } from './types.js';
 
@@ -86,6 +91,9 @@ export interface SurfaceRepositoryService {
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
   ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError>;
+  readonly splitSurfacePane: (
+    input: SplitSurfacePaneInput,
+  ) => Effect.Effect<SplitSurfacePaneOutput | null, DatabaseError>;
   readonly setPaneSession: (input: {
     readonly paneId: number;
     readonly sessionKind: 'agent_session' | 'terminal_session' | null;
@@ -290,6 +298,54 @@ export const SurfaceRepositoryLive = Layer.effect(
               .run();
           }
           return { ...surface, cwd: worktree.path };
+        }),
+      splitSurfacePane: (input) =>
+        database.transaction('split_surface_pane', (db) => {
+          const surface = db
+            .select()
+            .from(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.id, input.surfaceId))
+            .get();
+          if (!surface) return null;
+          const existingPanes = db
+            .select({ title: surfacePanes.title, sortOrder: surfacePanes.sortOrder })
+            .from(surfacePanes)
+            .where(eq(surfacePanes.surfaceId, input.surfaceId))
+            .all();
+          const layout = decodeLayout(surface.layoutJson);
+          if (!layoutContainsPane(layout, input.sourcePaneId)) return null;
+
+          const now = timestamp();
+          const title = duplicateSafeTitle(
+            input.titleBase,
+            existingPanes.map((pane) => pane.title),
+          );
+          const sortOrder =
+            existingPanes.reduce((max, pane) => Math.max(max, pane.sortOrder), -1) + 1;
+          const pane = db
+            .insert(surfacePanes)
+            .values({
+              surfaceId: input.surfaceId,
+              title,
+              sortOrder,
+              sessionKind: null,
+              sessionId: null,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning({ id: surfacePanes.id })
+            .get();
+          const nextLayout = insertPaneIntoLayout(
+            layout,
+            input.sourcePaneId,
+            pane.id,
+            input.direction,
+          );
+          db.update(worktreeSurfaces)
+            .set({ layoutJson: JSON.stringify(nextLayout), updatedAt: now })
+            .where(eq(worktreeSurfaces.id, input.surfaceId))
+            .run();
+          return { surfaceId: input.surfaceId, paneId: pane.id, title };
         }),
       setPaneSession: (input) =>
         database.use('set_surface_pane_session', (db) => {
@@ -645,6 +701,9 @@ function decodeArgs(json: string) {
   } catch {
     return [];
   }
+}
+function decodeLayout(json: string): SurfaceLayoutNode {
+  return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(json));
 }
 function timestamp() {
   return new Date().toISOString();

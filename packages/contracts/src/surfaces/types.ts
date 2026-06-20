@@ -213,6 +213,14 @@ export const createSurfaceInputSchema = Schema.Struct({
   initialPane: paneSessionSpecSchema,
 });
 
+export const splitPaneDirectionSchema = Schema.Literal('left', 'right', 'up', 'down');
+
+export const splitPaneInputSchema = Schema.Struct({
+  paneId: positiveIntegerSchema,
+  direction: splitPaneDirectionSchema,
+  newPane: paneSessionSpecSchema,
+});
+
 export const renameSurfaceInputSchema = Schema.Struct({
   title: Schema.String,
 });
@@ -361,6 +369,8 @@ export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
 export type PaneSessionSpec = Schema.Schema.Type<typeof paneSessionSpecSchema>;
 export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSchema>;
 export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
+export type SplitPaneDirection = Schema.Schema.Type<typeof splitPaneDirectionSchema>;
+export type SplitPaneInput = Schema.Schema.Type<typeof splitPaneInputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;

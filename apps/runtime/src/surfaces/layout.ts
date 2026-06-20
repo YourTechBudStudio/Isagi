@@ -1,4 +1,6 @@
-import type { SurfaceLayoutNode } from '@isagi/contracts';
+import type { SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
+
+type InsertSide = 'before' | 'after';
 
 export function prunePaneFromLayout(
   layout: SurfaceLayoutNode,
@@ -31,6 +33,104 @@ export function prunePaneFromLayout(
     children,
     weights: normalizeWeights(weights),
   };
+}
+
+export function insertPaneIntoLayout(
+  layout: SurfaceLayoutNode,
+  sourcePaneId: number,
+  newPaneId: number,
+  direction: SplitPaneDirection,
+): SurfaceLayoutNode {
+  const axis = axisForDirection(direction);
+  const side = sideForDirection(direction);
+  const inserted = insertIntoNode(layout, sourcePaneId, newPaneId, axis, side);
+  return inserted ?? layout;
+}
+
+export function layoutContainsPane(layout: SurfaceLayoutNode, paneId: number): boolean {
+  if (layout.kind === 'leaf') return layout.paneId === paneId;
+  return layout.children.some((child) => layoutContainsPane(child, paneId));
+}
+
+function insertIntoNode(
+  node: SurfaceLayoutNode,
+  sourcePaneId: number,
+  newPaneId: number,
+  axis: 'row' | 'column',
+  side: InsertSide,
+): SurfaceLayoutNode | null {
+  if (node.kind === 'leaf') {
+    if (node.paneId !== sourcePaneId) return null;
+    const newLeaf = leafForPane(newPaneId);
+    return {
+      kind: 'split',
+      nodeId: `split-${newPaneId}`,
+      axis,
+      sizing: 'manual',
+      children: side === 'after' ? [node, newLeaf] : [newLeaf, node],
+      weights: [0.5, 0.5],
+    };
+  }
+
+  for (let index = 0; index < node.children.length; index += 1) {
+    const child = node.children[index];
+    if (!child) continue;
+
+    if (child.kind === 'leaf' && child.paneId === sourcePaneId && node.axis === axis) {
+      return insertLeafIntoSameAxisSplit(node, index, newPaneId, side);
+    }
+
+    const inserted = insertIntoNode(child, sourcePaneId, newPaneId, axis, side);
+    if (!inserted) continue;
+
+    return {
+      ...node,
+      children: node.children.map((candidate, childIndex) =>
+        childIndex === index ? inserted : candidate,
+      ),
+    };
+  }
+
+  return null;
+}
+
+function insertLeafIntoSameAxisSplit(
+  node: Extract<SurfaceLayoutNode, { readonly kind: 'split' }>,
+  sourceIndex: number,
+  newPaneId: number,
+  side: InsertSide,
+): SurfaceLayoutNode {
+  const sourceWeight = node.weights[sourceIndex] ?? 0;
+  const splitWeight = sourceWeight / 2;
+  const children = [...node.children];
+  const weights = [...node.weights];
+  weights[sourceIndex] = splitWeight;
+  const insertIndex = side === 'after' ? sourceIndex + 1 : sourceIndex;
+  children.splice(insertIndex, 0, leafForPane(newPaneId));
+  weights.splice(insertIndex, 0, splitWeight);
+
+  return {
+    ...node,
+    children,
+    weights: normalizeWeights(weights),
+  };
+}
+
+function leafForPane(paneId: number): SurfaceLayoutNode {
+  return {
+    kind: 'leaf',
+    nodeId: `pane-${paneId}`,
+    paneId,
+    collapsed: false,
+  };
+}
+
+function axisForDirection(direction: SplitPaneDirection) {
+  return direction === 'left' || direction === 'right' ? 'row' : 'column';
+}
+
+function sideForDirection(direction: SplitPaneDirection): InsertSide {
+  return direction === 'right' || direction === 'down' ? 'after' : 'before';
 }
 
 function normalizeWeights(weights: readonly number[]) {
