@@ -5,7 +5,6 @@ import {
   createSurfaceInputSchema,
   createSurfaceOutputSchema,
   deleteSurfaceOutputSchema,
-  launchAgentSurfaceInputSchema,
   paneSessionClaimInputSchema,
   paneSessionClaimOutputSchema,
   paneSessionCreateInputSchema,
@@ -90,15 +89,6 @@ export const surfacesEndpoints = {
     output: createSurfaceOutputSchema,
     errors: surfaceApiErrorSchema,
   },
-  launchAgentSurface: {
-    id: 'worktrees.launchAgentSurface',
-    method: 'POST',
-    path: '/worktrees/:worktreeId/agent-surfaces',
-    params: worktreeEnvironmentFocusRouteParamsSchema,
-    body: launchAgentSurfaceInputSchema,
-    output: createSurfaceOutputSchema,
-    errors: surfaceApiErrorSchema,
-  },
   createPaneSession: {
     id: 'worktrees.createPaneSession',
     method: 'POST',
@@ -150,12 +140,6 @@ export const surfacesEndpoints = {
   >;
   readonly createSurface: ApiEndpoint<
     typeof createSurfaceInputSchema,
-    typeof createSurfaceOutputSchema,
-    typeof surfaceApiErrorSchema,
-    typeof worktreeEnvironmentFocusRouteParamsSchema
-  >;
-  readonly launchAgentSurface: ApiEndpoint<
-    typeof launchAgentSurfaceInputSchema,
     typeof createSurfaceOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema

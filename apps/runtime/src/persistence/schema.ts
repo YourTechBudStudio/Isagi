@@ -89,7 +89,6 @@ export const worktreeSurfaces = sqliteTable('worktree_surfaces', {
   worktreeId: integer('worktree_id')
     .notNull()
     .references(() => worktrees.id, { onDelete: 'cascade' }),
-  kind: text('kind', { enum: ['agent', 'terminal'] }).notNull(),
   title: text('title').notNull(),
   layoutJson: text('layout_json').notNull(),
   sortOrder: integer('sort_order').notNull(),

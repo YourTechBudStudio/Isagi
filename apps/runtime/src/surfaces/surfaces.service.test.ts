@@ -52,12 +52,12 @@ test('single-pane surface creation persists duplicate-safe titles and one-leaf l
         const surfaces = yield* SurfaceService;
         const first = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'agent',
+
           titleBase: 'Pi',
         });
         const second = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'agent',
+
           titleBase: 'Pi',
         });
         return {
@@ -83,26 +83,53 @@ test('single-pane surface creation persists duplicate-safe titles and one-leaf l
   }
 });
 
-test('create surface API slice creates and focuses a single empty pane', async () => {
+test('create surface API slice creates and focuses an initial terminal session', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-create-api-'));
+  let startFreshInput: Parameters<TerminalSessionServiceShape['startFresh']>[0] | null = null;
   try {
     const output = await Effect.runPromise(
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const created = yield* surfaces.createSurface({ worktreeId, kind: 'terminal' });
+        const created = yield* surfaces.createSurface({
+          worktreeId,
+          initialPane: { kind: 'terminal_session' },
+        });
+        const database = yield* RuntimeDatabase;
+        const pane = yield* database.use('test_find_created_terminal_pane', (db) =>
+          db.select().from(surfacePanes).where(eq(surfacePanes.id, created.paneId)).get(),
+        );
         return {
           created,
+          pane,
           focus: yield* surfaces.setWorktreeEnvironmentFocus({
             worktreeId,
             focus: { activeSurfaceId: created.surfaceId, activePaneId: created.paneId },
           }),
           detail: yield* surfaces.getSurfaceDetail(created.surfaceId),
         };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(
+        Effect.provide(
+          testLayer(dataRoot, {
+            terminalService: {
+              startFresh: (input) =>
+                Effect.sync(() => {
+                  startFreshInput = input;
+                  return { terminalSessionId: 123 };
+                }),
+            },
+          }),
+        ),
+      ),
     );
 
     assert.equal(output.created.title, 'Terminal');
+    assert.deepEqual(startFreshInput, {
+      worktreeId: output.created.worktreeId,
+      cwd: '/repo/isagi',
+    });
+    assert.equal(output.pane?.sessionKind, 'terminal_session');
+    assert.equal(output.pane?.sessionId, 123);
     assert.equal(output.detail.panes[0]?.id, output.created.paneId);
     assert.equal(output.detail.panes[0]?.session, null);
     assert.deepEqual(output.focus, {
@@ -115,7 +142,7 @@ test('create surface API slice creates and focuses a single empty pane', async (
   }
 });
 
-test('launch agent surface uses harness display names with duplicate-safe titles', async () => {
+test('create surface uses harness display names with duplicate-safe titles', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-'));
   const startFreshInputs: Parameters<AgentSessionServiceShape['startFresh']>[0][] = [];
   let nextAgentSessionId = 900;
@@ -124,17 +151,17 @@ test('launch agent surface uses harness display names with duplicate-safe titles
       Effect.gen(function* () {
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
-        const first = yield* surfaces.launchAgentSurface({
+        const first = yield* surfaces.createSurface({
           worktreeId,
-          launch: { harness: 'pi' },
+          initialPane: { kind: 'agent_session', harness: 'pi' },
         });
-        const second = yield* surfaces.launchAgentSurface({
+        const second = yield* surfaces.createSurface({
           worktreeId,
-          launch: { harness: 'pi' },
+          initialPane: { kind: 'agent_session', harness: 'pi' },
         });
-        const third = yield* surfaces.launchAgentSurface({
+        const third = yield* surfaces.createSurface({
           worktreeId,
-          launch: { harness: 'opencode' },
+          initialPane: { kind: 'agent_session', harness: 'opencode' },
         });
         const database = yield* RuntimeDatabase;
         const panes = yield* database.use('test_find_launched_agent_panes', (db) =>
@@ -175,7 +202,7 @@ test('launch agent surface uses harness display names with duplicate-safe titles
   }
 });
 
-test('failed agent surface launch leaves the harness-titled empty surface visible', async () => {
+test('failed agent surface creation leaves the harness-titled empty surface visible', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-launch-agent-failed-'));
   try {
     const output = await Effect.runPromise(
@@ -183,7 +210,7 @@ test('failed agent surface launch leaves the harness-titled empty surface visibl
         const worktreeId = yield* insertWorktree('/repo/isagi');
         const surfaces = yield* SurfaceService;
         const result = yield* surfaces
-          .launchAgentSurface({ worktreeId, launch: { harness: 'pi' } })
+          .createSurface({ worktreeId, initialPane: { kind: 'agent_session', harness: 'pi' } })
           .pipe(Effect.either);
         const database = yield* RuntimeDatabase;
         const persistedSurface = yield* database.use('test_find_failed_launch_surface', (db) =>
@@ -217,7 +244,6 @@ test('failed agent surface launch leaves the harness-titled empty surface visibl
 
     assert.ok(Either.isLeft(output.result));
     assert.equal(output.detail.title, 'Pi');
-    assert.equal(output.detail.kind, 'agent');
     assert.equal(output.detail.panes.length, 1);
     assert.equal(output.detail.panes[0]?.title, 'Pi');
     assert.equal(output.detail.panes[0]?.session, null);
@@ -236,7 +262,7 @@ test('create pane session assigns a new agent session to the pane', async () => 
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'agent',
+
           titleBase: 'Agent',
         });
         const claim = yield* surfaces.createPaneSession({
@@ -287,7 +313,7 @@ test('claim pane session rejects sessions from another worktree', async () => {
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'agent',
+
           titleBase: 'Agent',
         });
         return yield* surfaces
@@ -326,7 +352,7 @@ test('surface detail composes pane-owned agent session placement', async () => {
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'agent',
+
           titleBase: 'Pi',
         });
         const agentSessionId = yield* insertAgentSessionForWorktree({
@@ -356,12 +382,12 @@ test('environment focus persists active pane only when it belongs to the active 
         const surfaces = yield* SurfaceService;
         const first = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         const second = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
 
@@ -394,12 +420,12 @@ test('environment focus rejects panes that do not belong to the selected surface
           const surfaces = yield* SurfaceService;
           const first = yield* surfaces.createSinglePaneSurface({
             worktreeId,
-            kind: 'terminal',
+
             titleBase: 'Terminal',
           });
           const second = yield* surfaces.createSinglePaneSurface({
             worktreeId,
-            kind: 'terminal',
+
             titleBase: 'Terminal',
           });
 
@@ -427,12 +453,12 @@ test('rename trims surface title, allows duplicates, and leaves pane title uncha
         const surfaces = yield* SurfaceService;
         const first = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
 
@@ -467,7 +493,7 @@ test('rename rejects empty and overlong titles', async () => {
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         const empty = yield* surfaces
@@ -504,7 +530,7 @@ test('delete pane updates layout and keeps the remaining pane', async () => {
         const surfaces = yield* SurfaceService;
         const first = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         const secondPaneId = yield* addPaneToSurface(first.surfaceId);
@@ -549,7 +575,7 @@ test('delete last pane deletes the surface and leaves referenced logs for PTY GC
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
@@ -597,7 +623,7 @@ test('delete surface leaves log cleanup failures to PTY GC', async () => {
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
@@ -638,7 +664,7 @@ test('delete surface leaves live PTY cleanup to PTY GC', async () => {
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         yield* insertPtyProcess({
@@ -671,7 +697,7 @@ test('delete pane defers every live session when invalid layout escalates to sur
         const surfaces = yield* SurfaceService;
         const surface = yield* surfaces.createSinglePaneSurface({
           worktreeId,
-          kind: 'terminal',
+
           titleBase: 'Terminal',
         });
         const secondPaneId = yield* addPaneToSurface(surface.surfaceId);

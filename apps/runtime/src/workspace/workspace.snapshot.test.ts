@@ -96,7 +96,6 @@ const testSurfaceService = {
   deleteSurfacePane: () =>
     Effect.die('surface pane delete is not used by workspace snapshot tests'),
   createSurface: () => Effect.die('surface creation is not used by workspace tests'),
-  launchAgentSurface: () => Effect.die('agent surface launch is not used by workspace tests'),
   createPaneSession: () => Effect.die('surface pane session create is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
@@ -173,8 +172,8 @@ test('workspace snapshots include surface rail metadata and active surface id', 
       {
         id: 101,
         worktreeId: worktreeBase.id,
-        kind: 'agent',
         title: 'Pi',
+        paneKinds: ['agent_session'],
         sortOrder: 0,
       },
     ],
@@ -182,7 +181,7 @@ test('workspace snapshots include surface rail metadata and active surface id', 
   );
 
   assert.deepEqual(snapshot.projects[0]?.worktrees[0]?.surfaces, [
-    { id: 101, kind: 'agent', title: 'Pi' },
+    { id: 101, title: 'Pi', paneKinds: ['agent_session'] },
   ]);
   assert.equal(snapshot.projects[0]?.worktrees[0]?.activeSurfaceId, 101);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));

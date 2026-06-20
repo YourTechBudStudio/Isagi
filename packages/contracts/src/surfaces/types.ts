@@ -11,7 +11,7 @@ import {
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 
-export const runtimeSurfaceKindSchema = Schema.Literal('agent', 'terminal');
+export const paneSessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
 export const surfaceLayoutAxisSchema = Schema.Literal('row', 'column');
 export const surfaceLayoutSizingSchema = Schema.Literal('auto', 'manual');
 
@@ -181,7 +181,6 @@ export const surfacePaneSchema = Schema.Struct({
 export const surfaceDetailSchema = Schema.Struct({
   id: positiveIntegerSchema,
   worktreeId: positiveIntegerSchema,
-  kind: runtimeSurfaceKindSchema,
   title: Schema.String,
   layout: surfaceLayoutNodeSchema,
   activePaneId: Schema.NullOr(positiveIntegerSchema),
@@ -193,10 +192,6 @@ export const setWorktreeEnvironmentFocusInputSchema = Schema.Struct({
   activePaneId: Schema.NullOr(positiveIntegerSchema),
 });
 
-export const createSurfaceInputSchema = Schema.Struct({
-  kind: runtimeSurfaceKindSchema,
-});
-
 export const createSurfaceOutputSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
@@ -204,8 +199,18 @@ export const createSurfaceOutputSchema = Schema.Struct({
   title: Schema.String,
 });
 
-export const launchAgentSurfaceInputSchema = Schema.Struct({
-  harness: agentHarnessSchema,
+export const paneSessionSpecSchema = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal('agent_session'),
+    harness: agentHarnessSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('terminal_session'),
+  }),
+);
+
+export const createSurfaceInputSchema = Schema.Struct({
+  initialPane: paneSessionSpecSchema,
 });
 
 export const renameSurfaceInputSchema = Schema.Struct({
@@ -323,7 +328,6 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union(
   ptyWebSocketErrorMessageSchema,
 );
 
-export type RuntimeSurfaceKind = Schema.Schema.Type<typeof runtimeSurfaceKindSchema>;
 export type SurfaceRouteParams = Schema.Schema.Type<typeof surfaceRouteParamsSchema>;
 export type SurfacePaneRouteParams = Schema.Schema.Type<typeof surfacePaneRouteParamsSchema>;
 export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
@@ -345,6 +349,7 @@ export type AgentSessionRecoveryAction = Schema.Schema.Type<
 export type PtyProcessBackend = Schema.Schema.Type<typeof ptyProcessBackendSchema>;
 export type PtyProcessLogMode = Schema.Schema.Type<typeof ptyProcessLogModeSchema>;
 export type AgentHarness = Schema.Schema.Type<typeof agentHarnessSchema>;
+export type PaneSessionKind = Schema.Schema.Type<typeof paneSessionKindSchema>;
 export type AgentSessionMetadata = Schema.Schema.Type<typeof agentSessionMetadataSchema>;
 export type TerminalSessionMetadata = Schema.Schema.Type<typeof terminalSessionMetadataSchema>;
 export type SurfacePaneSession = Schema.Schema.Type<typeof surfacePaneSessionSchema>;
@@ -353,9 +358,9 @@ export type SurfaceDetail = Schema.Schema.Type<typeof surfaceDetailSchema>;
 export type SetWorktreeEnvironmentFocusInput = Schema.Schema.Type<
   typeof setWorktreeEnvironmentFocusInputSchema
 >;
+export type PaneSessionSpec = Schema.Schema.Type<typeof paneSessionSpecSchema>;
 export type CreateSurfaceInput = Schema.Schema.Type<typeof createSurfaceInputSchema>;
 export type CreateSurfaceOutput = Schema.Schema.Type<typeof createSurfaceOutputSchema>;
-export type LaunchAgentSurfaceInput = Schema.Schema.Type<typeof launchAgentSurfaceInputSchema>;
 export type RenameSurfaceInput = Schema.Schema.Type<typeof renameSurfaceInputSchema>;
 export type RenameSurfaceOutput = Schema.Schema.Type<typeof renameSurfaceOutputSchema>;
 export type DeleteSurfaceOutput = Schema.Schema.Type<typeof deleteSurfaceOutputSchema>;

@@ -1,11 +1,4 @@
-import {
-  Bot,
-  CircleDashed,
-  CirclePlus,
-  RotateCw,
-  SquareTerminal,
-  TriangleAlert,
-} from 'lucide-react';
+import { Bot, CircleDashed, CirclePlus, RotateCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
@@ -30,6 +23,7 @@ import {
 } from '../../lib/workspace/model.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneSession } from './usePaneSession.js';
 
@@ -113,7 +107,7 @@ function PtyPaneShell({
   readonly onDelete: () => void;
 }) {
   const shellRef = useRef<HTMLElement>(null);
-  const Icon = surface.kind === 'agent' ? Bot : SquareTerminal;
+  const Icon = paneSessionIcon(pane.session?.kind);
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
   const paneAttention = useAttentionStore((state) => attentionForPane(state.sourcesByKey, pane.id));
   const focusShell = useCallback(() => {

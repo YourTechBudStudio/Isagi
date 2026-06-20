@@ -61,8 +61,8 @@ function projectFixture(): Project {
         parked: false,
         attention: 'idle',
         surfaces: [
-          { id: 101, kind: 'agent', title: 'Pi', attention: 'idle' },
-          { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
+          { id: 101, title: 'Pi', paneKinds: ['agent_session'], attention: 'idle' },
+          { id: 102, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
         ],
         activeSurfaceId: null,
       },

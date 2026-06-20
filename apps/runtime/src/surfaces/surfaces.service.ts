@@ -3,10 +3,10 @@ import { Context, Data, Effect, Layer, Schema } from 'effect';
 import type {
   CreateSurfaceOutput,
   DeleteSurfaceOutput,
-  LaunchAgentSurfaceInput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
   PaneSessionCreateInput,
+  PaneSessionSpec,
   RenameSurfaceOutput,
   SetWorktreeEnvironmentFocusInput,
   SurfaceDetail,
@@ -68,11 +68,7 @@ export interface SurfaceService {
   }) => Effect.Effect<DeleteSurfaceOutput, SurfaceServiceError>;
   readonly createSurface: (input: {
     readonly worktreeId: number;
-    readonly kind: 'agent' | 'terminal';
-  }) => Effect.Effect<CreateSurfaceOutput, SurfaceServiceError>;
-  readonly launchAgentSurface: (input: {
-    readonly worktreeId: number;
-    readonly launch: LaunchAgentSurfaceInput;
+    readonly initialPane: PaneSessionSpec;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
   readonly createPaneSession: (input: {
     readonly worktreeId: number;
@@ -125,7 +121,6 @@ export const SurfaceServiceLive = Layer.effect(
           return {
             id: surface.id,
             worktreeId: surface.worktreeId,
-            kind: surface.kind,
             title: surface.title,
             layout: decodeLayout(surface.layoutJson),
             activePaneId,
@@ -193,22 +188,7 @@ export const SurfaceServiceLive = Layer.effect(
         Effect.gen(function* () {
           const surface = yield* createSinglePaneSurface(repository, {
             worktreeId: input.worktreeId,
-            kind: input.kind,
-            titleBase: input.kind === 'agent' ? 'Agent' : 'Terminal',
-          });
-          return {
-            worktreeId: input.worktreeId,
-            surfaceId: surface.surfaceId,
-            paneId: surface.paneId,
-            title: surface.title,
-          } satisfies CreateSurfaceOutput;
-        }),
-      launchAgentSurface: (input) =>
-        Effect.gen(function* () {
-          const surface = yield* createSinglePaneSurface(repository, {
-            worktreeId: input.worktreeId,
-            kind: 'agent',
-            titleBase: displayNameForHarness(input.launch.harness),
+            titleBase: titleBaseForInitialPane(input.initialPane),
           });
           yield* createPaneSession(
             repository,
@@ -217,11 +197,7 @@ export const SurfaceServiceLive = Layer.effect(
             lifecycle,
             eventBus,
             input.worktreeId,
-            {
-              kind: 'agent_session',
-              paneId: surface.paneId,
-              harness: input.launch.harness,
-            },
+            paneSessionCreateInput(surface.paneId, input.initialPane),
           );
           return {
             worktreeId: input.worktreeId,
@@ -284,6 +260,21 @@ function createSinglePaneSurface(
       );
     return yield* repository.createSinglePaneSurface(input);
   });
+}
+
+function titleBaseForInitialPane(initialPane: PaneSessionSpec) {
+  return initialPane.kind === 'agent_session'
+    ? displayNameForHarness(initialPane.harness)
+    : 'Terminal';
+}
+
+function paneSessionCreateInput(
+  paneId: number,
+  initialPane: PaneSessionSpec,
+): PaneSessionCreateInput {
+  return initialPane.kind === 'agent_session'
+    ? { kind: 'agent_session', paneId, harness: initialPane.harness }
+    : { kind: 'terminal_session', paneId };
 }
 
 function createPaneSession(

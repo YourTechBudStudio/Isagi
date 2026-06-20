@@ -78,7 +78,9 @@ test('launch success refetches workspace and selects the new surface locally', a
       project({
         id: 1,
         name: 'stale',
-        surfaces: [{ id: 100, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+        surfaces: [
+          { id: 100, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
+        ],
       }),
     ],
   });
@@ -104,7 +106,14 @@ test('launch success refetches workspace and selects the new surface locally', a
           project({
             id: 1,
             name: 'fresh',
-            surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal 2', attention: 'working' }],
+            surfaces: [
+              {
+                id: 501,
+                title: 'Terminal 2',
+                paneKinds: ['terminal_session'],
+                attention: 'working',
+              },
+            ],
           }),
         ],
       };
@@ -146,7 +155,9 @@ test('delete surface success refetches workspace and clears only stale local ove
       project({
         id: 1,
         name: 'stale',
-        surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+        surfaces: [
+          { id: 501, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
+        ],
       }),
     ],
   });
@@ -168,7 +179,9 @@ test('delete surface success refetches workspace and clears only stale local ove
         project({
           id: 1,
           name: 'fresh',
-          surfaces: [{ id: 502, kind: 'terminal', title: 'Terminal 2', attention: 'idle' }],
+          surfaces: [
+            { id: 502, title: 'Terminal 2', paneKinds: ['terminal_session'], attention: 'idle' },
+          ],
         }),
       ],
     }),
@@ -201,7 +214,9 @@ test('delete pane success clears only the deleted pane override', async () => {
         project({
           id: 1,
           name: 'fresh',
-          surfaces: [{ id: 501, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+          surfaces: [
+            { id: 501, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
+          ],
         }),
       ],
     }),
@@ -331,8 +346,8 @@ test('surface focus persistence ignores stale success responses', async () => {
           id: 1,
           name: 'existing',
           surfaces: [
-            { id: 101, kind: 'agent', title: 'Pi', attention: 'idle' },
-            { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
+            { id: 101, title: 'Pi', paneKinds: ['agent_session'], attention: 'idle' },
+            { id: 102, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
           ],
         }),
       ],
@@ -419,8 +434,8 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
           id: 1,
           name: 'existing',
           surfaces: [
-            { id: 101, kind: 'agent', title: 'Pi', attention: 'idle' },
-            { id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' },
+            { id: 101, title: 'Pi', paneKinds: ['agent_session'], attention: 'idle' },
+            { id: 102, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
           ],
         }),
       ],
@@ -443,7 +458,9 @@ test('surface delete prevents stale focus persistence from restoring deleted sur
           project({
             id: 1,
             name: 'fresh',
-            surfaces: [{ id: 102, kind: 'terminal', title: 'Terminal', attention: 'idle' }],
+            surfaces: [
+              { id: 102, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
+            ],
           }),
         ],
       }),
@@ -548,7 +565,6 @@ interface SurfaceFocusRequest {
 interface SurfaceDetailLike {
   readonly id: number;
   readonly worktreeId: number;
-  readonly kind: 'terminal';
   readonly title: string;
   readonly attention: 'idle';
   readonly layout: {
@@ -574,7 +590,6 @@ function surfaceDetail(surfaceId: number, paneId: number): SurfaceDetailLike {
   return {
     id: surfaceId,
     worktreeId: 10,
-    kind: 'terminal',
     title: 'Terminal',
     attention: 'idle',
     layout: { kind: 'leaf', nodeId: `pane-${paneId}`, paneId, collapsed: false },

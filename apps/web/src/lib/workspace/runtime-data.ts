@@ -5,6 +5,7 @@ import type {
   ActiveContextPersistenceInput,
   AddProjectOutput,
   AgentHarness,
+  CreateSurfaceInput,
   CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
@@ -146,9 +147,9 @@ export function setWorktreeEnvironmentFocus(
 
 export function createSurface(
   worktreeId: number,
-  kind: 'agent' | 'terminal',
+  input: CreateSurfaceInput,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.createSurface(worktreeId, kind)));
+  return getClient().pipe(Effect.flatMap((client) => client.createSurface(worktreeId, input)));
 }
 
 export function createPaneSession(
@@ -169,22 +170,13 @@ export function launchAgentSession(
   worktreeId: number,
   harness: AgentHarness,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
-  return getClient().pipe(
-    Effect.flatMap((client) => client.launchAgentSurface(worktreeId, { harness })),
-  );
+  return createSurface(worktreeId, { initialPane: { kind: 'agent_session', harness } });
 }
 
 export function launchTerminalSession(
   worktreeId: number,
 ): Effect.Effect<CreateSurfaceOutput, Error> {
-  return Effect.gen(function* () {
-    const surface = yield* createSurface(worktreeId, 'terminal');
-    yield* createPaneSession(worktreeId, {
-      kind: 'terminal_session',
-      paneId: surface.paneId,
-    });
-    return surface;
-  });
+  return createSurface(worktreeId, { initialPane: { kind: 'terminal_session' } });
 }
 
 export function resolveAgentSessionPtyWebSocketUrl(

@@ -94,11 +94,11 @@ test('surface pane delete route decodes both route params', async () => {
   );
 });
 
-test('agent surface launch route decodes harness through the contract path', async () => {
-  let input: Parameters<SurfaceServiceShape['launchAgentSurface']>[0] | null = null;
+test('surface creation route decodes initial pane through the contract path', async () => {
+  let input: Parameters<SurfaceServiceShape['createSurface']>[0] | null = null;
   await withSurfacesApi(
     fakeSurfaceService({
-      launchAgentSurface: (request) =>
+      createSurface: (request) =>
         Effect.sync(() => {
           input = request;
           return {
@@ -112,13 +112,16 @@ test('agent surface launch route decodes harness through the contract path', asy
     async (fastify) => {
       const response = await fastify.inject({
         method: 'POST',
-        url: '/api/v1/worktrees/10/agent-surfaces',
-        payload: { harness: 'opencode' },
+        url: '/api/v1/worktrees/10/surfaces',
+        payload: { initialPane: { kind: 'agent_session', harness: 'opencode' } },
       });
       const payload = response.json() as { data?: CreateSurfaceOutput };
 
       assert.equal(response.statusCode, 200);
-      assert.deepEqual(input, { worktreeId: 10, launch: { harness: 'opencode' } });
+      assert.deepEqual(input, {
+        worktreeId: 10,
+        initialPane: { kind: 'agent_session', harness: 'opencode' },
+      });
       assert.deepEqual(payload.data, {
         worktreeId: 10,
         surfaceId: 42,
@@ -231,14 +234,10 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         worktreeId: input.worktreeId,
         surfaceId: 42,
         paneId: 7,
-        title: input.kind === 'agent' ? 'Agent' : 'Terminal',
-      }),
-    launchAgentSurface: (input) =>
-      Effect.succeed({
-        worktreeId: input.worktreeId,
-        surfaceId: 42,
-        paneId: 7,
-        title: input.launch.harness === 'opencode' ? 'OpenCode' : 'Pi',
+        title:
+          input.initialPane.kind === 'agent_session' && input.initialPane.harness === 'opencode'
+            ? 'OpenCode'
+            : 'Terminal',
       }),
     createPaneSession: (input) =>
       Effect.succeed({
@@ -277,7 +276,6 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
 const surfaceDetail = {
   id: 42,
   worktreeId: 10,
-  kind: 'terminal',
   title: 'Terminal',
   layout: {
     kind: 'leaf',

@@ -4,7 +4,6 @@ import type {
   AgentSessionStatusReason,
   PtyProcessBackend,
   PtyProcessLogMode,
-  RuntimeSurfaceKind,
   SessionDiagnosticCode,
   SessionStatus,
   TerminalSessionStatusReason,
@@ -19,8 +18,8 @@ export interface EnvironmentFocusRow {
 export interface SurfaceMetadataRow {
   readonly id: number;
   readonly worktreeId: number;
-  readonly kind: RuntimeSurfaceKind;
   readonly title: string;
+  readonly paneKinds: readonly ('agent_session' | 'terminal_session')[];
   readonly sortOrder: number;
 }
 
@@ -126,7 +125,6 @@ export interface DerivedTerminalSessionState {
 
 export interface CreateSinglePaneSurfaceInput {
   readonly worktreeId: number;
-  readonly kind: RuntimeSurfaceKind;
   readonly titleBase: string;
 }
 

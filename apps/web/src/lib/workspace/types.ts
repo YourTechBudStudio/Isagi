@@ -1,6 +1,7 @@
 import type {
   AttentionState,
   Project as ContractProject,
+  SurfacePaneSession,
   Worktree as ContractWorktree,
 } from '@isagi/contracts';
 
@@ -13,29 +14,13 @@ export type WorkspaceSelection =
   | { readonly kind: 'missingProject'; readonly projectId: number }
   | { readonly kind: 'empty' };
 
-export type SurfaceKind = 'agent' | 'terminal' | 'browser' | 'editor' | 'artifact';
-
-export interface AgentSession {
-  readonly id: string;
-  readonly harness: string;
-  readonly attention: AttentionState;
-  readonly transcript: readonly string[];
-}
-
-export interface ShellPane {
-  readonly id: string;
-  readonly title: string;
-  readonly lines: readonly string[];
-}
+export type PaneSessionKind = SurfacePaneSession['kind'];
 
 export interface Surface {
   readonly id: number;
-  readonly kind: SurfaceKind;
   readonly title: string;
+  readonly paneKinds: readonly PaneSessionKind[];
   readonly attention: AttentionState;
-  readonly source?: string | undefined;
-  readonly agentSessions?: readonly AgentSession[] | undefined;
-  readonly shells?: readonly ShellPane[] | undefined;
 }
 
 export type Worktree = Omit<ContractWorktree, 'surfaces'> & {

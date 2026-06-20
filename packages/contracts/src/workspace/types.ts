@@ -3,10 +3,11 @@ import { Schema } from 'effect';
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const projectStatusSchema = Schema.Literal('present', 'missing');
+export const paneSessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
 export const surfaceSchema = Schema.Struct({
   id: positiveIntegerSchema,
-  kind: Schema.Literal('agent', 'terminal'),
   title: Schema.String,
+  paneKinds: Schema.Array(paneSessionKindSchema),
 });
 
 export const worktreeSchema = Schema.Struct({

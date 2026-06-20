@@ -85,19 +85,9 @@ export function registerSurfacesApi(
     handle: (input, _context, params) =>
       Effect.gen(function* () {
         const surfaces = yield* SurfaceService;
-        return yield* surfaces.createSurface({ worktreeId: params.worktreeId, kind: input.kind });
-      }),
-    mapError: (error, context) => toSurfaceApiError(error, context),
-    run,
-  });
-
-  registerApiEndpoint(fastify, apiEndpoints.surfaces.launchAgentSurface, {
-    handle: (input, _context, params) =>
-      Effect.gen(function* () {
-        const surfaces = yield* SurfaceService;
-        return yield* surfaces.launchAgentSurface({
+        return yield* surfaces.createSurface({
           worktreeId: params.worktreeId,
-          launch: input,
+          initialPane: input.initialPane,
         });
       }),
     mapError: (error, context) => toSurfaceApiError(error, context),

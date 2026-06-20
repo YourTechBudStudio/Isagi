@@ -71,8 +71,8 @@ function buildWorktreeSnapshot(
     parked: false,
     surfaces: worktreeSurfaces.map((surface) => ({
       id: surface.id,
-      kind: surface.kind,
       title: surface.title,
+      paneKinds: [...surface.paneKinds],
     })),
     activeSurfaceId: worktreeSurfaces.some((surface) => surface.id === focus?.activeSurfaceId)
       ? (focus?.activeSurfaceId ?? null)

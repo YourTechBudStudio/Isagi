@@ -5,8 +5,8 @@ import type { Project, Surface } from '../workspace/types.js';
 import { buildPaletteContext } from './context.js';
 
 test('palette context carries active surface and frontend active pane target', () => {
-  const surfaceA = surface({ id: 101, title: 'Agent' });
-  const surfaceB = surface({ id: 102, title: 'Terminal' });
+  const surfaceA = surface({ id: 101, title: 'Agent', paneKinds: ['agent_session'] });
+  const surfaceB = surface({ id: 102, title: 'Terminal', paneKinds: ['terminal_session'] });
   const projects = [project({ surfaces: [surfaceA, surfaceB], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
@@ -21,7 +21,7 @@ test('palette context carries active surface and frontend active pane target', (
 });
 
 test('palette context ignores stale active surface overrides', () => {
-  const surfaceA = surface({ id: 101, title: 'Agent' });
+  const surfaceA = surface({ id: 101, title: 'Agent', paneKinds: ['agent_session'] });
   const projects = [project({ surfaces: [surfaceA], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
@@ -33,11 +33,15 @@ test('palette context ignores stale active surface overrides', () => {
   assert.equal(ctx.activePaneId, 501);
 });
 
-function surface(input: { readonly id: number; readonly title: string }): Surface {
+function surface(input: {
+  readonly id: number;
+  readonly title: string;
+  readonly paneKinds: Surface['paneKinds'];
+}): Surface {
   return {
     id: input.id,
-    kind: 'terminal',
     title: input.title,
+    paneKinds: input.paneKinds,
     attention: 'idle',
   };
 }

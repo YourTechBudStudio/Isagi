@@ -381,14 +381,45 @@ function listAgentSessionsForPanes(
 }
 
 function listWorkspaceSurfaceMetadata(database: RuntimeDatabaseService) {
-  return database.use('list_workspace_surface_metadata_rows', (db) =>
-    db
-      .select()
+  return database.use('list_workspace_surface_metadata_rows', (db) => {
+    const rows = db
+      .select({
+        surface: worktreeSurfaces,
+        paneSessionKind: surfacePanes.sessionKind,
+      })
       .from(worktreeSurfaces)
-      .orderBy(worktreeSurfaces.worktreeId, worktreeSurfaces.sortOrder, worktreeSurfaces.id)
-      .all()
-      .map(surfaceMetadataRow),
-  );
+      .leftJoin(surfacePanes, eq(surfacePanes.surfaceId, worktreeSurfaces.id))
+      .orderBy(
+        worktreeSurfaces.worktreeId,
+        worktreeSurfaces.sortOrder,
+        worktreeSurfaces.id,
+        surfacePanes.sortOrder,
+        surfacePanes.id,
+      )
+      .all();
+
+    const surfaces = new Map<
+      number,
+      Omit<SurfaceMetadataRow, 'paneKinds'> & {
+        readonly paneKinds: ('agent_session' | 'terminal_session')[];
+      }
+    >();
+    for (const row of rows) {
+      const existing = surfaces.get(row.surface.id);
+      if (existing) {
+        if (row.paneSessionKind) {
+          existing.paneKinds.push(row.paneSessionKind);
+        }
+        continue;
+      }
+
+      surfaces.set(row.surface.id, {
+        ...surfaceMetadataRow(row.surface),
+        paneKinds: row.paneSessionKind ? [row.paneSessionKind] : [],
+      });
+    }
+    return [...surfaces.values()];
+  });
 }
 
 function listTerminalSessionsForPanes(
@@ -442,7 +473,6 @@ function createSinglePaneSurfaceRows(
     .insert(worktreeSurfaces)
     .values({
       worktreeId: input.worktreeId,
-      kind: input.kind,
       title,
       layoutJson: '{}',
       sortOrder,
@@ -490,8 +520,8 @@ function surfaceMetadataRow(row: WorktreeSurfaceRecord): SurfaceMetadataRow {
   return {
     id: row.id,
     worktreeId: row.worktreeId,
-    kind: row.kind,
     title: row.title,
+    paneKinds: [],
     sortOrder: row.sortOrder,
   };
 }

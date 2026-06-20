@@ -11,7 +11,7 @@ import {
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
 import { worktreeSubtitle } from '../../lib/workspace/selectors.js';
-import { surfaceIcon } from '../../lib/workspace/surface-presentation.js';
+import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Worktree, Surface } from '../../lib/workspace/types.js';
 
 /**
@@ -152,7 +152,7 @@ function SurfaceRow({
   pillId: string;
   onSelect: () => void;
 }) {
-  const Icon = surfaceIcon(surface.kind);
+  const Icon = surfaceSummaryIcon(surface.paneKinds);
   const dispatchCommand = useCommandDispatcher();
 
   const dispatchSurfaceCommand = (commandId: 'rename-active-surface' | 'delete-active-surface') => {

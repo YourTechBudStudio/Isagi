@@ -1,26 +1,24 @@
-import { Bot } from 'lucide-react';
-
 import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
-import type { Surface } from '../../lib/workspace/types.js';
+import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
+import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
 import { PtySurface } from './PtySurface.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
 
-export function AgentSurface({ surface }: { surface: Surface }) {
+export function Surface({ surface }: { surface: WorkspaceSurface }) {
   const detail = useSurfaceDetailQuery(surface.id);
+  const Icon = surfaceSummaryIcon(surface.paneKinds);
 
   if (detail.isPending) {
-    return (
-      <SurfaceFrameState icon={Bot} title={surface.title} body={surfaceDetailCopy.agent.loading} />
-    );
+    return <SurfaceFrameState icon={Icon} title={surface.title} body={surfaceDetailCopy.loading} />;
   }
 
   if (detail.error) {
     return (
       <SurfaceFrameState
-        icon={Bot}
+        icon={Icon}
         title={surface.title}
-        body={surfaceDetailCopy.agent.loadFailed(formatRuntimeError(detail.error))}
+        body={surfaceDetailCopy.loadFailed(formatRuntimeError(detail.error))}
         tone="error"
       />
     );

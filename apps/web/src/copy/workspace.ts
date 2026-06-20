@@ -4,7 +4,7 @@ import type {
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
-import type { MissingProject, Surface, Worktree } from '../lib/workspace/types.js';
+import type { MissingProject, Worktree } from '../lib/workspace/types.js';
 
 export const workspaceBootCopy = {
   restoring: {
@@ -24,16 +24,6 @@ export const workAreaCopy = {
 } as const;
 
 export const canvasCopy = {
-  surfacePlaceholder: (surface: Surface) => {
-    switch (surface.kind) {
-      case 'browser':
-        return '// a live browser surface \u2014 auto-detected from a running command';
-      case 'editor':
-        return '// VS Code in the browser \u2014 restores the artifacts you had open';
-      default:
-        return `// ${surface.title}`;
-    }
-  },
   freshEmpty: {
     title: 'No worktrees on the canvas.',
     body: "Point Isagi at a repo root. It'll find the worktrees you forgot you made.",
@@ -170,12 +160,6 @@ export const ptyCopy = {
 } as const;
 
 export const surfaceDetailCopy = {
-  agent: {
-    loading: 'Loading agent surface...',
-    loadFailed: (error: string) => `Could not load this agent surface. ${error}`,
-  },
-  terminal: {
-    loading: 'Loading terminal...',
-    loadFailed: (error: string) => `Could not load this terminal. ${error}`,
-  },
+  loading: 'Loading surface...',
+  loadFailed: (error: string) => `Could not load this surface. ${error}`,
 } as const;

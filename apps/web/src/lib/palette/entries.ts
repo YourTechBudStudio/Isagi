@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { useWorkspaceStore } from '../workspace/store.js';
-import { surfaceIcon } from '../workspace/surface-presentation.js';
+import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
 import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
@@ -104,7 +104,7 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
       entries.push({
         id: `surface:${surface.id}`,
         label: surface.title,
-        icon: surfaceIcon(surface.kind),
+        icon: surfaceSummaryIcon(surface.paneKinds),
         group: 'worktree-surfaces',
         sub: 'go to surface',
         run: () => activateSurface({ worktreeId: worktree.id, surfaceId: surface.id }),
