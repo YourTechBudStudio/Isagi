@@ -68,9 +68,6 @@ function commandLogDisplayKind(
   if (live && phase === 'attached') {
     return 'streaming';
   }
-  if (phase === 'errored') {
-    return 'errored';
-  }
   return 'loading';
 }
 
