@@ -8,11 +8,17 @@ import Fastify from 'fastify';
 import {
   agentSessionPtyWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
+  type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
 import { HarnessAdapterError } from '../harness-adapters/index.js';
-import { SessionLifecycle, SessionLifecycleLive } from '../session-lifecycle/index.js';
+import {
+  SessionLifecycle,
+  SessionLifecycleLive,
+  type AttachTokenRecord,
+  type SessionLifecycleService,
+} from '../session-lifecycle/index.js';
 import {
   TerminalSessionService,
   type TerminalSessionServiceShape,
@@ -20,6 +26,8 @@ import {
 import { registerPtyApi } from './api.js';
 import { PtyService, type PtyServiceShape } from './index.js';
 import type { PtyAttachment } from './pty.service.js';
+
+type OutputSender = (message: PtyWebSocketOutputMessage) => void;
 
 /**
  * The previous PTY API tests targeted the removed `/pty-sessions/:id` route.
@@ -144,6 +152,201 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
   }
 });
 
+test('PTY websocket API preserves session replay before live output ordering', async () => {
+  let liveSend: ((message: PtyWebSocketOutputMessage) => void) | null = null;
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, fakeAgentSessionService()),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          onAttachStarted: () => {},
+          attachPromise: async () =>
+            fakeAttachment(() => {
+              liveSend = null;
+            }),
+          onAttachSend: (send) => {
+            liveSend = send;
+          },
+          replay: (send) =>
+            Effect.sync(() => {
+              send({ type: 'replay_start', bytes: 5 });
+              send({ type: 'output', data: 'hello', replay: true });
+              send({ type: 'replay_end' });
+            }),
+        }),
+      ),
+      SessionLifecycleLive,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10);
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const messages = collectJsonMessages(ws);
+    await messages.waitForCount(4, 'session replay messages');
+    assert.deepEqual(messages.items[0], {
+      type: 'session',
+      status: 'running',
+      exitCode: null,
+      signal: null,
+    });
+    assert.deepEqual(messages.items[1], { type: 'replay_start', bytes: 5 });
+    assert.deepEqual(messages.items[2], {
+      type: 'output',
+      data: 'hello',
+      replay: true,
+    });
+    assert.deepEqual(messages.items[3], { type: 'replay_end' });
+
+    assert.ok(liveSend);
+    (liveSend as OutputSender)({ type: 'output', data: ' live' });
+    await messages.waitForCount(5, 'live output');
+    assert.deepEqual(messages.items[4], { type: 'output', data: ' live' });
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('PTY websocket API buffers client input until live attach completes', async () => {
+  let markAttachStarted!: () => void;
+  let resolveAttach!: () => void;
+  const attachStarted = new Promise<void>((resolve) => {
+    markAttachStarted = resolve;
+  });
+  const writes: string[] = [];
+  const resizes: Array<{ cols: number; rows: number }> = [];
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, fakeAgentSessionService()),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          onAttachStarted: markAttachStarted,
+          attachPromise: () =>
+            new Promise((resolveAttachment) => {
+              resolveAttach = () => resolveAttachment(fakeAttachment());
+            }),
+          write: (data) =>
+            Effect.sync(() => {
+              writes.push(data);
+            }),
+          resize: (size) =>
+            Effect.sync(() => {
+              resizes.push(size);
+            }),
+        }),
+      ),
+      SessionLifecycleLive,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10);
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    await attachStarted;
+    ws.send(JSON.stringify({ type: 'input', data: 'abc' }));
+    ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+    assert.deepEqual(writes, []);
+    assert.deepEqual(resizes, []);
+
+    resolveAttach();
+    await waitUntil(() => writes.length === 1 && resizes.length === 1, 'buffered input flush');
+    assert.deepEqual(writes, ['abc']);
+    assert.deepEqual(resizes, [{ cols: 120, rows: 40 }]);
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('PTY websocket API supersede detaches the displaced viewer before the replacement attaches', async () => {
+  let active = false;
+  let activeSend: ((message: PtyWebSocketOutputMessage) => void) | null = null;
+  let attachCalls = 0;
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(AgentSessionService, fakeAgentSessionService()),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({
+          onAttachStarted: () => {},
+          attachPromise: async () => {
+            if (active) throw new Error('session_already_attached');
+            active = true;
+            attachCalls++;
+            return fakeAttachment(() => {
+              active = false;
+              activeSend = null;
+            });
+          },
+          onAttachSend: (send) => {
+            activeSend = send;
+          },
+        }),
+      ),
+      SessionLifecycleLive,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const firstToken = await issueAgentAttachToken(runtime, 10);
+    const first = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${firstToken.token}`,
+    );
+    const firstMessages = collectJsonMessages(first);
+    await waitUntil(() => attachCalls === 1, 'first attachment');
+
+    const secondToken = await issueAgentAttachToken(runtime, 10);
+    const firstClosed = onceClose(first);
+    const second = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${secondToken.token}`,
+    );
+    const secondMessages = collectJsonMessages(second);
+
+    await firstMessages.waitForType('error', 'first moved error');
+    assert.deepEqual(firstMessages.items.at(-1), {
+      type: 'error',
+      code: 'session_attachment_moved',
+    });
+    await firstClosed;
+    await waitUntil(() => attachCalls === 2, 'replacement attachment');
+
+    assert.ok(activeSend);
+    (activeSend as OutputSender)({ type: 'output', data: 'replacement-live' });
+    await secondMessages.waitForType('output', 'replacement live output');
+    assert.deepEqual(secondMessages.items.at(-1), {
+      type: 'output',
+      data: 'replacement-live',
+    });
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 function fakeAgentSessionService(
   overrides: Partial<AgentSessionServiceShape> = {},
 ): AgentSessionServiceShape {
@@ -168,6 +371,16 @@ function fakeTerminalSessionService(): TerminalSessionServiceShape {
 function fakePtyService(input: {
   readonly onAttachStarted: () => void;
   readonly attachPromise: () => Promise<ReturnType<typeof fakeAttachment>>;
+  readonly onAttachSend?:
+    | ((send: (message: PtyWebSocketOutputMessage) => void) => void)
+    | undefined;
+  readonly replay?:
+    | ((send: (message: PtyWebSocketOutputMessage) => void) => Effect.Effect<void>)
+    | undefined;
+  readonly write?: ((data: string) => Effect.Effect<void>) | undefined;
+  readonly resize?:
+    | ((size: { readonly cols: number; readonly rows: number }) => Effect.Effect<void>)
+    | undefined;
 }): PtyServiceShape {
   return {
     launch: () => Effect.die('launch is not used'),
@@ -178,26 +391,109 @@ function fakePtyService(input: {
         live: true,
         replaySource: 'file_log',
       }),
-    attach: () =>
+    attach: ({ send }) =>
       Effect.promise(() => {
         const promise = input.attachPromise();
         input.onAttachStarted();
+        input.onAttachSend?.(send);
         return promise;
       }),
-    replay: () => Effect.void,
+    replay: ({ send }) => input.replay?.(send) ?? Effect.void,
     canObserveOutput: () => Effect.die('canObserveOutput is not used'),
     observeOutput: () => Effect.die('observeOutput is not used'),
-    write: () => Effect.void,
-    resize: () => Effect.void,
+    write: ({ data }) => input.write?.(data) ?? Effect.void,
+    resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
     kill: () => Effect.void,
     terminate: () => Effect.void,
   } satisfies PtyServiceShape;
 }
 
-function receiveJson(ws: { once: (event: 'message', listener: (data: Buffer) => void) => void }) {
-  return new Promise<unknown>((resolve) => {
-    ws.once('message', (data) => resolve(JSON.parse(data.toString())));
+function issueAgentAttachToken(
+  runtime: {
+    readonly runPromise: (
+      effect: Effect.Effect<AttachTokenRecord, never, SessionLifecycleService>,
+    ) => Promise<AttachTokenRecord>;
+  },
+  sessionId: number,
+) {
+  return runtime.runPromise(
+    Effect.gen(function* () {
+      const lifecycle = yield* SessionLifecycle;
+      return yield* lifecycle.issueAttachToken({ kind: 'agent_session', sessionId });
+    }),
+  );
+}
+
+function receiveJson(
+  ws: {
+    once: (event: 'message', listener: (data: Buffer) => void) => void;
+    off?: (event: 'message', listener: (data: Buffer) => void) => void;
+  },
+  label = 'websocket message',
+) {
+  return new Promise<unknown>((resolve, reject) => {
+    const onMessage = (data: Buffer) => {
+      clearTimeout(timer);
+      resolve(JSON.parse(data.toString()));
+    };
+    const timer = setTimeout(() => {
+      ws.off?.('message', onMessage);
+      reject(new Error(`Timed out waiting for ${label}`));
+    }, 1_000);
+    ws.once('message', onMessage);
   });
+}
+
+function collectJsonMessages(ws: {
+  on: (event: 'message', listener: (data: Buffer) => void) => void;
+}) {
+  const items: unknown[] = [];
+  const waiters: Array<() => void> = [];
+  ws.on('message', (data) => {
+    items.push(JSON.parse(data.toString()));
+    for (const waiter of waiters.splice(0)) waiter();
+  });
+
+  const waitFor = async (predicate: () => boolean, label: string) => {
+    const deadline = Date.now() + 1_000;
+    while (!predicate()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`Timed out waiting for ${label}`);
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, remaining);
+        waiters.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+  };
+
+  return {
+    items,
+    waitForCount: (count: number, label: string) => waitFor(() => items.length >= count, label),
+    waitForType: (type: string, label: string) =>
+      waitFor(
+        () =>
+          items.some(
+            (item) =>
+              typeof item === 'object' && item !== null && 'type' in item && item.type === type,
+          ),
+        label,
+      ),
+  };
+}
+
+function onceClose(ws: { once: (event: 'close', listener: () => void) => void }) {
+  return new Promise<void>((resolve) => ws.once('close', resolve));
+}
+
+async function waitUntil(predicate: () => boolean, label: string) {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 function fakeAttachment(onUnsubscribe: () => void = () => {}) {
@@ -206,6 +502,7 @@ function fakeAttachment(onUnsubscribe: () => void = () => {}) {
     attachmentId: Symbol('test-attachment'),
     replayBytes: null,
     live: true,
+    detach: Effect.sync(onUnsubscribe),
     unsubscribe: onUnsubscribe,
   } satisfies PtyAttachment;
 }

@@ -56,6 +56,7 @@ export interface PtyAttachment {
   readonly attachmentId: symbol | null;
   readonly replayBytes: number | null;
   readonly live: boolean;
+  readonly detach: Effect.Effect<void, never>;
   readonly unsubscribe: () => void;
 }
 
@@ -336,6 +337,7 @@ function attachToProcess(
         attachmentId: null,
         replayBytes: plan.replayBytes,
         live: false,
+        detach: Effect.void,
         unsubscribe: () => {},
       } satisfies PtyAttachment;
     const session = plan.session;
@@ -390,15 +392,15 @@ function attachToProcess(
         attachmentId,
         attachment: attachResult.right,
       });
+      const detach = detachActiveAttachment(activeAttachments, session.id, attachmentId);
       return {
         session,
         attachmentId,
         replayBytes: plan.replayBytes,
         live: true,
+        detach,
         unsubscribe: () => {
-          void Effect.runPromise(
-            detachActiveAttachment(activeAttachments, session.id, attachmentId),
-          );
+          void Effect.runPromise(detach);
         },
       } satisfies PtyAttachment;
     }).pipe(Effect.ensuring(Effect.sync(() => pendingAttachments.delete(session.id))));

@@ -1,5 +1,12 @@
 import { Schema } from 'effect';
 
+import {
+  ptyStreamExitMessageSchema,
+  ptyStreamOutputMessageSchema,
+  ptyStreamReplayEndMessageSchema,
+  ptyStreamReplayStartMessageSchema,
+} from '../pty-stream/types.js';
+
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 
@@ -305,23 +312,10 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union(
     exitCode: Schema.optional(Schema.NullOr(nonNegativeIntegerSchema)),
     signal: Schema.optional(Schema.NullOr(Schema.String)),
   }),
-  Schema.Struct({
-    type: Schema.Literal('replay_start'),
-    bytes: nonNegativeIntegerSchema,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('output'),
-    data: Schema.String,
-    replay: Schema.optional(Schema.Boolean),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('replay_end'),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('exit'),
-    exitCode: Schema.NullOr(nonNegativeIntegerSchema),
-    signal: Schema.NullOr(Schema.String),
-  }),
+  ptyStreamReplayStartMessageSchema,
+  ptyStreamOutputMessageSchema,
+  ptyStreamReplayEndMessageSchema,
+  ptyStreamExitMessageSchema,
   Schema.Struct({
     type: Schema.Literal('error'),
     code: ptyWebSocketErrorCodeSchema,

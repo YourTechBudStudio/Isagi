@@ -174,6 +174,21 @@ export {
 } from './paths/types.js';
 export type { PathSuggestInput, PathSuggestOutput, PathSuggestion } from './paths/types.js';
 
+export {
+  ptyStreamExitMessageSchema,
+  ptyStreamOutputMessageSchema,
+  ptyStreamOutputMessageSetSchema,
+  ptyStreamReplayEndMessageSchema,
+  ptyStreamReplayStartMessageSchema,
+} from './pty-stream/types.js';
+export type {
+  PtyStreamExitMessage,
+  PtyStreamOutputMessage,
+  PtyStreamOutputMessageSet,
+  PtyStreamReplayEndMessage,
+  PtyStreamReplayStartMessage,
+} from './pty-stream/types.js';
+
 export { projectsEndpoints } from './projects/api.js';
 export {
   addProjectInputSchema,
