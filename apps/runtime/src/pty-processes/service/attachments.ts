@@ -6,6 +6,7 @@ export interface ActiveAttachment {
   readonly ptyProcessId: number;
   readonly attachmentId: symbol;
   readonly attachment: BackendAttachment;
+  readonly displace?: Effect.Effect<void, never> | undefined;
 }
 
 export function requireActiveAttachment(

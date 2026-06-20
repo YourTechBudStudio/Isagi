@@ -162,6 +162,7 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
             // session exit; startup reconciliation and polling own tmux session state.
           });
           return {
+            replayBytes: null,
             write: (data) =>
               Effect.try({
                 try: () => client.write(data),

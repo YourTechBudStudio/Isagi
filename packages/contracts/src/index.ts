@@ -175,6 +175,8 @@ export {
 export type { PathSuggestInput, PathSuggestOutput, PathSuggestion } from './paths/types.js';
 
 export {
+  ptyStreamErrorCodeSchema,
+  ptyStreamErrorMessageSchema,
   ptyStreamExitMessageSchema,
   ptyStreamOutputMessageSchema,
   ptyStreamOutputMessageSetSchema,
@@ -182,6 +184,8 @@ export {
   ptyStreamReplayStartMessageSchema,
 } from './pty-stream/types.js';
 export type {
+  PtyStreamErrorCode,
+  PtyStreamErrorMessage,
   PtyStreamExitMessage,
   PtyStreamOutputMessage,
   PtyStreamOutputMessageSet,

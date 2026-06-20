@@ -4,7 +4,7 @@ import process from 'node:process';
 
 import { Effect } from 'effect';
 
-import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
+import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import type { PtyProcessRecord } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
@@ -147,7 +147,7 @@ export function replayBytesForProcess(session: PtyProcessRecord) {
 export function replayProcessLog(input: {
   readonly logPath: string | null;
   readonly bytes: number | null;
-  readonly send: (message: PtyWebSocketOutputMessage) => void;
+  readonly send: (message: PtyStreamOutputMessageSet) => void;
 }) {
   return Effect.try({
     try: () => {

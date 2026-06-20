@@ -1,8 +1,7 @@
-import { Effect, Either, Schema, type ManagedRuntime } from 'effect';
+import { Data, Effect, Schema, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import {
-  apiBasePath,
   apiEndpoints,
   commandLogStreamWebSocketEndpoint,
   ptyWebSocketInputMessageSchema,
@@ -12,9 +11,9 @@ import {
 } from '@isagi/contracts';
 
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
-import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
 import { DatabaseError } from '../persistence/index.js';
-import { PtyService, PtyServiceError } from '../pty-processes/index.js';
+import { PtyServiceError } from '../pty-processes/index.js';
+import { registerPtyStreamRoute, type PtyStreamStrategy } from '../pty-processes/stream-route.js';
 import type { RuntimeServices } from '../runtime.layer.js';
 import { CommandError, CommandService } from './commands.service.js';
 
@@ -25,6 +24,11 @@ const runWithRuntime =
     options?: { readonly signal?: AbortSignal | undefined },
   ) =>
     runtime.runPromise(effect, options);
+
+class CommandLogStreamProtocolError extends Data.TaggedError('CommandLogStreamProtocolError')<{
+  readonly code: 'command_not_found' | 'read_only_stream';
+  readonly message: string;
+}> {}
 
 export function registerCommandsApi(
   fastify: FastifyInstance,
@@ -101,240 +105,73 @@ function registerCommandLogStreamRoute(
   fastify: FastifyInstance,
   run: ReturnType<typeof runWithRuntime>,
 ) {
-  fastify.get(
-    `${apiBasePath}${commandLogStreamWebSocketEndpoint.path}`,
+  const strategy: PtyStreamStrategy<
     {
-      websocket: true,
-      preValidation: (request, reply, done) => {
-        const origin = request.headers.origin;
-        if (!isAllowedRuntimeOrigin(Array.isArray(origin) ? origin[0] : origin)) {
-          reply.code(403).send('Forbidden');
-          return;
-        }
-        done();
-      },
+      readonly metadata: Extract<
+        CommandLogStreamOutputMessage,
+        { readonly type: 'command_log_state' }
+      >;
     },
-    (socket, request) => {
-      const worktreeId = decodeWorktreeId(request.params);
-      const commandName = decodeCommandName(request.query);
-      if (worktreeId === null || commandName === null) {
-        sendSocketError(socket, { code: 'command_not_found' });
-        socket.close();
-        return;
-      }
-
-      let closed = false;
-      let replaying = false;
-      let unsubscribe = () => {};
-      const bufferedLiveMessages: CommandLogStreamOutputMessage[] = [];
-
-      socket.once('close', () => {
-        closed = true;
-        bufferedLiveMessages.splice(0);
-        unsubscribe();
-      });
-
-      const send = (message: CommandLogStreamOutputMessage) => sendSocketMessage(socket, message);
-      const sendLive = (message: CommandLogStreamOutputMessage) => {
-        if (closed) return;
-        if (replaying) {
-          bufferedLiveMessages.push(message);
-          return;
+    Extract<CommandLogStreamOutputMessage, { readonly type: 'command_log_state' }>
+  > = {
+    path: commandLogStreamWebSocketEndpoint.path,
+    logLabel: 'Command log stream',
+    mode: 'read_only',
+    closeOnExit: true,
+    closeOnReplayOnly: true,
+    closeOnClientError: true,
+    resolveTarget: (request) =>
+      Effect.gen(function* () {
+        const worktreeId = decodeWorktreeId(request.params);
+        const commandName = decodeCommandName(request.query);
+        if (worktreeId === null || commandName === null) {
+          return yield* Effect.fail(
+            new CommandLogStreamProtocolError({
+              code: 'command_not_found',
+              message: 'Command log stream target was invalid.',
+            }),
+          );
         }
-        send(message);
-        if (message.type === 'exit') setImmediate(() => socket.close());
-      };
-      const flushLiveBuffer = () => {
-        for (const message of bufferedLiveMessages.splice(0)) {
-          if (closed) return;
-          send(message);
-          if (message.type === 'exit') {
-            setImmediate(() => socket.close());
-            return;
-          }
-        }
-      };
-
-      void run(
-        Effect.gen(function* () {
-          const commands = yield* CommandService;
-          const pty = yield* PtyService;
-          const metadata = yield* commands.readLogMetadata({ worktreeId, commandName });
-          const ptyProcessId = metadata.latestRun?.ptyProcessId ?? null;
-          const plan = ptyProcessId ? yield* pty.getAttachmentPlan({ ptyProcessId }) : null;
-          const live = ptyProcessId
-            ? yield* pty.canObserveOutput({ ptyProcessId }).pipe(Effect.orElseSucceed(() => false))
-            : false;
-          return { metadata, plan, live };
-        }).pipe(Effect.either),
-      )
-        .then(async (result) => {
-          if (closed) return;
-          if (Either.isLeft(result)) {
-            const error = commandLogStreamError(result.left);
-            console.warn('[runtime] Command log stream failed before replay', {
-              worktreeId,
-              commandName,
-              errorCode: error.code,
-              errorMessage: error.message,
-              cause: result.left,
-            });
-            sendSocketError(socket, error);
-            setImmediate(() => socket.close());
-            return;
-          }
-
-          const { metadata, plan, live } = result.right;
-          let streamLive = live;
-          send({
-            type: 'command_log_state',
+        const commands = yield* CommandService;
+        const metadata = yield* commands.readLogMetadata({ worktreeId, commandName });
+        return {
+          metadata: {
+            type: 'command_log_state' as const,
             worktreeId: metadata.worktreeId,
             commandName: metadata.commandName,
             status: metadata.status,
             latestRun: metadata.latestRun,
-            live,
-          });
+            live: false,
+          },
+          ptyProcessId: metadata.latestRun?.ptyProcessId ?? null,
+        };
+      }),
+    preamble: ({ target, plan }) => ({
+      ...target.metadata,
+      live: Boolean(plan?.live),
+    }),
+    decodeClientMessage,
+    handleClientMessage: () =>
+      Effect.fail(
+        new CommandLogStreamProtocolError({
+          code: 'read_only_stream',
+          message: 'Command log streams are read-only.',
+        }),
+      ),
+    beforeAttach: () => Effect.void,
+    supersede: () => true,
+    displace: ({ controls }) =>
+      Effect.gen(function* () {
+        controls.send({ type: 'error', code: 'stream_superseded' });
+        yield* controls.detach;
+        controls.close();
+        yield* Effect.promise<void>(() => new Promise((resolve) => setImmediate(resolve)));
+      }),
+    registerAttachment: () => Effect.succeed(() => {}),
+    mapError: commandLogStreamError,
+  };
 
-          if (!metadata.latestRun || !metadata.latestRun.ptyProcessId || !plan) {
-            setImmediate(() => socket.close());
-            return;
-          }
-          const streamPtyProcessId = metadata.latestRun.ptyProcessId;
-          let replayBytes = plan.replayBytes;
-          let replaySession = plan.session;
-
-          if (streamLive) {
-            const observeResult = await run(
-              Effect.gen(function* () {
-                const pty = yield* PtyService;
-                return yield* pty.observeOutput({
-                  ptyProcessId: streamPtyProcessId,
-                  send: (message) => {
-                    if (message.type === 'output' || message.type === 'exit') sendLive(message);
-                  },
-                });
-              }).pipe(Effect.either),
-            );
-            if (Either.isLeft(observeResult)) {
-              if (shouldReplayAfterObserveFailure(observeResult.left)) {
-                const fallbackPlan = await run(
-                  Effect.gen(function* () {
-                    const pty = yield* PtyService;
-                    return yield* pty.getAttachmentPlan({ ptyProcessId: streamPtyProcessId });
-                  }).pipe(Effect.either),
-                );
-                if (Either.isRight(fallbackPlan)) {
-                  replayBytes = fallbackPlan.right.replayBytes;
-                  replaySession = fallbackPlan.right.session;
-                  streamLive = false;
-                  send({
-                    type: 'command_log_state',
-                    worktreeId: metadata.worktreeId,
-                    commandName: metadata.commandName,
-                    status: metadata.status,
-                    latestRun: metadata.latestRun,
-                    live: false,
-                  });
-                } else {
-                  const error = commandLogStreamError(fallbackPlan.left);
-                  console.warn('[runtime] Command log stream fallback replay failed', {
-                    worktreeId,
-                    commandName,
-                    ptyProcessId: streamPtyProcessId,
-                    errorCode: error.code,
-                    errorMessage: error.message,
-                    cause: fallbackPlan.left,
-                  });
-                  sendSocketError(socket, error);
-                  setImmediate(() => socket.close());
-                  return;
-                }
-              } else {
-                const error = commandLogStreamError(observeResult.left);
-                console.warn('[runtime] Command log stream observe failed', {
-                  worktreeId,
-                  commandName,
-                  ptyProcessId: streamPtyProcessId,
-                  errorCode: error.code,
-                  errorMessage: error.message,
-                  cause: observeResult.left,
-                });
-                sendSocketError(socket, error);
-                setImmediate(() => socket.close());
-                return;
-              }
-            } else {
-              replayBytes = observeResult.right.replayBytes;
-              replaySession = observeResult.right.session;
-              unsubscribe = observeResult.right.unsubscribe;
-            }
-          }
-
-          replaying = true;
-          const replayResult = await run(
-            Effect.gen(function* () {
-              const pty = yield* PtyService;
-              return yield* pty.replay({
-                session: replaySession,
-                bytes: replayBytes,
-                send: (message) => {
-                  if (
-                    message.type === 'replay_start' ||
-                    message.type === 'output' ||
-                    message.type === 'replay_end'
-                  ) {
-                    send(message);
-                  }
-                },
-              });
-            }).pipe(Effect.either),
-          );
-          replaying = false;
-
-          if (Either.isLeft(replayResult)) {
-            const error = commandLogStreamError(replayResult.left);
-            console.warn('[runtime] Command log stream replay failed', {
-              worktreeId,
-              commandName,
-              ptyProcessId: streamPtyProcessId,
-              errorCode: error.code,
-              errorMessage: error.message,
-              cause: replayResult.left,
-            });
-            sendSocketError(socket, error);
-            setImmediate(() => socket.close());
-            return;
-          }
-
-          flushLiveBuffer();
-          if (!streamLive) setImmediate(() => socket.close());
-        })
-        .catch((error: unknown) => {
-          const socketError = commandLogStreamError(error);
-          console.error('[runtime] Command log stream crashed', {
-            worktreeId,
-            commandName,
-            errorCode: socketError.code,
-            errorMessage: socketError.message,
-            cause: error,
-          });
-          sendSocketError(socket, socketError);
-          socket.close();
-        });
-
-      socket.on('message', (raw: Buffer) => {
-        if (closed) return;
-        const parsed = decodeClientMessage(raw.toString());
-        if (!parsed) {
-          sendSocketError(socket, { code: 'invalid_message' });
-          socket.close();
-          return;
-        }
-        sendSocketError(socket, { code: 'read_only_stream' });
-        socket.close();
-      });
-    },
-  );
+  registerPtyStreamRoute(fastify, run, strategy);
 }
 
 function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
@@ -401,24 +238,13 @@ function decodeClientMessage(raw: string) {
   }
 }
 
-function sendSocketMessage(
-  socket: { readonly readyState: number; readonly send: (data: string) => void },
-  message: CommandLogStreamOutputMessage,
-) {
-  if (socket.readyState === 1) socket.send(JSON.stringify(message));
-}
-
-function sendSocketError(
-  socket: { readonly readyState: number; readonly send: (data: string) => void },
-  error: { readonly code: CommandLogStreamErrorCode; readonly message?: string },
-) {
-  sendSocketMessage(socket, { type: 'error', ...error });
-}
-
 function commandLogStreamError(error: unknown): {
   readonly code: CommandLogStreamErrorCode;
   readonly message?: string;
 } {
+  if (error instanceof CommandLogStreamProtocolError) {
+    return { code: error.code, message: error.message };
+  }
   if (error instanceof CommandError) {
     if (
       error.code === 'worktree_not_found' ||
@@ -450,11 +276,4 @@ function commandLogStreamError(error: unknown): {
       message: `PTY state load failed: ${error.operation}`,
     };
   return { code: 'unknown', message: errorMessage(error) };
-}
-
-function shouldReplayAfterObserveFailure(error: unknown) {
-  return (
-    error instanceof PtyServiceError &&
-    (error.code === 'session_not_running' || error.code === 'active_process_not_running')
-  );
 }

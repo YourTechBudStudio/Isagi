@@ -1,7 +1,15 @@
 import { Schema } from 'effect';
 
+import {
+  ptyStreamErrorCodeSchema,
+  ptyStreamErrorMessageSchema,
+  ptyStreamExitMessageSchema,
+  ptyStreamOutputMessageSchema,
+  ptyStreamReplayEndMessageSchema,
+  ptyStreamReplayStartMessageSchema,
+} from '../pty-stream/types.js';
+
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
-const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 
 export const worktreeCommandsRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
@@ -58,19 +66,7 @@ export const commandLogMetadataOutputSchema = Schema.Struct({
   latestRun: Schema.NullOr(commandLogMetadataLatestRunSchema),
 });
 
-export const commandLogStreamErrorCodeSchema = Schema.Literal(
-  'invalid_message',
-  'read_only_stream',
-  'worktree_not_found',
-  'command_config_invalid',
-  'command_not_found',
-  'backend_unavailable',
-  'backend_session_missing',
-  'backend_attach_failed',
-  'log_read_failed',
-  'pty_state_load_failed',
-  'unknown',
-);
+export const commandLogStreamErrorCodeSchema = ptyStreamErrorCodeSchema;
 
 export const commandLogStreamStateMessageSchema = Schema.Struct({
   type: Schema.Literal('command_log_state'),
@@ -81,31 +77,14 @@ export const commandLogStreamStateMessageSchema = Schema.Struct({
   live: Schema.Boolean,
 });
 
-export const commandLogStreamErrorMessageSchema = Schema.Struct({
-  type: Schema.Literal('error'),
-  code: commandLogStreamErrorCodeSchema,
-  message: Schema.optional(Schema.String),
-});
+export const commandLogStreamErrorMessageSchema = ptyStreamErrorMessageSchema;
 
 export const commandLogStreamOutputMessageSchema = Schema.Union(
   commandLogStreamStateMessageSchema,
-  Schema.Struct({
-    type: Schema.Literal('replay_start'),
-    bytes: nonNegativeIntegerSchema,
-  }),
-  Schema.Struct({
-    type: Schema.Literal('output'),
-    data: Schema.String,
-    replay: Schema.optional(Schema.Boolean),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('replay_end'),
-  }),
-  Schema.Struct({
-    type: Schema.Literal('exit'),
-    exitCode: Schema.NullOr(nonNegativeIntegerSchema),
-    signal: Schema.NullOr(Schema.String),
-  }),
+  ptyStreamReplayStartMessageSchema,
+  ptyStreamOutputMessageSchema,
+  ptyStreamReplayEndMessageSchema,
+  ptyStreamExitMessageSchema,
   commandLogStreamErrorMessageSchema,
 );
 

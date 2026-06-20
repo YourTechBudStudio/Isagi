@@ -67,6 +67,8 @@ interface SessionAttachTarget {
   readonly sessionKey: SessionLifecycleKey;
 }
 
+type SessionPreamble = Extract<PtyWebSocketOutputMessage, { readonly type: 'session' }>;
+
 class SessionAttachProtocolError extends Data.TaggedError('SessionAttachProtocolError')<{
   readonly code: 'invalid_session_id';
   readonly message: string;
@@ -84,9 +86,10 @@ function registerSessionAttachRoute(
     ) => Effect.Effect<number, unknown, RuntimeServices>;
   },
 ) {
-  const strategy: PtyStreamStrategy<SessionAttachTarget> = {
+  const strategy: PtyStreamStrategy<SessionAttachTarget, SessionPreamble> = {
     path: input.path,
     logLabel: `PTY websocket ${input.sessionKind} attach`,
+    mode: 'interactive',
     resolveTarget: (request) =>
       Effect.gen(function* () {
         const sessionId = decodeSessionId(request.params, input.paramName);
@@ -109,6 +112,14 @@ function registerSessionAttachRoute(
     decodeClientMessage,
     handleClientMessage: ({ target, attachmentId, message }) =>
       Effect.gen(function* () {
+        if (target.ptyProcessId === null) {
+          return yield* Effect.fail(
+            new PtyServiceError({
+              code: 'session_not_running',
+              message: 'PTY process is not running.',
+            }),
+          );
+        }
         const pty = yield* PtyService;
         if (message.type === 'input') {
           return yield* pty.write({
@@ -129,6 +140,8 @@ function registerSessionAttachRoute(
         const lifecycle = yield* SessionLifecycle;
         yield* lifecycle.supersedeAttachment(target.sessionKey);
       }),
+    supersede: () => false,
+    displace: () => undefined,
     registerAttachment: ({ target, controls }) =>
       Effect.gen(function* () {
         const lifecycle = yield* SessionLifecycle;
@@ -150,7 +163,15 @@ function registerSessionAttachRoute(
   registerPtyStreamRoute(fastify, run, strategy);
 }
 
-function sessionPreamble(plan: PtyAttachmentPlan): PtyWebSocketOutputMessage {
+function sessionPreamble(plan: PtyAttachmentPlan | null): SessionPreamble {
+  if (!plan) {
+    return {
+      type: 'session',
+      status: 'failed',
+      exitCode: null,
+      signal: null,
+    };
+  }
   return {
     type: 'session',
     status: plan.session.status,

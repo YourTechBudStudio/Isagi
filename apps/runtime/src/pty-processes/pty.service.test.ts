@@ -16,7 +16,7 @@ import { PtyBackend } from './backend.js';
 import { PtyForegroundStateLive } from './foreground-state.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { PtyService, PtyServiceLive } from './pty.service.js';
-import { PtyServiceError, PtyStartError, type PtyBackend as PtyBackendShape } from './types.js';
+import { PtyServiceError, type PtyBackend as PtyBackendShape } from './types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
   const dataDirectory = {
@@ -122,8 +122,20 @@ test('PTY process service rejects concurrent websocket attachments for the same 
         const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
         return yield* Effect.all(
           [
-            pty.attach({ ptyProcessId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
-            pty.attach({ ptyProcessId: process.ptyProcessId, send: () => {} }).pipe(Effect.either),
+            pty
+              .attach({
+                ptyProcessId: process.ptyProcessId,
+                mode: 'interactive',
+                send: () => {},
+              })
+              .pipe(Effect.either),
+            pty
+              .attach({
+                ptyProcessId: process.ptyProcessId,
+                mode: 'interactive',
+                send: () => {},
+              })
+              .pipe(Effect.either),
           ],
           { concurrency: 'unbounded' },
         );
@@ -149,88 +161,26 @@ test('PTY process service rejects concurrent websocket attachments for the same 
   }
 });
 
-test('PTY process output observers receive live output without stealing interactive attachment', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-observers-'));
-  const backend = observableBackend();
-  try {
-    const messages = await Effect.runPromise(
-      Effect.gen(function* () {
-        const pty = yield* PtyService;
-        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
-        const attachmentMessages: unknown[] = [];
-        const firstObserverMessages: unknown[] = [];
-        const secondObserverMessages: unknown[] = [];
-        yield* pty.attach({
-          ptyProcessId: process.ptyProcessId,
-          send: (message) => attachmentMessages.push(message),
-        });
-        const first = yield* pty.observeOutput({
-          ptyProcessId: process.ptyProcessId,
-          send: (message) => firstObserverMessages.push(message),
-        });
-        yield* pty.observeOutput({
-          ptyProcessId: process.ptyProcessId,
-          send: (message) => secondObserverMessages.push(message),
-        });
-
-        backend.emitOutput('hello');
-        first.unsubscribe();
-        backend.emitOutput(' world');
-
-        return { attachmentMessages, firstObserverMessages, secondObserverMessages };
-      }).pipe(Effect.provide(serviceTestLayer(dataRoot, backend.backend))),
-    );
-
-    assert.deepEqual(messages.attachmentMessages, [
-      { type: 'output', data: 'hello' },
-      { type: 'output', data: ' world' },
-    ]);
-    assert.deepEqual(messages.firstObserverMessages, [{ type: 'output', data: 'hello' }]);
-    assert.deepEqual(messages.secondObserverMessages, [
-      { type: 'output', data: 'hello' },
-      { type: 'output', data: ' world' },
-    ]);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('PTY process output observation preserves backend not-live races', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-observer-race-'));
+test('PTY read-only attachments expose no writable attachment id', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-read-only-'));
   try {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const pty = yield* PtyService;
         const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
-        return yield* pty
-          .observeOutput({
+        const attachment = yield* pty.attach({
+          ptyProcessId: process.ptyProcessId,
+          mode: 'read_only',
+          send: () => {},
+        });
+        const writeResult = yield* pty
+          .write({
             ptyProcessId: process.ptyProcessId,
-            send: () => {},
+            attachmentId: attachment.attachmentId,
+            data: 'nope',
           })
           .pipe(Effect.either);
-      }).pipe(Effect.provide(serviceTestLayer(dataRoot, notLiveObserverBackend()))),
-    );
-
-    assert.equal(Either.isLeft(result), true);
-    if (Either.isLeft(result)) {
-      assert.equal(result.left instanceof PtyServiceError, true);
-      if (result.left instanceof PtyServiceError) {
-        assert.equal(result.left.code, 'session_not_running');
-      }
-    }
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('PTY process service reports non-observable backends as replay-only', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-replay-only-'));
-  try {
-    const live = await Effect.runPromise(
-      Effect.gen(function* () {
-        const pty = yield* PtyService;
-        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
-        return yield* pty.canObserveOutput({ ptyProcessId: process.ptyProcessId });
+        return { attachment, writeResult };
       }).pipe(
         Effect.provide(
           serviceTestLayer(
@@ -241,7 +191,54 @@ test('PTY process service reports non-observable backends as replay-only', async
       ),
     );
 
-    assert.equal(live, false);
+    assert.equal(result.attachment.attachmentId, null);
+    assert.equal(Either.isLeft(result.writeResult), true);
+    if (Either.isLeft(result.writeResult)) {
+      assert.equal(result.writeResult.left instanceof PtyServiceError, true);
+      if (result.writeResult.left instanceof PtyServiceError) {
+        assert.equal(result.writeResult.left.code, 'session_not_running');
+      }
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY read-only supersede awaits displaced detach before replacement attach', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-read-only-supersede-'));
+  const events: string[] = [];
+  const backend = singleAttachmentBackend(events);
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        yield* pty.attach({
+          ptyProcessId: process.ptyProcessId,
+          mode: 'read_only',
+          supersede: true,
+          send: () => {},
+          displace: (attachment) =>
+            Effect.gen(function* () {
+              events.push('displace');
+              yield* attachment.detach;
+            }),
+        });
+        yield* pty.attach({
+          ptyProcessId: process.ptyProcessId,
+          mode: 'read_only',
+          supersede: true,
+          send: () => {},
+          displace: (attachment) =>
+            Effect.gen(function* () {
+              events.push('replacement-displace');
+              yield* attachment.detach;
+            }),
+        });
+      }).pipe(Effect.provide(serviceTestLayer(dataRoot, backend))),
+    );
+
+    assert.deepEqual(events.slice(0, 4), ['attach', 'displace', 'detach', 'attach']);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -264,6 +261,7 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         const timer = setTimeout(() => {
           resume(
             Effect.succeed({
+              replayBytes: 0,
               write: () => Effect.void,
               resize: () => Effect.void,
               detach: Effect.void,
@@ -283,7 +281,8 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
   } satisfies PtyBackendShape;
 }
 
-function notLiveObserverBackend(): PtyBackendShape {
+function singleAttachmentBackend(events: string[]): PtyBackendShape {
+  let attached = false;
   return {
     name: 'node_pty',
     available: Effect.succeed(true),
@@ -294,76 +293,29 @@ function notLiveObserverBackend(): PtyBackendShape {
         ptyProcessId: input.ptyProcessId,
         pid: 1234,
       }),
-    attach: () => Effect.die('attach is not used'),
+    attach: () =>
+      Effect.sync(() => {
+        if (attached) throw new Error('already attached');
+        attached = true;
+        events.push('attach');
+        return {
+          replayBytes: 0,
+          write: () => Effect.void,
+          resize: () => Effect.void,
+          detach: Effect.sync(() => {
+            if (!attached) return;
+            attached = false;
+            events.push('detach');
+          }),
+        };
+      }),
     replay: (input) =>
       Effect.sync(() => {
         input.send({ type: 'replay_start', bytes: 0 });
         input.send({ type: 'replay_end' });
       }),
-    observeOutput: (input) =>
-      Effect.fail(
-        new PtyStartError({
-          ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
-          command: 'node_pty_observe_output',
-          cwd: '',
-          reason: 'backend_session_not_live',
-          cause: new Error('node-pty process is not live.'),
-        }),
-      ),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
     kill: () => Effect.void,
   } satisfies PtyBackendShape;
-}
-
-function observableBackend() {
-  let attachmentOutput: ((data: string) => void) | null = null;
-  const observerOutputs = new Map<symbol, (data: string) => void>();
-  return {
-    emitOutput: (data: string) => {
-      attachmentOutput?.(data);
-      for (const observer of observerOutputs.values()) observer(data);
-    },
-    backend: {
-      name: 'node_pty',
-      available: Effect.succeed(true),
-      launch: (input) =>
-        Effect.succeed({
-          schemaVersion: 1,
-          backend: 'node_pty',
-          ptyProcessId: input.ptyProcessId,
-          pid: 1234,
-        }),
-      attach: (input) =>
-        Effect.sync(() => {
-          attachmentOutput = input.onOutput;
-          return {
-            write: () => Effect.void,
-            resize: () => Effect.void,
-            detach: Effect.sync(() => {
-              attachmentOutput = null;
-            }),
-          };
-        }),
-      replay: (input) =>
-        Effect.sync(() => {
-          input.send({ type: 'replay_start', bytes: 0 });
-          input.send({ type: 'replay_end' });
-        }),
-      observeOutput: (input) =>
-        Effect.sync(() => {
-          const id = Symbol('observer');
-          observerOutputs.set(id, input.onOutput);
-          return {
-            replayBytes: 0,
-            unsubscribe: Effect.sync(() => {
-              observerOutputs.delete(id);
-            }),
-          };
-        }),
-      inspect: () => Effect.succeed({ status: 'alive' }),
-      listSessions: Effect.succeed([]),
-      kill: () => Effect.void,
-    } satisfies PtyBackendShape,
-  };
 }

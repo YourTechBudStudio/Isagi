@@ -8,7 +8,7 @@ import Fastify from 'fastify';
 import {
   agentSessionPtyWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
-  type PtyWebSocketOutputMessage,
+  type PtyStreamOutputMessageSet,
 } from '@isagi/contracts';
 
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
@@ -27,7 +27,7 @@ import { registerPtyApi } from './api.js';
 import { PtyService, type PtyServiceShape } from './index.js';
 import type { PtyAttachment } from './pty.service.js';
 
-type OutputSender = (message: PtyWebSocketOutputMessage) => void;
+type OutputSender = (message: PtyStreamOutputMessageSet) => void;
 
 /**
  * The previous PTY API tests targeted the removed `/pty-sessions/:id` route.
@@ -153,7 +153,7 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
 });
 
 test('PTY websocket API preserves session replay before live output ordering', async () => {
-  let liveSend: ((message: PtyWebSocketOutputMessage) => void) | null = null;
+  let liveSend: OutputSender | null = null;
   const fastify = Fastify({ logger: false });
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
@@ -279,7 +279,7 @@ test('PTY websocket API buffers client input until live attach completes', async
 
 test('PTY websocket API supersede detaches the displaced viewer before the replacement attaches', async () => {
   let active = false;
-  let activeSend: ((message: PtyWebSocketOutputMessage) => void) | null = null;
+  let activeSend: OutputSender | null = null;
   let attachCalls = 0;
   const fastify = Fastify({ logger: false });
   const runtime = ManagedRuntime.make(
@@ -372,10 +372,10 @@ function fakePtyService(input: {
   readonly onAttachStarted: () => void;
   readonly attachPromise: () => Promise<ReturnType<typeof fakeAttachment>>;
   readonly onAttachSend?:
-    | ((send: (message: PtyWebSocketOutputMessage) => void) => void)
+    | ((send: (message: PtyStreamOutputMessageSet) => void) => void)
     | undefined;
   readonly replay?:
-    | ((send: (message: PtyWebSocketOutputMessage) => void) => Effect.Effect<void>)
+    | ((send: (message: PtyStreamOutputMessageSet) => void) => Effect.Effect<void>)
     | undefined;
   readonly write?: ((data: string) => Effect.Effect<void>) | undefined;
   readonly resize?:
@@ -399,8 +399,6 @@ function fakePtyService(input: {
         return promise;
       }),
     replay: ({ send }) => input.replay?.(send) ?? Effect.void,
-    canObserveOutput: () => Effect.die('canObserveOutput is not used'),
-    observeOutput: () => Effect.die('observeOutput is not used'),
     write: ({ data }) => input.write?.(data) ?? Effect.void,
     resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
     kill: () => Effect.void,

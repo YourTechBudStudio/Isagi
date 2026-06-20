@@ -1,6 +1,6 @@
 import { Data, type Effect } from 'effect';
 
-import type { PtyProcessBackend, PtyWebSocketOutputMessage, SessionStatus } from '@isagi/contracts';
+import type { PtyProcessBackend, PtyStreamOutputMessageSet, SessionStatus } from '@isagi/contracts';
 
 export type PtyBackendName = PtyProcessBackend;
 export type PtyProcessStatus = SessionStatus;
@@ -131,17 +131,13 @@ export type BackendInspection =
   | { readonly status: 'unavailable'; readonly cause?: unknown };
 
 export interface BackendAttachment {
+  readonly replayBytes: number | null;
   readonly write: (data: string) => Effect.Effect<void, PtyWriteError>;
   readonly resize: (size: {
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyResizeError>;
   readonly detach: Effect.Effect<void, never>;
-}
-
-export interface BackendOutputObserver {
-  readonly replayBytes: number | null;
-  readonly unsubscribe: Effect.Effect<void, never>;
 }
 
 export interface PtyBackend {
@@ -167,13 +163,8 @@ export interface PtyBackend {
     readonly ref: BackendSessionRef;
     readonly logPath: string | null;
     readonly bytes: number | null;
-    readonly send: (message: PtyWebSocketOutputMessage) => void;
+    readonly send: (message: PtyStreamOutputMessageSet) => void;
   }) => Effect.Effect<void, PtyServiceError>;
-  readonly observeOutput?: (input: {
-    readonly ref: BackendSessionRef;
-    readonly onOutput: (data: string) => void;
-    readonly onExit: (exit: PtyExit) => void;
-  }) => Effect.Effect<BackendOutputObserver, PtyStartError>;
   readonly inspect: (ref: BackendSessionRef) => Effect.Effect<BackendInspection, PtyInspectError>;
   readonly listSessions: Effect.Effect<readonly BackendSessionRef[], PtyInspectError>;
   readonly terminate?: (input: {
