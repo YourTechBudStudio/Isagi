@@ -3,11 +3,10 @@ import {
   Maximize2,
   Minimize2,
   Play,
-  Plus,
   RefreshCw,
   RotateCcw,
   Square,
-  SquareChevronRight,
+  X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -44,7 +43,8 @@ import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
 import { XtermSurface } from './XtermSurface.js';
 
-const MIN_WIDTH = 380;
+const MIN_WIDTH = 800;
+const DEFAULT_WIDTH = `max(${MIN_WIDTH}px, 60vw)`;
 
 type CommandPresentation = 'configured' | 'removed' | 'managed';
 
@@ -56,15 +56,14 @@ type CommandListItem = CommandSummary & {
  * The workbench drawer — a dedicated monitor for the worktree's commands. Slides
  * in from the right at full height; master-detail command list and detail.
  * Commands are processes you *watch* (logs, ports, run/stop); interactive shells
- * live on the canvas as terminal surfaces, not here. No close button — Esc or a
- * click outside dismisses it.
+ * live on the canvas as terminal surfaces, not here.
  */
 export function WorkbenchDrawer() {
   const open = useWorkspaceStore((state) => state.drawer.open);
   const closeDrawer = useWorkspaceStore((state) => state.closeDrawer);
 
   const asideRef = useRef<HTMLElement>(null);
-  const [width, setWidth] = useState(640);
+  const [width, setWidth] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -74,7 +73,7 @@ export function WorkbenchDrawer() {
     restoreActivePaneFocus();
   }, [closeDrawer]);
 
-  // Dismiss on Escape or a click anywhere outside the drawer (no close button).
+  // Dismiss on Escape or a click anywhere outside the drawer.
   useEffect(() => {
     if (!open) {
       return;
@@ -101,7 +100,8 @@ export function WorkbenchDrawer() {
     event.preventDefault();
     setExpanded(false);
     const startX = event.clientX;
-    const startWidth = widthRef.current;
+    const startWidth =
+      asideRef.current?.getBoundingClientRect().width ?? widthRef.current ?? MIN_WIDTH;
     // The only real bound is the work area; drag as broad as that.
     const maxWidth = asideRef.current?.parentElement?.clientWidth ?? startWidth;
     const onMove = (moveEvent: PointerEvent) => {
@@ -126,7 +126,7 @@ export function WorkbenchDrawer() {
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: '100%', opacity: 0 }}
           transition={surfaceTransition}
-          style={{ width: expanded ? '100%' : width }}
+          style={{ width: expanded ? '100%' : (width ?? DEFAULT_WIDTH) }}
           className="absolute top-0 right-0 bottom-0 z-20 flex flex-col border-l border-line/24 bg-canvas/85 shadow-lift backdrop-blur-lg"
         >
           <div
@@ -137,16 +137,25 @@ export function WorkbenchDrawer() {
           </div>
 
           <div className="flex h-11 flex-none items-center gap-2 border-b border-line/14 px-3.5">
-            <SquareChevronRight size={14} className="text-fg-subtle" />
             <span className="font-mono text-[12px] text-fg-muted">Commands</span>
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              title={expanded ? 'Restore width' : 'Expand to full width'}
-              className="ml-auto grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
-            >
-              {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </button>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setExpanded((value) => !value)}
+                title={expanded ? 'Restore width' : 'Expand to full width'}
+                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+              >
+                {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+              <button
+                type="button"
+                onClick={closeDrawerAndRestoreFocus}
+                title="Close commands drawer"
+                className="grid size-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
 
           <div className="flex min-h-0 flex-1">
@@ -302,15 +311,6 @@ function CommandList({
           ) : null,
         )
       )}
-      <button
-        type="button"
-        disabled
-        title={workbenchCopy.commandAuthoringTitle}
-        className="mt-0.5 flex w-full cursor-not-allowed items-center gap-2 rounded-lg px-2 py-2 font-mono text-[11.5px] text-fg-subtle opacity-55"
-      >
-        <Plus size={13} />
-        new command
-      </button>
     </div>
   );
 }
@@ -331,6 +331,14 @@ function CommandListRow({
   const canRun = command.presentation === 'configured' && command.status !== 'running';
   const canStop = command.status === 'running';
   const showAction = canRun || canStop;
+  const runAction = () => {
+    onSelect(command.name);
+    if (canStop) {
+      stopCommand.mutate(command.name);
+      return;
+    }
+    runCommand.mutate(command.name);
+  };
 
   return (
     <div
@@ -341,9 +349,7 @@ function CommandListRow({
       {showAction ? (
         <button
           type="button"
-          onClick={() =>
-            canStop ? stopCommand.mutate(command.name) : runCommand.mutate(command.name)
-          }
+          onClick={runAction}
           disabled={runCommand.isPending || stopCommand.isPending}
           title={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
           aria-label={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
@@ -460,7 +466,6 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
             worktreeId={worktreeId}
             commandName={command.name}
             latestRunId={latestRun.id}
-            fallbackStatus={latestRun.status}
           />
         ) : latestRun ? (
           <CommandRunMetadataState
@@ -485,24 +490,22 @@ function CommandLogTerminal({
   worktreeId,
   commandName,
   latestRunId,
-  fallbackStatus,
 }: {
   readonly worktreeId: number;
   readonly commandName: string;
   readonly latestRunId: number;
-  readonly fallbackStatus: Exclude<CommandStatus, 'idle'>;
 }) {
   const { transport, streamKey, state, rendererWarning, setRendererWarning } = useCommandLogStream({
     worktreeId,
     commandName,
     latestRunId,
   });
-  const status = state.exit ? fallbackStatus : (state.status ?? fallbackStatus);
   const display = commandLogDisplayState({ state, rendererWarning });
+  const notice = display.notice ?? (display.kind === 'errored' ? { summary: display.label } : null);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-line/14">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-line/14">
         <XtermSurface
           key={streamKey}
           transport={transport}
@@ -510,20 +513,16 @@ function CommandLogTerminal({
           className="isagi-xterm isagi-xterm-edge h-full min-h-0"
           onRendererWarning={setRendererWarning}
         />
-      </div>
-      <div className="flex flex-none items-start gap-2 font-mono text-[10.5px] text-fg-subtle">
-        <AttentionDot state={attentionForCommandStatus(status)} />
-        <p className="min-w-0 flex-1 leading-relaxed">
-          <span className="text-fg-muted">{display.label}</span>
-          {display.notice ? (
-            <span className="ml-2 opacity-70">{display.notice.summary}</span>
-          ) : null}
-          {display.notice?.detail ? (
-            <span className="ml-2 opacity-55">
-              {workbenchCopy.commandRunDiagnosticDetailLabel}: {display.notice.detail}
-            </span>
-          ) : null}
-        </p>
+        {notice ? (
+          <div className="pointer-events-none absolute top-2 right-2 left-2 z-10 max-w-2xl rounded-md border border-line/18 bg-canvas/88 px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-fg-muted shadow-soft backdrop-blur-sm">
+            <span>{notice.summary}</span>
+            {notice.detail ? (
+              <span className="ml-2 opacity-65">
+                {workbenchCopy.commandRunDiagnosticDetailLabel}: {notice.detail}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

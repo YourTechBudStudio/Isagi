@@ -38,6 +38,7 @@
   --color-canvas: #24273a;
   --color-subtle: #2e3244;
   --color-elevated: #363a4f;
+  --color-terminal-surface: #2d3145;
   --color-overlay: #3a3f57;
   --color-line: #5b6078;
   --color-scrim: #141622;
@@ -195,11 +196,18 @@ body::after {
 
 .isagi-xterm .xterm {
   height: 100%;
+  padding: 8px 10px;
+  background: var(--color-terminal-surface);
+}
+
+.isagi-xterm .xterm-viewport,
+.isagi-xterm .xterm-screen {
+  background: var(--color-terminal-surface);
 }
 
 .isagi-xterm {
   font-family: var(--font-terminal);
-  background: color-mix(in srgb, var(--color-elevated) 50%, var(--color-canvas));
+  background: var(--color-terminal-surface);
 }
 
 .isagi-xterm-edge {
