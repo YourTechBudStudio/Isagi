@@ -4,6 +4,21 @@ import { workbenchCopy } from '../../../copy/index.js';
 import type { PtyStreamConnectionPhase, PtyStreamNotice } from '../pty-stream/index.js';
 import type { CommandLogStreamState } from './stream.js';
 
+const commandLogStreamErrorCodes = new Set<string>([
+  'invalid_message',
+  'stream_superseded',
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
+  'log_read_failed',
+  'pty_state_load_failed',
+  'read_only_stream',
+  'worktree_not_found',
+  'command_config_invalid',
+  'command_not_found',
+  'unknown',
+]);
+
 export type CommandLogDisplayKind =
   | 'loading'
   | 'replaying'
@@ -65,6 +80,9 @@ function commandLogDisplayKind(
   if (!live && phase === 'disconnected') {
     return 'closed';
   }
+  if (live && phase === 'disconnected') {
+    return 'errored';
+  }
   if (live && phase === 'attached') {
     return 'streaming';
   }
@@ -84,7 +102,7 @@ function commandLogDisplayLabel(kind: CommandLogDisplayKind): string {
     case 'closed':
       return workbenchCopy.commandLogClosed;
     case 'errored':
-      return workbenchCopy.commandLogUnavailable;
+      return workbenchCopy.commandLogDropped;
   }
 }
 
@@ -96,9 +114,14 @@ function commandLogNotice(
     return { summary: notice.message ?? workbenchCopy.commandLogUnavailable };
   }
   if (notice?.kind === 'protocol' && notice.code) {
-    return commandLogStreamErrorCopy(notice.code, notice.message);
+    const code = isCommandLogStreamErrorCode(notice.code) ? notice.code : 'unknown';
+    return commandLogStreamErrorCopy(code, notice.message ?? notice.code);
   }
   return rendererWarning ? { summary: rendererWarning } : null;
+}
+
+function isCommandLogStreamErrorCode(code: string): code is CommandLogStreamErrorCode {
+  return commandLogStreamErrorCodes.has(code);
 }
 
 function commandLogStreamErrorCopy(
@@ -111,5 +134,5 @@ function commandLogStreamErrorCopy(
   if (code === 'read_only_stream') {
     return { summary: workbenchCopy.commandLogReadOnlyRejected };
   }
-  return { summary: workbenchCopy.commandLogErrorCode(code), detail: message };
+  return { summary: workbenchCopy.commandLogStreamError(code), detail: message ?? code };
 }

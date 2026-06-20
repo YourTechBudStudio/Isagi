@@ -5,7 +5,7 @@ import type {
   PtyStreamNotice,
 } from '../pty-stream/index.js';
 import type { AttentionState } from '../types.js';
-import type { PaneView, PtyPaneSession } from './view.js';
+import { isPtyWebSocketErrorCode, type PaneView, type PtyPaneSession } from './view.js';
 
 export type ExitInfo = { readonly exitCode: number | null; readonly signal: string | null };
 export const NO_EXIT: ExitInfo = { exitCode: null, signal: null };
@@ -99,7 +99,9 @@ function resolveSocketNotice(notice: PtyStreamNotice | null): string | null {
     return null;
   }
   if (notice.code) {
-    return ptySocketErrorCopy.byReason(notice.code);
+    return ptySocketErrorCopy.byReason(
+      isPtyWebSocketErrorCode(notice.code) ? notice.code : 'unknown',
+    );
   }
   return notice.message ?? null;
 }

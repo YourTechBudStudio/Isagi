@@ -37,6 +37,34 @@ export type PaneConnectionSnapshot = {
   readonly attachRequested: boolean;
 };
 
+const ptyWebSocketErrorCodes = new Set<string>([
+  'invalid_message',
+  'stream_superseded',
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
+  'log_read_failed',
+  'pty_state_load_failed',
+  'invalid_session_id',
+  'session_not_found',
+  'session_not_running',
+  'active_process_missing',
+  'active_process_not_running',
+  'harness_session_id_missing',
+  'unsupported_harness',
+  'session_already_attached',
+  'session_attachment_moved',
+  'attach_token_missing',
+  'attach_token_invalid',
+  'attach_token_expired',
+  'pty_write_failed',
+  'unknown',
+]);
+
+export function isPtyWebSocketErrorCode(code: string): code is PtyWebSocketErrorCode {
+  return ptyWebSocketErrorCodes.has(code);
+}
+
 /**
  * What a pane should render. A pure projection of the backend session state and
  * the connection snapshot — the single place pane presentation precedence lives.

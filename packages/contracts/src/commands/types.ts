@@ -1,12 +1,11 @@
 import { Schema } from 'effect';
 
 import {
-  ptyStreamErrorCodeSchema,
-  ptyStreamErrorMessageSchema,
   ptyStreamExitMessageSchema,
   ptyStreamOutputMessageSchema,
   ptyStreamReplayEndMessageSchema,
   ptyStreamReplayStartMessageSchema,
+  ptyStreamTransportErrorCodeSchema,
 } from '../pty-stream/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -66,7 +65,15 @@ export const commandLogMetadataOutputSchema = Schema.Struct({
   latestRun: Schema.NullOr(commandLogMetadataLatestRunSchema),
 });
 
-export const commandLogStreamErrorCodeSchema = ptyStreamErrorCodeSchema;
+export const commandLogStreamErrorCodeSchema = Schema.Union(
+  ptyStreamTransportErrorCodeSchema,
+  Schema.Literal(
+    'read_only_stream',
+    'worktree_not_found',
+    'command_config_invalid',
+    'command_not_found',
+  ),
+);
 
 export const commandLogStreamStateMessageSchema = Schema.Struct({
   type: Schema.Literal('command_log_state'),
@@ -77,7 +84,13 @@ export const commandLogStreamStateMessageSchema = Schema.Struct({
   live: Schema.Boolean,
 });
 
-export const commandLogStreamErrorMessageSchema = ptyStreamErrorMessageSchema;
+export const commandLogStreamErrorMessageSchema = Schema.Struct({
+  type: Schema.Literal('error'),
+  code: commandLogStreamErrorCodeSchema,
+  // Diagnostic detail for logs and support. Clients render copy keyed off `code`,
+  // never this string. May be absent when there is nothing useful to add.
+  message: Schema.optional(Schema.String),
+});
 
 export const commandLogStreamOutputMessageSchema = Schema.Union(
   commandLogStreamStateMessageSchema,

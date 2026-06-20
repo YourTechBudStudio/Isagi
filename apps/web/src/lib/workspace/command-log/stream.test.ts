@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { QueryClient } from '@tanstack/react-query';
+import { Schema } from 'effect';
+
+import { ptyWebSocketOutputMessageSchema } from '@isagi/contracts';
 
 import { commandLogMetadataQueryKey, worktreeCommandsQueryKey } from '../query-keys.js';
 import { decodeCommandLogStreamMessage, invalidateCommandReadModel } from './stream.js';
@@ -12,6 +15,23 @@ test('command log stream decoder rejects malformed protocol messages', () => {
   assert.deepEqual(decodeCommandLogStreamMessage(JSON.stringify({ type: 'replay_end' })), {
     type: 'replay_end',
   });
+});
+
+test('command log stream decoder keeps command errors out of pane-session errors', () => {
+  assert.deepEqual(
+    decodeCommandLogStreamMessage(JSON.stringify({ type: 'error', code: 'command_not_found' })),
+    { type: 'error', code: 'command_not_found' },
+  );
+  assert.equal(
+    decodeCommandLogStreamMessage(JSON.stringify({ type: 'error', code: 'attach_token_missing' })),
+    null,
+  );
+  assert.throws(() =>
+    Schema.decodeUnknownSync(ptyWebSocketOutputMessageSchema)({
+      type: 'error',
+      code: 'command_not_found',
+    }),
+  );
 });
 
 test('command log exit invalidates command read-model queries', async () => {

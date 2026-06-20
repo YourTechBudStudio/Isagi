@@ -159,6 +159,28 @@ function registerCommandLogStreamRoute(
         }),
       ),
     beforeAttach: () => Effect.void,
+    recoverAttachFailure: ({ target, cause }) =>
+      Effect.gen(function* () {
+        if (!(cause instanceof PtyServiceError) || cause.code !== 'backend_attach_failed')
+          return null;
+
+        const commands = yield* CommandService;
+        const metadata = yield* commands.readLogMetadata({
+          worktreeId: target.metadata.worktreeId,
+          commandName: target.metadata.commandName,
+        });
+        return {
+          metadata: {
+            type: 'command_log_state' as const,
+            worktreeId: metadata.worktreeId,
+            commandName: metadata.commandName,
+            status: metadata.status,
+            latestRun: metadata.latestRun,
+            live: false,
+          },
+          ptyProcessId: metadata.latestRun?.ptyProcessId ?? null,
+        };
+      }),
     supersede: () => true,
     displace: ({ controls }) =>
       Effect.gen(function* () {

@@ -23,7 +23,20 @@ export const ptyStreamExitMessageSchema = Schema.Struct({
   signal: Schema.NullOr(Schema.String),
 });
 
-export const ptyStreamErrorCodeSchema = Schema.Literal(
+export const ptyStreamTransportErrorCodeSchema = Schema.Literal(
+  'invalid_message',
+  'stream_superseded',
+  'backend_unavailable',
+  'backend_session_missing',
+  'backend_attach_failed',
+  'log_read_failed',
+  'pty_state_load_failed',
+  'unknown',
+);
+
+export const ptyStreamErrorCodeSchema = ptyStreamTransportErrorCodeSchema;
+
+export const ptyStreamKnownErrorCodeSchema = Schema.Literal(
   'invalid_session_id',
   'invalid_message',
   'session_not_found',
@@ -53,7 +66,7 @@ export const ptyStreamErrorCodeSchema = Schema.Literal(
 
 export const ptyStreamErrorMessageSchema = Schema.Struct({
   type: Schema.Literal('error'),
-  code: ptyStreamErrorCodeSchema,
+  code: ptyStreamKnownErrorCodeSchema,
   // Diagnostic detail for logs and support. Clients render copy keyed off `code`,
   // never this string. May be absent when there is nothing useful to add.
   message: Schema.optional(Schema.String),
@@ -72,6 +85,10 @@ export type PtyStreamReplayStartMessage = Schema.Schema.Type<
 export type PtyStreamOutputMessage = Schema.Schema.Type<typeof ptyStreamOutputMessageSchema>;
 export type PtyStreamReplayEndMessage = Schema.Schema.Type<typeof ptyStreamReplayEndMessageSchema>;
 export type PtyStreamExitMessage = Schema.Schema.Type<typeof ptyStreamExitMessageSchema>;
-export type PtyStreamErrorCode = Schema.Schema.Type<typeof ptyStreamErrorCodeSchema>;
-export type PtyStreamErrorMessage = Schema.Schema.Type<typeof ptyStreamErrorMessageSchema>;
+export type PtyStreamErrorCode = Schema.Schema.Type<typeof ptyStreamKnownErrorCodeSchema>;
+export type PtyStreamErrorMessage = {
+  readonly type: 'error';
+  readonly code: PtyStreamErrorCode;
+  readonly message?: string | undefined;
+};
 export type PtyStreamOutputMessageSet = Schema.Schema.Type<typeof ptyStreamOutputMessageSetSchema>;

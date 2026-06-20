@@ -78,7 +78,10 @@ export function ptyStreamConnectionEventForMessage(
     case 'replay_end':
       return { type: 'replay_end' };
     case 'error':
-      return { type: 'errored', notice: { kind: 'protocol', code: message.code } };
+      return {
+        type: 'errored',
+        notice: { kind: 'protocol', code: message.code, message: message.message },
+      };
     case 'exit':
       return { type: 'stream_exited' };
     case 'output':

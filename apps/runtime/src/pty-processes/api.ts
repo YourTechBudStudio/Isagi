@@ -232,7 +232,12 @@ function websocketError(error: unknown): {
     }
     return { code: 'attach_token_invalid', message: error.message };
   }
-  if (error instanceof PtyServiceError) return { code: error.code, message: error.message };
+  if (error instanceof PtyServiceError) {
+    if (error.code === 'worktree_not_found') {
+      return { code: 'session_not_found', message: error.message };
+    }
+    return { code: error.code, message: error.message };
+  }
   if (error instanceof PtyWriteError || error instanceof PtyResizeError) {
     return { code: 'pty_write_failed', message: error.message };
   }

@@ -2,11 +2,10 @@ import { Schema } from 'effect';
 
 import {
   ptyStreamExitMessageSchema,
-  ptyStreamErrorCodeSchema,
-  ptyStreamErrorMessageSchema,
   ptyStreamOutputMessageSchema,
   ptyStreamReplayEndMessageSchema,
   ptyStreamReplayStartMessageSchema,
+  ptyStreamTransportErrorCodeSchema,
 } from '../pty-stream/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -283,7 +282,32 @@ export const ptyWebSocketInputMessageSchema = Schema.Union(
   }),
 );
 
-export const ptyWebSocketErrorCodeSchema = ptyStreamErrorCodeSchema;
+export const ptyWebSocketErrorCodeSchema = Schema.Union(
+  ptyStreamTransportErrorCodeSchema,
+  Schema.Literal(
+    'invalid_session_id',
+    'session_not_found',
+    'session_not_running',
+    'active_process_missing',
+    'active_process_not_running',
+    'harness_session_id_missing',
+    'unsupported_harness',
+    'session_already_attached',
+    'session_attachment_moved',
+    'attach_token_missing',
+    'attach_token_invalid',
+    'attach_token_expired',
+    'pty_write_failed',
+  ),
+);
+
+export const ptyWebSocketErrorMessageSchema = Schema.Struct({
+  type: Schema.Literal('error'),
+  code: ptyWebSocketErrorCodeSchema,
+  // Diagnostic detail for logs and support. Clients render copy keyed off `code`,
+  // never this string. May be absent when there is nothing useful to add.
+  message: Schema.optional(Schema.String),
+});
 
 export const ptyWebSocketOutputMessageSchema = Schema.Union(
   Schema.Struct({
@@ -296,7 +320,7 @@ export const ptyWebSocketOutputMessageSchema = Schema.Union(
   ptyStreamOutputMessageSchema,
   ptyStreamReplayEndMessageSchema,
   ptyStreamExitMessageSchema,
-  ptyStreamErrorMessageSchema,
+  ptyWebSocketErrorMessageSchema,
 );
 
 export type RuntimeSurfaceKind = Schema.Schema.Type<typeof runtimeSurfaceKindSchema>;

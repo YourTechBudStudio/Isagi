@@ -1,3 +1,20 @@
+import type { CommandLogStreamErrorCode } from '@isagi/contracts';
+
+const commandLogStreamErrorSummaries: Readonly<Record<CommandLogStreamErrorCode, string>> = {
+  invalid_message: 'Command output stream sent an unreadable message.',
+  stream_superseded: 'Command output opened somewhere else.',
+  backend_unavailable: "The command output backend isn't available.",
+  backend_session_missing: 'The command output backend is gone.',
+  backend_attach_failed: "Couldn't attach to command output.",
+  log_read_failed: "Couldn't replay command output.",
+  pty_state_load_failed: "Couldn't load command output state.",
+  read_only_stream: 'Command output is read-only.',
+  worktree_not_found: "Can't find that worktree. Did it get removed?",
+  command_config_invalid: "Couldn't read this command's config.",
+  command_not_found: "That command isn't available anymore.",
+  unknown: 'Command output stream gave out.',
+};
+
 export const workbenchCopy = {
   emptyCommands: '// no commands yet',
   noCommandsRunning: '// no commands running',
@@ -14,8 +31,7 @@ export const workbenchCopy = {
   commandManagedDetail:
     'Command config needs a look, but this managed command still has live runtime state.',
   commandRemovedMarker: 'removed',
-  commandOutputStreamingPending:
-    'Command output is temporarily unavailable while streaming is being rebuilt.',
+  commandOutputNotRecorded: 'No terminal output was recorded for this run.',
   commandOutputStatusCurrent: 'Command status is still current.',
   commandOutputWillStream: 'This run has PTY output ready for the streaming view.',
   commandLogConnecting: 'Connecting to command output...',
@@ -23,11 +39,12 @@ export const workbenchCopy = {
   commandLogStreaming: 'Streaming command output.',
   commandLogFrozen: 'Command output frozen.',
   commandLogClosed: 'Command output stream closed.',
+  commandLogDropped: 'Command output stream stopped.',
   commandLogProtocolError: 'Command output stream sent an unreadable message.',
   commandLogReadOnlyRejected: 'Command output is read-only.',
   commandLogUnavailable: 'Command output stream unavailable.',
   commandLogConnectionFailed: 'Command log stream connection failed.',
-  commandLogErrorCode: (code: string) => `Stream error: ${code}`,
+  commandLogStreamError: (code: CommandLogStreamErrorCode) => commandLogStreamErrorSummaries[code],
   commandLogExit: (exitCode: number | null, signal: string | null) =>
     signal ? `Exited by signal ${signal}.` : `Exited with code ${exitCode ?? 'unknown'}.`,
   commandRunDiagnosticDetailLabel: 'Diagnostic detail',

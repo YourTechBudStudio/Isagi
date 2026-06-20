@@ -326,6 +326,110 @@ test('command log stream replays to the attach cursor without a gap or duplicate
   );
 });
 
+test('command log stream falls back to replay-only output after stale live attach failure', async () => {
+  let metadataReads = 0;
+  let planReads = 0;
+  const runningRun = {
+    id: 1,
+    startedAt: '2026-06-19T00:00:00.000Z',
+    completedAt: null,
+    status: 'running' as const,
+    ptyProcessId: 20,
+    hasPtyProcess: true,
+    diagnostic: null,
+  };
+  const failedRun = {
+    id: 1,
+    startedAt: '2026-06-19T00:00:00.000Z',
+    completedAt: '2026-06-19T00:00:01.000Z',
+    status: 'failed' as const,
+    ptyProcessId: 20,
+    hasPtyProcess: true,
+    diagnostic: null,
+  };
+
+  await withCommandsApi(
+    commandService({
+      readLogMetadata: () =>
+        Effect.succeed(
+          metadataReads++ === 0
+            ? {
+                worktreeId: 10,
+                commandName: 'dev',
+                status: 'running',
+                latestRun: runningRun,
+              }
+            : {
+                worktreeId: 10,
+                commandName: 'dev',
+                status: 'failed',
+                latestRun: failedRun,
+              },
+        ),
+    }),
+    async (fastify) => {
+      const ws = await fastify.injectWS('/api/v1/worktrees/10/commands/log-stream?commandName=dev');
+      const messages = await receiveMessagesUntilClose(ws);
+
+      assert.deepEqual(messages, [
+        {
+          type: 'command_log_state',
+          worktreeId: 10,
+          commandName: 'dev',
+          status: 'running',
+          latestRun: runningRun,
+          live: true,
+        },
+        {
+          type: 'command_log_state',
+          worktreeId: 10,
+          commandName: 'dev',
+          status: 'failed',
+          latestRun: failedRun,
+          live: false,
+        },
+        { type: 'replay_start', bytes: 12 },
+        { type: 'output', data: 'final log\n', replay: true },
+        { type: 'replay_end' },
+      ]);
+    },
+    {
+      pty: fakeCommandLogPtyService({
+        getAttachmentPlan: () =>
+          Effect.succeed(
+            planReads++ === 0
+              ? {
+                  session: fakePtyProcess(),
+                  replayBytes: 4,
+                  live: true,
+                  replaySource: 'file_log',
+                }
+              : {
+                  session: fakePtyProcess({ status: 'failed' }),
+                  replayBytes: 12,
+                  live: false,
+                  replaySource: 'file_log',
+                },
+          ),
+        attach: () =>
+          Effect.fail(
+            new PtyServiceError({
+              code: 'backend_attach_failed',
+              message: 'Could not attach to PTY process 20.',
+              ptyProcessId: 20,
+            }),
+          ),
+        replay: (input) =>
+          Effect.sync(() => {
+            input.send({ type: 'replay_start', bytes: input.bytes ?? 0 });
+            input.send({ type: 'output', data: 'final log\n', replay: true });
+            input.send({ type: 'replay_end' });
+          }),
+      }),
+    },
+  );
+});
+
 test('command log stream replays an exited command without taking a live attachment', async () => {
   const latestRun = {
     id: 1,

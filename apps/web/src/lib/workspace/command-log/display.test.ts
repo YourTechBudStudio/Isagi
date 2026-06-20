@@ -33,9 +33,25 @@ test('command log display gives notice precedence over terminal close phase', ()
   assert.equal(state.kind, 'errored');
   assert.equal(state.label, workbenchCopy.commandLogUnavailable);
   assert.deepEqual(state.notice, {
-    summary: workbenchCopy.commandLogErrorCode('stream_superseded'),
+    summary: workbenchCopy.commandLogStreamError('stream_superseded'),
     detail: 'moved',
   });
+});
+
+test('command log display maps protocol codes to web-owned summaries', () => {
+  const state = display({
+    connection: {
+      phase: 'errored',
+      notice: { kind: 'protocol', code: 'command_not_found' },
+    },
+    live: true,
+  });
+
+  assert.deepEqual(state.notice, {
+    summary: workbenchCopy.commandLogStreamError('command_not_found'),
+    detail: 'command_not_found',
+  });
+  assert.doesNotMatch(state.notice?.summary ?? '', /Stream error:/);
 });
 
 test('command log display freezes exited streams before reading disconnected phase', () => {
@@ -57,6 +73,17 @@ test('command log display closes non-live streams after the socket disconnects',
 
   assert.equal(state.kind, 'closed');
   assert.equal(state.label, workbenchCopy.commandLogClosed);
+});
+
+test('command log display marks a dropped live stream as stopped', () => {
+  const state = display({
+    connection: { phase: 'disconnected', notice: null },
+    live: true,
+  });
+
+  assert.equal(state.kind, 'errored');
+  assert.equal(state.label, workbenchCopy.commandLogDropped);
+  assert.equal(state.notice, null);
 });
 
 test('command log display distinguishes replaying, live streaming, and loading states', () => {

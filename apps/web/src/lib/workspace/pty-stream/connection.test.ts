@@ -91,14 +91,19 @@ describe('ptyStreamConnectionEventForMessage', () => {
     });
   });
 
-  it('maps a protocol error to an errored event carrying its code', () => {
+  it('maps a protocol error to an errored event carrying its code and diagnostic message', () => {
     const event = ptyStreamConnectionEventForMessage({
       type: 'error',
       code: 'session_attachment_moved',
+      message: 'Attachment moved to a newer viewer.',
     });
     assert.deepEqual(event, {
       type: 'errored',
-      notice: { kind: 'protocol', code: 'session_attachment_moved' },
+      notice: {
+        kind: 'protocol',
+        code: 'session_attachment_moved',
+        message: 'Attachment moved to a newer viewer.',
+      },
     });
   });
 

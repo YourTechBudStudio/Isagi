@@ -177,11 +177,13 @@ export type { PathSuggestInput, PathSuggestOutput, PathSuggestion } from './path
 export {
   ptyStreamErrorCodeSchema,
   ptyStreamErrorMessageSchema,
+  ptyStreamKnownErrorCodeSchema,
   ptyStreamExitMessageSchema,
   ptyStreamOutputMessageSchema,
   ptyStreamOutputMessageSetSchema,
   ptyStreamReplayEndMessageSchema,
   ptyStreamReplayStartMessageSchema,
+  ptyStreamTransportErrorCodeSchema,
 } from './pty-stream/types.js';
 export type {
   PtyStreamErrorCode,
@@ -266,6 +268,7 @@ export {
   ptyProcessBackendSchema,
   ptyProcessLogModeSchema,
   ptyWebSocketErrorCodeSchema,
+  ptyWebSocketErrorMessageSchema,
   ptyWebSocketInputMessageSchema,
   ptyWebSocketOutputMessageSchema,
   renameSurfaceInputSchema,

@@ -16,6 +16,7 @@ import {
 import {
   claimInputForSession,
   derivePaneView,
+  isPtyWebSocketErrorCode,
   startFreshInputForSession,
   type PaneConnectionSnapshot,
   type PaneView,
@@ -282,7 +283,10 @@ function isAutoAttachableSession(session: PtyPaneSession | null): session is Pty
 
 function paneConnectionSnapshot(connection: PtyStreamConnectionState): PaneConnectionSnapshot {
   return {
-    code: connection.notice?.code ?? null,
+    code:
+      connection.notice?.code && isPtyWebSocketErrorCode(connection.notice.code)
+        ? connection.notice.code
+        : null,
     attachRequested: ptyStreamConnectionActive(connection),
   };
 }

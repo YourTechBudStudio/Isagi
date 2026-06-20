@@ -71,6 +71,14 @@ export interface PtyStreamStrategy<Target, Preamble extends { readonly type: str
   readonly beforeAttach: (
     target: Target & { readonly ptyProcessId: number },
   ) => Effect.Effect<void, unknown, RuntimeServices>;
+  readonly recoverAttachFailure?: (input: {
+    readonly target: Target & { readonly ptyProcessId: number };
+    readonly cause: unknown;
+  }) => Effect.Effect<
+    (Target & { readonly ptyProcessId: number | null }) | null,
+    unknown,
+    RuntimeServices
+  >;
   readonly supersede: (target: Target & { readonly ptyProcessId: number }) => boolean;
   readonly displace: (input: {
     readonly target: Target & { readonly ptyProcessId: number };
@@ -264,6 +272,20 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
         sendLive,
       }).pipe(Effect.either);
       if (Either.isLeft(attachResult)) {
+        const recovered = yield* recoverReplayOnlyAfterAttachFailure({
+          socket,
+          strategy,
+          target: liveTarget,
+          cause: attachResult.left,
+          sendMessage,
+          closed: () => closed,
+        });
+        if (recovered?.status === 'recovered') {
+          yield* Deferred.succeed(ready, { target: recovered.target, attachmentId: null });
+          if (strategy.closeOnReplayOnly) setImmediate(() => socket.close());
+          return yield* Deferred.await(closedSignal);
+        }
+        if (recovered?.status === 'closed') return yield* Deferred.await(closedSignal);
         closeWithMappedError(
           socket,
           strategy,
@@ -290,6 +312,22 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
     }).pipe(Effect.either);
 
     if (Either.isLeft(attachResult)) {
+      bufferingLive = false;
+      liveBuffer.splice(0);
+      const recovered = yield* recoverReplayOnlyAfterAttachFailure({
+        socket,
+        strategy,
+        target: liveTarget,
+        cause: attachResult.left,
+        sendMessage,
+        closed: () => closed,
+      });
+      if (recovered?.status === 'recovered') {
+        yield* Deferred.succeed(ready, { target: recovered.target, attachmentId: null });
+        if (strategy.closeOnReplayOnly) setImmediate(() => socket.close());
+        return yield* Deferred.await(closedSignal);
+      }
+      if (recovered?.status === 'closed') return yield* Deferred.await(closedSignal);
       closeWithMappedError(
         socket,
         strategy,
@@ -332,6 +370,61 @@ function runConnection<Target, Preamble extends { readonly type: string }>(
 
     flushLiveBuffer();
     return yield* Deferred.await(closedSignal);
+  });
+}
+
+function recoverReplayOnlyAfterAttachFailure<
+  Target,
+  Preamble extends { readonly type: string },
+>(input: {
+  readonly socket: SocketLike;
+  readonly strategy: PtyStreamStrategy<Target, Preamble>;
+  readonly target: Target & { readonly ptyProcessId: number };
+  readonly cause: unknown;
+  readonly sendMessage: (message: StreamSocketMessage<Preamble>) => void;
+  readonly closed: () => boolean;
+}) {
+  return Effect.gen(function* () {
+    if (!input.strategy.recoverAttachFailure) return null;
+    const pty = yield* PtyService;
+    const targetResult = yield* input.strategy
+      .recoverAttachFailure({ target: input.target, cause: input.cause })
+      .pipe(Effect.either);
+    if (Either.isLeft(targetResult) || targetResult.right === null) return null;
+
+    const recoveredTarget = targetResult.right;
+    const planResult =
+      recoveredTarget.ptyProcessId === null
+        ? Either.right(null)
+        : yield* pty
+            .getAttachmentPlan({ ptyProcessId: recoveredTarget.ptyProcessId })
+            .pipe(Effect.either);
+    if (Either.isLeft(planResult) || planResult.right?.live) return null;
+
+    const plan = planResult.right;
+    input.sendMessage(input.strategy.preamble({ target: recoveredTarget, plan }));
+    if (input.closed()) return { status: 'recovered' as const, target: recoveredTarget };
+
+    if (plan) {
+      const replayResult = yield* pty
+        .replay({
+          session: plan.session,
+          bytes: plan.replayBytes,
+          send: (message) => input.sendMessage(message),
+        })
+        .pipe(Effect.either);
+      if (Either.isLeft(replayResult)) {
+        closeWithMappedError(
+          input.socket,
+          input.strategy,
+          `${input.strategy.logLabel} replay failed after attach recovery`,
+          replayResult.left,
+        );
+        return { status: 'closed' as const };
+      }
+    }
+
+    return { status: 'recovered' as const, target: recoveredTarget };
   });
 }
 

@@ -544,7 +544,7 @@ function CommandRunMetadataState({
     ? workbenchCopy.commandRunDiagnostic[diagnosticReason]
     : hasPtyProcess
       ? workbenchCopy.commandOutputWillStream
-      : workbenchCopy.commandOutputStreamingPending;
+      : workbenchCopy.commandOutputNotRecorded;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded-md border border-line/14 bg-black/12 px-3.5 py-3">
