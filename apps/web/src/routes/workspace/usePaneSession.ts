@@ -1,17 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Effect } from 'effect';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Effect, Schema } from 'effect';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { PtyWebSocketOutputMessage } from '@isagi/contracts';
+import { ptyWebSocketOutputMessageSchema, type PtyWebSocketOutputMessage } from '@isagi/contracts';
 
 import { ptySocketErrorCopy } from '../../copy/index.js';
 import { runRuntimeEffect } from '../../lib/runtime/run.js';
-import {
-  initialPaneConnectionState,
-  paneConnectionEventForMessage,
-  paneConnectionReducer,
-  paneConnectionSnapshot,
-} from '../../lib/workspace/pane-session/connection.js';
 import {
   NO_EXIT,
   paneNotice,
@@ -20,17 +14,20 @@ import {
   type ExitInfo,
 } from '../../lib/workspace/pane-session/presentation.js';
 import {
-  createPaneTransport,
-  type PaneTransport,
-  type PaneTransportController,
-} from '../../lib/workspace/pane-session/transport.js';
-import {
   claimInputForSession,
   derivePaneView,
   startFreshInputForSession,
+  type PaneConnectionSnapshot,
   type PaneView,
   type PtyPaneSession,
 } from '../../lib/workspace/pane-session/view.js';
+import {
+  ptyStreamConnectionActive,
+  type PtyStreamConnectionState,
+  type PtyStreamTransport,
+  type PtyStreamTransportController,
+  usePtyStream,
+} from '../../lib/workspace/pty-stream/index.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/query-keys.js';
 import {
   claimPaneSession,
@@ -57,7 +54,7 @@ export interface UsePaneSessionResult {
   readonly notice: string | null;
   readonly errored: boolean;
   readonly dimmed: boolean;
-  readonly transport: PaneTransport;
+  readonly transport: PtyStreamTransport;
   /** Remounts the terminal per attach so each attach starts from a clean buffer. */
   readonly terminalKey: string;
   readonly onRendererWarning: (message: string | null) => void;
@@ -85,14 +82,8 @@ export function usePaneSession({
   autoAttach = false,
 }: UsePaneSessionInput): UsePaneSessionResult {
   const queryClient = useQueryClient();
-  const transportRef = useRef<PaneTransportController | null>(null);
   const autoAttachSessionKeyRef = useRef<string | null>(null);
-  if (transportRef.current === null) {
-    transportRef.current = createPaneTransport();
-  }
-  const transport = transportRef.current;
 
-  const [connection, dispatch] = useReducer(paneConnectionReducer, initialPaneConnectionState);
   const [exit, setExit] = useState<ExitInfo>(NO_EXIT);
   const [rendererWarning, setRendererWarning] = useState<string | null>(null);
   const [userAttach, setUserAttach] = useState(false);
@@ -105,12 +96,63 @@ export function usePaneSession({
   const running =
     session !== null && (session.status === 'starting' || session.status === 'running');
   const shouldConnect = session !== null && (running || userAttach);
+  const resetKey = `${sessionKind ?? 'none'}:${sessionId ?? 'none'}`;
+  const connectKey = `${resetKey}:${shouldConnect ? 'on' : 'off'}:${attachEpoch}:${worktreeId}:${paneId}`;
+  const initialInteractive = session?.status === 'running';
+
+  const resolveUrl = useCallback(() => {
+    if (session === null) {
+      return Effect.fail(new Error('No pane session is bound.'));
+    }
+    return resolveSessionPtyWebSocketUrl(worktreeId, paneId, session);
+  }, [paneId, session, worktreeId]);
+
+  const handleDomainMessage = useCallback(
+    (message: PtyWebSocketOutputMessage, transport: PtyStreamTransportController) => {
+      if (message.type !== 'session') {
+        return;
+      }
+      transport.setInteractive(message.status === 'running');
+      setExit({ exitCode: message.exitCode ?? null, signal: message.signal ?? null });
+    },
+    [],
+  );
+
+  const handleExit = useCallback((nextExit: ExitInfo, transport: PtyStreamTransportController) => {
+    transport.setInteractive(false);
+    setExit(nextExit);
+  }, []);
+
+  const handleResolveError = useCallback((error: unknown) => {
+    const detail = formatRuntimeError(error);
+    return {
+      message: detail,
+      output: ptySocketErrorCopy.connectFailed(detail),
+    };
+  }, []);
+
+  const handleSocketError = useCallback(
+    () => ({ message: ptySocketErrorCopy.byReason('socket_unavailable') }),
+    [],
+  );
+
+  const { transport, connection } = usePtyStream({
+    enabled: shouldConnect,
+    resetKey,
+    connectKey,
+    initialInteractive,
+    resolveUrl,
+    decodeMessage: decodeSessionPtyStreamMessage,
+    onDomainMessage: handleDomainMessage,
+    onExit: handleExit,
+    onResolveError: handleResolveError,
+    onSocketError: handleSocketError,
+  });
 
   // Reset connection-local state whenever the bound session identity changes.
   // Backend status / recovery updates flow through `derivePaneView` and must not
   // tear down a live connection, so they are deliberately not dependencies.
   useEffect(() => {
-    dispatch({ type: 'reset' });
     setExit(NO_EXIT);
     setRendererWarning(null);
     setUserAttach(false);
@@ -136,98 +178,6 @@ export function usePaneSession({
       void queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
     }
   }, [connection.phase, queryClient, surfaceId]);
-
-  // The one place the websocket is owned. Re-runs on session identity change, on
-  // an explicit (re)attach, or when the session starts/stops being connectable.
-  useEffect(() => {
-    if (session === null || !shouldConnect) {
-      return;
-    }
-    let disposed = false;
-
-    dispatch({ type: 'attach_started' });
-    transport.beginAttach(session.status);
-
-    void runRuntimeEffect(resolveSessionPtyWebSocketUrl(worktreeId, paneId, session)).then(
-      (url) => {
-        if (disposed) {
-          return;
-        }
-        dispatch({ type: 'socket_connecting' });
-        const socket = new WebSocket(url);
-        transport.bindSocket(socket);
-
-        socket.addEventListener('open', () => {
-          dispatch({ type: 'socket_open' });
-          transport.handleOpen();
-        });
-        socket.addEventListener('message', (event) => {
-          const message = decodeSocketMessage(event.data);
-          if (!message) {
-            dispatch({ type: 'errored', notice: { kind: 'protocol', code: 'invalid_message' } });
-            return;
-          }
-          switch (message.type) {
-            case 'output':
-              transport.pushOutput(message.data);
-              return;
-            case 'session':
-              transport.setStatus(message.status);
-              setExit({ exitCode: message.exitCode ?? null, signal: message.signal ?? null });
-              return;
-            case 'exit':
-              transport.setStatus(
-                message.exitCode === 0 && message.signal === null ? 'exited' : 'failed',
-              );
-              setExit({ exitCode: message.exitCode, signal: message.signal });
-              dispatch({ type: 'session_stopped' });
-              transport.closeSocket();
-              return;
-            default: {
-              const phaseEvent = paneConnectionEventForMessage(message);
-              if (phaseEvent) {
-                dispatch(phaseEvent);
-                if (phaseEvent.type === 'errored') {
-                  transport.closeSocket();
-                }
-              }
-            }
-          }
-        });
-        socket.addEventListener('close', () => {
-          if (!disposed) {
-            dispatch({ type: 'socket_closed' });
-          }
-        });
-        socket.addEventListener('error', () => {
-          // `socket_unavailable` is a local pseudo-code with no protocol code, so
-          // resolve its copy here; the message persists across the trailing close.
-          dispatch({
-            type: 'errored',
-            notice: {
-              kind: 'transport',
-              message: ptySocketErrorCopy.byReason('socket_unavailable'),
-            },
-          });
-        });
-      },
-      (error: unknown) => {
-        if (disposed) {
-          return;
-        }
-        const detail = formatRuntimeError(error);
-        dispatch({ type: 'errored', notice: { kind: 'transport', message: detail } });
-        transport.pushOutput(ptySocketErrorCopy.connectFailed(detail));
-      },
-    );
-
-    return () => {
-      disposed = true;
-      transport.closeSocket();
-    };
-    // `shouldConnect` / `attachEpoch` capture connectability and explicit
-    // re-attach triggers; the live session object is read fresh inside.
-  }, [sessionId, sessionKind, shouldConnect, attachEpoch, worktreeId, paneId, transport]);
 
   const attach = useCallback(() => {
     setUserAttach(true);
@@ -330,12 +280,16 @@ function isAutoAttachableSession(session: PtyPaneSession | null): session is Pty
   return session.kind === 'terminal_session' || session.recoveryAction !== 'create_replacement';
 }
 
-function decodeSocketMessage(data: unknown): PtyWebSocketOutputMessage | null {
-  if (typeof data !== 'string') {
-    return null;
-  }
+function paneConnectionSnapshot(connection: PtyStreamConnectionState): PaneConnectionSnapshot {
+  return {
+    code: connection.notice?.code ?? null,
+    attachRequested: ptyStreamConnectionActive(connection),
+  };
+}
+
+function decodeSessionPtyStreamMessage(data: unknown): PtyWebSocketOutputMessage | null {
   try {
-    return JSON.parse(data) as PtyWebSocketOutputMessage;
+    return Schema.decodeUnknownSync(ptyWebSocketOutputMessageSchema)(JSON.parse(String(data)));
   } catch {
     return null;
   }

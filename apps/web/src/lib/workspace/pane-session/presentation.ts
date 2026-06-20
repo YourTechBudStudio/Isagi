@@ -1,6 +1,10 @@
 import { agentSessionCopy, ptyCopy, ptySocketErrorCopy } from '../../../copy/index.js';
+import type {
+  PtyStreamConnectionPhase,
+  PtyStreamConnectionState,
+  PtyStreamNotice,
+} from '../pty-stream/index.js';
 import type { AttentionState } from '../types.js';
-import type { PaneConnectionPhase, PaneConnectionState, SocketNotice } from './connection.js';
 import type { PaneView, PtyPaneSession } from './view.js';
 
 export type ExitInfo = { readonly exitCode: number | null; readonly signal: string | null };
@@ -33,7 +37,7 @@ export function paneViewAttention(
 export function paneStatusLabel(
   view: PaneView,
   session: PtyPaneSession | null,
-  phase: PaneConnectionPhase,
+  phase: PtyStreamConnectionPhase,
   exit: ExitInfo,
 ): string {
   switch (view.kind) {
@@ -52,7 +56,7 @@ export function paneStatusLabel(
       // the prompt can never drift.
       return agentSessionCopy.status.start_fresh;
     case 'live':
-      if (phase === 'claiming' || phase === 'attaching' || phase === 'replaying') {
+      if (phase === 'connecting' || phase === 'replaying') {
         return ptyCopy.attaching;
       }
       return session
@@ -65,7 +69,7 @@ export function paneStatusLabel(
 export function paneNotice(
   view: PaneView,
   session: PtyPaneSession | null,
-  connection: PaneConnectionState,
+  connection: PtyStreamConnectionState,
   rendererWarning: string | null,
 ): string | null {
   switch (view.kind) {
@@ -90,7 +94,7 @@ export function paneNotice(
   }
 }
 
-function resolveSocketNotice(notice: SocketNotice | null): string | null {
+function resolveSocketNotice(notice: PtyStreamNotice | null): string | null {
   if (!notice) {
     return null;
   }

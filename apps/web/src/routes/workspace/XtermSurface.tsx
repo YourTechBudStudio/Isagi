@@ -3,6 +3,10 @@ import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ptyCopy } from '../../copy/index.js';
+import type {
+  PtyStreamSink,
+  PtyStreamSurfaceTransport,
+} from '../../lib/workspace/pty-stream/index.js';
 import { calculateTerminalFit } from './ptyFit.js';
 
 type XtermRenderDimensions = {
@@ -25,16 +29,6 @@ type XtermPrivateTerminal = Terminal & {
 
 type TerminalFitResult = 'fit' | 'unready';
 
-export interface XtermSurfaceSink {
-  readonly write: (data: string) => void;
-  readonly setInteractive: (interactive: boolean) => void;
-  readonly onConnected: () => void;
-}
-
-export interface XtermSurfaceTransport {
-  readonly connect: (sink: XtermSurfaceSink) => () => void;
-}
-
 export type XtermSurfaceKeyHandler = (
   event: KeyboardEvent,
   helpers: { readonly sendInput: (data: string) => void },
@@ -55,7 +49,7 @@ export function XtermSurface({
   onRendererWarning,
   onCustomKey,
 }: {
-  readonly transport: XtermSurfaceTransport;
+  readonly transport: PtyStreamSurfaceTransport;
   readonly initiallyInteractive: boolean;
   readonly disableScrollback?: boolean | undefined;
   readonly className?: string | undefined;
@@ -221,7 +215,7 @@ export function XtermSurface({
       };
       container.addEventListener('copy', handleTerminalCopy);
 
-      const sink: XtermSurfaceSink = {
+      const sink: PtyStreamSink = {
         write: (data) => terminal.write(data),
         setInteractive: (interactive) => {
           terminal.options.disableStdin = !interactive || !onInput;

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
-import type { PaneTransport } from '../../lib/workspace/pane-session/transport.js';
 import type { PtyPaneSession } from '../../lib/workspace/pane-session/view.js';
+import type { PtyStreamTransport } from '../../lib/workspace/pty-stream/index.js';
 import { XtermSurface, type XtermSurfaceKeyHandler } from './XtermSurface.js';
 
 /**
@@ -22,7 +22,7 @@ export function PaneTerminal({
   readonly surfaceId: number;
   readonly paneId: number;
   readonly focused: boolean;
-  readonly transport: PaneTransport;
+  readonly transport: PtyStreamTransport;
   readonly onRendererWarning: (message: string | null) => void;
 }) {
   const focusedRef = useRef(focused);
