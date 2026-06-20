@@ -5,7 +5,6 @@ export const workbenchCopy = {
   commandsConfigError: 'commands config error',
   commandsUnavailable: 'commands unavailable',
   openCommandLogsTitle: (label: string) => `Open ${label} monitor`,
-  commandAuthoringTitle: 'Add commands in .isagi/config.yaml',
   commandExecutionUnavailableTitle: 'Command execution lands in the next phase',
   commandIdleDetail: 'This command has not run yet.',
   commandRemovedDetail: 'This command is no longer in .isagi/config.yaml.',
