@@ -36,6 +36,7 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
   let interactive = false;
   let sink: PtyStreamSink | null = null;
   let buffer: string[] = [];
+  let frozen = false;
 
   const isLive = () => socket?.readyState === WebSocket.OPEN && interactive;
 
@@ -43,6 +44,7 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
     beginAttach(initialInteractive) {
       socket = null;
       interactive = initialInteractive;
+      frozen = false;
       buffer = [];
       sink?.setInteractive(initialInteractive);
     },
@@ -57,6 +59,9 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
       sink?.setInteractive(next);
     },
     pushOutput(data) {
+      if (frozen) {
+        return;
+      }
       if (sink) {
         sink.write(data);
       } else {
@@ -64,6 +69,7 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
       }
     },
     freeze() {
+      frozen = true;
       interactive = false;
       sink?.setInteractive(false);
     },

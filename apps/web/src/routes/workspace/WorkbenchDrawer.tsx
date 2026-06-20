@@ -20,7 +20,6 @@ import {
 
 import type {
   CommandRunDiagnosticReason,
-  CommandLogStreamErrorCode,
   CommandStatus,
   CommandSummary,
   WorktreeCommandsOutput,
@@ -30,7 +29,7 @@ import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
-import type { CommandLogStreamState } from '../../lib/workspace/command-log/stream.js';
+import { commandLogDisplayState } from '../../lib/workspace/command-log/display.js';
 import { useCommandLogStream } from '../../lib/workspace/command-log/stream.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import {
@@ -499,7 +498,7 @@ function CommandLogTerminal({
     latestRunId,
   });
   const status = state.exit ? fallbackStatus : (state.status ?? fallbackStatus);
-  const notice = commandLogNotice(state, rendererWarning);
+  const display = commandLogDisplayState({ state, rendererWarning });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -515,11 +514,13 @@ function CommandLogTerminal({
       <div className="flex flex-none items-start gap-2 font-mono text-[10.5px] text-fg-subtle">
         <AttentionDot state={attentionForCommandStatus(status)} />
         <p className="min-w-0 flex-1 leading-relaxed">
-          <span className="text-fg-muted">{commandLogStatusLabel(state)}</span>
-          {notice ? <span className="ml-2 opacity-70">{notice.summary}</span> : null}
-          {notice?.detail ? (
+          <span className="text-fg-muted">{display.label}</span>
+          {display.notice ? (
+            <span className="ml-2 opacity-70">{display.notice.summary}</span>
+          ) : null}
+          {display.notice?.detail ? (
             <span className="ml-2 opacity-55">
-              {workbenchCopy.commandRunDiagnosticDetailLabel}: {notice.detail}
+              {workbenchCopy.commandRunDiagnosticDetailLabel}: {display.notice.detail}
             </span>
           ) : null}
         </p>
@@ -566,58 +567,6 @@ function CommandRunMetadataState({
       )}
     </div>
   );
-}
-
-function commandLogStatusLabel(state: CommandLogStreamState) {
-  if (state.exit) {
-    return workbenchCopy.commandLogExit(state.exit.exitCode, state.exit.signal);
-  }
-  switch (state.phase) {
-    case 'idle':
-    case 'connecting':
-      return workbenchCopy.commandLogConnecting;
-    case 'replaying':
-      return workbenchCopy.commandLogReplaying;
-    case 'streaming':
-      return workbenchCopy.commandLogStreaming;
-    case 'frozen':
-      return workbenchCopy.commandLogFrozen;
-    case 'closed':
-      return workbenchCopy.commandLogClosed;
-    case 'errored':
-      return workbenchCopy.commandLogUnavailable;
-  }
-}
-
-type CommandLogNotice = {
-  readonly summary: string;
-  readonly detail?: string | undefined;
-};
-
-function commandLogNotice(
-  state: CommandLogStreamState,
-  rendererWarning: string | null,
-): CommandLogNotice | null {
-  if (state.notice?.kind === 'transport') {
-    return { summary: state.notice.message };
-  }
-  if (state.notice?.kind === 'protocol') {
-    return commandLogStreamErrorCopy(state.notice.code, state.notice.message);
-  }
-  return rendererWarning ? { summary: rendererWarning } : null;
-}
-
-function commandLogStreamErrorCopy(
-  code: CommandLogStreamErrorCode,
-  message?: string | undefined,
-): CommandLogNotice {
-  if (code === 'invalid_message') {
-    return { summary: workbenchCopy.commandLogProtocolError };
-  }
-  if (code === 'read_only_stream') {
-    return { summary: workbenchCopy.commandLogReadOnlyRejected };
-  }
-  return { summary: workbenchCopy.commandLogErrorCode(code), detail: message };
 }
 
 function EmptyCommandsState({ label }: { readonly label: string }) {

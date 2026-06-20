@@ -111,7 +111,7 @@ test('connect notifies a sink when a socket is already open', () => {
   assert.equal(attached.connected(), 1);
 });
 
-test('freeze disables interactivity and closeSocket closes the active socket', () => {
+test('freeze disables interactivity, drops late output, and closeSocket closes the active socket', () => {
   const transport = createPtyStreamTransport();
   const attached = createSink();
   const open = createOpenSocket();
@@ -119,11 +119,27 @@ test('freeze disables interactivity and closeSocket closes the active socket', (
   transport.connect(attached.sink);
   transport.bindSocket(open.socket);
   transport.setInteractive(true);
+  transport.pushOutput('before');
   transport.freeze();
+  transport.pushOutput('after');
   transport.sendInput('ignored');
   transport.closeSocket();
 
+  assert.deepEqual(attached.writes, ['before']);
   assert.deepEqual(attached.interactive, [false, true, false]);
   assert.deepEqual(open.sent, []);
   assert.equal(open.closed(), true);
+});
+
+test('beginAttach thaws output for a fresh stream', () => {
+  const transport = createPtyStreamTransport();
+  const attached = createSink();
+
+  transport.connect(attached.sink);
+  transport.freeze();
+  transport.pushOutput('stale');
+  transport.beginAttach(false);
+  transport.pushOutput('fresh');
+
+  assert.deepEqual(attached.writes, ['fresh']);
 });

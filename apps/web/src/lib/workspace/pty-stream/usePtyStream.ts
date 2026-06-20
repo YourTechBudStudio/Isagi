@@ -86,11 +86,11 @@ export function usePtyStream<Message extends PtyStreamMessage>({
 
   const failTransport = useCallback(
     (failure: TransportFailure) => {
-      transport.freeze();
-      dispatch({ type: 'errored', notice: { kind: 'transport', message: failure.message } });
       if (failure.output) {
         transport.pushOutput(failure.output);
       }
+      transport.freeze();
+      dispatch({ type: 'errored', notice: { kind: 'transport', message: failure.message } });
     },
     [transport],
   );
