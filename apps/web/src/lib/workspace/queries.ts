@@ -13,6 +13,7 @@ import type {
   ReconciliationFinding,
   SetActiveContextInput,
   SetSplitWeightsInput,
+  SetSplitWeightsOutput,
   SplitPaneInput,
   SurfaceDetail,
 } from '@isagi/contracts';
@@ -313,20 +314,40 @@ export async function splitPaneFromPalette(input: {
   }
 }
 
+// A resize commit returns the whole surface layout, so an older response landing
+// after a newer one would revert the newer resize. We stamp each commit per surface
+// and let only the latest one touch the cache: stale successes are dropped and a
+// stale failure does not force a refetch that would clobber a newer commit. The
+// server stays authoritative and refetch-on-focus backstops any dropped write.
+const latestSplitWeightCommitBySurface = new Map<number, number>();
+
 export async function setSplitWeightsFromSurface(input: {
   readonly surfaceId: number;
   readonly weights: SetSplitWeightsInput;
+  readonly commit?: (
+    surfaceId: number,
+    weights: SetSplitWeightsInput,
+  ) => Promise<SetSplitWeightsOutput>;
   readonly client?: QueryClient | undefined;
 }) {
   const client = input.client ?? queryClient;
+  const commit =
+    input.commit ?? ((surfaceId, weights) => runRuntimeEffect(setSplitWeights(surfaceId, weights)));
+  const commitSeq = (latestSplitWeightCommitBySurface.get(input.surfaceId) ?? 0) + 1;
+  latestSplitWeightCommitBySurface.set(input.surfaceId, commitSeq);
+  const isLatestCommit = () => latestSplitWeightCommitBySurface.get(input.surfaceId) === commitSeq;
   try {
-    const output = await runRuntimeEffect(setSplitWeights(input.surfaceId, input.weights));
-    client.setQueryData<SurfaceDetail>(surfaceDetailQueryKey(output.surfaceId), (detail) =>
-      detail ? { ...detail, layout: output.layout } : detail,
-    );
+    const output = await commit(input.surfaceId, input.weights);
+    if (isLatestCommit()) {
+      client.setQueryData<SurfaceDetail>(surfaceDetailQueryKey(output.surfaceId), (detail) =>
+        detail ? { ...detail, layout: output.layout } : detail,
+      );
+    }
     return output;
   } catch (error) {
-    await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
+    if (isLatestCommit()) {
+      await client.invalidateQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId) });
+    }
     throw error;
   }
 }

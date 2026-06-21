@@ -12,9 +12,11 @@ export const NO_EXIT: ExitInfo = { exitCode: null, signal: null };
 
 /**
  * Attention dot for a pane. The runtime is the single source of truth for session
- * attention (the `fallback`), so the pane dot and the rail dot — which aggregates
- * the same runtime sources — can never disagree on a session's state. Only the two
- * connection-level conditions the runtime's DB projection cannot see are overlaid.
+ * attention (the `fallback`), and the rail dot aggregates those same runtime sources,
+ * so on runtime-owned session state the pane and rail always agree. The pane then
+ * overlays two connection-level facts the runtime's DB projection cannot see —
+ * `unsupported` and `moved` — so in exactly those two cases the pane dot may
+ * intentionally differ from the rail dot.
  */
 export function paneViewAttention(
   view: PaneView,

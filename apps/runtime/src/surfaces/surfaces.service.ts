@@ -588,13 +588,9 @@ function sessionSurfaceError(
   worktreeId: number,
   sessionId: number,
 ) {
-  if (error.code === 'session_not_found')
-    return new SurfaceError({
-      code: 'session_not_found',
-      message: error.message,
-      worktreeId,
-      sessionId,
-    });
+  // The only failing call routed here is `get()`, which fails exclusively with
+  // `session_not_found`. The other session-error codes never reach this path and
+  // have no SurfaceError equivalent, so a single mapping is correct, not lossy.
   return new SurfaceError({
     code: 'session_not_found',
     message: error.message,
