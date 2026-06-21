@@ -152,19 +152,18 @@ function insertLeafIntoSameAxisSplit(
   newPaneId: number,
   side: InsertSide,
 ): SurfaceLayoutNode {
-  const sourceWeight = node.weights[sourceIndex] ?? 0;
-  const splitWeight = sourceWeight / 2;
+  // Same-axis splits equalize: adding a sibling rebalances every child to an
+  // even share rather than carving the new pane only out of the source. This
+  // discards prior manual resize of this split — the accepted tradeoff for
+  // predictable, evenly-sized panes after repeated splits.
   const children = [...node.children];
-  const weights = [...node.weights];
-  weights[sourceIndex] = splitWeight;
   const insertIndex = side === 'after' ? sourceIndex + 1 : sourceIndex;
   children.splice(insertIndex, 0, leafForPane(newPaneId));
-  weights.splice(insertIndex, 0, splitWeight);
 
   return {
     ...node,
     children,
-    weights: normalizeWeights(weights),
+    weights: equalWeights(children.length),
   };
 }
 

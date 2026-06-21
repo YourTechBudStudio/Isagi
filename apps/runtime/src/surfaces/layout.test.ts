@@ -99,7 +99,7 @@ test('layout insertion flattens into a matching row split after the source', () 
   assert.deepEqual(insertPaneIntoLayout(layout, 1, 3, 'right'), {
     ...layout,
     children: [leaf(1), leaf(3), leaf(2)],
-    weights: [0.125, 0.125, 0.75],
+    weights: [0.333333, 0.333333, 0.333334],
   });
 });
 
@@ -116,7 +116,7 @@ test('layout insertion flattens into a matching row split before the source', ()
   assert.deepEqual(insertPaneIntoLayout(layout, 2, 3, 'left'), {
     ...layout,
     children: [leaf(1), leaf(3), leaf(2)],
-    weights: [0.25, 0.375, 0.375],
+    weights: [0.333333, 0.333333, 0.333334],
   });
 });
 
@@ -133,7 +133,7 @@ test('layout insertion flattens into a matching column split before the source',
   assert.deepEqual(insertPaneIntoLayout(layout, 2, 4, 'up'), {
     ...layout,
     children: [leaf(1), leaf(4), leaf(2), leaf(3)],
-    weights: [0.2, 0.15, 0.15, 0.5],
+    weights: [0.25, 0.25, 0.25, 0.25],
   });
 });
 
