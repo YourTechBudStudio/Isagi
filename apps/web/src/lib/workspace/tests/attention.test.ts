@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { aggregateAttention, applyAttentionToProjects, useAttentionStore } from './attention.js';
-import type { Project } from './types.js';
+import { aggregateAttention, applyAttentionToProjects, useAttentionStore } from '../attention.js';
+import type { Project } from '../types.js';
 
 test('attention aggregation prioritizes error, then working, then waiting, then idle', () => {
   assert.equal(aggregateAttention(['waiting', 'idle']), 'waiting');

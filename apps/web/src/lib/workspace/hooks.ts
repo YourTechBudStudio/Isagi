@@ -5,6 +5,10 @@ import { showToast } from '../toast/index.js';
 import { activateSurface, restoreActivePaneFocus } from './activation.js';
 import { applyAttentionToProjects, useAttentionStore } from './attention.js';
 import {
+  scheduleActiveContextPersistence,
+  scheduleWorkspaceReconcileForProject,
+} from './background-sync.js';
+import {
   activeContextFromSelection,
   activeWorktreeId,
   findMissingProject,
@@ -13,13 +17,7 @@ import {
   selectedProjectId,
   selectionFromActiveContext,
 } from './model.js';
-import {
-  formatRuntimeError,
-  scheduleActiveContextPersistence,
-  scheduleWorkspaceReconcileForProject,
-  useActiveContextQuery,
-  useWorkspaceQuery,
-} from './queries.js';
+import { formatRuntimeError, useActiveContextQuery, useWorkspaceQuery } from './queries.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
 import type { Surface, Worktree, WorkspaceSelection } from './types.js';
 

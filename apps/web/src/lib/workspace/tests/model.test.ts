@@ -6,8 +6,8 @@ import {
   resolveActivePaneId,
   resolvePaneFocusAfterDetailChange,
   selectionFromActiveContext,
-} from './model.js';
-import type { Project } from './types.js';
+} from '../model.js';
+import type { Project } from '../types.js';
 
 const missingA = project({ id: 1, name: 'missing-a', status: 'missing' });
 const missingB = project({ id: 2, name: 'missing-b', status: 'missing' });

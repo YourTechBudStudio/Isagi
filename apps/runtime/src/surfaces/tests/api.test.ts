@@ -12,8 +12,8 @@ import type {
   SurfaceDetail,
 } from '@isagi/contracts';
 
-import { registerSurfacesApi } from './api.js';
-import { SurfaceError, SurfaceService, type SurfaceServiceShape } from './index.js';
+import { registerSurfacesApi } from '../api.js';
+import { SurfaceError, SurfaceService, type SurfaceServiceShape } from '../index.js';
 
 test('surface rename route decodes params and body through the contract path', async () => {
   let input: { readonly surfaceId: number; readonly title: string } | null = null;

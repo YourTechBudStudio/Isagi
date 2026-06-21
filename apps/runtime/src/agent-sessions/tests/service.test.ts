@@ -6,16 +6,16 @@ import { Effect, Either, Layer } from 'effect';
 import {
   HarnessAdapterRegistry,
   type HarnessAdapterRegistryService,
-} from '../harness-adapters/index.js';
-import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
-import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
-import { SessionLifecycleLive } from '../session-lifecycle/index.js';
-import type { AgentSessionRow, PtyProcessRow } from '../surfaces/index.js';
+} from '../../harness-adapters/index.js';
+import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
+import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
+import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
+import type { AgentSessionRow, PtyProcessRow } from '../../surfaces/index.js';
 import {
   AgentSessionRepository,
   type AgentSessionRepositoryService,
-} from './agent-sessions.repository.js';
-import { AgentSessionError, AgentSessionService, AgentSessionServiceLive } from './index.js';
+} from '../agent-sessions.repository.js';
+import { AgentSessionError, AgentSessionService, AgentSessionServiceLive } from '../index.js';
 
 test('agent session lifecycle launches a fresh process before any harness session id is observed', async () => {
   const state = mutableAgentSession({ activePtyProcessId: null, activePtyProcess: null });

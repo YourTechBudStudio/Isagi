@@ -6,11 +6,8 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
-import {
-  DataDirectory,
-  RuntimeDatabaseLive,
-  type DataDirectoryService,
-} from '../persistence/index.js';
+import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { PtyBackend } from './backend.js';
 import { PtyForegroundStateLive } from './foreground-state.js';
@@ -19,15 +16,7 @@ import { PtyService, PtyServiceLive } from './pty.service.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from './types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
-  const dataDirectory = {
-    paths: {
-      root: dataRoot,
-      databasePath: join(dataRoot, 'isagi.db'),
-      statePath: join(dataRoot, 'state.json'),
-      worktreesPath: join(dataRoot, 'worktrees'),
-      sessionsPath: join(dataRoot, 'sessions'),
-    },
-  } satisfies DataDirectoryService;
+  const dataDirectory = makeTestDataDirectory(dataRoot);
   return Layer.succeed(DataDirectory, dataDirectory);
 }
 

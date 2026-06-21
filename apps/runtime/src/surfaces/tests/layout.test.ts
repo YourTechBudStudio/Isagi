@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { SurfaceLayoutNode } from '@isagi/contracts';
 
-import { insertPaneIntoLayout, prunePaneFromLayout, setNodeWeights } from './layout.js';
+import { insertPaneIntoLayout, prunePaneFromLayout, setNodeWeights } from '../layout.js';
 
 test('layout pruning removes a matching leaf', () => {
   const layout = leaf(1);

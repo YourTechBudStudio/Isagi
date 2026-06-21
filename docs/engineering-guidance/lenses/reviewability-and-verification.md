@@ -9,6 +9,7 @@ This lens protects trust in completed work. Changes should be easy for humans an
 - Does the change explain its own shape through clear module boundaries, names, and flow?
 - Can a reviewer identify the important behavior without reading unrelated scaffolding?
 - Does verification match the risk of the change?
+- Does verification match risk in both directions — is low-risk or cosmetic output pinned by brittle assertions that churn on rewording rather than catch defects?
 - Were meaningful degraded or failure paths checked when runtime behavior changed?
 - When runtime API contracts change, were success and representative error paths checked across contract, runtime, and client code?
 - Are contracts, runtime behavior, and user-visible states verified at the right level?
@@ -24,6 +25,7 @@ This lens protects trust in completed work. Changes should be easy for humans an
 - Package-level checks can be useful while iterating, but final confidence should match the change scope.
 - Do not start long-running dev servers as verification.
 - Runtime lifecycle and API boundary changes need stronger evidence than static UI copy changes.
+- Verification matching risk cuts both ways: trivial or cosmetic output (literal copy strings, thin framework round-trips) rarely needs exhaustive assertions. Prefer behavioral or exhaustiveness checks over literal-string equality.
 - Completed work should be easy for a human maintainer to trust, especially when produced by an agent.
 
 ## Severity Mapping
@@ -48,4 +50,5 @@ This lens protects trust in completed work. Changes should be easy for humans an
 - A summary could be clearer.
 - A low-risk manual check could be mentioned.
 - A small test name, assertion, or fixture could be easier to read.
+- A brittle assertion pins cosmetic output (such as exact copy text) and will churn without catching defects; a behavioral or exhaustiveness check would be sturdier.
 - Minor unrelated cleanup should be split out next time.

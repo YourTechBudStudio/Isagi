@@ -1,0 +1,272 @@
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { Effect, Layer } from 'effect';
+
+import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
+import { agentSessions, projects, ptyProcesses, worktrees } from '../../persistence/schema.js';
+import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { PtyForegroundStateLive } from '../../pty-processes/index.js';
+import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
+import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../../surfaces/types.js';
+import { AgentSessionArtifactsLive } from '../artifacts.js';
+import { AgentSessionAttentionProjectionLive } from '../attention-projection.service.js';
+
+export function appendRecord(
+  path: string,
+  nativeEvent: 'agent_start' | 'agent_end',
+  pending: boolean | null,
+  options: { readonly harnessSessionId?: string } = {},
+) {
+  const harnessSessionId = options.harnessSessionId ?? 'pi-session-1';
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: new Date().toISOString(),
+      agentSessionId: 10,
+      harnessSessionId,
+      ptyProcessId: 20,
+      harness: 'pi',
+      nativeEvent,
+      event: {
+        nativeEvent,
+        context: { isIdle: pending === false, hasPendingMessages: pending },
+      },
+    })}\n`,
+    'utf8',
+  );
+}
+
+export function appendOpenCodeRecord(path: string, status: 'busy' | 'idle') {
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: new Date().toISOString(),
+      agentSessionId: 10,
+      harnessSessionId: 'opencode-session-1',
+      ptyProcessId: 20,
+      harness: 'opencode',
+      nativeEvent: 'session.status',
+      event: {
+        nativeEvent: 'session.status',
+        status,
+      },
+    })}\n`,
+    'utf8',
+  );
+}
+
+export function appendNestedOpenCodeRecord(path: string, status: 'busy' | 'idle') {
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: new Date().toISOString(),
+      agentSessionId: 10,
+      harnessSessionId: 'opencode-session-1',
+      ptyProcessId: 20,
+      harness: 'opencode',
+      nativeEvent: 'session.status',
+      event: {
+        nativeEvent: 'session.status',
+        event: {
+          id: 'evt_1',
+          type: 'session.status',
+          properties: {
+            sessionID: 'ses_1',
+            status: { type: status },
+          },
+        },
+        status: null,
+      },
+    })}\n`,
+    'utf8',
+  );
+}
+
+export function appendCommandHookRecord(
+  path: string,
+  harness: 'claude' | 'codex',
+  harnessSessionId: string,
+  nativeEvent: string,
+  input: Record<string, unknown> = {},
+) {
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      recordedAt: new Date().toISOString(),
+      agentSessionId: 10,
+      harnessSessionId,
+      ptyProcessId: 20,
+      harness,
+      nativeEvent,
+      event: {
+        nativeEvent,
+        notificationType:
+          typeof input.notification_type === 'string' ? input.notification_type : null,
+        input: {
+          hook_event_name: nativeEvent,
+          session_id: harnessSessionId,
+          ...input,
+        },
+      },
+    })}\n`,
+    'utf8',
+  );
+}
+
+export function harnessLogPath(directory: string, harnessSessionId = 'pi-session-1') {
+  return join(directory, `${Buffer.from(harnessSessionId, 'utf8').toString('hex')}.harness.jsonl`);
+}
+
+export function agentSession(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
+  return {
+    id: 10,
+    worktreeId: 1,
+    harness: 'pi',
+    cwd: '/repo/isagi',
+    harnessSessionId: 'pi-session-1',
+    harnessMetadataStatus: 'valid',
+    harnessMetadataDiagnostic: null,
+    activePtyProcessId: 20,
+    createdAt: '2026-06-18T00:00:00.000Z',
+    updatedAt: '2026-06-18T00:00:00.000Z',
+    lastSeenAt: null,
+    activePtyProcess: ptyProcess({ id: 20 }),
+    ...overrides,
+  };
+}
+
+export function terminalSession(overrides: Partial<TerminalSessionRow> = {}): TerminalSessionRow {
+  return {
+    id: 30,
+    worktreeId: 1,
+    cwd: '/repo/isagi',
+    shellCommand: 'bash',
+    shellArgs: [],
+    shellArgsJson: '[]',
+    activePtyProcessId: 30,
+    createdAt: '2026-06-18T00:00:00.000Z',
+    updatedAt: '2026-06-18T00:00:00.000Z',
+    activePtyProcess: ptyProcess({ id: 30 }),
+    ...overrides,
+  };
+}
+
+export function ptyProcess(overrides: Partial<PtyProcessRow> = {}): PtyProcessRow {
+  return {
+    id: 20,
+    backend: 'node_pty',
+    backendRefJson: '{}',
+    command: 'pi',
+    args: [],
+    argsJson: '[]',
+    cwd: '/repo/isagi',
+    status: 'running',
+    statusReason: null,
+    exitCode: null,
+    signal: null,
+    logMode: 'none',
+    logPath: null,
+    createdAt: '2026-06-18T00:00:00.000Z',
+    updatedAt: '2026-06-18T00:00:00.000Z',
+    exitedAt: null,
+    lastSeenAt: null,
+    ...overrides,
+  };
+}
+
+export async function seedActiveAgentSession(dataRoot: string) {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const database = yield* RuntimeDatabase;
+      yield* database.use('seed_attention_relevant_agent_session', (db) => {
+        const now = '2026-06-18T00:00:00.000Z';
+        db.insert(projects)
+          .values({
+            id: 1,
+            name: 'Isagi',
+            rootPath: '/repo/isagi',
+            status: 'present',
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+            missingReason: null,
+          })
+          .run();
+        db.insert(worktrees)
+          .values({
+            id: 1,
+            projectId: 1,
+            path: '/repo/isagi',
+            branch: 'main',
+            head: null,
+            createdAt: now,
+            updatedAt: now,
+            firstSeenAt: now,
+            lastSeenAt: now,
+          })
+          .run();
+        db.insert(ptyProcesses)
+          .values({
+            id: 20,
+            backend: 'node_pty',
+            backendRefJson: '{}',
+            command: 'pi',
+            argsJson: '[]',
+            cwd: '/repo/isagi',
+            status: 'running',
+            statusReason: null,
+            exitCode: null,
+            signal: null,
+            logMode: 'none',
+            logPath: null,
+            createdAt: now,
+            updatedAt: now,
+            exitedAt: null,
+            lastSeenAt: null,
+          })
+          .run();
+        db.insert(agentSessions)
+          .values({
+            id: 10,
+            worktreeId: 1,
+            harness: 'pi',
+            cwd: '/repo/isagi',
+            activePtyProcessId: 20,
+            createdAt: now,
+            updatedAt: now,
+            lastSeenAt: now,
+          })
+          .run();
+      });
+    }).pipe(Effect.provide(databaseLayer(dataRoot))),
+  );
+}
+
+function databaseLayer(dataRoot: string) {
+  return RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer(dataRoot)));
+}
+
+export function testLayer(dataRoot: string) {
+  const directoryLayer = dataDirectoryLayer(dataRoot);
+  const database = RuntimeDatabaseLive.pipe(Layer.provide(directoryLayer));
+  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directoryLayer));
+  const internalBus = InternalRuntimeEventBusLive;
+  const foreground = PtyForegroundStateLive;
+  const attention = AgentSessionAttentionProjectionLive.pipe(
+    Layer.provide(directoryLayer),
+    Layer.provide(database),
+    Layer.provide(artifacts),
+    Layer.provide(foreground),
+    Layer.provide(internalBus),
+  );
+  return Layer.mergeAll(attention, artifacts, foreground, internalBus, database);
+}
+
+function dataDirectoryLayer(dataRoot: string) {
+  return Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
+}

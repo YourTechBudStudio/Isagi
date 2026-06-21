@@ -6,8 +6,8 @@ import Fastify from 'fastify';
 
 import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
-import { registerWorkspaceApi } from './api.js';
-import { WorkspaceError, WorkspaceService, type WorkspaceServiceShape } from './index.js';
+import { registerWorkspaceApi } from '../api.js';
+import { WorkspaceError, WorkspaceService, type WorkspaceServiceShape } from '../index.js';
 
 test('worktree delete route decodes params and body through the contract path', async () => {
   let input: {

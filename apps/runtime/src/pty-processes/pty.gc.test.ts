@@ -11,24 +11,16 @@ import {
   DataDirectory,
   RuntimeDatabase,
   RuntimeDatabaseLive,
-  type DataDirectoryService,
   type RuntimeDatabaseService,
 } from '../persistence/index.js';
 import { projects, ptyProcesses, worktreeCommandStates, worktrees } from '../persistence/schema.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { collectPtyGarbage } from './service/gc.js';
 import { PtyInspectError, PtyKillError, type PtyBackend } from './types.js';
 
 function testLayer(dataRoot: string) {
-  const dataDirectory = {
-    paths: {
-      root: dataRoot,
-      databasePath: join(dataRoot, 'isagi.db'),
-      statePath: join(dataRoot, 'state.json'),
-      worktreesPath: join(dataRoot, 'worktrees'),
-      sessionsPath: join(dataRoot, 'sessions'),
-    },
-  } satisfies DataDirectoryService;
+  const dataDirectory = makeTestDataDirectory(dataRoot);
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const repository = PtyRepositoryLive.pipe(Layer.provide(database));

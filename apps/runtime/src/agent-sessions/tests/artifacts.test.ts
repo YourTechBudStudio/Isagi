@@ -13,8 +13,9 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { DataDirectory, type DataDirectoryService } from '../persistence/index.js';
-import { AgentSessionArtifacts, AgentSessionArtifactsLive } from './artifacts.js';
+import { DataDirectory } from '../../persistence/index.js';
+import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { AgentSessionArtifacts, AgentSessionArtifactsLive } from '../artifacts.js';
 
 test('agent session artifacts initialize and read harness metadata', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifacts-'));
@@ -159,17 +160,7 @@ test('agent session artifacts write observed harness session ids and remove dire
 
 function testLayer(dataRoot: string) {
   return AgentSessionArtifactsLive.pipe(
-    Layer.provide(
-      Layer.succeed(DataDirectory, {
-        paths: {
-          root: dataRoot,
-          databasePath: join(dataRoot, 'isagi.db'),
-          statePath: join(dataRoot, 'state.json'),
-          worktreesPath: join(dataRoot, 'worktrees'),
-          sessionsPath: join(dataRoot, 'sessions'),
-        },
-      } satisfies DataDirectoryService),
-    ),
+    Layer.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))),
   );
 }
 

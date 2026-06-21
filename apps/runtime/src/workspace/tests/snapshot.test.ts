@@ -8,39 +8,39 @@ import { Effect, Schema } from 'effect';
 
 import { workspaceSnapshotSchema } from '@isagi/contracts';
 
-import { CommandService, type CommandServiceShape } from '../commands/index.js';
-import { Git, GitCommandError } from '../git/index.js';
+import { CommandService, type CommandServiceShape } from '../../commands/index.js';
+import { Git, GitCommandError } from '../../git/index.js';
 import {
   DataDirectory,
   StateFile,
   stateFromActiveContext,
-  type DataDirectoryService,
   type WorkspaceState,
-} from '../persistence/index.js';
+} from '../../persistence/index.js';
+import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
-} from '../runtime-events/index.js';
+} from '../../runtime-events/index.js';
 import {
   SurfaceService,
   SurfaceRepository,
   type SurfaceRepositoryService,
   type SurfaceServiceShape,
-} from '../surfaces/index.js';
+} from '../../surfaces/index.js';
 import {
   WorktreeSetupRepository,
   WorktreeSetupService,
   type WorktreeSetupRepositoryService,
   type WorktreeSetupService as WorktreeSetupServiceShape,
-} from '../worktree-setup/index.js';
-import type { ProjectRow, WorktreeRow } from './types.js';
+} from '../../worktree-setup/index.js';
+import type { ProjectRow, WorktreeRow } from '../types.js';
 import {
   prunedWorktreeIds,
   WorkspaceRepository,
   type WorkspaceRepositoryService,
-} from './workspace.repository.js';
-import { WorkspaceService, WorkspaceServiceLive } from './workspace.service.js';
-import { buildWorkspaceSnapshot } from './workspace.snapshot.js';
+} from '../workspace.repository.js';
+import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
+import { buildWorkspaceSnapshot } from '../workspace.snapshot.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>
@@ -138,15 +138,7 @@ const project: ProjectRow = {
   missingReason: null,
 };
 
-const testDataDirectory = {
-  paths: {
-    root: '/tmp/isagi-test',
-    databasePath: '/tmp/isagi-test/isagi.db',
-    statePath: '/tmp/isagi-test/state.json',
-    worktreesPath: '/tmp/isagi-test/worktrees',
-    sessionsPath: '/tmp/isagi-test/sessions',
-  },
-} satisfies DataDirectoryService;
+const testDataDirectory = makeTestDataDirectory('/tmp/isagi-test');
 
 const worktreeBase = {
   id: 10,

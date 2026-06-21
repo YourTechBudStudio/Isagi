@@ -5,8 +5,8 @@ import { Effect } from 'effect';
 
 import type { ApiError } from '@isagi/contracts';
 
-import { RuntimeApiError } from '../runtime/client.js';
-import { formatRuntimeError, formatRuntimeErrorSummary } from './runtime-data.js';
+import { RuntimeApiError } from '../../runtime/client.js';
+import { formatRuntimeError, formatRuntimeErrorSummary } from '../runtime-data.js';
 
 test('runtime error summary maps project path rejections to user copy without diagnostics', () => {
   const error = new RuntimeApiError({

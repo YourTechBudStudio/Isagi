@@ -3,14 +3,14 @@ import test from 'node:test';
 
 import type { RuntimeEvent } from '@isagi/contracts';
 
-import { queryClient } from '../query/client.js';
+import { queryClient } from '../../query/client.js';
 import {
   commandLogMetadataQueryKey,
   surfaceDetailQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
-} from './query-keys.js';
-import { handleRuntimeEvent } from './runtime-events.js';
+} from '../query-keys.js';
+import { handleRuntimeEvent } from '../runtime-events.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();

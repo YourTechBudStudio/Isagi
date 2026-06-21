@@ -12,6 +12,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - Are internal files grouped by concept, responsibility, lifecycle, platform, or flow?
 - Can a human reviewer follow the main path through the code?
 - Is a large file still single-purpose and reviewable?
+- When a deep service defines its whole method set inline in one Effect `Layer` body, is that body still followable, or should cohesive groups move into internal files behind the same surface?
 - Would splitting a file clarify ownership or flow, or would it create shallow fragmentation?
 - Are platform-specific variants discoverable through lowercase suffixes such as `.darwin.ts`, `.linux.ts`, or `.windows.ts` where needed?
 - Are platform-neutral selectors or adapters separated from platform-specific implementation details?
@@ -23,6 +24,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 - Prefer grouped related files over scattered single-purpose fragments.
 - Platform variants should use lowercase platform suffixes where practical.
 - Deep modules are not huge files. They are modules with small public surfaces and well-organized internals.
+- A deep Effect service can stay single-purpose yet grow a large inline `Layer` body that is hard to trace. Prefer extracting cohesive internal clusters (resolution, reconciliation, row mapping) into sibling files while keeping the public surface narrow.
 - Avoid creating abstract interfaces merely to make code look architectural.
 
 ## Severity Mapping
@@ -39,6 +41,7 @@ This lens protects human-readable code flow. Isagi should use deep modules with 
 
 - Related files are scattered when grouping would make review and future change easier.
 - A file is growing large because it contains multiple separable responsibilities.
+- A service's inline `Layer` body has grown large enough that its method flow is hard to follow, even though the module stays single-purpose.
 - A new abstraction is shallow ceremony rather than a useful boundary.
 - Naming or grouping makes the intended code path hard to discover.
 - A module lacks a clear public entry point even though callers treat it as a module.

@@ -14,6 +14,7 @@ Reuse is not automatic. Reuse should prevent drift without weakening boundaries,
 - Did the change bypass an existing abstraction because that abstraction is wrong, or because it was inconvenient?
 - Should the existing shared component/module be improved instead of creating a parallel path?
 - Are there now two places that must be updated together?
+- Is the same fixture, service stub, or test environment hand-rolled across multiple suites instead of built from a shared helper?
 - Does shared code cross a boundary it should not cross?
 - Does a refactor leave old and new patterns side by side without a cleanup path?
 - Can callers be migrated to a cleaner internal interface instead of preserving both paths?
@@ -23,6 +24,7 @@ Reuse is not automatic. Reuse should prevent drift without weakening boundaries,
 - Reviewers should actively look for reuse opportunities. Do not wait for obvious copy-paste.
 - Shared UI components should reduce visual and behavior drift while preserving Isagi's design language.
 - Shared runtime helpers should clarify lifecycle and failure semantics, not hide important differences.
+- Test support code drifts too. Duplicated service stubs, fixtures, and environment setup across suites should usually be consolidated into shared builders, so an interface change updates one place instead of many.
 - Pre-MVP refactors should prefer clean internal interfaces and migrated callers over compatibility shims.
 - Similarity alone is not enough. Reuse must still preserve local reasoning and package boundaries.
 
@@ -42,6 +44,7 @@ Reuse is not automatic. Reuse should prevent drift without weakening boundaries,
 - A refactor leaves old and new patterns side by side without a cleanup path.
 - Shared code reduces drift but makes local reasoning noticeably harder.
 - Naming differs across similar concepts in a way likely to confuse future changes.
+- The same test fixture or service stub is hand-rolled across many suites, so an interface change must be repeated in many places.
 
 ### Nit
 
