@@ -1,9 +1,9 @@
 ---
 title: Code review surface slice
 status: todo
-milestone: worktree-continuity
+milestone: plan-and-code-review
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-21
 depends_on: [worktree-continuity-surfaces]
 ---
 

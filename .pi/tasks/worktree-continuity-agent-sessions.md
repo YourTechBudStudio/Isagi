@@ -1,7 +1,7 @@
 ---
 title: First-class agent sessions slice
 status: done
-milestone: worktree-continuity
+milestone: worktree-continuity-base
 created: 2026-05-29
 updated: 2026-06-12
 depends_on: [worktree-continuity-project-worktree-navigation]

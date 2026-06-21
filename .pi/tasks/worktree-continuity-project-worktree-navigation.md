@@ -1,7 +1,7 @@
 ---
 title: Project and worktree navigation slice
 status: completed
-milestone: worktree-continuity
+milestone: worktree-continuity-base
 created: 2026-05-29
 updated: 2026-06-07
 depends_on: [worktree-continuity-app-spine]

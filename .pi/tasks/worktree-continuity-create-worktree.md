@@ -1,7 +1,7 @@
 ---
 title: Create new worktree slice
-status: todo
-milestone: worktree-continuity
+status: done
+milestone: worktree-continuity-base
 created: 2026-05-29
 updated: 2026-05-29
 depends_on: [worktree-continuity-project-worktree-navigation]

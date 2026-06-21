@@ -1,9 +1,9 @@
 ---
 title: Surface split / drag / resize layout
-status: todo
-milestone: worktree-continuity
+status: done
+milestone: worktree-continuity-base
 created: 2026-06-02
-updated: 2026-06-09
+updated: 2026-06-21
 depends_on: [worktree-continuity-agent-sessions, worktree-continuity-surfaces]
 ---
 
@@ -37,6 +37,33 @@ Done when, inside a split-PTY surface, the user can:
   **persists per worktree environment** and restores on return. Default when none
   saved = single leaf for the first pane or balanced auto-distribution when new
   split panes are added.
+
+# Completion notes
+
+Shipped one shared split-PTY layout mechanism for both agent and terminal surfaces:
+
+- Split a pane right or down (palette + per-pane commands); the runtime inserts
+  into the layout tree, merging same-axis siblings for a Ghostty-style arrangement.
+- Resize column widths and stacked-pane heights via custom pointer-drag gutters;
+  `setSplitWeights` persists normalized weights and flips the split to `manual`.
+- New panes auto-distribute — same-axis splits equalize every boundary on add,
+  and pruning re-normalizes on delete.
+- Active pane persists on pane focus (worktree environment focus carries both
+  `activeSurfaceId` and `activePaneId`) and restores on return.
+- Layout tree, child ordering, and gutter weights persist per surface as
+  schema-validated `layoutJson` and restore on return. Default is a single leaf
+  for the first pane, with balanced distribution as panes are added.
+
+Deliberate scope cuts for this slice:
+
+- **Collapse is dropped.** No collapse API, geometry, or UI ships. The `collapsed`
+  flag stays on the leaf schema and is persisted (always `false`), so the stored
+  structure remains collapse-ready for a future slice with no migration — but the
+  collapse parts of the done condition are intentionally not delivered here.
+- **Split directions are right/down only** by decision; the contract still models
+  `left`/`up` for a later slice.
+- **Resize/drag is a custom pointer implementation**, not `react-resizable-panels`
+  or `@dnd-kit` — chosen over a third-party dependency.
 
 # Notes
 
