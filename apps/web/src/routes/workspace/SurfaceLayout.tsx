@@ -174,7 +174,10 @@ function renderLayoutNode({
   }
 
   return (
-    <div className={`flex h-full min-h-0 min-w-0 ${node.axis === 'row' ? 'flex-row' : 'flex-col'}`}>
+    <div
+      className={`flex h-full min-h-0 min-w-0 ${node.axis === 'row' ? 'flex-row' : 'flex-col'}`}
+      style={{ flex: '1 1 0%' }}
+    >
       {node.children.map((child, index) => (
         <FragmentWithDivider
           key={child.nodeId}
