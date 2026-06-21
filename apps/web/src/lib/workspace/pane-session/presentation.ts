@@ -10,25 +10,27 @@ import { isPtyWebSocketErrorCode, type PaneView, type PtyPaneSession } from './v
 export type ExitInfo = { readonly exitCode: number | null; readonly signal: string | null };
 export const NO_EXIT: ExitInfo = { exitCode: null, signal: null };
 
-/** Attention dot semantics for each non-live pane view; live panes keep the pane's own attention. */
+/**
+ * Attention dot for a pane. The runtime is the single source of truth for session
+ * attention (the `fallback`), so the pane dot and the rail dot — which aggregates
+ * the same runtime sources — can never disagree on a session's state. Only the two
+ * connection-level conditions the runtime's DB projection cannot see are overlaid.
+ */
 export function paneViewAttention(
   view: PaneView,
   fallback: AttentionState,
   session: PtyPaneSession | null,
 ): AttentionState {
   switch (view.kind) {
-    case 'attachable':
-      return view.resumeFailed ? 'error' : 'waiting';
-    case 'needs_fresh':
-      return 'waiting';
-    case 'moved':
-      // A moved agent session is waiting to be re-homed (it has continuity worth
-      // resuming). A moved terminal carries no resumable work, so it stays idle
-      // rather than nagging for attention it doesn't need.
-      return session?.kind === 'terminal_session' ? 'idle' : 'waiting';
     case 'unsupported':
+      // The harness has no runtime adapter — a connection-level fact.
       return 'error';
+    case 'moved':
+      // The attachment was taken over by another pane. A moved agent is worth
+      // re-homing (waiting); a moved terminal carries no resumable work (idle).
+      return session?.kind === 'terminal_session' ? 'idle' : 'waiting';
     default:
+      // attachable / needs_fresh / live / empty all trust the runtime source.
       return fallback;
   }
 }

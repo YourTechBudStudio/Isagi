@@ -16,6 +16,7 @@ import {
 } from '../persistence/schema.js';
 import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import { deriveAgentSessionState } from '../surfaces/session-status.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './artifacts.js';
 import { deriveLastKnownHarnessAttention } from './harness-observation/attention.js';
@@ -415,11 +416,30 @@ function deriveAgentSessionAttention(
   session: AgentSessionRow,
   projection: HarnessObservationProjection | undefined,
 ): AttentionState {
-  if (session.harnessMetadataStatus === 'missing' || session.harnessMetadataStatus === 'invalid') {
-    return 'error';
+  // Attention is a function of the single derived session state shared with the
+  // surface projection (`deriveAgentSessionState`), so the rail dot and the pane
+  // dot — which read the same runtime sources — can never disagree. Only a
+  // genuinely running session reflects live harness activity; every other state
+  // is calm (resumable / cleanly stopped) or a genuine error. A stale "waiting"
+  // never survives a dead process: a stopped session is idle, and its pane shows
+  // a resume prompt rather than nagging from the rail.
+  const state = deriveAgentSessionState(session);
+  switch (state.status) {
+    case 'running':
+      return deriveObservedHarnessAttention(session, projection);
+    case 'starting':
+      // Spinning up, or resumable with no live process yet — calm until it runs.
+      return 'idle';
+    case 'exited':
+      // Cleanly stopped and resumable; the pane's resume prompt carries the action.
+      return 'idle';
+    case 'killed':
+      return killedAgentAttention(session.activePtyProcess);
+    case 'failed':
+      // Metadata missing/invalid, resume failed, launch failed, process missing or
+      // attach failed — a genuine failure the user must recover from.
+      return 'error';
   }
-  const observed = deriveObservedHarnessAttention(session, projection);
-  return applyAgentProcessOverlay(session, observed);
 }
 
 function deriveObservedHarnessAttention(
@@ -432,44 +452,8 @@ function deriveObservedHarnessAttention(
   return deriveLastKnownHarnessAttention(session.harness, records);
 }
 
-function applyAgentProcessOverlay(
-  session: AgentSessionRow,
-  observed: AttentionState,
-): AttentionState {
-  if (observed === 'error') return 'error';
-  const process = session.activePtyProcess;
-  if (!session.activePtyProcessId) return overlayMissingOrDeadProcess(null, observed);
-  if (!process) return overlayMissingOrDeadProcess('missing', observed);
-  switch (process.status) {
-    case 'starting':
-    case 'running':
-      return observed;
-    case 'exited':
-      return overlayMissingOrDeadProcess('exited', observed);
-    case 'killed':
-      return overlayKilledProcess(process.statusReason, observed);
-    case 'failed':
-      return overlayMissingOrDeadProcess('failed', observed);
-  }
-}
-
-function overlayMissingOrDeadProcess(
-  reason: 'missing' | 'exited' | 'failed' | null,
-  observed: AttentionState,
-): AttentionState {
-  if (observed === 'working') return 'error';
-  if (observed === 'waiting') return 'waiting';
-  if (reason === 'missing' || reason === 'failed') return 'error';
-  return 'idle';
-}
-
-function overlayKilledProcess(
-  statusReason: string | null,
-  observed: AttentionState,
-): AttentionState {
-  if (observed === 'working') return 'error';
-  if (observed === 'waiting') return 'waiting';
-  return isBenignKillReason(statusReason) ? 'idle' : 'error';
+function killedAgentAttention(process: PtyProcessRow | null): AttentionState {
+  return process && isBenignKillReason(process.statusReason) ? 'idle' : 'error';
 }
 
 // A killed PTY is only "clean" when the stop was deliberate. `user_requested`

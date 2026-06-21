@@ -287,7 +287,7 @@ test('Codex attention derives working and waiting from hook JSONL', async () => 
   }
 });
 
-test('agent attention reports error when last-known harness state was working but the PTY is dead', async () => {
+test('agent attention is idle when cleanly exited and error when the process is missing or failed', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-working-dead-'));
   try {
     const states = await Effect.runPromise(
@@ -313,13 +313,13 @@ test('agent attention reports error when last-known harness state was working bu
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(states, { exited: 'error', missing: 'error', failed: 'error' });
+    assert.deepEqual(states, { exited: 'idle', missing: 'error', failed: 'error' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
-test('agent attention preserves last-known waiting state when the PTY is dead', async () => {
+test('agent attention ignores last-known waiting once the process is gone', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-waiting-dead-'));
   try {
     const states = await Effect.runPromise(
@@ -345,7 +345,7 @@ test('agent attention preserves last-known waiting state when the PTY is dead', 
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.deepEqual(states, { exited: 'waiting', missing: 'waiting', failed: 'waiting' });
+    assert.deepEqual(states, { exited: 'idle', missing: 'error', failed: 'error' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -397,10 +397,11 @@ test('agent attention treats only deliberate kill reasons as idle, all others as
           }),
         );
 
-        // A waiting-for-user signal must survive any kind of kill.
+        // A non-benign kill is an error even when the last-observed harness state
+        // was waiting — a dead process is never "waiting on you".
         appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
         yield* attention.reconcileAgentSession(10);
-        const waitingSurvivesFailureKill = yield* attention.agentSessionAttention(
+        const failureKillStaysError = yield* attention.agentSessionAttention(
           agentSession({
             activePtyProcess: ptyProcess({
               id: 20,
@@ -415,7 +416,7 @@ test('agent attention treats only deliberate kill reasons as idle, all others as
           killedByShutdown,
           killedByFailure,
           killedWithoutReason,
-          waitingSurvivesFailureKill,
+          failureKillStaysError,
         };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -425,7 +426,7 @@ test('agent attention treats only deliberate kill reasons as idle, all others as
       killedByShutdown: 'idle',
       killedByFailure: 'error',
       killedWithoutReason: 'error',
-      waitingSurvivesFailureKill: 'waiting',
+      failureKillStaysError: 'error',
     });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -487,12 +488,12 @@ test('startup attention reads pre-existing harness logs before applying process 
       Effect.gen(function* () {
         const attention = yield* AgentSessionAttentionProjection;
         return yield* attention.agentSessionAttention(
-          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
+          agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'running' }) }),
         );
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(state, 'error');
+    assert.equal(state, 'working');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
