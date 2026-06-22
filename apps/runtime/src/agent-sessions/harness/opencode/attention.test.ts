@@ -38,6 +38,8 @@ test('OpenCode running attention orders native events when async JSONL appends i
 function record(status: string | { readonly type: string }): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'opencode',
     nativeEvent: 'session.status',
     event: {
@@ -53,6 +55,8 @@ function nestedRecord(
 ): HarnessObservationRecord {
   return {
     recordedAt: '2026-06-18T18:57:59.420Z',
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'opencode',
     nativeEvent: 'session.status',
     event: {

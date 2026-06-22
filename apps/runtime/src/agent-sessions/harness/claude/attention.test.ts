@@ -32,6 +32,8 @@ function record(
 ): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'claude',
     nativeEvent,
     event: {
@@ -45,6 +47,8 @@ function record(
 function notificationRecord(notificationType: string): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'claude',
     nativeEvent: 'Notification',
     event: {
@@ -58,6 +62,8 @@ function notificationRecord(notificationType: string): HarnessObservationRecord 
 function nestedNotificationRecord(notificationType: string): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'claude',
     nativeEvent: 'Notification',
     event: {

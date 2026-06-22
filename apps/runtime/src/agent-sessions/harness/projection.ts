@@ -4,6 +4,8 @@ import type { AgentSessionHarnessJsonlRead } from './ledger.js';
 
 export interface HarnessObservationRecord {
   readonly recordedAt: string;
+  readonly seq: number;
+  readonly ptyProcessId: number | null;
   readonly harness: AgentHarness;
   readonly nativeEvent: string;
   readonly event: unknown;
@@ -23,6 +25,8 @@ export function buildHarnessObservationProjection(
       const existing = recordsByHarnessSessionId.get(record.harnessSessionId) ?? [];
       existing.push({
         recordedAt: record.recordedAt,
+        seq: 0,
+        ptyProcessId: record.ptyProcessId,
         harness: record.harness,
         nativeEvent: record.nativeEvent,
         event: record.event,
@@ -32,6 +36,9 @@ export function buildHarnessObservationProjection(
   }
   for (const records of recordsByHarnessSessionId.values()) {
     records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    records.forEach((record, index) => {
+      records[index] = { ...record, seq: index };
+    });
   }
   const sortedEntries = [...recordsByHarnessSessionId.entries()].sort(([a], [b]) =>
     a.localeCompare(b),

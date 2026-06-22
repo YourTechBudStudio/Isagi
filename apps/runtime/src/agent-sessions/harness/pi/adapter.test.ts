@@ -41,7 +41,9 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
 
     const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
     assert.match(extensionSource, /agent_start/);
+    assert.match(extensionSource, /message_end/);
     assert.match(extensionSource, /agent_end/);
+    assert.match(extensionSource, /toolResult/);
     assert.doesNotMatch(extensionSource, /session_start/);
     assert.doesNotMatch(extensionSource, /turn_start/);
     assert.doesNotMatch(extensionSource, /turn_end/);

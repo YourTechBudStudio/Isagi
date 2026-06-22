@@ -24,6 +24,8 @@ test('Codex running attention ignores non-Codex and unsupported records', () => 
 function record(nativeEvent: string): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'codex',
     nativeEvent,
     event: {

@@ -16,7 +16,9 @@ import {
   buildHarnessObservationProjection,
   emptyHarnessObservationProjection,
   type HarnessObservationProjection,
+  type HarnessObservationRecord,
 } from './projection.js';
+import { deriveHarnessTurnEdges, type HarnessTurnEdge } from './turns.js';
 
 export interface HarnessLedgerObserverService {
   readonly reconcileAgentSession: (agentSessionId: number) => Effect.Effect<void>;
@@ -39,12 +41,18 @@ export const HarnessLedgerObserverLive = Layer.scoped(
     const root = join(dataDirectory.paths.sessionsPath, 'agent-sessions');
     const projections = new Map<number, HarnessObservationProjection>();
     const artifactFingerprints = new Map<number, string>();
+    const turnStatuses = new Map<number, AgentSessionTurnStatuses>();
+    const deadPtys = new Set<number>();
     const watchers = new Map<number | 'root', FSWatcher>();
     const timers = new Map<number | 'root', NodeJS.Timeout>();
+    const reconcileSemaphore = yield* Effect.makeSemaphore(1);
 
     mkdirSync(root, { recursive: true });
 
     const reconcileAgentSession = (agentSessionId: number) =>
+      reconcileSemaphore.withPermits(1)(reconcileAgentSessionUnlocked(agentSessionId));
+
+    const reconcileAgentSessionUnlocked = (agentSessionId: number) =>
       Effect.gen(function* () {
         // `projections` and `artifactFingerprints` are always written together
         // below, so a cache miss implies `previous === null`. That makes the
@@ -74,6 +82,13 @@ export const HarnessLedgerObserverLive = Layer.scoped(
         ]);
         projections.set(agentSessionId, projection);
         artifactFingerprints.set(agentSessionId, fingerprint);
+        yield* reconcileTurnEdges({
+          agentSessionId,
+          projection,
+          turnStatuses,
+          deadPtys,
+          eventBus,
+        });
         if (previous !== null && previous !== fingerprint) {
           yield* eventBus.publish({ type: 'agent_session_changed', agentSessionId });
         }
@@ -160,6 +175,26 @@ export const HarnessLedgerObserverLive = Layer.scoped(
 
     yield* reconcileKnownAgentSessions;
     ensureRootWatcher();
+    const ptyDeathSubscription = yield* eventBus.subscribe({
+      types: ['pty_process_exited', 'pty_process_failed', 'pty_process_killed'],
+    });
+    yield* Effect.addFinalizer(() => ptyDeathSubscription.unsubscribe);
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.gen(function* () {
+          const event = yield* ptyDeathSubscription.take;
+          if (
+            event.type !== 'pty_process_exited' &&
+            event.type !== 'pty_process_failed' &&
+            event.type !== 'pty_process_killed'
+          ) {
+            return;
+          }
+          deadPtys.add(event.ptyProcessId);
+          scheduleRootScan();
+        }),
+      ),
+    );
 
     const service: HarnessLedgerObserverService = {
       reconcileAgentSession,
@@ -208,6 +243,152 @@ function readProjection(artifacts: AgentSessionArtifactsService, agentSessionId:
     const jsonlReads = yield* artifacts.readJsonlForAgentSession(agentSessionId);
     return buildHarnessObservationProjection(jsonlReads);
   });
+}
+
+type TurnStatus =
+  | {
+      readonly status: 'in_flight';
+      readonly recordedAt: string;
+      readonly ptyProcessId: number | null;
+    }
+  | { readonly status: 'terminated' };
+
+type HarnessSessionTurnStatuses = Map<number, TurnStatus>;
+type AgentSessionTurnStatuses = Map<string, HarnessSessionTurnStatuses>;
+
+function reconcileTurnEdges(input: {
+  readonly agentSessionId: number;
+  readonly projection: HarnessObservationProjection;
+  readonly turnStatuses: Map<number, AgentSessionTurnStatuses>;
+  readonly deadPtys: ReadonlySet<number>;
+  readonly eventBus: import('../../runtime-events/index.js').InternalRuntimeEventBusService;
+}) {
+  return Effect.gen(function* () {
+    const existing = input.turnStatuses.get(input.agentSessionId);
+    const shouldEmit = Boolean(existing);
+    const sessionStatuses = existing ?? new Map<string, HarnessSessionTurnStatuses>();
+    const streams = sortedHarnessStreams(input.projection);
+
+    for (const [harnessSessionId, records] of streams) {
+      const harness = records[0]?.harness;
+      if (!harness) continue;
+      let streamStatuses = sessionStatuses.get(harnessSessionId);
+      if (!streamStatuses) {
+        streamStatuses = new Map<number, TurnStatus>();
+        sessionStatuses.set(harnessSessionId, streamStatuses);
+      }
+      const edges = deriveHarnessTurnEdges(harness, records);
+      yield* reconcileHarnessSessionTurnEdges({
+        agentSessionId: input.agentSessionId,
+        harnessSessionId,
+        records,
+        edges,
+        streamStatuses,
+        shouldEmit,
+        deadPtys: input.deadPtys,
+        eventBus: input.eventBus,
+      });
+    }
+
+    input.turnStatuses.set(input.agentSessionId, sessionStatuses);
+  });
+}
+
+function reconcileHarnessSessionTurnEdges(input: {
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly records: readonly HarnessObservationRecord[];
+  readonly edges: readonly HarnessTurnEdge[];
+  readonly streamStatuses: HarnessSessionTurnStatuses;
+  readonly shouldEmit: boolean;
+  readonly deadPtys: ReadonlySet<number>;
+  readonly eventBus: import('../../runtime-events/index.js').InternalRuntimeEventBusService;
+}) {
+  return Effect.gen(function* () {
+    let activeStartedSeq: number | null = null;
+    for (const edge of input.edges) {
+      if (edge.type === 'turn_started') {
+        activeStartedSeq = edge.seq;
+        if (!input.streamStatuses.has(edge.seq)) {
+          const startRecord = input.records.find((record) => record.seq === edge.seq);
+          input.streamStatuses.set(edge.seq, {
+            status: 'in_flight',
+            recordedAt: edge.recordedAt,
+            ptyProcessId: startRecord?.ptyProcessId ?? null,
+          });
+          if (input.shouldEmit) {
+            yield* input.eventBus.publish({
+              type: 'turn_started',
+              agentSessionId: input.agentSessionId,
+              harnessSessionId: input.harnessSessionId,
+              seq: edge.seq,
+              recordedAt: edge.recordedAt,
+            });
+          }
+        }
+        continue;
+      }
+
+      if (activeStartedSeq === null) continue;
+      const current = input.streamStatuses.get(activeStartedSeq);
+      if (current?.status !== 'in_flight') {
+        activeStartedSeq = null;
+        continue;
+      }
+      input.streamStatuses.set(activeStartedSeq, { status: 'terminated' });
+      activeStartedSeq = null;
+      if (!input.shouldEmit) continue;
+      if (edge.type === 'turn_ended') {
+        yield* input.eventBus.publish({
+          type: 'turn_ended',
+          agentSessionId: input.agentSessionId,
+          harnessSessionId: input.harnessSessionId,
+          seq: edge.seq,
+          recordedAt: edge.recordedAt,
+        });
+      } else {
+        yield* input.eventBus.publish({
+          type: 'turn_failed',
+          agentSessionId: input.agentSessionId,
+          harnessSessionId: input.harnessSessionId,
+          seq: edge.seq,
+          recordedAt: edge.recordedAt,
+          reason: edge.reason,
+        });
+      }
+    }
+
+    for (const [startedSeq, status] of input.streamStatuses.entries()) {
+      if (
+        status.status !== 'in_flight' ||
+        status.ptyProcessId === null ||
+        !input.deadPtys.has(status.ptyProcessId)
+      ) {
+        continue;
+      }
+      input.streamStatuses.set(startedSeq, { status: 'terminated' });
+      if (!input.shouldEmit) continue;
+      yield* input.eventBus.publish({
+        type: 'turn_failed',
+        agentSessionId: input.agentSessionId,
+        harnessSessionId: input.harnessSessionId,
+        seq: null,
+        recordedAt: status.recordedAt,
+        reason: 'session_died',
+      });
+    }
+  });
+}
+
+function sortedHarnessStreams(projection: HarnessObservationProjection) {
+  return [...projection.recordsByHarnessSessionId.entries()].sort(
+    ([, leftRecords], [, rightRecords]) =>
+      earliestRecordedAt(leftRecords).localeCompare(earliestRecordedAt(rightRecords)),
+  );
+}
+
+function earliestRecordedAt(records: readonly HarnessObservationRecord[]) {
+  return records[0]?.recordedAt ?? '';
 }
 
 function metadataProjectionFingerprint(metadata: AgentSessionHarnessMetadataRead) {

@@ -28,6 +28,8 @@ function record(
 ): HarnessObservationRecord {
   return {
     recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
     harness: 'pi',
     nativeEvent,
     event: {
