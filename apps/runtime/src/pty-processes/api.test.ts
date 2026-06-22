@@ -11,8 +11,8 @@ import {
   type PtyStreamOutputMessageSet,
 } from '@isagi/contracts';
 
+import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
-import { HarnessAdapterError } from '../harness-adapters/index.js';
 import {
   SessionLifecycle,
   SessionLifecycleLive,

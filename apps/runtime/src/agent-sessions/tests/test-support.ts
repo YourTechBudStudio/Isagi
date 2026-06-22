@@ -9,22 +9,24 @@ import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyForegroundStateLive } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../../surfaces/types.js';
-import { AgentSessionArtifactsLive } from '../artifacts.js';
 import { AgentSessionAttentionProjectionLive } from '../attention-projection.service.js';
+import { AgentSessionArtifactsLive } from '../harness/ledger.js';
+import { HarnessLedgerObserverLive } from '../harness/observer.service.js';
 
 export function appendRecord(
   path: string,
   nativeEvent: 'agent_start' | 'agent_end',
   pending: boolean | null,
-  options: { readonly harnessSessionId?: string } = {},
+  options: { readonly agentSessionId?: number; readonly harnessSessionId?: string } = {},
 ) {
+  const agentSessionId = options.agentSessionId ?? 10;
   const harnessSessionId = options.harnessSessionId ?? 'pi-session-1';
   appendFileSync(
     path,
     `${JSON.stringify({
       schemaVersion: 1,
       recordedAt: new Date().toISOString(),
-      agentSessionId: 10,
+      agentSessionId,
       harnessSessionId,
       ptyProcessId: 20,
       harness: 'pi',
@@ -257,14 +259,19 @@ export function testLayer(dataRoot: string) {
   const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directoryLayer));
   const internalBus = InternalRuntimeEventBusLive;
   const foreground = PtyForegroundStateLive;
-  const attention = AgentSessionAttentionProjectionLive.pipe(
+  const observer = HarnessLedgerObserverLive.pipe(
     Layer.provide(directoryLayer),
     Layer.provide(database),
     Layer.provide(artifacts),
-    Layer.provide(foreground),
     Layer.provide(internalBus),
   );
-  return Layer.mergeAll(attention, artifacts, foreground, internalBus, database);
+  const attention = AgentSessionAttentionProjectionLive.pipe(
+    Layer.provide(database),
+    Layer.provide(artifacts),
+    Layer.provide(foreground),
+    Layer.provide(observer),
+  );
+  return Layer.mergeAll(attention, observer, artifacts, foreground, internalBus, database);
 }
 
 function dataDirectoryLayer(dataRoot: string) {

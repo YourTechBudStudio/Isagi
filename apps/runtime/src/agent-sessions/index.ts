@@ -5,7 +5,7 @@ export {
   AgentSessionAttentionProjectionLive,
 } from './attention-projection.service.js';
 export type { AgentSessionAttentionProjectionService } from './attention-projection.service.js';
-export { AgentSessionArtifacts, AgentSessionArtifactsLive } from './artifacts.js';
+export { AgentSessionArtifacts, AgentSessionArtifactsLive } from './harness/ledger.js';
 export type {
   AgentSessionArtifactPaths,
   AgentSessionArtifactsService,
@@ -13,7 +13,20 @@ export type {
   AgentSessionHarnessJsonlRecord,
   AgentSessionHarnessMetadata,
   AgentSessionHarnessMetadataRead,
-} from './artifacts.js';
+} from './harness/ledger.js';
+export {
+  displayNameForHarness,
+  HarnessAdapterRegistry,
+  HarnessAdapterRegistryLive,
+  HarnessLedgerObserver,
+  HarnessLedgerObserverLive,
+} from './harness/index.js';
+export type {
+  HarnessAdapterRegistryService,
+  HarnessLedgerObserverService,
+} from './harness/index.js';
+export { HarnessAdapterError } from './harness/types.js';
+export type { HarnessAdapter, HarnessLaunchContext } from './harness/types.js';
 export {
   AgentSessionError,
   AgentSessionService,

@@ -1,6 +1,10 @@
 import { Effect, Layer } from 'effect';
 
 import {
+  HarnessAdapterRegistryLive,
+  HarnessLedgerObserverLive,
+} from './agent-sessions/harness/index.js';
+import {
   AgentSessionAttentionProjectionLive,
   AgentSessionArtifactsLive,
   AgentSessionRepositoryLive,
@@ -15,7 +19,6 @@ import {
   type CommandServiceShape,
 } from './commands/index.js';
 import { GitLive } from './git/index.js';
-import { HarnessAdapterRegistryLive } from './harness-adapters/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
 import {
@@ -62,10 +65,15 @@ const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLiv
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
 const PtyForegroundStateLayer = PtyForegroundStateLive;
+const HarnessLedgerObserverLayer = HarnessLedgerObserverLive.pipe(
+  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(DatabaseLive),
+);
 const AgentSessionAttentionProjectionLayer = AgentSessionAttentionProjectionLive.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(HarnessLedgerObserverLayer),
   Layer.provide(PtyForegroundStateLayer),
-  Layer.provide(DataDirectoryLive),
   Layer.provide(DatabaseLive),
 );
 const SurfaceRepositoryLayer = SurfaceRepositoryLive.pipe(

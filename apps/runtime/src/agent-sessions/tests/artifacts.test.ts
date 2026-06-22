@@ -15,7 +15,7 @@ import { Effect, Layer } from 'effect';
 
 import { DataDirectory } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { AgentSessionArtifacts, AgentSessionArtifactsLive } from '../artifacts.js';
+import { AgentSessionArtifacts, AgentSessionArtifactsLive } from '../harness/ledger.js';
 
 test('agent session artifacts initialize and read harness metadata', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifacts-'));

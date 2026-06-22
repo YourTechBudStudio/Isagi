@@ -6,6 +6,7 @@ import {
   AgentSessionArtifacts,
   AgentSessionArtifactsLive,
   AgentSessionService,
+  HarnessLedgerObserverLive,
   type AgentSessionServiceShape,
 } from '../../agent-sessions/index.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
@@ -234,12 +235,17 @@ export function testLayer(
   const internalRuntimeEventBus = InternalRuntimeEventBusLive;
   const agentSessionArtifacts = AgentSessionArtifactsLive.pipe(Layer.provide(dataDirectoryLayer));
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
-  const attentionProjection = AgentSessionAttentionProjectionLive.pipe(
+  const harnessLedgerObserver = HarnessLedgerObserverLive.pipe(
     Layer.provide(dataDirectoryLayer),
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
-    Layer.provide(PtyForegroundStateLive),
     Layer.provide(internalRuntimeEventBus),
+  );
+  const attentionProjection = AgentSessionAttentionProjectionLive.pipe(
+    Layer.provide(database),
+    Layer.provide(agentSessionArtifacts),
+    Layer.provide(PtyForegroundStateLive),
+    Layer.provide(harnessLedgerObserver),
   );
   const workspaceRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const agentService = Layer.succeed(

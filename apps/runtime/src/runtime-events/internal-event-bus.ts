@@ -8,6 +8,28 @@ export type InternalRuntimeEvent =
       readonly agentSessionId: number;
     }
   | {
+      readonly type: 'turn_started';
+      readonly agentSessionId: number;
+      readonly harnessSessionId: string;
+      readonly seq: number;
+      readonly recordedAt: string;
+    }
+  | {
+      readonly type: 'turn_ended';
+      readonly agentSessionId: number;
+      readonly harnessSessionId: string;
+      readonly seq: number;
+      readonly recordedAt: string;
+    }
+  | {
+      readonly type: 'turn_failed';
+      readonly agentSessionId: number;
+      readonly harnessSessionId: string;
+      readonly seq: number | null;
+      readonly recordedAt: string;
+      readonly reason: 'session_died' | 'harness_error';
+    }
+  | {
       readonly type: 'worktree_activation_change';
       readonly previousWorktreeId: number | null;
       readonly nextWorktreeId: number | null;

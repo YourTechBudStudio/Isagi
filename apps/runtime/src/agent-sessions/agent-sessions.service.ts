@@ -2,13 +2,14 @@ import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { HarnessAdapterError, HarnessAdapterRegistry } from '../harness-adapters/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import type { AgentSessionRow } from '../surfaces/types.js';
 import { AgentSessionRepository } from './agent-sessions.repository.js';
+import { HarnessAdapterRegistry } from './harness/index.js';
+import { HarnessAdapterError } from './harness/types.js';
 
 export interface AgentSessionService {
   readonly startFresh: (input: {
@@ -245,7 +246,7 @@ function validateHarnessMetadata(session: AgentSessionRow) {
 }
 
 function agentLaunchEnvelope(
-  harnesses: import('../harness-adapters/index.js').HarnessAdapterRegistryService,
+  harnesses: import('./harness/index.js').HarnessAdapterRegistryService,
   session: AgentSessionRow,
 ) {
   return harnesses.buildLaunch({

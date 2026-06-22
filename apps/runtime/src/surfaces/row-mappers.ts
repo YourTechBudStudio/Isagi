@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import {
   type AgentSessionArtifactsService,
   type AgentSessionHarnessMetadataRead,
-} from '../agent-sessions/artifacts.js';
+} from '../agent-sessions/harness/ledger.js';
 import {
   agentSessions,
   ptyProcesses,

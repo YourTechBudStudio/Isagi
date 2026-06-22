@@ -7,8 +7,8 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { PtyForegroundState } from '../../pty-processes/index.js';
-import { AgentSessionArtifacts } from '../artifacts.js';
 import { AgentSessionAttentionProjection } from '../attention-projection.service.js';
+import { AgentSessionArtifacts } from '../harness/ledger.js';
 import {
   agentSession,
   appendRecord,

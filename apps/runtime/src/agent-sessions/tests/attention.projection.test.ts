@@ -7,8 +7,8 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
-import { AgentSessionArtifacts } from '../artifacts.js';
 import { AgentSessionAttentionProjection } from '../attention-projection.service.js';
+import { AgentSessionArtifacts } from '../harness/ledger.js';
 import {
   agentSession,
   appendRecord,
@@ -73,6 +73,38 @@ test('attention projection publishes an internal agent change when artifact proj
     );
 
     assert.deepEqual(event, { type: 'agent_session_changed', agentSessionId: 10 });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('attention projection read-path fill is publish-free', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-first-fill-'));
+  try {
+    const event = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const bus = yield* InternalRuntimeEventBus;
+        const subscription = yield* bus.subscribe({ types: ['agent_session_changed'] });
+
+        yield* attention.agentSessionAttention(agentSession({ id: 10 }));
+
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 11,
+          ptyProcessId: 20,
+        });
+        const jsonlPath = harnessLogPath(paths.directory);
+        yield* attention.reconcileAgentSession(11);
+        appendRecord(jsonlPath, 'agent_start', null, { agentSessionId: 11 });
+        yield* attention.reconcileAgentSession(11);
+        const changedEvent = yield* subscription.take;
+        yield* subscription.unsubscribe;
+        return changedEvent;
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(event, { type: 'agent_session_changed', agentSessionId: 11 });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

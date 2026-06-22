@@ -6,7 +6,7 @@ import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contract
 import {
   AgentSessionArtifacts,
   type AgentSessionArtifactsService,
-} from '../agent-sessions/artifacts.js';
+} from '../agent-sessions/harness/ledger.js';
 import {
   DatabaseError,
   RuntimeDatabase,

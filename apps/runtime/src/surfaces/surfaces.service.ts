@@ -18,8 +18,9 @@ import type {
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 
+import { displayNameForHarness } from '../agent-sessions/harness/display.js';
+import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
-import { displayNameForHarness, HarnessAdapterError } from '../harness-adapters/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';

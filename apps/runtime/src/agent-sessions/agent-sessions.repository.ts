@@ -10,7 +10,7 @@ import {
   AgentSessionArtifacts,
   type AgentSessionArtifactsService,
   type AgentSessionHarnessMetadataRead,
-} from './artifacts.js';
+} from './harness/ledger.js';
 
 export interface AgentSessionRepositoryService {
   readonly create: (input: {

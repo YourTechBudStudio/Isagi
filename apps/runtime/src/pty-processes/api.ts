@@ -10,8 +10,8 @@ import {
   type PtyWebSocketOutputMessage,
 } from '@isagi/contracts';
 
+import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
-import { HarnessAdapterError } from '../harness-adapters/index.js';
 import { errorMessage } from '../lib/api/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
