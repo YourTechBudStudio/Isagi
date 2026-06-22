@@ -124,13 +124,21 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /session\.status/);
+    assert.match(opencodeSource, /session\.idle/);
+    assert.match(opencodeSource, /session\.error/);
+    assert.match(opencodeSource, /message\.updated/);
+    assert.match(opencodeSource, /message\.part\.updated/);
     assert.match(opencodeSource, /appendHarnessEvent/);
     assert.match(opencodeSource, /harness: "opencode"/);
     assert.match(opencodeSource, /chat\.params/);
+    assert.match(opencodeSource, /chat\.message/);
+    assert.match(opencodeSource, /output: safeJsonValue/);
+    assert.match(opencodeSource, /completedAssistantMessageIds/);
+    assert.match(opencodeSource, /completedTextPartIds/);
     assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(opencodeSource, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_JSONL_PATH/);
-    assert.doesNotMatch(opencodeSource, /session\.idle/);
+    assert.doesNotMatch(opencodeSource, /tool\.execute/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_EVENT_URL/);
 
     const claudeSettings = JSON.parse(readFileSync(artifacts.claudeSettingsPath, 'utf8'));
@@ -143,6 +151,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.equal(claudeSettings.hooks.Notification[0].matcher, 'idle_prompt');
     assert.match(claudeSettings.hooks.Notification[0].hooks[0].command, /isagi-claude-hook\.mjs/);
     assert.match(claudeSettings.hooks.Stop[0].hooks[0].command, /isagi-claude-hook\.mjs/);
+    assert.match(claudeSettings.hooks.StopFailure[0].hooks[0].command, /isagi-claude-hook\.mjs/);
     assert.equal(claudeSettings.hooks.SessionStart, undefined);
     assert.equal(claudeSettings.hooks.SessionEnd, undefined);
 

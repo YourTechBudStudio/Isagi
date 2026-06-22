@@ -16,6 +16,7 @@ export function claudeSettings(hookPath: string) {
       UserPromptSubmit: [hookEntry],
       Notification: [{ matcher: 'idle_prompt', hooks: [hook] }],
       Stop: [hookEntry],
+      StopFailure: [hookEntry],
     },
   };
 }

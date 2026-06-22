@@ -4,13 +4,13 @@ import test from 'node:test';
 import type { HarnessObservationRecord } from '../projection.js';
 import { deriveOpenCodeRunningAttention } from './attention.js';
 
-test('OpenCode running attention uses session.status only', () => {
+test('OpenCode running attention uses session.status and session.error', () => {
   assert.equal(deriveOpenCodeRunningAttention([]), 'idle');
   assert.equal(deriveOpenCodeRunningAttention([record('busy')]), 'working');
   assert.equal(deriveOpenCodeRunningAttention([record({ type: 'busy' })]), 'working');
   assert.equal(deriveOpenCodeRunningAttention([record('idle')]), 'waiting');
   assert.equal(deriveOpenCodeRunningAttention([nestedRecord({ type: 'idle' })]), 'waiting');
-  assert.equal(deriveOpenCodeRunningAttention([record('error')]), 'error');
+  assert.equal(deriveOpenCodeRunningAttention([errorRecord()]), 'error');
   assert.equal(deriveOpenCodeRunningAttention([record('unknown')]), 'idle');
 });
 
@@ -18,6 +18,7 @@ test('OpenCode running attention ignores non-status and non-OpenCode records', (
   assert.equal(
     deriveOpenCodeRunningAttention([
       { ...record('idle'), nativeEvent: 'session.idle' },
+      { ...record('idle'), nativeEvent: 'message.updated' },
       { ...record('idle'), harness: 'pi' },
       record('busy'),
     ]),
@@ -45,6 +46,26 @@ function record(status: string | { readonly type: string }): HarnessObservationR
     event: {
       nativeEvent: 'session.status',
       status,
+    },
+  };
+}
+
+function errorRecord(): HarnessObservationRecord {
+  return {
+    recordedAt: new Date().toISOString(),
+    seq: 0,
+    ptyProcessId: 20,
+    harness: 'opencode',
+    nativeEvent: 'session.error',
+    event: {
+      nativeEvent: 'session.error',
+      event: {
+        type: 'session.error',
+        properties: {
+          sessionID: 'ses_1',
+          error: { name: 'UnknownError', data: { message: 'failed' } },
+        },
+      },
     },
   };
 }

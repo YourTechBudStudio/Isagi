@@ -1,6 +1,7 @@
 import type { AgentHarness } from '@isagi/contracts';
 
 import type { AgentSessionHarnessJsonlRead } from './ledger.js';
+import { compareOpenCodeRecords } from './opencode/order.js';
 
 export interface HarnessObservationRecord {
   readonly recordedAt: string;
@@ -35,7 +36,7 @@ export function buildHarnessObservationProjection(
     }
   }
   for (const records of recordsByHarnessSessionId.values()) {
-    records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    records.sort(recordComparator(records));
     records.forEach((record, index) => {
       records[index] = { ...record, seq: index };
     });
@@ -61,4 +62,10 @@ export function buildHarnessObservationProjection(
 
 export function emptyHarnessObservationProjection(): HarnessObservationProjection {
   return { fingerprint: '[]', recordsByHarnessSessionId: new Map() };
+}
+
+function recordComparator(records: readonly HarnessObservationRecord[]) {
+  if (records[0]?.harness === 'opencode') return compareOpenCodeRecords;
+  return (left: HarnessObservationRecord, right: HarnessObservationRecord) =>
+    left.recordedAt.localeCompare(right.recordedAt);
 }
