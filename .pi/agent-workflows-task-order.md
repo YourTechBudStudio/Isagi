@@ -7,7 +7,7 @@ mid-run `kill -9`** — do not invest past it until it passes.
 
 ## Order
 
-1. [ ] Harness instrumentation — `agent-workflows-harness-instrumentation` (Pi first)
+1. [x] Harness instrumentation — `agent-workflows-harness-instrumentation` (Pi first)
 2. [ ] Engine spine / restart-survival gate — `agent-workflows-engine-spine`  ← de-risk gate
 3. [ ] Full `ctx` SDK + loading/invocation — `agent-workflows-sdk-and-invocation`
 4. [ ] Reference implementation workflow (first dogfood) — `agent-workflows-reference-workflow`
