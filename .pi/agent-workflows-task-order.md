@@ -10,7 +10,7 @@ proceed on a durable-by-construction basis.
 ## Order
 
 1. [x] Harness instrumentation — `agent-workflows-harness-instrumentation` (Pi first)
-2. [ ] Engine spine / restart-survival gate — `agent-workflows-engine-spine`  ← de-risk gate
+2. [x] Engine spine / restart-survival gate — `agent-workflows-engine-spine` ✓ de-risk gate passed
 3. [ ] Full `ctx` SDK + loading/invocation — `agent-workflows-sdk-and-invocation`
 4. [ ] Reference implementation workflow (first dogfood) — `agent-workflows-reference-workflow`
 5. [ ] Workflow author guide — `agent-workflows-writer-docs` (after 3–4; → later an agent skill; off the critical path)

@@ -1,9 +1,9 @@
 ---
 title: Workflow engine spine — durable state machine (restart-survival gate)
-status: todo
+status: done
 milestone: agent-workflows
 created: 2026-06-21
-updated: 2026-06-21
+updated: 2026-06-23
 depends_on: [agent-workflows-harness-instrumentation]
 ---
 
