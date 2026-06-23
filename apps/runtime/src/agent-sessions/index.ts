@@ -24,6 +24,7 @@ export {
 export type {
   HarnessAdapterRegistryService,
   HarnessLedgerObserverService,
+  ObservedHarnessTurnEdge,
 } from './harness/index.js';
 export { HarnessAdapterError } from './harness/types.js';
 export type { HarnessAdapter, HarnessLaunchContext } from './harness/types.js';

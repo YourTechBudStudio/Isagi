@@ -1,5 +1,7 @@
 import { Context, Effect, Layer } from 'effect';
 
+import type { AgentHarness } from '@isagi/contracts';
+
 import type { ConversationMessage } from '../agent-sessions/harness/types.js';
 import { cont, done, suspend } from './constructors.js';
 import type { WorkflowDefinition } from './types.js';
@@ -37,54 +39,16 @@ export function createWorkflowRegistry(
 
 function builtInWorkflows(): Record<string, WorkflowDefinition> {
   return {
-    'pi-gate': {
-      initialState: { phase: 'spawn' },
-      step: async (ctx, state, event) => {
-        const current = state as {
-          readonly phase: 'spawn' | 'await_turn';
-          readonly agentSessionId?: number | undefined;
-          readonly harnessSessionId?: string | undefined;
-          readonly afterT?: string | undefined;
-        };
-        if (current.phase === 'spawn') {
-          await ctx.setUiFeedback({ phase: 'spawning', message: 'Starting Pi workflow gate.' });
-          const seeded = await ctx.spawnSession({
-            harness: 'pi',
-            prompt: 'Reply with one short sentence confirming the workflow gate is working.',
-          });
-          await ctx.setUiFeedback({ phase: 'waiting', message: 'Waiting for Pi to reply.' });
-          return suspend(
-            {
-              phase: 'await_turn',
-              agentSessionId: seeded.agentSessionId,
-              harnessSessionId: seeded.harnessSessionId,
-              afterT: seeded.seededAt,
-            },
-            {
-              kind: 'turn',
-              agentSessionId: seeded.agentSessionId,
-              harnessSessionId: seeded.harnessSessionId,
-              afterT: seeded.seededAt,
-            },
-          );
-        }
-
-        const payload = event as
-          | { readonly outcome: 'ended'; readonly recordedAt: string }
-          | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string }
-          | undefined;
-        if (payload?.outcome === 'failed') {
-          throw new Error(`Pi workflow gate turn failed: ${payload.reason}`);
-        }
-        if (payload?.outcome !== 'ended' || !current.agentSessionId) {
-          throw new Error('Pi workflow gate resumed without a completed turn payload.');
-        }
-        const history = await ctx.getConversationHistory(current.agentSessionId);
-        const message = latestAssistantText(history) ?? 'Pi completed the workflow gate.';
-        await ctx.setUiFeedback({ phase: 'done', message });
-        return done();
-      },
-    },
+    'pi-gate': agentGateWorkflow({
+      harness: 'pi',
+      label: 'Pi',
+      prompt: 'Reply with one short sentence confirming the workflow gate is working.',
+    }),
+    'codex-gate': agentGateWorkflow({
+      harness: 'codex',
+      label: 'Codex',
+      prompt: 'Reply with one short sentence confirming the workflow gate is working.',
+    }),
     'agentless-cont-done': {
       initialState: { phase: 'a', snapshots: ['a'] },
       step: async (ctx, state) => {
@@ -120,6 +84,67 @@ function builtInWorkflows(): Record<string, WorkflowDefinition> {
       step: async () => {
         throw new Error('Agentless fixture failure.');
       },
+    },
+  };
+}
+
+function agentGateWorkflow(input: {
+  readonly harness: AgentHarness;
+  readonly label: string;
+  readonly prompt: string;
+}): WorkflowDefinition {
+  return {
+    initialState: { phase: 'spawn' },
+    step: async (ctx, state, event) => {
+      const current = state as {
+        readonly phase: 'spawn' | 'await_turn';
+        readonly agentSessionId?: number | undefined;
+        readonly harnessSessionId?: string | undefined;
+        readonly afterT?: string | undefined;
+      };
+      if (current.phase === 'spawn') {
+        await ctx.setUiFeedback({
+          phase: 'spawning',
+          message: `Starting ${input.label} workflow gate.`,
+        });
+        const seeded = await ctx.spawnSession({
+          harness: input.harness,
+          prompt: input.prompt,
+        });
+        await ctx.setUiFeedback({
+          phase: 'waiting',
+          message: `Waiting for ${input.label} to reply.`,
+        });
+        return suspend(
+          {
+            phase: 'await_turn',
+            agentSessionId: seeded.agentSessionId,
+            harnessSessionId: seeded.harnessSessionId,
+            afterT: seeded.seededAt,
+          },
+          {
+            kind: 'turn',
+            agentSessionId: seeded.agentSessionId,
+            harnessSessionId: seeded.harnessSessionId,
+            afterT: seeded.seededAt,
+          },
+        );
+      }
+
+      const payload = event as
+        | { readonly outcome: 'ended'; readonly recordedAt: string }
+        | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string }
+        | undefined;
+      if (payload?.outcome === 'failed') {
+        throw new Error(`${input.label} workflow gate turn failed: ${payload.reason}`);
+      }
+      if (payload?.outcome !== 'ended' || !current.agentSessionId) {
+        throw new Error(`${input.label} workflow gate resumed without a completed turn payload.`);
+      }
+      const history = await ctx.getConversationHistory(current.agentSessionId);
+      const message = latestAssistantText(history) ?? `${input.label} completed the workflow gate.`;
+      await ctx.setUiFeedback({ phase: 'done', message });
+      return done();
     },
   };
 }

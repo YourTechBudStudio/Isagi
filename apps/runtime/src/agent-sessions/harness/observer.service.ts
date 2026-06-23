@@ -1,11 +1,11 @@
 import { mkdirSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 
-import { and, eq, isNotNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { Cause, Context, Effect, Layer } from 'effect';
 
 import { DataDirectory, RuntimeDatabase } from '../../persistence/index.js';
-import { agentSessions, surfacePanes } from '../../persistence/schema.js';
+import { agentSessions, ptyProcesses, surfacePanes } from '../../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import {
   AgentSessionArtifacts,
@@ -25,6 +25,12 @@ export interface HarnessLedgerObserverService {
   readonly getProjection: (
     agentSessionId: number,
   ) => Effect.Effect<HarnessObservationProjection | undefined>;
+  readonly getTurnEdges: (
+    agentSessionId: number,
+  ) => Effect.Effect<
+    readonly ObservedHarnessTurnEdge[],
+    import('../../persistence/index.js').DatabaseError
+  >;
 }
 
 export const HarnessLedgerObserver = Context.GenericTag<HarnessLedgerObserverService>(
@@ -205,6 +211,19 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           }
           return projections.get(agentSessionId);
         }),
+      getTurnEdges: (agentSessionId) =>
+        Effect.gen(function* () {
+          if (!projections.has(agentSessionId)) {
+            yield* reconcileAgentSession(agentSessionId);
+          }
+          const currentProjection =
+            projections.get(agentSessionId) ?? emptyHarnessObservationProjection();
+          return yield* turnEdgesForProjection({
+            agentSessionId,
+            projection: currentProjection,
+            database,
+          });
+        }),
     };
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
@@ -255,6 +274,11 @@ type TurnStatus =
 
 type HarnessSessionTurnStatuses = Map<number, TurnStatus>;
 type AgentSessionTurnStatuses = Map<string, HarnessSessionTurnStatuses>;
+
+export type ObservedHarnessTurnEdge = HarnessTurnEdge & {
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+};
 
 function reconcileTurnEdges(input: {
   readonly agentSessionId: number;
@@ -358,23 +382,21 @@ function reconcileHarnessSessionTurnEdges(input: {
       }
     }
 
-    for (const [startedSeq, status] of input.streamStatuses.entries()) {
-      if (
-        status.status !== 'in_flight' ||
-        status.ptyProcessId === null ||
-        !input.deadPtys.has(status.ptyProcessId)
-      ) {
-        continue;
-      }
-      input.streamStatuses.set(startedSeq, { status: 'terminated' });
+    for (const failure of synthesizeDeadPtyFailures(input.records, input.edges, (ptyProcessId) =>
+      input.deadPtys.has(ptyProcessId),
+    )) {
+      const status = input.streamStatuses.get(failure.startedSeq);
+      if (status?.status !== 'in_flight') continue;
+
+      input.streamStatuses.set(failure.startedSeq, { status: 'terminated' });
       if (!input.shouldEmit) continue;
       yield* input.eventBus.publish({
-        type: 'turn_failed',
+        type: failure.edge.type,
         agentSessionId: input.agentSessionId,
         harnessSessionId: input.harnessSessionId,
-        seq: null,
-        recordedAt: status.recordedAt,
-        reason: 'session_died',
+        seq: failure.edge.seq,
+        recordedAt: failure.edge.recordedAt,
+        reason: failure.edge.reason,
       });
     }
   });
@@ -385,6 +407,135 @@ function sortedHarnessStreams(projection: HarnessObservationProjection) {
     ([, leftRecords], [, rightRecords]) =>
       earliestRecordedAt(leftRecords).localeCompare(earliestRecordedAt(rightRecords)),
   );
+}
+
+function turnEdgesForProjection(input: {
+  readonly agentSessionId: number;
+  readonly projection: HarnessObservationProjection;
+  readonly database: import('../../persistence/index.js').RuntimeDatabaseService;
+}): Effect.Effect<
+  readonly ObservedHarnessTurnEdge[],
+  import('../../persistence/index.js').DatabaseError
+> {
+  return Effect.gen(function* () {
+    const streams = sortedHarnessStreams(input.projection);
+    const ptyProcessIds = new Set<number>();
+    const streamEdges = streams.flatMap(([harnessSessionId, records]) => {
+      const harness = records[0]?.harness;
+      if (!harness) return [];
+      const edges = deriveHarnessTurnEdges(harness, records);
+      for (const start of inFlightTurnStarts(records, edges).values()) {
+        if (start.ptyProcessId !== null) ptyProcessIds.add(start.ptyProcessId);
+      }
+      return [{ harnessSessionId, records, edges }];
+    });
+    const isDeadPty = yield* readDeadPtyPredicate(
+      input.database,
+      input.agentSessionId,
+      ptyProcessIds,
+    );
+
+    const observedEdges: ObservedHarnessTurnEdge[] = [];
+    for (const { harnessSessionId, records, edges } of streamEdges) {
+      for (const edge of edges) {
+        observedEdges.push({ ...edge, agentSessionId: input.agentSessionId, harnessSessionId });
+      }
+      for (const failure of synthesizeDeadPtyFailures(records, edges, isDeadPty)) {
+        observedEdges.push({
+          ...failure.edge,
+          agentSessionId: input.agentSessionId,
+          harnessSessionId,
+        });
+      }
+    }
+
+    return observedEdges;
+  });
+}
+
+function inFlightTurnStarts(
+  records: readonly HarnessObservationRecord[],
+  edges: readonly HarnessTurnEdge[],
+): ReadonlyMap<number, InFlightTurnStart> {
+  const inFlight = new Map<number, InFlightTurnStart>();
+  let activeStartedSeq: number | null = null;
+  for (const edge of edges) {
+    if (edge.type === 'turn_started') {
+      const startRecord = records.find((record) => record.seq === edge.seq);
+      activeStartedSeq = edge.seq;
+      inFlight.set(edge.seq, {
+        recordedAt: edge.recordedAt,
+        ptyProcessId: startRecord?.ptyProcessId ?? null,
+      });
+      continue;
+    }
+    if (activeStartedSeq === null) continue;
+    inFlight.delete(activeStartedSeq);
+    activeStartedSeq = null;
+  }
+  return inFlight;
+}
+
+function synthesizeDeadPtyFailures(
+  records: readonly HarnessObservationRecord[],
+  edges: readonly HarnessTurnEdge[],
+  isDeadPty: (ptyProcessId: number) => boolean,
+): readonly DeadPtyFailure[] {
+  const failures: DeadPtyFailure[] = [];
+  for (const [startedSeq, start] of inFlightTurnStarts(records, edges).entries()) {
+    if (start.ptyProcessId === null || !isDeadPty(start.ptyProcessId)) continue;
+    failures.push({
+      startedSeq,
+      edge: {
+        type: 'turn_failed',
+        harnessSessionId: '',
+        seq: null,
+        recordedAt: start.recordedAt,
+        reason: 'session_died',
+      },
+    });
+  }
+  return failures;
+}
+
+type InFlightTurnStart = {
+  readonly recordedAt: string;
+  readonly ptyProcessId: number | null;
+};
+
+type DeadPtyFailure = {
+  readonly startedSeq: number;
+  readonly edge: Extract<HarnessTurnEdge, { readonly type: 'turn_failed' }>;
+};
+
+function readDeadPtyPredicate(
+  database: import('../../persistence/index.js').RuntimeDatabaseService,
+  agentSessionId: number,
+  ptyProcessIds: ReadonlySet<number>,
+): Effect.Effect<
+  (ptyProcessId: number) => boolean,
+  import('../../persistence/index.js').DatabaseError
+> {
+  return database.use('read_dead_turn_pty_state', (db) => {
+    const session = db
+      .select({ activePtyProcessId: agentSessions.activePtyProcessId })
+      .from(agentSessions)
+      .where(eq(agentSessions.id, agentSessionId))
+      .get();
+    const statuses = new Map<number, string>();
+    if (ptyProcessIds.size > 0) {
+      for (const row of db
+        .select({ id: ptyProcesses.id, status: ptyProcesses.status })
+        .from(ptyProcesses)
+        .where(inArray(ptyProcesses.id, [...ptyProcessIds]))
+        .all()) {
+        statuses.set(row.id, row.status);
+      }
+    }
+
+    return (ptyProcessId: number) =>
+      ptyProcessId !== session?.activePtyProcessId || statuses.get(ptyProcessId) !== 'running';
+  });
 }
 
 function earliestRecordedAt(records: readonly HarnessObservationRecord[]) {

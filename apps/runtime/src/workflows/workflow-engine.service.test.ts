@@ -12,6 +12,8 @@ import {
   HarnessLedgerObserver,
   type AgentSessionArtifactsService,
   type AgentSessionServiceShape,
+  type AgentSessionHarnessMetadataRead,
+  type ObservedHarnessTurnEdge,
   type HarnessLedgerObserverService,
 } from '../agent-sessions/index.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../persistence/index.js';
@@ -181,7 +183,7 @@ test('startDevRun rejects unknown workflow keys before insert', async () => {
   }
 });
 
-test('startup ready-row initialization drains rows that predate the engine fiber', async () => {
+test('startup recoverer parks ready rows before the dispatcher startup drain', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-startup-drain-'));
   try {
     const runId = await Effect.runPromise(
@@ -236,8 +238,85 @@ test('startup ready-row initialization drains rows that predate the engine fiber
       ),
     );
 
-    assert.equal(row?.status, 'done');
+    assert.equal(row?.status, 'paused');
+    assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'ready_before_start' });
     assert.equal(row?.owner, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startup recoverer parks non-terminal rows and preserves wait shape', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-startup-recoverer-'));
+  try {
+    const runId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const database = yield* RuntimeDatabase;
+        return yield* database.use('seed_waiting_workflow_before_engine_start', (db) => {
+          const now = '2026-06-18T00:00:00.000Z';
+          return db
+            .insert(workflowRuns)
+            .values({
+              workflowKey: 'startup-fixture',
+              worktreeId: null,
+              surfaceId: null,
+              status: 'waiting',
+              waitKind: 'turn',
+              waitCondition: JSON.stringify({
+                kind: 'turn',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                afterT: '2026-06-18T00:00:00.000Z',
+              }),
+              resumePayload: null,
+              stateJson: JSON.stringify({ phase: 'waiting_before_start' }),
+              stateVersion: 1,
+              owner: 'dead-worker',
+              uiFeedback: JSON.stringify({ phase: 'waiting' }),
+              error: null,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning({ id: workflowRuns.id })
+            .get().id;
+        });
+      }).pipe(Effect.provide(databaseLayer(dataRoot))),
+    );
+
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        return yield* repository.findRun(runId);
+      }).pipe(
+        Effect.provide(
+          workflowLayer(
+            dataRoot,
+            Layer.succeed(
+              WorkflowRegistry,
+              createWorkflowRegistry({
+                'startup-fixture': {
+                  initialState: { phase: 'unused' },
+                  step: async () => done(),
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'paused');
+    assert.equal(row?.owner, null);
+    assert.equal(row?.waitKind, 'turn');
+    assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
+      kind: 'turn',
+      agentSessionId: 10,
+      harnessSessionId: 'harness-a',
+      afterT: '2026-06-18T00:00:00.000Z',
+    });
+    assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting_before_start' });
+    assert.deepEqual(JSON.parse(row?.uiFeedback ?? '{}'), { phase: 'waiting' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -361,6 +440,8 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
 
     assert.equal(result.before?.status, 'waiting');
     assert.equal(result.after?.status, 'ready');
+    assert.equal(result.after?.waitKind, null);
+    assert.equal(result.after?.waitCondition, null);
     assert.deepEqual(JSON.parse(result.after?.resumePayload ?? '{}'), {
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:10.000Z',
@@ -468,7 +549,7 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
             recordedAt: '2026-06-18T00:00:10.000Z',
-            reason: 'harness_error',
+            reason: 'new_start_supersedes',
           },
         });
         yield* engine.drainOnce;
@@ -477,8 +558,233 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
     );
 
     assert.equal(row?.status, 'failed');
-    assert.match(JSON.parse(row?.error ?? '{}').message, /turn failed: harness_error/);
+    assert.match(JSON.parse(row?.error ?? '{}').message, /turn failed: new_start_supersedes/);
     assert.equal(row?.resumePayload, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('continueDevRun moves a paused null-wait run back to ready', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-ready-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-cont-done',
+          state: { phase: 'a', snapshots: ['a'] },
+          stateVersion: 1,
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.continueDevRun({ runId: run.id });
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.waitKind, null);
+    assert.equal(row?.waitCondition, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('continueDevRun reconciles a satisfied paused turn run to ready', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-satisfied-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.continueDevRun({ runId: run.id });
+        return yield* repository.findRun(run.id);
+      }).pipe(
+        Effect.provide(
+          testLayerWithResumeFakes(dataRoot, {
+            metadataHarnessSessionId: 'harness-a',
+            edges: [
+              {
+                type: 'turn_started',
+                agentSessionId: 10,
+                harnessSessionId: 'other-harness',
+                seq: 0,
+                recordedAt: '2026-06-18T00:00:11.000Z',
+              },
+              {
+                type: 'turn_ended',
+                agentSessionId: 10,
+                harnessSessionId: 'other-harness',
+                seq: 1,
+                recordedAt: '2026-06-18T00:00:12.000Z',
+              },
+              {
+                type: 'turn_ended',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                seq: 2,
+                recordedAt: '2026-06-18T00:00:12.000Z',
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.waitKind, null);
+    assert.equal(row?.waitCondition, null);
+    assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
+      outcome: 'ended',
+      recordedAt: '2026-06-18T00:00:12.000Z',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('continueDevRun re-arms a paused turn run when no terminal edge satisfies it', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-not-satisfied-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.continueDevRun({ runId: run.id });
+        return yield* repository.findRun(run.id);
+      }).pipe(
+        Effect.provide(
+          testLayerWithResumeFakes(dataRoot, {
+            metadataHarnessSessionId: 'harness-a',
+            edges: [
+              {
+                type: 'turn_started',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                seq: 0,
+                recordedAt: '2026-06-18T00:00:11.000Z',
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'waiting');
+    assert.equal(row?.waitKind, 'turn');
+    assert.equal(row?.resumePayload, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('continueDevRun fails a paused turn run when the harness session pin mismatches', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-pin-mismatch-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.continueDevRun({ runId: run.id });
+        return yield* repository.findRun(run.id);
+      }).pipe(
+        Effect.provide(
+          testLayerWithResumeFakes(dataRoot, {
+            metadataHarnessSessionId: 'harness-b',
+            edges: [],
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'failed');
+    assert.match(JSON.parse(row?.error ?? '{}').message, /harness session pin mismatch/);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('continueDevRun fails unsupported paused wait kinds with a diagnostic', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-unsupported-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'user_input',
+          waitCondition: { kind: 'user_input' },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.continueDevRun({ runId: run.id });
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'failed');
+    assert.match(
+      JSON.parse(row?.error ?? '{}').message,
+      /unsupported workflow continue wait_kind/i,
+    );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -521,6 +827,27 @@ function testLayer(dataRoot: string) {
   return workflowLayer(dataRoot, WorkflowRegistryLive);
 }
 
+function testLayerWithResumeFakes(
+  dataRoot: string,
+  input: {
+    readonly metadataHarnessSessionId: string | null;
+    readonly edges: readonly ObservedHarnessTurnEdge[];
+  },
+) {
+  return workflowLayer(dataRoot, WorkflowRegistryLive, {
+    artifacts: fakeAgentSessionArtifacts({
+      status: 'valid',
+      metadata: {
+        schemaVersion: 1,
+        harnessSessionId: input.metadataHarnessSessionId,
+        updatedAt: '2026-06-18T00:00:00.000Z',
+      },
+      metadataPath: '',
+    }),
+    observer: fakeHarnessLedgerObserver(input.edges),
+  });
+}
+
 function repositoryOnlyLayer(dataRoot: string) {
   const database = databaseLayer(dataRoot);
   return WorkflowRepositoryLive.pipe(Layer.provide(database));
@@ -529,6 +856,10 @@ function repositoryOnlyLayer(dataRoot: string) {
 function workflowLayer(
   dataRoot: string,
   registry: Layer.Layer<import('./registry.js').WorkflowRegistryService>,
+  fakes: {
+    readonly artifacts?: AgentSessionArtifactsService | undefined;
+    readonly observer?: HarnessLedgerObserverService | undefined;
+  } = {},
 ) {
   const database = databaseLayer(dataRoot);
   const repository = WorkflowRepositoryLive.pipe(Layer.provide(database));
@@ -545,8 +876,12 @@ function workflowLayer(
     Layer.provide(Layer.succeed(AgentSessionService, fakeAgentSessionService())),
     Layer.provide(Layer.succeed(SurfaceService, fakeSurfaceService())),
     Layer.provide(Layer.succeed(PtyService, fakePtyService())),
-    Layer.provide(Layer.succeed(AgentSessionArtifacts, fakeAgentSessionArtifacts())),
-    Layer.provide(Layer.succeed(HarnessLedgerObserver, fakeHarnessLedgerObserver())),
+    Layer.provide(
+      Layer.succeed(AgentSessionArtifacts, fakes.artifacts ?? fakeAgentSessionArtifacts()),
+    ),
+    Layer.provide(
+      Layer.succeed(HarnessLedgerObserver, fakes.observer ?? fakeHarnessLedgerObserver()),
+    ),
   );
   return Layer.mergeAll(engine, repository, registry, database, stateFile);
 }
@@ -597,12 +932,15 @@ function fakePtyService(): PtyServiceShape {
   };
 }
 
-function fakeAgentSessionArtifacts(): AgentSessionArtifactsService {
+function fakeAgentSessionArtifacts(
+  metadata: AgentSessionHarnessMetadataRead | null = null,
+): AgentSessionArtifactsService {
   return {
     paths: () => ({ directory: '', metadataPath: '' }),
     initializeMetadata: () => Effect.die('artifacts initializeMetadata is not used'),
     prepareProcessArtifacts: () => Effect.die('artifacts prepareProcessArtifacts is not used'),
-    readMetadata: () => Effect.die('artifacts readMetadata is not used'),
+    readMetadata: () =>
+      metadata ? Effect.succeed(metadata) : Effect.die('artifacts readMetadata is not used'),
     readJsonlForAgentSession: () => Effect.die('artifacts readJsonlForAgentSession is not used'),
     listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.die('artifacts writeHarnessSessionId is not used'),
@@ -610,9 +948,12 @@ function fakeAgentSessionArtifacts(): AgentSessionArtifactsService {
   };
 }
 
-function fakeHarnessLedgerObserver(): HarnessLedgerObserverService {
+function fakeHarnessLedgerObserver(
+  edges: readonly ObservedHarnessTurnEdge[] = [],
+): HarnessLedgerObserverService {
   return {
     reconcileAgentSession: () => Effect.void,
     getProjection: () => Effect.succeed(undefined),
+    getTurnEdges: () => Effect.succeed(edges),
   };
 }

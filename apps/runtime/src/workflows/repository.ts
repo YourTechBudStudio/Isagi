@@ -22,6 +22,7 @@ export interface WorkflowRepositoryService {
   }) => Effect.Effect<WorkflowRunRow, DatabaseError>;
   readonly listReadyRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly pauseNonTerminalRuns: Effect.Effect<number, DatabaseError>;
   readonly setSurfaceId: (input: {
     readonly runId: number;
     readonly surfaceId: number;
@@ -38,6 +39,11 @@ export interface WorkflowRepositoryService {
     readonly runId: number;
     readonly resumePayload: WorkflowResumePayload;
   }) => Effect.Effect<boolean, DatabaseError>;
+  readonly readyPausedRun: (input: {
+    readonly runId: number;
+    readonly resumePayload?: WorkflowResumePayload | undefined;
+  }) => Effect.Effect<boolean, DatabaseError>;
+  readonly rearmPausedTurnRun: (runId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly completeCont: (input: {
     readonly runId: number;
     readonly state: unknown;
@@ -123,6 +129,15 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return row ? workflowRunRow(row) : null;
         }),
+      pauseNonTerminalRuns: database.transaction('pause_non_terminal_workflow_runs', (db) => {
+        const rows = db
+          .update(workflowRuns)
+          .set({ status: 'paused', owner: null, updatedAt: timestamp() })
+          .where(sql`${workflowRuns.status} IN ('waiting', 'ready', 'running')`)
+          .returning({ id: workflowRuns.id })
+          .all();
+        return rows.length;
+      }),
       setSurfaceId: (input) =>
         database.use('set_workflow_surface_id', (db) => {
           db.update(workflowRuns)
@@ -163,11 +178,61 @@ export const WorkflowRepositoryLive = Layer.effect(
             .update(workflowRuns)
             .set({
               status: 'ready',
+              waitKind: null,
+              waitCondition: null,
               resumePayload: json(input.resumePayload),
               owner: null,
               updatedAt: timestamp(),
             })
             .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'waiting')))
+            .returning({ id: workflowRuns.id })
+            .get();
+          return Boolean(row);
+        }),
+      readyPausedRun: (input) =>
+        database.transaction('ready_paused_workflow_run', (db) => {
+          const update =
+            input.resumePayload === undefined
+              ? {
+                  status: 'ready' as const,
+                  waitKind: null,
+                  waitCondition: null,
+                  owner: null,
+                  updatedAt: timestamp(),
+                }
+              : {
+                  status: 'ready' as const,
+                  waitKind: null,
+                  waitCondition: null,
+                  resumePayload: json(input.resumePayload),
+                  owner: null,
+                  updatedAt: timestamp(),
+                };
+          const row = db
+            .update(workflowRuns)
+            .set(update)
+            .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'paused')))
+            .returning({ id: workflowRuns.id })
+            .get();
+          return Boolean(row);
+        }),
+      rearmPausedTurnRun: (runId) =>
+        database.transaction('rearm_paused_turn_workflow_run', (db) => {
+          const row = db
+            .update(workflowRuns)
+            .set({
+              status: 'waiting',
+              resumePayload: null,
+              owner: null,
+              updatedAt: timestamp(),
+            })
+            .where(
+              and(
+                eq(workflowRuns.id, runId),
+                eq(workflowRuns.status, 'paused'),
+                eq(workflowRuns.waitKind, 'turn'),
+              ),
+            )
             .returning({ id: workflowRuns.id })
             .get();
           return Boolean(row);

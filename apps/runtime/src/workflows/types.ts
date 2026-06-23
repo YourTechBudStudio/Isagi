@@ -84,10 +84,15 @@ export interface WorkflowRunRow {
 export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError | StateFileError;
 
 export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')<{
-  readonly code: 'unknown_workflow_key' | 'no_active_worktree';
+  readonly code:
+    | 'unknown_workflow_key'
+    | 'no_active_worktree'
+    | 'workflow_run_not_found'
+    | 'workflow_run_not_paused';
   readonly message: string;
   readonly workflowKey?: string | undefined;
   readonly knownWorkflowKeys?: readonly string[] | undefined;
+  readonly workflowRunId?: number | undefined;
 }> {}
 
 export function waitKind(condition: WorkflowWaitCondition): WorkflowWaitKind {

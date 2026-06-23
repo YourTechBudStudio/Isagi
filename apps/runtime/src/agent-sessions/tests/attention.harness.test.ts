@@ -61,6 +61,33 @@ test('Pi attention derives idle, working, waiting, and pending-message working f
   }
 });
 
+test('Pi attention remains working across superseded in-flight turn records', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-pi-supersede-'));
+  try {
+    const state = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        const attention = yield* AgentSessionAttentionProjection;
+        const paths = yield* artifacts.prepareProcessArtifacts({
+          agentSessionId: 10,
+          ptyProcessId: 20,
+        });
+        const jsonlPath = harnessLogPath(paths.directory);
+        const session = agentSession({ activePtyProcess: ptyProcess({ id: 20 }) });
+
+        appendRecord(jsonlPath, 'agent_start', null);
+        appendRecord(jsonlPath, 'agent_start', null);
+        yield* attention.reconcileAgentSession(10);
+        return yield* attention.agentSessionAttention(session);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(state, 'working');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('Pi attention preserves harness history across PTY process replacement', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-pty-replace-'));
   try {

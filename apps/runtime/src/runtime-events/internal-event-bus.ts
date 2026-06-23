@@ -27,7 +27,7 @@ export type InternalRuntimeEvent =
       readonly harnessSessionId: string;
       readonly seq: number | null;
       readonly recordedAt: string;
-      readonly reason: 'session_died' | 'harness_error';
+      readonly reason: 'session_died' | 'harness_error' | 'new_start_supersedes';
     }
   | {
       readonly type: 'worktree_activation_change';

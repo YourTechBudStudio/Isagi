@@ -14,7 +14,7 @@ import {
   type WorkflowRepositoryService,
   type WorkflowRunErrorPayload,
 } from './repository.js';
-import { startWorkflowResolver } from './resolver.js';
+import { isSatisfied, startWorkflowResolver } from './resolver.js';
 import {
   waitKind,
   WorkflowEngineError,
@@ -26,6 +26,9 @@ import {
 export interface WorkflowEngineService {
   readonly startDevRun: (input: {
     readonly workflowKey: string;
+  }) => Effect.Effect<WorkflowRunRow, WorkflowEngineServiceError>;
+  readonly continueDevRun: (input: {
+    readonly runId: number;
   }) => Effect.Effect<WorkflowRunRow, WorkflowEngineServiceError>;
   readonly drainOnce: Effect.Effect<WorkflowDrainSummary, DatabaseError>;
   readonly poke: Effect.Effect<void>;
@@ -153,10 +156,36 @@ export const WorkflowEngineLive = Layer.scoped(
           yield* poke;
           return run;
         }),
+      continueDevRun: (input) =>
+        Effect.gen(function* () {
+          const run = yield* repository.findRun(input.runId);
+          if (!run) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_not_found',
+                message: `Workflow run ${input.runId} was not found.`,
+              }),
+            );
+          }
+          if (run.status !== 'paused') {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_not_paused',
+                message: `Workflow run ${input.runId} is ${run.status}, not paused.`,
+                workflowRunId: input.runId,
+              }),
+            );
+          }
+
+          yield* continuePausedRun({ run, repository, artifacts, observer, poke });
+          const continued = yield* repository.findRun(run.id);
+          return continued ?? run;
+        }),
       drainOnce,
       poke,
     } satisfies WorkflowEngineService;
 
+    yield* repository.pauseNonTerminalRuns;
     yield* drainOnce.pipe(
       Effect.catchAllCause(logDrainFailure('startup ready-row initialization')),
     );
@@ -203,6 +232,136 @@ function persistStepResult(
       context: { workflowKey: run.workflowKey },
     },
   });
+}
+
+function continuePausedRun(input: {
+  readonly run: WorkflowRunRow;
+  readonly repository: WorkflowRepositoryService;
+  readonly artifacts: import('../agent-sessions/index.js').AgentSessionArtifactsService;
+  readonly observer: import('../agent-sessions/index.js').HarnessLedgerObserverService;
+  readonly poke: Effect.Effect<void>;
+}) {
+  if (input.run.waitKind === null) {
+    return input.repository
+      .readyPausedRun({ runId: input.run.id })
+      .pipe(Effect.zipRight(input.poke));
+  }
+
+  if (input.run.waitKind === 'turn') {
+    return continuePausedTurnRun(input);
+  }
+
+  return input.repository.failRun({
+    runId: input.run.id,
+    error: {
+      message: `Unsupported workflow continue wait_kind '${input.run.waitKind}'.`,
+      context: { workflowRunId: input.run.id, waitKind: input.run.waitKind },
+    },
+  });
+}
+
+function continuePausedTurnRun(input: {
+  readonly run: WorkflowRunRow;
+  readonly repository: WorkflowRepositoryService;
+  readonly artifacts: import('../agent-sessions/index.js').AgentSessionArtifactsService;
+  readonly observer: import('../agent-sessions/index.js').HarnessLedgerObserverService;
+  readonly poke: Effect.Effect<void>;
+}) {
+  return Effect.gen(function* () {
+    const condition = parseTurnWaitCondition(input.run);
+    if (!condition) {
+      yield* input.repository.failRun({
+        runId: input.run.id,
+        error: {
+          message: `Workflow run ${input.run.id} has an invalid turn wait_condition.`,
+          context: { workflowRunId: input.run.id },
+        },
+      });
+      return;
+    }
+
+    const metadata = yield* input.artifacts.readMetadata(condition.agentSessionId);
+    const currentHarnessSessionId =
+      metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null;
+    if (currentHarnessSessionId !== condition.harnessSessionId) {
+      yield* input.repository.failRun({
+        runId: input.run.id,
+        error: {
+          message: `Workflow run ${input.run.id} cannot continue: harness session pin mismatch.`,
+          context: {
+            workflowRunId: input.run.id,
+            agentSessionId: condition.agentSessionId,
+            expectedHarnessSessionId: condition.harnessSessionId,
+            currentHarnessSessionId,
+            metadataStatus: metadata.status,
+          },
+        },
+      });
+      return;
+    }
+
+    const edges = yield* input.observer.getTurnEdges(condition.agentSessionId);
+    let terminalEdge: TerminalTurnEdge | null = null;
+    for (const edge of edges) {
+      if (!isTerminalTurnEdge(edge) || !isSatisfied(condition, edge)) continue;
+      terminalEdge = edge;
+      break;
+    }
+    if (!terminalEdge) {
+      yield* input.repository.rearmPausedTurnRun(input.run.id);
+      return;
+    }
+
+    yield* input.repository.readyPausedRun({
+      runId: input.run.id,
+      resumePayload: resumePayload(terminalEdge),
+    });
+    yield* input.poke;
+  });
+}
+
+type TerminalTurnEdge = {
+  readonly type: 'turn_ended' | 'turn_failed';
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly recordedAt: string;
+  readonly reason?: string | undefined;
+};
+
+function isTerminalTurnEdge(edge: { readonly type: string }): edge is TerminalTurnEdge {
+  return edge.type === 'turn_ended' || edge.type === 'turn_failed';
+}
+
+function parseTurnWaitCondition(run: WorkflowRunRow) {
+  if (!run.waitCondition) return null;
+  try {
+    const parsed = JSON.parse(run.waitCondition) as unknown;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      (parsed as { readonly kind?: unknown }).kind === 'turn'
+    ) {
+      return parsed as import('./types.js').WorkflowWaitCondition & { readonly kind: 'turn' };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function resumePayload(edge: {
+  readonly type: 'turn_ended' | 'turn_failed';
+  readonly recordedAt: string;
+  readonly reason?: string | undefined;
+}): import('./repository.js').WorkflowResumePayload {
+  if (edge.type === 'turn_failed') {
+    return {
+      outcome: 'failed',
+      recordedAt: edge.recordedAt,
+      reason: edge.reason ?? 'unknown',
+    };
+  }
+  return { outcome: 'ended', recordedAt: edge.recordedAt };
 }
 
 function parseState(run: WorkflowRunRow) {
