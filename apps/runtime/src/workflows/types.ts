@@ -1,6 +1,9 @@
 import { Data } from 'effect';
 
-import type { DatabaseError } from '../persistence/index.js';
+import type { AgentHarness } from '@isagi/contracts';
+
+import type { ConversationMessage } from '../agent-sessions/harness/types.js';
+import type { DatabaseError, StateFileError } from '../persistence/index.js';
 
 export type WorkflowStatus = 'paused' | 'waiting' | 'ready' | 'running' | 'done' | 'failed';
 
@@ -29,6 +32,18 @@ export type WorkflowResult =
   | { readonly type: 'done' };
 
 export interface WorkflowContext {
+  readonly spawnSession: (input: {
+    readonly harness: AgentHarness;
+    readonly prompt: string;
+  }) => Promise<{
+    readonly agentSessionId: number;
+    readonly harnessSessionId: string;
+    readonly seededAt: string;
+  }>;
+  readonly inject: (agentSessionId: number, text: string) => Promise<void>;
+  readonly getConversationHistory: (
+    agentSessionId: number,
+  ) => Promise<readonly ConversationMessage[]>;
   readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
 }
 
@@ -66,13 +81,13 @@ export interface WorkflowRunRow {
   readonly updatedAt: string;
 }
 
-export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError;
+export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError | StateFileError;
 
 export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')<{
-  readonly code: 'unknown_workflow_key';
+  readonly code: 'unknown_workflow_key' | 'no_active_worktree';
   readonly message: string;
-  readonly workflowKey: string;
-  readonly knownWorkflowKeys: readonly string[];
+  readonly workflowKey?: string | undefined;
+  readonly knownWorkflowKeys?: readonly string[] | undefined;
 }> {}
 
 export function waitKind(condition: WorkflowWaitCondition): WorkflowWaitKind {

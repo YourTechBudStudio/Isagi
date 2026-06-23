@@ -531,6 +531,7 @@ function fakeBackend(
     name: 'node_pty',
     available: Effect.succeed(true),
     launch: () => Effect.die('launch is not used by PTY GC tests'),
+    writeInput: () => Effect.die('writeInput is not used by PTY GC tests'),
     attach: () => Effect.die('attach is not used by PTY GC tests'),
     replay: () => Effect.die('replay is not used by PTY GC tests'),
     inspect: () => Effect.succeed({ status: 'missing' as const }),

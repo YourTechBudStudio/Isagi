@@ -1,4 +1,4 @@
-import { and, asc, eq, getTableColumns, type InferSelectModel } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, sql, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
@@ -22,10 +22,22 @@ export interface WorkflowRepositoryService {
   }) => Effect.Effect<WorkflowRunRow, DatabaseError>;
   readonly listReadyRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly setSurfaceId: (input: {
+    readonly runId: number;
+    readonly surfaceId: number;
+  }) => Effect.Effect<void, DatabaseError>;
   readonly claimReadyRun: (input: {
     readonly runId: number;
     readonly owner: string;
   }) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly findWaitingTurnRuns: (input: {
+    readonly agentSessionId: number;
+    readonly harnessSessionId: string;
+  }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly wakeWaitingRun: (input: {
+    readonly runId: number;
+    readonly resumePayload: WorkflowResumePayload;
+  }) => Effect.Effect<boolean, DatabaseError>;
   readonly completeCont: (input: {
     readonly runId: number;
     readonly state: unknown;
@@ -52,6 +64,10 @@ export interface WorkflowRunErrorPayload {
   readonly stack?: string | undefined;
   readonly context?: Record<string, unknown> | undefined;
 }
+
+export type WorkflowResumePayload =
+  | { readonly outcome: 'ended'; readonly recordedAt: string }
+  | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string };
 
 export const WorkflowRepository = Context.GenericTag<WorkflowRepositoryService>(
   'isagi/WorkflowRepository',
@@ -107,6 +123,13 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return row ? workflowRunRow(row) : null;
         }),
+      setSurfaceId: (input) =>
+        database.use('set_workflow_surface_id', (db) => {
+          db.update(workflowRuns)
+            .set({ surfaceId: input.surfaceId, updatedAt: timestamp() })
+            .where(eq(workflowRuns.id, input.runId))
+            .run();
+        }),
       claimReadyRun: (input) =>
         database.use('claim_ready_workflow_run', (db) => {
           const row = db
@@ -116,6 +139,38 @@ export const WorkflowRepositoryLive = Layer.effect(
             .returning(runColumns)
             .get();
           return row ? workflowRunRow(row) : null;
+        }),
+      findWaitingTurnRuns: (input) =>
+        database.use('find_waiting_turn_workflow_runs', (db) =>
+          db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.status, 'waiting'),
+                eq(workflowRuns.waitKind, 'turn'),
+                sql`json_extract(${workflowRuns.waitCondition}, '$.agentSessionId') = ${input.agentSessionId}`,
+                sql`json_extract(${workflowRuns.waitCondition}, '$.harnessSessionId') = ${input.harnessSessionId}`,
+              ),
+            )
+            .orderBy(asc(workflowRuns.id))
+            .all()
+            .map(workflowRunRow),
+        ),
+      wakeWaitingRun: (input) =>
+        database.transaction('wake_waiting_workflow_run', (db) => {
+          const row = db
+            .update(workflowRuns)
+            .set({
+              status: 'ready',
+              resumePayload: json(input.resumePayload),
+              owner: null,
+              updatedAt: timestamp(),
+            })
+            .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'waiting')))
+            .returning({ id: workflowRuns.id })
+            .get();
+          return Boolean(row);
         }),
       completeCont: (input) =>
         database.transaction('complete_workflow_cont', (db) => {
@@ -169,6 +224,9 @@ export const WorkflowRepositoryLive = Layer.effect(
           db.update(workflowRuns)
             .set({
               status: 'failed',
+              waitKind: null,
+              waitCondition: null,
+              resumePayload: null,
               owner: null,
               error: json(input.error),
               updatedAt: timestamp(),

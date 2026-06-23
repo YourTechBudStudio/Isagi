@@ -1,4 +1,6 @@
+export { registerWorkflowDevApi } from './api.js';
 export { cont, done, suspend } from './constructors.js';
+export { inject, workflowContext } from './context.js';
 export {
   createWorkflowRegistry,
   WorkflowRegistry,

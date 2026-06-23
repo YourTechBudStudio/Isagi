@@ -59,6 +59,7 @@ function fakeBackend(name: PtyBackendShape['name'], available: boolean): PtyBack
     name,
     available: Effect.succeed(available),
     launch: () => Effect.die('launch is not used by backend selection tests'),
+    writeInput: () => Effect.die('writeInput is not used by backend selection tests'),
     attach: () => Effect.die('attach is not used by backend selection tests'),
     replay: () => Effect.die('replay is not used by backend selection tests'),
     inspect: () => Effect.die('inspect is not used by backend selection tests'),

@@ -400,6 +400,7 @@ function fakePtyService(input: {
       }),
     replay: ({ send }) => input.replay?.(send) ?? Effect.void,
     write: ({ data }) => input.write?.(data) ?? Effect.void,
+    writeInput: ({ data }) => input.write?.(data) ?? Effect.void,
     resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
     kill: () => Effect.void,
     terminate: () => Effect.void,

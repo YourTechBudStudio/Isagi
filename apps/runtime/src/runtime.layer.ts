@@ -92,10 +92,6 @@ const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupReposi
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const WorkflowRepositoryLayer = WorkflowRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowEngineLayer = WorkflowEngineLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowRegistryLive),
-);
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
@@ -137,6 +133,16 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
+const WorkflowEngineLayer = WorkflowEngineLive.pipe(
+  Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(WorkflowRegistryLive),
+  Layer.provide(StateLive),
+  Layer.provide(AgentSessionServiceLayer),
+  Layer.provide(SurfaceServiceLayer),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(HarnessLedgerObserverLayer),
+);
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(TerminalSessionRepositoryLayer),

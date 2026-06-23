@@ -6,12 +6,26 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
+import {
+  AgentSessionArtifacts,
+  AgentSessionService,
+  HarnessLedgerObserver,
+  type AgentSessionArtifactsService,
+  type AgentSessionServiceShape,
+  type HarnessLedgerObserverService,
+} from '../agent-sessions/index.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../persistence/index.js';
 import { workflowRuns } from '../persistence/schema.js';
+import { StateFile, stateFromActiveContext } from '../persistence/state-file.service.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
+import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
+import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
+import { SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
 import { cont, done } from './constructors.js';
+import { inject } from './context.js';
 import { createWorkflowRegistry, WorkflowRegistry, WorkflowRegistryLive } from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
+import { resolveTurnEdge } from './resolver.js';
 import { WorkflowEngineError } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
 
@@ -295,6 +309,207 @@ test('result writes do not clobber ui feedback from the same step', async () => 
   }
 });
 
+test('resolver wakes waiting turn runs only after the condition watermark', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resolver-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        let pokes = 0;
+        const engine = { poke: Effect.sync(() => void (pokes += 1)) };
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          edge: {
+            type: 'turn_ended',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:09.999Z',
+          },
+        });
+        const before = yield* repository.findRun(run.id);
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          edge: {
+            type: 'turn_ended',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        const after = yield* repository.findRun(run.id);
+        return { before, after, pokes };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.equal(result.before?.status, 'waiting');
+    assert.equal(result.after?.status, 'ready');
+    assert.deepEqual(JSON.parse(result.after?.resumePayload ?? '{}'), {
+      outcome: 'ended',
+      recordedAt: '2026-06-18T00:00:10.000Z',
+    });
+    assert.equal(result.pokes, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('step runner passes resume_payload as the workflow event and clears it on done', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-event-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('resume-consumer', {
+          initialState: { phase: 'unused' },
+          step: async (_ctx, state, event) => {
+            assert.deepEqual(state, { phase: 'await_turn' });
+            assert.deepEqual(event, {
+              outcome: 'ended',
+              recordedAt: '2026-06-18T00:00:10.000Z',
+            });
+            return done();
+          },
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'resume-consumer',
+          state: { phase: 'unused' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'await_turn' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:00.000Z',
+          },
+        });
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          edge: {
+            type: 'turn_ended',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* engine.drainOnce;
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'done');
+    assert.equal(row?.resumePayload, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('step runner marks failed when a resumed failed turn throws', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-failed-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('resume-fails', {
+          initialState: { phase: 'unused' },
+          step: async (_ctx, _state, event) => {
+            const payload = event as { readonly outcome?: string; readonly reason?: string };
+            if (payload.outcome === 'failed') throw new Error(`turn failed: ${payload.reason}`);
+            return done();
+          },
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'resume-fails',
+          state: { phase: 'unused' },
+          stateVersion: 1,
+        });
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'await_turn' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:00.000Z',
+          },
+        });
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          edge: {
+            type: 'turn_failed',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:10.000Z',
+            reason: 'harness_error',
+          },
+        });
+        yield* engine.drainOnce;
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'failed');
+    assert.match(JSON.parse(row?.error ?? '{}').message, /turn failed: harness_error/);
+    assert.equal(row?.resumePayload, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('inject resolves the active agent PTY and writes bracketed paste plus enter', async () => {
+  const writes: Array<{ ptyProcessId: number; data: string }> = [];
+  await Effect.runPromise(
+    inject({
+      agents: {
+        ...fakeAgentSessionService(),
+        activePtyProcessId: () => Effect.succeed(20),
+      },
+      pty: {
+        ...fakePtyService(),
+        writeInput: (input) =>
+          Effect.sync(() => {
+            writes.push(input);
+          }),
+      },
+      agentSessionId: 10,
+      text: 'line 1\r\nline 2',
+    }),
+  );
+
+  assert.deepEqual(writes, [
+    { ptyProcessId: 20, data: '\x1b[200~line 1\nline 2\x1b[201~' },
+    { ptyProcessId: 20, data: '\r' },
+  ]);
+});
+
 const listWorkflowRuns = Effect.gen(function* () {
   const database = yield* RuntimeDatabase;
   return yield* database.use('test_list_workflow_runs', (db) =>
@@ -317,12 +532,87 @@ function workflowLayer(
 ) {
   const database = databaseLayer(dataRoot);
   const repository = WorkflowRepositoryLive.pipe(Layer.provide(database));
-  const engine = WorkflowEngineLive.pipe(Layer.provide(repository), Layer.provide(registry));
-  return Layer.mergeAll(engine, repository, registry, database);
+  const stateFile = Layer.succeed(StateFile, {
+    read: Effect.succeed(stateFromActiveContext(1, 10, 1)),
+    write: () => Effect.void,
+    writeActiveContextIfFresh: () => Effect.succeed(stateFromActiveContext(1, 10, 1)),
+  });
+  const engine = WorkflowEngineLive.pipe(
+    Layer.provide(repository),
+    Layer.provide(registry),
+    Layer.provide(stateFile),
+    Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(Layer.succeed(AgentSessionService, fakeAgentSessionService())),
+    Layer.provide(Layer.succeed(SurfaceService, fakeSurfaceService())),
+    Layer.provide(Layer.succeed(PtyService, fakePtyService())),
+    Layer.provide(Layer.succeed(AgentSessionArtifacts, fakeAgentSessionArtifacts())),
+    Layer.provide(Layer.succeed(HarnessLedgerObserver, fakeHarnessLedgerObserver())),
+  );
+  return Layer.mergeAll(engine, repository, registry, database, stateFile);
 }
 
 function databaseLayer(dataRoot: string) {
   return RuntimeDatabaseLive.pipe(
     Layer.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))),
   );
+}
+
+function fakeAgentSessionService(): AgentSessionServiceShape {
+  return {
+    startFresh: () => Effect.die('agent startFresh is not used'),
+    get: () => Effect.die('agent get is not used'),
+    ensureActivePtyProcess: () => Effect.die('agent ensureActivePtyProcess is not used'),
+    activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
+  };
+}
+
+function fakeSurfaceService(): SurfaceServiceShape {
+  return {
+    getSurfaceDetail: () => Effect.die('surface getSurfaceDetail is not used'),
+    renameSurface: () => Effect.die('surface renameSurface is not used'),
+    deleteSurface: () => Effect.die('surface deleteSurface is not used'),
+    deleteSurfacePane: () => Effect.die('surface deleteSurfacePane is not used'),
+    createSurface: () => Effect.die('surface createSurface is not used'),
+    splitPane: () => Effect.die('surface splitPane is not used'),
+    setSplitWeights: () => Effect.die('surface setSplitWeights is not used'),
+    createPaneSession: () => Effect.die('surface createPaneSession is not used'),
+    claimPaneSession: () => Effect.die('surface claimPaneSession is not used'),
+    createSinglePaneSurface: () => Effect.die('surface createSinglePaneSurface is not used'),
+    setWorktreeEnvironmentFocus: () =>
+      Effect.die('surface setWorktreeEnvironmentFocus is not used'),
+  };
+}
+
+function fakePtyService(): PtyServiceShape {
+  return {
+    launch: () => Effect.die('pty launch is not used'),
+    getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
+    attach: () => Effect.die('pty attach is not used'),
+    replay: () => Effect.die('pty replay is not used'),
+    write: () => Effect.die('pty write is not used'),
+    writeInput: () => Effect.die('pty writeInput is not used'),
+    resize: () => Effect.die('pty resize is not used'),
+    kill: () => Effect.die('pty kill is not used'),
+    terminate: () => Effect.die('pty terminate is not used'),
+  };
+}
+
+function fakeAgentSessionArtifacts(): AgentSessionArtifactsService {
+  return {
+    paths: () => ({ directory: '', metadataPath: '' }),
+    initializeMetadata: () => Effect.die('artifacts initializeMetadata is not used'),
+    prepareProcessArtifacts: () => Effect.die('artifacts prepareProcessArtifacts is not used'),
+    readMetadata: () => Effect.die('artifacts readMetadata is not used'),
+    readJsonlForAgentSession: () => Effect.die('artifacts readJsonlForAgentSession is not used'),
+    listAgentSessionIds: Effect.succeed([]),
+    writeHarnessSessionId: () => Effect.die('artifacts writeHarnessSessionId is not used'),
+    removeDirectory: () => Effect.die('artifacts removeDirectory is not used'),
+  };
+}
+
+function fakeHarnessLedgerObserver(): HarnessLedgerObserverService {
+  return {
+    reconcileAgentSession: () => Effect.void,
+    getProjection: () => Effect.succeed(undefined),
+  };
 }

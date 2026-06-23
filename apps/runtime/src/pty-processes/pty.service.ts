@@ -94,6 +94,10 @@ export interface PtyService {
     readonly attachmentId: symbol | null;
     readonly data: string;
   }) => Effect.Effect<void, PtyInputError>;
+  readonly writeInput: (input: {
+    readonly ptyProcessId: number;
+    readonly data: string;
+  }) => Effect.Effect<void, PtyInputError>;
   readonly resize: (input: {
     readonly ptyProcessId: number;
     readonly attachmentId: symbol | null;
@@ -244,6 +248,21 @@ export const PtyServiceLive = Layer.scoped(
             input.attachmentId,
           );
           yield* active.attachment.write(input.data);
+        }),
+      writeInput: (input) =>
+        Effect.gen(function* () {
+          const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+          if (!plan.live) {
+            return yield* Effect.fail(
+              new PtyServiceError({
+                code: 'session_not_running',
+                message: `PTY process ${input.ptyProcessId} is not running.`,
+                ptyProcessId: input.ptyProcessId,
+              }),
+            );
+          }
+          const ref = yield* decodeBackendRef(plan.session);
+          yield* backend.writeInput({ ref, data: input.data });
         }),
       resize: (input) =>
         Effect.gen(function* () {

@@ -146,6 +146,10 @@ export interface PtyBackend {
   readonly launch: (
     input: LaunchBackendSessionInput,
   ) => Effect.Effect<BackendSessionRef, PtyStartError>;
+  readonly writeInput: (input: {
+    readonly ref: BackendSessionRef;
+    readonly data: string;
+  }) => Effect.Effect<void, PtyWriteError>;
   readonly attach: (input: {
     readonly ref: BackendSessionRef;
     readonly cols: number;

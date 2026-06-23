@@ -192,6 +192,25 @@ export const NodePtyBackendLive = Layer.effect(
               cause,
             }),
         }),
+      writeInput: (input) =>
+        Effect.try({
+          try: () => {
+            if (input.ref.backend !== 'node_pty') {
+              throw new Error(`Cannot write node-pty input to ${input.ref.backend} ref.`);
+            }
+            const ref = input.ref;
+            const live = liveSessions.get(ref.ptyProcessId);
+            if (!live?.running) {
+              throw new Error(`node-pty process ${ref.ptyProcessId} is not live.`);
+            }
+            live.process.write(input.data);
+          },
+          catch: (cause) =>
+            new PtyWriteError({
+              ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
+              cause,
+            }),
+        }),
       replay: (input) => replayBackendLog(input.logPath, input.bytes, input.send),
       inspect: (ref) =>
         Effect.succeed(

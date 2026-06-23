@@ -1,16 +1,23 @@
 import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
+import { AgentSessionArtifacts, AgentSessionService } from '../agent-sessions/index.js';
+import { HarnessLedgerObserver } from '../agent-sessions/index.js';
 import type { DatabaseError } from '../persistence/index.js';
+import { StateFile } from '../persistence/index.js';
+import { PtyService } from '../pty-processes/index.js';
+import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import { SurfaceService } from '../surfaces/index.js';
+import { workflowContext } from './context.js';
 import { WorkflowRegistry } from './registry.js';
 import {
   WorkflowRepository,
   type WorkflowRepositoryService,
   type WorkflowRunErrorPayload,
 } from './repository.js';
+import { startWorkflowResolver } from './resolver.js';
 import {
   waitKind,
   WorkflowEngineError,
-  type WorkflowContext,
   type WorkflowEngineServiceError,
   type WorkflowResult,
   type WorkflowRunRow,
@@ -35,6 +42,13 @@ export const WorkflowEngineLive = Layer.scoped(
   Effect.gen(function* () {
     const repository = yield* WorkflowRepository;
     const registry = yield* WorkflowRegistry;
+    const stateFile = yield* StateFile;
+    const eventBus = yield* InternalRuntimeEventBus;
+    const agents = yield* AgentSessionService;
+    const surfaces = yield* SurfaceService;
+    const pty = yield* PtyService;
+    const artifacts = yield* AgentSessionArtifacts;
+    const observer = yield* HarnessLedgerObserver;
     const wakeQueue = yield* Queue.sliding<void>(1);
     const owner = `workflow-engine:${process.pid}:${Date.now()}`;
 
@@ -51,7 +65,15 @@ export const WorkflowEngineLive = Layer.scoped(
           return;
         }
 
-        const ctx = workflowContext(repository, run.id);
+        const ctx = workflowContext({
+          repository,
+          run,
+          agents,
+          surfaces,
+          pty,
+          artifacts,
+          observer,
+        });
         const state = yield* Effect.try({
           try: () => parseState(run),
           catch: (cause) => cause,
@@ -60,8 +82,16 @@ export const WorkflowEngineLive = Layer.scoped(
           yield* failRun(run, stepErrorPayload(state.left, run));
           return;
         }
+        const event = yield* Effect.try({
+          try: () => parseResumePayload(run),
+          catch: (cause) => cause,
+        }).pipe(Effect.either);
+        if (Either.isLeft(event)) {
+          yield* failRun(run, stepErrorPayload(event.left, run));
+          return;
+        }
         const result = yield* Effect.tryPromise({
-          try: () => definition.step(ctx, state.right),
+          try: () => definition.step(ctx, state.right, event.right),
           catch: (cause) => cause,
         }).pipe(Effect.either);
 
@@ -104,10 +134,21 @@ export const WorkflowEngineLive = Layer.scoped(
               }),
             );
           }
+          const state = yield* stateFile.read;
+          const worktreeId = state.workspace.activeWorktreeId;
+          if (worktreeId === null) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'no_active_worktree',
+                message: 'Cannot start a workflow dev run without an active worktree.',
+              }),
+            );
+          }
           const run = yield* repository.createRun({
             workflowKey: input.workflowKey,
             state: definition.initialState,
             stateVersion: 1,
+            worktreeId,
           });
           yield* poke;
           return run;
@@ -127,16 +168,11 @@ export const WorkflowEngineLive = Layer.scoped(
         ),
       ),
     );
+    yield* startWorkflowResolver({ repository, engine: service, eventBus });
 
     return service;
   }),
 );
-
-function workflowContext(repository: WorkflowRepositoryService, runId: number): WorkflowContext {
-  return {
-    setUiFeedback: (feedback) => Effect.runPromise(repository.setUiFeedback({ runId, feedback })),
-  };
-}
 
 function persistStepResult(
   repository: WorkflowRepositoryService,
@@ -174,6 +210,15 @@ function parseState(run: WorkflowRunRow) {
     return JSON.parse(run.stateJson) as unknown;
   } catch (cause) {
     throw new Error(`Workflow run ${run.id} has invalid state_json.`, { cause });
+  }
+}
+
+function parseResumePayload(run: WorkflowRunRow) {
+  if (!run.resumePayload) return undefined;
+  try {
+    return JSON.parse(run.resumePayload) as unknown;
+  } catch (cause) {
+    throw new Error(`Workflow run ${run.id} has invalid resume_payload.`, { cause });
   }
 }
 

@@ -193,6 +193,27 @@ test('PTY read-only attachments expose no writable attachment id', async () => {
   }
 });
 
+test('PTY service writeInput writes without an active attachment', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-write-input-'));
+  const writes: string[] = [];
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        yield* pty.writeInput({
+          ptyProcessId: process.ptyProcessId,
+          data: 'workflow input',
+        });
+      }).pipe(Effect.provide(serviceTestLayer(dataRoot, writeInputBackend(writes)))),
+    );
+
+    assert.deepEqual(writes, ['workflow input']);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('PTY read-only supersede awaits displaced detach before replacement attach', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-read-only-supersede-'));
   const events: string[] = [];
@@ -259,6 +280,7 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         }, 25);
         return Effect.sync(() => clearTimeout(timer));
       }),
+    writeInput: () => Effect.void,
     replay: (input) =>
       Effect.sync(() => {
         input.send({ type: 'replay_start', bytes: 0 });
@@ -298,6 +320,34 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
           }),
         };
       }),
+    writeInput: () => Effect.void,
+    replay: (input) =>
+      Effect.sync(() => {
+        input.send({ type: 'replay_start', bytes: 0 });
+        input.send({ type: 'replay_end' });
+      }),
+    inspect: () => Effect.succeed({ status: 'alive' }),
+    listSessions: Effect.succeed([]),
+    kill: () => Effect.void,
+  } satisfies PtyBackendShape;
+}
+
+function writeInputBackend(writes: string[]): PtyBackendShape {
+  return {
+    name: 'node_pty',
+    available: Effect.succeed(true),
+    launch: (input) =>
+      Effect.succeed({
+        schemaVersion: 1,
+        backend: 'node_pty',
+        ptyProcessId: input.ptyProcessId,
+        pid: 1234,
+      }),
+    writeInput: ({ data }) =>
+      Effect.sync(() => {
+        writes.push(data);
+      }),
+    attach: () => Effect.die('writeInput test should not attach'),
     replay: (input) =>
       Effect.sync(() => {
         input.send({ type: 'replay_start', bytes: 0 });

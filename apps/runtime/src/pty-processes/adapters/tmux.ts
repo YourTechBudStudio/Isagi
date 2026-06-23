@@ -186,6 +186,24 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
           }),
       });
     }),
+  writeInput: (input) =>
+    Effect.gen(function* () {
+      if (input.ref.backend !== 'tmux') {
+        return yield* Effect.fail(
+          new PtyWriteError({
+            cause: new Error(`Cannot write tmux input to ${input.ref.backend} ref.`),
+          }),
+        );
+      }
+      const bufferName = `isagi-input-${process.pid}-${Date.now()}`;
+      yield* runTmux(['set-buffer', '-b', bufferName, input.data]).pipe(
+        Effect.mapError((cause) => new PtyWriteError({ cause })),
+      );
+      yield* runTmux(['paste-buffer', '-d', '-b', bufferName, '-t', input.ref.sessionName]).pipe(
+        Effect.asVoid,
+        Effect.mapError((cause) => new PtyWriteError({ cause })),
+      );
+    }),
   replay: (input) =>
     Effect.gen(function* () {
       if (input.ref.backend !== 'tmux') {
