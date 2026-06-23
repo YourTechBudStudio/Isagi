@@ -2,6 +2,7 @@ import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
 import { AgentSessionArtifacts, AgentSessionService } from '../agent-sessions/index.js';
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
+import type { HarnessLedgerObserverService } from '../agent-sessions/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import { StateFile } from '../persistence/index.js';
 import { PtyService } from '../pty-processes/index.js';
@@ -21,6 +22,7 @@ import {
   type WorkflowEngineServiceError,
   type WorkflowResult,
   type WorkflowRunRow,
+  type WorkflowWaitCondition,
 } from './types.js';
 
 export interface WorkflowEngineService {
@@ -104,6 +106,22 @@ export const WorkflowEngineLive = Layer.scoped(
         }
 
         yield* persistStepResult(repository, run, result.right);
+        // Close the suspend-commit race. A turn can finish in the window between
+        // the step returning and `completeSuspend` persisting the `waiting` row.
+        // The bus is edge-triggered and lossy, so a `turn_ended` published in that
+        // window finds no `waiting` row in the resolver and is dropped — stranding
+        // the run in `waiting` until the next restart re-pauses it for a user-gated
+        // continue. The ledger is the source of truth, so re-evaluate the wait we
+        // just armed against it; an already-landed terminal edge wakes the run now.
+        if (result.right.type === 'suspend' && result.right.condition.kind === 'turn') {
+          yield* reconcileArmedTurnWait({
+            runId: run.id,
+            condition: result.right.condition,
+            repository,
+            observer,
+            poke,
+          });
+        }
       });
 
     const drainOnce = Effect.gen(function* () {
@@ -320,6 +338,33 @@ function continuePausedTurnRun(input: {
   });
 }
 
+// Live-path catch-up for the suspend-commit race: read the ledger (source of
+// truth) and wake the run if the wait it just armed is already satisfied. Mirrors
+// the resolver's edge matching rather than the continue path's pin assertion — the
+// pin was set moments ago in the same process, so it cannot have drifted here, and
+// `wakeWaitingRun` is guarded by `status = 'waiting'` so a concurrent resolver wake
+// stays single-winner.
+function reconcileArmedTurnWait(input: {
+  readonly runId: number;
+  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'turn' }>;
+  readonly repository: WorkflowRepositoryService;
+  readonly observer: HarnessLedgerObserverService;
+  readonly poke: Effect.Effect<void>;
+}) {
+  return Effect.gen(function* () {
+    const edges = yield* input.observer.getTurnEdges(input.condition.agentSessionId);
+    for (const edge of edges) {
+      if (!isTerminalTurnEdge(edge) || !isSatisfied(input.condition, edge)) continue;
+      const woke = yield* input.repository.wakeWaitingRun({
+        runId: input.runId,
+        resumePayload: resumePayload(edge),
+      });
+      if (woke) yield* input.poke;
+      return;
+    }
+  });
+}
+
 type TerminalTurnEdge = {
   readonly type: 'turn_ended' | 'turn_failed';
   readonly agentSessionId: number;
@@ -401,8 +446,23 @@ function stepErrorPayload(cause: unknown, run: WorkflowRunRow): WorkflowRunError
   return {
     message: error.message,
     stack: error.stack,
-    context: { workflowRunId: run.id, workflowKey: run.workflowKey },
+    context: { workflowRunId: run.id, workflowKey: run.workflowKey, ...taggedErrorContext(cause) },
   };
+}
+
+// Preserve a failing step's tagged-error identity as queryable fields rather than
+// only as text baked into `message`, so a remotely reported failed run can be
+// triaged by `_tag`/`code`. Best-effort: a verb rejection arrives wrapped in an
+// Effect `FiberFailure` and surfaces no tag here, but a directly thrown tagged
+// error (or a future structured throw) does, and the extra fields never hurt.
+function taggedErrorContext(cause: unknown): Record<string, unknown> {
+  if (!cause || typeof cause !== 'object') return {};
+  const context: Record<string, unknown> = {};
+  const tag = (cause as { readonly _tag?: unknown })._tag;
+  const code = (cause as { readonly code?: unknown }).code;
+  if (typeof tag === 'string') context.errorTag = tag;
+  if (typeof code === 'string') context.errorCode = code;
+  return context;
 }
 
 function logDrainFailure(label: string) {

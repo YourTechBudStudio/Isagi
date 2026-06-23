@@ -23,7 +23,7 @@ import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
-import { cont, done } from './constructors.js';
+import { cont, done, suspend } from './constructors.js';
 import { inject } from './context.js';
 import { createWorkflowRegistry, WorkflowRegistry, WorkflowRegistryLive } from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
@@ -96,6 +96,79 @@ test('drainOnce persists suspend as waiting without progressing it', async () =>
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting' });
     assert.equal(row?.owner, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('drainOnce immediately resumes a turn suspend whose terminal edge already landed', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-suspend-race-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const events: unknown[] = [];
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('suspend-race-catchup', {
+          initialState: { phase: 'arm' },
+          step: async (_ctx, state, event) => {
+            const current = state as { readonly phase: string };
+            if (current.phase === 'arm') {
+              return suspend(
+                { phase: 'await_turn' },
+                {
+                  kind: 'turn',
+                  agentSessionId: 10,
+                  harnessSessionId: 'harness-a',
+                  afterT: '2026-06-18T00:00:00.000Z',
+                },
+              );
+            }
+            events.push(event);
+            return done();
+          },
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'suspend-race-catchup',
+          state: { phase: 'arm' },
+          stateVersion: 1,
+        });
+
+        yield* engine.drainOnce;
+        const completed = yield* repository.findRun(run.id);
+        return { completed, events };
+      }).pipe(
+        Effect.provide(
+          testLayerWithResumeFakes(dataRoot, {
+            metadataHarnessSessionId: 'harness-a',
+            edges: [
+              {
+                type: 'turn_started',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                seq: 0,
+                recordedAt: '2026-06-18T00:00:01.000Z',
+              },
+              {
+                type: 'turn_ended',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                seq: 1,
+                recordedAt: '2026-06-18T00:00:02.000Z',
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    // The terminal edge already sat in the ledger when the step armed the wait, so
+    // the post-suspend reconcile woke and resumed the run within the same drain
+    // rather than stranding it in `waiting` for an event the lossy bus never replays.
+    assert.equal(result.completed?.status, 'done');
+    assert.equal(result.completed?.resumePayload, null);
+    assert.deepEqual(result.events, [{ outcome: 'ended', recordedAt: '2026-06-18T00:00:02.000Z' }]);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

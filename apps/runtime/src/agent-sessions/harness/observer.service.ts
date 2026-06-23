@@ -86,6 +86,12 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           metadataProjectionFingerprint(metadata),
           projection.fingerprint,
         ]);
+        // Order matters and is load-bearing: update the projection cache BEFORE
+        // `reconcileTurnEdges` publishes any `turn_*` edge. The workflow engine's
+        // suspend-commit race fix relies on it — when a turn edge reaches the bus,
+        // a subsequent `getTurnEdges` (post-suspend catch-up) must observe the same
+        // or newer projection, never a stale one. Keep the cache write ahead of the
+        // publish if this reconcile is ever refactored.
         projections.set(agentSessionId, projection);
         artifactFingerprints.set(agentSessionId, fingerprint);
         yield* reconcileTurnEdges({

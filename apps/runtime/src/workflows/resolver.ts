@@ -65,6 +65,17 @@ export function resolveTurnEdge(input: {
   });
 }
 
+// The watermark is start-anchored on `recordedAt` (there is no durable turn id).
+// v1 deliberately matches on the *terminal* edge alone: any `turn_ended`/`turn_failed`
+// at or after `afterT` for the pinned (agentSession, harnessSession) satisfies the
+// wait. This is provably safe for the gate's spawn-then-await pattern, where the
+// pinned session has no prior turn and `afterT` precedes its first-ever start.
+//
+// OWED before loop workflows land (await_impl -> await_verdict -> await_impl re-suspending
+// on the same session): also require the matched terminal turn to be opened by a
+// `turn_started` with `recordedAt >= afterT`, so a *previous* turn's end whose timestamp
+// happens to fall at/after the new inject `T` cannot satisfy the new wait. The shared
+// matcher is the right home for that gate when it arrives.
 export function isSatisfied(condition: WorkflowWaitCondition, edge: TurnEdge) {
   return (
     condition.kind === 'turn' &&

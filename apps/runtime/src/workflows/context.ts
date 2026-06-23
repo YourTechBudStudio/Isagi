@@ -33,6 +33,16 @@ export function workflowContext(input: {
   readonly artifacts: AgentSessionArtifactsService;
   readonly observer: HarnessLedgerObserverService;
 }): WorkflowContext {
+  // Workflow callbacks are plain async TypeScript (the engine runs the whole step
+  // inside `Effect.tryPromise`), so every `ctx` verb must cross the Effect->Promise
+  // boundary here. The service shapes are pre-resolved (`R = never`) and verb
+  // failures still surface as a rejected Promise the engine turns into a failed run,
+  // so correctness holds. The deliberate v1 tradeoff is cancellation: `runPromise`
+  // starts a detached root fiber, so a long `spawnSession` poll or pending `inject`
+  // is NOT interrupted when the engine scope closes on shutdown. That is acceptable
+  // here — the runtime owns these PTY/session resources regardless, the gate runs at
+  // concurrency 1, and a JS Promise is not interruptible by Effect anyway. Revisit if
+  // verbs need to abort cleanly on shutdown (would require a non-Promise verb boundary).
   const runEffect = <A>(effect: Effect.Effect<A, unknown, never>) => Effect.runPromise(effect);
 
   return {

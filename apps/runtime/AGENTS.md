@@ -13,7 +13,7 @@ The local-or-remote Isagi runtime. It will own Git, worktrees, PTYs, commands, a
 ## Sessions and PTY processes
 
 - Durable worktree entities (`agent_sessions`, `terminal_sessions`) sit above disposable PTY process incarnations (`pty_processes`). A durable session owns continuity and a sticky `active_pty_process_id`; the PTY process is transport only and is replaced freely. See ADRs 0005 and 0006.
-- The PTY process layer (`src/pty-processes`) is generic: command, args, cwd, env, backend refs, logs, write/resize/kill, status. It must not import or branch on harness semantics. Harness adapters (`src/harness-adapters`) build the generic launch envelope.
+- The PTY process layer (`src/pty-processes`) is generic: command, args, cwd, env, backend refs, logs, write/resize/kill, status. It must not import or branch on harness semantics. Harness adapters (`src/agent-sessions/harness/<harness>/adapter.ts`, registered via `src/agent-sessions/harness/registry.ts`) build the generic launch envelope.
 - `node-pty` is the primary PTY backend. `tmux` is a legacy/optional PTY process backend only — it is one transport for a process incarnation, not a restoration or continuity mechanism. Restoration comes from durable sessions plus latest observed harness session ids, never from a backend's own session persistence.
 
 ## Effect scope
