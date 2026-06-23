@@ -108,9 +108,10 @@ until it does. Build order in `agent-workflows-task-order`.
 - **Full design reference** — reference code, the durability deep-dive, the `ctx` taxonomy,
   codebase findings with file refs, the decisions log, and open questions — lives in
   `agent-workflows-design-notes`. Read it before any task brainstorm.
-- New subsystem ADR to land with the engine spine (durable state machine on Effect vs
-  Temporal replay, opaque-state boundary, ctx-as-activity, suspend/resume). ADR 0007 to be
-  updated with the expanded hook usage in the instrumentation task.
+- New subsystem **design doc** (`docs/workflow-engine.md`, a living explainer — not an ADR) to
+  land with the engine spine (durable state machine on Effect vs Temporal replay, opaque-state
+  boundary, ctx-as-activity, suspend/resume; with a key-decisions-&-rationale section). ADR 0007
+  to be updated with the expanded hook usage in the instrumentation task.
 - Failure spots surfaced during shaping: harness turn signalling is heterogeneous (edge
   `Stop` vs level `pending`/`status`); "waiting" conflates turn-done with blocked-on-prompt;
   records carry only a string `recordedAt`, no sequence id (→ injection-timestamp watermark);

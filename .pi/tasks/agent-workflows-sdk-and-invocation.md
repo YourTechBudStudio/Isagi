@@ -36,7 +36,7 @@ a child's value — and editing a callback hot-reloads on the next step.
 # Notes
 
 - Trust model: callbacks load in-process with full `ctx` power (user-authored, trusted). Make
-  this explicit (carry into the subsystem ADR).
+  this explicit (carry into the subsystem design doc, `docs/workflow-engine.md`).
 - `spawnSession` seed timing: prefer seeding via the launch envelope (initial-prompt arg) over
   a post-launch inject to avoid the harness-not-ready race.
 - Carry into this task's brainstorm: arg-schema language (Effect Schema?), error semantics

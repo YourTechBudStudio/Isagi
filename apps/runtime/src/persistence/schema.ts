@@ -213,6 +213,39 @@ export const worktreeCommandRuns = sqliteTable(
   ],
 );
 
+export const workflowRuns = sqliteTable(
+  'workflow_runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowKey: text('workflow_key').notNull(),
+    worktreeId: integer('worktree_id').references(() => worktrees.id, { onDelete: 'cascade' }),
+    surfaceId: integer('surface_id').references(() => worktreeSurfaces.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status', {
+      enum: ['paused', 'waiting', 'ready', 'running', 'done', 'failed'],
+    }).notNull(),
+    waitKind: text('wait_kind', {
+      enum: ['turn', 'user_continue', 'user_input', 'child_workflow', 'headless'],
+    }),
+    waitCondition: text('wait_condition'),
+    resumePayload: text('resume_payload'),
+    stateJson: text('state_json').notNull(),
+    stateVersion: integer('state_version').notNull(),
+    owner: text('owner'),
+    uiFeedback: text('ui_feedback'),
+    error: text('error'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('workflow_runs_status_idx').on(table.status),
+    index('workflow_runs_status_wait_kind_idx').on(table.status, table.waitKind),
+    index('workflow_runs_worktree_idx').on(table.worktreeId),
+    index('workflow_runs_surface_idx').on(table.surfaceId),
+  ],
+);
+
 export const worktreeEnvironmentStates = sqliteTable(
   'worktree_environment_states',
   {

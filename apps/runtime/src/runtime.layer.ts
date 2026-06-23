@@ -52,6 +52,12 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
+  WorkflowEngineLive,
+  WorkflowRegistryLive,
+  WorkflowRepositoryLive,
+  type WorkflowEngineService,
+} from './workflows/index.js';
+import {
   WorkspaceRepository,
   WorkspaceRepositoryLive,
   WorkspaceServiceLive,
@@ -85,6 +91,11 @@ const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(Datab
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const WorkflowRepositoryLayer = WorkflowRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const WorkflowEngineLayer = WorkflowEngineLive.pipe(
+  Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(WorkflowRegistryLive),
+);
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
@@ -188,11 +199,13 @@ export type RuntimeServices =
   | RuntimeEventBusService
   | InternalRuntimeEventBusService
   | SessionLifecycleService
-  | SessionGcService;
+  | SessionGcService
+  | WorkflowEngineService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
   CommandServiceLayer,
+  WorkflowEngineLayer,
   StartupActivationLayer,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
