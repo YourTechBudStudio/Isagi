@@ -30,6 +30,7 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
       types: [
         'agent_session_changed',
         'terminal_session_changed',
+        'surface_changed',
         'pty_process_started',
         'pty_process_exited',
         'pty_process_failed',
@@ -70,6 +71,14 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
                 id: event.terminalSessionId,
               });
             }
+            return;
+          }
+          if (event.type === 'surface_changed') {
+            yield* publicBus.publish({
+              ...nextRuntimeEventEnvelope(),
+              type: 'surface_changed',
+              payload: event.payload,
+            });
             return;
           }
           if (

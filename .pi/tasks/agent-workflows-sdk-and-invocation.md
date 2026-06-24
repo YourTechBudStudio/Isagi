@@ -1,9 +1,9 @@
 ---
 title: Full ctx SDK + workflow loading & invocation
-status: todo
+status: done
 milestone: agent-workflows
 created: 2026-06-21
-updated: 2026-06-21
+updated: 2026-06-24
 depends_on: [agent-workflows-engine-spine]
 ---
 

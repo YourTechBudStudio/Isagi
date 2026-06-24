@@ -13,6 +13,7 @@ import {
 
 import { queryClient } from '../query/client.js';
 import { runRuntimeEffect } from '../runtime/run.js';
+import { cancelWorkbenchFocusPersistence } from './activation.js';
 import { useAttentionStore } from './attention.js';
 import {
   commandLogMetadataQueryKey,
@@ -21,6 +22,7 @@ import {
   worktreeCommandsQueryKey,
 } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
+import { useWorkspaceStore } from './store.js';
 
 const initialReconnectDelayMs = 500;
 const maxReconnectDelayMs = 20_000;
@@ -125,6 +127,9 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
         queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
       });
       break;
+    case 'surface_changed':
+      handleSurfaceChangedEvent(event);
+      break;
     case 'command_changed':
       // Flip the command's status in the cached catalog right away so its
       // attention dot is honest immediately, then invalidate to reconcile the
@@ -141,6 +146,35 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
         queryKey: commandLogMetadataQueryKey(event.payload.worktreeId, event.payload.commandName),
       });
       break;
+  }
+}
+
+function handleSurfaceChangedEvent(
+  event: Extract<RuntimeEvent, { readonly type: 'surface_changed' }>,
+) {
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+
+  if (event.payload.change === 'deleted') {
+    cancelWorkbenchFocusPersistence(event.payload.worktreeId);
+    queryClient.removeQueries({
+      queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
+      exact: true,
+    });
+    const store = useWorkspaceStore.getState();
+    store.forgetSurface(event.payload.worktreeId, event.payload.surfaceId);
+    store.forgetPane(event.payload.surfaceId);
+    return;
+  }
+
+  void queryClient.invalidateQueries({
+    queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
+  });
+
+  if (event.payload.change === 'pane_deleted') {
+    const store = useWorkspaceStore.getState();
+    for (const paneId of event.payload.deletedPaneIds) {
+      store.forgetPane(event.payload.surfaceId, paneId);
+    }
   }
 }
 

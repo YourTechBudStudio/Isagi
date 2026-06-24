@@ -53,6 +53,7 @@ import {
 } from './terminal-sessions/index.js';
 import {
   WorkflowEngineLive,
+  WorkflowHeadlessLive,
   WorkflowRegistryLive,
   WorkflowRepositoryLive,
   type WorkflowEngineService,
@@ -105,6 +106,10 @@ const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
   Layer.provide(DataDirectoryLive),
   Layer.provide(AgentSessionArtifactsLayer),
 );
+const WorkflowHeadlessLayer = WorkflowHeadlessLive.pipe(
+  Layer.provide(HarnessAdapterRegistryLayer),
+  Layer.provide(PtyServiceLayer),
+);
 const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(AgentSessionArtifactsLayer),
@@ -129,19 +134,21 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(SurfaceRepositoryLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(TerminalSessionServiceLayer),
+  Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
   Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowRegistryLive),
-  Layer.provide(StateLive),
+  Layer.provide(WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive))),
+  Layer.provide(RepositoryLive),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
+  Layer.provide(WorkflowHeadlessLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),

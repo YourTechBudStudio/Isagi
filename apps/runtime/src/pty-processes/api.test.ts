@@ -404,6 +404,9 @@ function fakePtyService(input: {
     resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
     kill: () => Effect.void,
     terminate: () => Effect.void,
+    pin: () => Effect.void,
+    unpin: () => Effect.void,
+    isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }
 

@@ -1,6 +1,6 @@
 # Agent Workflows — build order
 
-Updated: 2026-06-21
+Updated: 2026-06-24
 
 Foundation-first with an early vertical proof. The engine spine is built **durable-by-design**;
 its gate is a working end-to-end run verified via the `workflow_runs` row/logs, with explicit
@@ -11,7 +11,7 @@ proceed on a durable-by-construction basis.
 
 1. [x] Harness instrumentation — `agent-workflows-harness-instrumentation` (Pi first)
 2. [x] Engine spine / restart-survival gate — `agent-workflows-engine-spine` ✓ de-risk gate passed
-3. [ ] Full `ctx` SDK + loading/invocation — `agent-workflows-sdk-and-invocation`
+3. [x] Full `ctx` SDK + loading/invocation — `agent-workflows-sdk-and-invocation`
 4. [ ] Reference implementation workflow (first dogfood) — `agent-workflows-reference-workflow`
 5. [ ] Workflow author guide — `agent-workflows-writer-docs` (after 3–4; → later an agent skill; off the critical path)
 6. [ ] Frontend surface — `agent-workflows-frontend-surface` (parallels 3–4; consumes their contracts)

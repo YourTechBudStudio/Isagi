@@ -30,10 +30,21 @@ export interface HarnessLaunchContext {
   readonly latestHarnessSessionId: string | null;
 }
 
+export interface HarnessHeadlessLaunchContext {
+  readonly harness: AgentHarness;
+  readonly cwd: string;
+  readonly prompt: string;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+}
+
 export interface HarnessAdapter {
   readonly harness: AgentHarness;
   readonly buildLaunch: (
     input: HarnessLaunchContext,
+  ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
+  readonly buildHeadlessLaunch: (
+    input: HarnessHeadlessLaunchContext,
   ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
 }
 

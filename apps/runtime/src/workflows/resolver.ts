@@ -1,6 +1,7 @@
 import { Cause, Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../runtime-events/index.js';
+import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService, WorkflowResumePayload } from './repository.js';
 import type { WorkflowWaitCondition } from './types.js';
 import type { WorkflowEngineService } from './workflow-engine.service.js';
@@ -17,18 +18,28 @@ export function startWorkflowResolver(input: {
   readonly repository: WorkflowRepositoryService;
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
   readonly eventBus: InternalRuntimeEventBusService;
+  readonly headless: WorkflowHeadlessService;
 }) {
   return Effect.gen(function* () {
     const subscription = yield* input.eventBus.subscribe({
-      types: ['turn_ended', 'turn_failed'],
+      types: ['turn_ended', 'turn_failed', 'headless_op_completed', 'workflow_run_terminal'],
     });
     yield* Effect.addFinalizer(() => subscription.unsubscribe);
     yield* Effect.forkScoped(
       Effect.forever(
         Effect.gen(function* () {
           const event = yield* subscription.take;
-          if (event.type !== 'turn_ended' && event.type !== 'turn_failed') return;
-          yield* resolveTurnEdge({ ...input, edge: event });
+          if (event.type === 'turn_ended' || event.type === 'turn_failed') {
+            yield* resolveTurnEdge({ ...input, edge: event });
+            return;
+          }
+          if (event.type === 'headless_op_completed') {
+            yield* resolveHeadlessCompletion({ ...input, runId: event.runId });
+            return;
+          }
+          if (event.type === 'workflow_run_terminal') {
+            yield* resolveWorkflowTerminal({ ...input, childRunId: event.runId });
+          }
         }).pipe(
           Effect.catchAllCause((cause) =>
             Effect.sync(() => {
@@ -38,6 +49,72 @@ export function startWorkflowResolver(input: {
         ),
       ),
     );
+  });
+}
+
+export function resolveWorkflowTerminal(input: {
+  readonly repository: WorkflowRepositoryService;
+  readonly engine: Pick<WorkflowEngineService, 'poke'>;
+  readonly eventBus: InternalRuntimeEventBusService;
+  readonly childRunId: number;
+}) {
+  return Effect.gen(function* () {
+    const candidates = yield* input.repository.findWaitingWorkflowRuns(input.childRunId);
+    let wokeAny = false;
+    for (const run of candidates) {
+      const condition = parseWorkflowWaitCondition(run.waitCondition);
+      if (!condition) continue;
+      const resolution = yield* input.repository.resolveWorkflowJoin(condition);
+      if (resolution.status === 'pending') continue;
+      if (resolution.status === 'missing') {
+        yield* input.repository.failRun({
+          runId: run.id,
+          error: {
+            message: `Workflow run ${run.id} is waiting on missing workflow run ${resolution.runId}.`,
+            context: { workflowRunId: run.id, missingWorkflowRunId: resolution.runId },
+          },
+          stateSnapshot: { stateJson: run.stateJson },
+          thrown: true,
+        });
+        yield* input.eventBus.publish({
+          type: 'workflow_run_terminal',
+          runId: run.id,
+          status: 'failed',
+        });
+        wokeAny = true;
+        continue;
+      }
+      const woke = yield* input.repository.wakeWaitingRun({
+        runId: run.id,
+        resumePayload: { kind: 'workflow', results: resolution.results },
+      });
+      wokeAny = wokeAny || woke;
+    }
+    if (wokeAny) yield* input.engine.poke;
+  });
+}
+
+export function resolveHeadlessCompletion(input: {
+  readonly repository: WorkflowRepositoryService;
+  readonly engine: Pick<WorkflowEngineService, 'poke'>;
+  readonly headless: WorkflowHeadlessService;
+  readonly runId: number;
+}) {
+  return Effect.gen(function* () {
+    const run = yield* input.repository.findRun(input.runId);
+    if (!run || run.status !== 'waiting' || run.waitKind !== 'headless') return;
+    const condition = parseHeadlessWaitCondition(run.waitCondition);
+    if (!condition) return;
+    const results = yield* input.headless.completedResults(condition);
+    if (!results) return;
+    const woke = yield* input.repository.wakeWaitingRun({
+      runId: run.id,
+      resumePayload: { kind: 'headless', results },
+    });
+    if (woke) {
+      yield* input.headless.releaseOps({ opIds: condition.ops.map((op) => op.opId) });
+      yield* input.engine.poke;
+    }
   });
 }
 
@@ -101,6 +178,30 @@ function parseWaitCondition(value: string | null): WorkflowWaitCondition | null 
   try {
     const parsed = JSON.parse(value) as WorkflowWaitCondition;
     return parsed?.kind === 'turn' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseHeadlessWaitCondition(
+  value: string | null,
+): Extract<WorkflowWaitCondition, { readonly kind: 'headless' }> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as WorkflowWaitCondition;
+    return parsed?.kind === 'headless' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWorkflowWaitCondition(
+  value: string | null,
+): Extract<WorkflowWaitCondition, { readonly kind: 'workflow' }> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as WorkflowWaitCondition;
+    return parsed?.kind === 'workflow' && Array.isArray(parsed.runIds) ? parsed : null;
   } catch {
     return null;
   }

@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
 import type { AgentSessionArtifactsService } from '../ledger.js';
-import type { HarnessLaunchContext } from '../types.js';
+import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
 export function buildCodexLaunch(
   input: HarnessLaunchContext,
@@ -31,6 +31,29 @@ export function buildCodexLaunch(
           ptyProcessId,
           artifacts: dependencies.artifacts,
         }),
+    };
+  });
+}
+
+export function buildCodexHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
+  return Effect.sync(() => {
+    console.info('[runtime] Codex headless launch envelope prepared', {
+      cwd: input.cwd,
+      model: input.model,
+      effort: input.effort,
+    });
+    return {
+      command: 'codex',
+      args: [
+        'exec',
+        '--json',
+        '-C',
+        input.cwd,
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
+        input.prompt,
+      ],
+      cwd: input.cwd,
     };
   });
 }

@@ -1,78 +1,175 @@
-import { Effect, type ManagedRuntime } from 'effect';
+import { Cause, Effect, Option, Runtime, Schema, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
 import type { RuntimeServices } from '../runtime.layer.js';
-import { WorkflowEngine } from './workflow-engine.service.js';
+import { WorkflowEngineError } from './types.js';
+import {
+  WorkflowEngine,
+  type WorkflowHumanWaitSatisfactionResult,
+} from './workflow-engine.service.js';
 
-const defaultWorkflowKey = 'pi-gate';
+const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
+const variablesSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const startContextSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+  paneId: Schema.optional(Schema.NullOr(positiveIntegerSchema)),
+});
+const listBodySchema = Schema.Struct({
+  context: startContextSchema,
+});
+const startBodySchema = Schema.Struct({
+  workflowKey: Schema.String.pipe(Schema.minLength(1)),
+  variables: Schema.optional(variablesSchema),
+  context: startContextSchema,
+});
+const continueBodySchema = Schema.Struct({
+  workflowRunId: positiveIntegerSchema,
+});
+const satisfyUserContinueBodySchema = Schema.Struct({
+  workflowRunId: positiveIntegerSchema,
+});
+const submitUserInputBodySchema = Schema.Struct({
+  workflowRunId: positiveIntegerSchema,
+  answers: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+});
 
 export function registerWorkflowDevApi(
   fastify: FastifyInstance,
   runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
 ) {
+  fastify.post('/internal/dev/workflows/list', async (request, reply) => {
+    const decoded = decodeBody(listBodySchema, request.body);
+    if (!decoded.ok) return reply.status(400).send({ error: decoded.message });
+
+    try {
+      const workflows = await runtime.runPromise(
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine;
+          return yield* engine.listWorkflowDescriptors({ context: decoded.value.context });
+        }),
+      );
+      return reply.status(200).send({ workflows });
+    } catch (error) {
+      request.log.error({ error }, 'Workflow dev list failed');
+      return sendWorkflowDevError(reply, error);
+    }
+  });
+
   fastify.post('/internal/dev/workflows/start', async (request, reply) => {
-    const workflowKey = workflowKeyFromRequest(request.body, request.query) ?? defaultWorkflowKey;
+    const decoded = decodeBody(startBodySchema, request.body);
+    if (!decoded.ok) return reply.status(400).send({ error: decoded.message });
+
     try {
       const run = await runtime.runPromise(
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine;
-          return yield* engine.startDevRun({ workflowKey });
+          return yield* engine.startWorkflow({
+            workflowKey: decoded.value.workflowKey,
+            variables: decoded.value.variables ?? {},
+            context: decoded.value.context,
+          });
         }),
       );
       return reply.status(200).send({ workflowRunId: run.id, workflowKey: run.workflowKey });
     } catch (error) {
       request.log.error({ error }, 'Workflow dev start failed');
-      return reply.status(500).send({
-        error: error instanceof Error ? error.message : String(error),
-      });
+      return sendWorkflowDevError(reply, error);
     }
   });
 
   fastify.post('/internal/dev/workflows/continue', async (request, reply) => {
-    const workflowRunId = workflowRunIdFromRequest(request.body, request.query);
-    if (workflowRunId === null) {
-      return reply.status(400).send({ error: 'workflowRunId is required.' });
-    }
+    const decoded = decodeBody(continueBodySchema, request.body);
+    if (!decoded.ok) return reply.status(400).send({ error: decoded.message });
+
     try {
       const run = await runtime.runPromise(
         Effect.gen(function* () {
           const engine = yield* WorkflowEngine;
-          return yield* engine.continueDevRun({ runId: workflowRunId });
+          return yield* engine.continueDevRun({ runId: decoded.value.workflowRunId });
         }),
       );
       return reply.status(200).send({ workflowRunId: run.id, status: run.status });
     } catch (error) {
       request.log.error({ error }, 'Workflow dev continue failed');
-      return reply.status(500).send({
-        error: error instanceof Error ? error.message : String(error),
-      });
+      return sendWorkflowDevError(reply, error);
+    }
+  });
+
+  fastify.post('/internal/dev/workflows/satisfy-user-continue', async (request, reply) => {
+    const decoded = decodeBody(satisfyUserContinueBodySchema, request.body);
+    if (!decoded.ok) return reply.status(400).send({ error: decoded.message });
+
+    try {
+      const result = await runtime.runPromise(
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine;
+          return yield* engine.satisfyUserContinueDevRun({
+            runId: decoded.value.workflowRunId,
+          });
+        }),
+      );
+      return reply.status(200).send(humanWaitResponse(result));
+    } catch (error) {
+      request.log.error({ error }, 'Workflow dev satisfy-user-continue failed');
+      return sendWorkflowDevError(reply, error);
+    }
+  });
+
+  fastify.post('/internal/dev/workflows/submit-user-input', async (request, reply) => {
+    const decoded = decodeBody(submitUserInputBodySchema, request.body);
+    if (!decoded.ok) return reply.status(400).send({ error: decoded.message });
+
+    try {
+      const result = await runtime.runPromise(
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine;
+          return yield* engine.submitUserInputDevRun({
+            runId: decoded.value.workflowRunId,
+            answers: decoded.value.answers,
+          });
+        }),
+      );
+      return reply.status(200).send(humanWaitResponse(result));
+    } catch (error) {
+      request.log.error({ error }, 'Workflow dev submit-user-input failed');
+      return sendWorkflowDevError(reply, error);
     }
   });
 }
 
-function workflowKeyFromRequest(body: unknown, query: unknown) {
-  const bodyKey = objectString(body, 'workflowKey');
-  if (bodyKey) return bodyKey;
-  return objectString(query, 'workflowKey');
+function humanWaitResponse(result: WorkflowHumanWaitSatisfactionResult) {
+  return {
+    outcome: result.outcome,
+    workflowRunId: result.run.id,
+    status: result.run.status,
+    waitKind: result.run.waitKind,
+  };
 }
 
-function objectString(value: unknown, key: string) {
-  if (!value || typeof value !== 'object') return null;
-  const field = (value as Record<string, unknown>)[key];
-  return typeof field === 'string' && field.trim().length > 0 ? field.trim() : null;
+function decodeBody<Decoded>(schema: Schema.Schema<Decoded>, body: unknown) {
+  try {
+    return { ok: true as const, value: Schema.decodeUnknownSync(schema)(body) };
+  } catch (error) {
+    return {
+      ok: false as const,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
-function workflowRunIdFromRequest(body: unknown, query: unknown) {
-  const bodyId = objectNumber(body, 'workflowRunId');
-  if (bodyId !== null) return bodyId;
-  return objectNumber(query, 'workflowRunId');
+function sendWorkflowDevError(reply: import('fastify').FastifyReply, error: unknown) {
+  const failure = unwrapEffectFailure(error);
+  if (failure instanceof WorkflowEngineError) {
+    return reply.status(400).send({ error: failure.message, code: failure.code });
+  }
+  return reply.status(500).send({
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
-function objectNumber(value: unknown, key: string) {
-  if (!value || typeof value !== 'object') return null;
-  const field = (value as Record<string, unknown>)[key];
-  if (typeof field === 'number' && Number.isSafeInteger(field) && field > 0) return field;
-  if (typeof field !== 'string' || field.trim().length === 0) return null;
-  const parsed = Number(field);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+function unwrapEffectFailure(error: unknown) {
+  if (!Runtime.isFiberFailure(error)) return error;
+  const failure = Cause.failureOption(error[Runtime.FiberFailureCauseId]);
+  return Option.isSome(failure) ? failure.value : error;
 }

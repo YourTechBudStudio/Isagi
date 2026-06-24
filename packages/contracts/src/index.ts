@@ -239,6 +239,7 @@ export {
   runtimeEventInputTypeSchema,
   runtimeEventSchema,
   runtimeEventTypeSchema,
+  surfaceChangedEventSchema,
   terminalSessionChangedEventSchema,
 } from './runtime-events/types.js';
 export type {
@@ -256,6 +257,7 @@ export type {
   RuntimeEventInputMessage,
   RuntimeEventInputType,
   RuntimeEventType,
+  SurfaceChangedEvent,
   TerminalSessionChangedEvent,
 } from './runtime-events/types.js';
 export {

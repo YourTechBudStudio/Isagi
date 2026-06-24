@@ -64,8 +64,25 @@ export interface WorkflowConversationMessage {
 }
 
 export interface WorkflowUiFeedback {
+  readonly kind?: 'info' | 'warning' | 'error' | undefined;
   readonly phase?: string | undefined;
   readonly message?: string | undefined;
+}
+
+export type WorkflowVariables = Record<string, unknown>;
+
+export interface WorkflowLaunchContext {
+  readonly worktreeId: number;
+  readonly worktreePath: string;
+  readonly surfaceId: number;
+  readonly paneId?: number | null | undefined;
+  readonly agentSessionId?: number | null | undefined;
+}
+
+export interface WorkflowCommandManifest {
+  readonly title: string;
+  readonly description?: string | undefined;
+  readonly inputs?: readonly WorkflowQuestionSpec[] | undefined;
 }
 
 export type WorkflowWaitCondition =
@@ -80,10 +97,7 @@ export type WorkflowWaitCondition =
   | { readonly kind: 'workflow'; readonly runIds: readonly number[] }
   | {
       readonly kind: 'headless';
-      readonly ops: readonly {
-        readonly opId: string;
-        readonly launch: WorkflowHeadlessLaunch;
-      }[];
+      readonly ops: readonly WorkflowHeadlessOp[];
     };
 
 export interface WorkflowHeadlessLaunch {
@@ -91,6 +105,28 @@ export interface WorkflowHeadlessLaunch {
   readonly harness: WorkflowAgentHarness;
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
+  readonly timeoutMs: number;
+}
+
+export interface WorkflowHeadlessPromptInput {
+  readonly prompt: string;
+  readonly harness: WorkflowAgentHarness;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+}
+
+export interface WorkflowHeadlessResult {
+  readonly opId: string;
+  readonly status: 'completed' | 'failed';
+  readonly output?: string | undefined;
+  readonly error?: string | undefined;
+  readonly exitCode?: number | null | undefined;
+}
+
+export interface WorkflowHeadlessOp {
+  readonly opId: string;
+  readonly launch: WorkflowHeadlessLaunch;
 }
 
 export type WorkflowResult =
@@ -100,6 +136,7 @@ export type WorkflowResult =
   | { readonly type: 'fail'; readonly reason: string };
 
 export interface WorkflowContext {
+  readonly worktreePath: string;
   readonly spawnSession: (input: {
     readonly harness: WorkflowAgentHarness;
     readonly prompt: string;
@@ -107,13 +144,26 @@ export interface WorkflowContext {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
     readonly seededAt: string;
+    readonly paneId: number;
   }>;
   readonly inject: (agentSessionId: number, text: string) => Promise<void>;
+  readonly closePane: (paneId: number) => Promise<void>;
   readonly getConversationHistory: (
     agentSessionId: number,
   ) => Promise<readonly WorkflowConversationMessage[]>;
+  readonly runHeadlessPrompt: (input: WorkflowHeadlessPromptInput) => Promise<WorkflowHeadlessOp>;
+  readonly startWorkflow: (
+    workflowKey: string,
+    variables?: WorkflowVariables,
+    context?: {
+      readonly surfaceId?: number | undefined;
+      readonly agentSessionId?: number | null | undefined;
+    },
+  ) => Promise<number>;
   readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
 }
+
+type MaybePromise<Value> = Value | Promise<Value>;
 
 export type WorkflowStep<State = unknown> = (
   ctx: WorkflowContext,
@@ -121,14 +171,19 @@ export type WorkflowStep<State = unknown> = (
   event: unknown,
 ) => Promise<WorkflowResult>;
 
-export interface WorkflowDefinition<State = unknown> {
-  readonly initialState: State;
+export interface WorkflowDefinition<
+  State = unknown,
+  Variables extends WorkflowVariables = WorkflowVariables,
+> {
+  readonly command: (ctx: WorkflowLaunchContext) => MaybePromise<WorkflowCommandManifest>;
+  readonly validate: (ctx: WorkflowLaunchContext, variables: Variables) => MaybePromise<void>;
+  readonly init: (ctx: WorkflowLaunchContext, variables: Variables) => MaybePromise<State>;
   readonly step: WorkflowStep<State>;
 }
 
-export function defineWorkflow<State>(
-  definition: WorkflowDefinition<State>,
-): WorkflowDefinition<State> {
+export function defineWorkflow<State, Variables extends WorkflowVariables = WorkflowVariables>(
+  definition: WorkflowDefinition<State, Variables>,
+): WorkflowDefinition<State, Variables> {
   return definition;
 }
 

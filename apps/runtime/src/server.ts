@@ -76,6 +76,11 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerPtyApi(fastify, runtime);
       registerRuntimeEventsApi(fastify, runtime);
       registerPathsApi(fastify);
+      // Workflow dev triggers start in-process, fully-trusted user-authored callbacks
+      // (see docs/workflow-engine.md trust model). They are deliberately live in all
+      // builds: the runtime's boundary is loopback binding + the established
+      // unauthenticated trust posture shared by every route group above, not route
+      // gating. Revisit if the runtime ever serves untrusted callers.
       registerWorkflowDevApi(fastify, runtime);
 
       const url = yield* tryPromise(() =>

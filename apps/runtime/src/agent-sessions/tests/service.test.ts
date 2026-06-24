@@ -227,6 +227,9 @@ function fakePtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     terminate: () => Effect.die('terminate is not used'),
+    pin: () => Effect.void,
+    unpin: () => Effect.void,
+    isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }
 
@@ -243,6 +246,7 @@ function fakeHarnesses(
           cwd: input.cwd,
         };
       }),
+    buildHeadlessLaunch: () => Effect.die('buildHeadlessLaunch is not used'),
   } satisfies HarnessAdapterRegistryService;
 }
 

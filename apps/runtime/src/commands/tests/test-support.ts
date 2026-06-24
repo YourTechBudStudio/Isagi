@@ -113,6 +113,9 @@ export function fakeCommandLogPtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     terminate: () => Effect.die('terminate is not used'),
+    pin: () => Effect.void,
+    unpin: () => Effect.void,
+    isPinned: () => Effect.succeed(false),
     ...overrides,
   };
 }
@@ -421,6 +424,9 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
     resize: () => Effect.void,
     kill: () => Effect.void,
     terminate: overrides.terminate ?? (() => Effect.void),
+    pin: overrides.pin ?? (() => Effect.void),
+    unpin: overrides.unpin ?? (() => Effect.void),
+    isPinned: overrides.isPinned ?? (() => Effect.succeed(false)),
   };
 }
 

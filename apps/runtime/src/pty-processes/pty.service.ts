@@ -111,6 +111,9 @@ export interface PtyService {
     readonly ptyProcessId: number;
     readonly gracefulTimeoutMs: number;
   }) => Effect.Effect<void, PtyKillProcessError>;
+  readonly pin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
+  readonly unpin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
+  readonly isPinned: (input: { readonly ptyProcessId: number }) => Effect.Effect<boolean>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyProcessService');
@@ -125,19 +128,23 @@ export const PtyServiceLive = Layer.scoped(
     const eventBus = yield* InternalRuntimeEventBus;
     const activeAttachments = new Map<number, ActiveAttachment>();
     const pendingAttachments = new Set<number>();
+    const pinnedPtyProcessIds = new Set<number>();
     const terminations = new Map<number, PtyTerminationState>();
     const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
     yield* reconcilePersistedProcesses(repository, backend, eventBus, { startup: true });
-    yield* collectPtyGarbage(repository, backend, namespace, directory.paths.sessionsPath);
+    yield* collectPtyGarbage(repository, backend, namespace, directory.paths.sessionsPath, {
+      pinnedPtyProcessIds,
+    });
     const pollTimer = startStatusPolling(repository, backend, eventBus);
     const gcTimer = startPtyGarbageCollector(
       repository,
       backend,
       namespace,
       directory.paths.sessionsPath,
+      { pinnedPtyProcessIds },
     );
 
     const service = {
@@ -294,6 +301,15 @@ export const PtyServiceLive = Layer.scoped(
           reason: 'user_requested',
           gracefulTimeoutMs: input.gracefulTimeoutMs,
         }),
+      pin: (input) =>
+        Effect.sync(() => {
+          pinnedPtyProcessIds.add(input.ptyProcessId);
+        }),
+      unpin: (input) =>
+        Effect.sync(() => {
+          pinnedPtyProcessIds.delete(input.ptyProcessId);
+        }),
+      isPinned: (input) => Effect.sync(() => pinnedPtyProcessIds.has(input.ptyProcessId)),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>

@@ -104,6 +104,50 @@ test('PTY GC force-kills old orphan running processes and deletes their row and 
   }
 });
 
+test('PTY GC keeps pinned orphan running processes', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-pinned-orphan-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'running.ptylog'),
+          updatedAt: oldIso(),
+        });
+        writeFileSync(process.logPath, 'session log', 'utf8');
+        let kills = 0;
+        const backend = fakeBackend({
+          inspect: () => Effect.succeed({ status: 'alive' as const }),
+          kill: () =>
+            Effect.sync(() => {
+              kills += 1;
+            }),
+        });
+
+        yield* collectPtyGarbage(repository, backend, 'test-runtime', sessionsPath, {
+          nowMs: nowMs(),
+          pinnedPtyProcessIds: new Set([process.id]),
+        });
+
+        return {
+          process: yield* repository.findProcess(process.id),
+          logExists: existsSync(process.logPath),
+          kills,
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.notEqual(output.process, null);
+    assert.equal(output.logExists, true);
+    assert.equal(output.kills, 0);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('PTY GC keeps orphan running processes when backend kill fails', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-gc-kill-failed-'));
   try {

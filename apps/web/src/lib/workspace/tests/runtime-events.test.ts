@@ -11,6 +11,7 @@ import {
   worktreeCommandsQueryKey,
 } from '../query-keys.js';
 import { handleRuntimeEvent } from '../runtime-events.js';
+import { useWorkspaceStore } from '../store.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
@@ -23,6 +24,42 @@ test('runtime session change events invalidate workspace and targeted surface qu
   assert.equal(queryClient.getQueryState(workspaceQueryKey)?.isInvalidated, true);
   assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(3))?.isInvalidated, true);
   assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(99))?.isInvalidated, false);
+  queryClient.clear();
+});
+
+test('surface pane delete events invalidate detail and clear matching active pane', () => {
+  queryClient.clear();
+  queryClient.setQueryData(workspaceQueryKey, { projects: [] });
+  queryClient.setQueryData(surfaceDetailQueryKey(3), { id: 3 });
+  useWorkspaceStore.setState({
+    activeSurfaceByWorktreeId: { 2: 3 },
+    activePaneBySurfaceId: { 3: 4, 99: 100 },
+  });
+
+  handleRuntimeEvent(surfacePaneDeletedEvent());
+
+  assert.equal(queryClient.getQueryState(workspaceQueryKey)?.isInvalidated, true);
+  assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(3))?.isInvalidated, true);
+  assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 2: 3 });
+  assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, { 99: 100 });
+  queryClient.clear();
+});
+
+test('surface deleted events remove detail cache and clear active surface state', () => {
+  queryClient.clear();
+  queryClient.setQueryData(workspaceQueryKey, { projects: [] });
+  queryClient.setQueryData(surfaceDetailQueryKey(3), { id: 3 });
+  useWorkspaceStore.setState({
+    activeSurfaceByWorktreeId: { 2: 3, 20: 30 },
+    activePaneBySurfaceId: { 3: 4, 99: 100 },
+  });
+
+  handleRuntimeEvent(surfaceDeletedEvent());
+
+  assert.equal(queryClient.getQueryState(workspaceQueryKey)?.isInvalidated, true);
+  assert.equal(queryClient.getQueryData(surfaceDetailQueryKey(3)), undefined);
+  assert.deepEqual(useWorkspaceStore.getState().activeSurfaceByWorktreeId, { 20: 30 });
+  assert.deepEqual(useWorkspaceStore.getState().activePaneBySurfaceId, { 99: 100 });
   queryClient.clear();
 });
 
@@ -106,6 +143,34 @@ function commandChangedEvent() {
       worktreeId: 10,
       commandName: 'old dev',
       status: 'failed',
+    },
+  } satisfies RuntimeEvent;
+}
+
+function surfacePaneDeletedEvent() {
+  return {
+    id: 'evt_test_3',
+    type: 'surface_changed',
+    occurredAt: '2026-06-19T00:00:00.000Z',
+    payload: {
+      worktreeId: 2,
+      surfaceId: 3,
+      change: 'pane_deleted',
+      deletedPaneIds: [4],
+    },
+  } satisfies RuntimeEvent;
+}
+
+function surfaceDeletedEvent() {
+  return {
+    id: 'evt_test_4',
+    type: 'surface_changed',
+    occurredAt: '2026-06-19T00:00:00.000Z',
+    payload: {
+      worktreeId: 2,
+      surfaceId: 3,
+      change: 'deleted',
+      deletedPaneIds: [4],
     },
   } satisfies RuntimeEvent;
 }

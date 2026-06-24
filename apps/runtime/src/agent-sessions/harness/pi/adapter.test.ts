@@ -7,12 +7,12 @@ import test from 'node:test';
 import { Effect, Either } from 'effect';
 
 import { prepareHarnessIntegrationArtifacts } from '../artifacts.js';
-import { buildClaudeLaunch } from '../claude/adapter.js';
-import { buildCodexLaunch } from '../codex/adapter.js';
+import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from '../claude/adapter.js';
+import { buildCodexHeadlessLaunch, buildCodexLaunch } from '../codex/adapter.js';
 import type { AgentSessionArtifactsService } from '../ledger.js';
-import { buildOpenCodeLaunch } from '../opencode/adapter.js';
+import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from '../opencode/adapter.js';
 import { HarnessAdapterError } from '../types.js';
-import { buildPiLaunch } from './adapter.js';
+import { buildPiHeadlessLaunch, buildPiLaunch } from './adapter.js';
 
 test('Pi adapter builds a fresh launch envelope with runtime-owned extension injection', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-harness-artifacts-'));
@@ -322,6 +322,100 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
+});
+
+test('headless harness adapters build non-interactive launch envelopes', async () => {
+  const pi = await Effect.runPromise(
+    buildPiHeadlessLaunch({
+      harness: 'pi',
+      cwd: '/repo/isagi',
+      prompt: 'judge this',
+      model: 'sonnet',
+      effort: 'high',
+    }),
+  );
+  assert.equal(pi.command, 'pi');
+  assert.deepEqual(pi.args, [
+    '--print',
+    '--mode',
+    'json',
+    '--no-session',
+    '--model',
+    'sonnet',
+    '--thinking',
+    'high',
+    'judge this',
+  ]);
+  assert.equal(pi.cwd, '/repo/isagi');
+
+  const claude = await Effect.runPromise(
+    buildClaudeHeadlessLaunch({
+      harness: 'claude',
+      cwd: '/repo/isagi',
+      prompt: 'judge this',
+      model: 'sonnet',
+      effort: 'medium',
+    }),
+  );
+  assert.equal(claude.command, 'claude');
+  assert.deepEqual(claude.args, [
+    '--print',
+    '--output-format',
+    'json',
+    '--model',
+    'sonnet',
+    '--effort',
+    'medium',
+    'judge this',
+  ]);
+  assert.equal(claude.cwd, '/repo/isagi');
+
+  const codex = await Effect.runPromise(
+    buildCodexHeadlessLaunch({
+      harness: 'codex',
+      cwd: '/repo/isagi',
+      prompt: 'judge this',
+      model: 'gpt-5.4',
+      effort: 'high',
+    }),
+  );
+  assert.equal(codex.command, 'codex');
+  assert.equal(codex.args.includes('exec'), true);
+  assert.equal(codex.args.includes('--json'), true);
+  assert.deepEqual(codex.args.slice(-7), [
+    '-C',
+    '/repo/isagi',
+    '--model',
+    'gpt-5.4',
+    '-c',
+    'model_reasoning_effort="high"',
+    'judge this',
+  ]);
+  assert.equal(codex.cwd, '/repo/isagi');
+
+  const opencode = await Effect.runPromise(
+    buildOpenCodeHeadlessLaunch({
+      harness: 'opencode',
+      cwd: '/repo/isagi',
+      prompt: 'judge this',
+      model: 'anthropic/claude-sonnet-4-6',
+      effort: 'high',
+    }),
+  );
+  assert.equal(opencode.command, 'opencode');
+  assert.deepEqual(opencode.args, [
+    'run',
+    '--format',
+    'json',
+    '--dir',
+    '/repo/isagi',
+    '--model',
+    'anthropic/claude-sonnet-4-6',
+    '--variant',
+    'high',
+    'judge this',
+  ]);
+  assert.equal(opencode.cwd, '/repo/isagi');
 });
 
 function fakeArtifacts(root: string): AgentSessionArtifactsService {

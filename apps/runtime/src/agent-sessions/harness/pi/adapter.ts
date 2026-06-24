@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
 import type { AgentSessionArtifactsService } from '../ledger.js';
-import type { HarnessLaunchContext } from '../types.js';
+import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
 export function buildPiLaunch(
   input: HarnessLaunchContext,
@@ -32,6 +32,29 @@ export function buildPiLaunch(
           ptyProcessId,
           artifacts: dependencies.artifacts,
         }),
+    };
+  });
+}
+
+export function buildPiHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
+  return Effect.sync(() => {
+    console.info('[runtime] Pi headless launch envelope prepared', {
+      cwd: input.cwd,
+      model: input.model,
+      effort: input.effort,
+    });
+    return {
+      command: 'pi',
+      args: [
+        '--print',
+        '--mode',
+        'json',
+        '--no-session',
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['--thinking', input.effort] : []),
+        input.prompt,
+      ],
+      cwd: input.cwd,
     };
   });
 }

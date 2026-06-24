@@ -1,17 +1,31 @@
-import { Context, Effect, Layer } from 'effect';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 import { cont, done, suspend } from '@isagi/workflow-sdk';
 
-import type { WorkflowConversationMessage, WorkflowDefinition } from './types.js';
+import { DataDirectory } from '../persistence/index.js';
+import { loadWorkflowDefinition, type WorkflowLoadError } from './loader.js';
+import { ensureWorkflowsScaffold, type WorkflowScaffoldError } from './scaffold.js';
+import type { WorkflowDefinition } from './types.js';
+
+export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryError')<{
+  readonly code: 'scan_failed' | 'in_memory_mutation_unsupported';
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
 
 export interface WorkflowRegistryService {
-  readonly get: (workflowKey: string) => WorkflowDefinition<unknown> | undefined;
-  readonly knownKeys: () => readonly string[];
+  readonly get: (
+    workflowKey: string,
+  ) => Effect.Effect<WorkflowDefinition<unknown> | null, WorkflowRegistryError | WorkflowLoadError>;
+  readonly knownKeys: Effect.Effect<readonly string[], WorkflowRegistryError>;
   readonly addWorkflow: (
     workflowKey: string,
     definition: WorkflowDefinition<unknown>,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, WorkflowRegistryError>;
 }
 
 export const WorkflowRegistry =
@@ -19,16 +33,42 @@ export const WorkflowRegistry =
 
 export const WorkflowRegistryLive = Layer.effect(
   WorkflowRegistry,
-  Effect.sync(() => createWorkflowRegistry(builtInWorkflows())),
+  Effect.gen(function* () {
+    const directory = yield* DataDirectory;
+    yield* ensureWorkflowsScaffold({ workflowsPath: directory.paths.workflowsPath });
+    return createFilesystemWorkflowRegistry(directory.paths.workflowsPath);
+  }),
 );
 
+export function createFilesystemWorkflowRegistry(workflowsPath: string): WorkflowRegistryService {
+  return {
+    get: (workflowKey) =>
+      Effect.gen(function* () {
+        const keys = yield* knownWorkflowKeys(workflowsPath);
+        if (!keys.includes(workflowKey)) return null;
+        return yield* loadWorkflowDefinition({
+          workflowKey,
+          indexPath: workflowIndexPath(workflowsPath, workflowKey),
+        });
+      }),
+    knownKeys: knownWorkflowKeys(workflowsPath),
+    addWorkflow: () =>
+      Effect.fail(
+        new WorkflowRegistryError({
+          code: 'in_memory_mutation_unsupported',
+          message: 'Filesystem workflow registry does not support addWorkflow.',
+        }),
+      ),
+  };
+}
+
 export function createWorkflowRegistry(
-  entries: Record<string, WorkflowDefinition<unknown>> = {},
+  entries: Record<string, WorkflowDefinition<unknown>> = testWorkflows(),
 ): WorkflowRegistryService {
   const workflows = new Map(Object.entries(entries));
   return {
-    get: (workflowKey) => workflows.get(workflowKey),
-    knownKeys: () => [...workflows.keys()].sort(),
+    get: (workflowKey) => Effect.succeed(workflows.get(workflowKey) ?? null),
+    knownKeys: Effect.sync(() => [...workflows.keys()].sort()),
     addWorkflow: (workflowKey, definition) =>
       Effect.sync(() => {
         workflows.set(workflowKey, definition);
@@ -36,7 +76,7 @@ export function createWorkflowRegistry(
   };
 }
 
-function builtInWorkflows(): Record<string, WorkflowDefinition<unknown>> {
+function testWorkflows(): Record<string, WorkflowDefinition<unknown>> {
   return {
     'pi-gate': agentGateWorkflow({
       harness: 'pi',
@@ -49,7 +89,9 @@ function builtInWorkflows(): Record<string, WorkflowDefinition<unknown>> {
       prompt: 'Reply with one short sentence confirming the workflow gate is working.',
     }),
     'agentless-cont-done': {
-      initialState: { phase: 'a', snapshots: ['a'] },
+      command: () => ({ title: 'Agentless cont/done' }),
+      validate: () => {},
+      init: () => ({ phase: 'a', snapshots: ['a'] }),
       step: async (ctx, state) => {
         const current = state as { readonly phase: string; readonly snapshots: readonly string[] };
         if (current.phase === 'a') {
@@ -66,7 +108,9 @@ function builtInWorkflows(): Record<string, WorkflowDefinition<unknown>> {
       },
     },
     'agentless-suspend': {
-      initialState: { phase: 'start' },
+      command: () => ({ title: 'Agentless suspend' }),
+      validate: () => {},
+      init: () => ({ phase: 'start' }),
       step: async () =>
         suspend(
           { phase: 'waiting' },
@@ -79,7 +123,9 @@ function builtInWorkflows(): Record<string, WorkflowDefinition<unknown>> {
         ),
     },
     'agentless-throws': {
-      initialState: { phase: 'before_throw' },
+      command: () => ({ title: 'Agentless throws' }),
+      validate: () => {},
+      init: () => ({ phase: 'before_throw' }),
       step: async () => {
         throw new Error('Agentless fixture failure.');
       },
@@ -93,7 +139,9 @@ function agentGateWorkflow(input: {
   readonly prompt: string;
 }): WorkflowDefinition<unknown> {
   return {
-    initialState: { phase: 'spawn' },
+    command: () => ({ title: `${input.label} gate` }),
+    validate: () => {},
+    init: () => ({ phase: 'spawn' }),
     step: async (ctx, state, event) => {
       const current = state as {
         readonly phase: 'spawn' | 'await_turn';
@@ -148,7 +196,7 @@ function agentGateWorkflow(input: {
   };
 }
 
-function latestAssistantText(history: readonly WorkflowConversationMessage[]) {
+function latestAssistantText(history: readonly import('./types.js').WorkflowConversationMessage[]) {
   for (const message of [...history].reverse()) {
     if (message.role !== 'assistant') continue;
     const text = message.parts
@@ -160,3 +208,30 @@ function latestAssistantText(history: readonly WorkflowConversationMessage[]) {
   }
   return null;
 }
+
+function knownWorkflowKeys(workflowsPath: string) {
+  return Effect.try({
+    try: () =>
+      readdirSync(workflowsPath, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .filter((name) => !name.startsWith('.') && name !== 'node_modules')
+        .filter((name) => existsSync(workflowIndexPath(workflowsPath, name)))
+        .sort(),
+    catch: (cause) =>
+      new WorkflowRegistryError({
+        code: 'scan_failed',
+        message: `Could not scan workflows directory ${workflowsPath}.`,
+        cause,
+      }),
+  });
+}
+
+function workflowIndexPath(workflowsPath: string, workflowKey: string) {
+  return join(workflowsPath, workflowKey, 'index.ts');
+}
+
+export type WorkflowRegistryServiceError =
+  | WorkflowRegistryError
+  | WorkflowLoadError
+  | WorkflowScaffoldError;

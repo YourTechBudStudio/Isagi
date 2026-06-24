@@ -18,7 +18,11 @@ import {
   worktreeSurfaces,
 } from '../../persistence/schema.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { PtyForegroundStateLive } from '../../pty-processes/index.js';
+import {
+  PtyForegroundStateLive,
+  PtyService,
+  type PtyServiceShape,
+} from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
 import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
 import {
@@ -217,7 +221,7 @@ export function insertPtyProcess(input: {
         .set({ sessionKind: 'terminal_session', sessionId: session.id, updatedAt: now })
         .where(eq(surfacePanes.id, input.paneId))
         .run();
-      return session.id;
+      return { terminalSessionId: session.id, ptyProcessId: process.id };
     });
   });
 }
@@ -227,6 +231,7 @@ export function testLayer(
   options: {
     readonly agentService?: Partial<AgentSessionServiceShape> | undefined;
     readonly terminalService?: Partial<TerminalSessionServiceShape> | undefined;
+    readonly ptyService?: Partial<PtyServiceShape> | undefined;
   } = {},
 ) {
   const dataDirectory = makeTestDataDirectory(dataRoot);
@@ -256,6 +261,7 @@ export function testLayer(
     TerminalSessionService,
     fakeTerminalSessionService(options.terminalService),
   );
+  const ptyService = Layer.succeed(PtyService, fakePtyService(options.ptyService));
   const surfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
@@ -266,6 +272,7 @@ export function testLayer(
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
     Layer.provide(terminalService),
+    Layer.provide(ptyService),
     Layer.provide(sessionLifecycle),
     Layer.provide(internalRuntimeEventBus),
   );
@@ -278,6 +285,7 @@ export function testLayer(
     surfaceRepository,
     surfaceService,
     sessionLifecycle,
+    ptyService,
   );
 }
 
@@ -307,6 +315,25 @@ function fakeTerminalSessionService(
       Effect.die('terminal activePtyProcessId is not used by surface service tests'),
     ...overrides,
   } satisfies TerminalSessionServiceShape;
+}
+
+function fakePtyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
+  return {
+    launch: () => Effect.die('pty launch is not used by surface service tests'),
+    getAttachmentPlan: () =>
+      Effect.die('pty getAttachmentPlan is not used by surface service tests'),
+    attach: () => Effect.die('pty attach is not used by surface service tests'),
+    replay: () => Effect.die('pty replay is not used by surface service tests'),
+    write: () => Effect.die('pty write is not used by surface service tests'),
+    writeInput: () => Effect.die('pty writeInput is not used by surface service tests'),
+    resize: () => Effect.die('pty resize is not used by surface service tests'),
+    kill: () => Effect.die('pty kill is not used by surface service tests'),
+    terminate: () => Effect.void,
+    pin: () => Effect.void,
+    unpin: () => Effect.void,
+    isPinned: () => Effect.succeed(false),
+    ...overrides,
+  } satisfies PtyServiceShape;
 }
 
 export function agentSessionRowForTest(input: {

@@ -51,6 +51,7 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'agent_session_changed',
   'terminal_session_changed',
   'command_changed',
+  'surface_changed',
   'attention_snapshot',
   'attention_source_changed',
   'attention_source_removed',
@@ -111,6 +112,28 @@ export const commandChangedEventSchema = Schema.Struct({
   }),
 });
 
+const surfaceChangedBasePayloadFields = {
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+} as const;
+
+export const surfaceChangedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('surface_changed'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Union(
+    Schema.Struct({
+      ...surfaceChangedBasePayloadFields,
+      change: Schema.Literal('created', 'renamed', 'layout_changed', 'session_changed'),
+    }),
+    Schema.Struct({
+      ...surfaceChangedBasePayloadFields,
+      change: Schema.Literal('pane_deleted', 'deleted'),
+      deletedPaneIds: Schema.Array(positiveIntegerSchema),
+    }),
+  ),
+});
+
 export const attentionSnapshotEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('attention_snapshot'),
@@ -140,6 +163,7 @@ export const runtimeEventSchema = Schema.Union(
   agentSessionChangedEventSchema,
   terminalSessionChangedEventSchema,
   commandChangedEventSchema,
+  surfaceChangedEventSchema,
   attentionSnapshotEventSchema,
   attentionSourceChangedEventSchema,
   attentionSourceRemovedEventSchema,
@@ -158,6 +182,7 @@ export type TerminalSessionChangedEvent = Schema.Schema.Type<
   typeof terminalSessionChangedEventSchema
 >;
 export type CommandChangedEvent = Schema.Schema.Type<typeof commandChangedEventSchema>;
+export type SurfaceChangedEvent = Schema.Schema.Type<typeof surfaceChangedEventSchema>;
 export type AttentionSnapshotEvent = Schema.Schema.Type<typeof attentionSnapshotEventSchema>;
 export type AttentionSourceChangedEvent = Schema.Schema.Type<
   typeof attentionSourceChangedEventSchema

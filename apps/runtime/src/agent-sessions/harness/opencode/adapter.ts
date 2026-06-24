@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
 import type { AgentSessionArtifactsService } from '../ledger.js';
-import type { HarnessLaunchContext } from '../types.js';
+import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
 export function buildOpenCodeLaunch(
   input: HarnessLaunchContext,
@@ -36,6 +36,30 @@ export function buildOpenCodeLaunch(
             OPENCODE_CONFIG_CONTENT: configContent,
           },
         }),
+    };
+  });
+}
+
+export function buildOpenCodeHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
+  return Effect.sync(() => {
+    console.info('[runtime] OpenCode headless launch envelope prepared', {
+      cwd: input.cwd,
+      model: input.model,
+      effort: input.effort,
+    });
+    return {
+      command: 'opencode',
+      args: [
+        'run',
+        '--format',
+        'json',
+        '--dir',
+        input.cwd,
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['--variant', input.effort] : []),
+        input.prompt,
+      ],
+      cwd: input.cwd,
     };
   });
 }

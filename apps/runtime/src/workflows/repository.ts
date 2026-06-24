@@ -8,6 +8,8 @@ import {
 } from '../persistence/index.js';
 import { workflowRunEvents, workflowRuns } from '../persistence/schema.js';
 import type {
+  WorkflowWaitCondition,
+  WorkflowHeadlessResult,
   WorkflowRunRow,
   WorkflowStatus,
   WorkflowUiFeedback,
@@ -27,10 +29,6 @@ export interface WorkflowRepositoryService {
   readonly listReadyRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
   readonly pauseNonTerminalRuns: Effect.Effect<number, DatabaseError>;
-  readonly setSurfaceId: (input: {
-    readonly runId: number;
-    readonly surfaceId: number;
-  }) => Effect.Effect<void, DatabaseError>;
   readonly claimReadyRun: (input: {
     readonly runId: number;
     readonly owner: string;
@@ -39,6 +37,12 @@ export interface WorkflowRepositoryService {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
   }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly findWaitingWorkflowRuns: (
+    childRunId: number,
+  ) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly resolveWorkflowJoin: (
+    condition: Extract<WorkflowWaitCondition, { readonly kind: 'workflow' }>,
+  ) => Effect.Effect<WorkflowJoinResolution, DatabaseError>;
   readonly wakeWaitingRun: (input: {
     readonly runId: number;
     readonly resumePayload: WorkflowResumePayload;
@@ -47,7 +51,7 @@ export interface WorkflowRepositoryService {
     readonly runId: number;
     readonly resumePayload?: WorkflowResumePayload | undefined;
   }) => Effect.Effect<boolean, DatabaseError>;
-  readonly rearmPausedTurnRun: (runId: number) => Effect.Effect<boolean, DatabaseError>;
+  readonly rearmPausedRun: (runId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly completeCont: (input: {
     readonly runId: number;
     readonly state: unknown;
@@ -94,7 +98,26 @@ type WorkflowRunEventTrigger =
 
 export type WorkflowResumePayload =
   | { readonly outcome: 'ended'; readonly recordedAt: string }
-  | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string };
+  | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string }
+  | { readonly kind: 'user_continue' }
+  | {
+      readonly kind: 'user_input';
+      readonly answers: Record<string, string | string[] | boolean>;
+    }
+  | { readonly kind: 'headless'; readonly results: readonly WorkflowHeadlessResult[] }
+  | { readonly kind: 'workflow'; readonly results: readonly WorkflowJoinResult[] };
+
+export interface WorkflowJoinResult {
+  readonly runId: number;
+  readonly status: 'done' | 'failed';
+  readonly result?: unknown | undefined;
+  readonly error?: WorkflowRunErrorPayload | undefined;
+}
+
+export type WorkflowJoinResolution =
+  | { readonly status: 'pending' }
+  | { readonly status: 'missing'; readonly runId: number }
+  | { readonly status: 'complete'; readonly results: readonly WorkflowJoinResult[] };
 
 export const WorkflowRepository = Context.GenericTag<WorkflowRepositoryService>(
   'isagi/WorkflowRepository',
@@ -166,13 +189,6 @@ export const WorkflowRepositoryLive = Layer.effect(
           .all();
         return rows.length;
       }),
-      setSurfaceId: (input) =>
-        database.use('set_workflow_surface_id', (db) => {
-          db.update(workflowRuns)
-            .set({ surfaceId: input.surfaceId, updatedAt: timestamp() })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-        }),
       claimReadyRun: (input) =>
         database.use('claim_ready_workflow_run', (db) => {
           const row = db
@@ -200,6 +216,47 @@ export const WorkflowRepositoryLive = Layer.effect(
             .all()
             .map(workflowRunRow),
         ),
+      findWaitingWorkflowRuns: (childRunId) =>
+        database.use('find_waiting_workflow_runs', (db) =>
+          db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.status, 'waiting'),
+                eq(workflowRuns.waitKind, 'workflow'),
+                sql`EXISTS (SELECT 1 FROM json_each(${workflowRuns.waitCondition}, '$.runIds') WHERE json_each.value = ${childRunId})`,
+              ),
+            )
+            .orderBy(asc(workflowRuns.id))
+            .all()
+            .map(workflowRunRow),
+        ),
+      resolveWorkflowJoin: (condition) =>
+        database.use('resolve_workflow_join', (db) => {
+          const results: WorkflowJoinResult[] = [];
+          for (const runId of condition.runIds) {
+            const row = db
+              .select(runColumns)
+              .from(workflowRuns)
+              .where(eq(workflowRuns.id, runId))
+              .get();
+            if (!row) return { status: 'missing', runId } satisfies WorkflowJoinResolution;
+            if (row.status !== 'done' && row.status !== 'failed') {
+              return { status: 'pending' } satisfies WorkflowJoinResolution;
+            }
+            results.push({
+              runId,
+              status: row.status,
+              result: row.status === 'done' ? parseOptionalJson(row.resultJson) : undefined,
+              error:
+                row.status === 'failed'
+                  ? (parseOptionalJson(row.error) as WorkflowRunErrorPayload | undefined)
+                  : undefined,
+            });
+          }
+          return { status: 'complete', results } satisfies WorkflowJoinResolution;
+        }),
       wakeWaitingRun: (input) =>
         database.transaction('wake_waiting_workflow_run', (db) => {
           const row = db
@@ -244,8 +301,8 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return Boolean(row);
         }),
-      rearmPausedTurnRun: (runId) =>
-        database.transaction('rearm_paused_turn_workflow_run', (db) => {
+      rearmPausedRun: (runId) =>
+        database.transaction('rearm_paused_workflow_run', (db) => {
           const row = db
             .update(workflowRuns)
             .set({
@@ -258,7 +315,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               and(
                 eq(workflowRuns.id, runId),
                 eq(workflowRuns.status, 'paused'),
-                eq(workflowRuns.waitKind, 'turn'),
+                sql`${workflowRuns.waitKind} IS NOT NULL`,
               ),
             )
             .returning({ id: workflowRuns.id })
@@ -416,6 +473,10 @@ function stateSnapshotJson(input: WorkflowStateSnapshotInput) {
 
 function json(value: unknown) {
   return JSON.stringify(value);
+}
+
+function parseOptionalJson(value: string | null) {
+  return value === null ? undefined : (JSON.parse(value) as unknown);
 }
 
 function timestamp() {

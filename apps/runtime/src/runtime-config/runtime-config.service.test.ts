@@ -96,5 +96,6 @@ function paths(root: string): IsagiDataDirectory {
     statePath: resolve(root, 'state.json'),
     worktreesPath: resolve(root, 'worktrees'),
     sessionsPath: resolve(root, 'sessions'),
+    workflowsPath: resolve(root, 'workflows'),
   };
 }

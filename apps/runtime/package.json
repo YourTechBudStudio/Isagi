@@ -12,7 +12,7 @@
     "dev": "cross-env ISAGI_DATA_DIR=../../data/.isagi tsx src/index.ts",
     "dev:fixed": "cross-env ISAGI_DATA_DIR=../../data/.isagi PORT=17373 tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
+    "test": "pnpm -C ../../packages/workflow-sdk build && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

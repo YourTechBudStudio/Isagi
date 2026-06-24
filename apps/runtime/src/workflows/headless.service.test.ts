@@ -1,0 +1,121 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { Effect, Layer } from 'effect';
+
+import {
+  HarnessAdapterRegistry,
+  type HarnessAdapterRegistryService,
+} from '../agent-sessions/harness/index.js';
+import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
+import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
+import { InternalRuntimeEventBus, InternalRuntimeEventBusLive } from '../runtime-events/index.js';
+import { WorkflowHeadless, WorkflowHeadlessLive } from './headless.js';
+
+// The live tracker owns PTY lifetime for headless ops. These tests cover the
+// resource-ownership edges: an op must not outlive its run, and consumed ops must
+// not linger in the in-memory map. Pure output parsing lives in `headless.test.ts`.
+
+type PtyCalls = { readonly terminated: number[]; readonly unpinned: number[] };
+
+const firstPtyProcessId = 100;
+
+function makeFakePty(calls: PtyCalls): PtyServiceShape {
+  let nextPtyProcessId = firstPtyProcessId;
+  return {
+    launch: () =>
+      Effect.sync(() => {
+        const ptyProcessId = nextPtyProcessId;
+        nextPtyProcessId += 1;
+        return { ptyProcessId, command: 'agent', args: [], cwd: '/tmp/wt', logPath: null };
+      }),
+    pin: () => Effect.void,
+    unpin: (input) =>
+      Effect.sync(() => {
+        calls.unpinned.push(input.ptyProcessId);
+      }),
+    terminate: (input) =>
+      Effect.sync(() => {
+        calls.terminated.push(input.ptyProcessId);
+      }),
+    getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
+    attach: () => Effect.die('pty attach is not used'),
+    replay: () => Effect.die('pty replay is not used'),
+    write: () => Effect.die('pty write is not used'),
+    writeInput: () => Effect.die('pty writeInput is not used'),
+    resize: () => Effect.die('pty resize is not used'),
+    kill: () => Effect.die('pty kill is not used'),
+    isPinned: () => Effect.succeed(false),
+  };
+}
+
+const fakeHarnesses: HarnessAdapterRegistryService = {
+  buildLaunch: () => Effect.die('buildLaunch is not used'),
+  buildHeadlessLaunch: () =>
+    Effect.succeed({ command: 'agent', args: [], cwd: '/tmp/wt' } satisfies LaunchPtyProcessInput),
+};
+
+function makeLayer(calls: PtyCalls) {
+  // The bus layer is shared by reference, so the tracker's subscription and the
+  // test's publisher resolve to the same in-memory event bus instance.
+  const bus = InternalRuntimeEventBusLive;
+  const headless = WorkflowHeadlessLive.pipe(
+    Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses)),
+    Layer.provide(Layer.succeed(PtyService, makeFakePty(calls))),
+    Layer.provide(bus),
+  );
+  return Layer.merge(headless, bus);
+}
+
+const waitUntil = (predicate: () => boolean) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (predicate()) return;
+      yield* Effect.sleep('5 millis');
+    }
+  });
+
+const launchPrompt = { harness: 'claude', prompt: 'judge', timeoutMs: 60_000 } as const;
+
+test('a terminal workflow run cancels its in-flight headless op', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      const bus = yield* InternalRuntimeEventBus;
+      const op = yield* headless.runHeadlessPrompt({
+        runId: 7,
+        worktreePath: '/tmp/wt',
+        prompt: launchPrompt,
+      });
+      yield* bus.publish({ type: 'workflow_run_terminal', runId: 7, status: 'failed' });
+      yield* waitUntil(() => calls.terminated.length > 0);
+      const after = yield* headless.completedResults({ kind: 'headless', ops: [op] });
+      return { after };
+    }).pipe(Effect.provide(makeLayer(calls)), Effect.scoped),
+  );
+
+  assert.deepEqual(calls.terminated, [firstPtyProcessId]);
+  assert.deepEqual(calls.unpinned, [firstPtyProcessId]);
+  assert.equal(result.after, null);
+});
+
+test('releaseOps tears down a tracked headless op and frees its PTY', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      const op = yield* headless.runHeadlessPrompt({
+        runId: 7,
+        worktreePath: '/tmp/wt',
+        prompt: launchPrompt,
+      });
+      yield* headless.releaseOps({ opIds: [op.opId] });
+      const after = yield* headless.completedResults({ kind: 'headless', ops: [op] });
+      return { after };
+    }).pipe(Effect.provide(makeLayer(calls)), Effect.scoped),
+  );
+
+  assert.deepEqual(calls.terminated, [firstPtyProcessId]);
+  assert.equal(result.after, null);
+});

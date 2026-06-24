@@ -2,6 +2,14 @@ export { registerWorkflowDevApi } from './api.js';
 export { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 export { inject, workflowContext } from './context.js';
 export {
+  defaultHeadlessTimeoutMs,
+  extractHeadlessOutput,
+  normalizeHeadlessLaunch,
+  WorkflowHeadless,
+  WorkflowHeadlessLive,
+  type WorkflowHeadlessService,
+} from './headless.js';
+export {
   createWorkflowRegistry,
   WorkflowRegistry,
   WorkflowRegistryLive,

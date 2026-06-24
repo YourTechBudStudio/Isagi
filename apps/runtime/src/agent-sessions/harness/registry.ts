@@ -5,16 +5,23 @@ import type { AgentHarness } from '@isagi/contracts';
 import { DataDirectory } from '../../persistence/index.js';
 import type { LaunchPtyProcessInput } from '../../pty-processes/types.js';
 import { prepareHarnessIntegrationArtifacts } from './artifacts.js';
-import { buildClaudeLaunch } from './claude/adapter.js';
-import { buildCodexLaunch } from './codex/adapter.js';
+import { buildClaudeHeadlessLaunch, buildClaudeLaunch } from './claude/adapter.js';
+import { buildCodexHeadlessLaunch, buildCodexLaunch } from './codex/adapter.js';
 import { AgentSessionArtifacts } from './ledger.js';
-import { buildOpenCodeLaunch } from './opencode/adapter.js';
-import { buildPiLaunch } from './pi/adapter.js';
-import { HarnessAdapterError, type HarnessLaunchContext } from './types.js';
+import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from './opencode/adapter.js';
+import { buildPiHeadlessLaunch, buildPiLaunch } from './pi/adapter.js';
+import {
+  HarnessAdapterError,
+  type HarnessHeadlessLaunchContext,
+  type HarnessLaunchContext,
+} from './types.js';
 
 export interface HarnessAdapterRegistryService {
   readonly buildLaunch: (
     input: HarnessLaunchContext,
+  ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
+  readonly buildHeadlessLaunch: (
+    input: HarnessHeadlessLaunchContext,
   ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>;
 }
 
@@ -54,6 +61,17 @@ export const HarnessAdapterRegistryLive = Layer.effect(
       AgentHarness,
       (input: HarnessLaunchContext) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>
     >;
+    const headlessAdapterFactories = {
+      pi: (input) => buildPiHeadlessLaunch(input),
+      opencode: (input) => buildOpenCodeHeadlessLaunch(input),
+      claude: (input) => buildClaudeHeadlessLaunch(input),
+      codex: (input) => buildCodexHeadlessLaunch(input),
+    } satisfies Record<
+      AgentHarness,
+      (
+        input: HarnessHeadlessLaunchContext,
+      ) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>
+    >;
 
     return {
       buildLaunch: (input) =>
@@ -70,6 +88,23 @@ export const HarnessAdapterRegistryLive = Layer.effect(
               new HarnessAdapterError(
                 'unsupported_harness',
                 `Harness ${input.harness} is not wired for Isagi restoration yet.`,
+              ),
+            );
+          }
+          return yield* build(input);
+        }),
+      buildHeadlessLaunch: (input) =>
+        Effect.gen(function* () {
+          const build = headlessAdapterFactories[input.harness];
+          if (!build) {
+            console.warn('[runtime] Headless harness launch rejected: unsupported adapter', {
+              harness: input.harness,
+              cwd: input.cwd,
+            });
+            return yield* Effect.fail(
+              new HarnessAdapterError(
+                'unsupported_harness',
+                `Harness ${input.harness} is not wired for Isagi headless prompts yet.`,
               ),
             );
           }

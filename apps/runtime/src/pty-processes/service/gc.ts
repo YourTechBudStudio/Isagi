@@ -21,10 +21,13 @@ export function startPtyGarbageCollector(
   backend: PtyBackend,
   runtimeNamespace: string,
   sessionsPath: string,
+  options: {
+    readonly pinnedPtyProcessIds?: ReadonlySet<number> | undefined;
+  } = {},
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      collectPtyGarbage(repository, backend, runtimeNamespace, sessionsPath).pipe(
+      collectPtyGarbage(repository, backend, runtimeNamespace, sessionsPath, options).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn('[runtime] PTY GC failed', error);
@@ -42,15 +45,19 @@ export function collectPtyGarbage(
   backend: PtyBackend,
   runtimeNamespace: string,
   sessionsPath: string,
-  options: { readonly nowMs?: number | undefined } = {},
+  options: {
+    readonly nowMs?: number | undefined;
+    readonly pinnedPtyProcessIds?: ReadonlySet<number> | undefined;
+  } = {},
 ) {
   return Effect.gen(function* () {
     yield* cleanupBackendProcesses(repository, backend, runtimeNamespace).pipe(
       tagGcPhaseError('backend_processes'),
     );
-    yield* cleanupOrphanPtyProcesses(repository, backend, options.nowMs ?? Date.now()).pipe(
-      tagGcPhaseError('orphan_processes'),
-    );
+    yield* cleanupOrphanPtyProcesses(repository, backend, {
+      nowMs: options.nowMs ?? Date.now(),
+      pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
+    }).pipe(tagGcPhaseError('orphan_processes'));
     yield* cleanupOrphanPtyLogs(repository, sessionsPath, {
       minAgeMs: orphanPtyLogRetentionMs,
       nowMs: options.nowMs,
@@ -99,12 +106,21 @@ function cleanupBackendProcesses(
 function cleanupOrphanPtyProcesses(
   repository: PtyRepositoryService,
   backend: PtyBackend,
-  nowMs: number,
+  options: {
+    readonly nowMs: number;
+    readonly pinnedPtyProcessIds: ReadonlySet<number>;
+  },
 ) {
   return Effect.gen(function* () {
     const processes = yield* repository.listOrphanProcesses;
     for (const process of processes) {
-      if (!isRetentionElapsed(process.updatedAt, nowMs)) continue;
+      if (options.pinnedPtyProcessIds.has(process.id)) {
+        console.info(
+          `[runtime] Keeping orphan PTY process because it is pinned ptyProcessId=${process.id}`,
+        );
+        continue;
+      }
+      if (!isRetentionElapsed(process.updatedAt, options.nowMs)) continue;
       yield* cleanupOrphanPtyProcess(repository, backend, process);
     }
   });

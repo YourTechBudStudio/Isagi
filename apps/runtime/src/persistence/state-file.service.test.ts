@@ -17,6 +17,7 @@ test('malformed state file recovery is logged and stays out of the returned stat
     statePath: resolve(root, 'state.json'),
     worktreesPath: resolve(root, 'worktrees'),
     sessionsPath: resolve(root, 'sessions'),
+    workflowsPath: resolve(root, 'workflows'),
   } satisfies IsagiDataDirectory;
   writeFileSync(paths.statePath, '{ not json', 'utf8');
 
@@ -58,6 +59,7 @@ test('active context writes keep the highest revision durable', async () => {
     statePath: resolve(root, 'state.json'),
     worktreesPath: resolve(root, 'worktrees'),
     sessionsPath: resolve(root, 'sessions'),
+    workflowsPath: resolve(root, 'workflows'),
   } satisfies IsagiDataDirectory;
 
   try {

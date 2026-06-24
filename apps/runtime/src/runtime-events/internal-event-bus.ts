@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
-import type { SessionStatus } from '@isagi/contracts';
+import type { SessionStatus, SurfaceChangedEvent } from '@isagi/contracts';
+
+type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
 
 export type InternalRuntimeEvent =
   | {
@@ -40,6 +42,10 @@ export type InternalRuntimeEvent =
       readonly terminalSessionId: number;
     }
   | {
+      readonly type: 'surface_changed';
+      readonly payload: SurfaceChangedPayload;
+    }
+  | {
       readonly type: 'pty_process_started';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
@@ -70,6 +76,16 @@ export type InternalRuntimeEvent =
   | {
       readonly type: 'pty_foreground_command_ended';
       readonly ptyProcessId: number;
+    }
+  | {
+      readonly type: 'headless_op_completed';
+      readonly runId: number;
+      readonly opId: string;
+    }
+  | {
+      readonly type: 'workflow_run_terminal';
+      readonly runId: number;
+      readonly status: 'done' | 'failed';
     };
 
 export interface InternalRuntimeEventSubscription {
