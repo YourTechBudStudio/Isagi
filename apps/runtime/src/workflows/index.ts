@@ -1,5 +1,5 @@
 export { registerWorkflowDevApi } from './api.js';
-export { cont, done, suspend } from './constructors.js';
+export { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 export { inject, workflowContext } from './context.js';
 export {
   createWorkflowRegistry,

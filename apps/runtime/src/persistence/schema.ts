@@ -1,5 +1,7 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+import { workflowWaitKinds } from '@isagi/workflow-sdk';
+
 export const projects = sqliteTable(
   'projects',
   {
@@ -225,9 +227,7 @@ export const workflowRuns = sqliteTable(
     status: text('status', {
       enum: ['paused', 'waiting', 'ready', 'running', 'done', 'failed'],
     }).notNull(),
-    waitKind: text('wait_kind', {
-      enum: ['turn', 'user_continue', 'user_input', 'child_workflow', 'headless'],
-    }),
+    waitKind: text('wait_kind', { enum: workflowWaitKinds }),
     waitCondition: text('wait_condition'),
     resumePayload: text('resume_payload'),
     stateJson: text('state_json').notNull(),
@@ -235,6 +235,7 @@ export const workflowRuns = sqliteTable(
     owner: text('owner'),
     uiFeedback: text('ui_feedback'),
     error: text('error'),
+    resultJson: text('result_json'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -244,6 +245,20 @@ export const workflowRuns = sqliteTable(
     index('workflow_runs_worktree_idx').on(table.worktreeId),
     index('workflow_runs_surface_idx').on(table.surfaceId),
   ],
+);
+
+export const workflowRunEvents = sqliteTable(
+  'workflow_run_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    workflowRunId: integer('workflow_run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    recordedAt: text('recorded_at').notNull(),
+    state: text('state').notNull(),
+    trigger: text('trigger').notNull(),
+  },
+  (table) => [index('workflow_run_events_run_idx').on(table.workflowRunId, table.id)],
 );
 
 export const worktreeEnvironmentStates = sqliteTable(

@@ -43,6 +43,13 @@
       "when": 1782187616593,
       "tag": "0005_odd_nekra",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1782266394488,
+      "tag": "0006_rapid_synch",
+      "breakpoints": true
     }
   ]
 }

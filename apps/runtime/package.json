@@ -19,6 +19,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/websocket": "^11.2.0",
     "@isagi/contracts": "workspace:*",
+    "@isagi/workflow-sdk": "workspace:*",
     "better-sqlite3": "^12.10.0",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.21.2",

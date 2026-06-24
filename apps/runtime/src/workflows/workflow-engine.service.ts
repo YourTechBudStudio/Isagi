@@ -59,14 +59,19 @@ export const WorkflowEngineLive = Layer.scoped(
 
     const poke = wakeQueue.offer(void 0).pipe(Effect.asVoid);
 
-    const failRun = (run: WorkflowRunRow, error: WorkflowRunErrorPayload) =>
-      repository.failRun({ runId: run.id, error });
+    const failRun = (
+      run: WorkflowRunRow,
+      error: WorkflowRunErrorPayload,
+      stateSnapshot: { readonly state: unknown } | { readonly stateJson: string },
+    ) => repository.failRun({ runId: run.id, error, stateSnapshot, thrown: true });
 
     const runClaimedStep = (run: WorkflowRunRow) =>
       Effect.gen(function* () {
         const definition = registry.get(run.workflowKey);
         if (!definition) {
-          yield* failRun(run, unknownWorkflowError(run.workflowKey, registry.knownKeys()));
+          yield* failRun(run, unknownWorkflowError(run.workflowKey, registry.knownKeys()), {
+            stateJson: run.stateJson,
+          });
           return;
         }
 
@@ -84,7 +89,7 @@ export const WorkflowEngineLive = Layer.scoped(
           catch: (cause) => cause,
         }).pipe(Effect.either);
         if (Either.isLeft(state)) {
-          yield* failRun(run, stepErrorPayload(state.left, run));
+          yield* failRun(run, stepErrorPayload(state.left, run), { stateJson: run.stateJson });
           return;
         }
         const event = yield* Effect.try({
@@ -92,7 +97,7 @@ export const WorkflowEngineLive = Layer.scoped(
           catch: (cause) => cause,
         }).pipe(Effect.either);
         if (Either.isLeft(event)) {
-          yield* failRun(run, stepErrorPayload(event.left, run));
+          yield* failRun(run, stepErrorPayload(event.left, run), { state: state.right });
           return;
         }
         const result = yield* Effect.tryPromise({
@@ -101,11 +106,11 @@ export const WorkflowEngineLive = Layer.scoped(
         }).pipe(Effect.either);
 
         if (Either.isLeft(result)) {
-          yield* failRun(run, stepErrorPayload(result.left, run));
+          yield* failRun(run, stepErrorPayload(result.left, run), { state: state.right });
           return;
         }
 
-        yield* persistStepResult(repository, run, result.right);
+        yield* persistStepResult(repository, run, state.right, result.right);
         // Close the suspend-commit race. A turn can finish in the window between
         // the step returning and `completeSuspend` persisting the `waiting` row.
         // The bus is edge-triggered and lossy, so a `turn_ended` published in that
@@ -224,6 +229,7 @@ export const WorkflowEngineLive = Layer.scoped(
 function persistStepResult(
   repository: WorkflowRepositoryService,
   run: WorkflowRunRow,
+  currentState: unknown,
   result: WorkflowResult,
 ) {
   if (result.type === 'cont') {
@@ -240,7 +246,19 @@ function persistStepResult(
   }
 
   if (result.type === 'done') {
-    return repository.completeDone(run.id);
+    return repository.completeDone({ runId: run.id, state: currentState, value: result.value });
+  }
+
+  if (result.type === 'fail') {
+    return repository.failRun({
+      runId: run.id,
+      error: {
+        message: result.reason,
+        context: { workflowKey: run.workflowKey, returnedFail: true },
+      },
+      stateSnapshot: { state: currentState },
+      thrown: false,
+    });
   }
 
   return repository.failRun({
@@ -249,6 +267,8 @@ function persistStepResult(
       message: `Workflow step returned an unsupported result for run ${run.id}.`,
       context: { workflowKey: run.workflowKey },
     },
+    stateSnapshot: { state: currentState },
+    thrown: true,
   });
 }
 
@@ -275,6 +295,8 @@ function continuePausedRun(input: {
       message: `Unsupported workflow continue wait_kind '${input.run.waitKind}'.`,
       context: { workflowRunId: input.run.id, waitKind: input.run.waitKind },
     },
+    stateSnapshot: { stateJson: input.run.stateJson },
+    thrown: true,
   });
 }
 
@@ -294,6 +316,8 @@ function continuePausedTurnRun(input: {
           message: `Workflow run ${input.run.id} has an invalid turn wait_condition.`,
           context: { workflowRunId: input.run.id },
         },
+        stateSnapshot: { stateJson: input.run.stateJson },
+        thrown: true,
       });
       return;
     }
@@ -314,6 +338,8 @@ function continuePausedTurnRun(input: {
             metadataStatus: metadata.status,
           },
         },
+        stateSnapshot: { stateJson: input.run.stateJson },
+        thrown: true,
       });
       return;
     }
@@ -458,7 +484,7 @@ function stepErrorPayload(cause: unknown, run: WorkflowRunRow): WorkflowRunError
 function taggedErrorContext(cause: unknown): Record<string, unknown> {
   if (!cause || typeof cause !== 'object') return {};
   const context: Record<string, unknown> = {};
-  const tag = (cause as { readonly _tag?: unknown })._tag;
+  const tag = (cause as { readonly _tag?: unknown })['_tag'];
   const code = (cause as { readonly code?: unknown }).code;
   if (typeof tag === 'string') context.errorTag = tag;
   if (typeof code === 'string') context.errorCode = code;

@@ -1,8 +1,12 @@
 import { and, asc, eq, getTableColumns, sql, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
-import { workflowRuns } from '../persistence/schema.js';
+import {
+  DatabaseError,
+  RuntimeDatabase,
+  type RuntimeDatabaseService,
+} from '../persistence/index.js';
+import { workflowRunEvents, workflowRuns } from '../persistence/schema.js';
 import type {
   WorkflowRunRow,
   WorkflowStatus,
@@ -54,10 +58,16 @@ export interface WorkflowRepositoryService {
     readonly waitKind: WorkflowWaitKind;
     readonly waitCondition: unknown;
   }) => Effect.Effect<void, DatabaseError>;
-  readonly completeDone: (runId: number) => Effect.Effect<void, DatabaseError>;
+  readonly completeDone: (input: {
+    readonly runId: number;
+    readonly state: unknown;
+    readonly value?: unknown | undefined;
+  }) => Effect.Effect<void, DatabaseError>;
   readonly failRun: (input: {
     readonly runId: number;
     readonly error: WorkflowRunErrorPayload;
+    readonly stateSnapshot: WorkflowStateSnapshotInput;
+    readonly thrown: boolean;
   }) => Effect.Effect<void, DatabaseError>;
   readonly setUiFeedback: (input: {
     readonly runId: number;
@@ -70,6 +80,17 @@ export interface WorkflowRunErrorPayload {
   readonly stack?: string | undefined;
   readonly context?: Record<string, unknown> | undefined;
 }
+
+export type WorkflowStateSnapshotInput =
+  | { readonly state: unknown }
+  | { readonly stateJson: string };
+
+type WorkflowRunEventTrigger =
+  | { readonly kind: 'initial' }
+  | { readonly kind: 'cont' }
+  | { readonly kind: 'suspend'; readonly waitKind: WorkflowWaitKind }
+  | { readonly kind: 'done'; readonly hasValue: boolean }
+  | { readonly kind: 'fail'; readonly thrown: boolean };
 
 export type WorkflowResumePayload =
   | { readonly outcome: 'ended'; readonly recordedAt: string }
@@ -104,11 +125,18 @@ export const WorkflowRepositoryLive = Layer.effect(
               owner: null,
               uiFeedback: null,
               error: null,
+              resultJson: null,
               createdAt: now,
               updatedAt: now,
             })
             .returning(runColumns)
             .get();
+          insertRunEvent(db, {
+            workflowRunId: inserted.id,
+            recordedAt: now,
+            stateJson: json(input.state),
+            trigger: { kind: 'initial' },
+          });
           return workflowRunRow(inserted);
         }),
       listReadyRuns: database.use('list_ready_workflow_runs', (db) =>
@@ -239,38 +267,56 @@ export const WorkflowRepositoryLive = Layer.effect(
         }),
       completeCont: (input) =>
         database.transaction('complete_workflow_cont', (db) => {
+          const now = timestamp();
+          const stateJson = json(input.state);
           db.update(workflowRuns)
             .set({
               status: 'ready',
               waitKind: null,
               waitCondition: null,
               resumePayload: null,
-              stateJson: json(input.state),
+              stateJson,
               owner: null,
               error: null,
-              updatedAt: timestamp(),
+              updatedAt: now,
             })
             .where(eq(workflowRuns.id, input.runId))
             .run();
+          insertRunEvent(db, {
+            workflowRunId: input.runId,
+            recordedAt: now,
+            stateJson,
+            trigger: { kind: 'cont' },
+          });
         }),
       completeSuspend: (input) =>
         database.transaction('complete_workflow_suspend', (db) => {
+          const now = timestamp();
+          const stateJson = json(input.state);
           db.update(workflowRuns)
             .set({
               status: 'waiting',
               waitKind: input.waitKind,
               waitCondition: json(input.waitCondition),
               resumePayload: null,
-              stateJson: json(input.state),
+              stateJson,
               owner: null,
               error: null,
-              updatedAt: timestamp(),
+              updatedAt: now,
             })
             .where(eq(workflowRuns.id, input.runId))
             .run();
+          insertRunEvent(db, {
+            workflowRunId: input.runId,
+            recordedAt: now,
+            stateJson,
+            trigger: { kind: 'suspend', waitKind: input.waitKind },
+          });
         }),
-      completeDone: (runId) =>
+      completeDone: (input) =>
         database.transaction('complete_workflow_done', (db) => {
+          const now = timestamp();
+          const hasValue = input.value !== undefined;
           db.update(workflowRuns)
             .set({
               status: 'done',
@@ -279,13 +325,21 @@ export const WorkflowRepositoryLive = Layer.effect(
               resumePayload: null,
               owner: null,
               error: null,
-              updatedAt: timestamp(),
+              resultJson: hasValue ? json(input.value) : null,
+              updatedAt: now,
             })
-            .where(eq(workflowRuns.id, runId))
+            .where(eq(workflowRuns.id, input.runId))
             .run();
+          insertRunEvent(db, {
+            workflowRunId: input.runId,
+            recordedAt: now,
+            stateJson: stateSnapshotJson({ state: input.state }),
+            trigger: { kind: 'done', hasValue },
+          });
         }),
       failRun: (input) =>
         database.transaction('fail_workflow_run', (db) => {
+          const now = timestamp();
           db.update(workflowRuns)
             .set({
               status: 'failed',
@@ -294,10 +348,16 @@ export const WorkflowRepositoryLive = Layer.effect(
               resumePayload: null,
               owner: null,
               error: json(input.error),
-              updatedAt: timestamp(),
+              updatedAt: now,
             })
             .where(eq(workflowRuns.id, input.runId))
             .run();
+          insertRunEvent(db, {
+            workflowRunId: input.runId,
+            recordedAt: now,
+            stateJson: stateSnapshotJson(input.stateSnapshot),
+            trigger: { kind: 'fail', thrown: input.thrown },
+          });
         }),
       setUiFeedback: (input) =>
         database.use('set_workflow_ui_feedback', (db) => {
@@ -325,9 +385,33 @@ function workflowRunRow(row: WorkflowRunRecord): WorkflowRunRow {
     owner: row.owner,
     uiFeedback: row.uiFeedback,
     error: row.error,
+    resultJson: row.resultJson,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function insertRunEvent(
+  db: Parameters<Parameters<RuntimeDatabaseService['transaction']>[1]>[0],
+  input: {
+    readonly workflowRunId: number;
+    readonly recordedAt: string;
+    readonly stateJson: string;
+    readonly trigger: WorkflowRunEventTrigger;
+  },
+) {
+  db.insert(workflowRunEvents)
+    .values({
+      workflowRunId: input.workflowRunId,
+      recordedAt: input.recordedAt,
+      state: input.stateJson,
+      trigger: json(input.trigger),
+    })
+    .run();
+}
+
+function stateSnapshotJson(input: WorkflowStateSnapshotInput) {
+  return 'stateJson' in input ? input.stateJson : json(input.state);
 }
 
 function json(value: unknown) {

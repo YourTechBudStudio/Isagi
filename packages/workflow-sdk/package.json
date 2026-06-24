@@ -1,5 +1,5 @@
 {
-  "name": "@isagi/contracts",
+  "name": "@isagi/workflow-sdk",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -11,10 +11,6 @@
     "build": "vite build",
     "check": "pnpm typecheck && pnpm build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "dependencies": {
-    "@isagi/workflow-sdk": "workspace:*",
-    "effect": "^3.21.2"
   },
   "devDependencies": {
     "vite": "^8.0.14",

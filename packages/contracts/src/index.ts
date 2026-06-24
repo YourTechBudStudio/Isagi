@@ -166,6 +166,17 @@ export { healthEndpoint } from './health/api.js';
 export { healthOutputSchema } from './health/types.js';
 export type { HealthOutput } from './health/types.js';
 
+export {
+  workflowInputKindSchema,
+  workflowQuestionOptionSchema,
+  workflowQuestionSpecSchema,
+} from './workflows/types.js';
+export type {
+  WorkflowInputKind,
+  WorkflowQuestionOptionDto,
+  WorkflowQuestionSpecDto,
+} from './workflows/types.js';
+
 export { pathsEndpoints } from './paths/api.js';
 export {
   pathSuggestInputSchema,

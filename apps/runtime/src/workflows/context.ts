@@ -3,6 +3,7 @@ import { statSync } from 'node:fs';
 import { Effect } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
+import type { WorkflowAgentHarness } from '@isagi/workflow-sdk';
 
 import { getConversationHistory } from '../agent-sessions/harness/conversation.js';
 import type { AgentSessionArtifactsService } from '../agent-sessions/harness/ledger.js';
@@ -15,6 +16,10 @@ import type { PtyService as PtyServiceShape } from '../pty-processes/pty.service
 import type { SurfaceService as SurfaceServiceShape } from '../surfaces/index.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import type { WorkflowContext, WorkflowRunRow } from './types.js';
+
+type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const harnessParity: Eq<WorkflowAgentHarness, AgentHarness> = true;
+void harnessParity;
 
 const spawnTimeoutMs = 10_000;
 const metadataInitialDelayMs = 100;
@@ -96,7 +101,7 @@ function spawnSession(input: {
   readonly pty: PtyServiceShape;
   readonly artifacts: AgentSessionArtifactsService;
   readonly input: {
-    readonly harness: AgentHarness;
+    readonly harness: WorkflowAgentHarness;
     readonly prompt: string;
   };
 }) {

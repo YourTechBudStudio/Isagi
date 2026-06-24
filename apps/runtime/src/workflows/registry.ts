@@ -1,17 +1,16 @@
 import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
+import { cont, done, suspend } from '@isagi/workflow-sdk';
 
-import type { ConversationMessage } from '../agent-sessions/harness/types.js';
-import { cont, done, suspend } from './constructors.js';
-import type { WorkflowDefinition } from './types.js';
+import type { WorkflowConversationMessage, WorkflowDefinition } from './types.js';
 
 export interface WorkflowRegistryService {
-  readonly get: (workflowKey: string) => WorkflowDefinition | undefined;
+  readonly get: (workflowKey: string) => WorkflowDefinition<unknown> | undefined;
   readonly knownKeys: () => readonly string[];
   readonly addWorkflow: (
     workflowKey: string,
-    definition: WorkflowDefinition,
+    definition: WorkflowDefinition<unknown>,
   ) => Effect.Effect<void>;
 }
 
@@ -24,7 +23,7 @@ export const WorkflowRegistryLive = Layer.effect(
 );
 
 export function createWorkflowRegistry(
-  entries: Record<string, WorkflowDefinition> = {},
+  entries: Record<string, WorkflowDefinition<unknown>> = {},
 ): WorkflowRegistryService {
   const workflows = new Map(Object.entries(entries));
   return {
@@ -37,7 +36,7 @@ export function createWorkflowRegistry(
   };
 }
 
-function builtInWorkflows(): Record<string, WorkflowDefinition> {
+function builtInWorkflows(): Record<string, WorkflowDefinition<unknown>> {
   return {
     'pi-gate': agentGateWorkflow({
       harness: 'pi',
@@ -92,7 +91,7 @@ function agentGateWorkflow(input: {
   readonly harness: AgentHarness;
   readonly label: string;
   readonly prompt: string;
-}): WorkflowDefinition {
+}): WorkflowDefinition<unknown> {
   return {
     initialState: { phase: 'spawn' },
     step: async (ctx, state, event) => {
@@ -149,7 +148,7 @@ function agentGateWorkflow(input: {
   };
 }
 
-function latestAssistantText(history: readonly ConversationMessage[]) {
+function latestAssistantText(history: readonly WorkflowConversationMessage[]) {
   for (const message of [...history].reverse()) {
     if (message.role !== 'assistant') continue;
     const text = message.parts

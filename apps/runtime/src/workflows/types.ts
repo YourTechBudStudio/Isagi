@@ -1,67 +1,26 @@
 import { Data } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import type { WorkflowWaitCondition, WorkflowWaitKind } from '@isagi/workflow-sdk';
 
-import type { ConversationMessage } from '../agent-sessions/harness/types.js';
 import type { DatabaseError, StateFileError } from '../persistence/index.js';
 
+export type {
+  WorkflowAgentHarness,
+  WorkflowContext,
+  WorkflowConversationMessage,
+  WorkflowConversationPart,
+  WorkflowConversationRole,
+  WorkflowDefinition,
+  WorkflowQuestionOption,
+  WorkflowQuestionSpec,
+  WorkflowResult,
+  WorkflowStep,
+  WorkflowUiFeedback,
+  WorkflowWaitCondition,
+  WorkflowWaitKind,
+} from '@isagi/workflow-sdk';
+
 export type WorkflowStatus = 'paused' | 'waiting' | 'ready' | 'running' | 'done' | 'failed';
-
-export type WorkflowWaitKind =
-  | 'turn'
-  | 'user_continue'
-  | 'user_input'
-  | 'child_workflow'
-  | 'headless';
-
-export type WorkflowWaitCondition =
-  | {
-      readonly kind: 'turn';
-      readonly agentSessionId: number;
-      readonly harnessSessionId: string;
-      readonly afterT: string;
-    }
-  | { readonly kind: 'user_continue' }
-  | { readonly kind: 'user_input' }
-  | { readonly kind: 'child_workflow'; readonly runId: number }
-  | { readonly kind: 'headless'; readonly opId: string };
-
-export type WorkflowResult =
-  | { readonly type: 'cont'; readonly state: unknown }
-  | { readonly type: 'suspend'; readonly state: unknown; readonly condition: WorkflowWaitCondition }
-  | { readonly type: 'done' };
-
-export interface WorkflowContext {
-  readonly spawnSession: (input: {
-    readonly harness: AgentHarness;
-    readonly prompt: string;
-  }) => Promise<{
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-    readonly seededAt: string;
-  }>;
-  readonly inject: (agentSessionId: number, text: string) => Promise<void>;
-  readonly getConversationHistory: (
-    agentSessionId: number,
-  ) => Promise<readonly ConversationMessage[]>;
-  readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
-}
-
-export interface WorkflowUiFeedback {
-  readonly phase?: string | undefined;
-  readonly message?: string | undefined;
-}
-
-export type WorkflowStep = (
-  ctx: WorkflowContext,
-  state: unknown,
-  event?: unknown,
-) => Promise<WorkflowResult>;
-
-export interface WorkflowDefinition {
-  readonly initialState: unknown;
-  readonly step: WorkflowStep;
-}
 
 export interface WorkflowRunRow {
   readonly id: number;
@@ -77,6 +36,7 @@ export interface WorkflowRunRow {
   readonly owner: string | null;
   readonly uiFeedback: string | null;
   readonly error: string | null;
+  readonly resultJson: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

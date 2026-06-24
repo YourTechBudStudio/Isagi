@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
 import { Effect, Either, Layer } from 'effect';
+
+import { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 
 import {
   AgentSessionArtifacts,
@@ -17,13 +20,12 @@ import {
   type HarnessLedgerObserverService,
 } from '../agent-sessions/index.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../persistence/index.js';
-import { workflowRuns } from '../persistence/schema.js';
+import { workflowRunEvents, workflowRuns } from '../persistence/schema.js';
 import { StateFile, stateFromActiveContext } from '../persistence/state-file.service.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
-import { cont, done, suspend } from './constructors.js';
 import { inject } from './context.js';
 import { createWorkflowRegistry, WorkflowRegistry, WorkflowRegistryLive } from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
@@ -63,6 +65,87 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
     assert.equal(result.completed?.owner, null);
     assert.equal(result.completed?.waitKind, null);
     assert.equal(result.completed?.waitCondition, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('done(value) writes result_json and records reducer transition events', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-done-result-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('done-with-value', {
+          initialState: { phase: 'start' },
+          step: async () => done({ ok: true, count: 2 }),
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'done-with-value',
+          state: { phase: 'start' },
+          stateVersion: 1,
+        });
+
+        yield* engine.drainOnce;
+        const completed = yield* repository.findRun(run.id);
+        const events = yield* listWorkflowRunEvents(run.id);
+        return { completed, events };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.completed?.status, 'done');
+    assert.deepEqual(JSON.parse(result.completed?.resultJson ?? '{}'), { ok: true, count: 2 });
+    assert.deepEqual(
+      result.events.map((event) => JSON.parse(event.trigger) as unknown),
+      [{ kind: 'initial' }, { kind: 'done', hasValue: true }],
+    );
+    assert.deepEqual(
+      result.events.map((event) => JSON.parse(event.state) as unknown),
+      [{ phase: 'start' }, { phase: 'start' }],
+    );
+    assert.ok(result.events[0]!.id < result.events[1]!.id);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('returned fail(reason) marks failed and records a non-thrown failure event', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-returned-fail-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('returned-fail', {
+          initialState: { phase: 'decide' },
+          step: async (ctx) => {
+            await ctx.setUiFeedback({ phase: 'failed' });
+            return fail('workflow decided to stop');
+          },
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'returned-fail',
+          state: { phase: 'decide' },
+          stateVersion: 1,
+        });
+
+        yield* engine.drainOnce;
+        const failed = yield* repository.findRun(run.id);
+        const events = yield* listWorkflowRunEvents(run.id);
+        return { failed, events };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.failed?.status, 'failed');
+    assert.match(JSON.parse(result.failed?.error ?? '{}').message, /workflow decided to stop/);
+    assert.deepEqual(JSON.parse(result.failed?.uiFeedback ?? '{}'), { phase: 'failed' });
+    assert.deepEqual(JSON.parse(result.events.at(-1)?.trigger ?? '{}'), {
+      kind: 'fail',
+      thrown: false,
+    });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -205,6 +288,65 @@ test('thrown workflow step marks failed and preserves pre-step state and ui feed
     assert.deepEqual(JSON.parse(row?.uiFeedback ?? '{}'), { phase: 'throwing' });
     assert.match(JSON.parse(row?.error ?? '{}').message, /boom/);
     assert.equal(row?.owner, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('thrown workflow step records a thrown failure event', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-thrown-event-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-throws',
+          state: { phase: 'before_throw' },
+          stateVersion: 1,
+        });
+
+        yield* engine.drainOnce;
+        const failed = yield* repository.findRun(run.id);
+        const events = yield* listWorkflowRunEvents(run.id);
+        return { failed, events };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.failed?.status, 'failed');
+    assert.deepEqual(JSON.parse(result.events.at(-1)?.trigger ?? '{}'), {
+      kind: 'fail',
+      thrown: true,
+    });
+    assert.deepEqual(JSON.parse(result.events.at(-1)?.state ?? '{}'), {
+      phase: 'before_throw',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('deleting a workflow run cascades its event history', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-event-cascade-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-cont-done',
+          state: { phase: 'a', snapshots: ['a'] },
+          stateVersion: 1,
+        });
+        yield* repository.completeCont({ runId: run.id, state: { phase: 'b' } });
+        const before = yield* listWorkflowRunEvents(run.id);
+        yield* deleteWorkflowRun(run.id);
+        const after = yield* listWorkflowRunEvents(run.id);
+        return { before, after };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.equal(result.before.length, 2);
+    assert.deepEqual(result.after, []);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -845,7 +987,7 @@ test('continueDevRun fails unsupported paused wait kinds with a diagnostic', asy
           runId: run.id,
           state: { phase: 'waiting' },
           waitKind: 'user_input',
-          waitCondition: { kind: 'user_input' },
+          waitCondition: { kind: 'user_input', questions: [] },
         });
         yield* repository.pauseNonTerminalRuns;
         yield* engine.continueDevRun({ runId: run.id });
@@ -896,6 +1038,29 @@ const listWorkflowRuns = Effect.gen(function* () {
   );
 });
 
+function listWorkflowRunEvents(runId: number) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    return yield* database.use('test_list_workflow_run_events', (db) =>
+      db
+        .select()
+        .from(workflowRunEvents)
+        .where(eq(workflowRunEvents.workflowRunId, runId))
+        .orderBy(workflowRunEvents.id)
+        .all(),
+    );
+  });
+}
+
+function deleteWorkflowRun(runId: number) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    yield* database.use('test_delete_workflow_run', (db) => {
+      db.delete(workflowRuns).where(eq(workflowRuns.id, runId)).run();
+    });
+  });
+}
+
 function testLayer(dataRoot: string) {
   return workflowLayer(dataRoot, WorkflowRegistryLive);
 }
@@ -923,7 +1088,8 @@ function testLayerWithResumeFakes(
 
 function repositoryOnlyLayer(dataRoot: string) {
   const database = databaseLayer(dataRoot);
-  return WorkflowRepositoryLive.pipe(Layer.provide(database));
+  const repository = WorkflowRepositoryLive.pipe(Layer.provide(database));
+  return Layer.mergeAll(repository, database);
 }
 
 function workflowLayer(
