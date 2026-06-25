@@ -116,6 +116,28 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       worktree_not_found: worktreeGone,
     },
   },
+  workflow_rejected: {
+    summary: "Isagi couldn't complete that workflow action.",
+    byReason: {
+      unknown_workflow_key: "Isagi doesn't recognize that workflow.",
+      workflow_load_failed: "Couldn't load that workflow's code.",
+      worktree_not_found: worktreeGone,
+      surface_not_found: surfaceGone,
+      surface_worktree_mismatch: 'That surface belongs to a different worktree.',
+      pane_not_found: "That pane isn't here anymore.",
+      agent_session_not_on_surface: "That agent session isn't on this surface.",
+      validation_failed: "Those answers didn't pass the workflow's checks.",
+      workflow_root_surface_required: 'A workflow needs a surface to run on.',
+      workflow_surface_busy: 'This surface already has a workflow running.',
+      workflow_run_not_found: "That workflow run isn't here anymore.",
+      workflow_run_not_paused: "That workflow isn't paused.",
+      workflow_run_not_failed: "That workflow isn't in a failed state.",
+      workflow_wait_not_satisfiable: "That workflow can't be advanced right now.",
+      workflow_user_input_invalid:
+        "Those answers didn't go through. Check the fields and try again.",
+      workflow_event_ledger_failed: "Couldn't read the workflow's event log.",
+    },
+  },
   worktree_commands_rejected: {
     summary: "Isagi couldn't complete that command action.",
     byReason: {

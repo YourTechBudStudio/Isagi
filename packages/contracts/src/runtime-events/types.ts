@@ -7,6 +7,7 @@ import {
   sessionStatusSchema,
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
+import { workflowSurfaceSummarySchema } from '../workflows/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
@@ -55,9 +56,15 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'attention_snapshot',
   'attention_source_changed',
   'attention_source_removed',
+  'workflow_surface_snapshot',
+  'workflow_surface_changed',
+  'workflow_surface_cleared',
 );
 
-export const runtimeEventInputTypeSchema = Schema.Literal('attention_snapshot_requested');
+export const runtimeEventInputTypeSchema = Schema.Literal(
+  'attention_snapshot_requested',
+  'workflow_surface_snapshot_requested',
+);
 
 export const runtimeEventBaseSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
@@ -66,7 +73,7 @@ export const runtimeEventBaseSchema = Schema.Struct({
 });
 
 export const runtimeEventInputMessageSchema = Schema.Struct({
-  type: Schema.Literal('attention_snapshot_requested'),
+  type: runtimeEventInputTypeSchema,
 });
 
 const changedSessionProjectionSchema = Schema.Struct({
@@ -159,6 +166,31 @@ export const attentionSourceRemovedEventSchema = Schema.Struct({
   }),
 });
 
+export const workflowSurfaceSnapshotEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('workflow_surface_snapshot'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Struct({
+    summaries: Schema.Array(workflowSurfaceSummarySchema),
+  }),
+});
+
+export const workflowSurfaceChangedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('workflow_surface_changed'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: workflowSurfaceSummarySchema,
+});
+
+export const workflowSurfaceClearedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('workflow_surface_cleared'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Struct({
+    surfaceId: positiveIntegerSchema,
+  }),
+});
+
 export const runtimeEventSchema = Schema.Union(
   agentSessionChangedEventSchema,
   terminalSessionChangedEventSchema,
@@ -167,6 +199,9 @@ export const runtimeEventSchema = Schema.Union(
   attentionSnapshotEventSchema,
   attentionSourceChangedEventSchema,
   attentionSourceRemovedEventSchema,
+  workflowSurfaceSnapshotEventSchema,
+  workflowSurfaceChangedEventSchema,
+  workflowSurfaceClearedEventSchema,
 );
 
 export type AttentionState = Schema.Schema.Type<typeof attentionStateSchema>;
@@ -189,5 +224,14 @@ export type AttentionSourceChangedEvent = Schema.Schema.Type<
 >;
 export type AttentionSourceRemovedEvent = Schema.Schema.Type<
   typeof attentionSourceRemovedEventSchema
+>;
+export type WorkflowSurfaceSnapshotEvent = Schema.Schema.Type<
+  typeof workflowSurfaceSnapshotEventSchema
+>;
+export type WorkflowSurfaceChangedEvent = Schema.Schema.Type<
+  typeof workflowSurfaceChangedEventSchema
+>;
+export type WorkflowSurfaceClearedEvent = Schema.Schema.Type<
+  typeof workflowSurfaceClearedEventSchema
 >;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;

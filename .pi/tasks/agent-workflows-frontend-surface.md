@@ -1,9 +1,9 @@
 ---
 title: Workflow frontend surface — rail, lockdown, controls, dynamic panes
-status: todo
+status: done
 milestone: agent-workflows
 created: 2026-06-21
-updated: 2026-06-21
+updated: 2026-06-25
 depends_on: [agent-workflows-engine-spine]
 ---
 

@@ -4,6 +4,7 @@ import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
 import { runtimeEventsWebSocketEndpoint } from './runtime-events/api.js';
 import { surfacesEndpoints } from './surfaces/api.js';
+import { workflowsEndpoints } from './workflows/api.js';
 import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
 
@@ -15,6 +16,7 @@ export const apiEndpoints = {
   runtimeEvents: runtimeEventsWebSocketEndpoint,
   worktrees: worktreesEndpoints,
   surfaces: surfacesEndpoints,
+  workflows: workflowsEndpoints,
   paths: pathsEndpoints,
 } as const;
 
@@ -85,6 +87,9 @@ export {
   worktreeCommandsApiErrorSchema,
   worktreeCommandsRejectedErrorSchema,
   worktreeCommandsRejectionReasonSchema,
+  workflowApiErrorSchema,
+  workflowRejectedErrorSchema,
+  workflowRejectionReasonSchema,
   worktreeDeleteApiErrorSchema,
   worktreeDeleteRejectedErrorSchema,
   worktreeDeleteRejectionReasonSchema,
@@ -110,6 +115,7 @@ export type {
   SurfaceRejectionReason,
   WorktreeCommandsRejectedError,
   WorktreeCommandsRejectionReason,
+  WorkflowRejectionReason,
   WorkspaceActiveContextRejectedError,
   WorkspaceActiveContextRejectionReason,
   WorkspaceReconcileRejectedError,
@@ -167,15 +173,68 @@ export { healthOutputSchema } from './health/types.js';
 export type { HealthOutput } from './health/types.js';
 
 export {
+  advanceWorkflowInputSchema,
+  listWorkflowDescriptorsInputSchema,
+  listWorkflowDescriptorsOutputSchema,
+  setWorkflowPausedInputSchema,
+  startWorkflowInputSchema,
+  startWorkflowOutputSchema,
+  workflowCommandManifestSchema,
+  workflowDescriptorResultSchema,
+  workflowEventAppendedMessageSchema,
+  workflowEventSchema,
+  workflowEventsReplayOutputSchema,
+  workflowEventsRequestedMessageSchema,
+  workflowEventsSnapshotMessageSchema,
+  workflowEventsStreamErrorCodeSchema,
+  workflowEventsStreamErrorMessageSchema,
+  workflowEventsStreamInputMessageSchema,
+  workflowEventsStreamOutputMessageSchema,
+  workflowLifecycleEventEnvelopeSchema,
+  workflowLifecycleEventSchema,
+  workflowLogEventSchema,
+  workflowLogLevelSchema,
+  workflowRunControlOutputSchema,
+  workflowRunRouteParamsSchema,
   workflowInputKindSchema,
   workflowQuestionOptionSchema,
   workflowQuestionSpecSchema,
+  workflowStartContextSchema,
+  workflowSurfaceControlOutputSchema,
+  workflowSurfaceRouteParamsSchema,
+  workflowSurfaceStatusSchema,
+  workflowSurfaceSummarySchema,
+  workflowUiFeedbackSchema,
 } from './workflows/types.js';
 export type {
+  AdvanceWorkflowInput,
+  ListWorkflowDescriptorsInput,
+  ListWorkflowDescriptorsOutput,
+  SetWorkflowPausedInput,
+  StartWorkflowInput,
+  StartWorkflowOutput,
+  WorkflowCommandManifestDto,
+  WorkflowDescriptorResult,
+  WorkflowEvent,
+  WorkflowEventsReplayOutput,
+  WorkflowEventsStreamErrorCode,
+  WorkflowEventsStreamInputMessage,
+  WorkflowEventsStreamOutputMessage,
   WorkflowInputKind,
+  WorkflowLifecycleEvent,
+  WorkflowLogLevelDto,
   WorkflowQuestionOptionDto,
   WorkflowQuestionSpecDto,
+  WorkflowRunControlOutput,
+  WorkflowRunRouteParams,
+  WorkflowSurfaceControlOutput,
+  WorkflowSurfaceRouteParams,
+  WorkflowSurfaceStatus,
+  WorkflowSurfaceSummary,
+  WorkflowStartContext,
+  WorkflowUiFeedbackDto,
 } from './workflows/types.js';
+export { workflowEventsStreamWebSocketEndpoint, workflowsEndpoints } from './workflows/api.js';
 
 export { pathsEndpoints } from './paths/api.js';
 export {
@@ -232,6 +291,9 @@ export {
   attentionSourceSchema,
   attentionStateSchema,
   commandChangedEventSchema,
+  workflowSurfaceChangedEventSchema,
+  workflowSurfaceClearedEventSchema,
+  workflowSurfaceSnapshotEventSchema,
   terminalAttentionStateSchema,
   agentSessionChangedEventSchema,
   runtimeEventBaseSchema,
@@ -259,6 +321,9 @@ export type {
   RuntimeEventType,
   SurfaceChangedEvent,
   TerminalSessionChangedEvent,
+  WorkflowSurfaceChangedEvent,
+  WorkflowSurfaceClearedEvent,
+  WorkflowSurfaceSnapshotEvent,
 } from './runtime-events/types.js';
 export {
   agentSessionPtyWebSocketEndpoint,

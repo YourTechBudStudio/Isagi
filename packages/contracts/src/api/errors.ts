@@ -71,6 +71,25 @@ export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
   'command_action_failed',
 );
 
+export const workflowRejectionReasonSchema = Schema.Literal(
+  'unknown_workflow_key',
+  'workflow_load_failed',
+  'worktree_not_found',
+  'surface_not_found',
+  'surface_worktree_mismatch',
+  'pane_not_found',
+  'agent_session_not_on_surface',
+  'validation_failed',
+  'workflow_root_surface_required',
+  'workflow_surface_busy',
+  'workflow_run_not_found',
+  'workflow_run_not_paused',
+  'workflow_run_not_failed',
+  'workflow_wait_not_satisfiable',
+  'workflow_user_input_invalid',
+  'workflow_event_ledger_failed',
+);
+
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_missing',
@@ -253,6 +272,22 @@ export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
   }),
 });
 
+export const workflowRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('workflow_rejected'),
+  status: Schema.Union(Schema.Literal(400), Schema.Literal(409), Schema.Literal(500)),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: workflowRejectionReasonSchema,
+    workflowKey: Schema.optional(Schema.String),
+    workflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    activeWorkflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
 export const projectRelocationRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('project_relocation_rejected'),
   status: Schema.Union(Schema.Literal(400), Schema.Literal(409)),
@@ -350,6 +385,12 @@ export const worktreeCommandsApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const workflowApiErrorSchema = Schema.Union(
+  workflowRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export const projectApiErrorSchema = Schema.Union(
   projectOperationRejectedErrorSchema,
   projectPathRejectedErrorSchema,
@@ -419,6 +460,7 @@ export type SessionLaunchRejectionReason = Schema.Schema.Type<
 export type WorktreeCommandsRejectionReason = Schema.Schema.Type<
   typeof worktreeCommandsRejectionReasonSchema
 >;
+export type WorkflowRejectionReason = Schema.Schema.Type<typeof workflowRejectionReasonSchema>;
 export type ProjectRelocationRejectionReason = Schema.Schema.Type<
   typeof projectRelocationRejectionReasonSchema
 >;

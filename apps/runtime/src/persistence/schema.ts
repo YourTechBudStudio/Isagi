@@ -1,4 +1,11 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+  type AnySQLiteColumn,
+} from 'drizzle-orm/sqlite-core';
 
 import { workflowWaitKinds } from '@isagi/workflow-sdk';
 
@@ -220,20 +227,28 @@ export const workflowRuns = sqliteTable(
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     workflowKey: text('workflow_key').notNull(),
+    workflowTitle: text('workflow_title').notNull(),
     worktreeId: integer('worktree_id').references(() => worktrees.id, { onDelete: 'cascade' }),
     surfaceId: integer('surface_id').references(() => worktreeSurfaces.id, {
       onDelete: 'set null',
     }),
+    parentRunId: integer('parent_run_id').references((): AnySQLiteColumn => workflowRuns.id, {
+      onDelete: 'cascade',
+    }),
+    rootRunId: integer('root_run_id').references((): AnySQLiteColumn => workflowRuns.id, {
+      onDelete: 'cascade',
+    }),
     status: text('status', {
-      enum: ['paused', 'waiting', 'ready', 'running', 'done', 'failed'],
+      enum: ['waiting', 'ready', 'running', 'done', 'failed'],
     }).notNull(),
+    paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
     waitKind: text('wait_kind', { enum: workflowWaitKinds }),
     waitCondition: text('wait_condition'),
     resumePayload: text('resume_payload'),
     stateJson: text('state_json').notNull(),
     stateVersion: integer('state_version').notNull(),
     owner: text('owner'),
-    uiFeedback: text('ui_feedback'),
     error: text('error'),
     resultJson: text('result_json'),
     createdAt: text('created_at').notNull(),
@@ -242,8 +257,10 @@ export const workflowRuns = sqliteTable(
   (table) => [
     index('workflow_runs_status_idx').on(table.status),
     index('workflow_runs_status_wait_kind_idx').on(table.status, table.waitKind),
+    index('workflow_runs_paused_idx').on(table.paused),
     index('workflow_runs_worktree_idx').on(table.worktreeId),
     index('workflow_runs_surface_idx').on(table.surfaceId),
+    index('workflow_runs_root_idx').on(table.rootRunId),
   ],
 );
 

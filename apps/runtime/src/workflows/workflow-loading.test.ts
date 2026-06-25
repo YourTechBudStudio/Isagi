@@ -87,6 +87,7 @@ function emptyCtx() {
     startWorkflow: async () => {
       throw new Error('startWorkflow is not used');
     },
+    log: async () => {},
     setUiFeedback: async () => {},
   };
 }

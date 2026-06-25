@@ -118,20 +118,28 @@ export function EntryList({
         const Icon = entry.icon;
         const header = entry.group !== lastGroup ? GROUP_LABELS[entry.group] : null;
         lastGroup = entry.group;
+        const disabled = entry.disabled !== undefined;
         return (
           <div key={entry.id}>
             {header && <GroupHeader label={header} />}
             <button
               type="button"
-              onClick={() => onPick(index)}
-              className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
-                index === sel ? 'bg-white/8' : 'hover:bg-white/4'
+              disabled={disabled}
+              onClick={() => {
+                if (!disabled) onPick(index);
+              }}
+              className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed ${
+                disabled ? 'opacity-45' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
               }`}
             >
               <Icon
                 size={16}
                 className={
-                  entry.accent ? 'text-violet' : index === sel ? 'text-fg' : 'text-fg-subtle'
+                  entry.accent && !disabled
+                    ? 'text-violet'
+                    : index === sel && !disabled
+                      ? 'text-fg'
+                      : 'text-fg-subtle'
                 }
               />
               <span className="min-w-0 flex-1">
@@ -142,7 +150,7 @@ export function EntryList({
                   </span>
                 )}
               </span>
-              {entry.command?.args?.length ? (
+              {entry.command?.args?.length && !disabled ? (
                 <span className="font-mono text-[10.5px] text-fg-subtle">›</span>
               ) : null}
             </button>

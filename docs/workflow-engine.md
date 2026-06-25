@@ -332,13 +332,12 @@ benign no-op.
 
 Human waits are long waits resolved by explicit operator actions rather than harness events.
 
-- **`user_continue`** stores `{ kind: 'user_continue' }`. The dev
-  `satisfy-user-continue` operation wakes a waiting run with resume payload
-  `{ kind: 'user_continue' }`.
+- **`user_continue`** stores `{ kind: 'user_continue' }`. The public
+  `advance(runId)` operation wakes a waiting run with resume payload `{ kind: 'user_continue' }`.
 - **`user_input`** stores `{ kind: 'user_input', questions }`, where `questions` is the static SDK
-  question schema (`text`, `select`, `multi-select`, `confirm`). The dev `submit-user-input`
-  operation validates submitted answers against the persisted questions, applies defaults for
-  optional questions, and wakes the run with `{ kind: 'user_input', answers }`.
+  question schema (`text`, `select`, `multi-select`, `confirm`). The public
+  `advance(runId, answers)` operation validates submitted answers against the persisted questions,
+  applies defaults for optional questions, and wakes the run with `{ kind: 'user_input', answers }`.
 
 Validation is strict and runtime-owned: unknown keys, missing required keys, wrong primitive types,
 and option values outside the persisted question options are rejected. A rejected submission leaves
@@ -372,21 +371,22 @@ autoincrement `id`.
 
 Result writes are **targeted** to engine-owned columns so a step's immediate `setUiFeedback` write
 is never clobbered by a stale snapshot. `owner` is cleared on every result transition. Indexes
-cover `status`, `(status, wait_kind)`, `worktree_id`, and `surface_id`. `wait_kind` values are
-`turn`, `user_continue`, `user_input`, `workflow`, and `headless`; `turn`, `user_continue`,
-`user_input`, `workflow`, and `headless` are behaviorally wired in the current spine. Expected
-failures surface as the tagged
+cover `status`, `(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`. `wait_kind`
+values are `turn`, `user_continue`, `user_input`, `workflow`, and `headless`; all five are
+behaviorally wired in the current spine. `paused` and `cancel_requested` are orthogonal flags, not
+lifecycle statuses. Expected failures surface as the tagged
 `WorkflowEngineError`
-(`unknown_workflow_key`, `no_active_worktree`,
-`workflow_run_not_found`, `workflow_run_not_paused`,
-`workflow_wait_not_satisfiable`, `workflow_user_input_invalid`).
+(`unknown_workflow_key`, `workflow_load_failed`, `worktree_not_found`, `surface_not_found`,
+`surface_worktree_mismatch`, `workflow_surface_busy`, `workflow_run_not_found`,
+`workflow_run_not_failed`, `workflow_wait_not_satisfiable`, `workflow_user_input_invalid`, and
+related context-validation reasons).
 
 ## Ownership and the client boundary
 
-A run is scoped to a surface (`surface_id`). The runtime owns run status and the `pause` / `cancel`
-/ `continue` _operations_; the client renders status and provides the controls and input lockdown.
-The engine exposes the `paused` status and the continue operation; the UI is the frontend's
-responsibility.
+A run is scoped to a surface (`surface_id`). The runtime owns run status and the `setPaused`,
+`clear`, `retry`, and `advance` operations; the client renders status and provides the controls and
+input lockdown. Pause and cancel are flags checked at phase boundaries, so an in-flight step
+finishes before a clear request reaps the run tree.
 
 ## Key decisions and rationale
 
@@ -409,13 +409,13 @@ responsibility.
 ## v1 scope and deferrals
 
 This subsystem currently implements the **engine spine** plus the SDK/loading foundation: the seven
-verbs above, data-root workflow loading with per-step hot reload, command
-manifests, validation, `init`, explicit-context dev start/list/continue triggers, the `turn`,
-`user_continue`, `user_input`, `workflow`, and `headless` wait kinds, `done(value)`/`fail(reason)`,
-`result_json`, and the reducer event log.
+verbs above, data-root workflow loading with per-step hot reload, command manifests, validation,
+`init`, explicit-context dev start/list triggers, public workflow controls (`setPaused`, `clear`,
+`retry`, `advance`), the `turn`, `user_continue`, `user_input`, `workflow`, and `headless` wait
+kinds, `done(value)`/`fail(reason)`, `result_json`, and the reducer event log.
 Explicitly out of scope here (and tracked in the `agent-workflows` milestone):
 
-- public `/api/v1` workflow contracts and frontend palette/rail rendering;
+- frontend palette/rail rendering;
 - Reload Configuration / config-source changes for `.isagi/config.yaml`;
 - the frontend surface (rail, lockdown, controls, dynamic panes);
 - the agent-facing "run a workflow" tool.

@@ -14,6 +14,8 @@ import type {
   SetSplitWeightsOutput,
   SplitPaneInput,
   SurfaceDetail,
+  AdvanceWorkflowInput,
+  WorkflowStartContext,
 } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
@@ -31,6 +33,7 @@ import {
   activeContextQueryKey,
   commandLogMetadataQueryKey,
   surfaceDetailQueryKey,
+  workflowDescriptorsQueryKey,
   workspaceQueryKey,
   worktreeCommandsQueryKey,
 } from './query-keys.js';
@@ -45,16 +48,22 @@ import {
   fetchWorktreeCommands,
   fetchWorkspace,
   formatRuntimeError,
+  advanceWorkflow,
   getSurfaceDetail,
+  listWorkflowDescriptors,
   launchAgentSession,
   launchTerminalSession,
   openWorktree,
   renameSurfaceTitle,
   restartCommand,
   runCommand,
+  clearWorkflow,
+  retryWorkflow,
   relocateProject,
+  setWorkflowPaused,
   setSplitWeights,
   splitPane,
+  startWorkflow,
   stopCommand,
 } from './runtime-data.js';
 import { showWorktreeSetupFailure } from './setup-failure.js';
@@ -130,6 +139,80 @@ export function useRestartCommandMutation(worktreeId: number | null) {
     onSettled: async (_output, _error, commandName) => {
       await invalidateCommandQueries(client, worktreeId, commandName);
     },
+  });
+}
+
+export function useSetWorkflowPausedMutation(surfaceId: number | null) {
+  return useMutation({
+    mutationFn: (paused: boolean) => {
+      if (surfaceId === null) throw new Error('Workflow pause requires an active surface.');
+      return runRuntimeEffect(setWorkflowPaused(surfaceId, { paused }));
+    },
+  });
+}
+
+export function useClearWorkflowMutation(surfaceId: number | null) {
+  return useMutation({
+    mutationFn: () => {
+      if (surfaceId === null) throw new Error('Workflow clear requires an active surface.');
+      return runRuntimeEffect(clearWorkflow(surfaceId));
+    },
+  });
+}
+
+export function useRetryWorkflowMutation(surfaceId: number | null) {
+  return useMutation({
+    mutationFn: () => {
+      if (surfaceId === null) throw new Error('Workflow retry requires an active surface.');
+      return runRuntimeEffect(retryWorkflow(surfaceId));
+    },
+  });
+}
+
+export function useAdvanceWorkflowMutation() {
+  return useMutation({
+    mutationFn: (input: {
+      readonly runId: number;
+      readonly answers?: AdvanceWorkflowInput['answers'];
+    }) => runRuntimeEffect(advanceWorkflow(input.runId, { answers: input.answers })),
+  });
+}
+
+export function useWorkflowDescriptorsQuery(
+  context: WorkflowStartContext | null,
+  options: { readonly enabled?: boolean | undefined } = {},
+) {
+  return useQuery({
+    queryKey: workflowDescriptorsQueryKey(
+      context?.worktreeId ?? null,
+      context?.surfaceId ?? null,
+      context?.paneId ?? null,
+    ),
+    enabled: (options.enabled ?? true) && context !== null,
+    staleTime: 30_000,
+    queryFn: ({ signal }) => {
+      if (context === null) {
+        throw new Error('Workflow descriptor query requires an active launch context.');
+      }
+      return runRuntimeEffect(listWorkflowDescriptors({ context }), { signal });
+    },
+  });
+}
+
+export function useStartWorkflowMutation() {
+  return useMutation({
+    mutationFn: (input: {
+      readonly workflowKey: string;
+      readonly variables?: Record<string, unknown> | undefined;
+      readonly context: WorkflowStartContext;
+    }) =>
+      runRuntimeEffect(
+        startWorkflow({
+          workflowKey: input.workflowKey,
+          variables: input.variables,
+          context: input.context,
+        }),
+      ),
   });
 }
 

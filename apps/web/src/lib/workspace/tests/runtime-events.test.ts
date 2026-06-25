@@ -12,6 +12,7 @@ import {
 } from '../query-keys.js';
 import { handleRuntimeEvent } from '../runtime-events.js';
 import { useWorkspaceStore } from '../store.js';
+import { useWorkflowSurfaceStore } from '../workflow-surface.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
@@ -115,6 +116,42 @@ test('command change events patch managed command status when config is malforme
   };
   assert.deepEqual(patched.managedCommands, [{ name: 'old dev', status: 'failed', ports: [] }]);
   queryClient.clear();
+});
+
+test('workflow surface events replace, upsert, and clear workflow summaries', () => {
+  useWorkflowSurfaceStore.getState().replace([]);
+
+  handleRuntimeEvent({
+    id: 'evt_workflow_snapshot',
+    type: 'workflow_surface_snapshot',
+    occurredAt: '2026-06-12T00:00:00.000Z',
+    payload: {
+      summaries: [{ surfaceId: 3, rootRunId: 42, status: 'driving', title: 'Gate' }],
+    },
+  });
+  assert.deepEqual(Object.keys(useWorkflowSurfaceStore.getState().summariesBySurfaceId), ['3']);
+
+  handleRuntimeEvent({
+    id: 'evt_workflow_changed',
+    type: 'workflow_surface_changed',
+    occurredAt: '2026-06-12T00:00:01.000Z',
+    payload: {
+      surfaceId: 3,
+      rootRunId: 42,
+      status: 'waiting_user',
+      title: 'Gate',
+      prompt: { runId: 42, questions: [] },
+    },
+  });
+  assert.equal(useWorkflowSurfaceStore.getState().summariesBySurfaceId[3]?.status, 'waiting_user');
+
+  handleRuntimeEvent({
+    id: 'evt_workflow_cleared',
+    type: 'workflow_surface_cleared',
+    occurredAt: '2026-06-12T00:00:02.000Z',
+    payload: { surfaceId: 3 },
+  });
+  assert.deepEqual(useWorkflowSurfaceStore.getState().summariesBySurfaceId, {});
 });
 
 function agentSessionChangedEvent() {

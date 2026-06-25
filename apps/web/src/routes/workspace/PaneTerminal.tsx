@@ -15,6 +15,7 @@ export function PaneTerminal({
   surfaceId,
   paneId,
   focused,
+  locked,
   transport,
   onRendererWarning,
 }: {
@@ -22,6 +23,7 @@ export function PaneTerminal({
   readonly surfaceId: number;
   readonly paneId: number;
   readonly focused: boolean;
+  readonly locked: boolean;
   readonly transport: PtyStreamTransport;
   readonly onRendererWarning: (message: string | null) => void;
 }) {
@@ -99,6 +101,7 @@ export function PaneTerminal({
     <XtermSurface
       transport={transport}
       initiallyInteractive={initiallyInteractive}
+      locked={locked}
       disableScrollback={disableScrollback}
       onInput={handleInput}
       onFit={handleFit}

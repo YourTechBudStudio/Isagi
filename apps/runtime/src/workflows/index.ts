@@ -1,6 +1,12 @@
-export { registerWorkflowDevApi } from './api.js';
+export { registerWorkflowApi } from './api.js';
 export { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 export { inject, workflowContext } from './context.js';
+export {
+  WorkflowEventLedger,
+  WorkflowEventLedgerLive,
+  workflowEventLedgerWarningPayload,
+  type WorkflowEventLedgerService,
+} from './event-ledger.service.js';
 export {
   defaultHeadlessTimeoutMs,
   extractHeadlessOutput,
@@ -26,6 +32,12 @@ export {
   WorkflowRepositoryLive,
   type WorkflowRepositoryService,
 } from './repository.js';
+export {
+  deriveWorkflowSurfaceSummary,
+  WorkflowSurfaceProjection,
+  WorkflowSurfaceProjectionLive,
+  type WorkflowSurfaceProjectionService,
+} from './workflow-surface-projection.service.js';
 export type {
   WorkflowContext,
   WorkflowDefinition,

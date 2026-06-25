@@ -24,21 +24,25 @@ export type {
   WorkflowWaitKind,
 } from '@isagi/workflow-sdk';
 
-export type WorkflowStatus = 'paused' | 'waiting' | 'ready' | 'running' | 'done' | 'failed';
+export type WorkflowStatus = 'waiting' | 'ready' | 'running' | 'done' | 'failed';
 
 export interface WorkflowRunRow {
   readonly id: number;
   readonly workflowKey: string;
+  readonly workflowTitle: string;
   readonly worktreeId: number | null;
   readonly surfaceId: number | null;
+  readonly parentRunId: number | null;
+  readonly rootRunId: number | null;
   readonly status: WorkflowStatus;
+  readonly paused: boolean;
+  readonly cancelRequested: boolean;
   readonly waitKind: WorkflowWaitKind | null;
   readonly waitCondition: string | null;
   readonly resumePayload: string | null;
   readonly stateJson: string;
   readonly stateVersion: number;
   readonly owner: string | null;
-  readonly uiFeedback: string | null;
   readonly error: string | null;
   readonly resultJson: string | null;
   readonly createdAt: string;
@@ -58,14 +62,18 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'pane_not_found'
     | 'agent_session_not_on_surface'
     | 'validation_failed'
+    | 'workflow_root_surface_required'
+    | 'workflow_surface_busy'
     | 'workflow_run_not_found'
     | 'workflow_run_not_paused'
+    | 'workflow_run_not_failed'
     | 'workflow_wait_not_satisfiable'
     | 'workflow_user_input_invalid';
   readonly message: string;
   readonly workflowKey?: string | undefined;
   readonly knownWorkflowKeys?: readonly string[] | undefined;
   readonly workflowRunId?: number | undefined;
+  readonly activeWorkflowRunId?: number | undefined;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
   readonly paneId?: number | undefined;

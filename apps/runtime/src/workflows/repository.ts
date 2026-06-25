@@ -7,12 +7,12 @@ import {
   type RuntimeDatabaseService,
 } from '../persistence/index.js';
 import { workflowRunEvents, workflowRuns } from '../persistence/schema.js';
+import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import type {
   WorkflowWaitCondition,
   WorkflowHeadlessResult,
   WorkflowRunRow,
   WorkflowStatus,
-  WorkflowUiFeedback,
   WorkflowWaitKind,
 } from './types.js';
 
@@ -21,14 +21,42 @@ type WorkflowRunRecord = InferSelectModel<typeof workflowRuns>;
 export interface WorkflowRepositoryService {
   readonly createRun: (input: {
     readonly workflowKey: string;
+    readonly workflowTitle: string;
     readonly state: unknown;
     readonly stateVersion: number;
     readonly worktreeId?: number | null | undefined;
     readonly surfaceId?: number | null | undefined;
+    readonly parentRunId?: number | null | undefined;
+    readonly rootRunId?: number | null | undefined;
   }) => Effect.Effect<WorkflowRunRow, DatabaseError>;
   readonly listReadyRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly findNonTerminalRootRunForSurface: (
+    surfaceId: number,
+  ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly findLatestRootRunForSurface: (
+    surfaceId: number,
+  ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly findFailedRootRunForSurface: (
+    surfaceId: number,
+  ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly listSurfaceRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly listNonTerminalSurfaceRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly listSurfaceDeletedRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly listRunTree: (rootRunId: number) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly pauseNonTerminalRuns: Effect.Effect<number, DatabaseError>;
+  readonly setPausedForRunTree: (input: {
+    readonly rootRunId: number;
+    readonly paused: boolean;
+  }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly requestCancelForRunTree: (
+    rootRunId: number,
+  ) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly deleteRunTree: (input: {
+    readonly rootRunId: number;
+    readonly surfaceId: number | null;
+  }) => Effect.Effect<number, DatabaseError>;
+  readonly retryFailedRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
   readonly claimReadyRun: (input: {
     readonly runId: number;
     readonly owner: string;
@@ -73,9 +101,11 @@ export interface WorkflowRepositoryService {
     readonly stateSnapshot: WorkflowStateSnapshotInput;
     readonly thrown: boolean;
   }) => Effect.Effect<void, DatabaseError>;
-  readonly setUiFeedback: (input: {
+  readonly failNonTerminalRun: (input: {
     readonly runId: number;
-    readonly feedback: WorkflowUiFeedback;
+    readonly error: WorkflowRunErrorPayload;
+    readonly stateSnapshot: WorkflowStateSnapshotInput;
+    readonly thrown: boolean;
   }) => Effect.Effect<void, DatabaseError>;
 }
 
@@ -127,46 +157,65 @@ export const WorkflowRepositoryLive = Layer.effect(
   WorkflowRepository,
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
+    const eventBus = yield* InternalRuntimeEventBus;
     const runColumns = getTableColumns(workflowRuns);
 
     return {
       createRun: (input) =>
-        database.use('create_workflow_run', (db) => {
-          const now = timestamp();
-          const inserted = db
-            .insert(workflowRuns)
-            .values({
-              workflowKey: input.workflowKey,
-              worktreeId: input.worktreeId ?? null,
-              surfaceId: input.surfaceId ?? null,
-              status: 'ready',
-              waitKind: null,
-              waitCondition: null,
-              resumePayload: null,
+        database
+          .transaction('create_workflow_run', (db) => {
+            const now = timestamp();
+            const inserted = db
+              .insert(workflowRuns)
+              .values({
+                workflowKey: input.workflowKey,
+                workflowTitle: input.workflowTitle,
+                worktreeId: input.worktreeId ?? null,
+                surfaceId: input.surfaceId ?? null,
+                parentRunId: input.parentRunId ?? null,
+                rootRunId: input.rootRunId ?? null,
+                status: 'ready',
+                waitKind: null,
+                waitCondition: null,
+                resumePayload: null,
+                stateJson: json(input.state),
+                stateVersion: input.stateVersion,
+                owner: null,
+                error: null,
+                resultJson: null,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .returning(runColumns)
+              .get();
+            const row =
+              inserted.rootRunId === null && inserted.parentRunId === null
+                ? db
+                    .update(workflowRuns)
+                    .set({ rootRunId: inserted.id })
+                    .where(eq(workflowRuns.id, inserted.id))
+                    .returning(runColumns)
+                    .get()
+                : inserted;
+            insertRunEvent(db, {
+              workflowRunId: row.id,
+              recordedAt: now,
               stateJson: json(input.state),
-              stateVersion: input.stateVersion,
-              owner: null,
-              uiFeedback: null,
-              error: null,
-              resultJson: null,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .returning(runColumns)
-            .get();
-          insertRunEvent(db, {
-            workflowRunId: inserted.id,
-            recordedAt: now,
-            stateJson: json(input.state),
-            trigger: { kind: 'initial' },
-          });
-          return workflowRunRow(inserted);
-        }),
+              trigger: { kind: 'initial' },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(Effect.tap((run) => publishWorkflowRunChanged(eventBus, run))),
       listReadyRuns: database.use('list_ready_workflow_runs', (db) =>
         db
           .select(runColumns)
           .from(workflowRuns)
-          .where(eq(workflowRuns.status, 'ready'))
+          .where(
+            and(
+              eq(workflowRuns.status, 'ready'),
+              sql`(${workflowRuns.paused} = 0 OR ${workflowRuns.cancelRequested} = 1)`,
+            ),
+          )
           .orderBy(asc(workflowRuns.id))
           .all()
           .map(workflowRunRow),
@@ -180,25 +229,228 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return row ? workflowRunRow(row) : null;
         }),
-      pauseNonTerminalRuns: database.transaction('pause_non_terminal_workflow_runs', (db) => {
-        const rows = db
-          .update(workflowRuns)
-          .set({ status: 'paused', owner: null, updatedAt: timestamp() })
-          .where(sql`${workflowRuns.status} IN ('waiting', 'ready', 'running')`)
-          .returning({ id: workflowRuns.id })
-          .all();
-        return rows.length;
-      }),
-      claimReadyRun: (input) =>
-        database.use('claim_ready_workflow_run', (db) => {
+      findNonTerminalRootRunForSurface: (surfaceId) =>
+        database.use('find_non_terminal_root_workflow_run_for_surface', (db) => {
           const row = db
-            .update(workflowRuns)
-            .set({ status: 'running', owner: input.owner, updatedAt: timestamp() })
-            .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'ready')))
-            .returning(runColumns)
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.surfaceId, surfaceId),
+                sql`${workflowRuns.parentRunId} IS NULL`,
+                sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+              ),
+            )
+            .orderBy(asc(workflowRuns.id))
             .get();
           return row ? workflowRunRow(row) : null;
         }),
+      findLatestRootRunForSurface: (surfaceId) =>
+        database.use('find_latest_root_workflow_run_for_surface', (db) => {
+          const row = db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(eq(workflowRuns.surfaceId, surfaceId), sql`${workflowRuns.parentRunId} IS NULL`),
+            )
+            .orderBy(sql`${workflowRuns.id} DESC`)
+            .get();
+          return row ? workflowRunRow(row) : null;
+        }),
+      findFailedRootRunForSurface: (surfaceId) =>
+        database.use('find_failed_root_workflow_run_for_surface', (db) => {
+          const row = db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(
+                eq(workflowRuns.surfaceId, surfaceId),
+                sql`${workflowRuns.parentRunId} IS NULL`,
+                eq(workflowRuns.status, 'failed'),
+              ),
+            )
+            .orderBy(sql`${workflowRuns.id} DESC`)
+            .get();
+          return row ? workflowRunRow(row) : null;
+        }),
+      listSurfaceRootRuns: database.use('list_surface_root_workflow_runs', (db) =>
+        db
+          .select(runColumns)
+          .from(workflowRuns)
+          .where(
+            and(
+              sql`${workflowRuns.surfaceId} IS NOT NULL`,
+              sql`${workflowRuns.parentRunId} IS NULL`,
+            ),
+          )
+          .orderBy(asc(workflowRuns.id))
+          .all()
+          .map(workflowRunRow),
+      ),
+      listNonTerminalSurfaceRootRuns: database.use(
+        'list_non_terminal_surface_root_workflow_runs',
+        (db) =>
+          db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(
+              and(
+                sql`${workflowRuns.surfaceId} IS NOT NULL`,
+                sql`${workflowRuns.parentRunId} IS NULL`,
+                sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+              ),
+            )
+            .orderBy(asc(workflowRuns.id))
+            .all()
+            .map(workflowRunRow),
+      ),
+      listSurfaceDeletedRootRuns: database.use('list_surface_deleted_workflow_root_runs', (db) =>
+        db
+          .select(runColumns)
+          .from(workflowRuns)
+          .where(
+            and(sql`${workflowRuns.surfaceId} IS NULL`, sql`${workflowRuns.parentRunId} IS NULL`),
+          )
+          .orderBy(asc(workflowRuns.id))
+          .all()
+          .map(workflowRunRow),
+      ),
+      listRunTree: (rootRunId) =>
+        database.use('list_workflow_run_tree', (db) =>
+          db
+            .select(runColumns)
+            .from(workflowRuns)
+            .where(eq(workflowRuns.rootRunId, rootRunId))
+            .orderBy(asc(workflowRuns.id))
+            .all()
+            .map(workflowRunRow),
+        ),
+      pauseNonTerminalRuns: database
+        .transaction('pause_non_terminal_workflow_runs', (db) =>
+          db
+            .update(workflowRuns)
+            .set({
+              status: sql`CASE WHEN ${workflowRuns.status} = 'running' THEN 'ready' ELSE ${workflowRuns.status} END`,
+              paused: true,
+              owner: null,
+              updatedAt: timestamp(),
+            })
+            .where(sql`${workflowRuns.status} IN ('waiting', 'ready', 'running')`)
+            .returning(runColumns)
+            .all()
+            .map(workflowRunRow),
+        )
+        .pipe(
+          Effect.tap((runs) =>
+            Effect.all(
+              runs.map((run) => publishWorkflowRunChanged(eventBus, run)),
+              {
+                discard: true,
+              },
+            ),
+          ),
+          Effect.map((runs) => runs.length),
+        ),
+      setPausedForRunTree: (input) =>
+        database
+          .transaction('set_paused_for_workflow_run_tree', (db) =>
+            db
+              .update(workflowRuns)
+              .set({ paused: input.paused, owner: null, updatedAt: timestamp() })
+              .where(
+                and(
+                  eq(workflowRuns.rootRunId, input.rootRunId),
+                  sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+                ),
+              )
+              .returning(runColumns)
+              .all()
+              .map(workflowRunRow),
+          )
+          .pipe(
+            Effect.tap((runs) =>
+              Effect.all(
+                runs.map((run) => publishWorkflowRunChanged(eventBus, run)),
+                {
+                  discard: true,
+                },
+              ),
+            ),
+          ),
+      requestCancelForRunTree: (rootRunId) =>
+        database.transaction('request_cancel_for_workflow_run_tree', (db) =>
+          db
+            .update(workflowRuns)
+            .set({ cancelRequested: true, updatedAt: timestamp() })
+            .where(
+              and(
+                eq(workflowRuns.rootRunId, rootRunId),
+                sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+              ),
+            )
+            .returning(runColumns)
+            .all()
+            .map(workflowRunRow),
+        ),
+      deleteRunTree: (input) =>
+        database
+          .transaction('delete_workflow_run_tree', (db) => {
+            const deleted = db
+              .delete(workflowRuns)
+              .where(eq(workflowRuns.rootRunId, input.rootRunId))
+              .run();
+            return deleted.changes;
+          })
+          .pipe(
+            Effect.tap(() =>
+              publishWorkflowSurfaceRecompute(eventBus, {
+                rootRunId: input.rootRunId,
+                surfaceId: input.surfaceId,
+              }),
+            ),
+          ),
+      retryFailedRun: (runId) =>
+        database
+          .transaction('retry_failed_workflow_run', (db) => {
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'ready',
+                paused: false,
+                cancelRequested: false,
+                owner: null,
+                error: null,
+                updatedAt: timestamp(),
+              })
+              .where(and(eq(workflowRuns.id, runId), eq(workflowRuns.status, 'failed')))
+              .returning(runColumns)
+              .get();
+            return row ? workflowRunRow(row) : null;
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+          ),
+      claimReadyRun: (input) =>
+        database
+          .use('claim_ready_workflow_run', (db) => {
+            const row = db
+              .update(workflowRuns)
+              .set({ status: 'running', owner: input.owner, updatedAt: timestamp() })
+              .where(
+                and(
+                  eq(workflowRuns.id, input.runId),
+                  eq(workflowRuns.status, 'ready'),
+                  eq(workflowRuns.paused, false),
+                  eq(workflowRuns.cancelRequested, false),
+                ),
+              )
+              .returning(runColumns)
+              .get();
+            return row ? workflowRunRow(row) : null;
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+          ),
       findWaitingTurnRuns: (input) =>
         database.use('find_waiting_turn_workflow_runs', (db) =>
           db
@@ -207,6 +459,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             .where(
               and(
                 eq(workflowRuns.status, 'waiting'),
+                eq(workflowRuns.paused, false),
                 eq(workflowRuns.waitKind, 'turn'),
                 sql`json_extract(${workflowRuns.waitCondition}, '$.agentSessionId') = ${input.agentSessionId}`,
                 sql`json_extract(${workflowRuns.waitCondition}, '$.harnessSessionId') = ${input.harnessSessionId}`,
@@ -224,6 +477,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             .where(
               and(
                 eq(workflowRuns.status, 'waiting'),
+                eq(workflowRuns.paused, false),
                 eq(workflowRuns.waitKind, 'workflow'),
                 sql`EXISTS (SELECT 1 FROM json_each(${workflowRuns.waitCondition}, '$.runIds') WHERE json_each.value = ${childRunId})`,
               ),
@@ -258,171 +512,275 @@ export const WorkflowRepositoryLive = Layer.effect(
           return { status: 'complete', results } satisfies WorkflowJoinResolution;
         }),
       wakeWaitingRun: (input) =>
-        database.transaction('wake_waiting_workflow_run', (db) => {
-          const row = db
-            .update(workflowRuns)
-            .set({
-              status: 'ready',
-              waitKind: null,
-              waitCondition: null,
-              resumePayload: json(input.resumePayload),
-              owner: null,
-              updatedAt: timestamp(),
-            })
-            .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'waiting')))
-            .returning({ id: workflowRuns.id })
-            .get();
-          return Boolean(row);
-        }),
+        database
+          .transaction('wake_waiting_workflow_run', (db) => {
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'ready',
+                waitKind: null,
+                waitCondition: null,
+                resumePayload: json(input.resumePayload),
+                owner: null,
+                updatedAt: timestamp(),
+              })
+              .where(
+                and(
+                  eq(workflowRuns.id, input.runId),
+                  eq(workflowRuns.status, 'waiting'),
+                  eq(workflowRuns.paused, false),
+                  eq(workflowRuns.cancelRequested, false),
+                ),
+              )
+              .returning(runColumns)
+              .get();
+            return row ? workflowRunRow(row) : null;
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.map(Boolean),
+          ),
       readyPausedRun: (input) =>
-        database.transaction('ready_paused_workflow_run', (db) => {
-          const update =
-            input.resumePayload === undefined
-              ? {
-                  status: 'ready' as const,
-                  waitKind: null,
-                  waitCondition: null,
-                  owner: null,
-                  updatedAt: timestamp(),
-                }
-              : {
-                  status: 'ready' as const,
-                  waitKind: null,
-                  waitCondition: null,
-                  resumePayload: json(input.resumePayload),
-                  owner: null,
-                  updatedAt: timestamp(),
-                };
-          const row = db
-            .update(workflowRuns)
-            .set(update)
-            .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'paused')))
-            .returning({ id: workflowRuns.id })
-            .get();
-          return Boolean(row);
-        }),
+        database
+          .transaction('ready_paused_workflow_run', (db) => {
+            const update =
+              input.resumePayload === undefined
+                ? {
+                    status: 'ready' as const,
+                    paused: false,
+                    waitKind: null,
+                    waitCondition: null,
+                    owner: null,
+                    updatedAt: timestamp(),
+                  }
+                : {
+                    status: 'ready' as const,
+                    paused: false,
+                    waitKind: null,
+                    waitCondition: null,
+                    resumePayload: json(input.resumePayload),
+                    owner: null,
+                    updatedAt: timestamp(),
+                  };
+            const row = db
+              .update(workflowRuns)
+              .set(update)
+              .where(
+                and(
+                  eq(workflowRuns.id, input.runId),
+                  sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+                  eq(workflowRuns.cancelRequested, false),
+                ),
+              )
+              .returning(runColumns)
+              .get();
+            return row ? workflowRunRow(row) : null;
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.map(Boolean),
+          ),
       rearmPausedRun: (runId) =>
-        database.transaction('rearm_paused_workflow_run', (db) => {
-          const row = db
-            .update(workflowRuns)
-            .set({
-              status: 'waiting',
-              resumePayload: null,
-              owner: null,
-              updatedAt: timestamp(),
-            })
-            .where(
-              and(
-                eq(workflowRuns.id, runId),
-                eq(workflowRuns.status, 'paused'),
-                sql`${workflowRuns.waitKind} IS NOT NULL`,
-              ),
-            )
-            .returning({ id: workflowRuns.id })
-            .get();
-          return Boolean(row);
-        }),
+        database
+          .transaction('rearm_paused_workflow_run', (db) => {
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'waiting',
+                paused: false,
+                resumePayload: null,
+                owner: null,
+                updatedAt: timestamp(),
+              })
+              .where(
+                and(
+                  eq(workflowRuns.id, runId),
+                  sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+                  eq(workflowRuns.cancelRequested, false),
+                  sql`${workflowRuns.waitKind} IS NOT NULL`,
+                ),
+              )
+              .returning(runColumns)
+              .get();
+            return row ? workflowRunRow(row) : null;
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.map(Boolean),
+          ),
       completeCont: (input) =>
-        database.transaction('complete_workflow_cont', (db) => {
-          const now = timestamp();
-          const stateJson = json(input.state);
-          db.update(workflowRuns)
-            .set({
-              status: 'ready',
-              waitKind: null,
-              waitCondition: null,
-              resumePayload: null,
+        database
+          .transaction('complete_workflow_cont', (db) => {
+            const now = timestamp();
+            const stateJson = json(input.state);
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'ready',
+                waitKind: null,
+                waitCondition: null,
+                resumePayload: null,
+                stateJson,
+                owner: null,
+                error: null,
+                updatedAt: now,
+              })
+              .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'running')))
+              .returning(runColumns)
+              .get();
+            if (!row) return null;
+            insertRunEvent(db, {
+              workflowRunId: input.runId,
+              recordedAt: now,
               stateJson,
-              owner: null,
-              error: null,
-              updatedAt: now,
-            })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-          insertRunEvent(db, {
-            workflowRunId: input.runId,
-            recordedAt: now,
-            stateJson,
-            trigger: { kind: 'cont' },
-          });
-        }),
+              trigger: { kind: 'cont' },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.asVoid,
+          ),
       completeSuspend: (input) =>
-        database.transaction('complete_workflow_suspend', (db) => {
-          const now = timestamp();
-          const stateJson = json(input.state);
-          db.update(workflowRuns)
-            .set({
-              status: 'waiting',
-              waitKind: input.waitKind,
-              waitCondition: json(input.waitCondition),
-              resumePayload: null,
+        database
+          .transaction('complete_workflow_suspend', (db) => {
+            const now = timestamp();
+            const stateJson = json(input.state);
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'waiting',
+                waitKind: input.waitKind,
+                waitCondition: json(input.waitCondition),
+                resumePayload: null,
+                stateJson,
+                owner: null,
+                error: null,
+                updatedAt: now,
+              })
+              .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'running')))
+              .returning(runColumns)
+              .get();
+            if (!row) return null;
+            insertRunEvent(db, {
+              workflowRunId: input.runId,
+              recordedAt: now,
               stateJson,
-              owner: null,
-              error: null,
-              updatedAt: now,
-            })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-          insertRunEvent(db, {
-            workflowRunId: input.runId,
-            recordedAt: now,
-            stateJson,
-            trigger: { kind: 'suspend', waitKind: input.waitKind },
-          });
-        }),
+              trigger: { kind: 'suspend', waitKind: input.waitKind },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.asVoid,
+          ),
       completeDone: (input) =>
-        database.transaction('complete_workflow_done', (db) => {
-          const now = timestamp();
-          const hasValue = input.value !== undefined;
-          db.update(workflowRuns)
-            .set({
-              status: 'done',
-              waitKind: null,
-              waitCondition: null,
-              resumePayload: null,
-              owner: null,
-              error: null,
-              resultJson: hasValue ? json(input.value) : null,
-              updatedAt: now,
-            })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-          insertRunEvent(db, {
-            workflowRunId: input.runId,
-            recordedAt: now,
-            stateJson: stateSnapshotJson({ state: input.state }),
-            trigger: { kind: 'done', hasValue },
-          });
-        }),
+        database
+          .transaction('complete_workflow_done', (db) => {
+            const now = timestamp();
+            const hasValue = input.value !== undefined;
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'done',
+                waitKind: null,
+                waitCondition: null,
+                resumePayload: null,
+                owner: null,
+                error: null,
+                resultJson: hasValue ? json(input.value) : null,
+                updatedAt: now,
+              })
+              .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'running')))
+              .returning(runColumns)
+              .get();
+            if (!row) return null;
+            insertRunEvent(db, {
+              workflowRunId: input.runId,
+              recordedAt: now,
+              stateJson: stateSnapshotJson({ state: input.state }),
+              trigger: { kind: 'done', hasValue },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.asVoid,
+          ),
       failRun: (input) =>
-        database.transaction('fail_workflow_run', (db) => {
-          const now = timestamp();
-          db.update(workflowRuns)
-            .set({
-              status: 'failed',
-              waitKind: null,
-              waitCondition: null,
-              resumePayload: null,
-              owner: null,
-              error: json(input.error),
-              updatedAt: now,
-            })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-          insertRunEvent(db, {
-            workflowRunId: input.runId,
-            recordedAt: now,
-            stateJson: stateSnapshotJson(input.stateSnapshot),
-            trigger: { kind: 'fail', thrown: input.thrown },
-          });
-        }),
-      setUiFeedback: (input) =>
-        database.use('set_workflow_ui_feedback', (db) => {
-          db.update(workflowRuns)
-            .set({ uiFeedback: json(input.feedback), updatedAt: timestamp() })
-            .where(eq(workflowRuns.id, input.runId))
-            .run();
-        }),
+        database
+          .transaction('fail_workflow_run', (db) => {
+            const now = timestamp();
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'failed',
+                waitKind: null,
+                waitCondition: null,
+                // Preserve `resumePayload` (the event that drove the throwing step)
+                // so `retry` can re-run the failed step from snapshot with the same
+                // event in hand — a resume-driven step must still see its turn edge /
+                // user answers / join results on re-run, not `undefined`.
+                owner: null,
+                error: json(input.error),
+                updatedAt: now,
+              })
+              .where(and(eq(workflowRuns.id, input.runId), eq(workflowRuns.status, 'running')))
+              .returning(runColumns)
+              .get();
+            if (!row) return null;
+            insertRunEvent(db, {
+              workflowRunId: input.runId,
+              recordedAt: now,
+              stateJson: stateSnapshotJson(input.stateSnapshot),
+              trigger: { kind: 'fail', thrown: input.thrown },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.asVoid,
+          ),
+      failNonTerminalRun: (input) =>
+        database
+          .transaction('fail_non_terminal_workflow_run', (db) => {
+            const now = timestamp();
+            const row = db
+              .update(workflowRuns)
+              .set({
+                status: 'failed',
+                paused: false,
+                cancelRequested: false,
+                waitKind: null,
+                waitCondition: null,
+                // Preserve `resumePayload` for the same reason as `failRun`: a later
+                // `retry` re-runs the failed step from snapshot and must still see the
+                // event that drove it.
+                owner: null,
+                error: json(input.error),
+                updatedAt: now,
+              })
+              .where(
+                and(
+                  eq(workflowRuns.id, input.runId),
+                  sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
+                ),
+              )
+              .returning(runColumns)
+              .get();
+            if (!row) return null;
+            insertRunEvent(db, {
+              workflowRunId: input.runId,
+              recordedAt: now,
+              stateJson: stateSnapshotJson(input.stateSnapshot),
+              trigger: { kind: 'fail', thrown: input.thrown },
+            });
+            return workflowRunRow(row);
+          })
+          .pipe(
+            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.asVoid,
+          ),
     } satisfies WorkflowRepositoryService;
   }),
 );
@@ -431,21 +789,48 @@ function workflowRunRow(row: WorkflowRunRecord): WorkflowRunRow {
   return {
     id: row.id,
     workflowKey: row.workflowKey,
+    workflowTitle: row.workflowTitle,
     worktreeId: row.worktreeId,
     surfaceId: row.surfaceId,
+    parentRunId: row.parentRunId,
+    rootRunId: row.rootRunId,
     status: row.status as WorkflowStatus,
+    paused: row.paused,
+    cancelRequested: row.cancelRequested,
     waitKind: row.waitKind,
     waitCondition: row.waitCondition,
     resumePayload: row.resumePayload,
     stateJson: row.stateJson,
     stateVersion: row.stateVersion,
     owner: row.owner,
-    uiFeedback: row.uiFeedback,
     error: row.error,
     resultJson: row.resultJson,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function publishWorkflowRunChanged(
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
+  run: Pick<WorkflowRunRow, 'id' | 'rootRunId' | 'surfaceId'>,
+) {
+  return eventBus.publish({
+    type: 'workflow_run_changed',
+    runId: run.id,
+    rootRunId: run.rootRunId,
+    surfaceId: run.surfaceId,
+  });
+}
+
+function publishWorkflowSurfaceRecompute(
+  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
+  input: { readonly rootRunId: number; readonly surfaceId: number | null },
+) {
+  return eventBus.publish({
+    type: 'workflow_surface_recompute_requested',
+    rootRunId: input.rootRunId,
+    surfaceId: input.surfaceId,
+  });
 }
 
 function insertRunEvent(

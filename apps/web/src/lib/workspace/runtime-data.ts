@@ -36,6 +36,14 @@ import type {
   ReconcileWorkspaceOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
+  AdvanceWorkflowInput,
+  ListWorkflowDescriptorsInput,
+  ListWorkflowDescriptorsOutput,
+  SetWorkflowPausedInput,
+  StartWorkflowInput,
+  StartWorkflowOutput,
+  WorkflowRunControlOutput,
+  WorkflowSurfaceControlOutput,
 } from '@isagi/contracts';
 
 import { runtimeErrorCopy } from '../../copy/index.js';
@@ -99,6 +107,44 @@ export function restartCommand(
   return getClient().pipe(
     Effect.flatMap((client) => client.restartCommand(worktreeId, commandName)),
   );
+}
+
+export function setWorkflowPaused(
+  surfaceId: number,
+  input: SetWorkflowPausedInput,
+): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.setWorkflowPaused(surfaceId, input)));
+}
+
+export function clearWorkflow(
+  surfaceId: number,
+): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.clearWorkflow(surfaceId)));
+}
+
+export function retryWorkflow(
+  surfaceId: number,
+): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.retryWorkflow(surfaceId)));
+}
+
+export function advanceWorkflow(
+  runId: number,
+  input: AdvanceWorkflowInput,
+): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.advanceWorkflow(runId, input)));
+}
+
+export function listWorkflowDescriptors(
+  input: ListWorkflowDescriptorsInput,
+): Effect.Effect<ListWorkflowDescriptorsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowDescriptors(input)));
+}
+
+export function startWorkflow(
+  input: StartWorkflowInput,
+): Effect.Effect<StartWorkflowOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.startWorkflow(input)));
 }
 
 export function fetchActiveContext(): Effect.Effect<ActiveContextOutput, Error> {
@@ -222,6 +268,14 @@ export function resolveCommandLogStreamWebSocketUrl(
 ): Effect.Effect<string, Error> {
   return getClient().pipe(
     Effect.map((client) => client.resolveCommandLogStreamWebSocketUrl(worktreeId, commandName)),
+  );
+}
+
+export function resolveWorkflowEventsStreamWebSocketUrl(
+  surfaceId: number,
+): Effect.Effect<string, Error> {
+  return getClient().pipe(
+    Effect.map((client) => client.resolveWorkflowEventsStreamWebSocketUrl(surfaceId)),
   );
 }
 

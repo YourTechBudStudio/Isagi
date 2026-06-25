@@ -50,6 +50,27 @@
       "when": 1782266394488,
       "tag": "0006_rapid_synch",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1782381114453,
+      "tag": "0007_cuddly_bloodscream",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1782402460383,
+      "tag": "0008_freezing_smasher",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1782405809368,
+      "tag": "0009_reflective_korvac",
+      "breakpoints": true
     }
   ]
 }

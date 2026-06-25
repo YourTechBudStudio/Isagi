@@ -2,7 +2,6 @@ import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
 import { AgentSessionArtifacts, AgentSessionService } from '../agent-sessions/index.js';
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
-import type { HarnessLedgerObserverService } from '../agent-sessions/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import { PtyService } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
@@ -11,14 +10,36 @@ import type { SurfaceService as SurfaceServiceShape } from '../surfaces/index.js
 import { WorkspaceRepository } from '../workspace/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import { workflowContext } from './context.js';
-import { WorkflowHeadless, type WorkflowHeadlessService } from './headless.js';
+import {
+  WorkflowEventLedger,
+  type WorkflowEventLedgerService,
+  workflowEventLedgerWarningPayload,
+} from './event-ledger.service.js';
+import { WorkflowHeadless } from './headless.js';
 import { WorkflowRegistry } from './registry.js';
 import {
   WorkflowRepository,
   type WorkflowRepositoryService,
   type WorkflowRunErrorPayload,
 } from './repository.js';
-import { isSatisfied, startWorkflowResolver } from './resolver.js';
+import { startWorkflowResolver } from './resolver.js';
+import {
+  continuePausedRun,
+  reconcileArmedHeadlessWait,
+  reconcileArmedTurnWait,
+  reconcileArmedWorkflowWait,
+} from './resume-paths.js';
+import {
+  appendLifecycleBestEffort,
+  errorMessage,
+  findRunOrFail,
+  publishWorkflowRunTerminal,
+  stepErrorPayload,
+  unknownWorkflowError,
+  unknownWorkflowMessage,
+  userInputError,
+  worktreePathForRun,
+} from './run-failure.js';
 import {
   waitKind,
   WorkflowEngineError,
@@ -28,12 +49,9 @@ import {
   type WorkflowResult,
   type WorkflowRunRow,
   type WorkflowVariables,
-  type WorkflowWaitCondition,
 } from './types.js';
-import {
-  validateWorkflowUserInputAnswers,
-  WorkflowUserInputValidationError,
-} from './user-input.js';
+import { validateWorkflowUserInputAnswers } from './user-input.js';
+import { parseResumePayload, parseState, parseUserInputWaitCondition } from './wait-conditions.js';
 
 export interface WorkflowEngineService {
   readonly listWorkflowDescriptors: (input: {
@@ -44,15 +62,19 @@ export interface WorkflowEngineService {
     readonly variables: WorkflowVariables;
     readonly context: WorkflowStartContextInput;
   }) => Effect.Effect<WorkflowRunRow, WorkflowEngineServiceError>;
-  readonly continueDevRun: (input: {
+  readonly setPaused: (input: {
+    readonly surfaceId: number;
+    readonly paused: boolean;
+  }) => Effect.Effect<WorkflowSurfaceControlResult, WorkflowEngineServiceError>;
+  readonly clear: (input: {
+    readonly surfaceId: number;
+  }) => Effect.Effect<WorkflowSurfaceControlResult, WorkflowEngineServiceError>;
+  readonly retry: (input: {
+    readonly surfaceId: number;
+  }) => Effect.Effect<WorkflowRunControlResult, WorkflowEngineServiceError>;
+  readonly advance: (input: {
     readonly runId: number;
-  }) => Effect.Effect<WorkflowRunRow, WorkflowEngineServiceError>;
-  readonly satisfyUserContinueDevRun: (input: {
-    readonly runId: number;
-  }) => Effect.Effect<WorkflowHumanWaitSatisfactionResult, WorkflowEngineServiceError>;
-  readonly submitUserInputDevRun: (input: {
-    readonly runId: number;
-    readonly answers: Record<string, unknown>;
+    readonly answers?: Record<string, unknown> | undefined;
   }) => Effect.Effect<WorkflowHumanWaitSatisfactionResult, WorkflowEngineServiceError>;
   readonly drainOnce: Effect.Effect<WorkflowDrainSummary, DatabaseError>;
   readonly poke: Effect.Effect<void>;
@@ -60,6 +82,15 @@ export interface WorkflowEngineService {
 
 export interface WorkflowDrainSummary {
   readonly claimed: number;
+}
+
+export interface WorkflowSurfaceControlResult {
+  readonly surfaceId: number;
+}
+
+export interface WorkflowRunControlResult {
+  readonly runId: number;
+  readonly status: WorkflowRunRow['status'];
 }
 
 export type WorkflowHumanWaitSatisfactionResult =
@@ -106,6 +137,7 @@ export const WorkflowEngineLive = Layer.scoped(
     const artifacts = yield* AgentSessionArtifacts;
     const observer = yield* HarnessLedgerObserver;
     const headless = yield* WorkflowHeadless;
+    const eventLedger = yield* WorkflowEventLedger;
     const wakeQueue = yield* Queue.sliding<void>(1);
     const owner = `workflow-engine:${process.pid}:${Date.now()}`;
 
@@ -118,12 +150,16 @@ export const WorkflowEngineLive = Layer.scoped(
     ) =>
       repository
         .failRun({ runId: run.id, error, stateSnapshot, thrown: true })
-        .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')));
+        .pipe(
+          Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')),
+          Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')),
+        );
 
     const startWorkflowRun = (input: {
       readonly workflowKey: string;
       readonly variables: WorkflowVariables;
       readonly context: WorkflowStartContextInput;
+      readonly parentRun?: WorkflowRunRow | undefined;
     }) =>
       Effect.gen(function* () {
         const definition = yield* registry.get(input.workflowKey).pipe(Effect.either);
@@ -161,6 +197,42 @@ export const WorkflowEngineLive = Layer.scoped(
           workspaceRepository,
           surfaces,
         });
+        const manifest = yield* Effect.tryPromise({
+          try: async () => loadedDefinition.command(launchCtx),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new WorkflowEngineError({
+                code: 'validation_failed',
+                message: errorMessage(cause),
+                workflowKey: input.workflowKey,
+              }),
+          ),
+        );
+        if (!input.parentRun) {
+          if (launchCtx.surfaceId === null) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_root_surface_required',
+                message: `Workflow '${input.workflowKey}' cannot start without a surface.`,
+                workflowKey: input.workflowKey,
+              }),
+            );
+          }
+          const activeRoot = yield* repository.findLatestRootRunForSurface(launchCtx.surfaceId);
+          if (activeRoot) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_surface_busy',
+                message: `Surface ${launchCtx.surfaceId} already has a workflow.`,
+                workflowKey: input.workflowKey,
+                activeWorkflowRunId: activeRoot.id,
+                surfaceId: launchCtx.surfaceId,
+              }),
+            );
+          }
+        }
         const validated = yield* Effect.tryPromise({
           try: async () => loadedDefinition.validate(launchCtx, input.variables),
           catch: (cause) => cause,
@@ -189,11 +261,15 @@ export const WorkflowEngineLive = Layer.scoped(
         );
         const run = yield* repository.createRun({
           workflowKey: input.workflowKey,
+          workflowTitle: manifest.title,
           state: initialState,
           stateVersion: 1,
           worktreeId: launchCtx.worktreeId,
           surfaceId: launchCtx.surfaceId,
+          parentRunId: input.parentRun?.id ?? null,
+          rootRunId: input.parentRun?.rootRunId ?? input.parentRun?.id ?? null,
         });
+        yield* appendLifecycleBestEffort(eventLedger, run, 'started');
         yield* poke;
         return run;
       });
@@ -234,6 +310,7 @@ export const WorkflowEngineLive = Layer.scoped(
           artifacts,
           observer,
           headless,
+          eventLedger,
           worktreePath: worktreePath.right,
           startWorkflow: ({ parentRun, workflowKey, variables, context }) =>
             Effect.gen(function* () {
@@ -256,6 +333,7 @@ export const WorkflowEngineLive = Layer.scoped(
                   surfaceId,
                   agentSessionId: context?.agentSessionId ?? null,
                 },
+                parentRun,
               });
             }),
         });
@@ -280,12 +358,20 @@ export const WorkflowEngineLive = Layer.scoped(
           catch: (cause) => cause,
         }).pipe(Effect.either);
 
+        const cancelled = yield* reapIfCancelRequested({ repository, eventLedger, run });
+        if (cancelled) return;
+
         if (Either.isLeft(result)) {
           yield* failRun(run, stepErrorPayload(result.left, run), { state: state.right });
           return;
         }
 
-        yield* persistStepResult({ repository, eventBus }, run, state.right, result.right);
+        yield* persistStepResult(
+          { repository, eventBus, eventLedger },
+          run,
+          state.right,
+          result.right,
+        );
         // Close the suspend-commit race. A turn can finish in the window between
         // the step returning and `completeSuspend` persisting the `waiting` row.
         // The bus is edge-triggered and lossy, so a `turn_ended` published in that
@@ -295,19 +381,21 @@ export const WorkflowEngineLive = Layer.scoped(
         // just armed against it; an already-landed terminal edge wakes the run now.
         if (result.right.type === 'suspend' && result.right.condition.kind === 'turn') {
           yield* reconcileArmedTurnWait({
-            runId: run.id,
+            run,
             condition: result.right.condition,
             repository,
             observer,
+            eventLedger,
             poke,
           });
         }
         if (result.right.type === 'suspend' && result.right.condition.kind === 'headless') {
           yield* reconcileArmedHeadlessWait({
-            runId: run.id,
+            run,
             condition: result.right.condition,
             repository,
             headless,
+            eventLedger,
             poke,
           });
         }
@@ -317,6 +405,7 @@ export const WorkflowEngineLive = Layer.scoped(
             condition: result.right.condition,
             repository,
             eventBus,
+            eventLedger,
             poke,
           });
         }
@@ -329,6 +418,13 @@ export const WorkflowEngineLive = Layer.scoped(
         if (readyRuns.length === 0) break;
 
         for (const readyRun of readyRuns) {
+          if (readyRun.cancelRequested) {
+            yield* repository.deleteRunTree({
+              rootRunId: readyRun.rootRunId ?? readyRun.id,
+              surfaceId: readyRun.surfaceId,
+            });
+            continue;
+          }
           const claimedRun = yield* repository.claimReadyRun({ runId: readyRun.id, owner });
           if (!claimedRun) continue;
           claimed += 1;
@@ -391,74 +487,136 @@ export const WorkflowEngineLive = Layer.scoped(
           return results;
         }),
       startWorkflow: (input) => startWorkflowRun(input),
-      continueDevRun: (input) =>
+      setPaused: (input) =>
         Effect.gen(function* () {
-          const run = yield* repository.findRun(input.runId);
-          if (!run) {
+          const root = yield* repository.findNonTerminalRootRunForSurface(input.surfaceId);
+          if (!root || root.rootRunId === null) {
             return yield* Effect.fail(
               new WorkflowEngineError({
                 code: 'workflow_run_not_found',
-                message: `Workflow run ${input.runId} was not found.`,
+                message: `Surface ${input.surfaceId} does not have a non-terminal workflow.`,
+                surfaceId: input.surfaceId,
               }),
             );
           }
-          if (run.status !== 'paused') {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_run_not_paused',
-                message: `Workflow run ${input.runId} is ${run.status}, not paused.`,
-                workflowRunId: input.runId,
-              }),
-            );
-          }
-
-          yield* continuePausedRun({
-            run,
-            repository,
-            artifacts,
-            observer,
-            headless,
-            workspaceRepository,
-            eventBus,
-            poke,
+          const pausedRunsBeforeResume = input.paused
+            ? []
+            : (yield* repository.listRunTree(root.rootRunId)).filter((run) => run.paused);
+          yield* repository.setPausedForRunTree({
+            rootRunId: root.rootRunId,
+            paused: input.paused,
           });
-          const continued = yield* repository.findRun(run.id);
-          return continued ?? run;
+          if (!input.paused) {
+            for (const run of pausedRunsBeforeResume) {
+              yield* continuePausedRun({
+                run,
+                repository,
+                artifacts,
+                observer,
+                headless,
+                eventLedger,
+                workspaceRepository,
+                eventBus,
+                poke,
+              });
+            }
+            yield* poke;
+          }
+          return { surfaceId: input.surfaceId };
         }),
-      satisfyUserContinueDevRun: (input) =>
+      clear: (input) =>
         Effect.gen(function* () {
-          const run = yield* findRunOrFail(repository, input.runId);
-          if (run.status !== 'waiting') return { outcome: 'already_resolved', run } as const;
-          if (run.waitKind !== 'user_continue') {
+          const root = yield* repository.findLatestRootRunForSurface(input.surfaceId);
+          if (!root || root.rootRunId === null) {
             return yield* Effect.fail(
               new WorkflowEngineError({
-                code: 'workflow_wait_not_satisfiable',
-                message: `Workflow run ${run.id} is waiting on '${run.waitKind ?? 'none'}', not 'user_continue'.`,
-                workflowRunId: run.id,
+                code: 'workflow_run_not_found',
+                message: `Surface ${input.surfaceId} does not have a workflow to clear.`,
+                surfaceId: input.surfaceId,
               }),
             );
           }
-          const woke = yield* repository.wakeWaitingRun({
-            runId: run.id,
-            resumePayload: { kind: 'user_continue' },
-          });
-          if (!woke) {
-            const current = yield* repository.findRun(run.id);
-            return { outcome: 'already_resolved', run: current ?? run } as const;
+          const runs = yield* repository.listRunTree(root.rootRunId);
+          if (runs.some((run) => run.status === 'running')) {
+            yield* repository.requestCancelForRunTree(root.rootRunId);
+          } else {
+            yield* eventLedger.deleteRunTreeLedgers(root.rootRunId).pipe(
+              Effect.catchAll((error) =>
+                Effect.sync(() => {
+                  console.warn('[runtime] Workflow clear ledger cleanup failed', {
+                    op: 'clear',
+                    ...workflowEventLedgerWarningPayload(error),
+                  });
+                }),
+              ),
+            );
+            yield* repository.deleteRunTree({
+              rootRunId: root.rootRunId,
+              surfaceId: root.surfaceId,
+            });
+          }
+          return { surfaceId: input.surfaceId };
+        }),
+      retry: (input) =>
+        Effect.gen(function* () {
+          const activeRoot = yield* repository.findNonTerminalRootRunForSurface(input.surfaceId);
+          if (activeRoot) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_surface_busy',
+                message: `Surface ${input.surfaceId} already has a running workflow.`,
+                activeWorkflowRunId: activeRoot.id,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          }
+          const failedRoot = yield* repository.findFailedRootRunForSurface(input.surfaceId);
+          if (!failedRoot) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_not_failed',
+                message: `Surface ${input.surfaceId} does not have a failed workflow to retry.`,
+                surfaceId: input.surfaceId,
+              }),
+            );
+          }
+          const retried = yield* repository.retryFailedRun(failedRoot.id);
+          if (!retried) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_not_failed',
+                message: `Workflow run ${failedRoot.id} is not failed.`,
+                workflowRunId: failedRoot.id,
+                surfaceId: input.surfaceId,
+              }),
+            );
           }
           yield* poke;
-          const current = yield* repository.findRun(run.id);
-          return { outcome: 'satisfied', run: current ?? run } as const;
+          return { runId: retried.id, status: retried.status };
         }),
-      submitUserInputDevRun: (input) =>
+      advance: (input) =>
         Effect.gen(function* () {
           const run = yield* findRunOrFail(repository, input.runId);
           if (run.status !== 'waiting') return { outcome: 'already_resolved', run } as const;
+          if (run.waitKind === 'user_continue') {
+            const woke = yield* repository.wakeWaitingRun({
+              runId: run.id,
+              resumePayload: { kind: 'user_continue' },
+            });
+            if (!woke) {
+              const current = yield* repository.findRun(run.id);
+              return { outcome: 'already_resolved', run: current ?? run } as const;
+            }
+            yield* appendLifecycleBestEffort(eventLedger, run, 'resumed');
+            yield* poke;
+            const current = yield* repository.findRun(run.id);
+            return { outcome: 'satisfied', run: current ?? run } as const;
+          }
           if (run.waitKind !== 'user_input') {
             return yield* Effect.fail(
               new WorkflowEngineError({
                 code: 'workflow_wait_not_satisfiable',
-                message: `Workflow run ${run.id} is waiting on '${run.waitKind ?? 'none'}', not 'user_input'.`,
+                message: `Workflow run ${run.id} is waiting on '${run.waitKind ?? 'none'}', not a user wait.`,
                 workflowRunId: run.id,
               }),
             );
@@ -477,7 +635,7 @@ export const WorkflowEngineLive = Layer.scoped(
             try: () =>
               validateWorkflowUserInputAnswers({
                 questions: condition.questions,
-                answers: input.answers,
+                answers: input.answers ?? {},
               }),
             catch: (cause) => userInputError(cause, run.id),
           });
@@ -489,6 +647,7 @@ export const WorkflowEngineLive = Layer.scoped(
             const current = yield* repository.findRun(run.id);
             return { outcome: 'already_resolved', run: current ?? run } as const;
           }
+          yield* appendLifecycleBestEffort(eventLedger, run, 'resumed');
           yield* poke;
           const current = yield* repository.findRun(run.id);
           return { outcome: 'satisfied', run: current ?? run } as const;
@@ -509,7 +668,7 @@ export const WorkflowEngineLive = Layer.scoped(
         ),
       ),
     );
-    yield* startWorkflowResolver({ repository, engine: service, eventBus, headless });
+    yield* startWorkflowResolver({ repository, engine: service, eventBus, headless, eventLedger });
 
     return service;
   }),
@@ -606,58 +765,36 @@ function buildLaunchContext(
   });
 }
 
-function worktreePathForRun(run: WorkflowRunRow, workspaceRepository: WorkspaceRepositoryService) {
-  return Effect.gen(function* () {
-    if (run.worktreeId === null) {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'worktree_not_found',
-          message: `Workflow run ${run.id} has no worktree_id.`,
-          workflowRunId: run.id,
-        }),
-      );
-    }
-    const worktree = yield* workspaceRepository.findWorktree(run.worktreeId);
-    if (!worktree) {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'worktree_not_found',
-          message: `Worktree ${run.worktreeId} for workflow run ${run.id} was not found.`,
-          workflowRunId: run.id,
-          worktreeId: run.worktreeId,
-        }),
-      );
-    }
-    return worktree.path;
-  });
-}
-
 function persistStepResult(
   services: {
     readonly repository: WorkflowRepositoryService;
     readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
+    readonly eventLedger: WorkflowEventLedgerService;
   },
   run: WorkflowRunRow,
   currentState: unknown,
   result: WorkflowResult,
 ) {
-  const { repository, eventBus } = services;
+  const { repository, eventBus, eventLedger } = services;
   if (result.type === 'cont') {
     return repository.completeCont({ runId: run.id, state: result.state });
   }
 
   if (result.type === 'suspend') {
-    return repository.completeSuspend({
-      runId: run.id,
-      state: result.state,
-      waitKind: waitKind(result.condition),
-      waitCondition: result.condition,
-    });
+    return repository
+      .completeSuspend({
+        runId: run.id,
+        state: result.state,
+        waitKind: waitKind(result.condition),
+        waitCondition: result.condition,
+      })
+      .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'suspended')));
   }
 
   if (result.type === 'done') {
     return repository
       .completeDone({ runId: run.id, state: currentState, value: result.value })
+      .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'done')))
       .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'done')));
   }
 
@@ -672,6 +809,7 @@ function persistStepResult(
         stateSnapshot: { state: currentState },
         thrown: false,
       })
+      .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')))
       .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')));
   }
 
@@ -685,525 +823,35 @@ function persistStepResult(
       stateSnapshot: { state: currentState },
       thrown: true,
     })
+    .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')))
     .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')));
 }
 
-function continuePausedRun(input: {
-  readonly run: WorkflowRunRow;
+function reapIfCancelRequested(input: {
   readonly repository: WorkflowRepositoryService;
-  readonly artifacts: import('../agent-sessions/index.js').AgentSessionArtifactsService;
-  readonly observer: import('../agent-sessions/index.js').HarnessLedgerObserverService;
-  readonly headless: WorkflowHeadlessService;
-  readonly workspaceRepository: WorkspaceRepositoryService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  if (input.run.waitKind === null) {
-    return input.repository
-      .readyPausedRun({ runId: input.run.id })
-      .pipe(Effect.zipRight(input.poke));
-  }
-
-  if (input.run.waitKind === 'turn') {
-    return continuePausedTurnRun(input);
-  }
-
-  if (input.run.waitKind === 'user_continue' || input.run.waitKind === 'user_input') {
-    return input.repository.rearmPausedRun(input.run.id);
-  }
-
-  if (input.run.waitKind === 'headless') {
-    return continuePausedHeadlessRun(input);
-  }
-
-  if (input.run.waitKind === 'workflow') {
-    return continuePausedWorkflowRun(input);
-  }
-
-  return failWorkflowRunAndPublish({
-    repository: input.repository,
-    eventBus: input.eventBus,
-    run: input.run,
-    error: {
-      message: `Unsupported workflow continue wait_kind '${input.run.waitKind}'.`,
-      context: { workflowRunId: input.run.id, waitKind: input.run.waitKind },
-    },
-    stateSnapshot: { stateJson: input.run.stateJson },
-  });
-}
-
-function continuePausedWorkflowRun(input: {
+  readonly eventLedger: WorkflowEventLedgerService;
   readonly run: WorkflowRunRow;
-  readonly repository: WorkflowRepositoryService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly poke: Effect.Effect<void>;
 }) {
   return Effect.gen(function* () {
-    const condition = parseWorkflowWaitCondition(input.run);
-    if (!condition) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} has an invalid workflow wait_condition.`,
-          context: { workflowRunId: input.run.id },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-    const resolution = yield* input.repository.resolveWorkflowJoin(condition);
-    if (resolution.status === 'pending') {
-      yield* input.repository.rearmPausedRun(input.run.id);
-      return;
-    }
-    if (resolution.status === 'missing') {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} is waiting on missing workflow run ${resolution.runId}.`,
-          context: { workflowRunId: input.run.id, missingWorkflowRunId: resolution.runId },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      yield* input.poke;
-      return;
-    }
-    yield* input.repository.readyPausedRun({
-      runId: input.run.id,
-      resumePayload: { kind: 'workflow', results: resolution.results },
-    });
-    yield* input.poke;
-  });
-}
-
-function continuePausedHeadlessRun(input: {
-  readonly run: WorkflowRunRow;
-  readonly repository: WorkflowRepositoryService;
-  readonly headless: WorkflowHeadlessService;
-  readonly workspaceRepository: WorkspaceRepositoryService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  return Effect.gen(function* () {
-    const condition = parseHeadlessWaitCondition(input.run);
-    if (!condition) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} has an invalid headless wait_condition.`,
-          context: { workflowRunId: input.run.id },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-    const worktreePath = yield* worktreePathForRun(input.run, input.workspaceRepository).pipe(
-      Effect.either,
+    const current = yield* input.repository.findRun(input.run.id);
+    if (!current?.cancelRequested) return false;
+    const rootRunId = current.rootRunId ?? current.id;
+    yield* input.eventLedger.deleteRunTreeLedgers(rootRunId).pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          console.warn('[runtime] Workflow cancel ledger cleanup failed', {
+            op: 'cancel',
+            ...workflowEventLedgerWarningPayload(error),
+          });
+        }),
+      ),
     );
-    if (Either.isLeft(worktreePath)) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: stepErrorPayload(worktreePath.left, input.run),
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-    const results = yield* input.headless.completedResults(condition);
-    if (results) {
-      yield* input.repository.readyPausedRun({
-        runId: input.run.id,
-        resumePayload: { kind: 'headless', results },
-      });
-      yield* input.headless.releaseOps({ opIds: condition.ops.map((op) => op.opId) });
-      yield* input.poke;
-      return;
-    }
-    const reissued = yield* input.headless
-      .reissue({
-        runId: input.run.id,
-        worktreePath: worktreePath.right,
-        ops: condition.ops,
-      })
-      .pipe(Effect.either);
-    if (Either.isLeft(reissued)) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: stepErrorPayload(reissued.left, input.run),
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-    yield* input.repository.rearmPausedRun(input.run.id);
-  });
-}
-
-function continuePausedTurnRun(input: {
-  readonly run: WorkflowRunRow;
-  readonly repository: WorkflowRepositoryService;
-  readonly artifacts: import('../agent-sessions/index.js').AgentSessionArtifactsService;
-  readonly observer: import('../agent-sessions/index.js').HarnessLedgerObserverService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  return Effect.gen(function* () {
-    const condition = parseTurnWaitCondition(input.run);
-    if (!condition) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} has an invalid turn wait_condition.`,
-          context: { workflowRunId: input.run.id },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-
-    const metadata = yield* input.artifacts.readMetadata(condition.agentSessionId);
-    const currentHarnessSessionId =
-      metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null;
-    if (currentHarnessSessionId !== condition.harnessSessionId) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} cannot continue: harness session pin mismatch.`,
-          context: {
-            workflowRunId: input.run.id,
-            agentSessionId: condition.agentSessionId,
-            expectedHarnessSessionId: condition.harnessSessionId,
-            currentHarnessSessionId,
-            metadataStatus: metadata.status,
-          },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-
-    const edges = yield* input.observer.getTurnEdges(condition.agentSessionId);
-    let terminalEdge: TerminalTurnEdge | null = null;
-    for (const edge of edges) {
-      if (!isTerminalTurnEdge(edge) || !isSatisfied(condition, edge)) continue;
-      terminalEdge = edge;
-      break;
-    }
-    if (!terminalEdge) {
-      yield* input.repository.rearmPausedRun(input.run.id);
-      return;
-    }
-
-    yield* input.repository.readyPausedRun({
-      runId: input.run.id,
-      resumePayload: resumePayload(terminalEdge),
+    yield* input.repository.deleteRunTree({
+      rootRunId,
+      surfaceId: current.surfaceId,
     });
-    yield* input.poke;
+    return true;
   });
-}
-
-// Live-path catch-up for the suspend-commit race: read the ledger (source of
-// truth) and wake the run if the wait it just armed is already satisfied. Mirrors
-// the resolver's edge matching rather than the continue path's pin assertion — the
-// pin was set moments ago in the same process, so it cannot have drifted here, and
-// `wakeWaitingRun` is guarded by `status = 'waiting'` so a concurrent resolver wake
-// stays single-winner.
-function reconcileArmedTurnWait(input: {
-  readonly runId: number;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'turn' }>;
-  readonly repository: WorkflowRepositoryService;
-  readonly observer: HarnessLedgerObserverService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  return Effect.gen(function* () {
-    const edges = yield* input.observer.getTurnEdges(input.condition.agentSessionId);
-    for (const edge of edges) {
-      if (!isTerminalTurnEdge(edge) || !isSatisfied(input.condition, edge)) continue;
-      const woke = yield* input.repository.wakeWaitingRun({
-        runId: input.runId,
-        resumePayload: resumePayload(edge),
-      });
-      if (woke) yield* input.poke;
-      return;
-    }
-  });
-}
-
-function reconcileArmedHeadlessWait(input: {
-  readonly runId: number;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>;
-  readonly repository: WorkflowRepositoryService;
-  readonly headless: WorkflowHeadlessService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  return Effect.gen(function* () {
-    const results = yield* input.headless.completedResults(input.condition);
-    if (!results) return;
-    const woke = yield* input.repository.wakeWaitingRun({
-      runId: input.runId,
-      resumePayload: { kind: 'headless', results },
-    });
-    if (woke) {
-      yield* input.headless.releaseOps({ opIds: input.condition.ops.map((op) => op.opId) });
-      yield* input.poke;
-    }
-  });
-}
-
-function reconcileArmedWorkflowWait(input: {
-  readonly run: WorkflowRunRow;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'workflow' }>;
-  readonly repository: WorkflowRepositoryService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly poke: Effect.Effect<void>;
-}) {
-  return Effect.gen(function* () {
-    const resolution = yield* input.repository.resolveWorkflowJoin(input.condition);
-    if (resolution.status === 'pending') return;
-    if (resolution.status === 'missing') {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} is waiting on missing workflow run ${resolution.runId}.`,
-          context: { workflowRunId: input.run.id, missingWorkflowRunId: resolution.runId },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      yield* input.poke;
-      return;
-    }
-    const woke = yield* input.repository.wakeWaitingRun({
-      runId: input.run.id,
-      resumePayload: { kind: 'workflow', results: resolution.results },
-    });
-    if (woke) yield* input.poke;
-  });
-}
-
-function failWorkflowRunAndPublish(input: {
-  readonly repository: WorkflowRepositoryService;
-  readonly eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService;
-  readonly run: WorkflowRunRow;
-  readonly error: WorkflowRunErrorPayload;
-  readonly stateSnapshot: { readonly state: unknown } | { readonly stateJson: string };
-}) {
-  return input.repository
-    .failRun({
-      runId: input.run.id,
-      error: input.error,
-      stateSnapshot: input.stateSnapshot,
-      thrown: true,
-    })
-    .pipe(Effect.zipRight(publishWorkflowRunTerminal(input.eventBus, input.run.id, 'failed')));
-}
-
-function publishWorkflowRunTerminal(
-  eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
-  runId: number,
-  status: 'done' | 'failed',
-) {
-  return eventBus.publish({ type: 'workflow_run_terminal', runId, status });
-}
-
-type TerminalTurnEdge = {
-  readonly type: 'turn_ended' | 'turn_failed';
-  readonly agentSessionId: number;
-  readonly harnessSessionId: string;
-  readonly recordedAt: string;
-  readonly reason?: string | undefined;
-};
-
-function isTerminalTurnEdge(edge: { readonly type: string }): edge is TerminalTurnEdge {
-  return edge.type === 'turn_ended' || edge.type === 'turn_failed';
-}
-
-function parseTurnWaitCondition(run: WorkflowRunRow) {
-  if (!run.waitCondition) return null;
-  try {
-    const parsed = JSON.parse(run.waitCondition) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'turn'
-    ) {
-      return parsed as import('./types.js').WorkflowWaitCondition & { readonly kind: 'turn' };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function parseUserInputWaitCondition(run: WorkflowRunRow) {
-  if (!run.waitCondition) return null;
-  try {
-    const parsed = JSON.parse(run.waitCondition) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'user_input' &&
-      Array.isArray((parsed as { readonly questions?: unknown }).questions)
-    ) {
-      return parsed as Extract<WorkflowWaitCondition, { readonly kind: 'user_input' }>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function parseHeadlessWaitCondition(run: WorkflowRunRow) {
-  if (!run.waitCondition) return null;
-  try {
-    const parsed = JSON.parse(run.waitCondition) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'headless' &&
-      Array.isArray((parsed as { readonly ops?: unknown }).ops)
-    ) {
-      return parsed as Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function parseWorkflowWaitCondition(run: WorkflowRunRow) {
-  if (!run.waitCondition) return null;
-  try {
-    const parsed = JSON.parse(run.waitCondition) as unknown;
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'workflow' &&
-      Array.isArray((parsed as { readonly runIds?: unknown }).runIds)
-    ) {
-      return parsed as Extract<WorkflowWaitCondition, { readonly kind: 'workflow' }>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function resumePayload(edge: {
-  readonly type: 'turn_ended' | 'turn_failed';
-  readonly recordedAt: string;
-  readonly reason?: string | undefined;
-}): import('./repository.js').WorkflowResumePayload {
-  if (edge.type === 'turn_failed') {
-    return {
-      outcome: 'failed',
-      recordedAt: edge.recordedAt,
-      reason: edge.reason ?? 'unknown',
-    };
-  }
-  return { outcome: 'ended', recordedAt: edge.recordedAt };
-}
-
-function parseState(run: WorkflowRunRow) {
-  try {
-    return JSON.parse(run.stateJson) as unknown;
-  } catch (cause) {
-    throw new Error(`Workflow run ${run.id} has invalid state_json.`, { cause });
-  }
-}
-
-function parseResumePayload(run: WorkflowRunRow) {
-  if (!run.resumePayload) return undefined;
-  try {
-    return JSON.parse(run.resumePayload) as unknown;
-  } catch (cause) {
-    throw new Error(`Workflow run ${run.id} has invalid resume_payload.`, { cause });
-  }
-}
-
-function findRunOrFail(repository: WorkflowRepositoryService, runId: number) {
-  return Effect.gen(function* () {
-    const run = yield* repository.findRun(runId);
-    if (run) return run;
-    return yield* Effect.fail(
-      new WorkflowEngineError({
-        code: 'workflow_run_not_found',
-        message: `Workflow run ${runId} was not found.`,
-        workflowRunId: runId,
-      }),
-    );
-  });
-}
-
-function userInputError(cause: unknown, runId: number) {
-  if (cause instanceof WorkflowUserInputValidationError) {
-    return new WorkflowEngineError({
-      code: 'workflow_user_input_invalid',
-      message: cause.message,
-      workflowRunId: runId,
-    });
-  }
-  return new WorkflowEngineError({
-    code: 'workflow_user_input_invalid',
-    message: errorMessage(cause),
-    workflowRunId: runId,
-  });
-}
-
-function unknownWorkflowError(
-  workflowKey: string,
-  knownWorkflowKeys: readonly string[],
-): WorkflowRunErrorPayload {
-  return {
-    message: unknownWorkflowMessage(workflowKey, knownWorkflowKeys),
-    context: { workflowKey, knownWorkflowKeys },
-  };
-}
-
-function unknownWorkflowMessage(workflowKey: string, knownWorkflowKeys: readonly string[]) {
-  const known = knownWorkflowKeys.length > 0 ? knownWorkflowKeys.join(', ') : '(none)';
-  return `Unknown workflow_key '${workflowKey}'; known: ${known}`;
-}
-
-function errorMessage(cause: unknown) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-function stepErrorPayload(cause: unknown, run: WorkflowRunRow): WorkflowRunErrorPayload {
-  const error = cause instanceof Error ? cause : new Error(String(cause));
-  return {
-    message: error.message,
-    stack: error.stack,
-    context: { workflowRunId: run.id, workflowKey: run.workflowKey, ...taggedErrorContext(cause) },
-  };
-}
-
-// Preserve a failing step's tagged-error identity as queryable fields rather than
-// only as text baked into `message`, so a remotely reported failed run can be
-// triaged by `_tag`/`code`. Best-effort: a verb rejection arrives wrapped in an
-// Effect `FiberFailure` and surfaces no tag here, but a directly thrown tagged
-// error (or a future structured throw) does, and the extra fields never hurt.
-function taggedErrorContext(cause: unknown): Record<string, unknown> {
-  if (!cause || typeof cause !== 'object') return {};
-  const context: Record<string, unknown> = {};
-  const tag = (cause as { readonly _tag?: unknown })['_tag'];
-  const code = (cause as { readonly code?: unknown }).code;
-  if (typeof tag === 'string') context.errorTag = tag;
-  if (typeof code === 'string') context.errorCode = code;
-  return context;
 }
 
 function logDrainFailure(label: string) {

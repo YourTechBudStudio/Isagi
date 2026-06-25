@@ -1,8 +1,10 @@
 import { create } from 'zustand';
 
 import type { AttentionSource, AttentionSourceIdentity, AttentionState } from '@isagi/contracts';
+import type { WorkflowSurfaceSummary } from '@isagi/contracts';
 
 import type { Project, Surface, Worktree } from './types.js';
+import { workflowSurfaceAttention } from './workflow-derive.js';
 
 interface AttentionStore {
   readonly sourcesByKey: Readonly<Record<string, AttentionSource>>;
@@ -54,19 +56,25 @@ export function attentionForPane(
 export function applyAttentionToProjects(
   projects: readonly Project[],
   sourcesByKey: Readonly<Record<string, AttentionSource>>,
+  workflowSummariesBySurfaceId: Readonly<Record<number, WorkflowSurfaceSummary>> = {},
 ): readonly Project[] {
   const sources = Object.values(sourcesByKey);
   return projects.map((project) => ({
     ...project,
-    worktrees: project.worktrees.map((worktree) => applyAttentionToWorktree(worktree, sources)),
+    worktrees: project.worktrees.map((worktree) =>
+      applyAttentionToWorktree(worktree, sources, workflowSummariesBySurfaceId),
+    ),
   }));
 }
 
 function applyAttentionToWorktree(
   worktree: Worktree,
   sources: readonly AttentionSource[],
+  workflowSummariesBySurfaceId: Readonly<Record<number, WorkflowSurfaceSummary>>,
 ): Worktree {
-  const surfaces = worktree.surfaces.map((surface) => applyAttentionToSurface(surface, sources));
+  const surfaces = worktree.surfaces.map((surface) =>
+    applyAttentionToSurface(surface, sources, workflowSummariesBySurfaceId[surface.id]),
+  );
   return {
     ...worktree,
     surfaces,
@@ -74,12 +82,21 @@ function applyAttentionToWorktree(
   };
 }
 
-function applyAttentionToSurface(surface: Surface, sources: readonly AttentionSource[]): Surface {
+function applyAttentionToSurface(
+  surface: Surface,
+  sources: readonly AttentionSource[],
+  workflowSummary?: WorkflowSurfaceSummary | undefined,
+): Surface {
+  const workflowAttention = workflowSurfaceAttention(workflowSummary);
   return {
     ...surface,
-    attention: aggregateAttention(
-      sources.filter((source) => source.surfaceId === surface.id).map((source) => source.attention),
-    ),
+    attention:
+      workflowAttention ??
+      aggregateAttention(
+        sources
+          .filter((source) => source.surfaceId === surface.id)
+          .map((source) => source.attention),
+      ),
   };
 }
 

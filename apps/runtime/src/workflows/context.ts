@@ -14,6 +14,10 @@ import {
 import type { AgentSessionService as AgentSessionServiceShape } from '../agent-sessions/index.js';
 import type { PtyService as PtyServiceShape } from '../pty-processes/pty.service.js';
 import type { SurfaceService as SurfaceServiceShape } from '../surfaces/index.js';
+import {
+  type WorkflowEventLedgerService,
+  workflowEventLedgerWarningPayload,
+} from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import type { WorkflowContext, WorkflowRunRow, WorkflowUiFeedback } from './types.js';
@@ -39,6 +43,7 @@ export function workflowContext(input: {
   readonly artifacts: AgentSessionArtifactsService;
   readonly observer: HarnessLedgerObserverService;
   readonly headless: WorkflowHeadlessService;
+  readonly eventLedger: WorkflowEventLedgerService;
   readonly worktreePath: string;
   readonly startWorkflow?: (input: {
     readonly parentRun: WorkflowRunRow;
@@ -128,13 +133,46 @@ export function workflowContext(input: {
               },
         ),
       ).then((run) => run.id),
+    log: (level, message) =>
+      runEffect(
+        input.eventLedger
+          .append({
+            runId: input.run.id,
+            rootRunId: input.run.rootRunId,
+            surfaceId: input.run.surfaceId,
+            event: { type: 'log', level, message },
+          })
+          .pipe(
+            Effect.catchAll((error) =>
+              Effect.sync(() => {
+                console.warn('[runtime] Workflow ctx.log append failed', {
+                  op: 'ctx.log',
+                  ...workflowEventLedgerWarningPayload(error),
+                });
+              }),
+            ),
+          ),
+      ).then(() => undefined),
     setUiFeedback: (feedback) =>
       runEffect(
-        input.repository.setUiFeedback({
-          runId: input.run.id,
-          feedback: normalizeUiFeedback(feedback),
-        }),
-      ),
+        input.eventLedger
+          .append({
+            runId: input.run.id,
+            rootRunId: input.run.rootRunId,
+            surfaceId: input.run.surfaceId,
+            event: { type: 'ui_feedback', ...normalizeUiFeedback(feedback) },
+          })
+          .pipe(
+            Effect.catchAll((error) =>
+              Effect.sync(() => {
+                console.warn('[runtime] Workflow setUiFeedback append failed', {
+                  op: 'setUiFeedback',
+                  ...workflowEventLedgerWarningPayload(error),
+                });
+              }),
+            ),
+          ),
+      ).then(() => undefined),
   };
 }
 

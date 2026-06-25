@@ -21,6 +21,17 @@ export const paletteCopy = {
   reviewStep: {
     loading: 'Reading setup hooks...',
   },
+  workflows: {
+    start: 'Start workflow',
+    disabled: {
+      occupied: 'Dismiss the current workflow first.',
+      broken: 'Manifest did not load.',
+    },
+    startFailed: {
+      title: 'Workflow did not start.',
+      diagnosticLabel: 'Runtime detail',
+    },
+  },
   wizardStep: {
     loading: 'Loading\u2026',
   },

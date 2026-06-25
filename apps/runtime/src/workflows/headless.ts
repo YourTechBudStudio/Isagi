@@ -37,9 +37,7 @@ export interface WorkflowHeadlessService {
   readonly completedResults: (
     condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>,
   ) => Effect.Effect<readonly WorkflowHeadlessResult[] | null>;
-  readonly releaseOps: (input: {
-    readonly opIds: readonly string[];
-  }) => Effect.Effect<void>;
+  readonly releaseOps: (input: { readonly opIds: readonly string[] }) => Effect.Effect<void>;
 }
 
 export type WorkflowHeadlessWaitOp = Extract<

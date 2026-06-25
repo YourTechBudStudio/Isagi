@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -39,6 +39,11 @@ import {
 } from '../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace/index.js';
 import { chooseSpawnSplit, inject, workflowContext } from './context.js';
+import {
+  WorkflowEventLedger,
+  WorkflowEventLedgerLive,
+  type WorkflowEventLedgerService,
+} from './event-ledger.service.js';
 import { WorkflowHeadless, type WorkflowHeadlessService } from './headless.js';
 import { createWorkflowRegistry, WorkflowRegistry } from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
@@ -46,6 +51,7 @@ import type { WorkflowRepositoryService } from './repository.js';
 import { resolveTurnEdge } from './resolver.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
+import { deriveWorkflowSurfaceSummary } from './workflow-surface-projection.service.js';
 
 test('drainOnce runs an agentless cont workflow to done', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-cont-'));
@@ -53,9 +59,11 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -63,7 +71,8 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
 
         const summary = yield* engine.drainOnce;
         const completed = yield* repository.findRun(run.id);
-        return { summary, completed };
+        const uiFeedback = yield* ledger.latestUiFeedbackForRunTree(run.id);
+        return { summary, completed, uiFeedback };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -73,7 +82,7 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
       phase: 'c',
       snapshots: ['a', 'b', 'c'],
     });
-    assert.deepEqual(JSON.parse(result.completed?.uiFeedback ?? '{}'), {
+    assert.deepEqual(result.uiFeedback, {
       kind: 'info',
       phase: 'almost_done',
       message: 'Agentless workflow advanced.',
@@ -102,6 +111,7 @@ test('done(value) writes result_json and records reducer transition events', asy
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'done-with-value',
+          workflowTitle: 'done-with-value',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -146,9 +156,11 @@ test('returned fail(reason) marks failed and records a non-thrown failure event'
           },
         });
         const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'returned-fail',
+          workflowTitle: 'returned-fail',
           state: { phase: 'decide' },
           stateVersion: 1,
           worktreeId: 1,
@@ -157,13 +169,14 @@ test('returned fail(reason) marks failed and records a non-thrown failure event'
         yield* engine.drainOnce;
         const failed = yield* repository.findRun(run.id);
         const events = yield* listWorkflowRunEvents(run.id);
-        return { failed, events };
+        const uiFeedback = yield* ledger.latestUiFeedbackForRunTree(run.id);
+        return { failed, events, uiFeedback };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
     assert.equal(result.failed?.status, 'failed');
     assert.match(JSON.parse(result.failed?.error ?? '{}').message, /workflow decided to stop/);
-    assert.deepEqual(JSON.parse(result.failed?.uiFeedback ?? '{}'), {
+    assert.deepEqual(result.uiFeedback, {
       kind: 'info',
       phase: 'failed',
     });
@@ -185,6 +198,7 @@ test('drainOnce persists suspend as waiting without progressing it', async () =>
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -242,6 +256,7 @@ test('drainOnce immediately resumes a turn suspend whose terminal edge already l
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'suspend-race-catchup',
+          workflowTitle: 'suspend-race-catchup',
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -314,6 +329,7 @@ test('drainOnce immediately resumes a headless suspend whose op already complete
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'headless-race-catchup',
+          workflowTitle: 'headless-race-catchup',
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -390,24 +406,28 @@ test('thrown workflow step marks failed and preserves pre-step state and ui feed
           },
         });
         const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'feedback-then-throws',
+          workflowTitle: 'feedback-then-throws',
           state: { phase: 'before_throw' },
           stateVersion: 1,
           worktreeId: 1,
         });
 
         yield* engine.drainOnce;
-        return yield* repository.findRun(run.id);
+        const failed = yield* repository.findRun(run.id);
+        const uiFeedback = yield* ledger.latestUiFeedbackForRunTree(run.id);
+        return { failed, uiFeedback };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(row?.status, 'failed');
-    assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'before_throw' });
-    assert.deepEqual(JSON.parse(row?.uiFeedback ?? '{}'), { kind: 'info', phase: 'throwing' });
-    assert.match(JSON.parse(row?.error ?? '{}').message, /boom/);
-    assert.equal(row?.owner, null);
+    assert.equal(row.failed?.status, 'failed');
+    assert.deepEqual(JSON.parse(row.failed?.stateJson ?? '{}'), { phase: 'before_throw' });
+    assert.deepEqual(row.uiFeedback, { kind: 'info', phase: 'throwing' });
+    assert.match(JSON.parse(row.failed?.error ?? '{}').message, /boom/);
+    assert.equal(row.failed?.owner, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -422,6 +442,7 @@ test('thrown workflow step records a thrown failure event', async () => {
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-throws',
+          workflowTitle: 'agentless-throws',
           state: { phase: 'before_throw' },
           stateVersion: 1,
           worktreeId: 1,
@@ -455,10 +476,12 @@ test('deleting a workflow run cascades its event history', async () => {
         const repository = yield* WorkflowRepository;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeCont({ runId: run.id, state: { phase: 'b' } });
         const before = yield* listWorkflowRunEvents(run.id);
         yield* deleteWorkflowRun(run.id);
@@ -483,6 +506,7 @@ test('runtime unknown workflow key uses the failed path with a diagnostic', asyn
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'removed-workflow',
+          workflowTitle: 'removed-workflow',
           state: { phase: 'stale' },
           stateVersion: 1,
           worktreeId: 1,
@@ -499,6 +523,169 @@ test('runtime unknown workflow key uses the failed path with a diagnostic', asyn
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
+});
+
+test('startWorkflow rejects a second extant root on the same surface', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-one-root-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const first = yield* engine.startWorkflow({
+          workflowKey: 'agentless-suspend',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1, paneId: 7 },
+        });
+        const second = yield* engine
+          .startWorkflow({
+            workflowKey: 'agentless-suspend',
+            variables: {},
+            context: { worktreeId: 1, surfaceId: 1, paneId: 7 },
+          })
+          .pipe(Effect.either);
+        return { first, second };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.first.workflowTitle, 'Agentless suspend');
+    assert.equal(result.first.parentRunId, null);
+    assert.equal(result.first.rootRunId, result.first.id);
+    assert.equal(Either.isLeft(result.second), true);
+    if (Either.isLeft(result.second)) {
+      assert.ok(result.second.left instanceof WorkflowEngineError);
+      assert.equal(result.second.left.code, 'workflow_surface_busy');
+      assert.equal(result.second.left.activeWorkflowRunId, result.first.id);
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startWorkflow rejects a new root while a terminal root is waiting for dismiss', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-terminal-root-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const first = yield* engine.startWorkflow({
+          workflowKey: 'agentless-cont-done',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1, paneId: 7 },
+        });
+        yield* engine.drainOnce;
+        const completed = yield* repository.findRun(first.id);
+        const second = yield* engine
+          .startWorkflow({
+            workflowKey: 'agentless-suspend',
+            variables: {},
+            context: { worktreeId: 1, surfaceId: 1, paneId: 7 },
+          })
+          .pipe(Effect.either);
+        return { first, completed, second };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.completed?.status, 'done');
+    assert.equal(Either.isLeft(result.second), true);
+    if (Either.isLeft(result.second)) {
+      assert.ok(result.second.left instanceof WorkflowEngineError);
+      assert.equal(result.second.left.code, 'workflow_surface_busy');
+      assert.equal(result.second.left.activeWorkflowRunId, result.first.id);
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('workflow surface summary rolls a run tree into one surface state', () => {
+  const root = workflowRunFixture({
+    id: 1,
+    workflowTitle: 'Gate workflow',
+    surfaceId: 7,
+    rootRunId: 1,
+    status: 'running',
+    updatedAt: '2026-06-18T00:00:00.000Z',
+  });
+  const child = workflowRunFixture({
+    id: 2,
+    parentRunId: 1,
+    rootRunId: 1,
+    status: 'waiting',
+    waitKind: 'user_input',
+    waitCondition: JSON.stringify({
+      kind: 'user_input',
+      questions: [{ kind: 'text', key: 'plan', label: 'Plan' }],
+    }),
+    updatedAt: '2026-06-18T00:00:01.000Z',
+  });
+
+  assert.deepEqual(deriveWorkflowSurfaceSummary([root, child], { message: 'Child feedback' }), {
+    surfaceId: 7,
+    rootRunId: 1,
+    status: 'waiting_user',
+    title: 'Gate workflow',
+    uiFeedback: { message: 'Child feedback' },
+    prompt: {
+      runId: 2,
+      questions: [{ kind: 'text', key: 'plan', label: 'Plan' }],
+    },
+    error: undefined,
+  });
+
+  assert.equal(
+    deriveWorkflowSurfaceSummary([
+      root,
+      workflowRunFixture({ id: 3, rootRunId: 1, status: 'waiting', paused: true }),
+    ])?.status,
+    'paused',
+  );
+
+  // Pausing a run that is itself waiting on the user must derive `paused`, not
+  // `waiting_user` — otherwise the bar shows an inert prompt with no Resume.
+  const pausedUserWait = deriveWorkflowSurfaceSummary([
+    workflowRunFixture({
+      id: 6,
+      workflowTitle: 'Gate workflow',
+      surfaceId: 7,
+      rootRunId: 6,
+      status: 'waiting',
+      waitKind: 'user_input',
+      paused: true,
+      waitCondition: JSON.stringify({
+        kind: 'user_input',
+        questions: [{ kind: 'text', key: 'plan', label: 'Plan' }],
+      }),
+    }),
+  ]);
+  assert.equal(pausedUserWait?.status, 'paused');
+  assert.equal(pausedUserWait?.prompt, undefined);
+  assert.deepEqual(
+    deriveWorkflowSurfaceSummary([
+      workflowRunFixture({
+        id: 4,
+        surfaceId: 7,
+        rootRunId: 4,
+        status: 'failed',
+        error: JSON.stringify({ message: 'Step failed' }),
+      }),
+    ]),
+    {
+      surfaceId: 7,
+      rootRunId: 4,
+      status: 'failed',
+      title: 'Fixture workflow',
+      uiFeedback: undefined,
+      prompt: undefined,
+      error: 'Step failed',
+    },
+  );
+  assert.equal(
+    deriveWorkflowSurfaceSummary([
+      workflowRunFixture({ id: 5, surfaceId: null, rootRunId: 5, status: 'running' }),
+    ]),
+    null,
+  );
 });
 
 test('startWorkflow rejects unknown workflow keys before insert', async () => {
@@ -887,11 +1074,12 @@ test('workflow JOIN arm-time reconcile resumes when children are already termina
         const repository = yield* WorkflowRepository;
         const child = yield* repository.createRun({
           workflowKey: 'already-done-child',
+          workflowTitle: 'already-done-child',
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
-          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, child.id);
         yield* repository.completeDone({
           runId: child.id,
           state: { phase: 'done' },
@@ -927,6 +1115,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         const engine = yield* WorkflowEngine;
         const first = yield* repository.createRun({
           workflowKey: 'child-a',
+          workflowTitle: 'child-a',
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
@@ -934,20 +1123,25 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         });
         const second = yield* repository.createRun({
           workflowKey: 'child-b',
+          workflowTitle: 'child-b',
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
           surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, first.id);
         yield* repository.completeDone({ runId: first.id, state: {}, value: { child: 'a' } });
+        yield* claimWorkflowRunForTest(repository, second.id);
         yield* repository.completeDone({ runId: second.id, state: {}, value: { child: 'b' } });
         const parent = yield* repository.createRun({
           workflowKey: 'parent',
+          workflowTitle: 'parent',
           state: { phase: 'waiting' },
           stateVersion: 1,
           worktreeId: 1,
           surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, parent.id);
         yield* repository.completeSuspend({
           runId: parent.id,
           state: { phase: 'waiting' },
@@ -955,13 +1149,12 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
           waitCondition: { kind: 'workflow', runIds: [second.id, first.id] },
         });
         yield* repository.pauseNonTerminalRuns;
-        const continued = yield* engine.continueDevRun({ runId: parent.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         const readied = yield* repository.findRun(parent.id);
-        return { continued, readied };
+        return { readied };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(result.continued.status, 'ready');
     assert.equal(result.readied?.status, 'ready');
     assert.deepEqual(JSON.parse(result.readied?.resumePayload ?? '{}'), {
       kind: 'workflow',
@@ -987,6 +1180,7 @@ test('startup recoverer parks ready rows before the dispatcher startup drain', a
             .insert(workflowRuns)
             .values({
               workflowKey: 'startup-fixture',
+              workflowTitle: 'startup-fixture',
               worktreeId: null,
               surfaceId: null,
               status: 'ready',
@@ -996,7 +1190,6 @@ test('startup recoverer parks ready rows before the dispatcher startup drain', a
               stateJson: JSON.stringify({ phase: 'ready_before_start' }),
               stateVersion: 1,
               owner: null,
-              uiFeedback: null,
               error: null,
               createdAt: now,
               updatedAt: now,
@@ -1032,7 +1225,8 @@ test('startup recoverer parks ready rows before the dispatcher startup drain', a
       ),
     );
 
-    assert.equal(row?.status, 'paused');
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.paused, true);
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'ready_before_start' });
     assert.equal(row?.owner, null);
   } finally {
@@ -1052,6 +1246,7 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
             .insert(workflowRuns)
             .values({
               workflowKey: 'startup-fixture',
+              workflowTitle: 'startup-fixture',
               worktreeId: null,
               surfaceId: null,
               status: 'waiting',
@@ -1066,7 +1261,6 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
               stateJson: JSON.stringify({ phase: 'waiting_before_start' }),
               stateVersion: 1,
               owner: 'dead-worker',
-              uiFeedback: JSON.stringify({ phase: 'waiting' }),
               error: null,
               createdAt: now,
               updatedAt: now,
@@ -1102,7 +1296,8 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
       ),
     );
 
-    assert.equal(row?.status, 'paused');
+    assert.equal(row?.status, 'waiting');
+    assert.equal(row?.paused, true);
     assert.equal(row?.owner, null);
     assert.equal(row?.waitKind, 'turn');
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
@@ -1112,7 +1307,6 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
       afterT: '2026-06-18T00:00:00.000Z',
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting_before_start' });
-    assert.deepEqual(JSON.parse(row?.uiFeedback ?? '{}'), { phase: 'waiting' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -1126,6 +1320,7 @@ test('drainOnce claim leaves already-claimed ready rows to the winning worker', 
         const repository = yield* WorkflowRepository;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -1151,7 +1346,7 @@ test('drainOnce claim leaves already-claimed ready rows to the winning worker', 
 test('result writes do not clobber ui feedback from the same step', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-feedback-targeted-'));
   try {
-    const row = await Effect.runPromise(
+    const result = await Effect.runPromise(
       Effect.gen(function* () {
         const registry = yield* WorkflowRegistry;
         yield* registry.addWorkflow('feedback-then-cont', {
@@ -1168,21 +1363,25 @@ test('result writes do not clobber ui feedback from the same step', async () => 
           },
         });
         const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'feedback-then-cont',
+          workflowTitle: 'feedback-then-cont',
           state: { phase: 'set_feedback' },
           stateVersion: 1,
           worktreeId: 1,
         });
 
         yield* engine.drainOnce;
-        return yield* repository.findRun(run.id);
+        const row = yield* repository.findRun(run.id);
+        const uiFeedback = yield* ledger.latestUiFeedbackForRunTree(run.id);
+        return { row, uiFeedback };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
-    assert.equal(row?.status, 'done');
-    assert.deepEqual(JSON.parse(row?.uiFeedback ?? '{}'), { kind: 'info', phase: 'set' });
+    assert.equal(result.row?.status, 'done');
+    assert.deepEqual(result.uiFeedback, { kind: 'info', phase: 'set' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -1196,10 +1395,12 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
         const repository = yield* WorkflowRepository;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1276,10 +1477,12 @@ test('step runner passes resume_payload as the workflow event and clears it on d
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'resume-consumer',
+          workflowTitle: 'resume-consumer',
           state: { phase: 'unused' },
           stateVersion: 1,
           worktreeId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'await_turn' },
@@ -1333,10 +1536,12 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'resume-fails',
+          workflowTitle: 'resume-fails',
           state: { phase: 'unused' },
           stateVersion: 1,
           worktreeId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'await_turn' },
@@ -1366,13 +1571,19 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
 
     assert.equal(row?.status, 'failed');
     assert.match(JSON.parse(row?.error ?? '{}').message, /turn failed: new_start_supersedes/);
-    assert.equal(row?.resumePayload, null);
+    // The driving event is preserved on the failed row so a later `retry` can
+    // re-run the throwing step with the same event in hand.
+    assert.deepEqual(JSON.parse(row?.resumePayload ?? 'null'), {
+      outcome: 'failed',
+      reason: 'new_start_supersedes',
+      recordedAt: '2026-06-18T00:00:10.000Z',
+    });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 
-test('continueDevRun moves a paused null-wait run back to ready', async () => {
+test('setPaused(false) moves a paused null-wait run back to ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-ready-'));
   try {
     const row = await Effect.runPromise(
@@ -1381,12 +1592,14 @@ test('continueDevRun moves a paused null-wait run back to ready', async () => {
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -1399,7 +1612,7 @@ test('continueDevRun moves a paused null-wait run back to ready', async () => {
   }
 });
 
-test('continueDevRun reconciles a satisfied paused turn run to ready', async () => {
+test('setPaused(false) reconciles a satisfied paused turn run to ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-satisfied-'));
   try {
     const row = await Effect.runPromise(
@@ -1408,10 +1621,13 @@ test('continueDevRun reconciles a satisfied paused turn run to ready', async () 
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1424,7 +1640,7 @@ test('continueDevRun reconciles a satisfied paused turn run to ready', async () 
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1470,7 +1686,7 @@ test('continueDevRun reconciles a satisfied paused turn run to ready', async () 
   }
 });
 
-test('continueDevRun re-arms a paused turn run when no terminal edge satisfies it', async () => {
+test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies it', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-not-satisfied-'));
   try {
     const row = await Effect.runPromise(
@@ -1479,10 +1695,13 @@ test('continueDevRun re-arms a paused turn run when no terminal edge satisfies i
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1495,7 +1714,7 @@ test('continueDevRun re-arms a paused turn run when no terminal edge satisfies i
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1523,7 +1742,7 @@ test('continueDevRun re-arms a paused turn run when no terminal edge satisfies i
   }
 });
 
-test('continueDevRun fails a paused turn run when the harness session pin mismatches', async () => {
+test('setPaused(false) fails a paused turn run when the harness session pin mismatches', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-pin-mismatch-'));
   try {
     const row = await Effect.runPromise(
@@ -1532,10 +1751,13 @@ test('continueDevRun fails a paused turn run when the harness session pin mismat
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1548,7 +1770,7 @@ test('continueDevRun fails a paused turn run when the harness session pin mismat
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1567,7 +1789,7 @@ test('continueDevRun fails a paused turn run when the harness session pin mismat
   }
 });
 
-test('continueDevRun re-arms paused human waits without satisfying them', async () => {
+test('setPaused(false) re-arms paused human waits without satisfying them', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-human-wait-'));
   try {
     const row = await Effect.runPromise(
@@ -1576,10 +1798,13 @@ test('continueDevRun re-arms paused human waits without satisfying them', async 
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1587,7 +1812,7 @@ test('continueDevRun re-arms paused human waits without satisfying them', async 
           waitCondition: { kind: 'user_input', questions: [] },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -1604,7 +1829,7 @@ test('continueDevRun re-arms paused human waits without satisfying them', async 
   }
 });
 
-test('continueDevRun reissues paused headless waits without changing the persisted opId', async () => {
+test('setPaused(false) reissues paused headless waits without changing the persisted opId', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-headless-wait-'));
   const reissues: unknown[] = [];
   try {
@@ -1614,10 +1839,13 @@ test('continueDevRun reissues paused headless waits without changing the persist
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
+          surfaceId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1637,7 +1865,7 @@ test('continueDevRun reissues paused headless waits without changing the persist
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.continueDevRun({ runId: run.id });
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1690,7 +1918,274 @@ test('continueDevRun reissues paused headless waits without changing the persist
   }
 });
 
-test('satisfyUserContinueDevRun wakes a waiting user_continue run with a tagged event', async () => {
+test('setPaused(true) sets the flag without changing lifecycle status or state', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-pause-flag-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
+          state: { phase: 'a' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* engine.setPaused({ surfaceId: 1, paused: true });
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.paused, true);
+    assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'a' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('clear deletes a non-running surface tree and cascades workflow events', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-clear-waiting-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'user_continue',
+          waitCondition: { kind: 'user_continue' },
+        });
+        const beforeEvents = yield* listWorkflowRunEvents(run.id);
+        yield* engine.clear({ surfaceId: 1 });
+        const row = yield* repository.findRun(run.id);
+        const afterEvents = yield* listWorkflowRunEvents(run.id);
+        return { row, beforeEvents, afterEvents };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.ok(result.beforeEvents.length > 0);
+    assert.equal(result.row, null);
+    assert.deepEqual(result.afterEvents, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('clear marks a running tree cancel-requested without deleting the claimed row', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-clear-running-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
+          state: { phase: 'a' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* engine.clear({ surfaceId: 1 });
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'running');
+    assert.equal(row?.cancelRequested, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('retry flips a failed surface root back to ready and clears error', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-failed-'));
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-throws',
+          workflowTitle: 'agentless throws',
+          state: { phase: 'before_throw' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.failRun({
+          runId: run.id,
+          error: { message: 'boom' },
+          stateSnapshot: { stateJson: run.stateJson },
+          thrown: true,
+        });
+        yield* engine.retry({ surfaceId: 1 });
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.error, null);
+    assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'before_throw' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('retry re-runs a resume-driven failed step with the same event', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-resume-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const events: unknown[] = [];
+        const registry = yield* WorkflowRegistry;
+        // The step throws whenever it sees a failed turn edge. If `retry` re-ran
+        // it with `event === undefined` (the bug), `outcome` would be missing and
+        // the step would fall through to `done()` instead of re-throwing.
+        yield* registry.addWorkflow('resume-retry', {
+          command: () => ({ title: 'Resume retry' }),
+          validate: () => {},
+          init: () => ({ phase: 'unused' }),
+          step: async (_ctx, _state, event) => {
+            events.push(event);
+            const payload = event as { readonly outcome?: string; readonly reason?: string };
+            if (payload.outcome === 'failed') throw new Error(`turn failed: ${payload.reason}`);
+            return done();
+          },
+        });
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'resume-retry',
+          workflowTitle: 'resume-retry',
+          state: { phase: 'unused' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'await_turn' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:00.000Z',
+          },
+        });
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          edge: {
+            type: 'turn_failed',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:10.000Z',
+            reason: 'new_start_supersedes',
+          },
+        });
+        yield* engine.drainOnce;
+        const failed = yield* repository.findRun(run.id);
+        // Hand-edit-and-retry flow: the failed step is re-run from snapshot.
+        yield* engine.retry({ surfaceId: 1 });
+        yield* engine.drainOnce;
+        const reRun = yield* repository.findRun(run.id);
+        return { failed, reRun, events };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    const expectedEvent = {
+      outcome: 'failed',
+      recordedAt: '2026-06-18T00:00:10.000Z',
+      reason: 'new_start_supersedes',
+    };
+    assert.equal(result.failed?.status, 'failed');
+    // The step saw the failed edge on the first run and again after retry — the
+    // event survived the failure and was replayed from snapshot.
+    assert.deepEqual(result.events, [expectedEvent, expectedEvent]);
+    assert.equal(result.reRun?.status, 'failed');
+    assert.match(
+      JSON.parse(result.reRun?.error ?? '{}').message,
+      /turn failed: new_start_supersedes/,
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('sweepSurfaceDeletedRuns tears down run trees orphaned by surface deletion', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-surface-deleted-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
+        // A root run whose surface was deleted out from under it: surface_id is now
+        // null (FK onDelete: 'set null'), but the run tree + ledger still linger.
+        const orphan = yield* repository.createRun({
+          workflowKey: 'orphaned',
+          workflowTitle: 'orphaned',
+          state: { phase: 'await_turn' },
+          stateVersion: 1,
+          worktreeId: 1,
+        });
+        yield* ledger.append({
+          runId: orphan.id,
+          rootRunId: orphan.rootRunId,
+          surfaceId: null,
+          event: { type: 'lifecycle', event: 'started' },
+        });
+        const ledgerPath = ledger.pathForRun(orphan.id);
+        const ledgerExistedBefore = existsSync(ledgerPath);
+
+        // A live run still owned by a surface must be left untouched.
+        const kept = yield* repository.createRun({
+          workflowKey: 'kept',
+          workflowTitle: 'kept',
+          state: { phase: 'running' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+
+        yield* ledger.sweepSurfaceDeletedRuns;
+
+        return {
+          ledgerExistedBefore,
+          ledgerExistsAfter: existsSync(ledgerPath),
+          orphanAfter: yield* repository.findRun(orphan.id),
+          keptAfter: yield* repository.findRun(kept.id),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.ledgerExistedBefore, true);
+    assert.equal(result.ledgerExistsAfter, false);
+    assert.equal(result.orphanAfter, null);
+    assert.equal(result.keptAfter?.workflowKey, 'kept');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('advance wakes a waiting user_continue run with a tagged event', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-user-continue-'));
   try {
     const result = await Effect.runPromise(
@@ -1714,6 +2209,7 @@ test('satisfyUserContinueDevRun wakes a waiting user_continue run with a tagged 
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'human-continue',
+          workflowTitle: 'human-continue',
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1721,7 +2217,7 @@ test('satisfyUserContinueDevRun wakes a waiting user_continue run with a tagged 
 
         yield* engine.drainOnce;
         const waiting = yield* repository.findRun(run.id);
-        const satisfied = yield* engine.satisfyUserContinueDevRun({ runId: run.id });
+        const satisfied = yield* engine.advance({ runId: run.id });
         yield* engine.drainOnce;
         const completed = yield* repository.findRun(run.id);
         return { waiting, satisfied, completed, events };
@@ -1738,7 +2234,7 @@ test('satisfyUserContinueDevRun wakes a waiting user_continue run with a tagged 
   }
 });
 
-test('satisfyUserContinueDevRun treats no-longer-waiting runs as already resolved', async () => {
+test('advance treats no-longer-waiting runs as already resolved', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-user-continue-race-'));
   try {
     const result = await Effect.runPromise(
@@ -1747,11 +2243,12 @@ test('satisfyUserContinueDevRun treats no-longer-waiting runs as already resolve
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
         });
-        return yield* engine.satisfyUserContinueDevRun({ runId: run.id });
+        return yield* engine.advance({ runId: run.id });
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -1762,7 +2259,7 @@ test('satisfyUserContinueDevRun treats no-longer-waiting runs as already resolve
   }
 });
 
-test('submitUserInputDevRun validates answers against persisted questions and applies defaults', async () => {
+test('advance validates answers against persisted questions and applies defaults', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-user-input-'));
   try {
     const result = await Effect.runPromise(
@@ -1802,13 +2299,14 @@ test('submitUserInputDevRun validates answers against persisted questions and ap
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'human-input',
+          workflowTitle: 'human-input',
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
         });
 
         yield* engine.drainOnce;
-        const satisfied = yield* engine.submitUserInputDevRun({
+        const satisfied = yield* engine.advance({
           runId: run.id,
           answers: { summary: 'Ship it' },
         });
@@ -1831,7 +2329,7 @@ test('submitUserInputDevRun validates answers against persisted questions and ap
   }
 });
 
-test('submitUserInputDevRun rejects invalid answers and leaves the run waiting', async () => {
+test('advance rejects invalid answers and leaves the run waiting', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-user-input-invalid-'));
   try {
     const result = await Effect.runPromise(
@@ -1840,10 +2338,12 @@ test('submitUserInputDevRun rejects invalid answers and leaves the run waiting',
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
         });
+        yield* claimWorkflowRunForTest(repository, run.id);
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
@@ -1861,7 +2361,7 @@ test('submitUserInputDevRun rejects invalid answers and leaves the run waiting',
           },
         });
         const submitted = yield* engine
-          .submitUserInputDevRun({ runId: run.id, answers: { risk: 'medium' } })
+          .advance({ runId: run.id, answers: { risk: 'medium' } })
           .pipe(Effect.either);
         const row = yield* repository.findRun(run.id);
         return { submitted, row };
@@ -2117,6 +2617,7 @@ test('workflow ctx spawnSession splits the captured surface and returns paneId',
     }),
     observer: fakeHarnessLedgerObserver(),
     headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
     worktreePath: '/tmp/isagi-test-worktree',
   });
 
@@ -2151,6 +2652,7 @@ test('workflow ctx spawnSession hard-fails when the run has no captured surface'
     artifacts: fakeAgentSessionArtifacts(),
     observer: fakeHarnessLedgerObserver(),
     headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
     worktreePath: '/tmp/isagi-test-worktree',
   });
 
@@ -2178,6 +2680,7 @@ test('workflow ctx closePane delegates to the run surface', async () => {
     artifacts: fakeAgentSessionArtifacts(),
     observer: fakeHarnessLedgerObserver(),
     headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
     worktreePath: '/tmp/isagi-test-worktree',
   });
 
@@ -2214,6 +2717,39 @@ function deleteWorkflowRun(runId: number) {
       db.delete(workflowRuns).where(eq(workflowRuns.id, runId)).run();
     });
   });
+}
+
+function claimWorkflowRunForTest(repository: WorkflowRepositoryService, runId: number) {
+  return repository.claimReadyRun({ runId, owner: 'test-worker' });
+}
+
+function workflowRunFixture(
+  overrides: Partial<WorkflowRunRow> & { readonly id: number },
+): WorkflowRunRow {
+  const { id, ...rest } = overrides;
+  return {
+    id,
+    workflowKey: 'fixture',
+    workflowTitle: 'Fixture workflow',
+    worktreeId: 1,
+    surfaceId: 1,
+    parentRunId: null,
+    rootRunId: id,
+    status: 'ready',
+    paused: false,
+    cancelRequested: false,
+    waitKind: null,
+    waitCondition: null,
+    resumePayload: null,
+    stateJson: '{}',
+    stateVersion: 1,
+    owner: null,
+    error: null,
+    resultJson: null,
+    createdAt: '2026-06-18T00:00:00.000Z',
+    updatedAt: '2026-06-18T00:00:00.000Z',
+    ...rest,
+  };
 }
 
 function drainEngineUntilSettled(
@@ -2255,7 +2791,7 @@ function testLayerWithResumeFakes(
 function repositoryOnlyLayer(dataRoot: string) {
   const database = databaseLayer(dataRoot);
   const repository = WorkflowRepositoryLive.pipe(Layer.provide(database));
-  return Layer.mergeAll(repository, database);
+  return Layer.mergeAll(repository, database).pipe(Layer.provide(InternalRuntimeEventBusLive));
 }
 
 function workflowLayer(
@@ -2267,8 +2803,13 @@ function workflowLayer(
     readonly headless?: WorkflowHeadlessService | undefined;
   } = {},
 ) {
+  const dataDirectory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = databaseLayer(dataRoot);
   const repository = WorkflowRepositoryLive.pipe(Layer.provide(database));
+  const eventLedger = WorkflowEventLedgerLive.pipe(
+    Layer.provide(repository),
+    Layer.provide(dataDirectory),
+  );
   const stateFile = Layer.succeed(StateFile, {
     read: Effect.succeed(stateFromActiveContext(1, 10, 1)),
     write: () => Effect.void,
@@ -2276,10 +2817,10 @@ function workflowLayer(
   });
   const engine = WorkflowEngineLive.pipe(
     Layer.provide(repository),
+    Layer.provide(eventLedger),
     Layer.provide(registry),
     Layer.provide(stateFile),
     Layer.provide(Layer.succeed(WorkspaceRepository, fakeWorkspaceRepository())),
-    Layer.provide(InternalRuntimeEventBusLive),
     Layer.provide(Layer.succeed(AgentSessionService, fakeAgentSessionService())),
     Layer.provide(Layer.succeed(SurfaceService, fakeSurfaceService())),
     Layer.provide(Layer.succeed(PtyService, fakePtyService())),
@@ -2291,15 +2832,16 @@ function workflowLayer(
     ),
     Layer.provide(Layer.succeed(WorkflowHeadless, fakes.headless ?? fakeWorkflowHeadless())),
   );
-  return Layer.mergeAll(engine, repository, registry, database, stateFile);
+  return Layer.mergeAll(engine, repository, registry, database, stateFile, eventLedger).pipe(
+    Layer.provide(InternalRuntimeEventBusLive),
+  );
 }
 
 function databaseLayer(dataRoot: string) {
-  const database = RuntimeDatabaseLive.pipe(
-    Layer.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot))),
-  );
+  const dataDirectory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
+  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectory));
   const seed = Layer.scopedDiscard(seedDefaultWorkspace).pipe(Layer.provide(database));
-  return Layer.mergeAll(database, seed);
+  return Layer.mergeAll(database, seed, dataDirectory);
 }
 
 const seedDefaultWorkspace = Effect.gen(function* () {
@@ -2519,16 +3061,20 @@ function fakeWorkflowRun(
   return {
     id: 99,
     workflowKey: 'test-workflow',
+    workflowTitle: 'Test workflow',
     worktreeId: 'worktreeId' in overrides ? (overrides.worktreeId ?? null) : 1,
     surfaceId: 'surfaceId' in overrides ? (overrides.surfaceId ?? null) : 1,
+    parentRunId: null,
+    rootRunId: 99,
     status: 'running',
+    paused: false,
+    cancelRequested: false,
     waitKind: null,
     waitCondition: null,
     resumePayload: null,
     stateJson: '{}',
     stateVersion: 1,
     owner: 'test',
-    uiFeedback: null,
     error: null,
     resultJson: null,
     createdAt: '2026-06-18T00:00:00.000Z',
@@ -2541,7 +3087,23 @@ function fakeWorkflowRepository(): WorkflowRepositoryService {
     createRun: () => Effect.die('workflow createRun is not used'),
     listReadyRuns: Effect.die('workflow listReadyRuns is not used'),
     findRun: () => Effect.die('workflow findRun is not used'),
+    findNonTerminalRootRunForSurface: () =>
+      Effect.die('workflow findNonTerminalRootRunForSurface is not used'),
+    findLatestRootRunForSurface: () =>
+      Effect.die('workflow findLatestRootRunForSurface is not used'),
+    findFailedRootRunForSurface: () =>
+      Effect.die('workflow findFailedRootRunForSurface is not used'),
+    listSurfaceRootRuns: Effect.die('workflow listSurfaceRootRuns is not used'),
+    listNonTerminalSurfaceRootRuns: Effect.die(
+      'workflow listNonTerminalSurfaceRootRuns is not used',
+    ),
+    listSurfaceDeletedRootRuns: Effect.die('workflow listSurfaceDeletedRootRuns is not used'),
+    listRunTree: () => Effect.die('workflow listRunTree is not used'),
     pauseNonTerminalRuns: Effect.die('workflow pauseNonTerminalRuns is not used'),
+    setPausedForRunTree: () => Effect.die('workflow setPausedForRunTree is not used'),
+    requestCancelForRunTree: () => Effect.die('workflow requestCancelForRunTree is not used'),
+    deleteRunTree: () => Effect.die('workflow deleteRunTree is not used'),
+    retryFailedRun: () => Effect.die('workflow retryFailedRun is not used'),
     claimReadyRun: () => Effect.die('workflow claimReadyRun is not used'),
     findWaitingTurnRuns: () => Effect.die('workflow findWaitingTurnRuns is not used'),
     findWaitingWorkflowRuns: () => Effect.die('workflow findWaitingWorkflowRuns is not used'),
@@ -2553,7 +3115,24 @@ function fakeWorkflowRepository(): WorkflowRepositoryService {
     completeSuspend: () => Effect.die('workflow completeSuspend is not used'),
     completeDone: () => Effect.die('workflow completeDone is not used'),
     failRun: () => Effect.die('workflow failRun is not used'),
-    setUiFeedback: () => Effect.void,
+    failNonTerminalRun: () => Effect.die('workflow failNonTerminalRun is not used'),
+  };
+}
+
+function fakeWorkflowEventLedger(): WorkflowEventLedgerService {
+  return {
+    append: (input) =>
+      Effect.succeed({
+        ts: '2026-06-18T00:00:00.000Z',
+        runId: input.runId,
+        ...input.event,
+      }),
+    readSurfaceEvents: () => Effect.succeed([]),
+    latestUiFeedbackForRunTree: () => Effect.succeed(undefined),
+    deleteRunTreeLedgers: () => Effect.void,
+    collectOrphans: Effect.void,
+    sweepSurfaceDeletedRuns: Effect.void,
+    pathForRun: (runId) => `/tmp/isagi-test-workflow-events/${runId}/events.jsonl`,
   };
 }
 

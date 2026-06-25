@@ -1,3 +1,5 @@
+import type { WorkflowDescriptorResult, WorkflowSurfaceSummary } from '@isagi/contracts';
+
 import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
 
@@ -6,7 +8,12 @@ import type { Project, Surface, Worktree } from '../workspace/types.js';
  * command registry); the other three are first-class internal features assembled
  * from workspace state.
  */
-export type PaletteGroup = 'global' | 'worktree-actions' | 'worktree-surfaces' | 'switch-worktree';
+export type PaletteGroup =
+  | 'global'
+  | 'workflows'
+  | 'worktree-actions'
+  | 'worktree-surfaces'
+  | 'switch-worktree';
 
 /**
  * Snapshot of the current workspace context, derived from the Zustand store.
@@ -19,6 +26,8 @@ export interface PaletteContext {
   readonly activeProject: Project | null;
   readonly activeSurface: Surface | null;
   readonly activePaneId: number | null;
+  readonly workflowDescriptors?: readonly WorkflowDescriptorResult[] | undefined;
+  readonly activeSurfaceWorkflowSummary?: WorkflowSurfaceSummary | undefined;
 }
 
 export interface Option<Payload = unknown> {
@@ -222,6 +231,8 @@ export interface PaletteEntry {
   readonly accent?: boolean;
   /** Values captured when the entry was assembled, before async command effects run. */
   readonly values?: ArgValues;
+  readonly disabled?: { readonly reason: string } | undefined;
+  readonly workflow?: Extract<WorkflowDescriptorResult, { ok: true }> | undefined;
   /** Global commands with args open the wizard instead of running immediately. */
   readonly command?: PaletteCommand;
   readonly run: () => MaybePromise<CommandOutcome | void>;

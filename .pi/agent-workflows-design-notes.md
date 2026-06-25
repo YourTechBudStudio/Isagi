@@ -313,10 +313,18 @@ durable worktree entities). 0001/0008 (state ownership, read composition). 0003 
 
 - Collision is acceptable in practice (the human knows not to type while the workflow runs),
   arbitrated cleanly by: a running workflow is **scoped to a surface**; the surface **locks
-  input while the run is `running`** and unlocks on `waiting` / `done` / `failed`.
+  input while the workflow is driving** and releases only when it genuinely hands control back.
+  **Correction (frontend brainstorm — §14):** the earlier "lock while `running`, unlock on
+  `waiting`" was wrong — a run is `waiting` ~99% of the time (incl. while driving an agent
+  turn), so that rule flickers the lock on every inject. The lock spans the whole **driving
+  loop** (`running` + waiting-on-`turn`/`headless`/`child`) and releases on `user_continue` /
+  `user_input` / `paused` / `done` / `failed`, behind a single tunable `surfaceLockState(run)`.
+  The lock (keyboard block, driving-only) is **separate** from the surface "ownership" glow.
 - **Run status drives the lock** (runtime owns status, web renders).
-- **Controls:** `pause` (unlock + stop injecting), `cancel` (end the run), `continue` (resume
-  from a waiting state).
+- **Controls** (refined in §14): `pause`/`cancel` act in **bulk over all runs on the surface**;
+  `continue` is the prompt's submit (`user_input` form / `user_continue` button), not a top
+  button; `failed` offers **retry** (re-run the failed phase from snapshot); terminal runs offer
+  **dismiss**.
 - Headless ephemeral subprocesses are invisible/paneless — outside the surface, no locking.
 
 ## 12. Decisions log (with rationale)
@@ -504,13 +512,19 @@ index: (status, wait_kind)
 - Is conversation text already in the JSONL `event` blobs, or does hook capture need extending
   per harness? (Gates the routing reads — resolve early.)
 - Validate Pi's clean turn-boundary + message hooks (primary harness, currently weakest).
-- Arg-schema language for the palette (Effect Schema?).
+- ~~Arg-schema language for the palette (Effect Schema?)~~ **RESOLVED (frontend-surface, §14):**
+  the SDK's `WorkflowQuestionSpec` is the arg schema — 4 kinds (`text` / `select` /
+  `multi-select` / `confirm`), rendered by the palette wizard (invocation) and the bottom-bar
+  form (mid-run `user_input`), validated by the workflow's `validate()`. No `path` kind.
 - Workflow code loading / hot-reload mechanics (dynamic TS import, re-import per step) — the
   gate **hardcodes** one callback; real loading deferred to the SDK task.
 - ~~Default error semantics~~ **RESOLVED (engine-spine):** a thrown step is caught → run marked
   **`failed` (terminal)** with error context; not auto-retried; v1 retry = a fresh run.
   Error-phase-in-reducer deferred.
-- Per-run debug trace — separate from durability, but valuable since workflows are hand-edited.
+- ~~Per-run debug trace — separate from durability, but valuable since workflows are
+  hand-edited.~~ **RESOLVED (frontend-surface, §14):** the `ctx.log(level, message)` verb + a
+  per-run JSONL **event ledger** (typed envelope: `log` | `ui_feedback` | lifecycle), merged
+  per-surface on read, streamed to the bottom bar's expand panel.
 - Agent-tool return mechanism — decide after dogfooding.
 - ~~Concurrency / scheduling of many simultaneous runs~~ **shape decided (engine-spine):**
   bounded worker pool consuming `ready` rows, resolver/dispatcher at concurrency 1; gate runs at
@@ -520,3 +534,120 @@ index: (status, wait_kind)
 - **RESOLVED (phase-2):** resume mechanics — lossy-bus boot reconciliation, start-anchored
   watermark, the `(agentSessionId, harnessSessionId)` pin, `paused` + user-gated resume, and the two
   orphaned-turn rules. See the phase-2 block in §12.
+
+## 14. Frontend surface — shaping (2026-06-24 brainstorm)
+
+Shapes the running-workflow UX for `agent-workflows-frontend-surface`. Reference, not source of
+truth; the implementation plan refines it. Grounds in the engine/SDK as built (`workflow_runs`,
+`WorkflowContext`, `WorkflowUiFeedback`, the wait-condition union) and the existing frontend (rail,
+canvas, surface/pane layout, ⌘K palette + its step machine, `AttentionDot`, `StatusStrip`).
+
+**Frame — calm spine + attention magnet, not a dashboard.** The frontend's job: kick off → glance
+to confirm it's alive → get *pulled in* on a flag → take the wheel (`pause`) / give it back. The
+copy-paste was never load-bearing for awareness (§1), so this is not a monitoring surface. Build
+the irreducible core well; **defer the richness dial** to what the reference-workflow dogfood
+reveals. (Ordering caveat: we build the frontend before that dogfood, so we build what *any*
+richness needs and defer the dial.)
+
+**One workflow per surface (the user-facing model).** A surface hosts exactly **one user-started
+root** workflow at a time; you **cannot start a second** until it's `done`/`cancelled` (palette
+invocation is guarded). Child runs (`startWorkflow`) are **implementation details** — invisible to
+the user *except* through two shared channels: a child may set `ui_feedback` (updates the one bar)
+or suspend on `user_input` (its prompt shows in the one bar). Everything user-facing is "the one
+workflow."
+
+**Substrate — status is the only computed signal.** Runtime owns run **status** (source fact); the
+frontend reads runs-per-surface keyed by `surface_id`; every client signal (lock, rail attention,
+bar state) derives from `status` (+ `wait_kind`). **`ui_feedback` is display-only** — never treated
+as a phase or fed into any computation.
+
+**Left rail — derived attention override.** While a workflow owns a surface, its attention
+**overrides** the pane-derived surface dot (computed dynamically in the existing frontend aggregate,
+`attention.ts`, never persisted): driving (`running`/`ready`/waiting-on-`turn`/`headless`/`child`) →
+`working`; genuinely waiting on user (`user_continue`/`user_input`) → `waiting`; `failed` → `error`;
+`paused` → `idle`; `done`/none → fall back to the pane aggregate. **Why override, not blend:**
+`aggregateAttention` is max-severity with `working > waiting`, so a blend would (a) glow "waiting on
+you" on every turn-end the workflow absorbs (false alarms) and (b) **mask a real flag** whenever any
+agent is still `working`. Override fixes both. Cross-surface flags surface via the worktree
+aggregate glowing — **rail only, no toast**. The override is a clean, unit-tested **pure function**.
+
+**Panes + lock.** Panes stay the hero, full-fidelity, **state untouched** — the takeover is signaled
+at the **surface** level (the glow), not per-pane. **Keyboard input is blocked per-xterm** for *all*
+panes while driving (agent and terminal alike — a surface may mix kinds; the whole surface is taken
+over). The lock spans the whole **driving loop**, behind a single tunable **`surfaceLockState(run)`**
+(future levers: per-workflow, unlock-during-turn). The lock (keyboard block, **driving-only**) is
+**separate** from the glow (ownership+attention, present whenever owned).
+
+**The living glow — surface takeover.** Energy *framing* the work in Isagi's existing attention
+language (the Apple-Intelligence / Gemini feel, **minus the banned rainbow**). A `pointer-events-none`
+perimeter layer, layered soft gradients like `.canvas-atmosphere` but **inset** to frame the panes
+(soft inner bloom `inset 0 0 ~40px` + faint outer `0 0 ~32px`, ~12–18% opacity, diffuse like
+`shadow-soft`, never a crisp ring). **Color = state:** driving → **violet** (`working`) slow
+**breathe** (~3.5s); waiting-on-you → **cyan** (`waiting`) the soft outward **glow** ring (the literal
+`glow` keyframe, surface-scaled); paused → recede to **idle** (dim, still); failed → quiet **red**
+frame, no pulse; done → **fades out** as ownership ends. One ambient `ease-expo` loop, never
+travels/overshoots; `prefers-reduced-motion` → static low-opacity frame. **Key:** a cyan-glowing
+surface is *meant* to be typed into (glow = attention, not lock). Final opacity/blur/duration polish
+in the mock.
+
+**Bottom workflow bar (net-new).** Appears when a run owns the active surface; floats above the
+always-on `StatusStrip`; **one bar per surface = the one workflow**.
+- **Label:** a fixed default (the manifest `title`) **overridden stickily** by `setUiFeedback` (the
+  latest `ui_feedback` event across the tree). Status lives in the **dot**, decoupled from the label
+  so the text doesn't twitch; the default is the fallback when `ui_feedback` is never set.
+- **Controls — top-right, consistent through the active life, swapping only at terminal:** driving →
+  `pause`·`cancel`; waiting on you → `pause`·`cancel` (+ prompt below); paused → `resume`·`cancel`
+  (pause⇄resume toggle); done → `dismiss` (bar **persists** with last `ui_feedback`; never
+  auto-disappears); failed → `retry`·`dismiss`. `pause`/`cancel` act in **bulk over the whole
+  run-tree** (new surface-scoped runtime ops, so children can't be orphaned); `cancel` confirms;
+  panes/agents **stay** (durable, ADR 0006).
+- **Prompt area (morphs in below) on a user wait:** `user_input` → the question form (fields +
+  submit); `user_continue` → a bare **Continue** action. Submit *is* the advance — no top "continue".
+- **Expand → the event log:** combined-tree, clean text, **bounded max-height + scrollable**, level
+  filter.
+
+**`retry` (failed) — the edit-resilience payoff.** "Retry the same phase" = reset `failed → ready`
+and **re-run the throwing step from the last snapshot** (state is snapshotted at the prior
+suspension). The dream flow: failure → hand-edit the callback → `retry` → it re-runs the fixed phase.
+**Overrides §12's "v1 retry = a fresh run"**; needs a **small new engine op**; inherits the v1
+double-effect caveat (a partially-executed step may double `inject`/`spawn`).
+
+**Inputs / prompts (finalized).** One `WorkflowQuestionSpec` set, **4 kinds**: `text` / `select` /
+`multi-select` / `confirm`. **No `path` kind** — workflows self-discover paths (e.g. `planPath` via a
+headless prompt over the originating session's output). Fields **required unless defaulted**;
+`validate()` owns semantic/cross-field checks, surfaced **inline at the collection site** (ADR 0004).
+**Two hosts, shared field renderers + spec:** the palette wizard (sequential, invocation) and the
+bottom-bar form (all-at-once, mid-run `user_input`).
+
+**Event ledger & streaming (net-new).** `ctx.log(level, message)` — levels debug/info/warning/error,
+**no `phase` param** (extends §7's ctx surface). A **per-run JSONL event ledger** with a typed
+envelope `{ ts, runId, type, …payload }`, `type` ∈ `log` | `ui_feedback` | lifecycle
+(`started`/`suspended`/`resumed`/`done`/`failed`); extensible. **Keep separate per-run files; merge
+at the read layer per surface** (runId stamped) — reuse the existing per-session JSONL + `fs.watch` +
+projection infra (§9) and the `command-log` → drawer streaming pattern. **Stream over the existing
+internal event bus; plus a GET** to replay (per-surface combined for the bar; per-run available).
+**Current sticky `ui_feedback` = the latest `ui_feedback` event** (event-sourced; one source of
+truth). Rendered as clean text.
+
+**Command palette — invocation.** Each registered workflow → an entry (own "Workflows" group);
+wizard steps generated from the manifest `inputs`; `validate` + `startWorkflow`. Guarded when the
+surface already has a live workflow.
+
+**Dynamic panes.** Spawned sessions appear via the existing surface-detail invalidation; **animate in
+gently; no focus-steal** (you're not driving); the surface auto-lays-out (workflow-directed layout
+deferred).
+
+**Build approach — mock first.** Implementation **phase 1 is a static mock** of the bottom bar + the
+surface-takeover glow, verified visually before any wiring (new UI; de-risk the look first).
+
+**Cross-task dependencies this surfaces (for the fan-out / solution design):**
+- New **surface-scoped runtime ops**: `pause-all` / `cancel-all` over the run-tree.
+- New **engine op**: `retry` (`failed → ready`, re-run from snapshot).
+- New **SDK verb + engine plumbing**: `ctx.log` + the typed event ledger + per-surface event
+  read/stream + GET.
+- `ui_feedback` recorded **as an event** (event-sourced current value), in addition to / instead of
+  the `workflow_runs.ui_feedback` column.
+
+**Lightly-held call (revisit in solution design):** the **expand log shows the combined tree** (a
+child's actions are part of debugging "what the workflow did"); the alternative is root-only for
+purity. Switch to root-only if the tree view gets noisy.

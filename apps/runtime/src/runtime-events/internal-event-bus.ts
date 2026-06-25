@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
-import type { SessionStatus, SurfaceChangedEvent } from '@isagi/contracts';
+import type { SessionStatus, SurfaceChangedEvent, WorkflowEvent } from '@isagi/contracts';
 
 type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
 
@@ -86,6 +86,24 @@ export type InternalRuntimeEvent =
       readonly type: 'workflow_run_terminal';
       readonly runId: number;
       readonly status: 'done' | 'failed';
+    }
+  | {
+      readonly type: 'workflow_run_changed';
+      readonly runId: number;
+      readonly rootRunId: number | null;
+      readonly surfaceId: number | null;
+    }
+  | {
+      readonly type: 'workflow_surface_recompute_requested';
+      readonly rootRunId: number;
+      readonly surfaceId: number | null;
+    }
+  | {
+      readonly type: 'workflow_event_appended';
+      readonly surfaceId: number | null;
+      readonly rootRunId: number | null;
+      readonly runId: number;
+      readonly event: WorkflowEvent;
     };
 
 export interface InternalRuntimeEventSubscription {

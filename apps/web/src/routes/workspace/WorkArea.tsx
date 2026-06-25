@@ -9,6 +9,7 @@ import { ActionBar } from './ActionBar.js';
 import { Canvas } from './Canvas.js';
 import { StatusStrip } from './StatusStrip.js';
 import { WorkbenchDrawer } from './WorkbenchDrawer.js';
+import { WorkflowBarContainer } from './WorkflowBarContainer.js';
 
 /**
  * The work area — everything right of the Rail: the canvas (hero), the always-on
@@ -33,6 +34,7 @@ export function WorkArea() {
 
       {error && !zen && <RuntimeErrorBanner error={error} />}
       <ActionBar />
+      {!zen && <WorkflowBarContainer />}
       <StatusStrip />
       <WorkbenchDrawer />
 

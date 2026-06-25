@@ -16,6 +16,7 @@ const MIN_PANE_SIZE_PX = 160;
 
 interface SurfaceLayoutProps {
   readonly detail: SurfaceDetail;
+  readonly locked?: boolean | undefined;
   readonly renderPane: (input: {
     readonly pane: SurfacePane;
     readonly focused: boolean;
@@ -51,7 +52,7 @@ interface DividerGeom {
  * reclaiming its PTY attachment. A flat keyed list keeps each pane mounted across
  * restructures. Dividers are an absolutely-positioned overlay over the inter-pane gutters.
  */
-export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
+export function SurfaceLayout({ detail, locked = false, renderPane }: SurfaceLayoutProps) {
   const storedPaneId = useWorkspaceStore((state) => state.activePaneBySurfaceId[detail.id]);
   const focusedPaneId = resolveActivePaneId(detail.panes, storedPaneId, detail.activePaneId);
   const previousPaneIds = useRef<ReadonlySet<number> | null>(null);
@@ -172,16 +173,18 @@ export function SurfaceLayout({ detail, renderPane }: SurfaceLayoutProps) {
           </div>
         );
       })}
-      {geometry.dividers.map((divider) => (
-        <SplitDivider
-          key={divider.key}
-          divider={divider}
-          containerRef={containerRef}
-          onDragStart={startDrag}
-          onDragMove={moveDrag}
-          onDragEnd={endDrag}
-        />
-      ))}
+      {locked
+        ? null
+        : geometry.dividers.map((divider) => (
+            <SplitDivider
+              key={divider.key}
+              divider={divider}
+              containerRef={containerRef}
+              onDragStart={startDrag}
+              onDragMove={moveDrag}
+              onDragEnd={endDrag}
+            />
+          ))}
     </div>
   );
 }

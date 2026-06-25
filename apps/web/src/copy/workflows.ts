@@ -1,0 +1,18 @@
+export const workflowCopy = {
+  cancelConfirm: 'Cancel this workflow?',
+  cancelConfirmDetail: 'The running step will finish its boundary, then the workflow is cleared.',
+  cancelConfirmAction: 'Cancel workflow',
+  cancelConfirmBack: 'Keep running',
+  continuePrompt: 'Continue',
+  submitPrompt: 'Submit',
+  retryActionFailed: "Couldn't retry the workflow.",
+  clearActionFailed: "Couldn't clear the workflow.",
+  pauseActionFailed: "Couldn't pause the workflow.",
+  resumeActionFailed: "Couldn't resume the workflow.",
+  advanceActionFailed: "Couldn't advance the workflow.",
+  requiredField: 'Answer this before continuing.',
+  requiredConfirm: 'Confirm this before continuing.',
+  logEmpty: '// no workflow events yet',
+  logConnecting: 'connecting',
+  logDisconnected: 'disconnected',
+} as const;

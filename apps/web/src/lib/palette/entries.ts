@@ -1,5 +1,6 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Workflow } from 'lucide-react';
 
+import { paletteCopy } from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
@@ -28,6 +29,35 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
 
   const worktree = ctx.activeWorktree;
   if (worktree) {
+    for (const descriptor of ctx.workflowDescriptors ?? []) {
+      if (descriptor.ok) {
+        const occupied = ctx.activeSurfaceWorkflowSummary !== undefined;
+        entries.push({
+          id: `workflow:${descriptor.workflowKey}`,
+          label: descriptor.manifest.title,
+          icon: Workflow,
+          group: 'workflows',
+          sub: occupied
+            ? paletteCopy.workflows.disabled.occupied
+            : (descriptor.manifest.description ?? descriptor.workflowKey),
+          workflow: descriptor,
+          ...(occupied ? { disabled: { reason: paletteCopy.workflows.disabled.occupied } } : {}),
+          run: () => {},
+        });
+        continue;
+      }
+
+      entries.push({
+        id: `workflow:${descriptor.workflowKey}`,
+        label: descriptor.workflowKey,
+        icon: Workflow,
+        group: 'workflows',
+        sub: paletteCopy.workflows.disabled.broken,
+        disabled: { reason: descriptor.message },
+        run: () => {},
+      });
+    }
+
     const activeSurfaceTitle = ctx.activeSurface?.title;
     const activeWorktreeCommands = worktreeActionCommands.filter(
       (command) => command.available?.(ctx) ?? true,

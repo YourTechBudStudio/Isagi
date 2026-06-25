@@ -12,7 +12,7 @@ import { registerPtyApi } from './pty-processes/index.js';
 import { registerRuntimeEventsApi } from './runtime-events/index.js';
 import { RuntimeLayer } from './runtime.layer.js';
 import { registerSurfacesApi } from './surfaces/index.js';
-import { registerWorkflowDevApi } from './workflows/index.js';
+import { registerWorkflowApi } from './workflows/index.js';
 import { registerWorkspaceApi } from './workspace/api.js';
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';
@@ -76,12 +76,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerPtyApi(fastify, runtime);
       registerRuntimeEventsApi(fastify, runtime);
       registerPathsApi(fastify);
-      // Workflow dev triggers start in-process, fully-trusted user-authored callbacks
-      // (see docs/workflow-engine.md trust model). They are deliberately live in all
-      // builds: the runtime's boundary is loopback binding + the established
-      // unauthenticated trust posture shared by every route group above, not route
-      // gating. Revisit if the runtime ever serves untrusted callers.
-      registerWorkflowDevApi(fastify, runtime);
+      registerWorkflowApi(fastify, runtime);
 
       const url = yield* tryPromise(() =>
         fastify.listen({

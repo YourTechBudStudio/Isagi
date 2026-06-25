@@ -5,10 +5,11 @@ import {
   useMemo,
   useRef,
   useReducer,
+  useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 
-import type { PathSuggestion } from '@isagi/contracts';
+import type { PathSuggestion, WorkflowStartContext } from '@isagi/contracts';
 
 import { Chip } from '../../components/Chip.js';
 import { paletteCopy } from '../../copy/index.js';
@@ -37,7 +38,13 @@ import type { Option, PaletteEntry, ReviewChoice } from '../../lib/palette/types
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
+import {
+  useStartWorkflowMutation,
+  useWorkflowDescriptorsQuery,
+} from '../../lib/workspace/queries.js';
+import { formatRuntimeError, formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
 import {
   EntryList,
   OutcomePanel,
@@ -48,6 +55,7 @@ import {
   WizardOptions,
   outcomeActions,
 } from './CommandPaletteViews.js';
+import { type WorkflowQuestionAnswers, WorkflowQuestionForm } from './WorkflowQuestionForm.js';
 
 export function CommandPalette() {
   const open = usePaletteStore((state) => state.open);
@@ -60,7 +68,7 @@ export function CommandPalette() {
 
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
   const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
-  const ctx = useMemo(
+  const baseCtx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
         activeSurfaceByWorktreeId,
@@ -68,9 +76,43 @@ export function CommandPalette() {
       }),
     [projects, activeWorktreeId, activeSurfaceByWorktreeId, activePaneBySurfaceId],
   );
+  const activeSurfaceWorkflowSummary = useWorkflowSurfaceStore((state) =>
+    baseCtx.activeSurface ? state.summariesBySurfaceId[baseCtx.activeSurface.id] : undefined,
+  );
+  const workflowLaunchContext = useMemo(
+    (): WorkflowStartContext | null =>
+      baseCtx.activeWorktree && baseCtx.activeSurface
+        ? {
+            worktreeId: baseCtx.activeWorktree.id,
+            surfaceId: baseCtx.activeSurface.id,
+            ...(baseCtx.activePaneId ? { paneId: baseCtx.activePaneId } : {}),
+          }
+        : null,
+    [baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
+  );
+  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchContext, { enabled: open });
+  const ctx = useMemo(
+    () =>
+      buildPaletteContext(projects, activeWorktreeId, {
+        activeSurfaceByWorktreeId,
+        activePaneBySurfaceId,
+        workflowDescriptors: workflowDescriptors.data?.workflows,
+        activeSurfaceWorkflowSummary,
+      }),
+    [
+      projects,
+      activeWorktreeId,
+      activeSurfaceByWorktreeId,
+      activePaneBySurfaceId,
+      workflowDescriptors.data?.workflows,
+      activeSurfaceWorkflowSummary,
+    ],
+  );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
 
   const [machine, send] = useReducer(paletteReducer, initialPaletteState);
+  const [workflowFormEntryId, setWorkflowFormEntryId] = useState<string | null>(null);
+  const startWorkflowMutation = useStartWorkflowMutation();
   const inputRef = useRef<HTMLInputElement>(null);
   const seenEffectIds = useRef(new Set<number>());
   const pathSuggestTimer = useRef<number | null>(null);
@@ -117,6 +159,7 @@ export function CommandPalette() {
   // Reset on open; jump straight into a command flow when autostarted.
   useEffect(() => {
     if (!open) {
+      setWorkflowFormEntryId(null);
       lastOpenRequest.current = null;
       if (machine.kind !== 'closed') {
         send({ type: 'closed' });
@@ -156,7 +199,6 @@ export function CommandPalette() {
   const sel = machine.kind === 'search' || machine.kind === 'step' ? machine.selectedIndex : null;
   const commandError =
     machine.kind === 'search' || machine.kind === 'step' ? machine.inlineError : null;
-  const acceptsInput = machine.kind === 'search' || machine.kind === 'step';
 
   useEffect(() => {
     if (machine.kind !== 'step' || (command && spec)) {
@@ -177,6 +219,12 @@ export function CommandPalette() {
     }
     if (machine.kind === 'error') {
       return { kind: 'error' as const, content: machine.content };
+    }
+    if (workflowFormEntryId) {
+      const entry = allEntries.find((candidate) => candidate.id === workflowFormEntryId);
+      if (entry?.workflow) {
+        return { kind: 'workflow-form' as const, entry, workflow: entry.workflow };
+      }
     }
     if (machine.kind === 'step' && command && spec) {
       if (spec.kind === 'text') {
@@ -233,7 +281,9 @@ export function CommandPalette() {
       ? filterEntries(allEntries, searchQuery)
       : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
-  }, [machine, command, spec, allEntries, recents]);
+  }, [machine, workflowFormEntryId, allEntries, command, spec, recents]);
+  const acceptsInput =
+    view.kind !== 'workflow-form' && (machine.kind === 'search' || machine.kind === 'step');
 
   useEffect(() => {
     runPaletteEffects(machine.effects, {
@@ -272,12 +322,18 @@ export function CommandPalette() {
   const defaultIndex =
     view.kind === 'wizard'
       ? stepDefaultIndex(spec, view.options)
-      : view.kind === 'path' && view.stale
+      : view.kind === 'workflow-form'
         ? null
-        : 0;
+        : view.kind === 'path' && view.stale
+          ? null
+          : 0;
   const viewKey = `${baseViewKey}:${selectableLength}:${defaultIndex ?? 'none'}`;
   const panelKey =
-    machine.kind === 'step' && view.kind === 'path' ? `path-${machine.flow.stepIndex}` : viewKey;
+    view.kind === 'workflow-form'
+      ? `workflow-form:${view.entry.id}`
+      : machine.kind === 'step' && view.kind === 'path'
+        ? `path-${machine.flow.stepIndex}`
+        : viewKey;
 
   // Snap the selection to the default whenever the view changes shape.
   useEffect(() => {
@@ -288,12 +344,71 @@ export function CommandPalette() {
   }, [open, viewKey, selectableLength, defaultIndex]);
 
   useEffect(() => {
-    if (open && (machine.kind === 'search' || machine.kind === 'step')) {
+    if (
+      open &&
+      view.kind !== 'workflow-form' &&
+      (machine.kind === 'search' || machine.kind === 'step')
+    ) {
       inputRef.current?.focus();
     }
-  }, [open, machine.kind, viewKey]);
+  }, [open, machine.kind, view.kind, viewKey]);
+
+  const workflowStartErrorContent = (error: unknown) => ({
+    title: paletteCopy.workflows.startFailed.title,
+    body: formatRuntimeErrorSummary(error),
+    diagnostic: {
+      label: paletteCopy.workflows.startFailed.diagnosticLabel,
+      detail: formatRuntimeError(error),
+    },
+  });
+
+  const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowQuestionAnswers) => {
+    if (!entry.workflow || !workflowLaunchContext) {
+      send({
+        type: 'flow-failed',
+        content: {
+          title: paletteCopy.outcome.commandUnavailableTitle,
+          body: paletteCopy.outcome.commandUnavailableBody,
+        },
+      });
+      return;
+    }
+
+    startWorkflowMutation.mutate(
+      {
+        workflowKey: entry.workflow.workflowKey,
+        variables: answers,
+        context: workflowLaunchContext,
+      },
+      {
+        onSuccess: () => {
+          pushRecent(entry.id);
+          closeCurrentPalette();
+        },
+        onError: (error) => {
+          setWorkflowFormEntryId(null);
+          send({ type: 'flow-failed', content: workflowStartErrorContent(error) });
+        },
+      },
+    );
+  };
 
   const runEntry = (entry: PaletteEntry) => {
+    if (entry.disabled) {
+      return;
+    }
+    if (entry.workflow) {
+      if (startWorkflowMutation.isPending) {
+        return;
+      }
+      const questions = entry.workflow.manifest.inputs ?? [];
+      if (questions.length === 0) {
+        startWorkflowEntry(entry, {});
+        return;
+      }
+      setWorkflowFormEntryId(entry.id);
+      return;
+    }
     send({ type: 'activate-entry', entry, ctx });
   };
 
@@ -399,6 +514,10 @@ export function CommandPalette() {
   }, [ctx, open, selectableLength, sel, view]);
 
   const back = () => {
+    if (view.kind === 'workflow-form') {
+      setWorkflowFormEntryId(null);
+      return;
+    }
     send({ type: 'back', command: command ?? undefined, ctx });
   };
 
@@ -487,7 +606,9 @@ export function CommandPalette() {
             className="h-fit w-145 max-w-full overflow-hidden rounded-lg border border-line/30 bg-elevated/85 shadow-lift backdrop-blur-2xl"
           >
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line/16 px-4 py-3.5">
-              {command ? (
+              {view.kind === 'workflow-form' ? (
+                <Chip tone="command">{view.workflow.manifest.title}</Chip>
+              ) : command ? (
                 <>
                   <Chip tone="command">{command.label}</Chip>
                   {crumbs.map((crumb) => (
@@ -530,7 +651,9 @@ export function CommandPalette() {
                 />
               ) : (
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-subtle">
-                  {paletteCopy.outcome.localFeedback}
+                  {view.kind === 'workflow-form'
+                    ? (view.workflow.manifest.description ?? view.workflow.workflowKey)
+                    : paletteCopy.outcome.localFeedback}
                 </span>
               )}
             </div>
@@ -548,7 +671,16 @@ export function CommandPalette() {
               transition={uiTransition}
               className="max-h-[46vh] overflow-y-auto p-1.5"
             >
-              {view.kind === 'wizard' ? (
+              {view.kind === 'workflow-form' ? (
+                <div className="px-3 py-3">
+                  <WorkflowQuestionForm
+                    questions={view.workflow.manifest.inputs ?? []}
+                    submitLabel={paletteCopy.workflows.start}
+                    disabled={startWorkflowMutation.isPending}
+                    onSubmit={(answers) => startWorkflowEntry(view.entry, answers)}
+                  />
+                </div>
+              ) : view.kind === 'wizard' ? (
                 <WizardOptions
                   options={view.options}
                   sel={sel}
@@ -625,11 +757,13 @@ export function CommandPalette() {
               mode={
                 view.kind === 'result' || view.kind === 'error'
                   ? 'outcome'
-                  : command
-                    ? spec?.kind === 'path'
-                      ? 'path'
-                      : 'wizard'
-                    : 'list'
+                  : view.kind === 'workflow-form'
+                    ? 'wizard'
+                    : command
+                      ? spec?.kind === 'path'
+                        ? 'path'
+                        : 'wizard'
+                      : 'list'
               }
             />
           </motion.div>

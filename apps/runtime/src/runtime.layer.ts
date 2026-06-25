@@ -53,10 +53,14 @@ import {
 } from './terminal-sessions/index.js';
 import {
   WorkflowEngineLive,
+  WorkflowEventLedgerLive,
   WorkflowHeadlessLive,
   WorkflowRegistryLive,
   WorkflowRepositoryLive,
+  WorkflowSurfaceProjectionLive,
   type WorkflowEngineService,
+  type WorkflowEventLedgerService,
+  type WorkflowSurfaceProjectionService,
 } from './workflows/index.js';
 import {
   WorkspaceRepository,
@@ -93,6 +97,10 @@ const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupReposi
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const WorkflowRepositoryLayer = WorkflowRepositoryLive.pipe(Layer.provide(DatabaseLive));
+const WorkflowEventLedgerLayer = WorkflowEventLedgerLive.pipe(
+  Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(DataDirectoryLive),
+);
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendLive),
@@ -141,6 +149,7 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(WorkflowEventLedgerLayer),
   Layer.provide(WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive))),
   Layer.provide(RepositoryLive),
   Layer.provide(AgentSessionServiceLayer),
@@ -149,6 +158,10 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
   Layer.provide(WorkflowHeadlessLayer),
+);
+const WorkflowSurfaceProjectionLayer = WorkflowSurfaceProjectionLive.pipe(
+  Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(WorkflowEventLedgerLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
@@ -165,6 +178,8 @@ const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
   SessionServicesLayer,
   EventProjectionLayer,
+  WorkflowSurfaceProjectionLayer,
+  WorkflowEventLedgerLayer,
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
@@ -213,7 +228,9 @@ export type RuntimeServices =
   | InternalRuntimeEventBusService
   | SessionLifecycleService
   | SessionGcService
-  | WorkflowEngineService;
+  | WorkflowEngineService
+  | WorkflowEventLedgerService
+  | WorkflowSurfaceProjectionService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,

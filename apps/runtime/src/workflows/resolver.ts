@@ -1,6 +1,10 @@
 import { Cause, Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../runtime-events/index.js';
+import {
+  type WorkflowEventLedgerService,
+  workflowEventLedgerWarningPayload,
+} from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService, WorkflowResumePayload } from './repository.js';
 import type { WorkflowWaitCondition } from './types.js';
@@ -19,10 +23,17 @@ export function startWorkflowResolver(input: {
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly headless: WorkflowHeadlessService;
+  readonly eventLedger?: WorkflowEventLedgerService | undefined;
 }) {
   return Effect.gen(function* () {
     const subscription = yield* input.eventBus.subscribe({
-      types: ['turn_ended', 'turn_failed', 'headless_op_completed', 'workflow_run_terminal'],
+      types: [
+        'turn_ended',
+        'turn_failed',
+        'headless_op_completed',
+        'workflow_run_terminal',
+        'surface_changed',
+      ],
     });
     yield* Effect.addFinalizer(() => subscription.unsubscribe);
     yield* Effect.forkScoped(
@@ -39,6 +50,13 @@ export function startWorkflowResolver(input: {
           }
           if (event.type === 'workflow_run_terminal') {
             yield* resolveWorkflowTerminal({ ...input, childRunId: event.runId });
+            return;
+          }
+          if (event.type === 'surface_changed' && event.payload.change === 'deleted') {
+            // The surface was deleted out from under any workflow it owned; tear the
+            // now-surfaceless run tree down eagerly instead of leaving it to linger
+            // until the next process restart's orphan sweep.
+            yield* input.eventLedger?.sweepSurfaceDeletedRuns ?? Effect.void;
           }
         }).pipe(
           Effect.catchAllCause((cause) =>
@@ -56,6 +74,7 @@ export function resolveWorkflowTerminal(input: {
   readonly repository: WorkflowRepositoryService;
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
   readonly eventBus: InternalRuntimeEventBusService;
+  readonly eventLedger?: WorkflowEventLedgerService | undefined;
   readonly childRunId: number;
 }) {
   return Effect.gen(function* () {
@@ -81,6 +100,7 @@ export function resolveWorkflowTerminal(input: {
           runId: run.id,
           status: 'failed',
         });
+        yield* appendLifecycleBestEffort(input.eventLedger, run, 'failed');
         wokeAny = true;
         continue;
       }
@@ -88,6 +108,7 @@ export function resolveWorkflowTerminal(input: {
         runId: run.id,
         resumePayload: { kind: 'workflow', results: resolution.results },
       });
+      if (woke) yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
       wokeAny = wokeAny || woke;
     }
     if (wokeAny) yield* input.engine.poke;
@@ -98,6 +119,7 @@ export function resolveHeadlessCompletion(input: {
   readonly repository: WorkflowRepositoryService;
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
   readonly headless: WorkflowHeadlessService;
+  readonly eventLedger?: WorkflowEventLedgerService | undefined;
   readonly runId: number;
 }) {
   return Effect.gen(function* () {
@@ -112,6 +134,7 @@ export function resolveHeadlessCompletion(input: {
       resumePayload: { kind: 'headless', results },
     });
     if (woke) {
+      yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
       yield* input.headless.releaseOps({ opIds: condition.ops.map((op) => op.opId) });
       yield* input.engine.poke;
     }
@@ -121,6 +144,7 @@ export function resolveHeadlessCompletion(input: {
 export function resolveTurnEdge(input: {
   readonly repository: WorkflowRepositoryService;
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
+  readonly eventLedger?: WorkflowEventLedgerService | undefined;
   readonly edge: TurnEdge;
 }) {
   return Effect.gen(function* () {
@@ -136,10 +160,38 @@ export function resolveTurnEdge(input: {
         runId: run.id,
         resumePayload: resumePayload(input.edge),
       });
+      if (woke) yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
       wokeAny = wokeAny || woke;
     }
     if (wokeAny) yield* input.engine.poke;
   });
+}
+
+function appendLifecycleBestEffort(
+  eventLedger: WorkflowEventLedgerService | undefined,
+  run: import('./types.js').WorkflowRunRow,
+  event: import('@isagi/contracts').WorkflowLifecycleEvent,
+) {
+  if (!eventLedger) return Effect.void;
+  return eventLedger
+    .append({
+      runId: run.id,
+      rootRunId: run.rootRunId,
+      surfaceId: run.surfaceId,
+      event: { type: 'lifecycle', event },
+    })
+    .pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          console.warn('[runtime] Workflow resolver lifecycle append failed', {
+            op: 'lifecycle',
+            lifecycle: event,
+            ...workflowEventLedgerWarningPayload(error),
+          });
+        }),
+      ),
+      Effect.asVoid,
+    );
 }
 
 // The watermark is start-anchored on `recordedAt` (there is no durable turn id).

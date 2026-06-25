@@ -129,6 +129,8 @@ export interface WorkflowHeadlessOp {
   readonly launch: WorkflowHeadlessLaunch;
 }
 
+export type WorkflowLogLevel = 'debug' | 'info' | 'warning' | 'error';
+
 export type WorkflowResult =
   | { readonly type: 'cont'; readonly state: unknown }
   | { readonly type: 'suspend'; readonly state: unknown; readonly condition: WorkflowWaitCondition }
@@ -160,6 +162,7 @@ export interface WorkflowContext {
       readonly agentSessionId?: number | null | undefined;
     },
   ) => Promise<number>;
+  readonly log: (level: WorkflowLogLevel, message: string) => Promise<void>;
   readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
 }
 

@@ -17,6 +17,8 @@ export function buildPaletteContext(
   options: {
     readonly activeSurfaceByWorktreeId?: Readonly<Record<number, number>>;
     readonly activePaneBySurfaceId?: Readonly<Record<number, number>>;
+    readonly workflowDescriptors?: PaletteContext['workflowDescriptors'];
+    readonly activeSurfaceWorkflowSummary?: PaletteContext['activeSurfaceWorkflowSummary'];
   } = {},
 ): PaletteContext {
   const activeWorktree =
@@ -41,5 +43,7 @@ export function buildPaletteContext(
     activePaneId: activeSurface
       ? (options.activePaneBySurfaceId?.[activeSurface.id] ?? null)
       : null,
+    workflowDescriptors: options.workflowDescriptors,
+    activeSurfaceWorkflowSummary: options.activeSurfaceWorkflowSummary,
   };
 }

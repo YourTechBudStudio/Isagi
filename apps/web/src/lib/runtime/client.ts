@@ -5,6 +5,7 @@ import {
   apiEndpoints,
   agentSessionPtyWebSocketEndpoint,
   commandLogStreamWebSocketEndpoint,
+  workflowEventsStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   apiErrorResponseSchema,
@@ -49,6 +50,14 @@ import {
   type WorktreeCommandsOutput,
   type CommandActionOutput,
   type CommandLogMetadataOutput,
+  type AdvanceWorkflowInput,
+  type ListWorkflowDescriptorsInput,
+  type ListWorkflowDescriptorsOutput,
+  type SetWorkflowPausedInput,
+  type StartWorkflowInput,
+  type StartWorkflowOutput,
+  type WorkflowRunControlOutput,
+  type WorkflowSurfaceControlOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -78,6 +87,7 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.commands.logMetadata>
   >;
   readonly resolveCommandLogStreamWebSocketUrl: (worktreeId: number, commandName: string) => string;
+  readonly resolveWorkflowEventsStreamWebSocketUrl: (surfaceId: number) => string;
   readonly runCommand: (
     worktreeId: number,
     commandName: string,
@@ -244,6 +254,44 @@ export interface RuntimeClient {
     PathSuggestOutput,
     RuntimeEndpointError<typeof apiEndpoints.paths.suggestions>
   >;
+  readonly setWorkflowPaused: (
+    surfaceId: number,
+    input: SetWorkflowPausedInput,
+  ) => Effect.Effect<
+    WorkflowSurfaceControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.setPaused>
+  >;
+  readonly clearWorkflow: (
+    surfaceId: number,
+  ) => Effect.Effect<
+    WorkflowSurfaceControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.clear>
+  >;
+  readonly retryWorkflow: (
+    surfaceId: number,
+  ) => Effect.Effect<
+    WorkflowSurfaceControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.retry>
+  >;
+  readonly advanceWorkflow: (
+    runId: number,
+    input: AdvanceWorkflowInput,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.advance>
+  >;
+  readonly listWorkflowDescriptors: (
+    input: ListWorkflowDescriptorsInput,
+  ) => Effect.Effect<
+    ListWorkflowDescriptorsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.list>
+  >;
+  readonly startWorkflow: (
+    input: StartWorkflowInput,
+  ) => Effect.Effect<
+    StartWorkflowOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.start>
+  >;
 }
 
 export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
@@ -261,6 +309,14 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
         runtimeUrl,
       );
       httpUrl.searchParams.set('commandName', commandName);
+      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      return httpUrl.toString();
+    },
+    resolveWorkflowEventsStreamWebSocketUrl: (surfaceId) => {
+      const httpUrl = new URL(
+        `${apiBasePath}${interpolatePath(workflowEventsStreamWebSocketEndpoint.path, { surfaceId })}`,
+        runtimeUrl,
+      );
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
@@ -330,6 +386,13 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.worktrees.delete, { projectId, worktreeId }, input),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),
+    setWorkflowPaused: (surfaceId, input) =>
+      request(apiEndpoints.workflows.setPaused, { surfaceId }, input),
+    clearWorkflow: (surfaceId) => request(apiEndpoints.workflows.clear, { surfaceId }),
+    retryWorkflow: (surfaceId) => request(apiEndpoints.workflows.retry, { surfaceId }),
+    advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
+    listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.list, input),
+    startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
   };
 }
 

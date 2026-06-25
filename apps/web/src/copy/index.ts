@@ -17,3 +17,4 @@ export {
 export { toastCopy } from './toasts.js';
 export { workbenchCopy } from './workbench.js';
 export { worktreeSetupFailureCopy } from './setup.js';
+export { workflowCopy } from './workflows.js';

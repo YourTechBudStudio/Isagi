@@ -13,6 +13,7 @@ import {
 import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
 import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
 import type { RuntimeServices } from '../runtime.layer.js';
+import { WorkflowSurfaceProjection } from '../workflows/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEventBus } from './event-bus.js';
 
 const runWithRuntime =
@@ -82,7 +83,9 @@ export function registerRuntimeEventsApi(
 
           const subscription = subscriptionResult.right;
           unsubscribe = () => {
-            void run(subscription.unsubscribe);
+            void run(subscription.unsubscribe).catch((error: unknown) => {
+              console.warn('[runtime] Runtime event websocket unsubscribe failed', error);
+            });
           };
           if (closed) {
             unsubscribe();
@@ -168,6 +171,16 @@ function handleClientMessage(
           ...nextRuntimeEventEnvelope(),
           type: 'attention_snapshot',
           payload: { sources: [...sources] },
+        } satisfies RuntimeEvent;
+      });
+    case 'workflow_surface_snapshot_requested':
+      return Effect.gen(function* () {
+        const projection = yield* WorkflowSurfaceProjection;
+        const summaries = yield* projection.listSummaries;
+        return {
+          ...nextRuntimeEventEnvelope(),
+          type: 'workflow_surface_snapshot',
+          payload: { summaries: [...summaries] },
         } satisfies RuntimeEvent;
       });
   }
