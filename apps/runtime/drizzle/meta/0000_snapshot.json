@@ -70,12 +70,8 @@
           "name": "agent_sessions_worktree_id_worktrees_id_fk",
           "tableFrom": "agent_sessions",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -83,12 +79,8 @@
           "name": "agent_sessions_active_pty_process_id_pty_processes_id_fk",
           "tableFrom": "agent_sessions",
           "tableTo": "pty_processes",
-          "columnsFrom": [
-            "active_pty_process_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_pty_process_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -160,9 +152,7 @@
       "indexes": {
         "projects_root_path_unique": {
           "name": "projects_root_path_unique",
-          "columns": [
-            "root_path"
-          ],
+          "columns": ["root_path"],
           "isUnique": true
         }
       },
@@ -359,12 +349,8 @@
           "name": "surface_panes_surface_id_worktree_surfaces_id_fk",
           "tableFrom": "surface_panes",
           "tableTo": "worktree_surfaces",
-          "columnsFrom": [
-            "surface_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["surface_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -439,12 +425,8 @@
           "name": "terminal_sessions_worktree_id_worktrees_id_fk",
           "tableFrom": "terminal_sessions",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -452,12 +434,8 @@
           "name": "terminal_sessions_active_pty_process_id_pty_processes_id_fk",
           "tableFrom": "terminal_sessions",
           "tableTo": "pty_processes",
-          "columnsFrom": [
-            "active_pty_process_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_pty_process_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -508,10 +486,7 @@
       "indexes": {
         "workflow_run_events_run_idx": {
           "name": "workflow_run_events_run_idx",
-          "columns": [
-            "workflow_run_id",
-            "id"
-          ],
+          "columns": ["workflow_run_id", "id"],
           "isUnique": false
         }
       },
@@ -520,12 +495,8 @@
           "name": "workflow_run_events_workflow_run_id_workflow_runs_id_fk",
           "tableFrom": "workflow_run_events",
           "tableTo": "workflow_runs",
-          "columnsFrom": [
-            "workflow_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workflow_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -683,45 +654,32 @@
       "indexes": {
         "workflow_runs_status_idx": {
           "name": "workflow_runs_status_idx",
-          "columns": [
-            "status"
-          ],
+          "columns": ["status"],
           "isUnique": false
         },
         "workflow_runs_status_wait_kind_idx": {
           "name": "workflow_runs_status_wait_kind_idx",
-          "columns": [
-            "status",
-            "wait_kind"
-          ],
+          "columns": ["status", "wait_kind"],
           "isUnique": false
         },
         "workflow_runs_paused_idx": {
           "name": "workflow_runs_paused_idx",
-          "columns": [
-            "paused"
-          ],
+          "columns": ["paused"],
           "isUnique": false
         },
         "workflow_runs_worktree_idx": {
           "name": "workflow_runs_worktree_idx",
-          "columns": [
-            "worktree_id"
-          ],
+          "columns": ["worktree_id"],
           "isUnique": false
         },
         "workflow_runs_surface_idx": {
           "name": "workflow_runs_surface_idx",
-          "columns": [
-            "surface_id"
-          ],
+          "columns": ["surface_id"],
           "isUnique": false
         },
         "workflow_runs_root_idx": {
           "name": "workflow_runs_root_idx",
-          "columns": [
-            "root_run_id"
-          ],
+          "columns": ["root_run_id"],
           "isUnique": false
         }
       },
@@ -730,12 +688,8 @@
           "name": "workflow_runs_worktree_id_worktrees_id_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -743,12 +697,8 @@
           "name": "workflow_runs_surface_id_worktree_surfaces_id_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "worktree_surfaces",
-          "columnsFrom": [
-            "surface_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["surface_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -756,12 +706,8 @@
           "name": "workflow_runs_parent_run_id_workflow_runs_id_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "workflow_runs",
-          "columnsFrom": [
-            "parent_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["parent_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -769,12 +715,8 @@
           "name": "workflow_runs_root_run_id_workflow_runs_id_fk",
           "tableFrom": "workflow_runs",
           "tableTo": "workflow_runs",
-          "columnsFrom": [
-            "root_run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["root_run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -867,18 +809,12 @@
       "indexes": {
         "worktree_command_runs_latest_idx": {
           "name": "worktree_command_runs_latest_idx",
-          "columns": [
-            "worktree_id",
-            "command_name",
-            "id"
-          ],
+          "columns": ["worktree_id", "command_name", "id"],
           "isUnique": false
         },
         "worktree_command_runs_pty_idx": {
           "name": "worktree_command_runs_pty_idx",
-          "columns": [
-            "pty_process_id"
-          ],
+          "columns": ["pty_process_id"],
           "isUnique": false
         }
       },
@@ -887,12 +823,8 @@
           "name": "worktree_command_runs_worktree_id_worktrees_id_fk",
           "tableFrom": "worktree_command_runs",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -900,12 +832,8 @@
           "name": "worktree_command_runs_pty_process_id_pty_processes_id_fk",
           "tableFrom": "worktree_command_runs",
           "tableTo": "pty_processes",
-          "columnsFrom": [
-            "pty_process_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["pty_process_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -970,17 +898,12 @@
       "indexes": {
         "worktree_command_states_worktree_command_unique": {
           "name": "worktree_command_states_worktree_command_unique",
-          "columns": [
-            "worktree_id",
-            "command_name"
-          ],
+          "columns": ["worktree_id", "command_name"],
           "isUnique": true
         },
         "worktree_command_states_active_pty_idx": {
           "name": "worktree_command_states_active_pty_idx",
-          "columns": [
-            "active_pty_process_id"
-          ],
+          "columns": ["active_pty_process_id"],
           "isUnique": false
         }
       },
@@ -989,12 +912,8 @@
           "name": "worktree_command_states_worktree_id_worktrees_id_fk",
           "tableFrom": "worktree_command_states",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1002,12 +921,8 @@
           "name": "worktree_command_states_active_pty_process_id_pty_processes_id_fk",
           "tableFrom": "worktree_command_states",
           "tableTo": "pty_processes",
-          "columnsFrom": [
-            "active_pty_process_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_pty_process_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1065,9 +980,7 @@
       "indexes": {
         "worktree_environment_states_worktree_id_unique": {
           "name": "worktree_environment_states_worktree_id_unique",
-          "columns": [
-            "worktree_id"
-          ],
+          "columns": ["worktree_id"],
           "isUnique": true
         }
       },
@@ -1076,12 +989,8 @@
           "name": "worktree_environment_states_worktree_id_worktrees_id_fk",
           "tableFrom": "worktree_environment_states",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1089,12 +998,8 @@
           "name": "worktree_environment_states_active_surface_id_worktree_surfaces_id_fk",
           "tableFrom": "worktree_environment_states",
           "tableTo": "worktree_surfaces",
-          "columnsFrom": [
-            "active_surface_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_surface_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1102,12 +1007,8 @@
           "name": "worktree_environment_states_active_pane_id_surface_panes_id_fk",
           "tableFrom": "worktree_environment_states",
           "tableTo": "surface_panes",
-          "columnsFrom": [
-            "active_pane_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["active_pane_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1175,12 +1076,8 @@
           "name": "worktree_setup_runs_worktree_id_worktrees_id_fk",
           "tableFrom": "worktree_setup_runs",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1304,12 +1201,8 @@
           "name": "worktree_setup_steps_run_id_worktree_setup_runs_id_fk",
           "tableFrom": "worktree_setup_steps",
           "tableTo": "worktree_setup_runs",
-          "columnsFrom": [
-            "run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["run_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1381,10 +1274,7 @@
       "indexes": {
         "worktree_setup_trust_project_scope_unique": {
           "name": "worktree_setup_trust_project_scope_unique",
-          "columns": [
-            "project_id",
-            "scope"
-          ],
+          "columns": ["project_id", "scope"],
           "isUnique": true
         }
       },
@@ -1393,12 +1283,8 @@
           "name": "worktree_setup_trust_project_id_projects_id_fk",
           "tableFrom": "worktree_setup_trust",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1466,12 +1352,8 @@
           "name": "worktree_surfaces_worktree_id_worktrees_id_fk",
           "tableFrom": "worktree_surfaces",
           "tableTo": "worktrees",
-          "columnsFrom": [
-            "worktree_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["worktree_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1550,10 +1432,7 @@
       "indexes": {
         "worktrees_project_path_unique": {
           "name": "worktrees_project_path_unique",
-          "columns": [
-            "project_id",
-            "path"
-          ],
+          "columns": ["project_id", "path"],
           "isUnique": true
         }
       },
@@ -1562,12 +1441,8 @@
           "name": "worktrees_project_id_projects_id_fk",
           "tableFrom": "worktrees",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }

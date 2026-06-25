@@ -269,6 +269,7 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
         ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
         ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
         ...(error.paneId ? { paneId: error.paneId } : {}),
+        ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
       },
     };
   }

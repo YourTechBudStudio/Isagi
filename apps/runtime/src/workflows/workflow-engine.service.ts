@@ -668,7 +668,14 @@ export const WorkflowEngineLive = Layer.scoped(
         ),
       ),
     );
-    yield* startWorkflowResolver({ repository, engine: service, eventBus, headless, eventLedger });
+    yield* startWorkflowResolver({
+      repository,
+      engine: service,
+      eventBus,
+      headless,
+      observer,
+      eventLedger,
+    });
 
     return service;
   }),
@@ -728,6 +735,22 @@ function buildLaunchContext(
             message: `Agent session ${context.agentSessionId} was not found on surface ${surface.id}.`,
             worktreeId: worktree.id,
             surfaceId: surface.id,
+          }),
+        );
+      }
+      if (
+        context.paneId !== undefined &&
+        context.paneId !== null &&
+        context.paneId !== agentPane.id
+      ) {
+        return yield* Effect.fail(
+          new WorkflowEngineError({
+            code: 'workflow_launch_context_mismatch',
+            message: `Workflow launch context supplied pane ${context.paneId} with agent session ${context.agentSessionId}, but agent session ${context.agentSessionId} belongs to pane ${agentPane.id} on surface ${surface.id}.`,
+            worktreeId: worktree.id,
+            surfaceId: surface.id,
+            paneId: context.paneId,
+            agentSessionId: context.agentSessionId,
           }),
         );
       }

@@ -61,6 +61,7 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'surface_worktree_mismatch'
     | 'pane_not_found'
     | 'agent_session_not_on_surface'
+    | 'workflow_launch_context_mismatch'
     | 'validation_failed'
     | 'workflow_root_surface_required'
     | 'workflow_surface_busy'
@@ -77,6 +78,7 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
   readonly paneId?: number | undefined;
+  readonly agentSessionId?: number | undefined;
 }> {}
 
 export function waitKind(condition: WorkflowWaitCondition): WorkflowWaitKind {

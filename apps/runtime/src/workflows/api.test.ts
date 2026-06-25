@@ -47,11 +47,11 @@ test('list route returns workflow descriptors from the engine', async () => {
   const response = await fastify.inject({
     method: 'POST',
     url: '/api/v1/workflows/list',
-    payload: { context: { worktreeId: 7, surfaceId: 42, paneId: 99 } },
+    payload: { context: { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 } },
   });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(listContext, { worktreeId: 7, surfaceId: 42, paneId: 99 });
+  assert.deepEqual(listContext, { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 });
   const body = JSON.parse(response.body) as {
     readonly data: { readonly workflows: readonly unknown[] };
     readonly meta: { readonly requestId: string };
@@ -102,7 +102,7 @@ test('start route starts a workflow with launch context and variables', async ()
     payload: {
       workflowKey: 'ship-it',
       variables: { version: '1.2.3' },
-      context: { worktreeId: 7, surfaceId: 42, paneId: null },
+      context: { worktreeId: 7, surfaceId: 42, paneId: null, agentSessionId: null },
     },
   });
 
@@ -110,7 +110,7 @@ test('start route starts a workflow with launch context and variables', async ()
   assert.deepEqual(startInput, {
     workflowKey: 'ship-it',
     variables: { version: '1.2.3' },
-    context: { worktreeId: 7, surfaceId: 42, paneId: null },
+    context: { worktreeId: 7, surfaceId: 42, paneId: null, agentSessionId: null },
   });
   const body = JSON.parse(response.body) as {
     readonly data: { readonly workflowRunId: number; readonly workflowKey: string };

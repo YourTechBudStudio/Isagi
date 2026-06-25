@@ -418,6 +418,23 @@ test('step flows can fail locally when their command entry disappears', () => {
   assert.equal(state.content.title, 'Command is no longer available.');
 });
 
+test('entry-list flows can fail locally before entering a command step', () => {
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+
+  state = paletteReducer(state, {
+    type: 'flow-failed',
+    entryId: 'workflow:launch-context-probe',
+    content: {
+      title: "Couldn't start workflow.",
+      body: "Those answers didn't pass the workflow's checks.",
+    },
+  });
+
+  assert.equal(state.kind, 'error');
+  assert.equal(state.entryId, 'workflow:launch-context-probe');
+  assert.equal(state.content.body, "Those answers didn't pass the workflow's checks.");
+});
+
 function fakeCommand(overrides: Partial<PaletteCommand> = {}): PaletteCommand {
   return {
     id: 'fake-command',

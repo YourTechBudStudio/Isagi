@@ -62,6 +62,64 @@ test('delete pane updates layout and keeps the remaining pane', async () => {
   }
 });
 
+test('delete pane no-ops when the pane is missing', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-missing-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Terminal',
+        });
+
+        return yield* surfaces.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId: surface.paneId + 999,
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output, { deletedSurfaceId: null, deletedPaneIds: [] });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('delete pane no-ops when the pane deletion already removed the surface', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-pane-repeat-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Terminal',
+        });
+        const first = yield* surfaces.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId: surface.paneId,
+        });
+        const second = yield* surfaces.deleteSurfacePane({
+          surfaceId: surface.surfaceId,
+          paneId: surface.paneId,
+        });
+        return { first, second, surface };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.first, {
+      deletedSurfaceId: output.surface.surfaceId,
+      deletedPaneIds: [output.surface.paneId],
+    });
+    assert.deepEqual(output.second, { deletedSurfaceId: null, deletedPaneIds: [] });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('delete last pane deletes the surface and leaves referenced logs for PTY GC', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-delete-last-pane-'));
   try {

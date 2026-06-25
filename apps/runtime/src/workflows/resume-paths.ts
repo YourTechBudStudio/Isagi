@@ -20,7 +20,6 @@ import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import type { WorkflowEventLedgerService } from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService } from './repository.js';
-import { isSatisfied } from './resolver.js';
 import {
   appendLifecycleBestEffort,
   failWorkflowRunAndPublish,
@@ -29,12 +28,11 @@ import {
 } from './run-failure.js';
 import type { WorkflowRunRow, WorkflowWaitCondition } from './types.js';
 import {
-  isTerminalTurnEdge,
+  findSatisfiedTerminalTurnEdge,
   parseHeadlessWaitCondition,
   parseTurnWaitCondition,
   parseWorkflowWaitCondition,
   resumePayload,
-  type TerminalTurnEdge,
 } from './wait-conditions.js';
 
 export function continuePausedRun(input: {
@@ -258,12 +256,7 @@ function continuePausedTurnRun(input: {
     }
 
     const edges = yield* input.observer.getTurnEdges(condition.agentSessionId);
-    let terminalEdge: TerminalTurnEdge | null = null;
-    for (const edge of edges) {
-      if (!isTerminalTurnEdge(edge) || !isSatisfied(condition, edge)) continue;
-      terminalEdge = edge;
-      break;
-    }
+    const terminalEdge = findSatisfiedTerminalTurnEdge(condition, edges);
     if (!terminalEdge) {
       yield* input.repository.rearmPausedRun(input.run.id);
       return;
@@ -288,8 +281,8 @@ export function reconcileArmedTurnWait(input: {
 }) {
   return Effect.gen(function* () {
     const edges = yield* input.observer.getTurnEdges(input.condition.agentSessionId);
-    for (const edge of edges) {
-      if (!isTerminalTurnEdge(edge) || !isSatisfied(input.condition, edge)) continue;
+    const edge = findSatisfiedTerminalTurnEdge(input.condition, edges);
+    if (edge) {
       const woke = yield* input.repository.wakeWaitingRun({
         runId: input.run.id,
         resumePayload: resumePayload(edge),

@@ -14,7 +14,10 @@ import type { PathSuggestion, WorkflowStartContext } from '@isagi/contracts';
 import { Chip } from '../../components/Chip.js';
 import { paletteCopy } from '../../copy/index.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
-import { buildPaletteContext } from '../../lib/palette/context.js';
+import {
+  buildPaletteContext,
+  workflowContextFromSurfaceDetail,
+} from '../../lib/palette/context.js';
 import {
   commandForWorkbenchActionId,
   resolveStateCommand,
@@ -40,6 +43,7 @@ import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import {
   useStartWorkflowMutation,
+  useSurfaceDetailQuery,
   useWorkflowDescriptorsQuery,
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeError, formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
@@ -79,16 +83,20 @@ export function CommandPalette() {
   const activeSurfaceWorkflowSummary = useWorkflowSurfaceStore((state) =>
     baseCtx.activeSurface ? state.summariesBySurfaceId[baseCtx.activeSurface.id] : undefined,
   );
+  const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
+    enabled: open && baseCtx.activeSurface !== null,
+  });
   const workflowLaunchContext = useMemo(
     (): WorkflowStartContext | null =>
-      baseCtx.activeWorktree && baseCtx.activeSurface
-        ? {
+      baseCtx.activeWorktree && baseCtx.activeSurface && activeSurfaceDetail.data
+        ? workflowContextFromSurfaceDetail({
             worktreeId: baseCtx.activeWorktree.id,
             surfaceId: baseCtx.activeSurface.id,
-            ...(baseCtx.activePaneId ? { paneId: baseCtx.activePaneId } : {}),
-          }
+            activePaneId: baseCtx.activePaneId,
+            detail: activeSurfaceDetail.data,
+          })
         : null,
-    [baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
+    [activeSurfaceDetail.data, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
   );
   const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchContext, { enabled: open });
   const ctx = useMemo(
@@ -366,6 +374,7 @@ export function CommandPalette() {
     if (!entry.workflow || !workflowLaunchContext) {
       send({
         type: 'flow-failed',
+        entryId: entry.id,
         content: {
           title: paletteCopy.outcome.commandUnavailableTitle,
           body: paletteCopy.outcome.commandUnavailableBody,
@@ -387,7 +396,11 @@ export function CommandPalette() {
         },
         onError: (error) => {
           setWorkflowFormEntryId(null);
-          send({ type: 'flow-failed', content: workflowStartErrorContent(error) });
+          send({
+            type: 'flow-failed',
+            entryId: entry.id,
+            content: workflowStartErrorContent(error),
+          });
         },
       },
     );

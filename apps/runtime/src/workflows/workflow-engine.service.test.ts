@@ -741,7 +741,7 @@ test('startWorkflow validates context and seeds state through init', async () =>
         const run = yield* engine.startWorkflow({
           workflowKey: 'context-seeded',
           variables: { mode: 'dogfood' },
-          context: { worktreeId: 1, surfaceId: 1, paneId: 7 },
+          context: { worktreeId: 1, surfaceId: 1, paneId: 7, agentSessionId: 10 },
         });
         return run;
       }).pipe(Effect.provide(testLayer(dataRoot))),
@@ -756,6 +756,40 @@ test('startWorkflow validates context and seeds state through init', async () =>
       agentSessionId: 10,
       mode: 'dogfood',
     });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startWorkflow rejects mismatched pane and agent session launch context', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-start-context-mismatch-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('context-mismatch', {
+          command: () => ({ title: 'Context mismatch' }),
+          validate: () => {},
+          init: () => ({ phase: 'unused' }),
+          step: async () => done(),
+        });
+        const engine = yield* WorkflowEngine;
+        return yield* engine
+          .startWorkflow({
+            workflowKey: 'context-mismatch',
+            variables: {},
+            context: { worktreeId: 1, surfaceId: 1, paneId: 999, agentSessionId: 10 },
+          })
+          .pipe(Effect.either);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.ok(Either.isLeft(result));
+    assert.ok(result.left instanceof WorkflowEngineError);
+    assert.equal(result.left.code, 'workflow_launch_context_mismatch');
+    assert.equal(result.left.surfaceId, 1);
+    assert.equal(result.left.paneId, 999);
+    assert.equal(result.left.agentSessionId, 10);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -1417,6 +1451,22 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
         yield* resolveTurnEdge({
           repository,
           engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:09.000Z',
+            },
+            {
+              type: 'turn_ended',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:09.999Z',
+            },
+          ]),
           edge: {
             type: 'turn_ended',
             agentSessionId: 10,
@@ -1428,6 +1478,22 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
         yield* resolveTurnEdge({
           repository,
           engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+            },
+            {
+              type: 'turn_ended',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+            },
+          ]),
           edge: {
             type: 'turn_ended',
             agentSessionId: 10,
@@ -1497,6 +1563,22 @@ test('step runner passes resume_payload as the workflow event and clears it on d
         yield* resolveTurnEdge({
           repository,
           engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:00.000Z',
+            },
+            {
+              type: 'turn_ended',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+            },
+          ]),
           edge: {
             type: 'turn_ended',
             agentSessionId: 10,
@@ -1556,6 +1638,23 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
         yield* resolveTurnEdge({
           repository,
           engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:00.000Z',
+            },
+            {
+              type: 'turn_failed',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: null,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+              reason: 'new_start_supersedes',
+            },
+          ]),
           edge: {
             type: 'turn_failed',
             agentSessionId: 10,
@@ -1660,6 +1759,13 @@ test('setPaused(false) reconciles a satisfied paused turn run to ready', async (
                 harnessSessionId: 'other-harness',
                 seq: 1,
                 recordedAt: '2026-06-18T00:00:12.000Z',
+              },
+              {
+                type: 'turn_started',
+                agentSessionId: 10,
+                harnessSessionId: 'harness-a',
+                seq: 2,
+                recordedAt: '2026-06-18T00:00:11.000Z',
               },
               {
                 type: 'turn_ended',
@@ -2093,6 +2199,23 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
         yield* resolveTurnEdge({
           repository,
           engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:00.000Z',
+            },
+            {
+              type: 'turn_failed',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: null,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+              reason: 'new_start_supersedes',
+            },
+          ]),
           edge: {
             type: 'turn_failed',
             agentSessionId: 10,

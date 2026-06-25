@@ -1,3 +1,5 @@
+import type { SurfaceDetail, WorkflowStartContext } from '@isagi/contracts';
+
 import type { Project, Worktree } from '../workspace/types.js';
 import type { PaletteContext } from './types.js';
 
@@ -45,5 +47,27 @@ export function buildPaletteContext(
       : null,
     workflowDescriptors: options.workflowDescriptors,
     activeSurfaceWorkflowSummary: options.activeSurfaceWorkflowSummary,
+  };
+}
+
+export function workflowContextFromSurfaceDetail(input: {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly activePaneId: number | null;
+  readonly detail: SurfaceDetail;
+}): WorkflowStartContext {
+  const paneId = input.activePaneId ?? input.detail.activePaneId;
+  const pane =
+    paneId === null
+      ? null
+      : (input.detail.panes.find((candidate) => candidate.id === paneId) ?? null);
+  const agentSessionId =
+    pane?.session?.kind === 'agent_session' ? pane.session.agentSession.id : null;
+
+  return {
+    worktreeId: input.worktreeId,
+    surfaceId: input.surfaceId,
+    paneId,
+    agentSessionId,
   };
 }

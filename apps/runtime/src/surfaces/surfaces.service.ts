@@ -194,20 +194,28 @@ export const SurfaceServiceLive = Layer.effect(
         }),
       deleteSurfacePane: (input) =>
         Effect.gen(function* () {
-          const target = yield* loadDeleteTarget(repository, input.surfaceId);
+          const target = yield* loadDeleteTarget(repository, input.surfaceId).pipe(
+            Effect.catchTag('SurfaceError', (error) => {
+              if (error.code === 'surface_not_found') return Effect.succeed(null);
+              return Effect.fail(error);
+            }),
+          );
+          if (!target) {
+            return { deletedSurfaceId: null, deletedPaneIds: [] } satisfies DeleteSurfaceOutput;
+          }
           const paneTarget = target.panes.find(({ pane }) => pane.id === input.paneId);
-          if (!paneTarget)
-            return yield* Effect.fail(
-              new SurfaceError({
-                code: 'pane_not_found',
-                message: `Pane ${input.paneId} was not found for surface ${input.surfaceId}.`,
-                surfaceId: input.surfaceId,
-                paneId: input.paneId,
-              }),
-            );
+          if (!paneTarget) {
+            return { deletedSurfaceId: null, deletedPaneIds: [] } satisfies DeleteSurfaceOutput;
+          }
           const plan = planSurfacePaneDelete(target, input.paneId);
           const sessions = yield* sessionsForPaneIds(repository, plan.deletedPaneIds);
           const deleted = yield* repository.deleteSurfacePane({ target, plan });
+          if (deleted.deletedPaneIds.length === 0 && deleted.deletedSurfaceId === null) {
+            return {
+              deletedSurfaceId: null,
+              deletedPaneIds: [],
+            } satisfies DeleteSurfaceOutput;
+          }
           yield* terminateDeletedPanePtys(pty, sessions);
           const deletedPanes = target.panes
             .map(({ pane }) => pane)

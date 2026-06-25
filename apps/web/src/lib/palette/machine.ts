@@ -245,6 +245,7 @@ export type PaletteEvent =
     }
   | {
       readonly type: 'flow-failed';
+      readonly entryId?: string | undefined;
       readonly content: CommandErrorContent;
     }
   | {
@@ -344,14 +345,23 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
       return back(state, event.command, event.ctx);
 
     case 'flow-failed':
-      return state.kind === 'step'
-        ? withBase(state, {
-            kind: 'error',
-            content: event.content,
-            entryId: state.flow.entryId,
-            viewKey: `error-flow-${state.flow.entryId}`,
-          })
-        : state;
+      if (state.kind === 'step') {
+        return withBase(state, {
+          kind: 'error',
+          content: event.content,
+          entryId: state.flow.entryId,
+          viewKey: `error-flow-${state.flow.entryId}`,
+        });
+      }
+      if (state.kind === 'search') {
+        return withBase(state, {
+          kind: 'error',
+          content: event.content,
+          entryId: event.entryId ?? null,
+          viewKey: `error-flow-${event.entryId ?? 'local'}`,
+        });
+      }
+      return state;
 
     case 'run-succeeded':
       return runSucceeded(state, event.attemptId, event.outcome);

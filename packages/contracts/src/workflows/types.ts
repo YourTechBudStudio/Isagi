@@ -181,6 +181,7 @@ export const workflowStartContextSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
   surfaceId: positiveIntegerSchema,
   paneId: Schema.optional(Schema.NullOr(positiveIntegerSchema)),
+  agentSessionId: Schema.optional(Schema.NullOr(positiveIntegerSchema)),
 });
 
 export const workflowDescriptorResultSchema = Schema.Union(

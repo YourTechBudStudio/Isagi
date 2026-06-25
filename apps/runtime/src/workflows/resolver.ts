@@ -1,13 +1,20 @@
 import { Cause, Effect } from 'effect';
 
+import type { HarnessLedgerObserverService } from '../agent-sessions/index.js';
 import type { InternalRuntimeEventBusService } from '../runtime-events/index.js';
 import {
   type WorkflowEventLedgerService,
   workflowEventLedgerWarningPayload,
 } from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
-import type { WorkflowRepositoryService, WorkflowResumePayload } from './repository.js';
+import type { WorkflowRepositoryService } from './repository.js';
 import type { WorkflowWaitCondition } from './types.js';
+import {
+  findSatisfiedTerminalTurnEdge,
+  isTerminalTurnEdge,
+  parseTurnWaitCondition,
+  resumePayload,
+} from './wait-conditions.js';
 import type { WorkflowEngineService } from './workflow-engine.service.js';
 
 type TurnEdge = {
@@ -23,6 +30,7 @@ export function startWorkflowResolver(input: {
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly headless: WorkflowHeadlessService;
+  readonly observer: HarnessLedgerObserverService;
   readonly eventLedger?: WorkflowEventLedgerService | undefined;
 }) {
   return Effect.gen(function* () {
@@ -144,21 +152,26 @@ export function resolveHeadlessCompletion(input: {
 export function resolveTurnEdge(input: {
   readonly repository: WorkflowRepositoryService;
   readonly engine: Pick<WorkflowEngineService, 'poke'>;
+  readonly observer: HarnessLedgerObserverService;
   readonly eventLedger?: WorkflowEventLedgerService | undefined;
   readonly edge: TurnEdge;
 }) {
   return Effect.gen(function* () {
+    const edges = yield* input.observer.getTurnEdges(input.edge.agentSessionId);
+    if (!edges.some(isTerminalTurnEdge)) return;
     const candidates = yield* input.repository.findWaitingTurnRuns({
       agentSessionId: input.edge.agentSessionId,
       harnessSessionId: input.edge.harnessSessionId,
     });
     let wokeAny = false;
     for (const run of candidates) {
-      const condition = parseWaitCondition(run.waitCondition);
-      if (!condition || !isSatisfied(condition, input.edge)) continue;
+      const condition = parseTurnWaitCondition(run);
+      if (!condition) continue;
+      const terminalEdge = findSatisfiedTerminalTurnEdge(condition, edges);
+      if (!terminalEdge) continue;
       const woke = yield* input.repository.wakeWaitingRun({
         runId: run.id,
-        resumePayload: resumePayload(input.edge),
+        resumePayload: resumePayload(terminalEdge),
       });
       if (woke) yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
       wokeAny = wokeAny || woke;
@@ -192,47 +205,6 @@ function appendLifecycleBestEffort(
       ),
       Effect.asVoid,
     );
-}
-
-// The watermark is start-anchored on `recordedAt` (there is no durable turn id).
-// v1 deliberately matches on the *terminal* edge alone: any `turn_ended`/`turn_failed`
-// at or after `afterT` for the pinned (agentSession, harnessSession) satisfies the
-// wait. This is provably safe for the gate's spawn-then-await pattern, where the
-// pinned session has no prior turn and `afterT` precedes its first-ever start.
-//
-// OWED before loop workflows land (await_impl -> await_verdict -> await_impl re-suspending
-// on the same session): also require the matched terminal turn to be opened by a
-// `turn_started` with `recordedAt >= afterT`, so a *previous* turn's end whose timestamp
-// happens to fall at/after the new inject `T` cannot satisfy the new wait. The shared
-// matcher is the right home for that gate when it arrives.
-export function isSatisfied(condition: WorkflowWaitCondition, edge: TurnEdge) {
-  return (
-    condition.kind === 'turn' &&
-    condition.agentSessionId === edge.agentSessionId &&
-    condition.harnessSessionId === edge.harnessSessionId &&
-    edge.recordedAt >= condition.afterT
-  );
-}
-
-function resumePayload(edge: TurnEdge): WorkflowResumePayload {
-  if (edge.type === 'turn_failed') {
-    return {
-      outcome: 'failed',
-      recordedAt: edge.recordedAt,
-      reason: edge.reason ?? 'unknown',
-    };
-  }
-  return { outcome: 'ended', recordedAt: edge.recordedAt };
-}
-
-function parseWaitCondition(value: string | null): WorkflowWaitCondition | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as WorkflowWaitCondition;
-    return parsed?.kind === 'turn' ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function parseHeadlessWaitCondition(

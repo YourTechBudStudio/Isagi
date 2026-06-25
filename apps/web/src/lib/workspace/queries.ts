@@ -187,6 +187,7 @@ export function useWorkflowDescriptorsQuery(
       context?.worktreeId ?? null,
       context?.surfaceId ?? null,
       context?.paneId ?? null,
+      context?.agentSessionId ?? null,
     ),
     enabled: (options.enabled ?? true) && context !== null,
     staleTime: 30_000,
@@ -236,10 +237,19 @@ export async function invalidateCommandQueries(
   }
 }
 
-export function useSurfaceDetailQuery(surfaceId: number) {
+export function useSurfaceDetailQuery(
+  surfaceId: number | null,
+  options: { readonly enabled?: boolean | undefined } = {},
+) {
   return useQuery({
     queryKey: surfaceDetailQueryKey(surfaceId),
-    queryFn: ({ signal }) => runRuntimeEffect(getSurfaceDetail(surfaceId), { signal }),
+    enabled: (options.enabled ?? true) && surfaceId !== null,
+    queryFn: ({ signal }) => {
+      if (surfaceId === null) {
+        throw new Error('Surface detail query requires an active surface.');
+      }
+      return runRuntimeEffect(getSurfaceDetail(surfaceId), { signal });
+    },
   });
 }
 

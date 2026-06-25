@@ -79,6 +79,7 @@ export const workflowRejectionReasonSchema = Schema.Literal(
   'surface_worktree_mismatch',
   'pane_not_found',
   'agent_session_not_on_surface',
+  'workflow_launch_context_mismatch',
   'validation_failed',
   'workflow_root_surface_required',
   'workflow_surface_busy',
@@ -243,6 +244,7 @@ export const worktreeEnvironmentFocusRejectedErrorSchema = Schema.Struct({
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 

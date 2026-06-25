@@ -10,12 +10,74 @@ export type TerminalTurnEdge = {
   readonly type: 'turn_ended' | 'turn_failed';
   readonly agentSessionId: number;
   readonly harnessSessionId: string;
+  readonly seq?: number | null | undefined;
   readonly recordedAt: string;
   readonly reason?: string | undefined;
 };
 
+export type TurnStartedEdge = {
+  readonly type: 'turn_started';
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly seq?: number | null | undefined;
+  readonly recordedAt: string;
+};
+
+export type WorkflowObservedTurnEdge = TurnStartedEdge | TerminalTurnEdge;
+
 export function isTerminalTurnEdge(edge: { readonly type: string }): edge is TerminalTurnEdge {
   return edge.type === 'turn_ended' || edge.type === 'turn_failed';
+}
+
+export function findSatisfiedTerminalTurnEdge(
+  condition: Extract<WorkflowWaitCondition, { readonly kind: 'turn' }>,
+  edges: readonly WorkflowObservedTurnEdge[],
+): TerminalTurnEdge | null {
+  const openStarts: TurnStartedEdge[] = [];
+
+  for (const edge of edges) {
+    if (
+      edge.agentSessionId !== condition.agentSessionId ||
+      edge.harnessSessionId !== condition.harnessSessionId
+    ) {
+      continue;
+    }
+
+    if (edge.type === 'turn_started') {
+      openStarts.push(edge);
+      continue;
+    }
+
+    const start = matchedStart(openStarts, edge);
+    if (start) {
+      removeStart(openStarts, start);
+      if (start.recordedAt >= condition.afterT) return edge;
+    }
+  }
+
+  return null;
+}
+
+function matchedStart(
+  openStarts: readonly TurnStartedEdge[],
+  terminal: TerminalTurnEdge,
+): TurnStartedEdge | null {
+  if (typeof terminal.seq === 'number') {
+    const sameSeq = openStarts.find((start) => start.seq === terminal.seq);
+    if (sameSeq) return sameSeq;
+  }
+
+  for (let index = openStarts.length - 1; index >= 0; index -= 1) {
+    const start = openStarts[index];
+    if (start && start.recordedAt <= terminal.recordedAt) return start;
+  }
+
+  return null;
+}
+
+function removeStart(openStarts: TurnStartedEdge[], start: TurnStartedEdge) {
+  const index = openStarts.indexOf(start);
+  if (index >= 0) openStarts.splice(index, 1);
 }
 
 export function resumePayload(edge: {

@@ -126,6 +126,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       surface_worktree_mismatch: 'That surface belongs to a different worktree.',
       pane_not_found: "That pane isn't here anymore.",
       agent_session_not_on_surface: "That agent session isn't on this surface.",
+      workflow_launch_context_mismatch: "That pane and agent session don't match.",
       validation_failed: "Those answers didn't pass the workflow's checks.",
       workflow_root_surface_required: 'A workflow needs a surface to run on.',
       workflow_surface_busy: 'This surface already has a workflow running.',
