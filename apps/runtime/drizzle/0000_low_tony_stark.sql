@@ -46,7 +46,6 @@ CREATE TABLE `surface_panes` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`surface_id` integer NOT NULL,
 	`title` text NOT NULL,
-	`attention` text NOT NULL,
 	`sort_order` integer NOT NULL,
 	`session_kind` text,
 	`session_id` integer,
@@ -68,6 +67,81 @@ CREATE TABLE `terminal_sessions` (
 	FOREIGN KEY (`active_pty_process_id`) REFERENCES `pty_processes`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
+CREATE TABLE `workflow_run_events` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`workflow_run_id` integer NOT NULL,
+	`recorded_at` text NOT NULL,
+	`state` text NOT NULL,
+	`trigger` text NOT NULL,
+	FOREIGN KEY (`workflow_run_id`) REFERENCES `workflow_runs`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `workflow_run_events_run_idx` ON `workflow_run_events` (`workflow_run_id`,`id`);--> statement-breakpoint
+CREATE TABLE `workflow_runs` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`workflow_key` text NOT NULL,
+	`workflow_title` text NOT NULL,
+	`worktree_id` integer,
+	`surface_id` integer,
+	`parent_run_id` integer,
+	`root_run_id` integer,
+	`status` text NOT NULL,
+	`paused` integer DEFAULT false NOT NULL,
+	`cancel_requested` integer DEFAULT false NOT NULL,
+	`wait_kind` text,
+	`wait_condition` text,
+	`resume_payload` text,
+	`state_json` text NOT NULL,
+	`state_version` integer NOT NULL,
+	`owner` text,
+	`error` text,
+	`result_json` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`surface_id`) REFERENCES `worktree_surfaces`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`parent_run_id`) REFERENCES `workflow_runs`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`root_run_id`) REFERENCES `workflow_runs`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `workflow_runs_status_idx` ON `workflow_runs` (`status`);--> statement-breakpoint
+CREATE INDEX `workflow_runs_status_wait_kind_idx` ON `workflow_runs` (`status`,`wait_kind`);--> statement-breakpoint
+CREATE INDEX `workflow_runs_paused_idx` ON `workflow_runs` (`paused`);--> statement-breakpoint
+CREATE INDEX `workflow_runs_worktree_idx` ON `workflow_runs` (`worktree_id`);--> statement-breakpoint
+CREATE INDEX `workflow_runs_surface_idx` ON `workflow_runs` (`surface_id`);--> statement-breakpoint
+CREATE INDEX `workflow_runs_root_idx` ON `workflow_runs` (`root_run_id`);--> statement-breakpoint
+CREATE TABLE `worktree_command_runs` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`worktree_id` integer NOT NULL,
+	`command_name` text NOT NULL,
+	`pty_process_id` integer,
+	`status` text NOT NULL,
+	`diagnostic_reason` text,
+	`diagnostic_detail` text,
+	`started_at` text NOT NULL,
+	`completed_at` text,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`pty_process_id`) REFERENCES `pty_processes`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE INDEX `worktree_command_runs_latest_idx` ON `worktree_command_runs` (`worktree_id`,`command_name`,`id`);--> statement-breakpoint
+CREATE INDEX `worktree_command_runs_pty_idx` ON `worktree_command_runs` (`pty_process_id`);--> statement-breakpoint
+CREATE TABLE `worktree_command_states` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`worktree_id` integer NOT NULL,
+	`command_name` text NOT NULL,
+	`status` text NOT NULL,
+	`active_pty_process_id` integer,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`worktree_id`) REFERENCES `worktrees`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`active_pty_process_id`) REFERENCES `pty_processes`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `worktree_command_states_worktree_command_unique` ON `worktree_command_states` (`worktree_id`,`command_name`);--> statement-breakpoint
+CREATE INDEX `worktree_command_states_active_pty_idx` ON `worktree_command_states` (`active_pty_process_id`);--> statement-breakpoint
 CREATE TABLE `worktree_environment_states` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`worktree_id` integer NOT NULL,
@@ -127,9 +201,7 @@ CREATE UNIQUE INDEX `worktree_setup_trust_project_scope_unique` ON `worktree_set
 CREATE TABLE `worktree_surfaces` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`worktree_id` integer NOT NULL,
-	`kind` text NOT NULL,
 	`title` text NOT NULL,
-	`attention` text NOT NULL,
 	`layout_json` text NOT NULL,
 	`sort_order` integer NOT NULL,
 	`created_at` text NOT NULL,

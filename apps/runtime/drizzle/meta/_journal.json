@@ -5,71 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1781763458900,
-      "tag": "0000_thankful_punisher",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1781797271611,
-      "tag": "0001_empty_miek",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1781899939665,
-      "tag": "0002_clean_gravity",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1781912747950,
-      "tag": "0003_zippy_punisher",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1781993559980,
-      "tag": "0004_same_virginia_dare",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1782187616593,
-      "tag": "0005_odd_nekra",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1782266394488,
-      "tag": "0006_rapid_synch",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "6",
-      "when": 1782381114453,
-      "tag": "0007_cuddly_bloodscream",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "6",
-      "when": 1782402460383,
-      "tag": "0008_freezing_smasher",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "6",
-      "when": 1782405809368,
-      "tag": "0009_reflective_korvac",
+      "when": 1782416150427,
+      "tag": "0000_low_tony_stark",
       "breakpoints": true
     }
   ]

@@ -1,1 +1,0 @@
-ALTER TABLE `worktree_surfaces` DROP COLUMN `kind`;

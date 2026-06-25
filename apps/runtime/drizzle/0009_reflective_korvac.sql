@@ -1,1 +1,0 @@
-ALTER TABLE `workflow_runs` DROP COLUMN `ui_feedback`;
