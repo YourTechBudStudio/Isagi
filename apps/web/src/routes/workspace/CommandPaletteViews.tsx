@@ -428,9 +428,14 @@ export function WizardOptions({
   );
 }
 
+// Staggered delays (seconds) for the ambient "working" waveform. Seven bars
+// breathing out of phase read as a calm wave rather than a determinate progress
+// bar making promises it can't keep — long-running work pulses, it never spins.
+const WAVEFORM_DELAYS = [0, 0.12, 0.24, 0.36, 0.48, 0.6, 0.72] as const;
+
 /**
  * Shown while a command's async run is in flight. Long-running work breathes —
- * it does not spin (design language): a calm `working` pulse plus a dry,
+ * it does not spin (design language): a slow `working` waveform plus a dry,
  * one-line status so the palette never looks frozen. `role="status"` /
  * `aria-live` announces the work to assistive tech.
  */
@@ -443,9 +448,17 @@ export function RunningPanel({
     <div
       role="status"
       aria-live="polite"
-      className="flex min-h-28 flex-col items-center justify-center gap-3.5 px-6 py-9 text-center"
+      className="flex min-h-28 flex-col items-center justify-center gap-4 px-6 py-9 text-center"
     >
-      <span aria-hidden className="block size-2 rounded-full bg-working animate-breathe" />
+      <span aria-hidden className="flex h-6 items-center gap-1">
+        {WAVEFORM_DELAYS.map((delay, index) => (
+          <span
+            key={index}
+            className="block h-full w-0.75 rounded-full bg-working animate-wave"
+            style={{ animationDelay: `${delay}s` }}
+          />
+        ))}
+      </span>
       <div className="space-y-1.5">
         <p className="text-[13.5px] text-fg">{content.title}</p>
         {content.hint ? (

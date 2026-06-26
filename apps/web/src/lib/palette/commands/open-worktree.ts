@@ -1,6 +1,10 @@
 import { GitBranch } from 'lucide-react';
 
-import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
+import type {
+  OpenWorktreeOutput,
+  WorktreeBaseRef,
+  WorktreeSetupTrustInput,
+} from '@isagi/contracts';
 
 import { worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
 import { runRuntimeEffect } from '../../runtime/run.js';
@@ -11,9 +15,10 @@ import {
   preflightWorktreeSetup,
   trustWorktreeSetup,
 } from '../../workspace/runtime-data.js';
+import { formatWorktreeSetupFailureDetails } from '../../workspace/setup-failure.js';
 import { useWorkspaceStore } from '../../workspace/store.js';
 import type { Project, Worktree } from '../../workspace/types.js';
-import type { Option, PaletteCommand } from '../types.js';
+import type { CommandOutcome, Option, PaletteCommand } from '../types.js';
 
 interface ExistingWorktreePayload {
   readonly kind: 'existing_worktree';
@@ -244,14 +249,39 @@ export const openWorktreeCommand: PaletteCommand = {
     }
 
     const base = payloads?.base;
-    if (isBaseRefPayload(base)) {
-      await openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base });
-      return;
-    }
+    const output = isBaseRefPayload(base)
+      ? await openWorktreeFromPalette(project.id, { branch: values.branch, base: base.base })
+      : await openWorktreeFromPalette(project.id, { branch: values.branch });
 
-    await openWorktreeFromPalette(project.id, { branch: values.branch });
+    return outcomeForOpenWorktree(output);
   },
 };
+
+/**
+ * The worktree is created and already selected by the time this runs. A setup
+ * hook failure is a partial success, so it surfaces as a palette-local warning
+ * result (with the raw hook output) rather than closing into a detached modal —
+ * keeping the feedback where the user started the action (ADR 0004). Every other
+ * outcome closes the palette cleanly.
+ */
+function outcomeForOpenWorktree(output: OpenWorktreeOutput): CommandOutcome | void {
+  if (output.status !== 'created_setup_failed') {
+    return;
+  }
+  const { setup } = output;
+  return {
+    kind: 'result',
+    content: {
+      tone: 'warning',
+      title: worktreeCreateCopy.setupFailed.title,
+      body: worktreeCreateCopy.setupFailed.body(setup.failedHookIndex, setup.failedHookType),
+      diagnostic: {
+        label: worktreeCreateCopy.setupFailed.diagnosticLabel,
+        detail: formatWorktreeSetupFailureDetails(setup),
+      },
+    },
+  };
+}
 
 function presentProjects(projects: readonly Project[]) {
   return projects.filter((project) => project.status === 'present');

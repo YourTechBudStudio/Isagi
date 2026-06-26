@@ -109,10 +109,22 @@ export function workflowContext(input: {
       runEffect(
         input.artifacts.readMetadata(agentSessionId).pipe(
           Effect.flatMap((metadata) => {
-            if (metadata.status !== 'valid' || !metadata.metadata.harnessSessionId) {
+            if (metadata.status === 'missing') {
+              return Effect.fail(
+                new Error(`Agent session ${agentSessionId} has no captured harness metadata yet.`),
+              );
+            }
+            if (metadata.status === 'invalid') {
               return Effect.fail(
                 new Error(
-                  `Agent session ${agentSessionId} does not have a captured harness session id.`,
+                  `Agent session ${agentSessionId} has invalid harness metadata: ${metadata.diagnostic}`,
+                ),
+              );
+            }
+            if (!metadata.metadata.harnessSessionId) {
+              return Effect.fail(
+                new Error(
+                  `Agent session ${agentSessionId} does not have a captured harness session id yet.`,
                 ),
               );
             }

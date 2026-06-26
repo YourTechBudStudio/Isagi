@@ -16,6 +16,8 @@ export function buildCodexLaunch(
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
+      model: input.model,
+      effort: input.effort,
       hookPath: dependencies.hookPath,
     });
     return {

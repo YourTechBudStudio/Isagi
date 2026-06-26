@@ -21,11 +21,17 @@ export function buildOpenCodeLaunch(
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
+      model: input.model,
+      effort: input.effort,
       pluginPath: dependencies.pluginPath,
     });
     return {
       command: 'opencode',
-      args: input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : [],
+      args: [
+        ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['--variant', input.effort] : []),
+      ],
       cwd: input.cwd,
       envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
         harnessEnvForProcess({

@@ -1,10 +1,9 @@
 import { MotionConfig } from 'motion/react';
 import { useEffect } from 'react';
 
-import { Button } from '../../components/Button.js';
 import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
-import { worktreeSetupFailureCopy, workspaceBootCopy } from '../../copy/index.js';
+import { workspaceBootCopy } from '../../copy/index.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
 import {
   handleDispatchedCommandError,
@@ -19,10 +18,6 @@ import {
 } from '../../lib/workspace/hooks.js';
 import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
 import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
-import {
-  formatWorktreeSetupFailureDetails,
-  useWorktreeSetupFailureStore,
-} from '../../lib/workspace/setup-failure.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
@@ -54,45 +49,6 @@ function WorkspaceBootSurface() {
         aside={workspaceBootCopy.restoring.aside}
       />
     </main>
-  );
-}
-
-function WorktreeSetupFailureModal() {
-  const failure = useWorktreeSetupFailureStore((state) => state.failure);
-  const clearFailure = useWorktreeSetupFailureStore((state) => state.clearFailure);
-  if (!failure) {
-    return null;
-  }
-
-  const setup = failure.setup;
-  const details = formatWorktreeSetupFailureDetails(setup);
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-scrim/55 px-4 backdrop-blur-sm">
-      <section className="w-150 max-w-full rounded-lg border border-error/28 bg-elevated/92 p-5 shadow-lift backdrop-blur-2xl">
-        <p className="text-[15px] font-semibold text-fg">{worktreeSetupFailureCopy.title}</p>
-        <p className="mt-2 text-[13px] leading-snug text-fg-muted">
-          {worktreeSetupFailureCopy.body.createdPrefix}{' '}
-          <span className="font-mono text-fg">{failure.branch}</span>,{' '}
-          {worktreeSetupFailureCopy.body.hookFailedPrefix}{' '}
-          <span className="font-mono text-fg">{setup.failedHookIndex}</span>{' '}
-          {worktreeSetupFailureCopy.body.hookFailedMiddle}{' '}
-          <span className="font-mono text-fg">{setup.failedHookType}</span>.
-        </p>
-        <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-error/24 bg-error/8 px-3 py-2 font-mono text-[12px] leading-snug text-error">
-          {details}
-        </pre>
-        <p className="mt-2 font-mono text-[10.5px] text-fg-subtle">
-          {worktreeSetupFailureCopy.meta.setupRunLabel} {setup.runId} {'\u00b7'}{' '}
-          {worktreeSetupFailureCopy.meta.worktreeLabel} {failure.worktreeId}
-        </p>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => void navigator.clipboard?.writeText(details)}>
-            {worktreeSetupFailureCopy.actions.copyError}
-          </Button>
-          <Button onClick={clearFailure}>{worktreeSetupFailureCopy.actions.openAnyway}</Button>
-        </div>
-      </section>
-    </div>
   );
 }
 
@@ -193,7 +149,6 @@ export function WorkspacePage() {
             )}
           </div>
           <CommandPalette />
-          <WorktreeSetupFailureModal />
         </>
       </TooltipDelayProvider>
     </MotionConfig>

@@ -354,6 +354,93 @@ test('Codex adapter applies per-invocation model and reasoning effort to interac
   assert.equal(launch.cwd, '/repo/isagi');
 });
 
+test('Pi adapter applies per-invocation model and reasoning effort to interactive launch', async () => {
+  const launch = await Effect.runPromise(
+    buildPiLaunch(
+      {
+        agentSessionId: 10,
+        harness: 'pi',
+        cwd: '/repo/isagi',
+        latestHarnessSessionId: null,
+        model: 'sonnet',
+        effort: 'high',
+      },
+      {
+        extensionPath: '/runtime/harness-integrations/pi/extension.mjs',
+        artifacts: fakeArtifacts('/runtime'),
+      },
+    ),
+  );
+
+  assert.equal(launch.command, 'pi');
+  assert.deepEqual(launch.args, [
+    '--model',
+    'sonnet',
+    '--thinking',
+    'high',
+    '-e',
+    '/runtime/harness-integrations/pi/extension.mjs',
+  ]);
+});
+
+test('Claude adapter applies per-invocation model and reasoning effort to interactive launch', async () => {
+  const launch = await Effect.runPromise(
+    buildClaudeLaunch(
+      {
+        agentSessionId: 10,
+        harness: 'claude',
+        cwd: '/repo/isagi',
+        latestHarnessSessionId: null,
+        model: 'sonnet',
+        effort: 'medium',
+      },
+      {
+        settingsPath: '/runtime/harness-integrations/claude/settings.json',
+        artifacts: fakeArtifacts('/runtime'),
+      },
+    ),
+  );
+
+  assert.equal(launch.command, 'claude');
+  assert.deepEqual(launch.args, [
+    '--model',
+    'sonnet',
+    '--effort',
+    'medium',
+    '--settings',
+    '/runtime/harness-integrations/claude/settings.json',
+  ]);
+});
+
+test('OpenCode adapter applies per-invocation model and reasoning effort to interactive launch', async () => {
+  const launch = await Effect.runPromise(
+    buildOpenCodeLaunch(
+      {
+        agentSessionId: 10,
+        harness: 'opencode',
+        cwd: '/repo/isagi',
+        latestHarnessSessionId: 'opencode-session-123',
+        model: 'sonnet',
+        effort: 'high',
+      },
+      {
+        pluginPath: '/runtime/harness-integrations/opencode/plugin.mjs',
+        artifacts: fakeArtifacts('/runtime'),
+      },
+    ),
+  );
+
+  assert.equal(launch.command, 'opencode');
+  assert.deepEqual(launch.args, [
+    '--session',
+    'opencode-session-123',
+    '--model',
+    'sonnet',
+    '--variant',
+    'high',
+  ]);
+});
+
 test('headless harness adapters build non-interactive launch envelopes', async () => {
   const pi = await Effect.runPromise(
     buildPiHeadlessLaunch({

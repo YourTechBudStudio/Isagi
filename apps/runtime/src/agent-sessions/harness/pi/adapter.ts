@@ -16,12 +16,16 @@ export function buildPiLaunch(
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
+      model: input.model,
+      effort: input.effort,
       extensionPath: dependencies.extensionPath,
     });
     return {
       command: 'pi',
       args: [
         ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['--thinking', input.effort] : []),
         '-e',
         dependencies.extensionPath,
       ],

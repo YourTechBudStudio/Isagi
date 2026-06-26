@@ -16,12 +16,16 @@ export function buildClaudeLaunch(
       agentSessionId: input.agentSessionId,
       cwd: input.cwd,
       latestHarnessSessionId: input.latestHarnessSessionId,
+      model: input.model,
+      effort: input.effort,
       settingsPath: dependencies.settingsPath,
     });
     return {
       command: 'claude',
       args: [
         ...(input.latestHarnessSessionId ? ['--resume', input.latestHarnessSessionId] : []),
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['--effort', input.effort] : []),
         '--settings',
         dependencies.settingsPath,
       ],

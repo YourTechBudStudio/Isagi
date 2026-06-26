@@ -66,7 +66,6 @@ import {
   startWorkflow,
   stopCommand,
 } from './runtime-data.js';
-import { showWorktreeSetupFailure } from './setup-failure.js';
 import { useWorkspaceStore } from './store.js';
 
 export function useWorkspaceQuery() {
@@ -449,9 +448,9 @@ export async function commitOpenWorktreeSuccess(
   });
   useWorkspaceStore.getState().selectWorktree(output.projectId, output.worktreeId);
   restoreActivePaneFocus();
-  if (output.status === 'created_setup_failed') {
-    showWorktreeSetupFailure(output);
-  }
+  // A setup-hook failure (status 'created_setup_failed') is surfaced as a
+  // palette-local warning result by the open-worktree command, not here — the
+  // worktree still exists and is selected above.
 }
 
 export async function commitLaunchSessionSuccess(

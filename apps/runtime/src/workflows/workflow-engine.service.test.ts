@@ -2785,6 +2785,100 @@ test('workflow ctx spawnSession hard-fails when the run has no captured surface'
   );
 });
 
+test('workflow ctx getHarnessSessionId returns the captured harness session id', async () => {
+  const ctx = workflowContext({
+    repository: fakeWorkflowRepository(),
+    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+    agents: fakeAgentSessionService(),
+    surfaces: fakeSurfaceService(),
+    pty: fakePtyService(),
+    artifacts: fakeAgentSessionArtifacts({
+      status: 'valid',
+      metadata: {
+        schemaVersion: 1,
+        harnessSessionId: 'harness-z',
+        updatedAt: '2026-06-18T00:00:00.000Z',
+      },
+      metadataPath: '',
+    }),
+    observer: fakeHarnessLedgerObserver(),
+    headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
+    worktreePath: '/tmp/isagi-test-worktree',
+  });
+
+  assert.equal(await ctx.getHarnessSessionId(11), 'harness-z');
+});
+
+test('workflow ctx getHarnessSessionId rejects when metadata has no captured harness session id', async () => {
+  const ctx = workflowContext({
+    repository: fakeWorkflowRepository(),
+    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+    agents: fakeAgentSessionService(),
+    surfaces: fakeSurfaceService(),
+    pty: fakePtyService(),
+    artifacts: fakeAgentSessionArtifacts({
+      status: 'valid',
+      metadata: {
+        schemaVersion: 1,
+        harnessSessionId: null,
+        updatedAt: '2026-06-18T00:00:00.000Z',
+      },
+      metadataPath: '',
+    }),
+    observer: fakeHarnessLedgerObserver(),
+    headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
+    worktreePath: '/tmp/isagi-test-worktree',
+  });
+
+  await assert.rejects(
+    () => ctx.getHarnessSessionId(11),
+    /does not have a captured harness session id/,
+  );
+});
+
+test('workflow ctx getHarnessSessionId rejects when metadata is missing', async () => {
+  const ctx = workflowContext({
+    repository: fakeWorkflowRepository(),
+    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+    agents: fakeAgentSessionService(),
+    surfaces: fakeSurfaceService(),
+    pty: fakePtyService(),
+    artifacts: fakeAgentSessionArtifacts({ status: 'missing', metadataPath: '' }),
+    observer: fakeHarnessLedgerObserver(),
+    headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
+    worktreePath: '/tmp/isagi-test-worktree',
+  });
+
+  await assert.rejects(() => ctx.getHarnessSessionId(11), /has no captured harness metadata/);
+});
+
+test('workflow ctx getHarnessSessionId surfaces the diagnostic when metadata is invalid', async () => {
+  const ctx = workflowContext({
+    repository: fakeWorkflowRepository(),
+    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+    agents: fakeAgentSessionService(),
+    surfaces: fakeSurfaceService(),
+    pty: fakePtyService(),
+    artifacts: fakeAgentSessionArtifacts({
+      status: 'invalid',
+      metadataPath: '',
+      diagnostic: 'metadata file is not valid JSON',
+    }),
+    observer: fakeHarnessLedgerObserver(),
+    headless: fakeWorkflowHeadless(),
+    eventLedger: fakeWorkflowEventLedger(),
+    worktreePath: '/tmp/isagi-test-worktree',
+  });
+
+  await assert.rejects(
+    () => ctx.getHarnessSessionId(11),
+    /invalid harness metadata: metadata file is not valid JSON/,
+  );
+});
+
 test('workflow ctx closePane delegates to the run surface', async () => {
   const deleted: Array<{ surfaceId: number; paneId: number }> = [];
   const ctx = workflowContext({

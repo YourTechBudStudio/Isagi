@@ -179,4 +179,13 @@ export const worktreeCreateCopy = {
     title: 'Creating worktree…',
     hint: 'Running setup hooks.',
   },
+  // Shown in the palette when the worktree was created but a setup hook failed.
+  // The checkout exists and is already open, so this is a partial-success result
+  // (warning tone), not a hard failure — name the hook and show the raw output.
+  setupFailed: {
+    title: 'Worktree created — a setup hook failed.',
+    body: (hookIndex: number, hookType: string) =>
+      `Hook ${hookIndex} (${hookType}) didn’t finish. The checkout is ready and open; only setup fell short.`,
+    diagnosticLabel: 'Setup output',
+  },
 } as const;

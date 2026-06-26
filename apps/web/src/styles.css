@@ -81,9 +81,11 @@
   --shadow-lift: 0 24px 64px rgb(0 0 0 / 0.45);
 
   /* Ambient attention motion — calm, never frantic.
-     working: a slow breathe; waiting: a soft outward glow. */
+     working: a slow breathe; waiting: a soft outward glow; wave: a slow working
+     waveform for longer in-flight work (a pulse, never a spinner). */
   --animate-breathe: breathe 2.6s var(--ease-expo) infinite;
   --animate-glow: glow 2.8s var(--ease-expo) infinite;
+  --animate-wave: wave 2.4s var(--ease-expo) infinite;
 }
 
 @keyframes breathe {
@@ -103,6 +105,18 @@
   }
   50% {
     box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-waiting) 0%, transparent);
+  }
+}
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: scaleY(0.32);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
   }
 }
 

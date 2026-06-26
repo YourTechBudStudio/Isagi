@@ -211,6 +211,18 @@ export const SurfaceServiceLive = Layer.effect(
           const sessions = yield* sessionsForPaneIds(repository, plan.deletedPaneIds);
           const deleted = yield* repository.deleteSurfacePane({ target, plan });
           if (deleted.deletedPaneIds.length === 0 && deleted.deletedSurfaceId === null) {
+            // A delete plan was built from a pane that existed at load time, yet the
+            // repository removed nothing. This is not the idempotent "already gone"
+            // case (handled above) — it is a concurrent deletion racing this one, so
+            // leave a breadcrumb to distinguish it from a genuine repository miss.
+            console.warn(
+              '[runtime] Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
+              {
+                surfaceId: input.surfaceId,
+                paneId: input.paneId,
+                plannedDeletedPaneIds: plan.deletedPaneIds,
+              },
+            );
             return {
               deletedSurfaceId: null,
               deletedPaneIds: [],

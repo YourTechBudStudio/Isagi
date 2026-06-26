@@ -9,7 +9,7 @@ import { SessionLifecycle } from '../session-lifecycle/index.js';
 import type { AgentSessionRow } from '../surfaces/types.js';
 import { AgentSessionRepository } from './agent-sessions.repository.js';
 import { HarnessAdapterRegistry } from './harness/index.js';
-import { HarnessAdapterError } from './harness/types.js';
+import { HarnessAdapterError, type HarnessLaunchOptions } from './harness/types.js';
 
 export interface AgentSessionService {
   readonly startFresh: (input: {
@@ -22,7 +22,7 @@ export interface AgentSessionService {
   ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
   readonly ensureActivePtyProcess: (
     agentSessionId: number,
-    options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
+    options?: HarnessLaunchOptions,
   ) => Effect.Effect<
     number,
     DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError
@@ -65,10 +65,7 @@ export const AgentSessionServiceLive = Layer.effect(
     const publishChanged = (agentSessionId: number) =>
       eventBus.publish({ type: 'agent_session_changed', agentSessionId });
 
-    const launchProcessForSession = (
-      session: AgentSessionRow,
-      options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
-    ) =>
+    const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
       Effect.gen(function* () {
         console.info('[runtime] Agent session launch requested', {
           agentSessionId: session.id,
@@ -102,10 +99,7 @@ export const AgentSessionServiceLive = Layer.effect(
         return process.ptyProcessId;
       });
 
-    const ensureActivePtyProcess = (
-      agentSessionId: number,
-      options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
-    ) =>
+    const ensureActivePtyProcess = (agentSessionId: number, options?: HarnessLaunchOptions) =>
       lifecycle.withRestoreLock(
         { kind: 'agent_session', sessionId: agentSessionId },
         Effect.gen(function* () {
@@ -255,7 +249,7 @@ function validateHarnessMetadata(session: AgentSessionRow) {
 function agentLaunchEnvelope(
   harnesses: import('./harness/index.js').HarnessAdapterRegistryService,
   session: AgentSessionRow,
-  options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
+  options?: HarnessLaunchOptions,
 ) {
   return harnesses.buildLaunch({
     agentSessionId: session.id,

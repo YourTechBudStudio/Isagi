@@ -23,21 +23,22 @@ export interface ConversationMessage {
   readonly parts: readonly ConversationPart[];
 }
 
-export interface HarnessLaunchContext {
-  readonly agentSessionId: number;
-  readonly harness: AgentHarness;
-  readonly cwd: string;
-  readonly latestHarnessSessionId: string | null;
+export interface HarnessLaunchOptions {
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
 }
 
-export interface HarnessHeadlessLaunchContext {
+export interface HarnessLaunchContext extends HarnessLaunchOptions {
+  readonly agentSessionId: number;
+  readonly harness: AgentHarness;
+  readonly cwd: string;
+  readonly latestHarnessSessionId: string | null;
+}
+
+export interface HarnessHeadlessLaunchContext extends HarnessLaunchOptions {
   readonly harness: AgentHarness;
   readonly cwd: string;
   readonly prompt: string;
-  readonly model?: string | undefined;
-  readonly effort?: string | undefined;
 }
 
 export interface HarnessAdapter {
