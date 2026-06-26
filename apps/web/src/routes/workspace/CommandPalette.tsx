@@ -708,6 +708,8 @@ export function CommandPalette() {
               </p>
             )}
 
+            {running && <div aria-hidden className="palette-progress" />}
+
             <motion.div
               key={panelKey}
               initial={{ opacity: 0 }}
