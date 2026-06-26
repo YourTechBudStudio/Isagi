@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +10,8 @@ import { Effect } from 'effect';
 
 import { loadWorkflowDefinition } from './loader.js';
 import { ensureWorkflowsScaffold } from './scaffold.js';
+
+const require = createRequire(import.meta.url);
 
 test('scaffolded workflows load through tsx using the copied built SDK', async () => {
   const dataRoot = join(tmpdir(), `isagi-workflow-loading-${process.pid}-${Date.now()}`);
@@ -63,6 +67,47 @@ export default defineWorkflow({
       type: 'done',
       value: { phase: 'second-load' },
     });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('scaffolded workflows typecheck with Node globals in editors', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-types-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  const workflowPath = join(workflowsPath, 'node-types');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    assert.equal(existsSync(join(workflowsPath, 'node_modules', '@types', 'node')), true);
+    assert.equal(existsSync(join(workflowsPath, 'node_modules', 'undici-types')), true);
+
+    mkdirSync(workflowPath, { recursive: true });
+    writeWorkflow(
+      workflowPath,
+      `import { join } from 'node:path';
+import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: join('Node', 'typed workflow') }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done(process.cwd()),
+});
+`,
+    );
+
+    execFileSync(
+      process.execPath,
+      [
+        require.resolve('typescript/bin/tsc'),
+        '--noEmit',
+        '-p',
+        'tsconfig.json',
+        '--pretty',
+        'false',
+      ],
+      { cwd: workflowsPath, stdio: 'pipe' },
+    );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

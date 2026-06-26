@@ -25,6 +25,13 @@ function ensureWorkflowsScaffoldSync(workflowsPath: string) {
   writeIfAbsent(join(workflowsPath, 'package.json'), workflowsPackageJson());
   writeIfAbsent(join(workflowsPath, 'tsconfig.json'), workflowsTsconfigJson());
   syncWorkflowSdkCopy(workflowsPath);
+  syncTypePackageCopy(workflowsPath, '@types/node', join('@types', 'node'));
+  syncTypePackageCopy(
+    workflowsPath,
+    'undici-types',
+    'undici-types',
+    createRequire(join(packageSourceRoot('@types/node'), 'package.json')),
+  );
 }
 
 function syncWorkflowSdkCopy(workflowsPath: string) {
@@ -65,6 +72,33 @@ function workflowSdkSourceRoot() {
   }
 }
 
+function packageSourceRoot(packageName: string, require = createRequire(import.meta.url)) {
+  return dirname(require.resolve(`${packageName}/package.json`));
+}
+
+function syncTypePackageCopy(
+  workflowsPath: string,
+  packageName: string,
+  targetRelativePath: string,
+  require?: NodeRequire,
+) {
+  const sourceRoot = packageSourceRoot(packageName, require);
+  const sourcePackage = readJson(join(sourceRoot, 'package.json')) as {
+    readonly version?: unknown;
+  };
+  const version = typeof sourcePackage.version === 'string' ? sourcePackage.version : '0.0.0';
+  const targetRoot = join(workflowsPath, 'node_modules', targetRelativePath);
+  const targetPackagePath = join(targetRoot, 'package.json');
+  const targetVersion = existsSync(targetPackagePath)
+    ? (readJson(targetPackagePath) as { readonly version?: unknown }).version
+    : null;
+  if (targetVersion === version) return;
+
+  rmSync(targetRoot, { recursive: true, force: true });
+  mkdirSync(dirname(targetRoot), { recursive: true });
+  cpSync(sourceRoot, targetRoot, { recursive: true });
+}
+
 function writeIfAbsent(path: string, contents: string) {
   if (existsSync(path)) return;
   mkdirSync(dirname(path), { recursive: true });
@@ -76,6 +110,11 @@ function readJson(path: string): unknown {
 }
 
 function workflowsPackageJson() {
+  const nodeTypesVersion = packageVersion('@types/node');
+  const undiciTypesVersion = packageVersion(
+    'undici-types',
+    createRequire(join(packageSourceRoot('@types/node'), 'package.json')),
+  );
   return `${JSON.stringify(
     {
       private: true,
@@ -83,10 +122,21 @@ function workflowsPackageJson() {
       dependencies: {
         '@isagi/workflow-sdk': '0.0.1',
       },
+      devDependencies: {
+        '@types/node': nodeTypesVersion,
+        'undici-types': undiciTypesVersion,
+      },
     },
     null,
     2,
   )}\n`;
+}
+
+function packageVersion(packageName: string, require?: NodeRequire) {
+  const packageJson = readJson(join(packageSourceRoot(packageName, require), 'package.json')) as {
+    readonly version?: unknown;
+  };
+  return typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
 }
 
 function workflowSdkPackageJson(version: string) {
