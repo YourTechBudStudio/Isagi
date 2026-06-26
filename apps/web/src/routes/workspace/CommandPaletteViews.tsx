@@ -1,7 +1,3 @@
-import { Plus } from 'lucide-react';
-
-import type { PathSuggestion } from '@isagi/contracts';
-
 import { Overline } from '../../components/Overline.js';
 import { paletteCopy } from '../../copy/index.js';
 import { GROUP_LABELS } from '../../lib/palette/groups.js';
@@ -10,10 +6,7 @@ import type {
   CommandOutcomeAction,
   CommandOutcomeTone,
   CommandResultContent,
-  Option,
   PaletteEntry,
-  ReviewChoice,
-  ReviewContent,
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
 
@@ -26,10 +19,12 @@ export function outcomeActions(content: CommandResultContent | CommandErrorConte
 export function OutcomePanel({
   content,
   kind,
+  sel = null,
   onAction,
 }: {
   content: CommandResultContent | CommandErrorContent;
   kind: 'result' | 'error';
+  sel?: number | null;
   onAction: (value: string) => void;
 }) {
   const tone = kind === 'error' ? (content.tone ?? 'danger') : (content.tone ?? 'info');
@@ -53,12 +48,14 @@ export function OutcomePanel({
         )}
       </div>
       <div className="mt-3 flex justify-end gap-2">
-        {outcomeActions(content).map((action) => (
+        {outcomeActions(content).map((action, index) => (
           <button
             key={action.value}
             type="button"
             onClick={() => onAction(action.value)}
-            className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)}`}
+            className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)} ${
+              index === sel ? 'ring-1 ring-line/60' : ''
+            }`}
           >
             {action.label}
           </button>
@@ -161,273 +158,6 @@ export function EntryList({
   );
 }
 
-export function TextStep({
-  value,
-  placeholder,
-}: {
-  value: string;
-  placeholder: string | undefined;
-}) {
-  return (
-    <div className="px-3 py-4">
-      <p className="font-mono text-[11px] text-fg-subtle">
-        {value ? paletteCopy.textStep.useValue : (placeholder ?? paletteCopy.textStep.typeThenUse)}
-      </p>
-      {value && (
-        <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
-          {value}
-        </p>
-      )}
-    </div>
-  );
-}
-
-export function PathOptions({
-  suggestions,
-  value,
-  loading,
-  stale,
-  error,
-  sel,
-  onPick,
-}: {
-  suggestions: readonly PathSuggestion[];
-  value: string;
-  loading: boolean;
-  stale: boolean;
-  error: string | null;
-  sel: number | null;
-  onPick: (index: number) => void;
-}) {
-  if (error) {
-    return <p className="wrap-break-word px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
-  }
-
-  if (suggestions.length === 0) {
-    return (
-      <div className="px-3 py-4" aria-busy={loading}>
-        <p className="font-mono text-[11px] text-fg-subtle">
-          {loading
-            ? paletteCopy.pathStep.searching
-            : value
-              ? paletteCopy.pathStep.addPath
-              : paletteCopy.pathStep.typeRepositoryRoot}
-        </p>
-        {value && (
-          <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
-            {value}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div aria-busy={loading}>
-      {suggestions.map((suggestion, index) => (
-        <button
-          type="button"
-          key={suggestion.path}
-          disabled={stale}
-          onClick={() => onPick(index)}
-          className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo ${
-            stale ? 'opacity-55' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
-          }`}
-        >
-          <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-            {!stale && index === sel ? '●' : '○'}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13.5px] text-fg">{suggestion.label}</span>
-            <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
-              {suggestion.path}
-            </span>
-          </span>
-          {suggestion.hidden && (
-            <span className="font-mono text-[10.5px] text-fg-subtle">hidden</span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Per-choice colour for a review step. `danger` is the only place red appears in
- * the wizard (reserved for the destructive accept); `cancel` reads as a quiet
- * back-out; everything else is the neutral choice tone.
- */
-function reviewChoiceTone(intent: ReviewChoice['intent'], selected: boolean) {
-  if (intent === 'danger') {
-    return {
-      row: selected ? 'bg-error/14' : 'hover:bg-error/8',
-      glyph: 'text-error',
-      label: 'text-error',
-    };
-  }
-  if (intent === 'cancel') {
-    return {
-      row: selected ? 'bg-white/8' : 'hover:bg-white/4',
-      glyph: 'text-fg-subtle',
-      label: 'text-fg-muted',
-    };
-  }
-  return {
-    row: selected ? 'bg-white/8' : 'hover:bg-white/4',
-    glyph: 'text-fg-subtle',
-    label: 'text-fg',
-  };
-}
-
-export function ReviewStep({
-  content,
-  error,
-  loading,
-  sel,
-  onPick,
-}: {
-  content: ReviewContent | null;
-  error: string | null;
-  loading: boolean;
-  sel: number | null;
-  onPick: (index: number) => void;
-}) {
-  if (error) {
-    return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
-  }
-  if (loading || !content) {
-    return (
-      <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">
-        {paletteCopy.reviewStep.loading}
-      </p>
-    );
-  }
-
-  return (
-    <div className="px-3 py-3">
-      <p className="text-[13.5px] font-medium text-fg">{content.title}</p>
-      <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{content.body}</p>
-      {content.items.length > 0 && (
-        <div className="mt-3 space-y-1.5 rounded-md border border-line/20 bg-white/5 p-2">
-          {content.items.map((item, index) => (
-            <div key={`${item.label}-${index}`} className="rounded-sm px-2 py-1.5">
-              <p className="font-mono text-[11.5px] text-fg">
-                {index + 1}. {item.label}
-              </p>
-              {item.detail && (
-                <p className="mt-0.5 font-mono text-[10.5px] text-fg-subtle">{item.detail}</p>
-              )}
-              {item.envKeys && item.envKeys.length > 0 && (
-                <p className="mt-0.5 font-mono text-[10.5px] text-fg-subtle">
-                  env: {item.envKeys.join(', ')}
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="mt-3 space-y-1">
-        {content.choices.map((choice, index) => {
-          const tone = reviewChoiceTone(choice.intent, index === sel);
-          return (
-            <button
-              type="button"
-              key={choice.value}
-              onClick={() => onPick(index)}
-              className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${tone.row}`}
-            >
-              <span className={`w-4 text-center font-mono text-[12px] ${tone.glyph}`}>
-                {index === sel ? '●' : '○'}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className={`block truncate text-[13.5px] ${tone.label}`}>{choice.label}</span>
-                {choice.hint && (
-                  <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
-                    {choice.hint}
-                  </span>
-                )}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-export function WizardOptions({
-  options,
-  sel,
-  error,
-  hint,
-  loading,
-  onPick,
-}: {
-  options: readonly Option[];
-  sel: number | null;
-  error?: string | null | undefined;
-  hint?: string | undefined;
-  loading?: boolean | undefined;
-  onPick: (index: number) => void;
-}) {
-  if (error) {
-    return <p className="px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
-  }
-
-  return (
-    <>
-      {hint && <p className="px-3 py-2 font-mono text-[11px] text-fg-subtle">{hint}</p>}
-      {loading && (
-        <p className="px-3 py-4 font-mono text-[12px] text-fg-subtle">
-          {paletteCopy.wizardStep.loading}
-        </p>
-      )}
-      {options.map((option, index) =>
-        option.create ? (
-          <button
-            type="button"
-            key={option.value}
-            onClick={() => onPick(index)}
-            className={`mx-1 my-1 flex w-[calc(100%-0.5rem)] items-center gap-2.5 rounded-md border px-3 py-2.25 text-left transition duration-micro ease-expo ${
-              index === sel
-                ? 'border-green/45 bg-green/16'
-                : 'border-green/30 bg-green/10 hover:bg-green/16'
-            }`}
-          >
-            <Plus size={14} className="shrink-0 text-green" />
-            <span className="flex-1 truncate text-[13.5px] font-medium text-green">
-              {option.label ?? option.value}
-            </span>
-            {option.hint && (
-              <span className="font-mono text-[10.5px] text-green/70">{option.hint}</span>
-            )}
-          </button>
-        ) : (
-          <button
-            type="button"
-            key={option.value}
-            onClick={() => onPick(index)}
-            className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left ${
-              index === sel ? 'bg-white/8' : 'hover:bg-white/4'
-            }`}
-          >
-            <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-              {index === sel ? '●' : '○'}
-            </span>
-            <span className="flex-1 truncate text-[13.5px] text-fg">
-              {option.label ?? option.value}
-            </span>
-            {option.isDefault && <span className="font-mono text-[10.5px] text-cyan">default</span>}
-            {option.hint && (
-              <span className="font-mono text-[10.5px] text-fg-subtle">{option.hint}</span>
-            )}
-          </button>
-        ),
-      )}
-    </>
-  );
-}
-
 // Staggered delays (seconds) for the ambient "working" waveform. Seven bars
 // breathing out of phase read as a calm wave rather than a determinate progress
 // bar making promises it can't keep — long-running work pulses, it never spins.
@@ -488,6 +218,8 @@ export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' | '
         <span className="opacity-70">{paletteCopy.running.tip}</span>
       ) : mode === 'outcome' ? (
         <>
+          <TipKey hint={paletteCopy.tips.move}>↑↓</TipKey>
+          <TipKey hint={paletteCopy.tips.run}>↵</TipKey>
           <TipKey hint={paletteCopy.tips.close}>esc</TipKey>
         </>
       ) : mode === 'path' ? (

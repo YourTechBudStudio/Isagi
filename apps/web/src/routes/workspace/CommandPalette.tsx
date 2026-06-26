@@ -1,18 +1,19 @@
 import { AnimatePresence, motion } from 'motion/react';
-import {
-  useEffect,
-  useCallback,
-  useMemo,
-  useRef,
-  useReducer,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from 'react';
+import { useEffect, useCallback, useMemo, useRef, useReducer, useState } from 'react';
 
-import type { PathSuggestion, WorkflowStartContext } from '@isagi/contracts';
+import type { WorkflowStartContext } from '@isagi/contracts';
 
 import { Chip } from '../../components/Chip.js';
+import {
+  InputFlowBody,
+  InputFlowControl,
+  inputFlowHasTextInput,
+  inputFlowSelectableLength,
+  withSelectedIndex,
+  type InputFlowScreen,
+} from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';
+import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import {
   buildPaletteContext,
@@ -24,21 +25,21 @@ import {
   runPaletteEffects,
 } from '../../lib/palette/effects.js';
 import { assembleEntries } from '../../lib/palette/entries.js';
+import { commandStepToInputFlowScreen } from '../../lib/palette/input-flow.js';
 import {
   currentStep,
   initialPaletteState,
   isBusy,
   paletteReducer,
-  stepDefaultIndex,
 } from '../../lib/palette/machine.js';
 import {
-  computeStepOptions,
   commandForEntryId,
+  defaultOptionIndex,
   filterEntries,
   recencyView,
 } from '../../lib/palette/model.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
-import type { Option, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
+import type { ArgSpec, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -53,15 +54,24 @@ import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js
 import {
   EntryList,
   OutcomePanel,
-  PathOptions,
-  ReviewStep,
   RunningPanel,
-  TextStep,
   Tip,
-  WizardOptions,
   outcomeActions,
 } from './CommandPaletteViews.js';
-import { type WorkflowQuestionAnswers, WorkflowQuestionForm } from './WorkflowQuestionForm.js';
+import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
+
+function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
+  if (screen.kind === 'select' || screen.kind === 'combo') {
+    return spec ? defaultOptionIndex(spec, screen.options) : screen.options.length > 0 ? 0 : null;
+  }
+  if (screen.kind === 'text') {
+    return null;
+  }
+  if (screen.kind === 'path' && screen.stale) {
+    return null;
+  }
+  return inputFlowSelectableLength(screen) > 0 ? 0 : null;
+}
 
 export function CommandPalette() {
   const open = usePaletteStore((state) => state.open);
@@ -124,6 +134,10 @@ export function CommandPalette() {
   const [workflowFormEntryId, setWorkflowFormEntryId] = useState<string | null>(null);
   const startWorkflowMutation = useStartWorkflowMutation();
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Live highlight index for event-time handlers (defined before the selection
+  // hook); render reads `selection.selectedIndex` directly.
+  const selectedIndexRef = useRef<number | null>(null);
   const seenEffectIds = useRef(new Set<number>());
   const pathSuggestTimer = useRef<number | null>(null);
   const lastOpenRequest = useRef<{
@@ -206,7 +220,6 @@ export function CommandPalette() {
   const args = command?.args ?? [];
   const spec = currentStep(command, machine);
   const query = machine.kind === 'search' || machine.kind === 'step' ? machine.query : '';
-  const sel = machine.kind === 'search' || machine.kind === 'step' ? machine.selectedIndex : null;
   const commandError =
     machine.kind === 'search' || machine.kind === 'step' ? machine.inlineError : null;
 
@@ -249,52 +262,15 @@ export function CommandPalette() {
       }
     }
     if (machine.kind === 'step' && command && spec) {
-      if (spec.kind === 'text') {
-        return {
-          kind: 'text' as const,
-          value: machine.query.trim(),
-          placeholder: spec.placeholder,
-        };
-      }
-
-      if (spec.kind === 'path' && machine.stepData.kind === 'path') {
-        return {
-          kind: 'path' as const,
-          value: machine.query.trim(),
-          suggestions: machine.stepData.suggestions as readonly PathSuggestion[],
-          loading: machine.stepData.loading,
-          stale: machine.stepData.suggestionsQuery !== machine.query,
-          error: machine.stepData.error,
-          placeholder: spec.placeholder,
-        };
-      }
-
-      if (spec.kind === 'review' && machine.stepData.kind === 'review') {
-        return {
-          kind: 'review' as const,
-          content: machine.stepData.content,
-          error: machine.stepData.error,
-          loading: machine.stepData.loading,
-        };
-      }
-
-      const loadedOptions =
-        machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
-          ? machine.stepData.options
-          : [];
-      const options = computeStepOptions(spec, loadedOptions, machine.query);
+      // The highlight index is owned by the selection hook (wired below) and
+      // injected at render via `withSelectedIndex`; the shape is selection-free.
       return {
-        kind: 'wizard' as const,
-        error:
-          machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
-            ? machine.stepData.error
-            : null,
-        hint: spec.kind === 'select' || spec.kind === 'combo' ? spec.emptyHint : undefined,
-        loading:
-          machine.stepData.kind === 'select' || machine.stepData.kind === 'combo'
-            ? machine.stepData.loading
-            : false,
-        options,
+        kind: 'input-flow' as const,
+        screen: commandStepToInputFlowScreen({
+          spec,
+          stepData: machine.stepData,
+          query: machine.query,
+        }),
       };
     }
 
@@ -307,6 +283,7 @@ export function CommandPalette() {
   const acceptsInput =
     !running &&
     view.kind !== 'workflow-form' &&
+    view.kind !== 'input-flow' &&
     (machine.kind === 'search' || machine.kind === 'step');
 
   useEffect(() => {
@@ -323,18 +300,14 @@ export function CommandPalette() {
   const renderedLength =
     view.kind === 'running'
       ? 0
-      : view.kind === 'wizard'
-        ? view.options.length
+      : view.kind === 'input-flow'
+        ? inputFlowSelectableLength(view.screen)
         : view.kind === 'list'
           ? view.items.length
-          : view.kind === 'path'
-            ? view.suggestions.length
-            : view.kind === 'review'
-              ? (view.content?.choices.length ?? 0)
-              : view.kind === 'result' || view.kind === 'error'
-                ? outcomeActions(view.content).length
-                : 0;
-  const selectableLength = view.kind === 'path' && view.stale ? 0 : renderedLength;
+          : view.kind === 'result' || view.kind === 'error'
+            ? outcomeActions(view.content).length
+            : 0;
+  const selectableLength = renderedLength;
   const baseViewKey = running
     ? 'running'
     : machine.kind === 'step'
@@ -349,39 +322,37 @@ export function CommandPalette() {
   const defaultIndex =
     view.kind === 'running'
       ? null
-      : view.kind === 'wizard'
-        ? stepDefaultIndex(spec, view.options)
+      : view.kind === 'input-flow'
+        ? inputFlowDefaultIndex(spec, view.screen)
         : view.kind === 'workflow-form'
           ? null
-          : view.kind === 'path' && view.stale
-            ? null
-            : 0;
+          : 0;
   const viewKey = `${baseViewKey}:${selectableLength}:${defaultIndex ?? 'none'}`;
   const panelKey = running
     ? 'running'
     : view.kind === 'workflow-form'
       ? `workflow-form:${view.entry.id}`
-      : machine.kind === 'step' && view.kind === 'path'
+      : machine.kind === 'step' && view.kind === 'input-flow' && view.screen.kind === 'path'
         ? `path-${machine.flow.stepIndex}`
         : viewKey;
 
-  // Snap the selection to the default whenever the view changes shape.
+  // Keep the right element focused so the panel's key handler receives keys:
+  // the search input for list/text-bearing steps, the panel itself for screens
+  // with no text input (review steps, outcomes). input-flow controls that own a
+  // text input autofocus themselves; the workflow form manages its own focus.
   useEffect(() => {
-    if (!open) {
+    if (!open || running || view.kind === 'workflow-form') {
       return;
     }
-    send({ type: 'view-snap', viewKey, length: selectableLength, defaultIndex });
-  }, [open, viewKey, selectableLength, defaultIndex]);
-
-  useEffect(() => {
-    if (
-      open &&
-      view.kind !== 'workflow-form' &&
-      (machine.kind === 'search' || machine.kind === 'step')
-    ) {
+    if (acceptsInput) {
       inputRef.current?.focus();
+      return;
     }
-  }, [open, machine.kind, view.kind, viewKey]);
+    if (view.kind === 'input-flow' && inputFlowHasTextInput(view.screen)) {
+      return;
+    }
+    panelRef.current?.focus();
+  }, [open, running, acceptsInput, view, viewKey]);
 
   const workflowStartErrorContent = (error: unknown) => ({
     title: paletteCopy.workflows.startFailed.title,
@@ -392,7 +363,7 @@ export function CommandPalette() {
     },
   });
 
-  const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowQuestionAnswers) => {
+  const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowInputAnswers) => {
     if (!entry.workflow || !workflowLaunchContext) {
       send({
         type: 'flow-failed',
@@ -454,64 +425,97 @@ export function CommandPalette() {
     send({ type: 'accept-value', command, ctx, value, label, payload });
   };
 
-  const acceptOption = (option: Option) => {
+  const acceptOption = (option: {
+    readonly value: string;
+    readonly label?: string | undefined;
+    readonly payload?: unknown;
+  }) => {
     acceptValue(option.value, option.label ?? option.value, option.payload);
   };
 
-  const acceptReviewChoice = (choice: ReviewChoice) => {
+  const acceptReviewChoice = (choice: {
+    readonly value: string;
+    readonly label: string;
+    readonly hint?: string | undefined;
+    readonly intent?: ReviewChoice['intent'] | undefined;
+    readonly payload?: unknown;
+  }) => {
     if (!command) {
       return;
     }
-    send({ type: 'accept-review-choice', command, ctx, choice });
+    send({
+      type: 'accept-review-choice',
+      command,
+      ctx,
+      choice: {
+        value: choice.value,
+        label: choice.label,
+        ...(choice.hint !== undefined ? { hint: choice.hint } : {}),
+        ...(choice.intent !== undefined ? { intent: choice.intent } : {}),
+        ...(choice.payload !== undefined ? { payload: choice.payload } : {}),
+      },
+    });
   };
 
   const acceptText = () => {
-    if (view.kind === 'text') {
-      acceptValue(view.value, view.value);
+    if (view.kind === 'input-flow' && view.screen.kind === 'text') {
+      acceptValue(view.screen.value, view.screen.value);
     }
   };
 
   const acceptPath = () => {
-    if (view.kind !== 'path') {
+    if (view.kind !== 'input-flow' || view.screen.kind !== 'path') {
       return;
     }
     // Shell-style: Enter fills the input with the highlighted directory rather
     // than submitting. Press it again (buffer unchanged since the fill) to
     // commit, or type "/" to drill into the filled path and keep navigating.
-    if (machine.kind === 'step' && view.value && view.value === machine.lastFilledPath) {
-      acceptValue(view.value, view.value);
+    if (
+      machine.kind === 'step' &&
+      view.screen.value &&
+      view.screen.value === machine.lastFilledPath
+    ) {
+      acceptValue(view.screen.value, view.screen.value);
       return;
     }
-    const highlighted = sel === null ? undefined : view.suggestions[sel];
-    if (!view.stale && highlighted && highlighted.path !== view.value) {
+    const index = selectedIndexRef.current;
+    const highlighted = index === null ? undefined : view.screen.suggestions[index];
+    if (!view.screen.stale && highlighted && highlighted.path !== view.screen.value) {
       send({ type: 'fill-path', path: highlighted.path });
       return;
     }
-    if (view.value) {
-      acceptValue(view.value, view.value);
+    if (view.screen.value) {
+      acceptValue(view.screen.value, view.screen.value);
     }
   };
 
   const activate = () => {
+    if (running) {
+      return;
+    }
+    const index = selectedIndexRef.current;
     if (view.kind === 'list') {
-      const entry = sel === null ? undefined : view.items[sel];
+      const entry = index === null ? undefined : view.items[index];
       if (entry) {
         runEntry(entry);
       }
-    } else if (view.kind === 'wizard') {
-      const option = sel === null ? undefined : view.options[sel];
+    } else if (
+      view.kind === 'input-flow' &&
+      (view.screen.kind === 'select' || view.screen.kind === 'combo')
+    ) {
+      const option = index === null ? undefined : view.screen.options[index];
       if (option) {
         acceptOption(option);
       }
-    } else if (view.kind === 'path') {
+    } else if (view.kind === 'input-flow' && view.screen.kind === 'path') {
       acceptPath();
-    } else if (view.kind === 'review') {
-      const choice = sel === null ? undefined : view.content?.choices[sel];
+    } else if (view.kind === 'input-flow' && view.screen.kind === 'review') {
+      const choice = index === null ? undefined : view.screen.content?.choices[index];
       if (choice) {
         acceptReviewChoice(choice);
       }
     } else if (view.kind === 'result' || view.kind === 'error') {
-      const action = outcomeActions(view.content)[sel ?? 0];
+      const action = outcomeActions(view.content)[index ?? 0];
       if (action) {
         send({ type: 'outcome-action', value: action.value });
       }
@@ -520,82 +524,39 @@ export function CommandPalette() {
     }
   };
 
-  useEffect(() => {
-    if (!open || (view.kind !== 'result' && view.kind !== 'error')) {
-      return;
-    }
-
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        send({ type: 'move-selection', delta: 1, length: selectableLength });
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        send({ type: 'move-selection', delta: -1, length: selectableLength });
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        const action = outcomeActions(view.content)[sel ?? 0];
-        if (action) {
-          send({ type: 'outcome-action', value: action.value });
-        }
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        send({ type: 'back', ctx });
-      }
-    };
-
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [ctx, open, selectableLength, sel, view]);
-
   const back = () => {
-    if (view.kind === 'workflow-form') {
-      setWorkflowFormEntryId(null);
-      return;
-    }
     send({ type: 'back', command: command ?? undefined, ctx });
-  };
-
-  const cycleSel = (delta: number) => {
-    send({ type: 'move-selection', delta, length: selectableLength });
   };
 
   // Tab fills the buffer with the highlighted directory without submitting, so
   // Enter afterwards commits it. Path-step only.
   const fillPath = () => {
-    if (view.kind !== 'path') {
+    if (view.kind !== 'input-flow' || view.screen.kind !== 'path' || view.screen.stale) {
       return;
     }
-    if (view.stale) {
-      return;
-    }
-    const highlighted = sel === null ? undefined : view.suggestions[sel];
+    const index = selectedIndexRef.current;
+    const highlighted = index === null ? undefined : view.screen.suggestions[index];
     if (highlighted) {
       send({ type: 'fill-path', path: highlighted.path });
     }
   };
 
-  const onKeyDown = (event: ReactKeyboardEvent) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      cycleSel(1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      cycleSel(-1);
-    } else if (event.key === 'Tab') {
-      event.preventDefault();
-      fillPath();
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      activate();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      back();
-    } else if (event.key === 'Backspace' && query === '' && command) {
-      event.preventDefault();
-      back();
-    }
-  };
+  // One selection engine for every navigable view (command list, input-flow
+  // step, outcome actions). The workflow form drives its own copy of this hook.
+  const selection = useKeyboardSelection({
+    length: selectableLength,
+    snapKey: viewKey,
+    defaultIndex,
+    query,
+    capabilities: {
+      back: !running && view.kind !== 'workflow-form',
+      backOnEmptyQuery: !running && command != null && view.kind !== 'workflow-form',
+      fill: !running && view.kind === 'input-flow' && view.screen.kind === 'path',
+    },
+    handlers: { onAccept: activate, onBack: back, onFill: fillPath },
+  });
+  selectedIndexRef.current = selection.selectedIndex;
+  const sel = selection.selectedIndex;
 
   const crumbs =
     command && machine.kind === 'step'
@@ -639,11 +600,14 @@ export function CommandPalette() {
               (scrim `pt-[14vh]`), so without the tween it just sizes to content and
               grows straight down. The open/close animation below is independent. */}
           <motion.div
+            ref={panelRef}
+            tabIndex={-1}
             initial={{ opacity: 0, y: 6, scale: 0.985 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.985 }}
             transition={surfaceTransition}
-            className="h-fit w-145 max-w-full overflow-hidden rounded-lg border border-line/30 bg-elevated/85 shadow-lift backdrop-blur-2xl"
+            onKeyDown={selection.onKeyDown}
+            className="h-fit w-145 max-w-full overflow-hidden rounded-lg border border-line/30 bg-elevated/85 shadow-lift outline-none backdrop-blur-2xl"
           >
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line/16 px-4 py-3.5">
               {running ? (
@@ -679,7 +643,6 @@ export function CommandPalette() {
                       spec: spec ?? undefined,
                     });
                   }}
-                  onKeyDown={onKeyDown}
                   placeholder={
                     command
                       ? spec?.kind === 'combo'
@@ -690,6 +653,18 @@ export function CommandPalette() {
                       : paletteCopy.placeholders.command
                   }
                   className="min-w-30 flex-1 bg-transparent font-sans text-[15px] text-fg outline-none placeholder:text-fg-subtle"
+                />
+              ) : view.kind === 'input-flow' ? (
+                <InputFlowControl
+                  screen={view.screen}
+                  autoFocus
+                  onQueryChange={(nextQuery) => {
+                    send({
+                      type: 'query-changed',
+                      query: nextQuery,
+                      spec: spec ?? undefined,
+                    });
+                  }}
                 />
               ) : (
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-subtle">
@@ -718,71 +693,45 @@ export function CommandPalette() {
               {view.kind === 'running' ? (
                 <RunningPanel content={view.content} />
               ) : view.kind === 'workflow-form' ? (
-                <div className="px-3 py-3">
-                  <WorkflowQuestionForm
+                <div>
+                  <WorkflowInputFlow
                     questions={view.workflow.manifest.inputs ?? []}
-                    submitLabel={paletteCopy.workflows.start}
                     disabled={startWorkflowMutation.isPending}
+                    autoFocus
+                    onBack={() => setWorkflowFormEntryId(null)}
                     onSubmit={(answers) => startWorkflowEntry(view.entry, answers)}
                   />
                 </div>
-              ) : view.kind === 'wizard' ? (
-                <WizardOptions
-                  options={view.options}
-                  sel={sel}
-                  error={view.error}
-                  hint={view.hint}
-                  loading={view.loading}
+              ) : view.kind === 'input-flow' ? (
+                <InputFlowBody
+                  screen={withSelectedIndex(view.screen, sel)}
                   onPick={(index) => {
-                    const option = view.options[index];
-                    if (option) {
-                      acceptOption(option);
+                    if (view.screen.kind === 'select' || view.screen.kind === 'combo') {
+                      const option = view.screen.options[index];
+                      if (option) acceptOption(option);
+                    } else if (view.screen.kind === 'path') {
+                      if (view.screen.stale) return;
+                      const suggestion = view.screen.suggestions[index];
+                      if (suggestion) acceptValue(suggestion.path, suggestion.path);
+                    } else if (view.screen.kind === 'review') {
+                      const choice = view.screen.content?.choices[index];
+                      if (choice) acceptReviewChoice(choice);
                     }
                   }}
+                  onAccept={activate}
                 />
-              ) : view.kind === 'path' ? (
-                <PathOptions
-                  suggestions={view.suggestions}
-                  value={view.value}
-                  loading={view.loading}
-                  stale={view.stale}
-                  error={view.error}
-                  sel={sel}
-                  onPick={(index) => {
-                    if (view.stale) {
-                      return;
-                    }
-                    const suggestion = view.suggestions[index];
-                    if (suggestion) {
-                      acceptValue(suggestion.path, suggestion.path);
-                    }
-                  }}
-                />
-              ) : view.kind === 'review' ? (
-                <ReviewStep
-                  content={view.content}
-                  error={view.error}
-                  loading={view.loading}
-                  sel={sel}
-                  onPick={(index) => {
-                    const choice = view.content?.choices[index];
-                    if (choice) {
-                      acceptReviewChoice(choice);
-                    }
-                  }}
-                />
-              ) : view.kind === 'text' ? (
-                <TextStep value={view.value} placeholder={view.placeholder} />
               ) : view.kind === 'result' ? (
                 <OutcomePanel
                   content={view.content}
                   kind="result"
+                  sel={sel}
                   onAction={(value) => send({ type: 'outcome-action', value })}
                 />
               ) : view.kind === 'error' ? (
                 <OutcomePanel
                   content={view.content}
                   kind="error"
+                  sel={sel}
                   onAction={(value) => send({ type: 'outcome-action', value })}
                 />
               ) : (
@@ -808,7 +757,7 @@ export function CommandPalette() {
                     : view.kind === 'workflow-form'
                       ? 'wizard'
                       : command
-                        ? spec?.kind === 'path'
+                        ? view.kind === 'input-flow' && view.screen.kind === 'path'
                           ? 'path'
                           : 'wizard'
                         : 'list'

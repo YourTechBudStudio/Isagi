@@ -13,7 +13,7 @@ import { formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import { useWorkflowEventStream } from '../../lib/workspace/workflow-events/stream.js';
 import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
 import { WorkflowBar, type WorkflowBarAction } from './WorkflowBar.js';
-import type { WorkflowQuestionAnswers } from './WorkflowQuestionForm.js';
+import type { WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export function WorkflowBarContainer() {
   const { activeSurface } = useWorkspace();
@@ -47,7 +47,7 @@ export function WorkflowBarContainer() {
       dismiss: () =>
         runAction('dismiss', workflowCopy.clearActionFailed, () => clear.mutateAsync()),
       retry: () => runAction('retry', workflowCopy.retryActionFailed, () => retry.mutateAsync()),
-      advance: (runId: number, answers?: WorkflowQuestionAnswers) =>
+      advance: (runId: number, answers?: WorkflowInputAnswers) =>
         runAction('advance', workflowCopy.advanceActionFailed, () =>
           advance.mutateAsync({ runId, answers }),
         ),
