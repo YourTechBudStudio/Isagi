@@ -22,8 +22,8 @@ export function ensureWorkflowsScaffold(input: { readonly workflowsPath: string 
 
 function ensureWorkflowsScaffoldSync(workflowsPath: string) {
   mkdirSync(workflowsPath, { recursive: true });
-  writeIfAbsent(join(workflowsPath, 'package.json'), workflowsPackageJson());
-  writeIfAbsent(join(workflowsPath, 'tsconfig.json'), workflowsTsconfigJson());
+  writeManagedFile(join(workflowsPath, 'package.json'), workflowsPackageJson());
+  writeManagedFile(join(workflowsPath, 'tsconfig.json'), workflowsTsconfigJson());
   syncWorkflowSdkCopy(workflowsPath);
   syncTypePackageCopy(workflowsPath, '@types/node', join('@types', 'node'));
   syncTypePackageCopy(
@@ -46,16 +46,10 @@ function syncWorkflowSdkCopy(workflowsPath: string) {
   }
 
   const targetRoot = join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk');
-  const targetPackagePath = join(targetRoot, 'package.json');
-  const targetVersion = existsSync(targetPackagePath)
-    ? (readJson(targetPackagePath) as { readonly version?: unknown }).version
-    : null;
-  if (targetVersion === version) return;
-
   rmSync(targetRoot, { recursive: true, force: true });
   mkdirSync(join(targetRoot, 'dist'), { recursive: true });
   cpSync(sourceDist, join(targetRoot, 'dist'), { recursive: true });
-  writeFileSync(targetPackagePath, workflowSdkPackageJson(version), 'utf8');
+  writeFileSync(join(targetRoot, 'package.json'), workflowSdkPackageJson(version), 'utf8');
 }
 
 function workflowSdkSourceRoot() {
@@ -83,24 +77,13 @@ function syncTypePackageCopy(
   require?: NodeRequire,
 ) {
   const sourceRoot = packageSourceRoot(packageName, require);
-  const sourcePackage = readJson(join(sourceRoot, 'package.json')) as {
-    readonly version?: unknown;
-  };
-  const version = typeof sourcePackage.version === 'string' ? sourcePackage.version : '0.0.0';
   const targetRoot = join(workflowsPath, 'node_modules', targetRelativePath);
-  const targetPackagePath = join(targetRoot, 'package.json');
-  const targetVersion = existsSync(targetPackagePath)
-    ? (readJson(targetPackagePath) as { readonly version?: unknown }).version
-    : null;
-  if (targetVersion === version) return;
-
   rmSync(targetRoot, { recursive: true, force: true });
   mkdirSync(dirname(targetRoot), { recursive: true });
   cpSync(sourceRoot, targetRoot, { recursive: true });
 }
 
-function writeIfAbsent(path: string, contents: string) {
-  if (existsSync(path)) return;
+function writeManagedFile(path: string, contents: string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents, 'utf8');
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -113,8 +113,72 @@ export default defineWorkflow({
   }
 });
 
+test('workflow scaffold rewrites runtime-owned files and packages on restart', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-refresh-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  try {
+    writeFile(workflowsPath, 'package.json', '{"stale":true}\n');
+    writeFile(workflowsPath, 'tsconfig.json', '{"compilerOptions":{"types":["stale"]}}\n');
+    writeFile(
+      workflowsPath,
+      join('node_modules', '@isagi', 'workflow-sdk', 'package.json'),
+      '{}\n',
+    );
+    writeFile(workflowsPath, join('node_modules', '@isagi', 'workflow-sdk', 'stale.txt'), 'stale');
+    writeFile(workflowsPath, join('node_modules', '@types', 'node', 'package.json'), '{}\n');
+    writeFile(workflowsPath, join('node_modules', '@types', 'node', 'stale.txt'), 'stale');
+    writeFile(workflowsPath, join('node_modules', 'undici-types', 'package.json'), '{}\n');
+    writeFile(workflowsPath, join('node_modules', 'undici-types', 'stale.txt'), 'stale');
+    writeFile(workflowsPath, join('node_modules', 'user-installed', 'package.json'), '{}\n');
+
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+
+    const packageJson = readJson(join(workflowsPath, 'package.json')) as {
+      readonly dependencies?: Record<string, string>;
+      readonly devDependencies?: Record<string, string>;
+      readonly stale?: boolean;
+    };
+    const tsconfigJson = readJson(join(workflowsPath, 'tsconfig.json')) as {
+      readonly compilerOptions?: { readonly types?: readonly string[] };
+    };
+
+    assert.equal(packageJson.stale, undefined);
+    assert.equal(packageJson.dependencies?.['@isagi/workflow-sdk'], '0.0.1');
+    assert.equal(typeof packageJson.devDependencies?.['@types/node'], 'string');
+    assert.deepEqual(tsconfigJson.compilerOptions?.types, ['node']);
+    assert.equal(
+      existsSync(join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk', 'stale.txt')),
+      false,
+    );
+    assert.equal(
+      existsSync(join(workflowsPath, 'node_modules', '@types', 'node', 'stale.txt')),
+      false,
+    );
+    assert.equal(
+      existsSync(join(workflowsPath, 'node_modules', 'undici-types', 'stale.txt')),
+      false,
+    );
+    assert.equal(
+      existsSync(join(workflowsPath, 'node_modules', 'user-installed', 'package.json')),
+      true,
+    );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 function writeWorkflow(workflowPath: string, contents: string) {
   writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
+}
+
+function writeFile(root: string, path: string, contents: string) {
+  const target = join(root, path);
+  mkdirSync(join(target, '..'), { recursive: true });
+  writeFileSync(target, contents, 'utf8');
+}
+
+function readJson(path: string): unknown {
+  return JSON.parse(readFileSync(path, 'utf8')) as unknown;
 }
 
 function emptyCtx() {
