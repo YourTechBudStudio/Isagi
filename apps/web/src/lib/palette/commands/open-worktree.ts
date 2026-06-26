@@ -2,7 +2,7 @@ import { GitBranch } from 'lucide-react';
 
 import type { WorktreeBaseRef, WorktreeSetupTrustInput } from '@isagi/contracts';
 
-import { worktreeSetupReviewCopy } from '../../../copy/index.js';
+import { worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
 import { runRuntimeEffect } from '../../runtime/run.js';
 import { restoreActivePaneFocus } from '../../workspace/activation.js';
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
@@ -44,6 +44,7 @@ export const openWorktreeCommand: PaletteCommand = {
   label: 'Open worktree',
   icon: GitBranch,
   group: 'global',
+  running: worktreeCreateCopy.running,
   available: (ctx) => presentProjects(ctx.projects).length > 0,
   args: [
     {

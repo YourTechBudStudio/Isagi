@@ -428,6 +428,34 @@ export function WizardOptions({
   );
 }
 
+/**
+ * Shown while a command's async run is in flight. Long-running work breathes —
+ * it does not spin (design language): a calm `working` pulse plus a dry,
+ * one-line status so the palette never looks frozen. `role="status"` /
+ * `aria-live` announces the work to assistive tech.
+ */
+export function RunningPanel({
+  content,
+}: {
+  content: { readonly title: string; readonly hint?: string | undefined };
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-28 flex-col items-center justify-center gap-3.5 px-6 py-9 text-center"
+    >
+      <span aria-hidden className="block size-2 rounded-full bg-working animate-breathe" />
+      <div className="space-y-1.5">
+        <p className="text-[13.5px] text-fg">{content.title}</p>
+        {content.hint ? (
+          <p className="font-mono text-[11px] leading-relaxed text-fg-subtle">{content.hint}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function GroupHeader({ label }: { label: string }) {
   return <Overline className="px-2.5 pt-2 pb-1 text-[9.5px]">{label}</Overline>;
 }
@@ -440,10 +468,12 @@ function TipKey({ children, hint }: { children: string; hint: string }) {
   );
 }
 
-export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' }) {
+export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' | 'running' }) {
   return (
     <div className="flex items-center gap-3 border-t border-line/14 px-4 py-2.5 font-mono text-[11px] text-fg-subtle">
-      {mode === 'outcome' ? (
+      {mode === 'running' ? (
+        <span className="opacity-70">{paletteCopy.running.tip}</span>
+      ) : mode === 'outcome' ? (
         <>
           <TipKey hint={paletteCopy.tips.close}>esc</TipKey>
         </>

@@ -27,6 +27,7 @@ import { assembleEntries } from '../../lib/palette/entries.js';
 import {
   currentStep,
   initialPaletteState,
+  isBusy,
   paletteReducer,
   stepDefaultIndex,
 } from '../../lib/palette/machine.js';
@@ -54,6 +55,7 @@ import {
   OutcomePanel,
   PathOptions,
   ReviewStep,
+  RunningPanel,
   TextStep,
   Tip,
   WizardOptions,
@@ -221,7 +223,19 @@ export function CommandPalette() {
     });
   }, [command, machine.kind, spec]);
 
+  // A command's async run (or a workflow launch) is in flight. The machine stays
+  // in search/step while the run effect resolves, so without this the palette
+  // would keep rendering the frozen list/wizard with no sign of progress.
+  const running =
+    isBusy(machine) || (startWorkflowMutation.isPending && workflowFormEntryId === null);
+
   const view = useMemo(() => {
+    if (running) {
+      return {
+        kind: 'running' as const,
+        content: command?.running ?? { title: paletteCopy.running.title },
+      };
+    }
     if (machine.kind === 'result') {
       return { kind: 'result' as const, content: machine.content };
     }
@@ -289,9 +303,11 @@ export function CommandPalette() {
       ? filterEntries(allEntries, searchQuery)
       : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
-  }, [machine, workflowFormEntryId, allEntries, command, spec, recents]);
+  }, [running, machine, workflowFormEntryId, allEntries, command, spec, recents]);
   const acceptsInput =
-    view.kind !== 'workflow-form' && (machine.kind === 'search' || machine.kind === 'step');
+    !running &&
+    view.kind !== 'workflow-form' &&
+    (machine.kind === 'search' || machine.kind === 'step');
 
   useEffect(() => {
     runPaletteEffects(machine.effects, {
@@ -305,20 +321,23 @@ export function CommandPalette() {
   }, [machine.effects, allEntries, ctx, pushRecent]);
 
   const renderedLength =
-    view.kind === 'wizard'
-      ? view.options.length
-      : view.kind === 'list'
-        ? view.items.length
-        : view.kind === 'path'
-          ? view.suggestions.length
-          : view.kind === 'review'
-            ? (view.content?.choices.length ?? 0)
-            : view.kind === 'result' || view.kind === 'error'
-              ? outcomeActions(view.content).length
-              : 0;
+    view.kind === 'running'
+      ? 0
+      : view.kind === 'wizard'
+        ? view.options.length
+        : view.kind === 'list'
+          ? view.items.length
+          : view.kind === 'path'
+            ? view.suggestions.length
+            : view.kind === 'review'
+              ? (view.content?.choices.length ?? 0)
+              : view.kind === 'result' || view.kind === 'error'
+                ? outcomeActions(view.content).length
+                : 0;
   const selectableLength = view.kind === 'path' && view.stale ? 0 : renderedLength;
-  const baseViewKey =
-    machine.kind === 'step'
+  const baseViewKey = running
+    ? 'running'
+    : machine.kind === 'step'
       ? `wizard-${machine.flow.stepIndex}:${query}`
       : machine.kind === 'search'
         ? query
@@ -328,16 +347,19 @@ export function CommandPalette() {
           ? machine.viewKey
           : 'closed';
   const defaultIndex =
-    view.kind === 'wizard'
-      ? stepDefaultIndex(spec, view.options)
-      : view.kind === 'workflow-form'
-        ? null
-        : view.kind === 'path' && view.stale
+    view.kind === 'running'
+      ? null
+      : view.kind === 'wizard'
+        ? stepDefaultIndex(spec, view.options)
+        : view.kind === 'workflow-form'
           ? null
-          : 0;
+          : view.kind === 'path' && view.stale
+            ? null
+            : 0;
   const viewKey = `${baseViewKey}:${selectableLength}:${defaultIndex ?? 'none'}`;
-  const panelKey =
-    view.kind === 'workflow-form'
+  const panelKey = running
+    ? 'running'
+    : view.kind === 'workflow-form'
       ? `workflow-form:${view.entry.id}`
       : machine.kind === 'step' && view.kind === 'path'
         ? `path-${machine.flow.stepIndex}`
@@ -600,6 +622,11 @@ export function CommandPalette() {
           exit={{ opacity: 0 }}
           transition={uiTransition}
           onPointerDown={(event) => {
+            // While a run is in flight the palette is locked to its progress
+            // state; an outside click must not abandon the visible work.
+            if (running) {
+              return;
+            }
             if (event.target === event.currentTarget) {
               closeCurrentPalette();
             }
@@ -619,7 +646,9 @@ export function CommandPalette() {
             className="h-fit w-145 max-w-full overflow-hidden rounded-lg border border-line/30 bg-elevated/85 shadow-lift backdrop-blur-2xl"
           >
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line/16 px-4 py-3.5">
-              {view.kind === 'workflow-form' ? (
+              {running ? (
+                <Chip tone="command">{command?.label ?? paletteCopy.running.chip}</Chip>
+              ) : view.kind === 'workflow-form' ? (
                 <Chip tone="command">{view.workflow.manifest.title}</Chip>
               ) : command ? (
                 <>
@@ -664,9 +693,11 @@ export function CommandPalette() {
                 />
               ) : (
                 <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-subtle">
-                  {view.kind === 'workflow-form'
-                    ? (view.workflow.manifest.description ?? view.workflow.workflowKey)
-                    : paletteCopy.outcome.localFeedback}
+                  {running
+                    ? ''
+                    : view.kind === 'workflow-form'
+                      ? (view.workflow.manifest.description ?? view.workflow.workflowKey)
+                      : paletteCopy.outcome.localFeedback}
                 </span>
               )}
             </div>
@@ -684,7 +715,9 @@ export function CommandPalette() {
               transition={uiTransition}
               className="max-h-[46vh] overflow-y-auto p-1.5"
             >
-              {view.kind === 'workflow-form' ? (
+              {view.kind === 'running' ? (
+                <RunningPanel content={view.content} />
+              ) : view.kind === 'workflow-form' ? (
                 <div className="px-3 py-3">
                   <WorkflowQuestionForm
                     questions={view.workflow.manifest.inputs ?? []}
@@ -768,15 +801,17 @@ export function CommandPalette() {
 
             <Tip
               mode={
-                view.kind === 'result' || view.kind === 'error'
-                  ? 'outcome'
-                  : view.kind === 'workflow-form'
-                    ? 'wizard'
-                    : command
-                      ? spec?.kind === 'path'
-                        ? 'path'
-                        : 'wizard'
-                      : 'list'
+                running
+                  ? 'running'
+                  : view.kind === 'result' || view.kind === 'error'
+                    ? 'outcome'
+                    : view.kind === 'workflow-form'
+                      ? 'wizard'
+                      : command
+                        ? spec?.kind === 'path'
+                          ? 'path'
+                          : 'wizard'
+                        : 'list'
               }
             />
           </motion.div>

@@ -1022,7 +1022,7 @@ function updatePaths(
   };
 }
 
-function isBusy(state: PaletteState) {
+export function isBusy(state: PaletteState) {
   return (
     (state.kind === 'search' &&
       (state.preflightAttemptId !== null || state.runAttemptId !== null)) ||

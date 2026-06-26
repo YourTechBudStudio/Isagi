@@ -45,6 +45,14 @@ export const paletteCopy = {
     close: 'Close',
     diagnostic: 'Diagnostic detail',
   },
+  // Calm status while a command's async run is in flight. The chip names the
+  // surface, the title is the generic fallback for commands without their own
+  // running copy, and the tip is a dry one-liner — no performed cuteness.
+  running: {
+    chip: 'Working',
+    title: 'Working…',
+    tip: 'This can take a moment.',
+  },
   tips: {
     cycle: 'cycle',
     fill: 'fill',
@@ -158,5 +166,17 @@ export const worktreeSetupReviewCopy = {
       label: 'Skip hooks for this project',
       hint: 'Isagi keeps creating worktrees, just never runs the hooks.',
     },
+  },
+} as const;
+
+/**
+ * Shown in the palette's running state while a brand-new worktree is being
+ * created. Creation blocks on server-side setup hooks (copy/symlink/command),
+ * so the status names that work rather than leaving the palette looking stuck.
+ */
+export const worktreeCreateCopy = {
+  running: {
+    title: 'Creating worktree…',
+    hint: 'Running setup hooks.',
   },
 } as const;

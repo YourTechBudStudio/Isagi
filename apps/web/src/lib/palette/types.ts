@@ -214,6 +214,16 @@ export interface PaletteCommand {
     values: ArgValues,
   ) => MaybePromise<CommandPreflightResult>;
   readonly args?: readonly ArgSpec[];
+  /**
+   * Calm status shown in the palette while this command's async `run` is in
+   * flight. Worktree creation runs setup hooks server-side and can take real
+   * time; naming the work keeps the palette honest instead of looking frozen.
+   * Omit it for fast commands — they fall back to a generic working status.
+   */
+  readonly running?: {
+    readonly title: string;
+    readonly hint?: string;
+  };
   readonly run: (
     values: ArgValues,
     ctx: PaletteContext,

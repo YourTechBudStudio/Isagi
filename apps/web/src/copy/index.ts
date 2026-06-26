@@ -12,6 +12,7 @@ export {
   paletteCopy,
   surfaceActionsCopy,
   worktreeActionsCopy,
+  worktreeCreateCopy,
   worktreeSetupReviewCopy,
 } from './palette.js';
 export { toastCopy } from './toasts.js';
