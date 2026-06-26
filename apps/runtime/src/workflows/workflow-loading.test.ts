@@ -81,6 +81,9 @@ function emptyCtx() {
     inject: async () => {},
     closePane: async () => {},
     getConversationHistory: async () => [],
+    getHarnessSessionId: async () => {
+      throw new Error('getHarnessSessionId is not used');
+    },
     runHeadlessPrompt: async () => {
       throw new Error('runHeadlessPrompt is not used');
     },

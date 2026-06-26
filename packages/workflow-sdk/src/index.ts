@@ -142,6 +142,8 @@ export interface WorkflowContext {
   readonly spawnSession: (input: {
     readonly harness: WorkflowAgentHarness;
     readonly prompt: string;
+    readonly model?: string | undefined;
+    readonly effort?: string | undefined;
   }) => Promise<{
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
@@ -153,6 +155,7 @@ export interface WorkflowContext {
   readonly getConversationHistory: (
     agentSessionId: number,
   ) => Promise<readonly WorkflowConversationMessage[]>;
+  readonly getHarnessSessionId: (agentSessionId: number) => Promise<string>;
   readonly runHeadlessPrompt: (input: WorkflowHeadlessPromptInput) => Promise<WorkflowHeadlessOp>;
   readonly startWorkflow: (
     workflowKey: string,

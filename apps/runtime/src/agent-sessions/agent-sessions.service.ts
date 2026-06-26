@@ -22,6 +22,7 @@ export interface AgentSessionService {
   ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
   readonly ensureActivePtyProcess: (
     agentSessionId: number,
+    options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
   ) => Effect.Effect<
     number,
     DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError
@@ -64,7 +65,10 @@ export const AgentSessionServiceLive = Layer.effect(
     const publishChanged = (agentSessionId: number) =>
       eventBus.publish({ type: 'agent_session_changed', agentSessionId });
 
-    const launchProcessForSession = (session: AgentSessionRow) =>
+    const launchProcessForSession = (
+      session: AgentSessionRow,
+      options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
+    ) =>
       Effect.gen(function* () {
         console.info('[runtime] Agent session launch requested', {
           agentSessionId: session.id,
@@ -75,7 +79,7 @@ export const AgentSessionServiceLive = Layer.effect(
           previousPtyProcessStatus: session.activePtyProcess?.status ?? null,
           previousPtyProcessStatusReason: session.activePtyProcess?.statusReason ?? null,
         });
-        const launch = yield* agentLaunchEnvelope(harnesses, session);
+        const launch = yield* agentLaunchEnvelope(harnesses, session, options);
         console.info('[runtime] Agent session launch envelope built', {
           agentSessionId: session.id,
           harness: session.harness,
@@ -98,7 +102,10 @@ export const AgentSessionServiceLive = Layer.effect(
         return process.ptyProcessId;
       });
 
-    const ensureActivePtyProcess = (agentSessionId: number) =>
+    const ensureActivePtyProcess = (
+      agentSessionId: number,
+      options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
+    ) =>
       lifecycle.withRestoreLock(
         { kind: 'agent_session', sessionId: agentSessionId },
         Effect.gen(function* () {
@@ -127,7 +134,7 @@ export const AgentSessionServiceLive = Layer.effect(
               harness: session.harness,
               cwd: session.cwd,
             });
-            return yield* launchProcessForSession(session);
+            return yield* launchProcessForSession(session, options);
           }
           if (!session.harnessSessionId) {
             console.warn(
@@ -157,7 +164,7 @@ export const AgentSessionServiceLive = Layer.effect(
             previousPtyProcessStatus: process?.status ?? null,
             previousPtyProcessStatusReason: process?.statusReason ?? null,
           });
-          return yield* launchProcessForSession(session);
+          return yield* launchProcessForSession(session, options);
         }),
       );
 
@@ -248,12 +255,15 @@ function validateHarnessMetadata(session: AgentSessionRow) {
 function agentLaunchEnvelope(
   harnesses: import('./harness/index.js').HarnessAdapterRegistryService,
   session: AgentSessionRow,
+  options?: { readonly model?: string | undefined; readonly effort?: string | undefined },
 ) {
   return harnesses.buildLaunch({
     agentSessionId: session.id,
     harness: session.harness,
     cwd: session.cwd,
     latestHarnessSessionId: session.harnessSessionId,
+    model: options?.model,
+    effort: options?.effort,
   });
 }
 

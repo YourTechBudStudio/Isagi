@@ -14,9 +14,15 @@ import {
 import { HarnessAdapterRegistry, type HarnessAdapterRegistryService } from '../harness/index.js';
 import { AgentSessionError, AgentSessionService, AgentSessionServiceLive } from '../index.js';
 
+type RecordedLaunchInput = {
+  readonly latestHarnessSessionId: string | null;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+};
+
 test('agent session lifecycle launches a fresh process before any harness session id is observed', async () => {
   const state = mutableAgentSession({ activePtyProcessId: null, activePtyProcess: null });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const ptyProcessId = await Effect.runPromise(
@@ -32,6 +38,27 @@ test('agent session lifecycle launches a fresh process before any harness sessio
   assert.equal(state.session.activePtyProcessId, 99);
 });
 
+test('agent session lifecycle forwards per-invocation model and effort to launch envelope', async () => {
+  const state = mutableAgentSession({ activePtyProcessId: null, activePtyProcess: null });
+  const launchInputs: RecordedLaunchInput[] = [];
+  const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+
+  const ptyProcessId = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10, {
+        model: 'gpt-5.5',
+        effort: 'medium',
+      });
+    }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
+  );
+
+  assert.equal(ptyProcessId, 99);
+  assert.deepEqual(launchInputs, [
+    { latestHarnessSessionId: null, model: 'gpt-5.5', effort: 'medium' },
+  ]);
+});
+
 test('agent session lifecycle resumes a dead previous process with the latest observed harness session id', async () => {
   const state = mutableAgentSession({
     activePtyProcessId: 20,
@@ -42,7 +69,7 @@ test('agent session lifecycle resumes a dead previous process with the latest ob
       statusReason: 'runtime_ephemeral_lost',
     }),
   });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const ptyProcessId = await Effect.runPromise(
@@ -69,7 +96,7 @@ test('agent session lifecycle refuses to restore a dead previous process without
       statusReason: 'runtime_ephemeral_lost',
     }),
   });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const result = await Effect.runPromise(
@@ -97,7 +124,7 @@ test('agent session lifecycle refuses to launch when harness metadata is missing
     harnessMetadataStatus: 'missing',
     harnessMetadataDiagnostic: 'Harness metadata file is missing.',
   });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const result = await Effect.runPromise(
@@ -125,7 +152,7 @@ test('agent session lifecycle refuses to launch when harness metadata is invalid
     harnessMetadataStatus: 'invalid',
     harnessMetadataDiagnostic: 'Invalid harness metadata.',
   });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const result = await Effect.runPromise(
@@ -151,7 +178,7 @@ test('agent session lifecycle reuses an active running process', async () => {
     activePtyProcessId: 20,
     activePtyProcess: ptyProcess({ id: 20, status: 'running', statusReason: null }),
   });
-  const launchInputs: Array<{ latestHarnessSessionId: string | null }> = [];
+  const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
   const ptyProcessId = await Effect.runPromise(
@@ -168,7 +195,7 @@ test('agent session lifecycle reuses an active running process', async () => {
 
 function testLayer(input: {
   readonly state: ReturnType<typeof mutableAgentSession>;
-  readonly launchInputs: Array<{ latestHarnessSessionId: string | null }>;
+  readonly launchInputs: RecordedLaunchInput[];
   readonly ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>;
 }) {
   return AgentSessionServiceLive.pipe(
@@ -233,13 +260,18 @@ function fakePtyService(
   } satisfies PtyServiceShape;
 }
 
-function fakeHarnesses(
-  launchInputs: Array<{ latestHarnessSessionId: string | null }>,
-): HarnessAdapterRegistryService {
+function fakeHarnesses(launchInputs: RecordedLaunchInput[]): HarnessAdapterRegistryService {
   return {
     buildLaunch: (input) =>
       Effect.sync(() => {
-        launchInputs.push({ latestHarnessSessionId: input.latestHarnessSessionId });
+        const recorded: RecordedLaunchInput = {
+          latestHarnessSessionId: input.latestHarnessSessionId,
+        };
+        if (input.model !== undefined || input.effort !== undefined) {
+          launchInputs.push({ ...recorded, model: input.model, effort: input.effort });
+        } else {
+          launchInputs.push(recorded);
+        }
         return {
           command: 'pi',
           args: input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : [],

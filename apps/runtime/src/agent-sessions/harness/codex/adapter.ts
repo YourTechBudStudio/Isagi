@@ -22,6 +22,8 @@ export function buildCodexLaunch(
       command: 'codex',
       args: [
         ...codexHookArgs(dependencies.hookPath),
+        ...(input.model ? ['--model', input.model] : []),
+        ...(input.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(input.effort)}`] : []),
         ...(input.latestHarnessSessionId ? ['resume', input.latestHarnessSessionId] : []),
       ],
       cwd: input.cwd,

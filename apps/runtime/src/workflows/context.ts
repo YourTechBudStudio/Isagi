@@ -105,6 +105,21 @@ export function workflowContext(input: {
           Effect.provideService(HarnessLedgerObserver, input.observer),
         ),
       ),
+    getHarnessSessionId: (agentSessionId) =>
+      runEffect(
+        input.artifacts.readMetadata(agentSessionId).pipe(
+          Effect.flatMap((metadata) => {
+            if (metadata.status !== 'valid' || !metadata.metadata.harnessSessionId) {
+              return Effect.fail(
+                new Error(
+                  `Agent session ${agentSessionId} does not have a captured harness session id.`,
+                ),
+              );
+            }
+            return Effect.succeed(metadata.metadata.harnessSessionId);
+          }),
+        ),
+      ),
     runHeadlessPrompt: (prompt) =>
       runEffect(
         input.headless.runHeadlessPrompt({
@@ -229,6 +244,8 @@ function spawnSession(input: {
   readonly input: {
     readonly harness: WorkflowAgentHarness;
     readonly prompt: string;
+    readonly model?: string | undefined;
+    readonly effort?: string | undefined;
   };
 }) {
   return Effect.gen(function* () {
@@ -252,15 +269,20 @@ function spawnSession(input: {
       surfaceId: created.surfaceId,
       paneId: created.paneId,
     });
-    const ptyProcessId = yield* input.agents.ensureActivePtyProcess(agentSessionId).pipe(
-      Effect.timeoutFail({
-        duration: `${spawnTimeoutMs} millis`,
-        onTimeout: () =>
-          new Error(
-            `Timed out waiting for workflow agent session ${agentSessionId} PTY to become live.`,
-          ),
-      }),
-    );
+    const ptyProcessId = yield* input.agents
+      .ensureActivePtyProcess(agentSessionId, {
+        model: input.input.model,
+        effort: input.input.effort,
+      })
+      .pipe(
+        Effect.timeoutFail({
+          duration: `${spawnTimeoutMs} millis`,
+          onTimeout: () =>
+            new Error(
+              `Timed out waiting for workflow agent session ${agentSessionId} PTY to become live.`,
+            ),
+        }),
+      );
     yield* waitForPtyOutputQuiescence(input.pty, ptyProcessId).pipe(
       Effect.timeoutFail({
         duration: `${spawnTimeoutMs} millis`,

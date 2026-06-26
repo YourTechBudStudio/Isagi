@@ -28,6 +28,8 @@ export interface HarnessLaunchContext {
   readonly harness: AgentHarness;
   readonly cwd: string;
   readonly latestHarnessSessionId: string | null;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
 }
 
 export interface HarnessHeadlessLaunchContext {

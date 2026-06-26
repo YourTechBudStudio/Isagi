@@ -324,6 +324,36 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
 
+test('Codex adapter applies per-invocation model and reasoning effort to interactive launch', async () => {
+  const launch = await Effect.runPromise(
+    buildCodexLaunch(
+      {
+        agentSessionId: 10,
+        harness: 'codex',
+        cwd: '/repo/isagi',
+        latestHarnessSessionId: null,
+        model: 'gpt-5.5',
+        effort: 'medium',
+      },
+      {
+        hookPath: '/runtime/harness-integrations/codex/isagi-codex-hook.mjs',
+        artifacts: fakeArtifacts('/runtime'),
+      },
+    ),
+  );
+
+  assert.equal(launch.command, 'codex');
+  assert.equal(launch.args.includes('--model'), true);
+  assert.equal(launch.args.includes('gpt-5.5'), true);
+  assert.deepEqual(launch.args.slice(-4), [
+    '--model',
+    'gpt-5.5',
+    '-c',
+    'model_reasoning_effort="medium"',
+  ]);
+  assert.equal(launch.cwd, '/repo/isagi');
+});
+
 test('headless harness adapters build non-interactive launch envelopes', async () => {
   const pi = await Effect.runPromise(
     buildPiHeadlessLaunch({
