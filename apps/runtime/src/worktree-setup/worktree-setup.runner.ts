@@ -8,6 +8,7 @@ import { glob } from 'tinyglobby';
 
 import type { WorktreeSetupResult } from '@isagi/contracts';
 
+import { stripAnsi } from '../lib/ansi.js';
 import type { DatabaseError } from '../persistence/index.js';
 import type {
   WorktreeHooksConfig,
@@ -97,8 +98,7 @@ export function runPostCreateSetup(input: {
         ...(failed.dest ? { dest: failed.dest } : {}),
         ...(failed.exitCode !== undefined ? { exitCode: failed.exitCode } : {}),
         ...(failed.signal !== undefined ? { signal: failed.signal } : {}),
-        ...(failed.stdoutExcerpt ? { stdoutExcerpt: failed.stdoutExcerpt } : {}),
-        ...(failed.stderrExcerpt ? { stderrExcerpt: failed.stderrExcerpt } : {}),
+        ...(failed.outputExcerpt ? { outputExcerpt: failed.outputExcerpt } : {}),
       } satisfies WorktreeSetupResult;
     }
 
@@ -254,8 +254,7 @@ function runCommandHook(
       );
       return;
     }
-    const stdout = new TailBuffer(maxOutputExcerptBytes);
-    const stderr = new TailBuffer(maxOutputExcerptBytes);
+    const output = new TailBuffer(maxOutputExcerptBytes);
     const child = spawn(hook.run, {
       cwd,
       detached: true,
@@ -284,8 +283,8 @@ function runCommandHook(
     }, timeoutMs);
     timer.unref();
 
-    child.stdout?.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
-    child.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stdout?.on('data', (chunk) => output.push(Buffer.from(chunk)));
+    child.stderr?.on('data', (chunk) => output.push(Buffer.from(chunk)));
     child.on('error', (cause) => {
       finished = true;
       clearTimeout(timer);
@@ -300,8 +299,7 @@ function runCommandHook(
       if (killTimer) {
         clearTimeout(killTimer);
       }
-      const stdoutExcerpt = stdout.text();
-      const stderrExcerpt = stderr.text();
+      const outputExcerpt = output.text();
       if (exitCode === 0 && !timedOut) {
         resume(
           Effect.succeed({
@@ -309,8 +307,7 @@ function runCommandHook(
             details: {
               command: hook.run,
               message: 'Command completed.',
-              stdoutExcerpt,
-              stderrExcerpt,
+              outputExcerpt,
             },
           }),
         );
@@ -323,14 +320,13 @@ function runCommandHook(
         Effect.fail(
           new WorktreeSetupRunError({
             message,
-            cause: { exitCode, signal, stdoutExcerpt, stderrExcerpt },
+            cause: { exitCode, signal, outputExcerpt },
             details: {
               command: hook.run,
               message,
               exitCode,
               signal,
-              stdoutExcerpt,
-              stderrExcerpt,
+              outputExcerpt,
             },
           }),
         ),
@@ -420,8 +416,17 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+// Captures stdout and stderr merged into a single near-chronological stream so
+// the diagnostic reads like the terminal the user would have seen. ANSI escape
+// codes are stripped on read (over the whole buffer, never per-chunk, so escape
+// sequences split across data events aren't mangled) since the palette renders
+// the excerpt as plain text. When the buffer overflows we keep only the tail and
+// drop the partial first line, so a head-truncated excerpt starts at a clean
+// line boundary rather than mid-escape-sequence (which strip couldn't match
+// without its leading ESC byte).
 class TailBuffer {
   private buffer = Buffer.alloc(0);
+  private truncated = false;
 
   constructor(private readonly maxBytes: number) {}
 
@@ -429,10 +434,18 @@ class TailBuffer {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     if (this.buffer.length > this.maxBytes) {
       this.buffer = this.buffer.subarray(this.buffer.length - this.maxBytes);
+      this.truncated = true;
     }
   }
 
   text() {
-    return this.buffer.toString('utf8');
+    let buffer = this.buffer;
+    if (this.truncated) {
+      const newlineIndex = buffer.indexOf(0x0a);
+      if (newlineIndex !== -1) {
+        buffer = buffer.subarray(newlineIndex + 1);
+      }
+    }
+    return stripAnsi(buffer.toString('utf8'));
   }
 }

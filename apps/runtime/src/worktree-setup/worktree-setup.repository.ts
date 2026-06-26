@@ -34,8 +34,7 @@ export interface CreateSetupStepInput {
   readonly dest?: string | null | undefined;
   readonly exitCode?: number | null | undefined;
   readonly signal?: string | null | undefined;
-  readonly stdoutExcerpt?: string | null | undefined;
-  readonly stderrExcerpt?: string | null | undefined;
+  readonly outputExcerpt?: string | null | undefined;
 }
 
 export interface WorktreeSetupRepositoryService {

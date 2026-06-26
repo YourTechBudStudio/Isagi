@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6b243d16-6636-419c-ac8f-9a63bc77d97e",
+  "id": "f4b952cc-6396-43fe-a03c-7f39ea701929",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agent_sessions": {
@@ -1180,15 +1180,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "stdout_excerpt": {
-          "name": "stdout_excerpt",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stderr_excerpt": {
-          "name": "stderr_excerpt",
+        "output_excerpt": {
+          "name": "output_excerpt",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

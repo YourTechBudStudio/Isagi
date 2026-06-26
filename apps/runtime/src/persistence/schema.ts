@@ -89,8 +89,7 @@ export const worktreeSetupSteps = sqliteTable('worktree_setup_steps', {
   dest: text('dest'),
   exitCode: integer('exit_code'),
   signal: text('signal'),
-  stdoutExcerpt: text('stdout_excerpt'),
-  stderrExcerpt: text('stderr_excerpt'),
+  outputExcerpt: text('output_excerpt'),
 });
 
 export const worktreeSurfaces = sqliteTable('worktree_surfaces', {
