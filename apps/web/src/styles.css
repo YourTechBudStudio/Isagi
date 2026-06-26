@@ -233,7 +233,7 @@ body::after {
 
 .isagi-xterm .xterm {
   height: 100%;
-  padding: 8px 10px;
+  padding: 2px 4px;
   background: var(--color-terminal-surface);
 }
 
