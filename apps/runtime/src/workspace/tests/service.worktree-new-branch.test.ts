@@ -10,6 +10,7 @@ import { CommandService } from '../../commands/index.js';
 import { branchPathHash, Git, type GitService } from '../../git/index.js';
 import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
@@ -23,6 +24,7 @@ import {
   testCommandService,
   testDataDirectory,
   testInternalEvents,
+  testPtyService,
   testSurfaceRepository,
   testSurfaceService,
   testWorktreeSetup,
@@ -72,6 +74,7 @@ test('opening a missing branch without a base asks the client for base selection
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -177,6 +180,7 @@ test('opening a missing branch creates it from a local branch base', async () =>
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -277,6 +281,7 @@ test('opening a missing branch can create it from the current detached worktree'
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -391,6 +396,7 @@ test('opening a missing branch rejects invalid detached worktree bases before ch
           }).pipe(
             Effect.provide(WorkspaceServiceLive),
             Effect.provideService(CommandService, testCommandService),
+            Effect.provideService(PtyService, testPtyService),
             Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
             Effect.provideService(WorkspaceRepository, repository),
             Effect.provideService(SurfaceRepository, testSurfaceRepository),

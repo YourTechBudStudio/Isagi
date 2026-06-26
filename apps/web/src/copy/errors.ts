@@ -86,6 +86,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       root_worktree_not_deletable: 'The root worktree cannot be deleted.',
       dirty_checkout_requires_force: 'That checkout has changes. Confirm checkout removal first.',
       root_worktree_not_found: "Couldn't find the root checkout to select afterward.",
+      pty_teardown_failed: "Couldn't stop active sessions in that worktree.",
     },
   },
   workspace_reconcile_rejected: {

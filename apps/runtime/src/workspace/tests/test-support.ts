@@ -8,6 +8,7 @@ import type { CommandServiceShape } from '../../commands/index.js';
 import type { GitService } from '../../git/index.js';
 import { stateFromActiveContext, type StateFileService } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import type { PtyServiceShape } from '../../pty-processes/index.js';
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfaces/index.js';
 import type {
@@ -123,6 +124,21 @@ export const testCommandService = {
   reconcileStaleRunningCommands: Effect.void,
 } satisfies CommandServiceShape;
 
+export const testPtyService = {
+  launch: () => Effect.die('pty launch is not used by workspace tests'),
+  getAttachmentPlan: () => Effect.die('pty attachment planning is not used by workspace tests'),
+  attach: () => Effect.die('pty attach is not used by workspace tests'),
+  replay: () => Effect.die('pty replay is not used by workspace tests'),
+  write: () => Effect.die('pty write is not used by workspace tests'),
+  writeInput: () => Effect.die('pty write input is not used by workspace tests'),
+  resize: () => Effect.die('pty resize is not used by workspace tests'),
+  kill: () => Effect.void,
+  terminate: () => Effect.void,
+  pin: () => Effect.void,
+  unpin: () => Effect.void,
+  isPinned: () => Effect.succeed(false),
+} satisfies PtyServiceShape;
+
 export const testInternalEvents = {
   publish: () => Effect.void,
   subscribe: () =>
@@ -168,6 +184,19 @@ export function repositoryWith(input: {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.succeed({
+        agentSessionCount: 0,
+        agentSessionActivePtyProcessIds: [],
+        commandRunCount: 0,
+        commandRunPtyProcessIds: [],
+        commandStateCount: 0,
+        commandStateActivePtyProcessIds: [],
+        paneCount: 0,
+        surfaceCount: 0,
+        terminalSessionCount: 0,
+        terminalSessionActivePtyProcessIds: [],
+      }),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.succeed(input.project ? [input.project] : []),
     listWorktrees: Effect.succeed(input.worktree ? [input.worktree] : []),
@@ -211,6 +240,19 @@ export function repositoryWithWorktrees(input: {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(true),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.succeed({
+        agentSessionCount: 0,
+        agentSessionActivePtyProcessIds: [],
+        commandRunCount: 0,
+        commandRunPtyProcessIds: [],
+        commandStateCount: 0,
+        commandStateActivePtyProcessIds: [],
+        paneCount: 0,
+        surfaceCount: 0,
+        terminalSessionCount: 0,
+        terminalSessionActivePtyProcessIds: [],
+      }),
     insertProject: () => Effect.succeed(input.project.id),
     listProjects: Effect.succeed([input.project]),
     listWorktrees: Effect.succeed([...input.worktrees]),

@@ -10,6 +10,7 @@ import { CommandService, type CommandServiceShape } from '../../commands/index.j
 import { branchPathHash, Git, GitCommandError, type GitService } from '../../git/index.js';
 import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
@@ -23,6 +24,7 @@ import {
   testCommandService,
   testDataDirectory,
   testInternalEvents,
+  testPtyService,
   testSurfaceRepository,
   testSurfaceService,
   testWorktreeSetup,
@@ -129,6 +131,7 @@ test('opening an existing local branch creates an Isagi-managed checkout and ret
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, commandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -195,6 +198,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -260,6 +264,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -325,6 +330,7 @@ test('opening an existing local branch rejects a stale registered deterministic 
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -386,6 +392,7 @@ test('opening an existing local branch distinguishes checkout parent preparation
         }).pipe(
           Effect.provide(WorkspaceServiceLive),
           Effect.provideService(CommandService, testCommandService),
+          Effect.provideService(PtyService, testPtyService),
           Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
           Effect.provideService(WorkspaceRepository, repository),
           Effect.provideService(SurfaceRepository, testSurfaceRepository),

@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 import { CommandService, type CommandServiceShape } from '../../commands/index.js';
 import { Git, GitCommandError, type GitService } from '../../git/index.js';
 import { DataDirectory, StateFile } from '../../persistence/index.js';
+import { PtyService, PtyServiceError, type PtyServiceShape } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
@@ -18,6 +19,7 @@ import {
   testCommandService,
   testDataDirectory,
   testInternalEvents,
+  testPtyService,
   testSurfaceRepository,
   testSurfaceService,
   testWorktreeSetup,
@@ -62,6 +64,7 @@ test('delete worktree rejects dirty checkout in normal mode before removal', asy
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -101,6 +104,19 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         events.push(`db:${worktreeId}`);
         return true;
       }),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.succeed({
+        agentSessionCount: 1,
+        agentSessionActivePtyProcessIds: [21],
+        commandRunCount: 0,
+        commandRunPtyProcessIds: [],
+        commandStateCount: 0,
+        commandStateActivePtyProcessIds: [],
+        paneCount: 2,
+        surfaceCount: 1,
+        terminalSessionCount: 1,
+        terminalSessionActivePtyProcessIds: [22],
+      }),
   } satisfies WorkspaceRepositoryService;
   const deleteGit = {
     run: (args: readonly string[]) =>
@@ -119,6 +135,13 @@ test('delete worktree force removes checkout before deleting DB row and returns 
         events.push(`commands:${input.worktreeId}`);
       }),
   } satisfies CommandServiceShape;
+  const ptyService = {
+    ...testPtyService,
+    terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
+      Effect.sync(() => {
+        events.push(`pty:${input.ptyProcessId}:${input.gracefulTimeoutMs}`);
+      }),
+  } satisfies PtyServiceShape;
 
   const output = await Effect.runPromise(
     Effect.gen(function* () {
@@ -131,6 +154,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(CommandService, commandService),
+      Effect.provideService(PtyService, ptyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -154,9 +178,114 @@ test('delete worktree force removes checkout before deleting DB row and returns 
   });
   assert.deepEqual(events, [
     `commands:${fixtures.targetWorktree.id}`,
+    'pty:21:1000',
+    'pty:22:1000',
     `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
     `db:${fixtures.targetWorktree.id}`,
   ]);
+  fixtures.cleanup();
+});
+
+test('delete worktree stops before Git removal when active PTY teardown fails', async () => {
+  const fixtures = deleteFixtures();
+  const events: string[] = [];
+  let dbDeleteCalls = 0;
+  const repository = {
+    ...repositoryWithWorktrees({
+      project: fixtures.project,
+      worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+    }),
+    deleteWorktree: () =>
+      Effect.sync(() => {
+        dbDeleteCalls += 1;
+        events.push('db');
+        return true;
+      }),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.succeed({
+        agentSessionCount: 1,
+        agentSessionActivePtyProcessIds: [21],
+        commandRunCount: 0,
+        commandRunPtyProcessIds: [],
+        commandStateCount: 0,
+        commandStateActivePtyProcessIds: [],
+        paneCount: 1,
+        surfaceCount: 1,
+        terminalSessionCount: 1,
+        terminalSessionActivePtyProcessIds: [22],
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const deleteGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        if (args.includes('status')) {
+          return { stdout: '', stderr: '' };
+        }
+        events.push(`git:${args.join(' ')}`);
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+  const commandService = {
+    ...testCommandService,
+    cleanupBeforeWorktreeDelete: () =>
+      Effect.sync(() => {
+        events.push('commands');
+      }),
+  } satisfies CommandServiceShape;
+  const ptyService = {
+    ...testPtyService,
+    terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
+      Effect.gen(function* () {
+        events.push(`pty:${input.ptyProcessId}`);
+        if (input.ptyProcessId === 21) {
+          return yield* Effect.fail(
+            new PtyServiceError({
+              code: 'backend_unavailable',
+              message: 'PTY backend is unavailable.',
+              ptyProcessId: input.ptyProcessId,
+            }),
+          );
+        }
+      }),
+  } satisfies PtyServiceShape;
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteWorktree({
+          projectId: fixtures.project.id,
+          worktreeId: fixtures.targetWorktree.id,
+          request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, commandService),
+        Effect.provideService(PtyService, ptyService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(
+          StateFile,
+          stateFileWithWriteCounter(() => {}),
+        ),
+        Effect.provideService(Git, deleteGit),
+        Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+      ),
+    ),
+  );
+
+  assert.ok(error instanceof WorkspaceError);
+  assert.equal(error.code, 'pty_teardown_failed');
+  assert.equal(dbDeleteCalls, 0);
+  assert.deepEqual(
+    events.filter((event) => event.startsWith('git:') || event === 'db'),
+    [],
+  );
+  assert.deepEqual(new Set(events), new Set(['commands', 'pty:21', 'pty:22']));
   fixtures.cleanup();
 });
 
@@ -196,6 +325,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -241,6 +371,7 @@ test('delete worktree rejects before destructive work when root fallback is miss
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),

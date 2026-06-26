@@ -92,6 +92,44 @@ test('worktree delete route maps domain failures to delete rejection envelopes',
   );
 });
 
+test('worktree delete route maps PTY teardown failures to stable delete rejection reason', async () => {
+  await withWorkspaceApi(
+    fakeWorkspaceService({
+      deleteWorktree: (request) =>
+        Effect.fail(
+          new WorkspaceError({
+            code: 'pty_teardown_failed',
+            message: 'Could not stop active sessions for that worktree.',
+            projectId: request.projectId,
+            worktreeId: request.worktreeId,
+          }),
+        ),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'DELETE',
+        url: '/api/v1/projects/1/worktrees/11',
+        payload: {
+          checkoutRemovalMode: 'normal',
+          branchRemovalMode: 'preserve',
+        },
+      });
+      const payload = response.json() as {
+        error?: { readonly code?: string; readonly data?: unknown; readonly requestId?: unknown };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(payload.error?.code, 'worktree_delete_rejected');
+      assert.equal(typeof payload.error?.requestId, 'string');
+      assert.deepEqual(payload.error?.data, {
+        reason: 'pty_teardown_failed',
+        projectId: 1,
+        worktreeId: 11,
+      });
+    },
+  );
+});
+
 async function withWorkspaceApi<A>(
   service: WorkspaceServiceShape,
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,

@@ -2,6 +2,7 @@ import { unlinkSync } from 'node:fs';
 
 import { Effect, Either } from 'effect';
 
+import { diagnosticPhase, logDiagnosticEvent } from '../../diagnostics/phase.js';
 import type { PtyProcessRow } from '../../surfaces/index.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
@@ -51,17 +52,27 @@ export function collectPtyGarbage(
   } = {},
 ) {
   return Effect.gen(function* () {
-    yield* cleanupBackendProcesses(repository, backend, runtimeNamespace).pipe(
-      tagGcPhaseError('backend_processes'),
-    );
-    yield* cleanupOrphanPtyProcesses(repository, backend, {
-      nowMs: options.nowMs ?? Date.now(),
-      pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
-    }).pipe(tagGcPhaseError('orphan_processes'));
-    yield* cleanupOrphanPtyLogs(repository, sessionsPath, {
-      minAgeMs: orphanPtyLogRetentionMs,
-      nowMs: options.nowMs,
-    }).pipe(tagGcPhaseError('orphan_logs'));
+    yield* diagnosticPhase(
+      'pty.gc.backend_processes',
+      { backend: backend.name, runtimeNamespace },
+      cleanupBackendProcesses(repository, backend, runtimeNamespace),
+    ).pipe(tagGcPhaseError('backend_processes'));
+    yield* diagnosticPhase(
+      'pty.gc.orphan_processes',
+      { backend: backend.name },
+      cleanupOrphanPtyProcesses(repository, backend, {
+        nowMs: options.nowMs ?? Date.now(),
+        pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
+      }),
+    ).pipe(tagGcPhaseError('orphan_processes'));
+    yield* diagnosticPhase(
+      'pty.gc.orphan_logs',
+      { sessionsPath },
+      cleanupOrphanPtyLogs(repository, sessionsPath, {
+        minAgeMs: orphanPtyLogRetentionMs,
+        nowMs: options.nowMs,
+      }),
+    ).pipe(tagGcPhaseError('orphan_logs'));
   });
 }
 
@@ -113,7 +124,21 @@ function cleanupOrphanPtyProcesses(
 ) {
   return Effect.gen(function* () {
     const processes = yield* repository.listOrphanProcesses;
+    logDiagnosticEvent('pty.gc.orphan_processes_discovered', {
+      backend: backend.name,
+      orphanCount: processes.length,
+      pinnedCount: options.pinnedPtyProcessIds.size,
+    });
     for (const process of processes) {
+      logDiagnosticEvent('pty.gc.orphan_process_considered', {
+        ptyProcessId: process.id,
+        backend: process.backend,
+        status: process.status,
+        statusReason: process.statusReason,
+        cwd: process.cwd,
+        pinned: options.pinnedPtyProcessIds.has(process.id),
+        retentionElapsed: isRetentionElapsed(process.updatedAt, options.nowMs),
+      });
       if (options.pinnedPtyProcessIds.has(process.id)) {
         console.info(
           `[runtime] Keeping orphan PTY process because it is pinned ptyProcessId=${process.id}`,
@@ -121,7 +146,17 @@ function cleanupOrphanPtyProcesses(
         continue;
       }
       if (!isRetentionElapsed(process.updatedAt, options.nowMs)) continue;
-      yield* cleanupOrphanPtyProcess(repository, backend, process);
+      yield* diagnosticPhase(
+        'pty.gc.cleanup_orphan_process',
+        {
+          ptyProcessId: process.id,
+          backend: process.backend,
+          status: process.status,
+          statusReason: process.statusReason,
+          cwd: process.cwd,
+        },
+        cleanupOrphanPtyProcess(repository, backend, process),
+      );
     }
   });
 }

@@ -131,6 +131,7 @@ export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
   'dirty_checkout_requires_force',
   'root_worktree_not_found',
   'command_cleanup_failed',
+  'pty_teardown_failed',
 );
 
 export const projectDeleteRejectionReasonSchema = Schema.Literal('command_cleanup_failed');

@@ -3147,6 +3147,8 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
       Effect.die('workspace findProjectWorktreeByBranch is not used'),
     deleteProject: () => Effect.die('workspace deleteProject is not used'),
     deleteWorktree: () => Effect.die('workspace deleteWorktree is not used'),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.die('workspace readWorktreeDeleteDiagnostics is not used'),
     insertProject: () => Effect.die('workspace insertProject is not used'),
     listProjects: Effect.die('workspace listProjects is not used'),
     listWorktrees: Effect.die('workspace listWorktrees is not used'),

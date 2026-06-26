@@ -13,6 +13,7 @@ import {
   type ApiError,
 } from '@isagi/contracts';
 
+import { logDiagnosticEvent } from '../../diagnostics/phase.js';
 import {
   requestDecodingFailed,
   responseEncodingFailed,
@@ -20,6 +21,8 @@ import {
   unhandledApiError,
   type ApiRouteContext,
 } from './errors.js';
+
+const slowApiRequestThresholdMs = 1_000;
 
 export interface RegisterApiEndpointOptions<
   Endpoint extends ApiEndpoint<
@@ -77,6 +80,23 @@ export function registerApiEndpoint<
       }
 
       const interrupt = requestInterruptSignal(request, reply);
+      const handlerStartedAt = Date.now();
+      let slowRequestLogged = false;
+      const slowRequestTimer = setTimeout(() => {
+        slowRequestLogged = true;
+        logDiagnosticEvent(
+          'api.request_still_running',
+          {
+            endpointId: endpoint.id,
+            requestId: context.requestId,
+            method: request.method,
+            url: request.url,
+            elapsedMs: Date.now() - handlerStartedAt,
+          },
+          'warn',
+        );
+      }, slowApiRequestThresholdMs);
+      slowRequestTimer.unref();
       let output: ApiEndpointOutput<Endpoint>;
       try {
         const result = await options.run(
@@ -86,6 +106,15 @@ export function registerApiEndpoint<
           },
         );
         if (Either.isLeft(result)) {
+          logSlowApiRequest({
+            context,
+            elapsedMs: Date.now() - handlerStartedAt,
+            endpointId: endpoint.id,
+            method: request.method,
+            outcome: 'failed',
+            slowRequestLogged,
+            url: request.url,
+          });
           const apiError =
             options.mapError?.(result.left, context) ?? unhandledApiError(context, result.left);
           return sendRouteApiError(request, reply, endpoint, context, apiError);
@@ -93,13 +122,41 @@ export function registerApiEndpoint<
         output = result.right;
       } catch (error: unknown) {
         if (interrupt.signal.aborted || reply.raw.destroyed) {
+          logSlowApiRequest({
+            context,
+            elapsedMs: Date.now() - handlerStartedAt,
+            endpointId: endpoint.id,
+            method: request.method,
+            outcome: 'aborted',
+            slowRequestLogged,
+            url: request.url,
+          });
           return;
         }
+        logSlowApiRequest({
+          context,
+          elapsedMs: Date.now() - handlerStartedAt,
+          endpointId: endpoint.id,
+          method: request.method,
+          outcome: 'threw',
+          slowRequestLogged,
+          url: request.url,
+        });
         const apiError = unhandledApiError(context, error);
         return sendRouteApiError(request, reply, endpoint, context, apiError);
       } finally {
+        clearTimeout(slowRequestTimer);
         interrupt.cleanup();
       }
+      logSlowApiRequest({
+        context,
+        elapsedMs: Date.now() - handlerStartedAt,
+        endpointId: endpoint.id,
+        method: request.method,
+        outcome: 'succeeded',
+        slowRequestLogged,
+        url: request.url,
+      });
 
       if (interrupt.signal.aborted || reply.raw.destroyed) {
         return;
@@ -117,6 +174,30 @@ export function registerApiEndpoint<
       }
     },
   });
+}
+
+function logSlowApiRequest(input: {
+  readonly context: ApiRouteContext;
+  readonly elapsedMs: number;
+  readonly endpointId: string;
+  readonly method: string;
+  readonly outcome: 'aborted' | 'failed' | 'succeeded' | 'threw';
+  readonly slowRequestLogged: boolean;
+  readonly url: string;
+}) {
+  if (!input.slowRequestLogged && input.elapsedMs < slowApiRequestThresholdMs) return;
+  logDiagnosticEvent(
+    'api.request_completed',
+    {
+      endpointId: input.endpointId,
+      requestId: input.context.requestId,
+      method: input.method,
+      url: input.url,
+      outcome: input.outcome,
+      elapsedMs: input.elapsedMs,
+    },
+    input.outcome === 'succeeded' ? 'info' : 'warn',
+  );
 }
 
 function decodeParams<

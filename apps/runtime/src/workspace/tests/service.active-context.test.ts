@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 import { CommandService } from '../../commands/index.js';
 import { Git } from '../../git/index.js';
 import { DataDirectory, StateFile, stateFromActiveContext } from '../../persistence/index.js';
+import { PtyService } from '../../pty-processes/index.js';
 import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
@@ -24,6 +25,7 @@ import {
   testCommandService,
   testDataDirectory,
   testInternalEvents,
+  testPtyService,
   testSurfaceRepository,
   testSurfaceService,
   testWorktreeSetup,
@@ -49,6 +51,7 @@ test('active context persistence validates before writing state', async () => {
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -82,6 +85,7 @@ test('valid active context persistence writes after validation', async () => {
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -127,6 +131,7 @@ test('active context persistence publishes internal activation changes for accep
     }).pipe(
       Effect.provide(WorkspaceServiceLive),
       Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(PtyService, testPtyService),
       Effect.provideService(InternalRuntimeEventBus, internalEvents),
       Effect.provideService(WorkspaceRepository, repository),
       Effect.provideService(SurfaceRepository, testSurfaceRepository),

@@ -17,6 +17,7 @@ import {
   type WorkspaceState,
 } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
 import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
@@ -117,6 +118,22 @@ const testCommandService = {
   cleanupBeforeWorktreePrune: () => Effect.void,
   reconcileStaleRunningCommands: Effect.void,
 } satisfies CommandServiceShape;
+
+const testPtyService = {
+  launch: () => Effect.die('pty launch is not used by workspace snapshot tests'),
+  getAttachmentPlan: () =>
+    Effect.die('pty attachment planning is not used by workspace snapshot tests'),
+  attach: () => Effect.die('pty attach is not used by workspace snapshot tests'),
+  replay: () => Effect.die('pty replay is not used by workspace snapshot tests'),
+  write: () => Effect.die('pty write is not used by workspace snapshot tests'),
+  writeInput: () => Effect.die('pty write input is not used by workspace snapshot tests'),
+  resize: () => Effect.die('pty resize is not used by workspace snapshot tests'),
+  kill: () => Effect.void,
+  terminate: () => Effect.void,
+  pin: () => Effect.void,
+  unpin: () => Effect.void,
+  isPinned: () => Effect.succeed(false),
+} satisfies PtyServiceShape;
 
 const testInternalEvents = {
   publish: () => Effect.void,
@@ -241,6 +258,19 @@ test('workspace reads known rows without reconciling Git state', async () => {
       ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
+    readWorktreeDeleteDiagnostics: () =>
+      Effect.succeed({
+        agentSessionCount: 0,
+        agentSessionActivePtyProcessIds: [],
+        commandRunCount: 0,
+        commandRunPtyProcessIds: [],
+        commandStateCount: 0,
+        commandStateActivePtyProcessIds: [],
+        paneCount: 0,
+        surfaceCount: 0,
+        terminalSessionCount: 0,
+        terminalSessionActivePtyProcessIds: [],
+      }),
     insertProject: () => Effect.succeed(project.id),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
@@ -310,6 +340,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),

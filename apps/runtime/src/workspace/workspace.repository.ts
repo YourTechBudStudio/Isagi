@@ -1,4 +1,4 @@
-import { and, eq, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import {
@@ -6,7 +6,16 @@ import {
   RuntimeDatabase,
   type RuntimeDatabaseService,
 } from '../persistence/index.js';
-import { projects, worktrees } from '../persistence/schema.js';
+import {
+  agentSessions,
+  projects,
+  surfacePanes,
+  terminalSessions,
+  worktreeCommandRuns,
+  worktreeCommandStates,
+  worktrees,
+  worktreeSurfaces,
+} from '../persistence/schema.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 
 type ProjectRecord = InferSelectModel<typeof projects>;
@@ -17,6 +26,19 @@ type ReconciledWorktreeSummary = Pick<WorktreeRow, 'id' | 'path' | 'branch'>;
 export interface WorkspaceReconcileProjectWorktreesResult {
   readonly added: readonly ReconciledWorktreeSummary[];
   readonly missing: readonly ReconciledWorktreeSummary[];
+}
+
+export interface WorktreeDeleteDiagnostics {
+  readonly agentSessionCount: number;
+  readonly agentSessionActivePtyProcessIds: readonly number[];
+  readonly commandRunCount: number;
+  readonly commandRunPtyProcessIds: readonly number[];
+  readonly commandStateCount: number;
+  readonly commandStateActivePtyProcessIds: readonly number[];
+  readonly paneCount: number;
+  readonly surfaceCount: number;
+  readonly terminalSessionCount: number;
+  readonly terminalSessionActivePtyProcessIds: readonly number[];
 }
 
 export interface WorkspaceRepositoryService {
@@ -39,6 +61,9 @@ export interface WorkspaceRepositoryService {
   }) => Effect.Effect<WorktreeRow | null, DatabaseError>;
   readonly deleteProject: (projectId: number) => Effect.Effect<boolean, DatabaseError>;
   readonly deleteWorktree: (worktreeId: number) => Effect.Effect<boolean, DatabaseError>;
+  readonly readWorktreeDeleteDiagnostics: (
+    worktreeId: number,
+  ) => Effect.Effect<WorktreeDeleteDiagnostics, DatabaseError>;
   readonly insertProject: (input: {
     readonly name: string;
     readonly rootPath: string;
@@ -128,6 +153,70 @@ export const WorkspaceRepositoryLive = Layer.effect(
         database.use('delete_worktree', (db) => {
           const result = db.delete(worktrees).where(eq(worktrees.id, worktreeId)).run();
           return result.changes > 0;
+        }),
+      readWorktreeDeleteDiagnostics: (worktreeId) =>
+        database.use('read_worktree_delete_diagnostics', (db) => {
+          const surfaces = db
+            .select({ id: worktreeSurfaces.id })
+            .from(worktreeSurfaces)
+            .where(eq(worktreeSurfaces.worktreeId, worktreeId))
+            .all();
+          const surfaceIds = surfaces.map((surface) => surface.id);
+          const panes =
+            surfaceIds.length === 0
+              ? []
+              : db
+                  .select({ id: surfacePanes.id })
+                  .from(surfacePanes)
+                  .where(inArray(surfacePanes.surfaceId, surfaceIds))
+                  .all();
+          const agents = db
+            .select({
+              activePtyProcessId: agentSessions.activePtyProcessId,
+            })
+            .from(agentSessions)
+            .where(eq(agentSessions.worktreeId, worktreeId))
+            .all();
+          const terminals = db
+            .select({
+              activePtyProcessId: terminalSessions.activePtyProcessId,
+            })
+            .from(terminalSessions)
+            .where(eq(terminalSessions.worktreeId, worktreeId))
+            .all();
+          const commandStates = db
+            .select({
+              activePtyProcessId: worktreeCommandStates.activePtyProcessId,
+            })
+            .from(worktreeCommandStates)
+            .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+            .all();
+          const commandRuns = db
+            .select({
+              ptyProcessId: worktreeCommandRuns.ptyProcessId,
+            })
+            .from(worktreeCommandRuns)
+            .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
+            .all();
+
+          return {
+            agentSessionCount: agents.length,
+            agentSessionActivePtyProcessIds: compactIds(
+              agents.map((agent) => agent.activePtyProcessId),
+            ),
+            commandRunCount: commandRuns.length,
+            commandRunPtyProcessIds: compactIds(commandRuns.map((run) => run.ptyProcessId)),
+            commandStateCount: commandStates.length,
+            commandStateActivePtyProcessIds: compactIds(
+              commandStates.map((state) => state.activePtyProcessId),
+            ),
+            paneCount: panes.length,
+            surfaceCount: surfaces.length,
+            terminalSessionCount: terminals.length,
+            terminalSessionActivePtyProcessIds: compactIds(
+              terminals.map((terminal) => terminal.activePtyProcessId),
+            ),
+          } satisfies WorktreeDeleteDiagnostics;
         }),
       insertProject: (input) =>
         database.use('insert_project', (db) => {
@@ -298,6 +387,10 @@ function worktreeRow(row: WorktreeRecord): WorktreeRow {
 
 function timestamp() {
   return new Date().toISOString();
+}
+
+function compactIds(ids: readonly (number | null)[]) {
+  return ids.filter((id): id is number => id !== null);
 }
 
 type RuntimeDatabaseConnection = Parameters<

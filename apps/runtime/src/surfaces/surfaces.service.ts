@@ -22,7 +22,13 @@ import { displayNameForHarness } from '../agent-sessions/harness/display.js';
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
 import type { DatabaseError } from '../persistence/index.js';
-import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js';
+import {
+  activePtyProcessIdsForSessions,
+  PtyService,
+  terminatePtyProcessIds,
+  type PtyServiceShape,
+} from '../pty-processes/index.js';
+import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
@@ -731,42 +737,18 @@ function sessionsForPaneIds(repository: SurfaceRepositoryService, paneIds: reado
 }
 
 function terminateDeletedPanePtys(
-  pty: import('../pty-processes/pty.service.js').PtyService,
+  pty: PtyServiceShape,
   sessions: {
     readonly agents: readonly AgentSessionRow[];
     readonly terminals: readonly TerminalSessionRow[];
   },
 ) {
-  const activePtyProcessIds = [
-    ...new Set([
-      ...sessions.agents.flatMap((session) => activePtyProcessIdForTermination(session)),
-      ...sessions.terminals.flatMap((session) => activePtyProcessIdForTermination(session)),
-    ]),
-  ];
-
-  return Effect.all(
-    activePtyProcessIds.map((ptyProcessId) =>
-      pty.terminate({ ptyProcessId, gracefulTimeoutMs: 1_000 }).pipe(
-        Effect.catchAll((error) =>
-          Effect.sync(() => {
-            console.warn(
-              `[runtime] Failed to terminate PTY process for deleted pane ptyProcessId=${ptyProcessId}`,
-              error,
-            );
-          }),
-        ),
-      ),
-    ),
-    { discard: true, concurrency: 'unbounded' },
-  );
-}
-
-function activePtyProcessIdForTermination(
-  session: AgentSessionRow | TerminalSessionRow,
-): readonly number[] {
-  if (!session.activePtyProcessId) return [];
-  const status = session.activePtyProcess?.status ?? null;
-  return status === 'starting' || status === 'running' ? [session.activePtyProcessId] : [];
+  return terminatePtyProcessIds(pty, {
+    failurePolicy: 'best_effort',
+    gracefulTimeoutMs: 1_000,
+    operation: 'surface_delete',
+    ptyProcessIds: activePtyProcessIdsForSessions(sessions),
+  }).pipe(Effect.catchAll(() => Effect.void));
 }
 
 function publishSurfaceChanged(

@@ -217,6 +217,7 @@ function worktreeDeleteRejectionReason(error: WorkspaceError) {
     case 'dirty_checkout_requires_force':
     case 'root_worktree_not_found':
     case 'command_cleanup_failed':
+    case 'pty_teardown_failed':
       return error.code;
     default:
       return 'project_not_found';

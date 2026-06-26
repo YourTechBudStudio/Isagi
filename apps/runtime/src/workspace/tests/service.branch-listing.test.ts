@@ -9,6 +9,7 @@ import { Effect } from 'effect';
 import { CommandService } from '../../commands/index.js';
 import { Git, type GitService } from '../../git/index.js';
 import { DataDirectory, StateFile } from '../../persistence/index.js';
+import { PtyService } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { SurfaceService, SurfaceRepository } from '../../surfaces/index.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
@@ -22,6 +23,7 @@ import {
   testCommandService,
   testDataDirectory,
   testInternalEvents,
+  testPtyService,
   testSurfaceRepository,
   testSurfaceService,
   testWorktreeSetup,
@@ -70,6 +72,7 @@ test('project branch listing rejects a present project whose path disappeared be
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
@@ -116,6 +119,7 @@ test('project branch listing combines local branches with known open worktrees',
       }).pipe(
         Effect.provide(WorkspaceServiceLive),
         Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
         Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
         Effect.provideService(WorkspaceRepository, repository),
         Effect.provideService(SurfaceRepository, testSurfaceRepository),
