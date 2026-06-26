@@ -129,33 +129,45 @@ export const worktreeSetupTrustOutputSchema = Schema.Struct({
   hash: Schema.optional(Schema.String),
 });
 
+// Single source of truth for each setup-status shape. Both worktreeSetupResult
+// (the runner's return) and openWorktreeOutput (the wire response that spreads
+// it) compose these same structs, so a field only ever needs adding in one
+// place — without this, a field added to one copy and missed in the other would
+// pass `satisfies` and then be silently dropped by the encoder.
+const worktreeSetupNotRunSchema = Schema.Struct({
+  status: Schema.Literal('not_run'),
+  reason: Schema.Literal('existing_worktree'),
+});
+
+const worktreeSetupSkippedSchema = Schema.Struct({
+  status: Schema.Literal('skipped'),
+  reason: Schema.Literal('not_configured', 'hooks_disabled'),
+});
+
+const worktreeSetupSucceededSchema = Schema.Struct({
+  status: Schema.Literal('succeeded'),
+  runId: positiveIntegerSchema,
+});
+
+const worktreeSetupFailedSchema = Schema.Struct({
+  status: Schema.Literal('failed'),
+  runId: positiveIntegerSchema,
+  failedHookIndex: positiveIntegerSchema,
+  failedHookType: worktreeSetupHookTypeSchema,
+  message: Schema.String,
+  command: Schema.optional(Schema.String),
+  src: Schema.optional(Schema.String),
+  dest: Schema.optional(Schema.String),
+  exitCode: Schema.optional(Schema.NullOr(Schema.Number.pipe(Schema.int()))),
+  signal: Schema.optional(Schema.NullOr(Schema.String)),
+  outputExcerpt: Schema.optional(Schema.String),
+});
+
 export const worktreeSetupResultSchema = Schema.Union(
-  Schema.Struct({
-    status: Schema.Literal('not_run'),
-    reason: Schema.Literal('existing_worktree'),
-  }),
-  Schema.Struct({
-    status: Schema.Literal('skipped'),
-    reason: Schema.Literal('not_configured', 'hooks_disabled'),
-  }),
-  Schema.Struct({
-    status: Schema.Literal('succeeded'),
-    runId: positiveIntegerSchema,
-  }),
-  Schema.Struct({
-    status: Schema.Literal('failed'),
-    runId: positiveIntegerSchema,
-    failedHookIndex: positiveIntegerSchema,
-    failedHookType: worktreeSetupHookTypeSchema,
-    message: Schema.String,
-    command: Schema.optional(Schema.String),
-    src: Schema.optional(Schema.String),
-    dest: Schema.optional(Schema.String),
-    exitCode: Schema.optional(Schema.NullOr(Schema.Number.pipe(Schema.int()))),
-    signal: Schema.optional(Schema.NullOr(Schema.String)),
-    stdoutExcerpt: Schema.optional(Schema.String),
-    stderrExcerpt: Schema.optional(Schema.String),
-  }),
+  worktreeSetupNotRunSchema,
+  worktreeSetupSkippedSchema,
+  worktreeSetupSucceededSchema,
+  worktreeSetupFailedSchema,
 );
 
 export const openWorktreeStatusSchema = Schema.Literal(
@@ -170,46 +182,21 @@ export const openWorktreeOutputSchema = Schema.Union(
     worktreeId: positiveIntegerSchema,
     branch: Schema.String,
     status: Schema.Literal('opened_existing'),
-    setup: Schema.Struct({
-      status: Schema.Literal('not_run'),
-      reason: Schema.Literal('existing_worktree'),
-    }),
+    setup: worktreeSetupNotRunSchema,
   }),
   Schema.Struct({
     projectId: positiveIntegerSchema,
     worktreeId: positiveIntegerSchema,
     branch: Schema.String,
     status: Schema.Literal('created'),
-    setup: Schema.Union(
-      Schema.Struct({
-        status: Schema.Literal('skipped'),
-        reason: Schema.Literal('not_configured', 'hooks_disabled'),
-      }),
-      Schema.Struct({
-        status: Schema.Literal('succeeded'),
-        runId: positiveIntegerSchema,
-      }),
-    ),
+    setup: Schema.Union(worktreeSetupSkippedSchema, worktreeSetupSucceededSchema),
   }),
   Schema.Struct({
     projectId: positiveIntegerSchema,
     worktreeId: positiveIntegerSchema,
     branch: Schema.String,
     status: Schema.Literal('created_setup_failed'),
-    setup: Schema.Struct({
-      status: Schema.Literal('failed'),
-      runId: positiveIntegerSchema,
-      failedHookIndex: positiveIntegerSchema,
-      failedHookType: worktreeSetupHookTypeSchema,
-      message: Schema.String,
-      command: Schema.optional(Schema.String),
-      src: Schema.optional(Schema.String),
-      dest: Schema.optional(Schema.String),
-      exitCode: Schema.optional(Schema.NullOr(Schema.Number.pipe(Schema.int()))),
-      signal: Schema.optional(Schema.NullOr(Schema.String)),
-      stdoutExcerpt: Schema.optional(Schema.String),
-      stderrExcerpt: Schema.optional(Schema.String),
-    }),
+    setup: worktreeSetupFailedSchema,
   }),
 );
 

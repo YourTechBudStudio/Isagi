@@ -160,3 +160,51 @@ test('command hook timeout is recorded as a failed setup result', async () => {
     rmSync(worktreeRoot, { recursive: true, force: true });
   }
 });
+
+test('command hook failure captures merged, ANSI-stripped output', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
+  const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
+  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
+    {};
+
+  // Build a script that writes ANSI-colored lines to both stdout and stderr and
+  // exits non-zero. The escape (27) and newline (10) bytes are produced inside
+  // the subprocess so this test source stays free of literal control characters.
+  const ansiScript = [
+    'const e = String.fromCharCode(27), nl = String.fromCharCode(10);',
+    "process.stdout.write(e + '[31mout-line' + e + '[39m' + nl);",
+    "process.stderr.write(e + '[32merr-line' + e + '[39m' + nl);",
+    'process.exit(3);',
+  ].join(' ');
+
+  try {
+    const result = await Effect.runPromise(
+      runPostCreateSetup({
+        config: {
+          postCreate: [
+            { type: 'command', run: `node -e "${ansiScript}"`, cwd: '.', timeout: '30s', env: {} },
+          ],
+        },
+        hash: 'hash-ansi',
+        projectRootPath: projectRoot,
+        worktreeId: 11,
+        worktreePath: worktreeRoot,
+      }).pipe(Effect.provideService(WorktreeSetupRepository, capturingRepository(captured))),
+    );
+
+    assert.equal(result.status, 'failed');
+    const outputExcerpt = result.status === 'failed' ? (result.outputExcerpt ?? '') : '';
+    // Both streams are captured in one excerpt...
+    assert.match(outputExcerpt, /out-line/);
+    assert.match(outputExcerpt, /err-line/);
+    // ...with ANSI escape sequences stripped out.
+    assert.equal(outputExcerpt.includes(String.fromCharCode(27)), false);
+    assert.doesNotMatch(outputExcerpt, /\[3\dm/);
+    // The exit summary lands in `message`, not the output body.
+    assert.match(result.status === 'failed' ? result.message : '', /exited with 3/i);
+    assert.equal(captured.input?.steps[0]?.outputExcerpt, outputExcerpt);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(worktreeRoot, { recursive: true, force: true });
+  }
+});

@@ -180,8 +180,7 @@ CREATE TABLE `worktree_setup_steps` (
 	`dest` text,
 	`exit_code` integer,
 	`signal` text,
-	`stdout_excerpt` text,
-	`stderr_excerpt` text,
+	`output_excerpt` text,
 	FOREIGN KEY (`run_id`) REFERENCES `worktree_setup_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
