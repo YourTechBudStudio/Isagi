@@ -30,6 +30,7 @@ export function buildPiLaunch(
         dependencies.extensionPath,
       ],
       cwd: input.cwd,
+      launchMode: 'user_shell' as const,
       envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
@@ -59,6 +60,7 @@ export function buildPiHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
         input.prompt,
       ],
       cwd: input.cwd,
+      launchMode: 'user_shell' as const,
     };
   });
 }

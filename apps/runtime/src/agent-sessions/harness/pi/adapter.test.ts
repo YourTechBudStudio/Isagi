@@ -38,6 +38,7 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
     assert.deepEqual(launch.args, ['-e', artifacts.piExtensionPath]);
     assert.equal(launch.args.includes('--no-extensions'), false);
     assert.equal(launch.cwd, '/repo/isagi');
+    assert.equal(launch.launchMode, 'user_shell');
 
     const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
     assert.match(extensionSource, /agent_start/);
@@ -218,6 +219,7 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
   assert.equal(launch.command, 'opencode');
   assert.deepEqual(launch.args, []);
   assert.equal(launch.cwd, '/repo/isagi');
+  assert.equal(launch.launchMode, 'user_shell');
 
   const env = (await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
@@ -279,6 +281,7 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
   ]);
   assert.equal(launch.args.includes('--session-id'), false);
   assert.equal(launch.cwd, '/repo/isagi');
+  assert.equal(launch.launchMode, 'user_shell');
 
   const env = await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
@@ -315,6 +318,7 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   assert.match(launch.args.join(' '), /hooks\.Stop/);
   assert.match(launch.args.join(' '), /isagi-codex-hook\.mjs/);
   assert.equal(launch.cwd, '/repo/isagi');
+  assert.equal(launch.launchMode, 'user_shell');
 
   const env = await Effect.runPromise(
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
@@ -464,6 +468,7 @@ test('headless harness adapters build non-interactive launch envelopes', async (
     'judge this',
   ]);
   assert.equal(pi.cwd, '/repo/isagi');
+  assert.equal(pi.launchMode, 'user_shell');
 
   const claude = await Effect.runPromise(
     buildClaudeHeadlessLaunch({
@@ -486,6 +491,7 @@ test('headless harness adapters build non-interactive launch envelopes', async (
     'judge this',
   ]);
   assert.equal(claude.cwd, '/repo/isagi');
+  assert.equal(claude.launchMode, 'user_shell');
 
   const codex = await Effect.runPromise(
     buildCodexHeadlessLaunch({
@@ -509,6 +515,7 @@ test('headless harness adapters build non-interactive launch envelopes', async (
     'judge this',
   ]);
   assert.equal(codex.cwd, '/repo/isagi');
+  assert.equal(codex.launchMode, 'user_shell');
 
   const opencode = await Effect.runPromise(
     buildOpenCodeHeadlessLaunch({
@@ -533,6 +540,7 @@ test('headless harness adapters build non-interactive launch envelopes', async (
     'judge this',
   ]);
   assert.equal(opencode.cwd, '/repo/isagi');
+  assert.equal(opencode.launchMode, 'user_shell');
 });
 
 function fakeArtifacts(root: string): AgentSessionArtifactsService {

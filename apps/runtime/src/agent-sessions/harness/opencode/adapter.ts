@@ -33,6 +33,7 @@ export function buildOpenCodeLaunch(
         ...(input.effort ? ['--variant', input.effort] : []),
       ],
       cwd: input.cwd,
+      launchMode: 'user_shell' as const,
       envForProcess: ({ ptyProcessId }: { readonly ptyProcessId: number }) =>
         harnessEnvForProcess({
           agentSessionId: input.agentSessionId,
@@ -66,6 +67,7 @@ export function buildOpenCodeHeadlessLaunch(input: HarnessHeadlessLaunchContext)
         input.prompt,
       ],
       cwd: input.cwd,
+      launchMode: 'user_shell' as const,
     };
   });
 }

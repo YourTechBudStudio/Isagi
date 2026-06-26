@@ -186,11 +186,14 @@ export interface LaunchPtyProcessInput {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly launchMode?: PtyLaunchMode | undefined;
   readonly shellIntegration?: boolean | undefined;
   readonly envForProcess?:
     | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
     | undefined;
 }
+
+export type PtyLaunchMode = 'direct' | 'user_shell';
 
 export interface PtyProcessLaunchMetadata {
   readonly ptyProcessId: number;

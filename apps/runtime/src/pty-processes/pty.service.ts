@@ -21,6 +21,7 @@ import {
 import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
 import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
 import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
+import { backendLaunchCommand } from './service/launch-mode.js';
 import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
 import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
 import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
@@ -169,8 +170,17 @@ export const PtyServiceLive = Layer.scoped(
           const baseEnv = input.envForProcess
             ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
             : (input.env ?? launchEnv());
-          const launch = prepareShellIntegration({
+          const backendCommand = backendLaunchCommand({
             launch: input,
+            env: baseEnv,
+          });
+          const launch = prepareShellIntegration({
+            launch: {
+              ...input,
+              command: backendCommand.command,
+              args: backendCommand.args,
+              launchMode: 'direct',
+            },
             ptyProcessId,
             sessionsPath: directory.paths.sessionsPath,
             env: baseEnv,
