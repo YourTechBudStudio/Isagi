@@ -1,10 +1,4 @@
-import {
-  defaultOptionIndex,
-  firstUnfilledStep,
-  labelForValue,
-  nextVisibleStep,
-  prevVisibleStep,
-} from './model.js';
+import { firstUnfilledStep, labelForValue, nextVisibleStep, prevVisibleStep } from './model.js';
 import type {
   ArgPayloads,
   ArgSpec,
@@ -126,7 +120,6 @@ type ClosedStateBody = {
 type SearchStateBody = {
   readonly kind: 'search';
   readonly query: string;
-  readonly selectedIndex: number | null;
   readonly inlineError: string | null;
   readonly preflightAttemptId: number | null;
   readonly runAttemptId: number | null;
@@ -137,7 +130,6 @@ type StepStateBody = {
   readonly kind: 'step';
   readonly flow: PaletteFlow;
   readonly query: string;
-  readonly selectedIndex: number | null;
   readonly stepData: StepData;
   readonly inlineError: string | null;
   readonly runAttemptId: number | null;
@@ -180,13 +172,6 @@ export type PaletteEvent =
     }
   | { readonly type: 'effects-consumed'; readonly ids: readonly number[] }
   | { readonly type: 'query-changed'; readonly query: string; readonly spec?: ArgSpec | undefined }
-  | {
-      readonly type: 'view-snap';
-      readonly viewKey: string;
-      readonly length: number;
-      readonly defaultIndex: number | null;
-    }
-  | { readonly type: 'move-selection'; readonly delta: number; readonly length: number }
   | { readonly type: 'activate-entry'; readonly entry: PaletteEntry; readonly ctx: PaletteContext }
   | {
       readonly type: 'preflight-succeeded';
@@ -289,12 +274,6 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
     case 'query-changed':
       return queryChanged(state, event.query, event.spec);
 
-    case 'view-snap':
-      return snapSelection(state, event.viewKey, event.length, event.defaultIndex);
-
-    case 'move-selection':
-      return moveSelection(state, event.delta, event.length);
-
     case 'activate-entry':
       return activateEntry(state, event.entry, event.ctx);
 
@@ -393,12 +372,6 @@ export function initialTextQuery(
   return spec?.kind === 'text' ? (values[spec.key] ?? spec.default?.(ctx, values) ?? '') : '';
 }
 
-export function stepDefaultIndex(spec: ArgSpec | null, options: readonly Option[]) {
-  return spec && (spec.kind === 'select' || spec.kind === 'combo')
-    ? defaultOptionIndex(spec, options)
-    : 0;
-}
-
 function withBase(previous: PaletteState, next: PaletteStateBody): PaletteState {
   return {
     ...next,
@@ -412,7 +385,6 @@ function searchState(_state: PaletteState): SearchStateBody {
   return {
     kind: 'search',
     query: '',
-    selectedIndex: 0,
     inlineError: null,
     preflightAttemptId: null,
     runAttemptId: null,
@@ -451,7 +423,6 @@ function startPreflight(
     {
       kind: 'search',
       query: state.kind === 'search' ? state.query : '',
-      selectedIndex: state.kind === 'search' ? state.selectedIndex : 0,
       inlineError: null,
       preflightAttemptId: attemptId,
       runAttemptId: null,
@@ -575,7 +546,6 @@ function enterStep(
       kind: 'step',
       flow,
       query,
-      selectedIndex: 0,
       stepData,
       inlineError,
       runAttemptId: null,
@@ -672,7 +642,6 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
   const next = {
     ...state,
     query,
-    selectedIndex: null,
     inlineError: null,
     lastFilledPath: null,
     nextAttemptId,
@@ -686,33 +655,6 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
     },
   };
   return enqueue(next, { kind: 'suggestPaths', attemptId, query });
-}
-
-function snapSelection(
-  state: PaletteState,
-  viewKey: string,
-  length: number,
-  defaultIndex: number | null,
-): PaletteState {
-  if (state.kind !== 'search' && state.kind !== 'step') {
-    return state;
-  }
-  if (state.viewKey === viewKey) {
-    return state;
-  }
-  const selectedIndex =
-    defaultIndex === null ? null : state.query === '' ? defaultIndex : length > 0 ? 0 : null;
-  return { ...state, viewKey, selectedIndex };
-}
-
-function moveSelection(state: PaletteState, delta: number, length: number): PaletteState {
-  if ((state.kind !== 'search' && state.kind !== 'step') || length === 0) {
-    return state;
-  }
-  if (state.selectedIndex === null) {
-    return { ...state, selectedIndex: delta < 0 ? length - 1 : 0 };
-  }
-  return { ...state, selectedIndex: (state.selectedIndex + delta + length) % length };
 }
 
 function acceptValue(
@@ -768,7 +710,6 @@ function fillPath(state: PaletteState, path: string): PaletteState {
   const next = {
     ...state,
     query: path,
-    selectedIndex: null,
     lastFilledPath: path,
     nextAttemptId,
     stepData: {
@@ -1011,7 +952,6 @@ function updatePaths(
   }
   return {
     ...state,
-    selectedIndex: input.suggestions.length > 0 ? 0 : null,
     stepData: {
       ...state.stepData,
       suggestions: input.suggestions,

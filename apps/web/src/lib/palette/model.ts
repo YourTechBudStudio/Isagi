@@ -68,7 +68,12 @@ export function computeStepOptions(
   return result;
 }
 
-export function defaultOptionIndex(spec: ArgSpec, options: readonly Option[]): number | null {
+export function defaultOptionIndex(
+  spec: ArgSpec,
+  // Only the default flag is read, so this accepts both command `Option`s and
+  // the presentational `InputFlowOption`s the palette renders.
+  options: readonly { readonly isDefault?: boolean | undefined }[],
+): number | null {
   if ((spec.kind === 'select' || spec.kind === 'combo') && spec.defaultSelection === 'none') {
     return null;
   }

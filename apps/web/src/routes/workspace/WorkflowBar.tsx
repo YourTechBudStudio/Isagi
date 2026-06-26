@@ -24,7 +24,7 @@ import { Tooltip } from '../../components/Tooltip.js';
 import { workflowCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import type { PtyStreamConnectionState } from '../../lib/workspace/pty-stream/connection.js';
-import { type WorkflowQuestionAnswers, WorkflowQuestionForm } from './WorkflowQuestionForm.js';
+import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export interface WorkflowBarProps {
   readonly summary: WorkflowSurfaceSummary;
@@ -39,7 +39,7 @@ export interface WorkflowBarProps {
   readonly onCancel: () => void;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
-  readonly onAdvance: (runId: number, answers?: WorkflowQuestionAnswers) => void;
+  readonly onAdvance: (runId: number, answers?: WorkflowInputAnswers) => void;
 }
 
 export type WorkflowBarAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'dismiss' | 'advance';
@@ -386,7 +386,7 @@ function WorkflowPrompt({
 }: {
   readonly prompt: NonNullable<WorkflowSurfaceSummary['prompt']>;
   readonly busy: boolean;
-  readonly onAdvance: (runId: number, answers?: WorkflowQuestionAnswers) => void;
+  readonly onAdvance: (runId: number, answers?: WorkflowInputAnswers) => void;
 }) {
   return (
     <motion.div
@@ -409,9 +409,10 @@ function WorkflowPrompt({
             </button>
           </div>
         ) : (
-          <WorkflowQuestionForm
+          <WorkflowInputFlow
             questions={prompt.questions}
             disabled={busy}
+            autoFocus
             onSubmit={(answers) => onAdvance(prompt.runId, answers)}
           />
         )}

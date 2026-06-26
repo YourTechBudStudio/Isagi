@@ -14,24 +14,13 @@ const ctx: PaletteContext = {
   activePaneId: null,
 };
 
-test('opens into search and tracks query/selection movement', () => {
+test('opens into search and tracks query', () => {
   let state = paletteReducer(initialPaletteState, { type: 'opened' });
   assert.equal(state.kind, 'search');
 
   state = paletteReducer(state, { type: 'query-changed', query: 'open' });
   assert.equal(state.kind, 'search');
   assert.equal(state.query, 'open');
-
-  state = paletteReducer(state, {
-    type: 'view-snap',
-    viewKey: 'search:open:3:0',
-    length: 3,
-    defaultIndex: 0,
-  });
-  state = paletteReducer(state, { type: 'move-selection', delta: 1, length: 3 });
-
-  assert.equal(state.kind, 'search');
-  assert.equal(state.selectedIndex, 1);
 });
 
 test('activation preflights commands and ignores stale completions', () => {
@@ -319,7 +308,6 @@ test('path queries keep previous suggestions while loading newer results', () =>
   assert.equal(state.stepData.kind, 'path');
   assert.equal(state.stepData.loading, true);
   assert.equal(state.stepData.suggestionsQuery, '');
-  assert.equal(state.selectedIndex, null);
   assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi', path: '/repo/isagi' }]);
   const secondAttempt = state.stepData.attemptId;
 
@@ -341,7 +329,6 @@ test('path queries keep previous suggestions while loading newer results', () =>
   assert.equal(state.stepData.kind, 'path');
   assert.equal(state.stepData.loading, false);
   assert.equal(state.stepData.suggestionsQuery, '/repo/i');
-  assert.equal(state.selectedIndex, 0);
   assert.deepEqual(state.stepData.suggestions, [{ label: 'isagi-web', path: '/repo/isagi-web' }]);
 });
 

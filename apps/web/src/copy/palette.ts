@@ -35,6 +35,12 @@ export const paletteCopy = {
   wizardStep: {
     loading: 'Loading\u2026',
   },
+  flow: {
+    continue: 'Continue',
+    multiSelectHint: 'Space to select, Enter to continue.',
+    requiredField: 'Answer this before continuing.',
+    requiredConfirm: 'Confirm this before continuing.',
+  },
   outcome: {
     resultLabel: 'Result',
     errorLabel: 'Could not run command',

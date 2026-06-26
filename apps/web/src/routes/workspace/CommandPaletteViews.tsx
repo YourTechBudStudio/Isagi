@@ -26,10 +26,12 @@ export function outcomeActions(content: CommandResultContent | CommandErrorConte
 export function OutcomePanel({
   content,
   kind,
+  sel = null,
   onAction,
 }: {
   content: CommandResultContent | CommandErrorContent;
   kind: 'result' | 'error';
+  sel?: number | null;
   onAction: (value: string) => void;
 }) {
   const tone = kind === 'error' ? (content.tone ?? 'danger') : (content.tone ?? 'info');
@@ -53,12 +55,14 @@ export function OutcomePanel({
         )}
       </div>
       <div className="mt-3 flex justify-end gap-2">
-        {outcomeActions(content).map((action) => (
+        {outcomeActions(content).map((action, index) => (
           <button
             key={action.value}
             type="button"
             onClick={() => onAction(action.value)}
-            className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)}`}
+            className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)} ${
+              index === sel ? 'ring-1 ring-line/60' : ''
+            }`}
           >
             {action.label}
           </button>
@@ -476,6 +480,8 @@ export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' | '
         <span className="opacity-70">{paletteCopy.running.tip}</span>
       ) : mode === 'outcome' ? (
         <>
+          <TipKey hint={paletteCopy.tips.move}>↑↓</TipKey>
+          <TipKey hint={paletteCopy.tips.run}>↵</TipKey>
           <TipKey hint={paletteCopy.tips.close}>esc</TipKey>
         </>
       ) : mode === 'path' ? (
