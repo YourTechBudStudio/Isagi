@@ -82,7 +82,7 @@ test('beginAttach drops output buffered for a previous stream before connect', (
   assert.deepEqual(attached.writes, ['new']);
 });
 
-test('input and resize are gated on an open interactive socket', () => {
+test('input requires interactivity, while resize only requires an open socket', () => {
   const transport = createPtyStreamTransport();
   const open = createOpenSocket();
 
@@ -95,6 +95,7 @@ test('input and resize are gated on an open interactive socket', () => {
   transport.sendResize(120, 40);
 
   assert.deepEqual(open.sent, [
+    JSON.stringify({ type: 'resize', cols: 80, rows: 24 }),
     JSON.stringify({ type: 'input', data: 'a' }),
     JSON.stringify({ type: 'resize', cols: 120, rows: 40 }),
   ]);

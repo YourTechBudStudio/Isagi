@@ -239,8 +239,7 @@ export function CommandPalette() {
   // A command's async run (or a workflow launch) is in flight. The machine stays
   // in search/step while the run effect resolves, so without this the palette
   // would keep rendering the frozen list/wizard with no sign of progress.
-  const running =
-    isBusy(machine) || (startWorkflowMutation.isPending && workflowFormEntryId === null);
+  const running = isBusy(machine) || startWorkflowMutation.isPending;
 
   const view = useMemo(() => {
     if (running) {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,6 +7,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { Effect, Either, Layer } from 'effect';
 
+import type { WorkflowEvent } from '@isagi/contracts';
 import { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 
 import {
@@ -72,7 +73,8 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
         const summary = yield* engine.drainOnce;
         const completed = yield* repository.findRun(run.id);
         const uiFeedback = yield* ledger.latestUiFeedbackForRunTree(run.id);
-        return { summary, completed, uiFeedback };
+        const events = readWorkflowLedgerEvents(ledger.pathForRun(run.id));
+        return { summary, completed, events, uiFeedback };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -87,6 +89,18 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
       phase: 'almost_done',
       message: 'Agentless workflow advanced.',
     });
+    assert.deepEqual(
+      result.events.filter((event) => event.type === 'lifecycle').map((event) => event.event),
+      ['done'],
+    );
+    // Per-step narration (claimed/executing/returned/persisted) is debug-level and
+    // gated off by default; the done milestone stays at info.
+    assert.ok(
+      result.events.some(
+        (event) =>
+          event.type === 'log' && event.level === 'info' && event.message.includes('completed'),
+      ),
+    );
     assert.equal(result.completed?.owner, null);
     assert.equal(result.completed?.waitKind, null);
     assert.equal(result.completed?.waitCondition, null);
@@ -1202,6 +1216,57 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
   }
 });
 
+test('setPaused(false) re-arms a paused workflow JOIN whose children have not all terminated', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-join-continue-pending-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        // A still-running child (off any surface, so the parent's surface resume does
+        // not reach it) keeps the join pending.
+        const child = yield* repository.createRun({
+          workflowKey: 'child-pending',
+          workflowTitle: 'child-pending',
+          state: { phase: 'running' },
+          stateVersion: 1,
+          worktreeId: 1,
+        });
+        const parent = yield* repository.createRun({
+          workflowKey: 'parent-pending',
+          workflowTitle: 'parent-pending',
+          state: { phase: 'waiting' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, parent.id);
+        yield* repository.completeSuspend({
+          runId: parent.id,
+          state: { phase: 'waiting' },
+          waitKind: 'workflow',
+          waitCondition: { kind: 'workflow', runIds: [child.id] },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        return {
+          parent: yield* repository.findRun(parent.id),
+          child: yield* repository.findRun(child.id),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    // The join is unsatisfied, so continuing must re-arm the wait rather than resume
+    // or fail it, and must leave the off-surface child parked (still paused).
+    assert.equal(result.parent?.status, 'waiting');
+    assert.equal(result.parent?.waitKind, 'workflow');
+    assert.equal(result.parent?.resumePayload, null);
+    assert.equal(result.child?.paused, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('startup recoverer parks ready rows before the dispatcher startup drain', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-startup-drain-'));
   try {
@@ -1848,6 +1913,89 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
   }
 });
 
+test('setPaused(false) reconciles turn edges that land while rearming a paused run', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-turn-race-'));
+  let edgeReads = 0;
+  const terminalEdges: readonly ObservedHarnessTurnEdge[] = [
+    {
+      type: 'turn_started',
+      agentSessionId: 10,
+      harnessSessionId: 'harness-a',
+      seq: 0,
+      recordedAt: '2026-06-18T00:00:11.000Z',
+    },
+    {
+      type: 'turn_ended',
+      agentSessionId: 10,
+      harnessSessionId: 'harness-a',
+      seq: 0,
+      recordedAt: '2026-06-18T00:00:12.000Z',
+    },
+  ];
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'turn',
+          waitCondition: {
+            kind: 'turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            afterT: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        return yield* repository.findRun(run.id);
+      }).pipe(
+        Effect.provide(
+          workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, createWorkflowRegistry()), {
+            artifacts: fakeAgentSessionArtifacts({
+              status: 'valid',
+              metadata: {
+                schemaVersion: 1,
+                harnessSessionId: 'harness-a',
+                updatedAt: '2026-06-18T00:00:00.000Z',
+              },
+              metadataPath: '',
+            }),
+            observer: {
+              ...fakeHarnessLedgerObserver(),
+              getTurnEdges: () =>
+                Effect.sync(() => {
+                  edgeReads += 1;
+                  return edgeReads === 1 ? [] : terminalEdges;
+                }),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.waitKind, null);
+    assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
+      outcome: 'ended',
+      recordedAt: '2026-06-18T00:00:12.000Z',
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('setPaused(false) fails a paused turn run when the harness session pin mismatches', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-pin-mismatch-'));
   try {
@@ -2019,6 +2167,95 @@ test('setPaused(false) reissues paused headless waits without changing the persi
         ],
       },
     ]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('setPaused(false) reconciles a headless result that completes while rearming', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-headless-race-'));
+  let completed = false;
+  const released: string[][] = [];
+  try {
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'headless',
+          waitCondition: {
+            kind: 'headless',
+            ops: [
+              {
+                opId: 'headless:race-op',
+                launch: {
+                  harness: 'codex',
+                  prompt: 'inspect',
+                  timeoutMs: 600_000,
+                },
+              },
+            ],
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        return yield* repository.findRun(run.id);
+      }).pipe(
+        Effect.provide(
+          workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, createWorkflowRegistry()), {
+            headless: fakeWorkflowHeadless({
+              completedResults: () =>
+                Effect.sync(() =>
+                  completed
+                    ? [
+                        {
+                          opId: 'headless:race-op',
+                          status: 'completed',
+                          output: '{"ok":true}',
+                          exitCode: 0,
+                        } as const,
+                      ]
+                    : null,
+                ),
+              reissue: () =>
+                Effect.sync(() => {
+                  completed = true;
+                }),
+              releaseOps: (input) =>
+                Effect.sync(() => {
+                  released.push([...input.opIds]);
+                }),
+            }),
+          }),
+        ),
+      ),
+    );
+
+    assert.equal(row?.status, 'ready');
+    assert.equal(row?.waitKind, null);
+    assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
+      kind: 'headless',
+      results: [
+        {
+          opId: 'headless:race-op',
+          status: 'completed',
+          output: '{"ok":true}',
+          exitCode: 0,
+        },
+      ],
+    });
+    assert.deepEqual(released, [['headless:race-op']]);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -2502,7 +2739,8 @@ test('advance rejects invalid answers and leaves the run waiting', async () => {
 });
 
 test('inject resolves the active agent PTY and writes bracketed paste plus enter', async () => {
-  const writes: Array<{ ptyProcessId: number; data: string }> = [];
+  const startedAt = Date.now();
+  const writes: Array<{ ptyProcessId: number; data: string; elapsedMs: number }> = [];
   await Effect.runPromise(
     inject({
       agents: {
@@ -2513,7 +2751,7 @@ test('inject resolves the active agent PTY and writes bracketed paste plus enter
         ...fakePtyService(),
         writeInput: (input) =>
           Effect.sync(() => {
-            writes.push(input);
+            writes.push({ ...input, elapsedMs: Date.now() - startedAt });
           }),
       },
       observer: fakeHarnessLedgerObserver(),
@@ -2522,10 +2760,17 @@ test('inject resolves the active agent PTY and writes bracketed paste plus enter
     }),
   );
 
-  assert.deepEqual(writes, [
-    { ptyProcessId: 20, data: '\x1b[200~line 1\nline 2\x1b[201~' },
-    { ptyProcessId: 20, data: '\r' },
-  ]);
+  assert.deepEqual(
+    writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
+    [
+      { ptyProcessId: 20, data: '\x1b[200~line 1\nline 2\x1b[201~' },
+      { ptyProcessId: 20, data: '\r' },
+    ],
+  );
+  assert.ok(
+    writes[1]?.elapsedMs !== undefined && writes[1].elapsedMs >= 50,
+    'Enter should be paced after bracketed paste',
+  );
 });
 
 test('inject fails before writing when a turn is in flight', async () => {
@@ -2657,7 +2902,8 @@ test('chooseSpawnSplit deterministically appends under a column-start layout', (
 
 test('workflow ctx spawnSession splits the captured surface and returns paneId', async () => {
   const splitInputs: Parameters<SurfaceServiceShape['splitPane']>[0][] = [];
-  const writes: Array<{ ptyProcessId: number; data: string }> = [];
+  const startedAt = Date.now();
+  const writes: Array<{ ptyProcessId: number; data: string; elapsedMs: number }> = [];
   const ctx = workflowContext({
     repository: fakeWorkflowRepository(),
     run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
@@ -2726,7 +2972,7 @@ test('workflow ctx spawnSession splits the captured surface and returns paneId',
         }),
       writeInput: (input) =>
         Effect.sync(() => {
-          writes.push(input);
+          writes.push({ ...input, elapsedMs: Date.now() - startedAt });
         }),
     },
     artifacts: fakeAgentSessionArtifacts({
@@ -2759,10 +3005,21 @@ test('workflow ctx spawnSession splits the captured surface and returns paneId',
       },
     },
   ]);
-  assert.deepEqual(writes, [
-    { ptyProcessId: 20, data: '\x1b[200~seed\x1b[201~' },
-    { ptyProcessId: 20, data: '\r' },
-  ]);
+  assert.deepEqual(
+    writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
+    [
+      { ptyProcessId: 20, data: '\x1b[200~seed\x1b[201~' },
+      { ptyProcessId: 20, data: '\r' },
+    ],
+  );
+  assert.ok(
+    writes[0]?.elapsedMs !== undefined && writes[0].elapsedMs >= 400,
+    'spawn seed prompt should wait for startup and spawn settle before writing',
+  );
+  assert.ok(
+    writes[1]?.elapsedMs !== undefined && writes[1].elapsedMs - writes[0].elapsedMs >= 50,
+    'spawn seed Enter should be paced after bracketed paste',
+  );
 });
 
 test('workflow ctx spawnSession hard-fails when the run has no captured surface', async () => {
@@ -3059,6 +3316,13 @@ function databaseLayer(dataRoot: string) {
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectory));
   const seed = Layer.scopedDiscard(seedDefaultWorkspace).pipe(Layer.provide(database));
   return Layer.mergeAll(database, seed, dataDirectory);
+}
+
+function readWorkflowLedgerEvents(path: string) {
+  return readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as WorkflowEvent);
 }
 
 const seedDefaultWorkspace = Effect.gen(function* () {

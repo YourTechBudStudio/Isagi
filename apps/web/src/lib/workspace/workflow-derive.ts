@@ -1,9 +1,5 @@
 import type { AttentionState, WorkflowSurfaceSummary } from '@isagi/contracts';
 
-export function surfaceLockState(summary?: WorkflowSurfaceSummary | null): boolean {
-  return summary?.status === 'driving';
-}
-
 export function workflowSurfaceAttention(
   summary?: WorkflowSurfaceSummary | null,
 ): AttentionState | null {

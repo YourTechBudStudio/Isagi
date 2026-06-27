@@ -78,11 +78,13 @@ export function useWorkflowEventStream({
             return;
           }
           if (message.type === 'workflow_events_snapshot') {
-            setEvents([...message.events].sort(compareWorkflowEvents));
+            setEvents(capRecentEvents([...message.events].sort(compareWorkflowEvents)));
             return;
           }
           if (message.type === 'workflow_event_appended') {
-            setEvents((current) => [...current, message.event].sort(compareWorkflowEvents));
+            setEvents((current) =>
+              capRecentEvents([...current, message.event].sort(compareWorkflowEvents)),
+            );
           }
         });
         socket.addEventListener('close', () => {
@@ -127,6 +129,18 @@ export function decodeWorkflowEventsStreamMessage(
   } catch {
     return null;
   }
+}
+
+// Cap the in-memory buffer (and its per-append re-sort) so a long-running or fan-out
+// workflow can't grow it without bound. The panel is a recent-activity log, so the
+// most recent N events suffice; older lines scroll out. Keep this aligned with the
+// server snapshot cap in apps/runtime/src/workflows/api.ts.
+const maxBufferedWorkflowEvents = 1000;
+
+function capRecentEvents(events: readonly WorkflowEvent[]): readonly WorkflowEvent[] {
+  return events.length > maxBufferedWorkflowEvents
+    ? events.slice(events.length - maxBufferedWorkflowEvents)
+    : events;
 }
 
 function compareWorkflowEvents(left: WorkflowEvent, right: WorkflowEvent) {

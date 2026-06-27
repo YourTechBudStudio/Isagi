@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
@@ -41,15 +41,28 @@ export const WorkflowRegistryLive = Layer.effect(
 );
 
 export function createFilesystemWorkflowRegistry(workflowsPath: string): WorkflowRegistryService {
+  const loadedDefinitions = new Map<
+    string,
+    {
+      readonly signature: string;
+      readonly definition: WorkflowDefinition<unknown>;
+    }
+  >();
+
   return {
     get: (workflowKey) =>
       Effect.gen(function* () {
         const keys = yield* knownWorkflowKeys(workflowsPath);
         if (!keys.includes(workflowKey)) return null;
-        return yield* loadWorkflowDefinition({
+        const signature = yield* workflowDefinitionSignature(workflowsPath, workflowKey);
+        const cached = loadedDefinitions.get(workflowKey);
+        if (cached?.signature === signature) return cached.definition;
+        const definition = yield* loadWorkflowDefinition({
           workflowKey,
           indexPath: workflowIndexPath(workflowsPath, workflowKey),
         });
+        loadedDefinitions.set(workflowKey, { signature, definition });
+        return definition;
       }),
     knownKeys: knownWorkflowKeys(workflowsPath),
     addWorkflow: () =>
@@ -229,6 +242,46 @@ function knownWorkflowKeys(workflowsPath: string) {
 
 function workflowIndexPath(workflowsPath: string, workflowKey: string) {
   return join(workflowsPath, workflowKey, 'index.ts');
+}
+
+function workflowDefinitionSignature(workflowsPath: string, workflowKey: string) {
+  return Effect.try({
+    try: () => {
+      const workflowPath = join(workflowsPath, workflowKey);
+      return listWorkflowSourceFiles(workflowPath)
+        .map((path) => {
+          const stats = statSync(path);
+          return `${path}:${stats.mtimeMs}:${stats.size}`;
+        })
+        .join('\n');
+    },
+    catch: (cause) =>
+      new WorkflowRegistryError({
+        code: 'scan_failed',
+        message: `Could not fingerprint workflow ${workflowKey}.`,
+        cause,
+      }),
+  });
+}
+
+function listWorkflowSourceFiles(root: string): readonly string[] {
+  const files: string[] = [];
+  visitWorkflowSourceDirectory(root, files);
+  return files.sort();
+}
+
+function visitWorkflowSourceDirectory(path: string, files: string[]) {
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) {
+      visitWorkflowSourceDirectory(child, files);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith('.ts')) {
+      files.push(child);
+    }
+  }
 }
 
 export type WorkflowRegistryServiceError =

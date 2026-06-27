@@ -22,6 +22,13 @@ type TransportFailure = {
   readonly output?: string | undefined;
 };
 
+type AttachAttempt = {
+  readonly id: number;
+  readonly connectKey: string;
+  startTimer: ReturnType<typeof setTimeout> | null;
+  disposed: boolean;
+};
+
 export type UsePtyStreamInput<Message extends PtyStreamMessage> = {
   readonly enabled: boolean;
   readonly resetKey: string;
@@ -70,6 +77,9 @@ export function usePtyStream<Message extends PtyStreamMessage>({
   const onExitRef = useRef(onExit);
   const onResolveErrorRef = useRef(onResolveError);
   const onSocketErrorRef = useRef(onSocketError);
+  const initialInteractiveRef = useRef(initialInteractive);
+  const attemptRef = useRef<AttachAttempt | null>(null);
+  const nextAttemptIdRef = useRef(0);
 
   useEffect(() => {
     resolveUrlRef.current = resolveUrl;
@@ -78,7 +88,16 @@ export function usePtyStream<Message extends PtyStreamMessage>({
     onExitRef.current = onExit;
     onResolveErrorRef.current = onResolveError;
     onSocketErrorRef.current = onSocketError;
-  }, [decodeMessage, onDomainMessage, onExit, onResolveError, onSocketError, resolveUrl]);
+    initialInteractiveRef.current = initialInteractive;
+  }, [
+    decodeMessage,
+    initialInteractive,
+    onDomainMessage,
+    onExit,
+    onResolveError,
+    onSocketError,
+    resolveUrl,
+  ]);
 
   useEffect(() => {
     dispatch({ type: 'reset' });
@@ -100,97 +119,132 @@ export function usePtyStream<Message extends PtyStreamMessage>({
       return;
     }
 
-    let disposed = false;
+    const attempt: AttachAttempt = {
+      id: nextAttemptIdRef.current + 1,
+      connectKey,
+      startTimer: null,
+      disposed: false,
+    };
+    nextAttemptIdRef.current = attempt.id;
+    attemptRef.current = attempt;
+
+    const isCurrentAttempt = () =>
+      attemptRef.current?.id === attempt.id && attemptRef.current.connectKey === attempt.connectKey;
 
     dispatch({ type: 'connect_started' });
-    transport.beginAttach(initialInteractive);
+    transport.beginAttach(initialInteractiveRef.current);
 
-    void runRuntimeEffect(resolveUrlRef.current()).then(
-      (url) => {
-        if (disposed) {
-          return;
-        }
-        const socket = new WebSocket(url);
-        transport.bindSocket(socket);
+    // React StrictMode immediately tears down and re-runs effects in development;
+    // deferring the operational claim lets that probe cancel before it mints a token.
+    attempt.startTimer = setTimeout(() => {
+      attempt.startTimer = null;
+      if (attempt.disposed || !isCurrentAttempt()) {
+        return;
+      }
 
-        socket.addEventListener('open', () => {
-          dispatch({ type: 'socket_open' });
-          transport.handleOpen();
-        });
-        socket.addEventListener('message', (event) => {
-          const message = decodeMessageRef.current(event.data);
-          if (!message) {
-            transport.freeze();
-            dispatch({
-              type: 'errored',
-              notice: { kind: 'protocol', code: 'invalid_message' },
-            });
-            transport.closeSocket();
+      void runRuntimeEffect(resolveUrlRef.current()).then(
+        (url) => {
+          if (attempt.disposed || !isCurrentAttempt()) {
             return;
           }
-          switch (message.type) {
-            case 'output':
-              transport.pushOutput((message as unknown as { readonly data: string }).data);
+          const socket = new WebSocket(url);
+          transport.bindSocket(socket);
+
+          socket.addEventListener('open', () => {
+            if (attempt.disposed || !isCurrentAttempt()) {
               return;
-            case 'exit': {
-              const exit = message as unknown as {
-                readonly exitCode: number | null;
-                readonly signal: string | null;
-              };
+            }
+            dispatch({ type: 'socket_open' });
+            transport.handleOpen();
+          });
+          socket.addEventListener('message', (event) => {
+            if (attempt.disposed || !isCurrentAttempt()) {
+              return;
+            }
+            const message = decodeMessageRef.current(event.data);
+            if (!message) {
               transport.freeze();
-              dispatch({ type: 'stream_exited' });
-              onExitRef.current({ exitCode: exit.exitCode, signal: exit.signal }, transport);
+              dispatch({
+                type: 'errored',
+                notice: { kind: 'protocol', code: 'invalid_message' },
+              });
               transport.closeSocket();
               return;
             }
-            case 'error': {
-              const phaseEvent = ptyStreamConnectionEventForMessage(
-                message as PtyStreamSharedMessage,
-              );
-              if (phaseEvent) {
-                dispatch(phaseEvent);
+            switch (message.type) {
+              case 'output':
+                transport.pushOutput((message as unknown as { readonly data: string }).data);
+                return;
+              case 'exit': {
+                const exit = message as unknown as {
+                  readonly exitCode: number | null;
+                  readonly signal: string | null;
+                };
+                transport.freeze();
+                dispatch({ type: 'stream_exited' });
+                onExitRef.current({ exitCode: exit.exitCode, signal: exit.signal }, transport);
+                transport.closeSocket();
+                return;
               }
-              transport.freeze();
-              transport.closeSocket();
+              case 'error': {
+                const phaseEvent = ptyStreamConnectionEventForMessage(
+                  message as PtyStreamSharedMessage,
+                );
+                if (phaseEvent) {
+                  dispatch(phaseEvent);
+                }
+                transport.freeze();
+                transport.closeSocket();
+                return;
+              }
+              case 'replay_start':
+              case 'replay_end': {
+                const phaseEvent = ptyStreamConnectionEventForMessage(
+                  message as PtyStreamSharedMessage,
+                );
+                if (phaseEvent) {
+                  dispatch(phaseEvent);
+                }
+                return;
+              }
+              default:
+                onDomainMessageRef.current(message, transport);
+            }
+          });
+          socket.addEventListener('close', () => {
+            if (!attempt.disposed && isCurrentAttempt()) {
+              dispatch({ type: 'socket_closed' });
+            }
+          });
+          socket.addEventListener('error', () => {
+            if (attempt.disposed || !isCurrentAttempt()) {
               return;
             }
-            case 'replay_start':
-            case 'replay_end': {
-              const phaseEvent = ptyStreamConnectionEventForMessage(
-                message as PtyStreamSharedMessage,
-              );
-              if (phaseEvent) {
-                dispatch(phaseEvent);
-              }
-              return;
-            }
-            default:
-              onDomainMessageRef.current(message, transport);
+            failTransport(onSocketErrorRef.current());
+            transport.closeSocket();
+          });
+        },
+        (error: unknown) => {
+          if (attempt.disposed || !isCurrentAttempt()) {
+            return;
           }
-        });
-        socket.addEventListener('close', () => {
-          if (!disposed) {
-            dispatch({ type: 'socket_closed' });
-          }
-        });
-        socket.addEventListener('error', () => {
-          failTransport(onSocketErrorRef.current());
-          transport.closeSocket();
-        });
-      },
-      (error: unknown) => {
-        if (disposed) {
-          return;
-        }
-        failTransport(onResolveErrorRef.current(error));
-      },
-    );
+          failTransport(onResolveErrorRef.current(error));
+        },
+      );
+    }, 0);
 
     return () => {
-      disposed = true;
-      transport.closeSocket();
+      attempt.disposed = true;
+      if (attempt.startTimer !== null) {
+        clearTimeout(attempt.startTimer);
+        attempt.startTimer = null;
+      }
+      if (attemptRef.current?.id === attempt.id) {
+        attemptRef.current = null;
+        transport.closeSocket();
+      }
     };
-  }, [connectKey, enabled, failTransport, initialInteractive, transport]);
+  }, [connectKey, enabled, failTransport, transport]);
 
   return { transport, connection };
 }

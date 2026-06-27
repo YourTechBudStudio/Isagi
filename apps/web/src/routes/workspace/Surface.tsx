@@ -4,7 +4,7 @@ import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
 import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
-import { useSurfaceLocked, useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
+import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
 import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
 import { SurfaceLayout } from './SurfaceLayout.js';
@@ -12,7 +12,6 @@ import { WorkflowSurfaceGlow } from './WorkflowSurfaceGlow.js';
 
 export function Surface({ surface }: { surface: WorkspaceSurface }) {
   const detail = useSurfaceDetailQuery(surface.id);
-  const locked = useSurfaceLocked(surface.id);
   const workflowStatus = useWorkflowSurfaceStore(
     (state) => state.summariesBySurfaceId[surface.id]?.status ?? null,
   );
@@ -37,15 +36,8 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
     <div className="relative h-full min-h-0 min-w-0">
       <SurfaceLayout
         detail={detail.data}
-        locked={locked}
         renderPane={({ pane, focused, onFocus }) => (
-          <PtyPane
-            pane={pane}
-            surface={detail.data}
-            focused={focused}
-            locked={locked}
-            onFocus={onFocus}
-          />
+          <PtyPane pane={pane} surface={detail.data} focused={focused} onFocus={onFocus} />
         )}
       />
       <AnimatePresence initial={false}>

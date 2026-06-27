@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { aggregateAttention, applyAttentionToProjects, useAttentionStore } from '../attention.js';
 import type { Project } from '../types.js';
-import { surfaceLockState, workflowSurfaceAttention } from '../workflow-derive.js';
+import { workflowSurfaceAttention } from '../workflow-derive.js';
 
 test('attention aggregation prioritizes error, then working, then waiting, then idle', () => {
   assert.equal(aggregateAttention(['waiting', 'idle']), 'waiting');
@@ -67,16 +67,7 @@ test('workflow surface attention overrides pane attention without changing pane 
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'working');
 });
 
-test('workflow derivations map status to lock and attention signals', () => {
-  assert.equal(surfaceLockState(undefined), false);
-  assert.equal(
-    surfaceLockState({ surfaceId: 1, rootRunId: 1, status: 'driving', title: 'Gate' }),
-    true,
-  );
-  assert.equal(
-    surfaceLockState({ surfaceId: 1, rootRunId: 1, status: 'waiting_user', title: 'Gate' }),
-    false,
-  );
+test('workflow derivations map status to attention signals', () => {
   assert.equal(
     workflowSurfaceAttention({ surfaceId: 1, rootRunId: 1, status: 'driving', title: 'Gate' }),
     'working',

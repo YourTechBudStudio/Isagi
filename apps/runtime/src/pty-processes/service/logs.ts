@@ -1,4 +1,4 @@
-import { closeSync, openSync, readdirSync, readSync, statSync, unlinkSync } from 'node:fs';
+import { readdirSync, statSync, unlinkSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import process from 'node:process';
 
@@ -7,11 +7,11 @@ import { Effect } from 'effect';
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
 import type { PtyProcessRecord } from '../../surfaces/index.js';
+import { replayUtf8LogFile } from '../log-replay.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import { PtyServiceError } from '../types.js';
 
 const orphanLogSampleSize = 5;
-const replayChunkBytes = 64 * 1024;
 
 export interface OrphanPtyLogCleanupStats {
   readonly inspected: number;
@@ -149,36 +149,11 @@ export function replayProcessLog(input: {
   readonly bytes: number | null;
   readonly send: (message: PtyStreamOutputMessageSet) => void;
 }) {
-  return Effect.try({
-    try: () => {
-      const bytes = input.logPath ? (input.bytes ?? statSync(input.logPath).size) : 0;
-      input.send({ type: 'replay_start', bytes });
-      if (input.logPath && bytes > 0) {
-        const fd = openSync(input.logPath, 'r');
-        try {
-          const buffer = Buffer.allocUnsafe(Math.min(replayChunkBytes, bytes));
-          let offset = 0;
-          while (offset < bytes) {
-            const toRead = Math.min(buffer.byteLength, bytes - offset);
-            const read = readSync(fd, buffer, 0, toRead, offset);
-            if (read <= 0) {
-              break;
-            }
-            offset += read;
-            input.send({ type: 'output', data: buffer.toString('utf8', 0, read), replay: true });
-          }
-        } finally {
-          closeSync(fd);
-        }
-      }
-      input.send({ type: 'replay_end' });
-    },
-    catch: (cause) =>
-      new PtyServiceError({
-        code: 'log_read_failed',
-        message: 'Could not replay this session log.',
-        cause,
-      }),
+  return replayUtf8LogFile({
+    logPath: input.logPath,
+    bytes: input.bytes,
+    send: input.send,
+    failureMessage: 'Could not replay this session log.',
   });
 }
 

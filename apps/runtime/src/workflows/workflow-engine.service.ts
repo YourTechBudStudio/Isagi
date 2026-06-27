@@ -2,6 +2,7 @@ import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
 import { AgentSessionArtifacts, AgentSessionService } from '../agent-sessions/index.js';
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
+import { diagnosticPhase } from '../diagnostics/phase.js';
 import type { DatabaseError } from '../persistence/index.js';
 import { PtyService } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
@@ -31,6 +32,7 @@ import {
 } from './resume-paths.js';
 import {
   appendLifecycleBestEffort,
+  appendInternalWorkflowLogBestEffort,
   errorMessage,
   findRunOrFail,
   publishWorkflowRunTerminal,
@@ -49,6 +51,7 @@ import {
   type WorkflowResult,
   type WorkflowRunRow,
   type WorkflowVariables,
+  type WorkflowWaitCondition,
 } from './types.js';
 import { validateWorkflowUserInputAnswers } from './user-input.js';
 import { parseResumePayload, parseState, parseUserInputWaitCondition } from './wait-conditions.js';
@@ -148,12 +151,16 @@ export const WorkflowEngineLive = Layer.scoped(
       error: WorkflowRunErrorPayload,
       stateSnapshot: { readonly state: unknown } | { readonly stateJson: string },
     ) =>
-      repository
-        .failRun({ runId: run.id, error, stateSnapshot, thrown: true })
-        .pipe(
-          Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')),
-          Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')),
-        );
+      appendInternalWorkflowLogBestEffort(
+        eventLedger,
+        run,
+        'error',
+        `Workflow run ${run.id} failed while executing: ${error.message}`,
+      ).pipe(
+        Effect.zipRight(repository.failRun({ runId: run.id, error, stateSnapshot, thrown: true })),
+        Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')),
+        Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')),
+      );
 
     const startWorkflowRun = (input: {
       readonly workflowKey: string;
@@ -162,7 +169,19 @@ export const WorkflowEngineLive = Layer.scoped(
       readonly parentRun?: WorkflowRunRow | undefined;
     }) =>
       Effect.gen(function* () {
-        const definition = yield* registry.get(input.workflowKey).pipe(Effect.either);
+        const diagnosticContext = {
+          workflowKey: input.workflowKey,
+          parentRunId: input.parentRun?.id ?? null,
+          worktreeId: input.context.worktreeId,
+          surfaceId: input.context.surfaceId,
+          paneId: input.context.paneId ?? null,
+          agentSessionId: input.context.agentSessionId ?? null,
+        };
+        const definition = yield* diagnosticPhase(
+          'workflow.start.load_definition',
+          diagnosticContext,
+          registry.get(input.workflowKey).pipe(Effect.either),
+        );
         if (Either.isLeft(definition)) {
           return yield* Effect.fail(
             new WorkflowEngineError({
@@ -193,21 +212,34 @@ export const WorkflowEngineLive = Layer.scoped(
           );
         }
         const loadedDefinition = definition.right;
-        const launchCtx = yield* buildLaunchContext(input.context, {
-          workspaceRepository,
-          surfaces,
-        });
-        const manifest = yield* Effect.tryPromise({
-          try: async () => loadedDefinition.command(launchCtx),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new WorkflowEngineError({
-                code: 'validation_failed',
-                message: errorMessage(cause),
-                workflowKey: input.workflowKey,
-              }),
+        const launchCtx = yield* diagnosticPhase(
+          'workflow.start.build_launch_context',
+          diagnosticContext,
+          buildLaunchContext(input.context, {
+            workspaceRepository,
+            surfaces,
+          }),
+        );
+        const launchContextDiagnostics = {
+          ...diagnosticContext,
+          resolvedPaneId: launchCtx.paneId,
+          resolvedAgentSessionId: launchCtx.agentSessionId,
+        };
+        const manifest = yield* diagnosticPhase(
+          'workflow.start.command_manifest',
+          launchContextDiagnostics,
+          Effect.tryPromise({
+            try: async () => loadedDefinition.command(launchCtx),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowEngineError({
+                  code: 'validation_failed',
+                  message: errorMessage(cause),
+                  workflowKey: input.workflowKey,
+                }),
+            ),
           ),
         );
         if (!input.parentRun) {
@@ -220,7 +252,11 @@ export const WorkflowEngineLive = Layer.scoped(
               }),
             );
           }
-          const activeRoot = yield* repository.findLatestRootRunForSurface(launchCtx.surfaceId);
+          const activeRoot = yield* diagnosticPhase(
+            'workflow.start.find_active_root',
+            launchContextDiagnostics,
+            repository.findLatestRootRunForSurface(launchCtx.surfaceId),
+          );
           if (activeRoot) {
             return yield* Effect.fail(
               new WorkflowEngineError({
@@ -233,10 +269,14 @@ export const WorkflowEngineLive = Layer.scoped(
             );
           }
         }
-        const validated = yield* Effect.tryPromise({
-          try: async () => loadedDefinition.validate(launchCtx, input.variables),
-          catch: (cause) => cause,
-        }).pipe(Effect.either);
+        const validated = yield* diagnosticPhase(
+          'workflow.start.validate',
+          launchContextDiagnostics,
+          Effect.tryPromise({
+            try: async () => loadedDefinition.validate(launchCtx, input.variables),
+            catch: (cause) => cause,
+          }).pipe(Effect.either),
+        );
         if (Either.isLeft(validated)) {
           return yield* Effect.fail(
             new WorkflowEngineError({
@@ -246,37 +286,67 @@ export const WorkflowEngineLive = Layer.scoped(
             }),
           );
         }
-        const initialState = yield* Effect.tryPromise({
-          try: async () => loadedDefinition.init(launchCtx, input.variables),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new WorkflowEngineError({
-                code: 'validation_failed',
-                message: errorMessage(cause),
-                workflowKey: input.workflowKey,
-              }),
+        const initialState = yield* diagnosticPhase(
+          'workflow.start.init',
+          launchContextDiagnostics,
+          Effect.tryPromise({
+            try: async () => loadedDefinition.init(launchCtx, input.variables),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WorkflowEngineError({
+                  code: 'validation_failed',
+                  message: errorMessage(cause),
+                  workflowKey: input.workflowKey,
+                }),
+            ),
           ),
         );
-        const run = yield* repository.createRun({
-          workflowKey: input.workflowKey,
-          workflowTitle: manifest.title,
-          state: initialState,
-          stateVersion: 1,
-          worktreeId: launchCtx.worktreeId,
-          surfaceId: launchCtx.surfaceId,
-          parentRunId: input.parentRun?.id ?? null,
-          rootRunId: input.parentRun?.rootRunId ?? input.parentRun?.id ?? null,
-        });
-        yield* appendLifecycleBestEffort(eventLedger, run, 'started');
+        const run = yield* diagnosticPhase(
+          'workflow.start.create_run',
+          launchContextDiagnostics,
+          repository.createRun({
+            workflowKey: input.workflowKey,
+            workflowTitle: manifest.title,
+            state: initialState,
+            stateVersion: 1,
+            worktreeId: launchCtx.worktreeId,
+            surfaceId: launchCtx.surfaceId,
+            parentRunId: input.parentRun?.id ?? null,
+            rootRunId: input.parentRun?.rootRunId ?? input.parentRun?.id ?? null,
+          }),
+        );
+        const runDiagnostics = { ...launchContextDiagnostics, workflowRunId: run.id };
+        yield* appendInternalWorkflowLogBestEffort(
+          eventLedger,
+          run,
+          'info',
+          `Workflow run ${run.id} created for '${input.workflowKey}' on surface ${launchCtx.surfaceId ?? 'none'}.`,
+        );
+        yield* diagnosticPhase(
+          'workflow.start.append_lifecycle',
+          runDiagnostics,
+          appendLifecycleBestEffort(eventLedger, run, 'started'),
+        );
         yield* poke;
         return run;
       });
 
     const runClaimedStep = (run: WorkflowRunRow) =>
       Effect.gen(function* () {
-        const definition = yield* registry.get(run.workflowKey).pipe(Effect.either);
+        const phaseContext = {
+          workflowRunId: run.id,
+          workflowKey: run.workflowKey,
+          status: run.status,
+          waitKind: run.waitKind,
+          owner: run.owner,
+        };
+        const definition = yield* diagnosticPhase(
+          'workflow.claimed.load_definition',
+          phaseContext,
+          registry.get(run.workflowKey),
+        ).pipe(Effect.either);
         if (Either.isLeft(definition)) {
           yield* failRun(run, stepErrorPayload(definition.left, run), { stateJson: run.stateJson });
           return;
@@ -291,9 +361,11 @@ export const WorkflowEngineLive = Layer.scoped(
           return;
         }
         const loadedDefinition = definition.right;
-        const worktreePath = yield* worktreePathForRun(run, workspaceRepository).pipe(
-          Effect.either,
-        );
+        const worktreePath = yield* diagnosticPhase(
+          'workflow.claimed.resolve_worktree_path',
+          phaseContext,
+          worktreePathForRun(run, workspaceRepository),
+        ).pipe(Effect.either);
         if (Either.isLeft(worktreePath)) {
           yield* failRun(run, stepErrorPayload(worktreePath.left, run), {
             stateJson: run.stateJson,
@@ -301,6 +373,8 @@ export const WorkflowEngineLive = Layer.scoped(
           return;
         }
 
+        // Built directly (not as a diagnostic phase): constructing the context is
+        // synchronous and can't stall the loop, so a marker/phase would be noise.
         const ctx = workflowContext({
           repository,
           run,
@@ -337,35 +411,67 @@ export const WorkflowEngineLive = Layer.scoped(
               });
             }),
         });
-        const state = yield* Effect.try({
-          try: () => parseState(run),
-          catch: (cause) => cause,
-        }).pipe(Effect.either);
+        const state = yield* diagnosticPhase(
+          'workflow.claimed.parse_state',
+          phaseContext,
+          Effect.try({
+            try: () => parseState(run),
+            catch: (cause) => cause,
+          }),
+        ).pipe(Effect.either);
         if (Either.isLeft(state)) {
           yield* failRun(run, stepErrorPayload(state.left, run), { stateJson: run.stateJson });
           return;
         }
-        const event = yield* Effect.try({
-          try: () => parseResumePayload(run),
-          catch: (cause) => cause,
-        }).pipe(Effect.either);
+        const event = yield* diagnosticPhase(
+          'workflow.claimed.parse_resume_payload',
+          phaseContext,
+          Effect.try({
+            try: () => parseResumePayload(run),
+            catch: (cause) => cause,
+          }),
+        ).pipe(Effect.either);
         if (Either.isLeft(event)) {
           yield* failRun(run, stepErrorPayload(event.left, run), { state: state.right });
           return;
         }
-        const result = yield* Effect.tryPromise({
-          try: async () => loadedDefinition.step(ctx, state.right, event.right),
-          catch: (cause) => cause,
-        }).pipe(Effect.either);
+        yield* appendInternalWorkflowLogBestEffort(
+          eventLedger,
+          run,
+          'debug',
+          `Executing workflow step for run ${run.id}: ${workflowStateSummary(state.right)}; event=${workflowEventSummary(event.right)}.`,
+        );
+        const result = yield* diagnosticPhase(
+          'workflow.claimed.step',
+          phaseContext,
+          Effect.tryPromise({
+            try: async () => loadedDefinition.step(ctx, state.right, event.right),
+            catch: (cause) => cause,
+          }),
+        ).pipe(Effect.either);
 
         const cancelled = yield* reapIfCancelRequested({ repository, eventLedger, run });
-        if (cancelled) return;
+        if (cancelled) {
+          yield* appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'info',
+            `Workflow run ${run.id} was cancelled after the step returned.`,
+          );
+          return;
+        }
 
         if (Either.isLeft(result)) {
           yield* failRun(run, stepErrorPayload(result.left, run), { state: state.right });
           return;
         }
 
+        yield* appendInternalWorkflowLogBestEffort(
+          eventLedger,
+          run,
+          'debug',
+          `Workflow step for run ${run.id} returned ${workflowResultSummary(result.right)}.`,
+        );
         yield* persistStepResult(
           { repository, eventBus, eventLedger },
           run,
@@ -428,6 +534,14 @@ export const WorkflowEngineLive = Layer.scoped(
           const claimedRun = yield* repository.claimReadyRun({ runId: readyRun.id, owner });
           if (!claimedRun) continue;
           claimed += 1;
+          // Per-step churn: debug-gated so it stays out of the default narrative. The
+          // milestone lines (created/suspended/resumed/done/failed) stay at info.
+          yield* appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            claimedRun,
+            'debug',
+            `Workflow run ${claimedRun.id} claimed by ${owner}; executing now.`,
+          );
           yield* runClaimedStep(claimedRun);
         }
       }
@@ -591,6 +705,12 @@ export const WorkflowEngineLive = Layer.scoped(
               }),
             );
           }
+          yield* appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            retried,
+            'info',
+            `Workflow run ${retried.id} retried; run is ready for execution.`,
+          );
           yield* poke;
           return { runId: retried.id, status: retried.status };
         }),
@@ -607,6 +727,12 @@ export const WorkflowEngineLive = Layer.scoped(
               const current = yield* repository.findRun(run.id);
               return { outcome: 'already_resolved', run: current ?? run } as const;
             }
+            yield* appendInternalWorkflowLogBestEffort(
+              eventLedger,
+              run,
+              'info',
+              `User continue received for run ${run.id}; run is ready to resume.`,
+            );
             yield* appendLifecycleBestEffort(eventLedger, run, 'resumed');
             yield* poke;
             const current = yield* repository.findRun(run.id);
@@ -647,6 +773,12 @@ export const WorkflowEngineLive = Layer.scoped(
             const current = yield* repository.findRun(run.id);
             return { outcome: 'already_resolved', run: current ?? run } as const;
           }
+          yield* appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'info',
+            `User input received for run ${run.id}; run is ready to resume.`,
+          );
           yield* appendLifecycleBestEffort(eventLedger, run, 'resumed');
           yield* poke;
           const current = yield* repository.findRun(run.id);
@@ -800,7 +932,18 @@ function persistStepResult(
 ) {
   const { repository, eventBus, eventLedger } = services;
   if (result.type === 'cont') {
-    return repository.completeCont({ runId: run.id, state: result.state });
+    return repository
+      .completeCont({ runId: run.id, state: result.state })
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'debug',
+            `Workflow run ${run.id} state persisted; run is ready for the next step.`,
+          ),
+        ),
+      );
   }
 
   if (result.type === 'suspend') {
@@ -811,13 +954,33 @@ function persistStepResult(
         waitKind: waitKind(result.condition),
         waitCondition: result.condition,
       })
-      .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'suspended')));
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'info',
+            `Workflow run ${run.id} suspended on ${workflowWaitConditionSummary(result.condition)}.`,
+          ),
+        ),
+        Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'suspended')),
+      );
   }
 
   if (result.type === 'done') {
     return repository
       .completeDone({ runId: run.id, state: currentState, value: result.value })
       .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'done')))
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'info',
+            `Workflow run ${run.id} completed.`,
+          ),
+        ),
+      )
       .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'done')));
   }
 
@@ -832,6 +995,16 @@ function persistStepResult(
         stateSnapshot: { state: currentState },
         thrown: false,
       })
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            run,
+            'error',
+            `Workflow run ${run.id} failed by workflow result: ${result.reason}`,
+          ),
+        ),
+      )
       .pipe(Effect.zipRight(appendLifecycleBestEffort(eventLedger, run, 'failed')))
       .pipe(Effect.zipRight(publishWorkflowRunTerminal(eventBus, run.id, 'failed')));
   }
@@ -875,6 +1048,62 @@ function reapIfCancelRequested(input: {
     });
     return true;
   });
+}
+
+function workflowStateSummary(state: unknown) {
+  if (!state || typeof state !== 'object') return 'state=unknown';
+  const record = state as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof record.phase === 'string') parts.push(`phase=${record.phase}`);
+  if (typeof record.currentPhase === 'number') parts.push(`currentPhase=${record.currentPhase}`);
+  if (typeof record.phaseCount === 'number') parts.push(`phaseCount=${record.phaseCount}`);
+  if (isRecord(record.awaiting) && typeof record.awaiting.kind === 'string') {
+    parts.push(`awaiting=${record.awaiting.kind}`);
+  }
+  if (isRecord(record.pauseReason) && typeof record.pauseReason.kind === 'string') {
+    parts.push(`pauseReason=${record.pauseReason.kind}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'state=object';
+}
+
+function workflowEventSummary(event: unknown) {
+  if (event === undefined) return 'none';
+  if (!event || typeof event !== 'object') return typeof event;
+  const record = event as Record<string, unknown>;
+  if (typeof record.kind === 'string') return record.kind;
+  if (typeof record.outcome === 'string') {
+    const recordedAt = typeof record.recordedAt === 'string' ? ` at ${record.recordedAt}` : '';
+    return `${record.outcome}${recordedAt}`;
+  }
+  return 'object';
+}
+
+function workflowResultSummary(result: WorkflowResult) {
+  if (result.type === 'suspend') {
+    return `suspend(${workflowWaitConditionSummary(result.condition)})`;
+  }
+  if (result.type === 'fail') return `fail(${result.reason})`;
+  return result.type;
+}
+
+function workflowWaitConditionSummary(condition: WorkflowWaitCondition) {
+  if (condition.kind === 'turn') {
+    return `turn agentSessionId=${condition.agentSessionId} harnessSessionId=${condition.harnessSessionId}`;
+  }
+  if (condition.kind === 'headless') {
+    return `headless ops=${condition.ops.map((op) => op.opId).join(',')}`;
+  }
+  if (condition.kind === 'workflow') {
+    return `workflow runIds=${condition.runIds.join(',')}`;
+  }
+  if (condition.kind === 'user_input') {
+    return `user_input questions=${condition.questions.map((question) => question.key).join(',')}`;
+  }
+  return condition.kind;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function logDrainFailure(label: string) {

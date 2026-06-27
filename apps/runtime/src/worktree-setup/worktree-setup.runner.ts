@@ -37,10 +37,9 @@ export class WorktreeSetupRunError extends Data.TaggedError('WorktreeSetupRunErr
 
 export type WorktreeSetupRunnerError = DatabaseError | WorktreeSetupRunError;
 
-type WorktreePostCreateSetupResult = Extract<
-  WorktreeSetupResult,
-  { status: 'succeeded' | 'failed' }
->;
+type WorktreePostCreateSetupResult =
+  | Extract<WorktreeSetupResult, { status: 'succeeded' }>
+  | Extract<WorktreeSetupResult, { status: 'failed' }>;
 
 export function runPostCreateSetup(input: {
   readonly config: WorktreeHooksConfig;

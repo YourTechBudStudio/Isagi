@@ -9,6 +9,7 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import { loadWorkflowDefinition } from './loader.js';
+import { createFilesystemWorkflowRegistry } from './registry.js';
 import { ensureWorkflowsScaffold } from './scaffold.js';
 
 const require = createRequire(import.meta.url);
@@ -113,6 +114,53 @@ export default defineWorkflow({
   }
 });
 
+test('filesystem workflow registry caches definitions until source files change', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-registry-cache-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  const workflowPath = join(workflowsPath, 'cached');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    mkdirSync(workflowPath, { recursive: true });
+    writeWorkflowHelper(workflowPath, `export const value = 1;\n`);
+    writeWorkflow(
+      workflowPath,
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+import { value } from './helper.js';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Cached workflow' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done(value),
+});
+`,
+    );
+
+    const registry = createFilesystemWorkflowRegistry(workflowsPath);
+    const first = await Effect.runPromise(registry.get('cached'));
+    const second = await Effect.runPromise(registry.get('cached'));
+    assert.ok(first);
+    assert.equal(second, first);
+    assert.deepEqual(await second.step(emptyCtx(), {}, undefined), {
+      type: 'done',
+      value: 1,
+    });
+
+    await sleep(5);
+    writeWorkflowHelper(workflowPath, `export const value = 22;\n`);
+
+    const reloaded = await Effect.runPromise(registry.get('cached'));
+    assert.ok(reloaded);
+    assert.notEqual(reloaded, first);
+    assert.deepEqual(await reloaded.step(emptyCtx(), {}, undefined), {
+      type: 'done',
+      value: 22,
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('workflow scaffold rewrites runtime-owned files and packages on restart', async () => {
   const dataRoot = join(tmpdir(), `isagi-workflow-refresh-${process.pid}-${Date.now()}`);
   const workflowsPath = join(dataRoot, 'workflows');
@@ -169,6 +217,14 @@ test('workflow scaffold rewrites runtime-owned files and packages on restart', a
 
 function writeWorkflow(workflowPath: string, contents: string) {
   writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
+}
+
+function writeWorkflowHelper(workflowPath: string, contents: string) {
+  writeFileSync(join(workflowPath, 'helper.ts'), contents, 'utf8');
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function writeFile(root: string, path: string, contents: string) {

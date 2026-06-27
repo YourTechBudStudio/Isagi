@@ -2,8 +2,6 @@ import { create } from 'zustand';
 
 import type { WorkflowSurfaceSummary } from '@isagi/contracts';
 
-import { surfaceLockState } from './workflow-derive.js';
-
 interface WorkflowSurfaceStore {
   readonly summariesBySurfaceId: Readonly<Record<number, WorkflowSurfaceSummary>>;
   readonly replace: (summaries: readonly WorkflowSurfaceSummary[]) => void;
@@ -34,9 +32,3 @@ export const useWorkflowSurfaceStore = create<WorkflowSurfaceStore>((set) => ({
       return { summariesBySurfaceId: next };
     }),
 }));
-
-export function useSurfaceLocked(surfaceId: number) {
-  return useWorkflowSurfaceStore((state) =>
-    surfaceLockState(state.summariesBySurfaceId[surfaceId]),
-  );
-}

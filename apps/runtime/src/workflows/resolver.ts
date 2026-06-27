@@ -8,6 +8,7 @@ import {
 } from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService } from './repository.js';
+import { appendInternalWorkflowLogBestEffort } from './run-failure.js';
 import type { WorkflowWaitCondition } from './types.js';
 import {
   findSatisfiedTerminalTurnEdge,
@@ -116,7 +117,15 @@ export function resolveWorkflowTerminal(input: {
         runId: run.id,
         resumePayload: { kind: 'workflow', results: resolution.results },
       });
-      if (woke) yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
+      if (woke) {
+        yield* appendInternalWorkflowLogBestEffort(
+          input.eventLedger,
+          run,
+          'info',
+          `Workflow child run ${input.childRunId} completed; run ${run.id} is ready to resume.`,
+        );
+        yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
+      }
       wokeAny = wokeAny || woke;
     }
     if (wokeAny) yield* input.engine.poke;
@@ -142,6 +151,12 @@ export function resolveHeadlessCompletion(input: {
       resumePayload: { kind: 'headless', results },
     });
     if (woke) {
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        run,
+        'info',
+        `Headless operation completed for run ${run.id}; run is ready to resume.`,
+      );
       yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
       yield* input.headless.releaseOps({ opIds: condition.ops.map((op) => op.opId) });
       yield* input.engine.poke;
@@ -173,7 +188,15 @@ export function resolveTurnEdge(input: {
         runId: run.id,
         resumePayload: resumePayload(terminalEdge),
       });
-      if (woke) yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
+      if (woke) {
+        yield* appendInternalWorkflowLogBestEffort(
+          input.eventLedger,
+          run,
+          'info',
+          `Agent turn ${terminalEdge.type} for session ${terminalEdge.agentSessionId}; run ${run.id} is ready to resume.`,
+        );
+        yield* appendLifecycleBestEffort(input.eventLedger, run, 'resumed');
+      }
       wokeAny = wokeAny || woke;
     }
     if (wokeAny) yield* input.engine.poke;

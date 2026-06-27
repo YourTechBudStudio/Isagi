@@ -22,6 +22,7 @@ import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import {
   appendLifecycleBestEffort,
+  appendInternalWorkflowLogBestEffort,
   failWorkflowRunAndPublish,
   stepErrorPayload,
   worktreePathForRun,
@@ -49,6 +50,16 @@ export function continuePausedRun(input: {
   if (input.run.waitKind === null) {
     return input.repository
       .readyPausedRun({ runId: input.run.id })
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            input.eventLedger,
+            input.run,
+            'info',
+            `Paused workflow run ${input.run.id} had no wait condition; run is ready to resume.`,
+          ),
+        ),
+      )
       .pipe(Effect.zipRight(input.poke));
   }
 
@@ -57,7 +68,18 @@ export function continuePausedRun(input: {
   }
 
   if (input.run.waitKind === 'user_continue' || input.run.waitKind === 'user_input') {
-    return input.repository.rearmPausedRun(input.run.id);
+    return input.repository
+      .rearmPausedRun(input.run.id)
+      .pipe(
+        Effect.zipRight(
+          appendInternalWorkflowLogBestEffort(
+            input.eventLedger,
+            input.run,
+            'info',
+            `Paused workflow run ${input.run.id} re-armed ${input.run.waitKind} wait.`,
+          ),
+        ),
+      );
   }
 
   if (input.run.waitKind === 'headless') {
@@ -107,6 +129,20 @@ function continuePausedWorkflowRun(input: {
     const resolution = yield* input.repository.resolveWorkflowJoin(condition);
     if (resolution.status === 'pending') {
       yield* input.repository.rearmPausedRun(input.run.id);
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Paused workflow run ${input.run.id} re-armed workflow join wait.`,
+      );
+      yield* reconcileArmedWorkflowWait({
+        run: input.run,
+        condition,
+        repository: input.repository,
+        eventBus: input.eventBus,
+        eventLedger: input.eventLedger,
+        poke: input.poke,
+      });
       return;
     }
     if (resolution.status === 'missing') {
@@ -128,6 +164,12 @@ function continuePausedWorkflowRun(input: {
       runId: input.run.id,
       resumePayload: { kind: 'workflow', results: resolution.results },
     });
+    yield* appendInternalWorkflowLogBestEffort(
+      input.eventLedger,
+      input.run,
+      'info',
+      `Workflow join satisfied while continuing run ${input.run.id}; run is ready to resume.`,
+    );
     yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
     yield* input.poke;
   });
@@ -178,6 +220,12 @@ function continuePausedHeadlessRun(input: {
         runId: input.run.id,
         resumePayload: { kind: 'headless', results },
       });
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Headless wait already satisfied while continuing run ${input.run.id}; run is ready to resume.`,
+      );
       yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
       yield* input.headless.releaseOps({ opIds: condition.ops.map((op) => op.opId) });
       yield* input.poke;
@@ -202,6 +250,20 @@ function continuePausedHeadlessRun(input: {
       return;
     }
     yield* input.repository.rearmPausedRun(input.run.id);
+    yield* appendInternalWorkflowLogBestEffort(
+      input.eventLedger,
+      input.run,
+      'info',
+      `Paused workflow run ${input.run.id} reissued and re-armed headless wait.`,
+    );
+    yield* reconcileArmedHeadlessWait({
+      run: input.run,
+      condition,
+      repository: input.repository,
+      headless: input.headless,
+      eventLedger: input.eventLedger,
+      poke: input.poke,
+    });
   });
 }
 
@@ -259,6 +321,20 @@ function continuePausedTurnRun(input: {
     const terminalEdge = findSatisfiedTerminalTurnEdge(condition, edges);
     if (!terminalEdge) {
       yield* input.repository.rearmPausedRun(input.run.id);
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Paused workflow run ${input.run.id} re-armed turn wait for agent session ${condition.agentSessionId}.`,
+      );
+      yield* reconcileArmedTurnWait({
+        run: input.run,
+        condition,
+        repository: input.repository,
+        observer: input.observer,
+        eventLedger: input.eventLedger,
+        poke: input.poke,
+      });
       return;
     }
 
@@ -266,6 +342,12 @@ function continuePausedTurnRun(input: {
       runId: input.run.id,
       resumePayload: resumePayload(terminalEdge),
     });
+    yield* appendInternalWorkflowLogBestEffort(
+      input.eventLedger,
+      input.run,
+      'info',
+      `Turn wait satisfied while continuing run ${input.run.id}; run is ready to resume.`,
+    );
     yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
     yield* input.poke;
   });
@@ -288,6 +370,12 @@ export function reconcileArmedTurnWait(input: {
         resumePayload: resumePayload(edge),
       });
       if (woke) {
+        yield* appendInternalWorkflowLogBestEffort(
+          input.eventLedger,
+          input.run,
+          'info',
+          `Turn wait satisfied during arm-time reconciliation for run ${input.run.id}; run is ready to resume.`,
+        );
         yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
         yield* input.poke;
       }
@@ -312,6 +400,12 @@ export function reconcileArmedHeadlessWait(input: {
       resumePayload: { kind: 'headless', results },
     });
     if (woke) {
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Headless wait satisfied during arm-time reconciliation for run ${input.run.id}; run is ready to resume.`,
+      );
       yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
       yield* input.headless.releaseOps({ opIds: input.condition.ops.map((op) => op.opId) });
       yield* input.poke;
@@ -350,6 +444,12 @@ export function reconcileArmedWorkflowWait(input: {
       resumePayload: { kind: 'workflow', results: resolution.results },
     });
     if (woke) {
+      yield* appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Workflow join satisfied during arm-time reconciliation for run ${input.run.id}; run is ready to resume.`,
+      );
       yield* appendLifecycleBestEffort(input.eventLedger, input.run, 'resumed');
       yield* input.poke;
     }

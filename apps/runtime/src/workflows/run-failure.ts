@@ -5,8 +5,9 @@
 
 import { Effect } from 'effect';
 
-import type { WorkflowLifecycleEvent } from '@isagi/contracts';
+import type { WorkflowLifecycleEvent, WorkflowLogLevelDto } from '@isagi/contracts';
 
+import { runtimeDiagnosticsEnabled } from '../diagnostics/phase.js';
 import type { InternalRuntimeEventBusService } from '../runtime-events/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import {
@@ -54,6 +55,39 @@ export function appendLifecycleBestEffort(
           console.warn('[runtime] Workflow lifecycle append failed', {
             op: 'lifecycle',
             lifecycle: event,
+            ...workflowEventLedgerWarningPayload(error),
+          });
+        }),
+      ),
+      Effect.asVoid,
+    );
+}
+
+export function appendInternalWorkflowLogBestEffort(
+  eventLedger: WorkflowEventLedgerService | undefined,
+  run: WorkflowRunRow,
+  level: WorkflowLogLevelDto,
+  message: string,
+) {
+  if (!eventLedger) return Effect.void;
+  // Debug logs are operator-only diagnostics. Skip the disk append + bus publish
+  // unless runtime diagnostics are enabled, so ordinary runs don't accrete granular
+  // setup/spawn traces in the ledger (and the user-facing WorkflowBar that mirrors
+  // it). The info-level lifecycle narrative below stays always-on.
+  if (level === 'debug' && !runtimeDiagnosticsEnabled()) return Effect.void;
+  return eventLedger
+    .append({
+      runId: run.id,
+      rootRunId: run.rootRunId,
+      surfaceId: run.surfaceId,
+      event: { type: 'log', level, message },
+    })
+    .pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          console.warn('[runtime] Workflow internal log append failed', {
+            op: 'internal-log',
+            level,
             ...workflowEventLedgerWarningPayload(error),
           });
         }),

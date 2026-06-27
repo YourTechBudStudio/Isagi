@@ -12,6 +12,7 @@ import {
   type HarnessLedgerObserverService,
 } from '../agent-sessions/harness/observer.service.js';
 import type { AgentSessionService as AgentSessionServiceShape } from '../agent-sessions/index.js';
+import { diagnosticPhase } from '../diagnostics/phase.js';
 import type { PtyService as PtyServiceShape } from '../pty-processes/pty.service.js';
 import type { SurfaceService as SurfaceServiceShape } from '../surfaces/index.js';
 import {
@@ -20,6 +21,7 @@ import {
 } from './event-ledger.service.js';
 import type { WorkflowHeadlessService } from './headless.js';
 import type { WorkflowRepositoryService } from './repository.js';
+import { appendInternalWorkflowLogBestEffort } from './run-failure.js';
 import type { WorkflowContext, WorkflowRunRow, WorkflowUiFeedback } from './types.js';
 
 type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
@@ -29,8 +31,17 @@ void harnessParity;
 const spawnTimeoutMs = 10_000;
 const metadataInitialDelayMs = 100;
 const metadataMaxDelayMs = 1_000;
-const startupQuietMs = 1_000;
-const startupPollMs = 100;
+// Seed-prompt timing uses fixed delays rather than waiting for the TUI to quiesce.
+// Animated harness TUIs (spinners, status lines) never go quiet, so a quiescence
+// wait either stalled the dispatcher or burned the whole spawn timeout. Instead we
+// wait for the first startup output, let the TUI settle for a fixed window, inject
+// the seed, then submit. The path is backstopped: waitForHarnessSessionId re-sends
+// Enter and times out into a visible failed run if the harness never accepts the
+// seed, so a too-early submit fails loudly instead of silently mis-seeding.
+const startupPollMs = 100; // Poll interval while waiting for the first PTY output.
+const startupSettleMs = 500; // Settle window once the first output appears.
+const spawnSeedPromptDelayMs = 500; // Further settle after startup output, before the seed.
+const promptSubmitDelayMs = 250; // Gap between the bracketed paste and the submit Enter.
 const submitRetryIntervalMs = 1_500;
 const submitRetryLimit = 2;
 
@@ -162,23 +173,7 @@ export function workflowContext(input: {
       ).then((run) => run.id),
     log: (level, message) =>
       runEffect(
-        input.eventLedger
-          .append({
-            runId: input.run.id,
-            rootRunId: input.run.rootRunId,
-            surfaceId: input.run.surfaceId,
-            event: { type: 'log', level, message },
-          })
-          .pipe(
-            Effect.catchAll((error) =>
-              Effect.sync(() => {
-                console.warn('[runtime] Workflow ctx.log append failed', {
-                  op: 'ctx.log',
-                  ...workflowEventLedgerWarningPayload(error),
-                });
-              }),
-            ),
-          ),
+        appendInternalWorkflowLogBestEffort(input.eventLedger, input.run, level, message),
       ).then(() => undefined),
     setUiFeedback: (feedback) =>
       runEffect(
@@ -204,7 +199,11 @@ export function workflowContext(input: {
 }
 
 function normalizeUiFeedback(feedback: WorkflowUiFeedback): WorkflowUiFeedback {
-  return { kind: feedback.kind ?? 'info', phase: feedback.phase, message: feedback.message };
+  return {
+    kind: feedback.kind ?? 'info',
+    phase: feedback.phase,
+    message: feedback.message,
+  };
 }
 
 export function inject(input: {
@@ -221,12 +220,11 @@ export function inject(input: {
       );
     }
     const ptyProcessId = yield* input.agents.activePtyProcessId(input.agentSessionId);
-    const normalized = input.text.replace(/\r\n/g, '\n');
-    yield* input.pty.writeInput({
+    yield* writePromptToPty({
+      pty: input.pty,
       ptyProcessId,
-      data: `\x1b[200~${normalized}\x1b[201~`,
+      text: input.text,
     });
-    yield* input.pty.writeInput({ ptyProcessId, data: '\r' });
   });
 }
 
@@ -267,66 +265,128 @@ function spawnSession(input: {
     if (input.run.surfaceId === null) {
       throw new Error(`Workflow run ${input.run.id} cannot spawn without a surface_id.`);
     }
-    const surface = yield* input.surfaces.getSurfaceDetail(input.run.surfaceId);
+    const worktreeId = input.run.worktreeId;
+    const surfaceId = input.run.surfaceId;
+    // Each spawn step is wrapped as a diagnostic phase so the event-loop watchdog can
+    // name whichever one is on the stack if the loop stalls — spawn is the most
+    // hang-prone verb (PTY launch, startup output, harness handshake).
+    const phaseContext = { workflowRunId: input.run.id, harness: input.input.harness };
+
+    const surface = yield* diagnosticPhase(
+      'workflow.spawn.get_surface',
+      phaseContext,
+      input.surfaces.getSurfaceDetail(surfaceId),
+    );
     const split = chooseSpawnSplit(surface.layout);
-    const created = yield* input.surfaces.splitPane({
-      worktreeId: input.run.worktreeId,
-      split: {
-        paneId: split.sourcePaneId,
-        direction: split.direction,
-        newPane: { kind: 'agent_session', harness: input.input.harness },
-      },
-    });
-    const agentSessionId = yield* agentSessionIdForCreatedPane(input.surfaces, {
-      surfaceId: created.surfaceId,
-      paneId: created.paneId,
-    });
-    const ptyProcessId = yield* input.agents
-      .ensureActivePtyProcess(agentSessionId, {
-        model: input.input.model,
-        effort: input.input.effort,
-      })
-      .pipe(
+    const created = yield* diagnosticPhase(
+      'workflow.spawn.split_pane',
+      { ...phaseContext, sourcePaneId: split.sourcePaneId, direction: split.direction },
+      input.surfaces.splitPane({
+        worktreeId,
+        split: {
+          paneId: split.sourcePaneId,
+          direction: split.direction,
+          newPane: { kind: 'agent_session', harness: input.input.harness },
+        },
+      }),
+    );
+    const agentSessionId = yield* diagnosticPhase(
+      'workflow.spawn.resolve_agent_session',
+      { ...phaseContext, paneId: created.paneId },
+      agentSessionIdForCreatedPane(input.surfaces, {
+        surfaceId: created.surfaceId,
+        paneId: created.paneId,
+      }),
+    );
+    const sessionContext = { ...phaseContext, agentSessionId, paneId: created.paneId };
+    const ptyProcessId = yield* diagnosticPhase(
+      'workflow.spawn.ensure_pty',
+      sessionContext,
+      input.agents
+        .ensureActivePtyProcess(agentSessionId, {
+          model: input.input.model,
+          effort: input.input.effort,
+        })
+        .pipe(
+          Effect.timeoutFail({
+            duration: `${spawnTimeoutMs} millis`,
+            onTimeout: () =>
+              new Error(
+                `Timed out waiting for workflow agent session ${agentSessionId} PTY to become live.`,
+              ),
+          }),
+        ),
+    );
+    yield* diagnosticPhase(
+      'workflow.spawn.await_startup_output',
+      { ...sessionContext, ptyProcessId },
+      waitForPtyStartupOutput(input.pty, ptyProcessId).pipe(
         Effect.timeoutFail({
           duration: `${spawnTimeoutMs} millis`,
           onTimeout: () =>
             new Error(
-              `Timed out waiting for workflow agent session ${agentSessionId} PTY to become live.`,
+              `Timed out waiting for workflow agent session ${agentSessionId} PTY startup output.`,
             ),
         }),
-      );
-    yield* waitForPtyOutputQuiescence(input.pty, ptyProcessId).pipe(
-      Effect.timeoutFail({
-        duration: `${spawnTimeoutMs} millis`,
-        onTimeout: () =>
-          new Error(
-            `Timed out waiting for workflow agent session ${agentSessionId} PTY startup output to settle.`,
-          ),
-      }),
+      ),
     );
+    // Fixed settle window before the seed prompt — see the seed-timing note above.
+    yield* Effect.sleep(`${spawnSeedPromptDelayMs} millis`);
     const seededAt = new Date().toISOString();
-    yield* inject({
-      agents: input.agents,
-      pty: input.pty,
-      agentSessionId,
-      text: input.input.prompt,
-      observer: input.observer,
-    });
-    const harnessSessionId = yield* waitForHarnessSessionId({
-      artifacts: input.artifacts,
-      pty: input.pty,
-      ptyProcessId,
-      agentSessionId,
-    }).pipe(
-      Effect.timeoutFail({
-        duration: `${spawnTimeoutMs} millis`,
-        onTimeout: () =>
-          new Error(
-            `Timed out waiting for workflow agent session ${agentSessionId} harness session id.`,
-          ),
+    yield* diagnosticPhase(
+      'workflow.spawn.inject_seed',
+      { ...sessionContext, ptyProcessId },
+      inject({
+        agents: input.agents,
+        pty: input.pty,
+        agentSessionId,
+        text: input.input.prompt,
+        observer: input.observer,
       }),
     );
-    return { agentSessionId, harnessSessionId, seededAt, paneId: created.paneId };
+    const harnessSessionId = yield* diagnosticPhase(
+      'workflow.spawn.await_harness_session_id',
+      { ...sessionContext, ptyProcessId },
+      waitForHarnessSessionId({
+        artifacts: input.artifacts,
+        pty: input.pty,
+        ptyProcessId,
+        agentSessionId,
+      }).pipe(
+        Effect.timeoutFail({
+          duration: `${spawnTimeoutMs} millis`,
+          onTimeout: () =>
+            new Error(
+              `Timed out waiting for workflow agent session ${agentSessionId} harness session id.`,
+            ),
+        }),
+      ),
+    );
+    return {
+      agentSessionId,
+      harnessSessionId,
+      seededAt,
+      paneId: created.paneId,
+    };
+  });
+}
+
+function writePromptToPty(input: {
+  readonly pty: PtyServiceShape;
+  readonly ptyProcessId: number;
+  readonly text: string;
+}) {
+  return Effect.gen(function* () {
+    const normalized = input.text.replace(/\r\n/g, '\n');
+    yield* input.pty.writeInput({
+      ptyProcessId: input.ptyProcessId,
+      data: `\x1b[200~${normalized}\x1b[201~`,
+    });
+    yield* Effect.sleep(`${promptSubmitDelayMs} millis`);
+    yield* input.pty.writeInput({
+      ptyProcessId: input.ptyProcessId,
+      data: '\r',
+    });
   });
 }
 
@@ -382,20 +442,18 @@ function agentSessionIdForCreatedPane(
   });
 }
 
-function waitForPtyOutputQuiescence(
+function waitForPtyStartupOutput(
   pty: PtyServiceShape,
   ptyProcessId: number,
-  previousBytes = 0,
-  stableMs = 0,
-  sawOutput = false,
 ): Effect.Effect<void, unknown, never> {
   return Effect.gen(function* () {
     const bytes = yield* ptyOutputBytes(pty, ptyProcessId);
-    const nextSawOutput = sawOutput || bytes > 0;
-    const nextStableMs = bytes === previousBytes ? stableMs + startupPollMs : 0;
-    if (nextSawOutput && nextStableMs >= startupQuietMs) return;
+    if (bytes > 0) {
+      yield* Effect.sleep(`${startupSettleMs} millis`);
+      return;
+    }
     yield* Effect.sleep(`${startupPollMs} millis`);
-    return yield* waitForPtyOutputQuiescence(pty, ptyProcessId, bytes, nextStableMs, nextSawOutput);
+    return yield* waitForPtyStartupOutput(pty, ptyProcessId);
   });
 }
 
@@ -434,7 +492,10 @@ function waitForHarnessSessionId(
       submitRetryCount < submitRetryLimit &&
       nextElapsedMs >= (submitRetryCount + 1) * submitRetryIntervalMs;
     if (shouldRetrySubmit) {
-      yield* input.pty.writeInput({ ptyProcessId: input.ptyProcessId, data: '\r' });
+      yield* input.pty.writeInput({
+        ptyProcessId: input.ptyProcessId,
+        data: '\r',
+      });
     }
     return yield* waitForHarnessSessionId(
       input,

@@ -39,7 +39,6 @@ const TERMINAL_FIT_RETRY_FRAMES = 12;
 export function XtermSurface({
   transport,
   initiallyInteractive,
-  locked = false,
   disableScrollback = false,
   className = 'isagi-xterm isagi-xterm-edge min-h-0 flex-1',
   onInput,
@@ -52,7 +51,6 @@ export function XtermSurface({
 }: {
   readonly transport: PtyStreamSurfaceTransport;
   readonly initiallyInteractive: boolean;
-  readonly locked?: boolean | undefined;
   readonly disableScrollback?: boolean | undefined;
   readonly className?: string | undefined;
   readonly onInput?: ((data: string) => void) | undefined;
@@ -66,7 +64,6 @@ export function XtermSurface({
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const interactiveRef = useRef(initiallyInteractive);
-  const lockedRef = useRef(locked);
   const [ready, setReady] = useState(false);
 
   const setSurfaceReady = useCallback(
@@ -80,13 +77,6 @@ export function XtermSurface({
   useEffect(() => {
     interactiveRef.current = initiallyInteractive;
   }, [initiallyInteractive]);
-
-  useEffect(() => {
-    lockedRef.current = locked;
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.disableStdin = !interactiveRef.current || !onInput || locked;
-  }, [locked, onInput]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -123,7 +113,7 @@ export function XtermSurface({
         allowProposedApi: true,
         convertEol: false,
         cursorBlink: true,
-        disableStdin: !initiallyInteractive || !onInput || lockedRef.current,
+        disableStdin: !initiallyInteractive || !onInput,
         fontFamily: terminalFontFamily,
         fontSize: 12,
         lineHeight: 1.35,
@@ -149,7 +139,7 @@ export function XtermSurface({
       }
 
       const sendInput = (data: string) => {
-        if (!onInput || lockedRef.current) {
+        if (!onInput) {
           return;
         }
         terminal.scrollToBottom();
@@ -230,11 +220,12 @@ export function XtermSurface({
       };
       container.addEventListener('copy', handleTerminalCopy);
 
+      fit();
       const sink: PtyStreamSink = {
         write: (data) => terminal.write(data),
         setInteractive: (interactive) => {
           interactiveRef.current = interactive;
-          terminal.options.disableStdin = !interactive || !onInput || lockedRef.current;
+          terminal.options.disableStdin = !interactive || !onInput;
           onInteractiveChange?.(interactive);
         },
         onConnected: () => scheduleFit(),

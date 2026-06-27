@@ -18,6 +18,7 @@ import {
   CommandServiceLive,
   type CommandServiceShape,
 } from './commands/index.js';
+import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
 import { GitLive } from './git/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
@@ -237,6 +238,7 @@ const ServicesLayer = Layer.mergeAll(
   CommandServiceLayer,
   WorkflowEngineLayer,
   StartupActivationLayer,
+  EventLoopWatchdogLive,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 

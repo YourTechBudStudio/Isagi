@@ -33,13 +33,11 @@ export function PtyPane({
   pane,
   surface,
   focused,
-  locked,
   onFocus,
 }: {
   readonly pane: SurfacePane;
   readonly surface: SurfaceDetail;
   readonly focused: boolean;
-  readonly locked: boolean;
   readonly onFocus: () => void;
 }) {
   const dispatchCommand = useCommandDispatcher();
@@ -106,15 +104,12 @@ export function PtyPane({
     dispatchPaneCommand('delete-active-pane');
   }, [dispatchPaneCommand]);
   const paneMenuItems = useMemo(
-    () =>
-      locked
-        ? []
-        : [
-            { label: 'Split Right', icon: PanelRight, onSelect: onSplitRight },
-            { label: 'Split Down', icon: PanelBottom, onSelect: onSplitDown },
-            { label: 'Delete pane', icon: Trash2, danger: true, onSelect: onDelete },
-          ],
-    [locked, onDelete, onSplitDown, onSplitRight],
+    () => [
+      { label: 'Split Right', icon: PanelRight, onSelect: onSplitRight },
+      { label: 'Split Down', icon: PanelBottom, onSelect: onSplitDown },
+      { label: 'Delete pane', icon: Trash2, danger: true, onSelect: onDelete },
+    ],
+    [onDelete, onSplitDown, onSplitRight],
   );
   const withPaneMenu = useCallback(
     (children: ReactElement) =>
@@ -204,7 +199,6 @@ export function PtyPane({
           paneId={pane.id}
           focused={focused}
           transport={transport}
-          locked={locked}
           onRendererWarning={onRendererWarning}
         />
       ) : (
@@ -214,13 +208,11 @@ export function PtyPane({
           </div>,
         )
       )}
-      {locked ? null : (
-        <PaneActionCluster
-          onSplitRight={onSplitRight}
-          onSplitDown={onSplitDown}
-          onDelete={onDelete}
-        />
-      )}
+      <PaneActionCluster
+        onSplitRight={onSplitRight}
+        onSplitDown={onSplitDown}
+        onDelete={onDelete}
+      />
     </section>
   );
 }

@@ -83,6 +83,10 @@ export const WorkflowEventLedgerLive = Layer.effect(
     const repository = yield* WorkflowRepository;
     const eventBus = yield* InternalRuntimeEventBus;
     const root = join(directory.paths.sessionsPath, 'workflow-runs');
+    // Run directories are created lazily on first append and remembered here so we
+    // skip a synchronous mkdir on every subsequent append (the engine appends many
+    // events per run). Entries are dropped when a run's directory is removed.
+    const ensuredRunDirs = new Set<number>();
 
     const service: WorkflowEventLedgerService = {
       append: (input) =>
@@ -95,8 +99,20 @@ export const WorkflowEventLedgerLive = Layer.effect(
           const path = eventPath(root, input.runId);
           yield* Effect.tryPromise({
             try: async () => {
-              mkdirSync(runDirectory(root, input.runId), { recursive: true });
-              await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
+              if (!ensuredRunDirs.has(input.runId)) {
+                mkdirSync(runDirectory(root, input.runId), { recursive: true });
+                ensuredRunDirs.add(input.runId);
+              }
+              const line = `${JSON.stringify(event)}\n`;
+              try {
+                await appendFile(path, line, 'utf8');
+              } catch (error) {
+                // The cached directory may have vanished out-of-band; recreate it once
+                // and retry so appends self-heal without waiting for a restart.
+                if (!isMissingFileError(error)) throw error;
+                mkdirSync(runDirectory(root, input.runId), { recursive: true });
+                await appendFile(path, line, 'utf8');
+              }
             },
             catch: (cause) =>
               new WorkflowEventLedgerError({
@@ -132,14 +148,14 @@ export const WorkflowEventLedgerLive = Layer.effect(
         Effect.gen(function* () {
           const runs = yield* repository.listRunTree(rootRunId);
           for (const run of runs) {
-            yield* removeRunDirectory(root, run.id);
+            yield* removeRunDirectory(root, run.id, ensuredRunDirs);
           }
         }),
       collectOrphans: Effect.gen(function* () {
         const ids = yield* listLedgerRunIds(root);
         for (const runId of ids) {
           const run = yield* repository.findRun(runId);
-          if (!run) yield* removeRunDirectory(root, runId);
+          if (!run) yield* removeRunDirectory(root, runId, ensuredRunDirs);
         }
 
         yield* service.sweepSurfaceDeletedRuns;
@@ -243,11 +259,12 @@ function readRunEvents(root: string, run: WorkflowRunRow) {
   });
 }
 
-function removeRunDirectory(root: string, runId: number) {
+function removeRunDirectory(root: string, runId: number, ensuredRunDirs: Set<number>) {
   const directory = runDirectory(root, runId);
   return Effect.try({
     try: () => {
       rmSync(directory, { recursive: true, force: true });
+      ensuredRunDirs.delete(runId);
     },
     catch: (cause) =>
       new WorkflowEventLedgerError({

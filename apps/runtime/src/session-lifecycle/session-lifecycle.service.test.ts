@@ -28,24 +28,45 @@ test('attach tokens are single use', async () => {
   if (Either.isLeft(result.second)) assert.equal(result.second.left.code, 'attach_token_invalid');
 });
 
-test('issuing a new token revokes the previous token for that session', async () => {
+test('issuing multiple tokens keeps unresolved attach attempts independent', async () => {
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const lifecycle = yield* SessionLifecycle;
-      const stale = yield* lifecycle.issueAttachToken(agentKey);
-      const fresh = yield* lifecycle.issueAttachToken(agentKey);
-      const staleResult = yield* lifecycle
-        .consumeAttachToken({ key: agentKey, token: stale.token })
+      const firstToken = yield* lifecycle.issueAttachToken(agentKey);
+      const secondToken = yield* lifecycle.issueAttachToken(agentKey);
+      const first = yield* lifecycle
+        .consumeAttachToken({ key: agentKey, token: firstToken.token })
         .pipe(Effect.either);
-      const freshResult = yield* lifecycle
-        .consumeAttachToken({ key: agentKey, token: fresh.token })
+      const second = yield* lifecycle
+        .consumeAttachToken({ key: agentKey, token: secondToken.token })
         .pipe(Effect.either);
-      return { staleResult, freshResult };
+      return { first, second };
     }).pipe(Effect.provide(SessionLifecycleLive)),
   );
 
-  assert.equal(Either.isLeft(result.staleResult), true);
-  assert.equal(Either.isRight(result.freshResult), true);
+  assert.equal(Either.isRight(result.first), true);
+  assert.equal(Either.isRight(result.second), true);
+});
+
+test('revoking attach tokens invalidates all outstanding tokens for a session', async () => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const lifecycle = yield* SessionLifecycle;
+      const firstToken = yield* lifecycle.issueAttachToken(agentKey);
+      const secondToken = yield* lifecycle.issueAttachToken(agentKey);
+      yield* lifecycle.revokeAttachTokens(agentKey);
+      const first = yield* lifecycle
+        .consumeAttachToken({ key: agentKey, token: firstToken.token })
+        .pipe(Effect.either);
+      const second = yield* lifecycle
+        .consumeAttachToken({ key: agentKey, token: secondToken.token })
+        .pipe(Effect.either);
+      return { first, second };
+    }).pipe(Effect.provide(SessionLifecycleLive)),
+  );
+
+  assert.equal(Either.isLeft(result.first), true);
+  assert.equal(Either.isLeft(result.second), true);
 });
 
 test('attach tokens expire after five minutes', async () => {

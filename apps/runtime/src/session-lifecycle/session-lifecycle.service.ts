@@ -69,8 +69,21 @@ export const SessionLifecycleLive = Layer.scoped(
         }),
       issueAttachToken: (key) =>
         Effect.sync(() => {
-          revokeTokensForKey(tokens, tokensBySession, key);
           const now = Date.now();
+          const keyId = sessionKeyId(key);
+          const sessionTokens = tokensBySession.get(keyId) ?? new Set<string>();
+          // Sweep this session's already-expired tokens on each issue so dead tokens
+          // don't pile up across issues (they are otherwise only dropped on
+          // consume/revoke). This bounds growth to tokens issued within one TTL
+          // window rather than a fixed cap; live tokens stay valid because concurrent
+          // attach attempts are intentionally kept independent.
+          for (const token of sessionTokens) {
+            const existing = tokens.get(token);
+            if (!existing || existing.expiresAt <= now) {
+              tokens.delete(token);
+              sessionTokens.delete(token);
+            }
+          }
           const record = {
             token: randomBytes(32).toString('base64url'),
             key,
@@ -78,8 +91,8 @@ export const SessionLifecycleLive = Layer.scoped(
             expiresAt: now + attachTokenTtlMs,
           } satisfies AttachTokenRecord;
           tokens.set(record.token, record);
-          const keyId = sessionKeyId(key);
-          tokensBySession.set(keyId, new Set([record.token]));
+          sessionTokens.add(record.token);
+          tokensBySession.set(keyId, sessionTokens);
           return record;
         }),
       consumeAttachToken: (input) =>

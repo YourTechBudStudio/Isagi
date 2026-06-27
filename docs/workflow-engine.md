@@ -168,10 +168,10 @@ The v1 action surface is `worktreePath` plus seven verbs:
 - **`spawnSession({ harness, prompt })` →
   `{ agentSessionId, harnessSessionId, seededAt, paneId }`.** This verb is allowed to take a
   couple of seconds. It adds an agent pane to the run's captured surface, waits for the PTY to come
-  live and its startup output to quiesce, stamps `seededAt`, injects the **seed prompt**, then polls
-  the harness metadata for the `harnessSessionId` (which only appears after the first inject) and
-  returns it. Every wait is bounded (~10s) and times out into a `failed` run rather than hanging the
-  dispatcher.
+  live and produce initial startup output, gives the TUI a short settle window, stamps `seededAt`,
+  injects the **seed prompt**, then polls the harness metadata for the `harnessSessionId` (which only
+  appears after the first inject) and returns it. Every wait is bounded (~10s) and times out into a
+  `failed` run rather than hanging the dispatcher.
   - Placement is deterministic and runtime-owned: a single-pane surface splits `right`; otherwise
     the runtime descends through the last child of the layout tree and splits that leaf `down`, so
     repeated agent panes stack in the right/bottom region. A pre-existing vertical-only surface

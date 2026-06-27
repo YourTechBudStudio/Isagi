@@ -1,14 +1,4 @@
-import {
-  accessSync,
-  appendFileSync,
-  chmodSync,
-  closeSync,
-  constants,
-  openSync,
-  readSync,
-  readdirSync,
-  statSync,
-} from 'node:fs';
+import { accessSync, appendFileSync, chmodSync, constants, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
@@ -16,6 +6,7 @@ import process from 'node:process';
 import { Context, Effect, Layer } from 'effect';
 import * as nodePty from 'node-pty';
 
+import { replayUtf8LogFile } from '../log-replay.js';
 import {
   createShellIntegrationParser,
   foregroundStateFromEvent,
@@ -26,16 +17,8 @@ import type {
   NodePtyBackendRef,
   PtyBackend as PtyBackendShape,
 } from '../types.js';
-import {
-  PtyKillError,
-  PtyResizeError,
-  PtyServiceError,
-  PtyStartError,
-  PtyWriteError,
-} from '../types.js';
+import { PtyKillError, PtyResizeError, PtyStartError, PtyWriteError } from '../types.js';
 import { collectNodePtyGarbage } from './node-pty-gc.js';
-
-const replayChunkBytes = 64 * 1024;
 
 interface LiveNodePtyProcess {
   readonly ptyProcessId: number;
@@ -327,36 +310,11 @@ function replayBackendLog(
   limitBytes: number | null,
   send: (message: import('@isagi/contracts').PtyStreamOutputMessageSet) => void,
 ) {
-  return Effect.try({
-    try: () => {
-      const bytes = path ? (limitBytes ?? statSync(path).size) : 0;
-      send({ type: 'replay_start', bytes });
-      if (path && bytes > 0) {
-        const fd = openSync(path, 'r');
-        try {
-          const buffer = Buffer.allocUnsafe(Math.min(replayChunkBytes, bytes));
-          let offset = 0;
-          while (offset < bytes) {
-            const toRead = Math.min(buffer.byteLength, bytes - offset);
-            const read = readSync(fd, buffer, 0, toRead, offset);
-            if (read <= 0) {
-              break;
-            }
-            offset += read;
-            send({ type: 'output', data: buffer.toString('utf8', 0, read), replay: true });
-          }
-        } finally {
-          closeSync(fd);
-        }
-      }
-      send({ type: 'replay_end' });
-    },
-    catch: (cause) =>
-      new PtyServiceError({
-        code: 'log_read_failed',
-        message: 'Could not replay this session log.',
-        cause,
-      }),
+  return replayUtf8LogFile({
+    logPath: path,
+    bytes: limitBytes,
+    send,
+    failureMessage: 'Could not replay this session log.',
   });
 }
 

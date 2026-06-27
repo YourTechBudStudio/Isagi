@@ -38,7 +38,8 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
   let buffer: string[] = [];
   let frozen = false;
 
-  const isLive = () => socket?.readyState === WebSocket.OPEN && interactive;
+  const isOpen = () => socket?.readyState === WebSocket.OPEN;
+  const isLive = () => isOpen() && interactive;
 
   return {
     beginAttach(initialInteractive) {
@@ -83,7 +84,7 @@ export function createPtyStreamTransport(): PtyStreamTransportController {
       }
     },
     sendResize(cols, rows) {
-      if (isLive()) {
+      if (isOpen()) {
         socket?.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     },

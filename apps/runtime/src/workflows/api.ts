@@ -28,6 +28,18 @@ const runWithRuntime =
   ) =>
     runtime.runPromise(effect, options);
 
+// Bound the snapshot sent on connect/replay so a long-lived surface's ledger can't
+// ship an unbounded payload (and overfill the client's bounded buffer). Events are
+// chronological, so the most recent N are what the panel shows. Keep aligned with the
+// client cap in apps/web/src/lib/workspace/workflow-events/stream.ts.
+const maxSnapshotEvents = 1000;
+
+function capRecentEvents<T>(events: readonly T[]): readonly T[] {
+  return events.length > maxSnapshotEvents
+    ? events.slice(events.length - maxSnapshotEvents)
+    : events;
+}
+
 export function registerWorkflowApi(
   fastify: FastifyInstance,
   runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>,
@@ -65,7 +77,7 @@ export function registerWorkflowApi(
       Effect.gen(function* () {
         const ledger = yield* WorkflowEventLedger;
         const events = yield* ledger.readSurfaceEvents(params.surfaceId);
-        return { surfaceId: params.surfaceId, events };
+        return { surfaceId: params.surfaceId, events: capRecentEvents(events) };
       }),
     mapError: (error, context) => toWorkflowApiError(error, context),
     run,
@@ -209,7 +221,8 @@ function registerWorkflowEventsStreamRoute(
                 console.warn('[runtime] Workflow events websocket unsubscribe failed', error);
               });
             };
-            if (!send({ type: 'workflow_events_snapshot', events: [...events] })) return;
+            if (!send({ type: 'workflow_events_snapshot', events: [...capRecentEvents(events)] }))
+              return;
 
             const pump = (): void => {
               if (closed) return;
