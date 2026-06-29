@@ -1,7 +1,9 @@
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { Data, Effect } from 'effect';
-import { tsImport } from 'tsx/esm/api';
+import { build } from 'esbuild';
 
 import type { WorkflowDefinition } from './types.js';
 
@@ -11,13 +13,17 @@ export class WorkflowLoadError extends Data.TaggedError('WorkflowLoadError')<{
   readonly cause?: unknown;
 }> {}
 
+const workflowArtifactBuilds = new Map<string, Promise<void>>();
+
 export function loadWorkflowDefinition(input: {
   readonly workflowKey: string;
   readonly indexPath: string;
+  readonly artifactPath: string;
 }) {
   return Effect.tryPromise({
     try: async () => {
-      const loaded = (await tsImport(input.indexPath, pathToFileURL(import.meta.url).href)) as {
+      await ensureWorkflowArtifact(input);
+      const loaded = (await import(pathToFileURL(input.artifactPath).href)) as {
         readonly default?: unknown;
       };
       return workflowDefinitionFromDefault(input.workflowKey, loaded.default);
@@ -28,6 +34,38 @@ export function loadWorkflowDefinition(input: {
         message: `Failed to load workflow ${input.workflowKey}: ${errorMessage(cause)}`,
         cause,
       }),
+  });
+}
+
+async function ensureWorkflowArtifact(input: {
+  readonly indexPath: string;
+  readonly artifactPath: string;
+}) {
+  if (existsSync(input.artifactPath)) return;
+  const inFlight = workflowArtifactBuilds.get(input.artifactPath);
+  if (inFlight) return inFlight;
+
+  const buildPromise = buildWorkflowArtifact(input).finally(() => {
+    workflowArtifactBuilds.delete(input.artifactPath);
+  });
+  workflowArtifactBuilds.set(input.artifactPath, buildPromise);
+  return buildPromise;
+}
+
+async function buildWorkflowArtifact(input: {
+  readonly indexPath: string;
+  readonly artifactPath: string;
+}) {
+  mkdirSync(dirname(input.artifactPath), { recursive: true });
+  await build({
+    entryPoints: [input.indexPath],
+    outfile: input.artifactPath,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node22',
+    packages: 'external',
+    logLevel: 'silent',
   });
 }
 

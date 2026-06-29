@@ -14,7 +14,7 @@ import { ensureWorkflowsScaffold } from './scaffold.js';
 
 const require = createRequire(import.meta.url);
 
-test('scaffolded workflows load through tsx using the copied built SDK', async () => {
+test('scaffolded workflows load through compiled artifacts using the copied built SDK', async () => {
   const dataRoot = join(tmpdir(), `isagi-workflow-loading-${process.pid}-${Date.now()}`);
   const workflowsPath = join(dataRoot, 'workflows');
   const workflowPath = join(workflowsPath, 'x');
@@ -38,8 +38,10 @@ export default defineWorkflow({
       loadWorkflowDefinition({
         workflowKey: 'x',
         indexPath: join(workflowPath, 'index.ts'),
+        artifactPath: workflowArtifactPath(workflowsPath, 'x', 'first-load'),
       }),
     );
+    assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'first-load')), true);
     assert.deepEqual(await loaded.step(emptyCtx(), {}, undefined), {
       type: 'cont',
       state: { phase: 'first-load' },
@@ -62,8 +64,10 @@ export default defineWorkflow({
       loadWorkflowDefinition({
         workflowKey: 'x',
         indexPath: join(workflowPath, 'index.ts'),
+        artifactPath: workflowArtifactPath(workflowsPath, 'x', 'second-load'),
       }),
     );
+    assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'second-load')), true);
     assert.deepEqual(await reloaded.step(emptyCtx(), {}, undefined), {
       type: 'done',
       value: { phase: 'second-load' },
@@ -146,16 +150,16 @@ export default defineWorkflow({
       value: 1,
     });
 
-    await sleep(5);
-    writeWorkflowHelper(workflowPath, `export const value = 22;\n`);
+    writeWorkflowHelper(workflowPath, `export const value = 2;\n`);
 
     const reloaded = await Effect.runPromise(registry.get('cached'));
     assert.ok(reloaded);
     assert.notEqual(reloaded, first);
     assert.deepEqual(await reloaded.step(emptyCtx(), {}, undefined), {
       type: 'done',
-      value: 22,
+      value: 2,
     });
+    assert.equal(existsSync(join(workflowsPath, '.cache', 'workflow-definitions')), true);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -223,10 +227,6 @@ function writeWorkflowHelper(workflowPath: string, contents: string) {
   writeFileSync(join(workflowPath, 'helper.ts'), contents, 'utf8');
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writeFile(root: string, path: string, contents: string) {
   const target = join(root, path);
   mkdirSync(join(target, '..'), { recursive: true });
@@ -235,6 +235,17 @@ function writeFile(root: string, path: string, contents: string) {
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+}
+
+function workflowArtifactPath(workflowsPath: string, workflowKey: string, sourceHash: string) {
+  return join(
+    workflowsPath,
+    '.cache',
+    'workflow-definitions',
+    workflowKey,
+    sourceHash,
+    'index.mjs',
+  );
 }
 
 function emptyCtx() {

@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
@@ -44,7 +45,7 @@ export function createFilesystemWorkflowRegistry(workflowsPath: string): Workflo
   const loadedDefinitions = new Map<
     string,
     {
-      readonly signature: string;
+      readonly sourceHash: string;
       readonly definition: WorkflowDefinition<unknown>;
     }
   >();
@@ -54,14 +55,15 @@ export function createFilesystemWorkflowRegistry(workflowsPath: string): Workflo
       Effect.gen(function* () {
         const keys = yield* knownWorkflowKeys(workflowsPath);
         if (!keys.includes(workflowKey)) return null;
-        const signature = yield* workflowDefinitionSignature(workflowsPath, workflowKey);
+        const sourceHash = yield* workflowDefinitionHash(workflowsPath, workflowKey);
         const cached = loadedDefinitions.get(workflowKey);
-        if (cached?.signature === signature) return cached.definition;
+        if (cached?.sourceHash === sourceHash) return cached.definition;
         const definition = yield* loadWorkflowDefinition({
           workflowKey,
           indexPath: workflowIndexPath(workflowsPath, workflowKey),
+          artifactPath: workflowArtifactPath(workflowsPath, workflowKey, sourceHash),
         });
-        loadedDefinitions.set(workflowKey, { signature, definition });
+        loadedDefinitions.set(workflowKey, { sourceHash, definition });
         return definition;
       }),
     knownKeys: knownWorkflowKeys(workflowsPath),
@@ -244,16 +246,19 @@ function workflowIndexPath(workflowsPath: string, workflowKey: string) {
   return join(workflowsPath, workflowKey, 'index.ts');
 }
 
-function workflowDefinitionSignature(workflowsPath: string, workflowKey: string) {
+function workflowDefinitionHash(workflowsPath: string, workflowKey: string) {
   return Effect.try({
     try: () => {
       const workflowPath = join(workflowsPath, workflowKey);
-      return listWorkflowSourceFiles(workflowPath)
-        .map((path) => {
-          const stats = statSync(path);
-          return `${path}:${stats.mtimeMs}:${stats.size}`;
-        })
-        .join('\n');
+      const hash = createHash('sha256');
+      hash.update('isagi-workflow-loader-esbuild-v1\0');
+      for (const path of listWorkflowSourceFiles(workflowPath)) {
+        hash.update(relative(workflowPath, path));
+        hash.update('\0');
+        hash.update(readFileSync(path));
+        hash.update('\0');
+      }
+      return hash.digest('hex');
     },
     catch: (cause) =>
       new WorkflowRegistryError({
@@ -262,6 +267,17 @@ function workflowDefinitionSignature(workflowsPath: string, workflowKey: string)
         cause,
       }),
   });
+}
+
+function workflowArtifactPath(workflowsPath: string, workflowKey: string, sourceHash: string) {
+  return join(
+    workflowsPath,
+    '.cache',
+    'workflow-definitions',
+    workflowKey,
+    sourceHash,
+    'index.mjs',
+  );
 }
 
 function listWorkflowSourceFiles(root: string): readonly string[] {

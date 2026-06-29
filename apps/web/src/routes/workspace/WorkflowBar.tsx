@@ -103,7 +103,8 @@ export function WorkflowBar({
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const meta = statusMeta[summary.status];
   const StatusIcon = meta.icon;
-  const label = summary.uiFeedback?.message ?? summary.title;
+  const heading = summary.uiFeedback?.phase ?? summary.title;
+  const body = summary.uiFeedback?.message;
   const prompt = summary.status === 'waiting_user' ? summary.prompt : undefined;
 
   useEffect(() => {
@@ -121,23 +122,28 @@ export function WorkflowBar({
       aria-label="Workflow"
     >
       <span aria-hidden className={`absolute inset-x-0 top-0 h-px ${meta.signal}`} />
-      <div className="flex h-11 flex-none items-center gap-2.5 px-3.5">
+      <div className="flex min-h-16 flex-none items-center gap-2.5 px-3.5 py-2">
         <StatusIcon size={13} className={meta.tone} aria-hidden />
-        <span className={`truncate font-mono text-[12px] ${meta.tone}`}>{label}</span>
-        <span className="truncate font-mono text-[10.5px] text-fg-subtle">{meta.label}</span>
-        {summary.status === 'failed' &&
-          summary.error && (
-            // The workflow's own thrown message — diagnostic, not a voiced line (the
-            // "Failed" label above is the voiced status). Muted so it reads as the
-            // raw detail a person can quote in a bug report, never as product copy.
-            <span
-              className="min-w-0 truncate font-mono text-[10.5px] text-fg-subtle"
-              title={summary.error}
-            >
-              {summary.error}
-            </span>
-          )}
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`truncate font-mono text-[11px] ${meta.tone}`}>{heading}</span>
+            <span className="truncate font-mono text-[10.5px] text-fg-subtle">{meta.label}</span>
+          </div>
+          {body && <p className="mt-0.5 text-[13.5px] leading-snug text-fg">{body}</p>}
+          {summary.status === 'failed' &&
+            summary.error && (
+              // The workflow's own thrown message — diagnostic, not a voiced line (the
+              // "Failed" label above is the voiced status). Muted so it reads as the
+              // raw detail a person can quote in a bug report, never as product copy.
+              <p
+                className="mt-0.5 min-w-0 truncate font-mono text-[10.5px] text-fg-subtle"
+                title={summary.error}
+              >
+                {summary.error}
+              </p>
+            )}
+        </div>
+        <div className="ml-3 flex flex-none items-center gap-0.5">
           <WorkflowBarControls
             status={summary.status}
             busyAction={busyAction}

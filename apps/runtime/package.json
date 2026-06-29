@@ -23,6 +23,7 @@
     "better-sqlite3": "^12.10.0",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.21.2",
+    "esbuild": "^0.28.0",
     "fastify": "^5.8.5",
     "node-pty": "^1.1.0",
     "tinyglobby": "^0.2.17",

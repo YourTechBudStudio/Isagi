@@ -78,6 +78,9 @@ importers:
       effect:
         specifier: ^3.21.2
         version: 3.21.2
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
       fastify:
         specifier: ^5.8.5
         version: 5.8.5

@@ -132,9 +132,12 @@ copied built `@isagi/workflow-sdk` package under
 package-manager install or symlink.
 
 Discovery is on-demand: the registry scans workflow directories when listing or starting workflows.
-The registry does not persist workflow definitions in the database. `index.ts` is imported with
-`tsx`'s `tsImport`, and the dispatcher re-imports the file for every step. This gives hand-edited
-workflows hot reload on the next reducer step.
+The registry does not persist workflow definitions in the database. It fingerprints each workflow's
+local TypeScript source by content hash, keeps the loaded definition in memory while that hash is
+current, and compiles changed sources with `esbuild` to
+`<dataRoot>/workflows/.cache/workflow-definitions/<workflowKey>/<hash>/index.mjs`. The runtime then
+imports that compiled JavaScript artifact. This gives hand-edited workflows hot reload on the next
+reducer step while letting unchanged workflows reuse compiled artifacts after a runtime restart.
 
 Starting a workflow is an explicit-context operation. The caller supplies `worktreeId`,
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating
