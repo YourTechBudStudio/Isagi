@@ -21,11 +21,11 @@ test('Pi turn edges do not end while pending messages are draining', () => {
   );
 });
 
-test('Pi turn edges use assistant message_end stopReason as harness error source', () => {
+test('Pi turn edges use sanitized assistant stopReason as harness error source', () => {
   assert.deepEqual(
     derivePiTurnEdges([
       record('agent_start', 0),
-      messageEnd(1, 'assistant', [{ type: 'text', text: 'failed' }], 'error'),
+      agentError(1, 'error'),
       record('agent_end', 2, { pending: false }),
     ]),
     [
@@ -59,27 +59,17 @@ function record(
   };
 }
 
-function messageEnd(
-  seq: number,
-  role: 'user' | 'assistant',
-  content: unknown,
-  stopReason?: string,
-): HarnessObservationRecord {
+function agentError(seq: number, stopReason: 'error' | 'aborted'): HarnessObservationRecord {
   return {
     recordedAt: time(seq),
     seq,
     ptyProcessId: 20,
     harness: 'pi',
-    nativeEvent: 'message_end',
+    nativeEvent: 'agent_error',
     event: {
-      nativeEvent: 'message_end',
-      event: {
-        message: {
-          role,
-          content,
-          ...(stopReason ? { stopReason } : {}),
-        },
-      },
+      nativeEvent: 'agent_error',
+      sourceNativeEvent: 'message_end',
+      stopReason,
       context: { hasPendingMessages: null },
     },
   };

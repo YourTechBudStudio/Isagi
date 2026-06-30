@@ -42,9 +42,15 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
 
     const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
     assert.match(extensionSource, /agent_start/);
-    assert.match(extensionSource, /message_end/);
     assert.match(extensionSource, /agent_end/);
-    assert.match(extensionSource, /toolResult/);
+    assert.match(extensionSource, /agent_error/);
+    assert.match(extensionSource, /message_end/);
+    assert.match(extensionSource, /stopReason/);
+    assert.doesNotMatch(extensionSource, /safeJsonValue\(event\)/);
+    assert.doesNotMatch(extensionSource, /content/);
+    assert.doesNotMatch(extensionSource, /toolResult/);
+    assert.doesNotMatch(extensionSource, /beforeAgentStart/);
+    assert.doesNotMatch(extensionSource, /lastBeforeAgentStart/);
     assert.doesNotMatch(extensionSource, /session_start/);
     assert.doesNotMatch(extensionSource, /turn_start/);
     assert.doesNotMatch(extensionSource, /turn_end/);
@@ -127,15 +133,16 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.match(opencodeSource, /session\.status/);
     assert.match(opencodeSource, /session\.idle/);
     assert.match(opencodeSource, /session\.error/);
-    assert.match(opencodeSource, /message\.updated/);
-    assert.match(opencodeSource, /message\.part\.updated/);
+    assert.doesNotMatch(opencodeSource, /message\.updated/);
+    assert.doesNotMatch(opencodeSource, /message\.part\.updated/);
     assert.match(opencodeSource, /appendHarnessEvent/);
     assert.match(opencodeSource, /harness: "opencode"/);
     assert.match(opencodeSource, /chat\.params/);
     assert.match(opencodeSource, /chat\.message/);
-    assert.match(opencodeSource, /output: safeJsonValue/);
-    assert.match(opencodeSource, /completedAssistantMessageIds/);
-    assert.match(opencodeSource, /completedTextPartIds/);
+    assert.doesNotMatch(opencodeSource, /output: safeJsonValue/);
+    assert.doesNotMatch(opencodeSource, /input: safeJsonValue/);
+    assert.doesNotMatch(opencodeSource, /completedAssistantMessageIds/);
+    assert.doesNotMatch(opencodeSource, /completedTextPartIds/);
     assert.match(opencodeSource, /ISAGI_HARNESS_METADATA_PATH/);
     assert.match(opencodeSource, /ISAGI_HARNESS_ARTIFACT_DIRECTORY/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_JSONL_PATH/);
@@ -159,6 +166,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const claudeHook = readFileSync(artifacts.claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
     assert.match(claudeHook, /hook_event_name/);
+    assert.doesNotMatch(claudeHook, /last_assistant_message/);
+    assert.doesNotMatch(claudeHook, /prompt/);
     assert.match(claudeHook, /appendHarnessEvent/);
     assert.match(claudeHook, /harness: "claude"/);
     assert.match(claudeHook, /ISAGI_HARNESS_METADATA_PATH/);
@@ -169,6 +178,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const codexHook = readFileSync(artifacts.codexHookPath, 'utf8');
     assert.match(codexHook, /session_id/);
     assert.match(codexHook, /hook_event_name/);
+    assert.doesNotMatch(codexHook, /last_assistant_message/);
+    assert.doesNotMatch(codexHook, /prompt/);
     assert.match(codexHook, /appendHarnessEvent/);
     assert.match(codexHook, /harness: "codex"/);
     assert.match(codexHook, /ISAGI_HARNESS_METADATA_PATH/);

@@ -23,8 +23,31 @@ await writeHarnessMetadata(sessionId);
 await appendHarnessEvent(sessionId, nativeEvent, {
   nativeEvent,
   notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
-  input: safeJsonValue(input),
+  input: safeJsonValue(harnessHookInput(input)),
 });
+
+function harnessHookInput(input) {
+  return {
+    session_id: stringOrNull(input.session_id),
+    transcript_path: stringOrNull(input.transcript_path),
+    cwd: stringOrNull(input.cwd),
+    hook_event_name: stringOrNull(input.hook_event_name),
+    model: stringOrNull(input.model),
+    permission_mode: stringOrNull(input.permission_mode),
+    notification_type: stringOrNull(input.notification_type),
+    turn_id: stringOrNull(input.turn_id),
+    source: stringOrNull(input.source),
+    stop_hook_active: booleanOrNull(input.stop_hook_active),
+  };
+}
+
+function stringOrNull(value) {
+  return typeof value === "string" ? value : null;
+}
+
+function booleanOrNull(value) {
+  return typeof value === "boolean" ? value : null;
+}
 `;
 }
 

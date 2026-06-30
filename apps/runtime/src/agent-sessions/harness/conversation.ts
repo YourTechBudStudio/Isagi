@@ -1,26 +1,84 @@
 import { Effect } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
-
+import type { AgentSessionRow } from '../../surfaces/types.js';
 import { readClaudeConversation } from './claude/conversation.js';
-import { deriveCodexConversation } from './codex/conversation.js';
+import { readCodexConversation } from './codex/conversation.js';
 import { HarnessLedgerObserver, type HarnessLedgerObserverService } from './observer.service.js';
-import { deriveOpenCodeConversation } from './opencode/conversation.js';
-import { derivePiConversation } from './pi/conversation.js';
+import { readOpenCodeConversation } from './opencode/conversation.js';
+import { readPiConversation } from './pi/conversation.js';
 import type { HarnessObservationRecord } from './projection.js';
 import type { ConversationMessage } from './types.js';
 
 export function getConversationHistory(
-  agentSessionId: number,
+  session: Pick<AgentSessionRow, 'id' | 'harness' | 'cwd' | 'harnessSessionId'>,
 ): Effect.Effect<readonly ConversationMessage[], never, HarnessLedgerObserverService> {
   return Effect.gen(function* () {
     const observer = yield* HarnessLedgerObserver;
-    const projection = yield* observer.getProjection(agentSessionId);
-    if (!projection) return [];
+    const projection = yield* observer.getProjection(session.id);
+    const streams = sortedHarnessStreams(projection?.recordsByHarnessSessionId ?? new Map());
+    if (session.harness === 'claude') {
+      const claudeStreams = targetedHarnessStreams(
+        streams,
+        session.harness,
+        session.harnessSessionId,
+      );
+      return yield* readClaudeConversation({
+        agentSessionId: session.id,
+        cwd: session.cwd,
+        harnessSessionId: session.harnessSessionId,
+        streams: claudeStreams,
+      });
+    }
+    if (session.harness === 'codex') {
+      const codexStreams = targetedHarnessStreams(
+        streams,
+        session.harness,
+        session.harnessSessionId,
+      );
+      return yield* readCodexConversation({
+        agentSessionId: session.id,
+        cwd: session.cwd,
+        harnessSessionId: session.harnessSessionId,
+        streams: codexStreams,
+      });
+    }
+    if (session.harness === 'pi') {
+      const piStreams = targetedHarnessStreams(streams, session.harness, session.harnessSessionId);
+      return yield* readPiConversation({
+        agentSessionId: session.id,
+        cwd: session.cwd,
+        harnessSessionId: session.harnessSessionId,
+        streams: piStreams,
+      });
+    }
+    if (session.harness === 'opencode') {
+      const openCodeStreams = targetedHarnessStreams(
+        streams,
+        session.harness,
+        session.harnessSessionId,
+      );
+      return yield* readOpenCodeConversation({
+        agentSessionId: session.id,
+        cwd: session.cwd,
+        harnessSessionId: session.harnessSessionId,
+        streams: openCodeStreams,
+      });
+    }
     return yield* readConversationHistory({
-      agentSessionId,
-      streams: sortedHarnessStreams(projection.recordsByHarnessSessionId),
+      agentSessionId: session.id,
+      streams,
     });
+  });
+}
+
+function targetedHarnessStreams(
+  streams: readonly [harnessSessionId: string, records: readonly HarnessObservationRecord[]][],
+  harness: AgentSessionRow['harness'],
+  harnessSessionId: string | null,
+) {
+  return streams.filter(([streamHarnessSessionId, records]) => {
+    if (records[0]?.harness !== harness) return false;
+    return harnessSessionId ? streamHarnessSessionId === harnessSessionId : true;
   });
 }
 
@@ -39,25 +97,25 @@ function readConversationHistory(input: {
         streams: claudeStreams,
       });
     }
-
-    const messages: ConversationMessage[] = [];
-    for (const [, records] of input.streams) {
-      const harness = records[0]?.harness;
-      if (!harness) continue;
-      messages.push(...deriveHarnessConversation(harness, records));
+    const codexStreams = input.streams.filter(([, records]) => records[0]?.harness === 'codex');
+    if (codexStreams.length > 0) {
+      return yield* readCodexConversation({
+        agentSessionId: input.agentSessionId,
+        streams: codexStreams,
+      });
     }
-    return messages;
-  });
-}
+    const openCodeStreams = input.streams.filter(
+      ([, records]) => records[0]?.harness === 'opencode',
+    );
+    if (openCodeStreams.length > 0) {
+      return yield* readOpenCodeConversation({
+        agentSessionId: input.agentSessionId,
+        streams: openCodeStreams,
+      });
+    }
 
-export function deriveHarnessConversation(
-  harness: AgentHarness,
-  records: readonly HarnessObservationRecord[],
-): readonly ConversationMessage[] {
-  if (harness === 'pi') return derivePiConversation(records);
-  if (harness === 'opencode') return deriveOpenCodeConversation(records);
-  if (harness === 'codex') return deriveCodexConversation(records);
-  return [];
+    return [];
+  });
 }
 
 function sortedHarnessStreams(

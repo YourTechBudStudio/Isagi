@@ -12,7 +12,7 @@ test('generic turn derivation fails an in-flight turn superseded by a new start'
     readonly startEvent: string;
   }[] = [
     { harness: 'pi', startEvent: 'agent_start' },
-    { harness: 'opencode', startEvent: 'chat.message' },
+    { harness: 'opencode', startEvent: 'agent_start' },
     { harness: 'claude', startEvent: 'UserPromptSubmit' },
     { harness: 'codex', startEvent: 'UserPromptSubmit' },
   ];

@@ -152,9 +152,10 @@ export interface WorkflowContext {
   }>;
   readonly inject: (agentSessionId: number, text: string) => Promise<void>;
   readonly closePane: (paneId: number) => Promise<void>;
-  readonly getConversationHistory: (
-    agentSessionId: number,
-  ) => Promise<readonly WorkflowConversationMessage[]>;
+  readonly getConversationHistory: (target: {
+    readonly agentSessionId: number;
+    readonly harnessSessionId: string;
+  }) => Promise<readonly WorkflowConversationMessage[]>;
   readonly getHarnessSessionId: (agentSessionId: number) => Promise<string>;
   readonly runHeadlessPrompt: (input: WorkflowHeadlessPromptInput) => Promise<WorkflowHeadlessOp>;
   readonly startWorkflow: (

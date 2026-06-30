@@ -13,12 +13,12 @@ test('projection assigns OpenCode seq after native-id canonical ordering', () =>
         record({
           recordedAt: '2026-06-18T00:00:00.002Z',
           nativeEvent: 'session.idle',
-          eventId: 'evt_edc18e4690011k2xiktqEoZ1ZO',
+          orderKey: 'edc18e4690011k2xiktqEoZ1ZO',
         }),
         record({
           recordedAt: '2026-06-18T00:00:00.001Z',
-          nativeEvent: 'chat.message',
-          eventId: 'evt_edc18e467001l6dAVUPbMoHzSd',
+          nativeEvent: 'agent_start',
+          orderKey: 'edc18e467001l6dAVUPbMoHzSd',
         }),
       ],
     },
@@ -28,7 +28,7 @@ test('projection assigns OpenCode seq after native-id canonical ordering', () =>
   assert.deepEqual(
     records.map((entry) => [entry.nativeEvent, entry.seq]),
     [
-      ['chat.message', 0],
+      ['agent_start', 0],
       ['session.idle', 1],
     ],
   );
@@ -37,7 +37,7 @@ test('projection assigns OpenCode seq after native-id canonical ordering', () =>
 function record(input: {
   readonly recordedAt: string;
   readonly nativeEvent: string;
-  readonly eventId: string;
+  readonly orderKey: string;
 }): AgentSessionHarnessJsonlRecord {
   return {
     schemaVersion: 1,
@@ -49,11 +49,8 @@ function record(input: {
     nativeEvent: input.nativeEvent,
     event: {
       nativeEvent: input.nativeEvent,
-      event: {
-        id: input.eventId,
-        type: input.nativeEvent,
-        properties: { sessionID: 'opencode-session-1' },
-      },
+      orderKey: input.orderKey,
+      event: { id: `evt_${input.orderKey}`, type: input.nativeEvent },
     },
   };
 }

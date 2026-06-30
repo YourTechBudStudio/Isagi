@@ -25,8 +25,6 @@ function sessionIdFromHookInput(input) {
 }
 
 export const IsagiSessionObserver = async () => {
-  const completedAssistantMessageIds = new Set();
-  const completedTextPartIds = new Set();
   return {
     event: async ({ event }) => {
       if (!event) return;
@@ -35,7 +33,8 @@ export const IsagiSessionObserver = async () => {
         await writeHarnessMetadata(sessionId);
         await appendHarnessEvent(sessionId, "session.status", {
           nativeEvent: "session.status",
-          event: safeJsonValue(event),
+          event: minimalOpenCodeEvent(event),
+          orderKey: openCodeEventOrderKey(event),
           status: sessionStatusFromEvent(event),
         });
         return;
@@ -45,29 +44,8 @@ export const IsagiSessionObserver = async () => {
         await writeHarnessMetadata(sessionId);
         await appendHarnessEvent(sessionId, event.type, {
           nativeEvent: event.type,
-          event: safeJsonValue(event),
-        });
-        return;
-      }
-      if (event.type === "message.part.updated" && isCompletedTextPartEvent(event)) {
-        const partId = event?.properties?.part?.id;
-        if (completedTextPartIds.has(partId)) return;
-        completedTextPartIds.add(partId);
-        const sessionId = sessionIdFromEvent(event);
-        await appendHarnessEvent(sessionId, "message.part.updated", {
-          nativeEvent: "message.part.updated",
-          event: safeJsonValue(event),
-        });
-        return;
-      }
-      if (event.type === "message.updated" && isCompletedAssistantMessageEvent(event)) {
-        const messageId = event?.properties?.info?.id;
-        if (completedAssistantMessageIds.has(messageId)) return;
-        completedAssistantMessageIds.add(messageId);
-        const sessionId = sessionIdFromEvent(event);
-        await appendHarnessEvent(sessionId, "message.updated", {
-          nativeEvent: "message.updated",
-          event: safeJsonValue(event),
+          event: minimalOpenCodeEvent(event),
+          orderKey: openCodeEventOrderKey(event),
         });
         return;
       }
@@ -80,10 +58,11 @@ export const IsagiSessionObserver = async () => {
     },
     "chat.message": async (input, output) => {
       await writeHarnessMetadata(sessionIdFromHookInput(input));
-      await appendHarnessEvent(sessionIdFromHookInput(input), "chat.message", {
-        nativeEvent: "chat.message",
-        input: safeJsonValue(input),
-        output: safeJsonValue(output),
+      await appendHarnessEvent(sessionIdFromHookInput(input), "agent_start", {
+        nativeEvent: "agent_start",
+        sessionId: sessionIdFromHookInput(input),
+        messageId: openCodeHookMessageId(input),
+        orderKey: openCodeHookOrderKey(input),
       });
     },
   };
@@ -101,15 +80,43 @@ function writeOpenCodeStatusSource() {
   return null;
 }
 
-function isCompletedAssistantMessageEvent(event) {
-  const info = event?.properties?.info;
-  return typeof info?.id === "string" && info?.role === "assistant" && typeof info?.time?.completed === "number";
+function minimalOpenCodeEvent(event) {
+  return {
+    id: stringOrNull(event?.id),
+    type: stringOrNull(event?.type),
+    properties: {
+      sessionID: sessionIdFromEvent(event),
+      status: sessionStatusFromEvent(event),
+    },
+  };
 }
 
-function isCompletedTextPartEvent(event) {
-  const part = event?.properties?.part;
-  // v1: intentionally skipping tool-call parts
-  return typeof part?.id === "string" && part?.type === "text" && typeof part?.text === "string" && typeof part?.time?.end === "number";
+function openCodeEventOrderKey(event) {
+  return sortableOpenCodeId(stringOrNull(event?.id));
+}
+
+function openCodeHookOrderKey(input) {
+  return sortableOpenCodeId(openCodeHookMessageId(input) ?? stringOrNull(input?.event?.id));
+}
+
+function openCodeHookMessageId(input) {
+  return (
+    stringOrNull(input?.messageID) ??
+    stringOrNull(input?.messageId) ??
+    stringOrNull(input?.message?.id) ??
+    stringOrNull(input?.info?.id) ??
+    null
+  );
+}
+
+function sortableOpenCodeId(id) {
+  if (!id) return null;
+  const separator = id.indexOf("_");
+  return separator >= 0 ? id.slice(separator + 1) : id;
+}
+
+function stringOrNull(value) {
+  return typeof value === "string" && value ? value : null;
 }
 `;
 }

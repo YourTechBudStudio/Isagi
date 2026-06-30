@@ -4,19 +4,16 @@ import test from 'node:test';
 import type { HarnessObservationRecord } from '../projection.js';
 import { deriveOpenCodeTurnEdges } from './turns.js';
 
-test('OpenCode turn edges start on chat.message and end on session.idle', () => {
-  assert.deepEqual(
-    deriveOpenCodeTurnEdges([record('chat.message', 0), record('session.idle', 1)]),
-    [
-      { type: 'turn_started', harnessSessionId: '', seq: 0, recordedAt: time(0) },
-      { type: 'turn_ended', harnessSessionId: '', seq: 1, recordedAt: time(1) },
-    ],
-  );
+test('OpenCode turn edges start on agent_start and end on session.idle', () => {
+  assert.deepEqual(deriveOpenCodeTurnEdges([record('agent_start', 0), record('session.idle', 1)]), [
+    { type: 'turn_started', harnessSessionId: '', seq: 0, recordedAt: time(0) },
+    { type: 'turn_ended', harnessSessionId: '', seq: 1, recordedAt: time(1) },
+  ]);
 });
 
 test('OpenCode turn edges fail on session.error', () => {
   assert.deepEqual(
-    deriveOpenCodeTurnEdges([record('chat.message', 0), record('session.error', 1)]),
+    deriveOpenCodeTurnEdges([record('agent_start', 0), record('session.error', 1)]),
     [
       { type: 'turn_started', harnessSessionId: '', seq: 0, recordedAt: time(0) },
       {

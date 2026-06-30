@@ -110,11 +110,15 @@ export function workflowContext(input: {
           paneId,
         }),
       ),
-    getConversationHistory: (agentSessionId) =>
+    getConversationHistory: (target) =>
       runEffect(
-        getConversationHistory(agentSessionId).pipe(
-          Effect.provideService(HarnessLedgerObserver, input.observer),
-        ),
+        Effect.gen(function* () {
+          const session = yield* input.agents.get(target.agentSessionId);
+          return yield* getConversationHistory({
+            ...session,
+            harnessSessionId: target.harnessSessionId,
+          }).pipe(Effect.provideService(HarnessLedgerObserver, input.observer));
+        }),
       ),
     getHarnessSessionId: (agentSessionId) =>
       runEffect(

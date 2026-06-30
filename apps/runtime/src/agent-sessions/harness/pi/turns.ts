@@ -20,8 +20,8 @@ export function derivePiTurnEdges(
     }
     if (
       !terminalSeenForCurrentTurn &&
-      record.nativeEvent === 'message_end' &&
-      piMessageStopReason(record) !== null
+      record.nativeEvent === 'agent_error' &&
+      piStopReason(record) !== null
     ) {
       terminalSeenForCurrentTurn = true;
       edges.push({
@@ -50,12 +50,9 @@ export function derivePiTurnEdges(
   return edges;
 }
 
-function piMessageStopReason(record: HarnessObservationRecord): 'error' | 'aborted' | null {
+function piStopReason(record: HarnessObservationRecord): 'error' | 'aborted' | null {
   const event = eventObject(record.event);
-  const message = eventObject(eventObject(event.event)?.message);
-  const role = message.role;
-  if (role !== 'assistant') return null;
-  const stopReason = message.stopReason;
+  const stopReason = event.stopReason;
   return stopReason === 'error' || stopReason === 'aborted' ? stopReason : null;
 }
 

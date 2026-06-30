@@ -200,10 +200,13 @@ function agentGateWorkflow(input: {
       if (payload?.outcome === 'failed') {
         throw new Error(`${input.label} workflow gate turn failed: ${payload.reason}`);
       }
-      if (payload?.outcome !== 'ended' || !current.agentSessionId) {
+      if (payload?.outcome !== 'ended' || !current.agentSessionId || !current.harnessSessionId) {
         throw new Error(`${input.label} workflow gate resumed without a completed turn payload.`);
       }
-      const history = await ctx.getConversationHistory(current.agentSessionId);
+      const history = await ctx.getConversationHistory({
+        agentSessionId: current.agentSessionId,
+        harnessSessionId: current.harnessSessionId,
+      });
       const message = latestAssistantText(history) ?? `${input.label} completed the workflow gate.`;
       await ctx.setUiFeedback({ phase: 'done', message });
       return done();

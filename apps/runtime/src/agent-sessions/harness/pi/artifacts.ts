@@ -5,18 +5,13 @@ export function piExtensionSource() {
 ${appendHarnessEventSource('pi')}
 ${writePiContextSource()}
 
-let lastBeforeAgentStart: unknown = null;
-
 async function observeStart(event: unknown, ctx: any) {
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   await writeHarnessMetadata(sessionId);
   await appendHarnessEvent(sessionId, "agent_start", {
     nativeEvent: "agent_start",
-    event: safeJsonValue(event),
-    beforeAgentStart: lastBeforeAgentStart,
     context: piContext(ctx),
   });
-  lastBeforeAgentStart = null;
 }
 
 async function observeEnd(event: unknown, ctx: any) {
@@ -24,33 +19,27 @@ async function observeEnd(event: unknown, ctx: any) {
   await writeHarnessMetadata(sessionId);
   await appendHarnessEvent(sessionId, "agent_end", {
     nativeEvent: "agent_end",
-    event: safeJsonValue(event),
     context: piContext(ctx),
   });
 }
 
 async function observeMessageEnd(event: any, ctx: any) {
   const message = event?.message;
-  const role = message?.role;
-  if (role === "toolResult") {
-    // v1: intentionally skipping tool-call parts
-    return undefined;
-  }
-  if (role !== "user" && role !== "assistant") return undefined;
+  if (message?.role !== "assistant") return undefined;
+  const stopReason = message?.stopReason;
+  if (stopReason !== "error" && stopReason !== "aborted") return undefined;
   const sessionId = ctx?.sessionManager?.getSessionId?.();
   await writeHarnessMetadata(sessionId);
-  await appendHarnessEvent(sessionId, "message_end", {
-    nativeEvent: "message_end",
-    event: safeJsonValue(event),
+  await appendHarnessEvent(sessionId, "agent_error", {
+    nativeEvent: "agent_error",
+    sourceNativeEvent: "message_end",
+    stopReason,
     context: piContext(ctx),
   });
   return undefined;
 }
 
 export default function (pi: any) {
-  pi.on("before_agent_start", async (event) => {
-    lastBeforeAgentStart = safeJsonValue(event);
-  });
   pi.on("agent_start", async (event, ctx) => observeStart(event, ctx));
   pi.on("message_end", async (event, ctx) => observeMessageEnd(event, ctx));
   pi.on("agent_end", async (event, ctx) => observeEnd(event, ctx));

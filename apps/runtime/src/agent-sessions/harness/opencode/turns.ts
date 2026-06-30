@@ -8,7 +8,7 @@ export function deriveOpenCodeTurnEdges(
   let terminalSeenForCurrentTurn = true;
   for (const record of records) {
     if (record.harness !== 'opencode') continue;
-    if (record.nativeEvent === 'chat.message') {
+    if (record.nativeEvent === 'agent_start') {
       terminalSeenForCurrentTurn = false;
       edges.push({
         type: 'turn_started',

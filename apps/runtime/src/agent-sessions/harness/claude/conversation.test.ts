@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { Effect } from 'effect';
 
 import type { HarnessObservationRecord } from '../projection.js';
-import { parseClaudeTranscript, readClaudeConversation } from './conversation.js';
+import {
+  nativeClaudeTranscriptPath,
+  parseClaudeTranscript,
+  readClaudeConversation,
+} from './conversation.js';
 
 test('Claude transcript parser skips tool-result user carriers and merges assistant text per turn', () => {
   const raw = [
@@ -58,6 +62,166 @@ test('Claude transcript parser skips tool-result user carriers and merges assist
       ],
     },
     { role: 'user', parts: [{ type: 'text', text: 'second prompt' }] },
+  ]);
+});
+
+test('Claude transcript parser follows the active leaf parent chain', () => {
+  const raw = [
+    entry({
+      uuid: 'system-1',
+      type: 'system',
+      parentUuid: null,
+      content: 'system noise',
+    }),
+    entry({
+      uuid: 'user-1',
+      parentUuid: 'system-1',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'first prompt' },
+    }),
+    entry({
+      uuid: 'assistant-1',
+      parentUuid: 'user-1',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+    }),
+    entry({
+      uuid: 'inactive-user',
+      parentUuid: 'assistant-1',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'inactive prompt' },
+    }),
+    entry({
+      uuid: 'inactive-assistant',
+      parentUuid: 'inactive-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'inactive answer' }] },
+    }),
+    entry({
+      uuid: 'active-user',
+      parentUuid: 'assistant-1',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'active prompt' },
+    }),
+    entry({
+      uuid: 'active-assistant',
+      parentUuid: 'active-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'active answer' }] },
+    }),
+    entry({
+      type: 'last-prompt',
+      leafUuid: 'active-assistant',
+      sessionId: 'claude-session-1',
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeTranscript(raw), [
+    { role: 'user', parts: [{ type: 'text', text: 'first prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'first answer' }] },
+    { role: 'user', parts: [{ type: 'text', text: 'active prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'active answer' }] },
+  ]);
+});
+
+test('Claude transcript parser follows a typed branch appended after a stale last-prompt marker', () => {
+  const raw = [
+    entry({
+      uuid: 'root',
+      type: 'system',
+      parentUuid: null,
+    }),
+    entry({
+      uuid: 'first-user',
+      parentUuid: 'root',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'first prompt' },
+    }),
+    entry({
+      uuid: 'first-assistant',
+      parentUuid: 'first-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+    }),
+    entry({
+      uuid: 'old-user',
+      parentUuid: 'first-assistant',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'old prompt' },
+    }),
+    entry({
+      uuid: 'old-assistant',
+      parentUuid: 'old-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'old answer' }] },
+    }),
+    entry({
+      type: 'last-prompt',
+      leafUuid: 'old-assistant',
+      sessionId: 'claude-session-1',
+    }),
+    entry({
+      type: 'file-history-snapshot',
+      messageId: 'new-user',
+    }),
+    entry({
+      uuid: 'new-user',
+      parentUuid: 'first-assistant',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'new prompt' },
+    }),
+    entry({
+      uuid: 'new-assistant',
+      parentUuid: 'new-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'new answer' }] },
+    }),
+    entry({
+      uuid: 'new-turn-duration',
+      parentUuid: 'new-assistant',
+      type: 'system',
+      subtype: 'turn_duration',
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeTranscript(raw), [
+    { role: 'user', parts: [{ type: 'text', text: 'first prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'first answer' }] },
+    { role: 'user', parts: [{ type: 'text', text: 'new prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'new answer' }] },
+  ]);
+});
+
+test('Claude transcript parser falls back to linear parsing when the active leaf is unavailable', () => {
+  const raw = [
+    entry({
+      uuid: 'user-1',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'first prompt' },
+    }),
+    entry({
+      uuid: 'assistant-1',
+      parentUuid: 'user-1',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+    }),
+    entry({
+      type: 'last-prompt',
+      leafUuid: 'missing-leaf',
+      sessionId: 'claude-session-1',
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeTranscript(raw), [
+    { role: 'user', parts: [{ type: 'text', text: 'first prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'first answer' }] },
   ]);
 });
 
@@ -121,6 +285,127 @@ test('Claude conversation reads transcript paths across streams and dedupes stab
       { role: 'assistant', parts: [{ type: 'text', text: 'first answer' }] },
       { role: 'user', parts: [{ type: 'text', text: 'second prompt' }] },
       { role: 'assistant', parts: [{ type: 'text', text: 'kept without uuid' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude conversation prefers native session transcript over stale hook transcript paths', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-native-transcript-'));
+  try {
+    const claudeDirectory = join(root, '.claude');
+    const native = nativeClaudeTranscriptPath({
+      claudeDirectory,
+      cwd: '/repo/isagi',
+      harnessSessionId: 'claude-session-1',
+    });
+    const stale = join(root, 'stale.jsonl');
+    mkdirSync(dirname(native), { recursive: true });
+    writeFileSync(
+      native,
+      [
+        entry({
+          uuid: 'native-user',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'native prompt' },
+        }),
+        entry({
+          uuid: 'native-assistant',
+          parentUuid: 'native-user',
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'native answer' }] },
+        }),
+        entry({
+          type: 'last-prompt',
+          leafUuid: 'native-assistant',
+          sessionId: 'claude-session-1',
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      stale,
+      [
+        entry({
+          uuid: 'stale-user',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'stale prompt' },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        cwd: '/repo/isagi',
+        harnessSessionId: 'claude-session-1',
+        claudeDirectory,
+        streams: [['claude-session-1', [stopRecord(0, stale)]]],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'native prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'native answer' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude conversation finds native transcript by session id when stored under a different cwd directory', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-discovered-transcript-'));
+  try {
+    const claudeDirectory = join(root, '.claude');
+    const discovered = nativeClaudeTranscriptPath({
+      claudeDirectory,
+      cwd: '/repo/actual-cwd',
+      harnessSessionId: 'claude-session-1',
+    });
+    mkdirSync(dirname(discovered), { recursive: true });
+    writeFileSync(
+      discovered,
+      [
+        entry({
+          uuid: 'discovered-user',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'discovered prompt' },
+          sessionId: 'claude-session-1',
+        }),
+        entry({
+          uuid: 'discovered-assistant',
+          parentUuid: 'discovered-user',
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'discovered answer' }] },
+          sessionId: 'claude-session-1',
+        }),
+        entry({
+          type: 'last-prompt',
+          leafUuid: 'discovered-assistant',
+          sessionId: 'claude-session-1',
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        cwd: '/repo/stale-cwd',
+        harnessSessionId: 'claude-session-1',
+        claudeDirectory,
+        streams: [],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'discovered prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'discovered answer' }] },
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -1,106 +1,258 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+import BetterSqlite from 'better-sqlite3';
+import { Effect } from 'effect';
+
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
 
-export function deriveOpenCodeConversation(
-  records: readonly HarnessObservationRecord[],
-): readonly ConversationMessage[] {
-  const messages: ConversationMessage[] = [];
-  let assistantParts: ConversationMessage['parts'] = [];
-  const textPartsByMessageId = new Map<string, ConversationMessage['parts']>();
-  const completedAssistantMessageIds = new Set<string>();
-  const consumedTextPartIds = new Set<string>();
-
-  const flushAssistant = () => {
-    if (assistantParts.length === 0) return;
-    messages.push({ role: 'assistant', parts: assistantParts });
-    assistantParts = [];
-  };
-
-  const appendCompletedAssistantText = (messageId: string) => {
-    const parts = textPartsByMessageId.get(messageId);
-    if (!parts || parts.length === 0) return;
-    assistantParts = [...assistantParts, ...parts];
-    textPartsByMessageId.delete(messageId);
-  };
-
-  for (const record of records) {
-    if (record.harness !== 'opencode') continue;
-    if (record.nativeEvent === 'chat.message') {
-      flushAssistant();
-      const parts = userTextParts(record);
-      if (parts.length > 0) messages.push({ role: 'user', parts });
-      continue;
+export function readOpenCodeConversation(input: {
+  readonly agentSessionId: number;
+  readonly cwd?: string | null | undefined;
+  readonly harnessSessionId?: string | null | undefined;
+  readonly opencodeDirectory?: string | undefined;
+  readonly streams: readonly [
+    harnessSessionId: string,
+    records: readonly HarnessObservationRecord[],
+  ][];
+}): Effect.Effect<readonly ConversationMessage[]> {
+  return Effect.gen(function* () {
+    const sessionIds = openCodeSessionIds(input);
+    if (sessionIds.length === 0) return [];
+    const opencodeDirectory = input.opencodeDirectory ?? defaultOpenCodeDirectory();
+    for (const harnessSessionId of sessionIds) {
+      const rows = yield* readOpenCodeRows({
+        agentSessionId: input.agentSessionId,
+        harnessSessionId,
+        opencodeDirectory,
+      });
+      if (!rows) continue;
+      return conversationFromOpenCodeRows(rows);
     }
-    if (record.nativeEvent === 'message.part.updated') {
-      const part = completedTextPart(record);
-      if (!part || consumedTextPartIds.has(part.id)) continue;
-      consumedTextPartIds.add(part.id);
-      const existing = textPartsByMessageId.get(part.messageId) ?? [];
-      textPartsByMessageId.set(part.messageId, [...existing, { type: 'text', text: part.text }]);
-      if (completedAssistantMessageIds.has(part.messageId))
-        appendCompletedAssistantText(part.messageId);
-      continue;
-    }
-    if (record.nativeEvent === 'message.updated') {
-      const messageId = completedAssistantMessageId(record);
-      if (!messageId) continue;
-      completedAssistantMessageIds.add(messageId);
-      appendCompletedAssistantText(messageId);
-      continue;
-    }
-    if (record.nativeEvent === 'session.idle' || record.nativeEvent === 'session.error') {
-      flushAssistant();
-    }
-  }
-
-  flushAssistant();
-  return messages;
-}
-
-function userTextParts(record: HarnessObservationRecord): ConversationMessage['parts'] {
-  const event = eventObject(record.event);
-  const output = eventObject(event.output);
-  const parts = output.parts;
-  if (!Array.isArray(parts)) return [];
-  return parts.flatMap((part) => {
-    const object = eventObject(part);
-    return object.type === 'text' && typeof object.text === 'string' ? textPart(object.text) : [];
+    return [];
   });
 }
 
-function completedTextPart(record: HarnessObservationRecord) {
-  const event = eventObject(record.event);
-  const nativeEvent = eventObject(event.event);
-  const properties = eventObject(nativeEvent.properties);
-  const part = eventObject(properties.part);
-  const id = stringField(part, 'id');
-  const messageId = stringField(part, 'messageID') ?? stringField(part, 'messageId');
-  const text = stringField(part, 'text');
-  if (part.type !== 'text' || !id || !messageId || !text) return null;
-  return { id, messageId, text };
+function openCodeSessionIds(input: {
+  readonly harnessSessionId?: string | null | undefined;
+  readonly streams: readonly [
+    harnessSessionId: string,
+    records: readonly HarnessObservationRecord[],
+  ][];
+}) {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const append = (id: string | null | undefined) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+  append(input.harnessSessionId);
+  for (const [harnessSessionId, records] of input.streams) {
+    if (records[0]?.harness !== 'opencode') continue;
+    append(harnessSessionId);
+  }
+  return ids;
 }
 
-function completedAssistantMessageId(record: HarnessObservationRecord) {
-  const event = eventObject(record.event);
-  const nativeEvent = eventObject(event.event);
-  const properties = eventObject(nativeEvent.properties);
-  const info = eventObject(properties.info);
-  if (info.role !== 'assistant') return null;
-  const time = eventObject(info.time);
-  if (typeof time.completed !== 'number') return null;
-  return stringField(info, 'id');
+function defaultOpenCodeDirectory() {
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  return xdgDataHome
+    ? join(xdgDataHome, 'opencode')
+    : join(homedir(), '.local', 'share', 'opencode');
 }
 
-function textPart(text: string): ConversationMessage['parts'] {
-  return text ? [{ type: 'text', text }] : [];
+interface OpenCodeRow {
+  readonly messageId: string;
+  readonly messageCreatedAt: number;
+  readonly messageData: string;
+  readonly partId: string | null;
+  readonly partCreatedAt: number | null;
+  readonly partData: string | null;
+  readonly revert: string | null;
 }
 
-function stringField(value: unknown, key: string) {
-  const object = eventObject(value);
-  const field = object[key];
-  return typeof field === 'string' && field ? field : null;
+function readOpenCodeRows(input: {
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly opencodeDirectory: string;
+}) {
+  return Effect.try({
+    try: () => {
+      const database = new BetterSqlite(join(input.opencodeDirectory, 'opencode.db'), {
+        readonly: true,
+        fileMustExist: true,
+      });
+      try {
+        const session = database
+          .prepare('select id from session where id = ? limit 1')
+          .get(input.harnessSessionId);
+        if (!session) return null;
+        return database
+          .prepare(
+            `select
+               m.id as messageId,
+               m.time_created as messageCreatedAt,
+               m.data as messageData,
+               p.id as partId,
+               p.time_created as partCreatedAt,
+               p.data as partData,
+               s.revert as revert
+             from message m
+             join session s on s.id = m.session_id
+             left join part p on p.message_id = m.id
+             where m.session_id = ?
+             order by m.time_created, m.id, p.time_created, p.id`,
+          )
+          .all(input.harnessSessionId) as OpenCodeRow[];
+      } finally {
+        database.close();
+      }
+    },
+    catch: (error) => error,
+  }).pipe(
+    Effect.catchAll((error) =>
+      Effect.sync(() => {
+        if (!isMissingDatabaseError(error)) {
+          console.warn('[runtime] OpenCode conversation database could not be read', {
+            agentSessionId: input.agentSessionId,
+            harnessSessionId: input.harnessSessionId,
+            opencodeDirectory: input.opencodeDirectory,
+            error,
+          });
+        }
+        return null;
+      }),
+    ),
+  );
 }
 
-function eventObject(value: unknown): Record<string, unknown> {
+interface OpenCodeMessage {
+  readonly id: string;
+  readonly createdAt: number;
+  readonly role: 'user' | 'assistant';
+  readonly parts: readonly OpenCodePart[];
+}
+
+interface OpenCodePart {
+  readonly id: string;
+  readonly createdAt: number;
+  readonly type: string;
+  readonly text: string;
+}
+
+function conversationFromOpenCodeRows(
+  rows: readonly OpenCodeRow[],
+): readonly ConversationMessage[] {
+  const messages = activeOpenCodeMessages(openCodeMessages(rows), revertMessageId(rows));
+  const conversation: ConversationMessage[] = [];
+  let assistantParts: ConversationMessage['parts'] = [];
+
+  const flushAssistant = () => {
+    if (assistantParts.length === 0) return;
+    conversation.push({ role: 'assistant', parts: assistantParts });
+    assistantParts = [];
+  };
+
+  for (const message of messages) {
+    if (message.role === 'user') {
+      flushAssistant();
+      const parts = textParts(message.parts);
+      if (parts.length > 0) conversation.push({ role: 'user', parts });
+      continue;
+    }
+
+    assistantParts = [...assistantParts, ...textParts(message.parts)];
+  }
+
+  flushAssistant();
+  return conversation;
+}
+
+function openCodeMessages(rows: readonly OpenCodeRow[]): readonly OpenCodeMessage[] {
+  const byMessageId = new Map<string, OpenCodeMessage & { parts: OpenCodePart[] }>();
+  for (const row of rows) {
+    let message = byMessageId.get(row.messageId);
+    if (!message) {
+      const data = objectValue(parseJson(row.messageData));
+      const role = data.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      message = {
+        id: row.messageId,
+        createdAt: row.messageCreatedAt,
+        role,
+        parts: [],
+      };
+      byMessageId.set(row.messageId, message);
+    }
+
+    if (!row.partId || row.partData === null || row.partCreatedAt === null) continue;
+    const part = objectValue(parseJson(row.partData));
+    const type = part.type;
+    const text = part.text;
+    if (typeof type !== 'string' || typeof text !== 'string') continue;
+    message.parts.push({
+      id: row.partId,
+      createdAt: row.partCreatedAt,
+      type,
+      text,
+    });
+  }
+
+  return [...byMessageId.values()]
+    .map((message) => ({
+      ...message,
+      parts: [...message.parts].sort(
+        (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+      ),
+    }))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+}
+
+function activeOpenCodeMessages(
+  messages: readonly OpenCodeMessage[],
+  activeRevertMessageId: string | null,
+) {
+  if (!activeRevertMessageId) return messages;
+  const revertIndex = messages.findIndex((message) => message.id === activeRevertMessageId);
+  return revertIndex >= 0 ? messages.slice(0, revertIndex) : messages;
+}
+
+function revertMessageId(rows: readonly OpenCodeRow[]) {
+  for (const row of rows) {
+    const revert = objectValue(parseJson(row.revert));
+    const messageId = revert.messageID;
+    if (typeof messageId === 'string' && messageId) return messageId;
+  }
+  return null;
+}
+
+function textParts(parts: readonly OpenCodePart[]): ConversationMessage['parts'] {
+  return parts.flatMap((part) =>
+    part.type === 'text' && part.text ? [{ type: 'text' as const, text: part.text }] : [],
+  );
+}
+
+function parseJson(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function isMissingDatabaseError(error: unknown) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    ((error as { readonly code?: unknown }).code === 'SQLITE_CANTOPEN' ||
+      (error as { readonly code?: unknown }).code === 'ENOENT')
+  );
 }

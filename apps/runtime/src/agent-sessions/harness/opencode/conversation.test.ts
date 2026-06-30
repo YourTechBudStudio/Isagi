@@ -1,150 +1,242 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
-import type { HarnessObservationRecord } from '../projection.js';
-import { deriveOpenCodeConversation } from './conversation.js';
+import BetterSqlite from 'better-sqlite3';
+import { Effect } from 'effect';
 
-test('OpenCode conversation extracts user text and completed assistant text', () => {
+import { readOpenCodeConversation } from './conversation.js';
+
+test('OpenCode native conversation reads current messages and merges assistant text per turn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-opencode-conversation-'));
+  seedOpenCodeDatabase(root, {
+    sessions: [{ id: 'ses_1' }],
+    messages: [
+      message('u1', 'ses_1', 1, { role: 'user' }, [part('u1-text', 2, 'text', 'first prompt')]),
+      message('a1', 'ses_1', 3, { role: 'assistant', parentID: 'u1' }, [
+        part('a1-reasoning', 4, 'reasoning', 'private'),
+        part('a1-text', 5, 'text', 'first answer'),
+      ]),
+      message('a2', 'ses_1', 6, { role: 'assistant', parentID: 'u1' }, [
+        part('a2-tool', 7, 'tool', 'tool output'),
+        part('a2-text', 8, 'text', 'second answer'),
+      ]),
+      message('u2', 'ses_1', 9, { role: 'user' }, [part('u2-text', 10, 'text', 'next prompt')]),
+      message('a3', 'ses_1', 11, { role: 'assistant', parentID: 'u2' }, [
+        part('a3-text', 12, 'text', 'final answer'),
+      ]),
+    ],
+  });
+
   assert.deepEqual(
-    deriveOpenCodeConversation([
-      chatMessage(0, 'make it work'),
-      completedTextPart(1, { id: 'part-1', messageId: 'assistant-1', text: 'first ' }),
-      completedTextPart(2, { id: 'part-2', messageId: 'assistant-1', text: 'answer' }),
-      completedAssistantMessage(3, 'assistant-1'),
-      record('session.idle', 4),
-    ]),
+    await Effect.runPromise(
+      readOpenCodeConversation({
+        agentSessionId: 10,
+        harnessSessionId: 'ses_1',
+        opencodeDirectory: root,
+        streams: [],
+      }),
+    ),
     [
-      { role: 'user', parts: [{ type: 'text', text: 'make it work' }] },
+      { role: 'user', parts: [{ type: 'text', text: 'first prompt' }] },
       {
         role: 'assistant',
         parts: [
-          { type: 'text', text: 'first ' },
-          { type: 'text', text: 'answer' },
+          { type: 'text', text: 'first answer' },
+          { type: 'text', text: 'second answer' },
         ],
       },
+      { role: 'user', parts: [{ type: 'text', text: 'next prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'final answer' }] },
     ],
   );
 });
 
-test('OpenCode conversation merges multiple completed assistant messages per turn', () => {
+test('OpenCode native conversation trims from the session revert message', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-opencode-revert-'));
+  seedOpenCodeDatabase(root, {
+    sessions: [{ id: 'ses_1', revert: { messageID: 'u2' } }],
+    messages: [
+      message('u1', 'ses_1', 1, { role: 'user' }, [part('u1-text', 2, 'text', 'kept prompt')]),
+      message('a1', 'ses_1', 3, { role: 'assistant', parentID: 'u1' }, [
+        part('a1-text', 4, 'text', 'kept answer'),
+      ]),
+      message('u2', 'ses_1', 5, { role: 'user' }, [part('u2-text', 6, 'text', 'reverted prompt')]),
+      message('a2', 'ses_1', 7, { role: 'assistant', parentID: 'u2' }, [
+        part('a2-text', 8, 'text', 'reverted answer'),
+      ]),
+    ],
+  });
+
   assert.deepEqual(
-    deriveOpenCodeConversation([
-      chatMessage(0, 'one'),
-      completedTextPart(1, { id: 'part-1', messageId: 'assistant-1', text: 'alpha' }),
-      completedAssistantMessage(2, 'assistant-1'),
-      completedTextPart(3, { id: 'part-2', messageId: 'assistant-2', text: 'beta' }),
-      completedAssistantMessage(4, 'assistant-2'),
-      record('session.idle', 5),
-    ]),
+    await Effect.runPromise(
+      readOpenCodeConversation({
+        agentSessionId: 10,
+        harnessSessionId: 'ses_1',
+        opencodeDirectory: root,
+        streams: [],
+      }),
+    ),
     [
-      { role: 'user', parts: [{ type: 'text', text: 'one' }] },
-      {
-        role: 'assistant',
-        parts: [
-          { type: 'text', text: 'alpha' },
-          { type: 'text', text: 'beta' },
-        ],
-      },
+      { role: 'user', parts: [{ type: 'text', text: 'kept prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'kept answer' }] },
     ],
   );
 });
 
-test('OpenCode conversation ignores incomplete assistant message updates and non-text user parts', () => {
+test('OpenCode conversation does not fall back to hook message history', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-opencode-missing-'));
   assert.deepEqual(
-    deriveOpenCodeConversation([
-      {
-        ...chatMessage(0, ''),
-        event: {
-          nativeEvent: 'chat.message',
-          input: { sessionID: 'opencode-session-1' },
-          output: {
-            parts: [
-              { type: 'tool', state: { status: 'completed' } },
-              { type: 'text', text: 'kept user text' },
+    await Effect.runPromise(
+      readOpenCodeConversation({
+        agentSessionId: 10,
+        opencodeDirectory: root,
+        streams: [
+          [
+            'ses_1',
+            [
+              {
+                recordedAt: '2026-06-18T00:00:00.000Z',
+                seq: 0,
+                ptyProcessId: 20,
+                harness: 'opencode',
+                nativeEvent: 'chat.message',
+                event: {
+                  nativeEvent: 'chat.message',
+                  message: { role: 'user', content: 'stale prompt' },
+                },
+              },
             ],
-          },
-        },
-      },
-      completedTextPart(1, { id: 'part-1', messageId: 'assistant-1', text: 'hidden' }),
-      record('message.updated', 2),
-      record('session.idle', 3),
-    ]),
-    [{ role: 'user', parts: [{ type: 'text', text: 'kept user text' }] }],
+          ],
+        ],
+      }),
+    ),
+    [],
   );
 });
 
-function chatMessage(seq: number, text: string): HarnessObservationRecord {
-  return {
-    ...record('chat.message', seq),
-    event: {
-      nativeEvent: 'chat.message',
-      input: { sessionID: 'opencode-session-1' },
-      output: {
-        message: { role: 'user', id: 'user-1' },
-        parts: text ? [{ type: 'text', text }] : [],
-      },
-    },
-  };
+test('OpenCode conversation does not scan other database sessions when pinned session is missing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-opencode-pinned-'));
+  seedOpenCodeDatabase(root, {
+    sessions: [{ id: 'other-session' }],
+    messages: [
+      message('u1', 'other-session', 1, { role: 'user' }, [
+        part('u1-text', 2, 'text', 'wrong prompt'),
+      ]),
+      message('a1', 'other-session', 3, { role: 'assistant', parentID: 'u1' }, [
+        part('a1-text', 4, 'text', 'wrong answer'),
+      ]),
+    ],
+  });
+
+  assert.deepEqual(
+    await Effect.runPromise(
+      readOpenCodeConversation({
+        agentSessionId: 10,
+        harnessSessionId: 'target-session',
+        opencodeDirectory: root,
+        streams: [],
+      }),
+    ),
+    [],
+  );
+});
+
+interface SeedInput {
+  readonly sessions: readonly {
+    readonly id: string;
+    readonly revert?: Record<string, unknown> | undefined;
+  }[];
+  readonly messages: readonly SeedMessage[];
 }
 
-function completedTextPart(
-  seq: number,
-  input: { readonly id: string; readonly messageId: string; readonly text: string },
-): HarnessObservationRecord {
-  return {
-    ...record('message.part.updated', seq),
-    event: {
-      nativeEvent: 'message.part.updated',
-      event: {
-        type: 'message.part.updated',
-        properties: {
-          part: {
-            id: input.id,
-            sessionID: 'opencode-session-1',
-            messageID: input.messageId,
-            type: 'text',
-            text: input.text,
-            time: { start: seq, end: seq + 1 },
-          },
-        },
-      },
-    },
-  };
+interface SeedMessage {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly createdAt: number;
+  readonly data: Record<string, unknown>;
+  readonly parts: readonly SeedPart[];
 }
 
-function completedAssistantMessage(seq: number, messageId: string): HarnessObservationRecord {
-  return {
-    ...record('message.updated', seq),
-    event: {
-      nativeEvent: 'message.updated',
-      event: {
-        type: 'message.updated',
-        properties: {
-          info: {
-            id: messageId,
-            sessionID: 'opencode-session-1',
-            role: 'assistant',
-            time: { created: seq, completed: seq + 1 },
-          },
-        },
-      },
-    },
-  };
+interface SeedPart {
+  readonly id: string;
+  readonly createdAt: number;
+  readonly data: Record<string, unknown>;
 }
 
-function record(nativeEvent: string, seq: number): HarnessObservationRecord {
+function seedOpenCodeDatabase(root: string, input: SeedInput) {
+  mkdirSync(root, { recursive: true });
+  const database = new BetterSqlite(join(root, 'opencode.db'));
+  try {
+    database.exec(`
+      create table session (
+        id text primary key,
+        revert text
+      );
+      create table message (
+        id text primary key,
+        session_id text not null,
+        time_created integer not null,
+        data text not null
+      );
+      create table part (
+        id text primary key,
+        message_id text not null,
+        session_id text not null,
+        time_created integer not null,
+        data text not null
+      );
+    `);
+
+    const insertSession = database.prepare('insert into session (id, revert) values (?, ?)');
+    for (const session of input.sessions) {
+      insertSession.run(session.id, session.revert ? JSON.stringify(session.revert) : null);
+    }
+
+    const insertMessage = database.prepare(
+      'insert into message (id, session_id, time_created, data) values (?, ?, ?, ?)',
+    );
+    const insertPart = database.prepare(
+      'insert into part (id, message_id, session_id, time_created, data) values (?, ?, ?, ?, ?)',
+    );
+    for (const messageInput of input.messages) {
+      insertMessage.run(
+        messageInput.id,
+        messageInput.sessionId,
+        messageInput.createdAt,
+        JSON.stringify(messageInput.data),
+      );
+      for (const partInput of messageInput.parts) {
+        insertPart.run(
+          partInput.id,
+          messageInput.id,
+          messageInput.sessionId,
+          partInput.createdAt,
+          JSON.stringify(partInput.data),
+        );
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
+function message(
+  id: string,
+  sessionId: string,
+  createdAt: number,
+  data: Record<string, unknown>,
+  parts: readonly SeedPart[],
+): SeedMessage {
+  return { id, sessionId, createdAt, data, parts };
+}
+
+function part(id: string, createdAt: number, type: string, text: string): SeedPart {
   return {
-    recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
-    seq,
-    ptyProcessId: 20,
-    harness: 'opencode',
-    nativeEvent,
-    event: {
-      nativeEvent,
-      event: {
-        type: nativeEvent,
-        properties: { sessionID: 'opencode-session-1' },
-      },
-    },
+    id,
+    createdAt,
+    data: { type, text },
   };
 }
