@@ -1,9 +1,9 @@
 ---
 title: Reference implementation workflow (first dogfood)
-status: todo
+status: done
 milestone: agent-workflows
 created: 2026-06-21
-updated: 2026-06-21
+updated: 2026-06-30
 depends_on: [agent-workflows-sdk-and-invocation]
 ---
 
