@@ -166,7 +166,7 @@ each `ctx` verb is a **Promise-returning** crossing of the Effect→Promise boun
 (`apps/runtime/src/workflows/context.ts`). A rejected verb Promise becomes a thrown step, which the
 engine records as a `failed` run.
 
-The v1 action surface is `worktreePath` plus seven verbs:
+The v1 action surface is `worktreePath` plus eight verbs:
 
 - **`spawnSession({ harness, prompt })` →
   `{ agentSessionId, harnessSessionId, seededAt, paneId }`.** This verb is allowed to take a
@@ -192,7 +192,16 @@ The v1 action surface is `worktreePath` plus seven verbs:
   `SurfaceService.deleteSurfacePane`. The surface service owns the delete plan and session-change
   publication. If the pane is the last pane, the surface is deleted; workflow authors should close
   panes they spawned, not the originating pane.
-- **`getConversationHistory(agentSessionId)`** — role-tagged message text from the harness ledger.
+- **`getConversationHistory({ agentSessionId, harnessSessionId })`** — role-tagged message text
+  from the harness ledger for the pinned harness invocation. Workflow authors must pass both ids:
+  `agentSessionId` identifies the durable agent session, while `harnessSessionId` identifies the
+  exact harness stream being inspected. This mirrors `turn` waits and prevents a workflow from
+  accidentally reading conversation history from a newer harness incarnation of the same durable
+  agent session.
+- **`getHarnessSessionId(agentSessionId)`** — reads the current captured harness session id for a
+  durable agent session. Use this when a workflow starts from an existing agent pane and needs to
+  pin a `turn` wait or conversation-history read to that pane's current harness stream. Spawned
+  sessions already return their `harnessSessionId` from `spawnSession`.
 - **`runHeadlessPrompt({ prompt, harness, model?, effort?, timeoutMs? })` →
   `{ opId, launch }`.** This launches a trusted, agentic, non-interactive harness run in the
   worktree cwd and returns immediately. `launch.timeoutMs` is normalized before return
