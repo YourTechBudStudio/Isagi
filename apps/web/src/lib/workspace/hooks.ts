@@ -20,7 +20,7 @@ import {
 import { formatRuntimeError, useActiveContextQuery, useWorkspaceQuery } from './queries.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from './store.js';
 import type { Surface, Worktree, WorkspaceSelection } from './types.js';
-import { useWorkflowSurfaceStore } from './workflow-surface.js';
+import { useWorkflowRunStore } from './workflow-runs.js';
 
 let suppressedPersistenceSelection: WorkspaceSelection | null = null;
 const restorationReconciledProjectIds = new Set<number>();
@@ -111,9 +111,8 @@ export function useWorkspace() {
   const workspace = useWorkspaceQuery();
   const selection = useWorkspaceStore((state) => state.selection);
   const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
-  const workflowSummariesBySurfaceId = useWorkflowSurfaceStore(
-    (state) => state.summariesBySurfaceId,
-  );
+  const workflowRunsById = useWorkflowRunStore((state) => state.runsById);
+  const rootRunIdBySurfaceId = useWorkflowRunStore((state) => state.rootRunIdBySurfaceId);
   const activeSurfaceByWorktreeId = useWorkspaceStore((state) => state.activeSurfaceByWorktreeId);
   const selectWorktree = useWorkspaceStore((state) => state.selectWorktree);
   const selectMissingProject = useWorkspaceStore((state) => state.selectMissingProject);
@@ -133,9 +132,10 @@ export function useWorkspace() {
       applyAttentionToProjects(
         workspace.data?.projects ?? [],
         sourcesByKey,
-        workflowSummariesBySurfaceId,
+        workflowRunsById,
+        rootRunIdBySurfaceId,
       ),
-    [workspace.data?.projects, sourcesByKey, workflowSummariesBySurfaceId],
+    [workspace.data?.projects, sourcesByKey, workflowRunsById, rootRunIdBySurfaceId],
   );
   const currentActiveWorktreeId = activeWorktreeId(selection);
   const currentSelectedProjectId = selectedProjectId(selection);
@@ -169,17 +169,17 @@ export function useWorkspace() {
 export function useActiveWorktree(): Worktree | null {
   const workspace = useWorkspaceQuery();
   const sourcesByKey = useAttentionStore((state) => state.sourcesByKey);
-  const workflowSummariesBySurfaceId = useWorkflowSurfaceStore(
-    (state) => state.summariesBySurfaceId,
-  );
+  const workflowRunsById = useWorkflowRunStore((state) => state.runsById);
+  const rootRunIdBySurfaceId = useWorkflowRunStore((state) => state.rootRunIdBySurfaceId);
   const projects = useMemo(
     () =>
       applyAttentionToProjects(
         workspace.data?.projects ?? [],
         sourcesByKey,
-        workflowSummariesBySurfaceId,
+        workflowRunsById,
+        rootRunIdBySurfaceId,
       ),
-    [workspace.data?.projects, sourcesByKey, workflowSummariesBySurfaceId],
+    [workspace.data?.projects, sourcesByKey, workflowRunsById, rootRunIdBySurfaceId],
   );
   const selection = useWorkspaceStore((state) => state.selection);
   return findWorktree(projects, activeWorktreeId(selection));

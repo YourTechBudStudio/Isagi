@@ -37,6 +37,19 @@ test('command API error reasons map to web-owned copy', () => {
   );
 });
 
+test('workflow API error reasons map to web-owned copy', () => {
+  assert.equal(
+    runtimeErrorCopy.fromApiError({
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason: 'workflow_root_run_required', workflowRunId: 10 },
+    } satisfies ApiError),
+    'That action needs the main workflow run.',
+  );
+});
+
 test('session status reasons produce degraded pane status labels', () => {
   assert.equal(ptyCopy.sessionStatus('failed', 'harness_launch_failed', exit()), 'Launch failed');
   assert.equal(ptyCopy.sessionStatus('failed', 'shell_launch_failed', exit()), 'Launch failed');

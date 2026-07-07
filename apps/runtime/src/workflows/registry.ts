@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
-import { cont, done, suspend } from '@isagi/workflow-sdk';
+import { cont, done, suspend, wait } from '@isagi/workflow-sdk';
 
 import { DataDirectory } from '../persistence/index.js';
 import { loadWorkflowDefinition, type WorkflowLoadError } from './loader.js';
@@ -129,12 +129,11 @@ function testWorkflows(): Record<string, WorkflowDefinition<unknown>> {
       step: async () =>
         suspend(
           { phase: 'waiting' },
-          {
-            kind: 'turn',
+          wait.agentTurn({
             agentSessionId: 10,
             harnessSessionId: 'phase-1-fixture',
-            afterT: '2026-06-18T00:00:00.000Z',
-          },
+            sentAt: '2026-06-18T00:00:00.000Z',
+          }),
         ),
     },
     'agentless-throws': {
@@ -162,14 +161,14 @@ function agentGateWorkflow(input: {
         readonly phase: 'spawn' | 'await_turn';
         readonly agentSessionId?: number | undefined;
         readonly harnessSessionId?: string | undefined;
-        readonly afterT?: string | undefined;
+        readonly sentAt?: string | undefined;
       };
       if (current.phase === 'spawn') {
         await ctx.setUiFeedback({
           phase: 'spawning',
           message: `Starting ${input.label} workflow gate.`,
         });
-        const seeded = await ctx.spawnSession({
+        const seeded = await ctx.spawnAgentSession({
           harness: input.harness,
           prompt: input.prompt,
         });
@@ -182,14 +181,9 @@ function agentGateWorkflow(input: {
             phase: 'await_turn',
             agentSessionId: seeded.agentSessionId,
             harnessSessionId: seeded.harnessSessionId,
-            afterT: seeded.seededAt,
+            sentAt: seeded.sentAt,
           },
-          {
-            kind: 'turn',
-            agentSessionId: seeded.agentSessionId,
-            harnessSessionId: seeded.harnessSessionId,
-            afterT: seeded.seededAt,
-          },
+          wait.agentTurn(seeded),
         );
       }
 

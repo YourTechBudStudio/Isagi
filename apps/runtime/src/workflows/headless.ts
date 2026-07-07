@@ -6,7 +6,7 @@ import { Context, Effect, Layer } from 'effect';
 import type {
   WorkflowAgentHarness,
   WorkflowHeadlessLaunch,
-  WorkflowHeadlessPromptInput,
+  WorkflowHeadlessAgentInput,
   WorkflowHeadlessResult,
   WorkflowWaitCondition,
 } from '@isagi/workflow-sdk';
@@ -22,10 +22,10 @@ export const defaultHeadlessTimeoutMs = 10 * 60_000;
 const timeoutTerminationGraceMs = 1_000;
 
 export interface WorkflowHeadlessService {
-  readonly runHeadlessPrompt: (input: {
+  readonly runHeadlessAgent: (input: {
     readonly runId: number;
     readonly worktreePath: string;
-    readonly prompt: WorkflowHeadlessPromptInput;
+    readonly prompt: WorkflowHeadlessAgentInput;
   }) => Effect.Effect<
     { readonly opId: string; readonly launch: WorkflowHeadlessLaunch },
     PtyLaunchError | HarnessAdapterError
@@ -36,14 +36,14 @@ export interface WorkflowHeadlessService {
     readonly ops: readonly WorkflowHeadlessWaitOp[];
   }) => Effect.Effect<void, PtyLaunchError | HarnessAdapterError>;
   readonly completedResults: (
-    condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>,
+    condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }>,
   ) => Effect.Effect<readonly WorkflowHeadlessResult[] | null>;
   readonly releaseOps: (input: { readonly opIds: readonly string[] }) => Effect.Effect<void>;
 }
 
 export type WorkflowHeadlessWaitOp = Extract<
   WorkflowWaitCondition,
-  { readonly kind: 'headless' }
+  { readonly kind: 'headless_agent' }
 >['ops'][number];
 
 type LiveHeadlessOp = {
@@ -280,7 +280,7 @@ export const WorkflowHeadlessLive = Layer.scoped(
     );
 
     const service = {
-      runHeadlessPrompt: (input) =>
+      runHeadlessAgent: (input) =>
         Effect.gen(function* () {
           const launch = normalizeHeadlessLaunch(input.prompt);
           const opId = `headless:${randomUUID()}`;
@@ -339,9 +339,7 @@ export const WorkflowHeadlessLive = Layer.scoped(
   }),
 );
 
-export function normalizeHeadlessLaunch(
-  input: WorkflowHeadlessPromptInput,
-): WorkflowHeadlessLaunch {
+export function normalizeHeadlessLaunch(input: WorkflowHeadlessAgentInput): WorkflowHeadlessLaunch {
   return {
     prompt: input.prompt,
     harness: input.harness,

@@ -88,13 +88,16 @@ export type InternalRuntimeEvent =
       readonly status: 'done' | 'failed';
     }
   | {
-      readonly type: 'workflow_run_changed';
+      // Internal repository→projection trigger: "a run row was touched, recompute its
+      // root summary". Distinct from the public `workflow_run_changed` contract event
+      // (payload = full WorkflowRunSummary) the projection emits on the public bus.
+      readonly type: 'workflow_run_touched';
       readonly runId: number;
       readonly rootRunId: number | null;
       readonly surfaceId: number | null;
     }
   | {
-      readonly type: 'workflow_surface_recompute_requested';
+      readonly type: 'workflow_run_recompute_requested';
       readonly rootRunId: number;
       readonly surfaceId: number | null;
     }

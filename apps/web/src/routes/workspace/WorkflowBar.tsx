@@ -14,20 +14,20 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
-import type {
-  WorkflowEvent,
-  WorkflowSurfaceStatus,
-  WorkflowSurfaceSummary,
-} from '@isagi/contracts';
+import type { WorkflowEvent, WorkflowRunSummary } from '@isagi/contracts';
 
 import { Tooltip } from '../../components/Tooltip.js';
 import { workflowCopy } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import type { PtyStreamConnectionState } from '../../lib/workspace/pty-stream/connection.js';
+import {
+  workflowPresentationStatus,
+  type WorkflowPresentationStatus,
+} from '../../lib/workspace/workflow-derive.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export interface WorkflowBarProps {
-  readonly summary: WorkflowSurfaceSummary;
+  readonly summary: WorkflowRunSummary;
   readonly events: readonly WorkflowEvent[];
   readonly eventConnection: PtyStreamConnectionState;
   readonly logExpanded: boolean;
@@ -45,7 +45,7 @@ export interface WorkflowBarProps {
 export type WorkflowBarAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'dismiss' | 'advance';
 
 const statusMeta: Record<
-  WorkflowSurfaceStatus,
+  WorkflowPresentationStatus,
   {
     readonly icon: LucideIcon;
     readonly label: string;
@@ -101,19 +101,20 @@ export function WorkflowBar({
   onAdvance,
 }: WorkflowBarProps) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const meta = statusMeta[summary.status];
+  const presentationStatus = workflowPresentationStatus(summary);
+  const meta = statusMeta[presentationStatus];
   const StatusIcon = meta.icon;
   const heading = summary.uiFeedback?.phase ?? summary.title;
   const body = summary.uiFeedback?.message;
-  const prompt = summary.status === 'waiting_user' ? summary.prompt : undefined;
+  const prompt = presentationStatus === 'waiting_user' ? summary.prompt : undefined;
 
   useEffect(() => {
     setConfirmingCancel(false);
-  }, [summary.rootRunId, summary.status]);
+  }, [summary.rootRunId, presentationStatus]);
 
   return (
     <motion.section
-      key={`workflow-bar-${summary.surfaceId}`}
+      key={`workflow-bar-${summary.runId}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 10 }}
@@ -130,7 +131,7 @@ export function WorkflowBar({
             <span className="truncate font-mono text-[10.5px] text-fg-subtle">{meta.label}</span>
           </div>
           {body && <p className="mt-0.5 text-[13.5px] leading-snug text-fg">{body}</p>}
-          {summary.status === 'failed' &&
+          {presentationStatus === 'failed' &&
             summary.error && (
               // The workflow's own thrown message — diagnostic, not a voiced line (the
               // "Failed" label above is the voiced status). Muted so it reads as the
@@ -145,7 +146,7 @@ export function WorkflowBar({
         </div>
         <div className="ml-3 flex flex-none items-center gap-0.5">
           <WorkflowBarControls
-            status={summary.status}
+            status={presentationStatus}
             busyAction={busyAction}
             confirmingCancel={confirmingCancel}
             onPause={onPause}
@@ -208,7 +209,7 @@ function WorkflowBarControls({
   onDismiss,
   onCancelIntent,
 }: {
-  readonly status: WorkflowSurfaceStatus;
+  readonly status: WorkflowPresentationStatus;
   readonly busyAction: WorkflowBarAction | null;
   readonly confirmingCancel: boolean;
   readonly onPause: () => void;
@@ -390,7 +391,7 @@ function WorkflowPrompt({
   busy,
   onAdvance,
 }: {
-  readonly prompt: NonNullable<WorkflowSurfaceSummary['prompt']>;
+  readonly prompt: NonNullable<WorkflowRunSummary['prompt']>;
   readonly busy: boolean;
   readonly onAdvance: (runId: number, answers?: WorkflowInputAnswers) => void;
 }) {

@@ -39,11 +39,9 @@ import type {
   AdvanceWorkflowInput,
   ListWorkflowDescriptorsInput,
   ListWorkflowDescriptorsOutput,
-  SetWorkflowPausedInput,
   StartWorkflowInput,
   StartWorkflowOutput,
   WorkflowRunControlOutput,
-  WorkflowSurfaceControlOutput,
 } from '@isagi/contracts';
 
 import { runtimeErrorCopy } from '../../copy/index.js';
@@ -109,23 +107,20 @@ export function restartCommand(
   );
 }
 
-export function setWorkflowPaused(
-  surfaceId: number,
-  input: SetWorkflowPausedInput,
-): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.setWorkflowPaused(surfaceId, input)));
+export function pauseWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.pauseWorkflow(runId)));
 }
 
-export function clearWorkflow(
-  surfaceId: number,
-): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.clearWorkflow(surfaceId)));
+export function resumeWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.resumeWorkflow(runId)));
 }
 
-export function retryWorkflow(
-  surfaceId: number,
-): Effect.Effect<WorkflowSurfaceControlOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.retryWorkflow(surfaceId)));
+export function clearWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.clearWorkflow(runId)));
+}
+
+export function retryWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.retryWorkflow(runId)));
 }
 
 export function advanceWorkflow(
@@ -272,10 +267,11 @@ export function resolveCommandLogStreamWebSocketUrl(
 }
 
 export function resolveWorkflowEventsStreamWebSocketUrl(
-  surfaceId: number,
+  runId: number,
+  options: { readonly includeChildren?: boolean | undefined } = {},
 ): Effect.Effect<string, Error> {
   return getClient().pipe(
-    Effect.map((client) => client.resolveWorkflowEventsStreamWebSocketUrl(surfaceId)),
+    Effect.map((client) => client.resolveWorkflowEventsStreamWebSocketUrl(runId, options)),
   );
 }
 

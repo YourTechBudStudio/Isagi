@@ -1,10 +1,14 @@
 import { create } from 'zustand';
 
-import type { AttentionSource, AttentionSourceIdentity, AttentionState } from '@isagi/contracts';
-import type { WorkflowSurfaceSummary } from '@isagi/contracts';
+import type {
+  AttentionSource,
+  AttentionSourceIdentity,
+  AttentionState,
+  WorkflowRunSummary,
+} from '@isagi/contracts';
 
 import type { Project, Surface, Worktree } from './types.js';
-import { workflowSurfaceAttention } from './workflow-derive.js';
+import { workflowRunAttention } from './workflow-derive.js';
 
 interface AttentionStore {
   readonly sourcesByKey: Readonly<Record<string, AttentionSource>>;
@@ -56,13 +60,14 @@ export function attentionForPane(
 export function applyAttentionToProjects(
   projects: readonly Project[],
   sourcesByKey: Readonly<Record<string, AttentionSource>>,
-  workflowSummariesBySurfaceId: Readonly<Record<number, WorkflowSurfaceSummary>> = {},
+  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>> = {},
+  rootRunIdBySurfaceId: Readonly<Record<number, number>> = {},
 ): readonly Project[] {
   const sources = Object.values(sourcesByKey);
   return projects.map((project) => ({
     ...project,
     worktrees: project.worktrees.map((worktree) =>
-      applyAttentionToWorktree(worktree, sources, workflowSummariesBySurfaceId),
+      applyAttentionToWorktree(worktree, sources, workflowRunsById, rootRunIdBySurfaceId),
     ),
   }));
 }
@@ -70,10 +75,11 @@ export function applyAttentionToProjects(
 function applyAttentionToWorktree(
   worktree: Worktree,
   sources: readonly AttentionSource[],
-  workflowSummariesBySurfaceId: Readonly<Record<number, WorkflowSurfaceSummary>>,
+  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
+  rootRunIdBySurfaceId: Readonly<Record<number, number>>,
 ): Worktree {
   const surfaces = worktree.surfaces.map((surface) =>
-    applyAttentionToSurface(surface, sources, workflowSummariesBySurfaceId[surface.id]),
+    applyAttentionToSurface(surface, sources, workflowRunsById, rootRunIdBySurfaceId),
   );
   return {
     ...worktree,
@@ -85,9 +91,13 @@ function applyAttentionToWorktree(
 function applyAttentionToSurface(
   surface: Surface,
   sources: readonly AttentionSource[],
-  workflowSummary?: WorkflowSurfaceSummary | undefined,
+  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
+  rootRunIdBySurfaceId: Readonly<Record<number, number>>,
 ): Surface {
-  const workflowAttention = workflowSurfaceAttention(workflowSummary);
+  const rootRunId = rootRunIdBySurfaceId[surface.id];
+  const workflowAttention = workflowRunAttention(
+    rootRunId === undefined ? undefined : workflowRunsById[rootRunId],
+  );
   return {
     ...surface,
     attention:

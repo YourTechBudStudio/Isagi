@@ -6,43 +6,44 @@ import { useWorkspace } from '../../lib/workspace/hooks.js';
 import {
   useAdvanceWorkflowMutation,
   useClearWorkflowMutation,
+  usePauseWorkflowMutation,
   useRetryWorkflowMutation,
-  useSetWorkflowPausedMutation,
+  useResumeWorkflowMutation,
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import { useWorkflowEventStream } from '../../lib/workspace/workflow-events/stream.js';
-import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
+import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
 import { WorkflowBar, type WorkflowBarAction } from './WorkflowBar.js';
 import type { WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export function WorkflowBarContainer() {
   const { activeSurface } = useWorkspace();
   const surfaceId = activeSurface?.id ?? null;
-  const summary = useWorkflowSurfaceStore((state) =>
-    surfaceId === null ? undefined : state.summariesBySurfaceId[surfaceId],
-  );
+  const summary = useWorkflowRunStore(selectRootRunForSurface(surfaceId));
   const [logExpanded, setLogExpanded] = useState(false);
   const [busyAction, setBusyAction] = useState<WorkflowBarAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const eventStream = useWorkflowEventStream({
-    surfaceId,
+    runId: summary?.rootRunId ?? null,
+    includeChildren: true,
     enabled: Boolean(summary) && logExpanded,
   });
 
-  const setPaused = useSetWorkflowPausedMutation(surfaceId);
-  const clear = useClearWorkflowMutation(surfaceId);
-  const retry = useRetryWorkflowMutation(surfaceId);
+  const pause = usePauseWorkflowMutation(summary?.rootRunId ?? null);
+  const resume = useResumeWorkflowMutation(summary?.rootRunId ?? null);
+  const clear = useClearWorkflowMutation(summary?.rootRunId ?? null);
+  const retry = useRetryWorkflowMutation(summary?.rootRunId ?? null);
   const advance = useAdvanceWorkflowMutation();
 
-  const mutating = setPaused.isPending || clear.isPending || retry.isPending || advance.isPending;
+  const mutating =
+    pause.isPending || resume.isPending || clear.isPending || retry.isPending || advance.isPending;
   const visibleBusyAction = mutating ? busyAction : null;
 
   const actions = useMemo(
     () => ({
-      pause: () =>
-        runAction('pause', workflowCopy.pauseActionFailed, () => setPaused.mutateAsync(true)),
+      pause: () => runAction('pause', workflowCopy.pauseActionFailed, () => pause.mutateAsync()),
       resume: () =>
-        runAction('resume', workflowCopy.resumeActionFailed, () => setPaused.mutateAsync(false)),
+        runAction('resume', workflowCopy.resumeActionFailed, () => resume.mutateAsync()),
       cancel: () => runAction('cancel', workflowCopy.clearActionFailed, () => clear.mutateAsync()),
       dismiss: () =>
         runAction('dismiss', workflowCopy.clearActionFailed, () => clear.mutateAsync()),
@@ -52,7 +53,7 @@ export function WorkflowBarContainer() {
           advance.mutateAsync({ runId, answers }),
         ),
     }),
-    [advance, clear, retry, setPaused],
+    [advance, clear, pause, resume, retry],
   );
 
   async function runAction(
@@ -78,7 +79,7 @@ export function WorkflowBarContainer() {
     <AnimatePresence initial={false}>
       {summary && (
         <WorkflowBar
-          key={summary.surfaceId}
+          key={summary.runId}
           summary={summary}
           events={eventStream.events}
           eventConnection={eventStream.connection}

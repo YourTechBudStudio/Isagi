@@ -1,4 +1,4 @@
-import type { WorkflowDescriptorResult, WorkflowSurfaceSummary } from '@isagi/contracts';
+import type { WorkflowDescriptorResult, WorkflowRunSummary } from '@isagi/contracts';
 
 import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
@@ -27,7 +27,7 @@ export interface PaletteContext {
   readonly activeSurface: Surface | null;
   readonly activePaneId: number | null;
   readonly workflowDescriptors?: readonly WorkflowDescriptorResult[] | undefined;
-  readonly activeSurfaceWorkflowSummary?: WorkflowSurfaceSummary | undefined;
+  readonly activeSurfaceWorkflowSummary?: WorkflowRunSummary | undefined;
 }
 
 export interface Option<Payload = unknown> {

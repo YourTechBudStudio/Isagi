@@ -23,7 +23,7 @@ import {
 } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 import { useWorkspaceStore } from './store.js';
-import { useWorkflowSurfaceStore } from './workflow-surface.js';
+import { useWorkflowRunStore } from './workflow-runs.js';
 
 const initialReconnectDelayMs = 500;
 const maxReconnectDelayMs = 20_000;
@@ -69,7 +69,7 @@ export function useRuntimeEventSubscription() {
           nextSocket.addEventListener('open', () => {
             reconnectDelayMs = initialReconnectDelayMs;
             sendRuntimeEventInput(nextSocket, { type: 'attention_snapshot_requested' });
-            sendRuntimeEventInput(nextSocket, { type: 'workflow_surface_snapshot_requested' });
+            sendRuntimeEventInput(nextSocket, { type: 'workflow_run_snapshot_requested' });
           });
           nextSocket.addEventListener('message', (event) => {
             const runtimeEvent = decodeRuntimeEvent(event.data);
@@ -122,14 +122,14 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
     case 'attention_source_removed':
       useAttentionStore.getState().removeSource(event.payload.source);
       break;
-    case 'workflow_surface_snapshot':
-      useWorkflowSurfaceStore.getState().replace(event.payload.summaries);
+    case 'workflow_run_snapshot':
+      useWorkflowRunStore.getState().replace(event.payload.summaries);
       break;
-    case 'workflow_surface_changed':
-      useWorkflowSurfaceStore.getState().upsert(event.payload);
+    case 'workflow_run_changed':
+      useWorkflowRunStore.getState().upsert(event.payload);
       break;
-    case 'workflow_surface_cleared':
-      useWorkflowSurfaceStore.getState().clear(event.payload.surfaceId);
+    case 'workflow_run_cleared':
+      useWorkflowRunStore.getState().clear(event.payload);
       break;
     case 'agent_session_changed':
     case 'terminal_session_changed':

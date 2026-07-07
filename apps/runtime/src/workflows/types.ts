@@ -64,6 +64,7 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'workflow_launch_context_mismatch'
     | 'validation_failed'
     | 'workflow_root_surface_required'
+    | 'workflow_root_run_required'
     | 'workflow_surface_busy'
     | 'workflow_run_not_found'
     | 'workflow_run_not_paused'
@@ -75,6 +76,7 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly knownWorkflowKeys?: readonly string[] | undefined;
   readonly workflowRunId?: number | undefined;
   readonly activeWorkflowRunId?: number | undefined;
+  readonly operation?: string | undefined;
   readonly worktreeId?: number | undefined;
   readonly surfaceId?: number | undefined;
   readonly paneId?: number | undefined;

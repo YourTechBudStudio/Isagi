@@ -60,7 +60,8 @@ import {
   clearWorkflow,
   retryWorkflow,
   relocateProject,
-  setWorkflowPaused,
+  pauseWorkflow,
+  resumeWorkflow,
   setSplitWeights,
   splitPane,
   startWorkflow,
@@ -141,29 +142,38 @@ export function useRestartCommandMutation(worktreeId: number | null) {
   });
 }
 
-export function useSetWorkflowPausedMutation(surfaceId: number | null) {
+export function usePauseWorkflowMutation(runId: number | null) {
   return useMutation({
-    mutationFn: (paused: boolean) => {
-      if (surfaceId === null) throw new Error('Workflow pause requires an active surface.');
-      return runRuntimeEffect(setWorkflowPaused(surfaceId, { paused }));
+    mutationFn: () => {
+      if (runId === null) throw new Error('Workflow pause requires a root run.');
+      return runRuntimeEffect(pauseWorkflow(runId));
     },
   });
 }
 
-export function useClearWorkflowMutation(surfaceId: number | null) {
+export function useResumeWorkflowMutation(runId: number | null) {
   return useMutation({
     mutationFn: () => {
-      if (surfaceId === null) throw new Error('Workflow clear requires an active surface.');
-      return runRuntimeEffect(clearWorkflow(surfaceId));
+      if (runId === null) throw new Error('Workflow resume requires a root run.');
+      return runRuntimeEffect(resumeWorkflow(runId));
     },
   });
 }
 
-export function useRetryWorkflowMutation(surfaceId: number | null) {
+export function useClearWorkflowMutation(runId: number | null) {
   return useMutation({
     mutationFn: () => {
-      if (surfaceId === null) throw new Error('Workflow retry requires an active surface.');
-      return runRuntimeEffect(retryWorkflow(surfaceId));
+      if (runId === null) throw new Error('Workflow clear requires a root run.');
+      return runRuntimeEffect(clearWorkflow(runId));
+    },
+  });
+}
+
+export function useRetryWorkflowMutation(runId: number | null) {
+  return useMutation({
+    mutationFn: () => {
+      if (runId === null) throw new Error('Workflow retry requires a root run.');
+      return runRuntimeEffect(retryWorkflow(runId));
     },
   });
 }

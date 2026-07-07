@@ -21,10 +21,12 @@ export interface WorkflowEventStreamState {
 }
 
 export function useWorkflowEventStream({
-  surfaceId,
+  runId,
+  includeChildren = false,
   enabled,
 }: {
-  readonly surfaceId: number | null;
+  readonly runId: number | null;
+  readonly includeChildren?: boolean | undefined;
   readonly enabled: boolean;
 }): WorkflowEventStreamState {
   const [events, setEvents] = useState<readonly WorkflowEvent[]>([]);
@@ -32,7 +34,7 @@ export function useWorkflowEventStream({
     ptyStreamConnectionReducer,
     initialPtyStreamConnectionState,
   );
-  const streamKey = `${surfaceId ?? 'none'}:${enabled ? 'enabled' : 'disabled'}`;
+  const streamKey = `${runId ?? 'none'}:${includeChildren ? 'children' : 'single'}:${enabled ? 'enabled' : 'disabled'}`;
 
   useEffect(() => {
     setEvents([]);
@@ -40,12 +42,12 @@ export function useWorkflowEventStream({
   }, [streamKey]);
 
   const resolveUrl = useCallback(() => {
-    if (surfaceId === null) throw new Error('Workflow event stream requires a surface id.');
-    return resolveWorkflowEventsStreamWebSocketUrl(surfaceId);
-  }, [surfaceId]);
+    if (runId === null) throw new Error('Workflow event stream requires a run id.');
+    return resolveWorkflowEventsStreamWebSocketUrl(runId, { includeChildren });
+  }, [includeChildren, runId]);
 
   useEffect(() => {
-    if (!enabled || surfaceId === null) return;
+    if (!enabled || runId === null) return;
 
     let disposed = false;
     let socket: WebSocket | null = null;
@@ -114,7 +116,7 @@ export function useWorkflowEventStream({
       disposed = true;
       socket?.close();
     };
-  }, [enabled, resolveUrl, surfaceId]);
+  }, [enabled, resolveUrl, runId]);
 
   return useMemo(() => ({ events, connection }), [connection, events]);
 }

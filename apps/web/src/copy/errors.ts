@@ -130,6 +130,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
       validation_failed: "Those answers didn't pass the workflow's checks.",
       workflow_root_surface_required: 'A workflow needs a surface to run on.',
+      workflow_root_run_required: 'That action needs the main workflow run.',
       workflow_surface_busy: 'This surface already has a workflow running.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
       workflow_run_not_paused: "That workflow isn't paused.",

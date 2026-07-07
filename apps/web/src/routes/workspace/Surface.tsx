@@ -4,7 +4,8 @@ import { surfaceDetailCopy } from '../../copy/index.js';
 import { formatRuntimeError, useSurfaceDetailQuery } from '../../lib/workspace/queries.js';
 import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
-import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
+import { workflowPresentationStatus } from '../../lib/workspace/workflow-derive.js';
+import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
 import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
 import { SurfaceLayout } from './SurfaceLayout.js';
@@ -12,9 +13,8 @@ import { WorkflowSurfaceGlow } from './WorkflowSurfaceGlow.js';
 
 export function Surface({ surface }: { surface: WorkspaceSurface }) {
   const detail = useSurfaceDetailQuery(surface.id);
-  const workflowStatus = useWorkflowSurfaceStore(
-    (state) => state.summariesBySurfaceId[surface.id]?.status ?? null,
-  );
+  const workflowSummary = useWorkflowRunStore(selectRootRunForSurface(surface.id));
+  const workflowStatus = workflowSummary ? workflowPresentationStatus(workflowSummary) : null;
   const Icon = surfaceSummaryIcon(surface.paneKinds);
 
   if (detail.isPending) {

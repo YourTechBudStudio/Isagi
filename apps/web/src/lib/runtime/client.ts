@@ -53,11 +53,9 @@ import {
   type AdvanceWorkflowInput,
   type ListWorkflowDescriptorsInput,
   type ListWorkflowDescriptorsOutput,
-  type SetWorkflowPausedInput,
   type StartWorkflowInput,
   type StartWorkflowOutput,
   type WorkflowRunControlOutput,
-  type WorkflowSurfaceControlOutput,
   type WorkspaceSnapshot,
 } from '@isagi/contracts';
 
@@ -87,7 +85,10 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.commands.logMetadata>
   >;
   readonly resolveCommandLogStreamWebSocketUrl: (worktreeId: number, commandName: string) => string;
-  readonly resolveWorkflowEventsStreamWebSocketUrl: (surfaceId: number) => string;
+  readonly resolveWorkflowEventsStreamWebSocketUrl: (
+    runId: number,
+    options?: { readonly includeChildren?: boolean | undefined },
+  ) => string;
   readonly runCommand: (
     worktreeId: number,
     commandName: string,
@@ -254,23 +255,28 @@ export interface RuntimeClient {
     PathSuggestOutput,
     RuntimeEndpointError<typeof apiEndpoints.paths.suggestions>
   >;
-  readonly setWorkflowPaused: (
-    surfaceId: number,
-    input: SetWorkflowPausedInput,
+  readonly pauseWorkflow: (
+    runId: number,
   ) => Effect.Effect<
-    WorkflowSurfaceControlOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.setPaused>
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.pause>
+  >;
+  readonly resumeWorkflow: (
+    runId: number,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.resume>
   >;
   readonly clearWorkflow: (
-    surfaceId: number,
+    runId: number,
   ) => Effect.Effect<
-    WorkflowSurfaceControlOutput,
+    WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.clear>
   >;
   readonly retryWorkflow: (
-    surfaceId: number,
+    runId: number,
   ) => Effect.Effect<
-    WorkflowSurfaceControlOutput,
+    WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.retry>
   >;
   readonly advanceWorkflow: (
@@ -284,7 +290,7 @@ export interface RuntimeClient {
     input: ListWorkflowDescriptorsInput,
   ) => Effect.Effect<
     ListWorkflowDescriptorsOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.list>
+    RuntimeEndpointError<typeof apiEndpoints.workflows.descriptors>
   >;
   readonly startWorkflow: (
     input: StartWorkflowInput,
@@ -312,11 +318,12 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
-    resolveWorkflowEventsStreamWebSocketUrl: (surfaceId) => {
+    resolveWorkflowEventsStreamWebSocketUrl: (runId, options = {}) => {
       const httpUrl = new URL(
-        `${apiBasePath}${interpolatePath(workflowEventsStreamWebSocketEndpoint.path, { surfaceId })}`,
+        `${apiBasePath}${interpolatePath(workflowEventsStreamWebSocketEndpoint.path, { runId })}`,
         runtimeUrl,
       );
+      if (options.includeChildren) httpUrl.searchParams.set('includeChildren', 'true');
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
@@ -386,12 +393,12 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.worktrees.delete, { projectId, worktreeId }, input),
     suggestProjectPaths: (input, limit = 25) =>
       request(apiEndpoints.paths.suggestions, { input, limit }),
-    setWorkflowPaused: (surfaceId, input) =>
-      request(apiEndpoints.workflows.setPaused, { surfaceId }, input),
-    clearWorkflow: (surfaceId) => request(apiEndpoints.workflows.clear, { surfaceId }),
-    retryWorkflow: (surfaceId) => request(apiEndpoints.workflows.retry, { surfaceId }),
+    pauseWorkflow: (runId) => request(apiEndpoints.workflows.pause, { runId }),
+    resumeWorkflow: (runId) => request(apiEndpoints.workflows.resume, { runId }),
+    clearWorkflow: (runId) => request(apiEndpoints.workflows.clear, { runId }),
+    retryWorkflow: (runId) => request(apiEndpoints.workflows.retry, { runId }),
     advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
-    listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.list, input),
+    listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
   };
 }

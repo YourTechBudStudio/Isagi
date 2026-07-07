@@ -5,10 +5,10 @@ import type { WorkflowWaitCondition } from './types.js';
 import { findSatisfiedTerminalTurnEdge } from './wait-conditions.js';
 
 const condition = {
-  kind: 'turn',
+  kind: 'agent_turn',
   agentSessionId: 10,
   harnessSessionId: 'harness-a',
-  afterT: '2026-06-18T00:00:10.000Z',
+  sentAt: '2026-06-18T00:00:10.000Z',
 } satisfies WorkflowWaitCondition;
 
 test('turn wait satisfaction requires a matching start after the wait watermark', () => {

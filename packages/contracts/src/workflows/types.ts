@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 
-import { workflowInputKinds } from '@isagi/workflow-sdk';
+import { workflowInputKinds, workflowWaitKinds } from '@isagi/workflow-sdk';
 import type {
   WorkflowCommandManifest,
   WorkflowLogLevel,
@@ -125,7 +125,7 @@ export const workflowEventAppendedMessageSchema = Schema.Struct({
 export const workflowEventsStreamErrorCodeSchema = Schema.Literal(
   'invalid_message',
   'workflow_events_unavailable',
-  'workflow_surface_not_found',
+  'workflow_run_not_found',
   'unknown',
 );
 
@@ -144,23 +144,38 @@ export const workflowEventsStreamOutputMessageSchema = Schema.Union(
 );
 
 export const workflowEventsReplayOutputSchema = Schema.Struct({
-  surfaceId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  runId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  includeChildren: Schema.Boolean,
   events: Schema.Array(workflowEventSchema),
 });
 
-export const workflowSurfaceStatusSchema = Schema.Literal(
-  'driving',
-  'waiting_user',
-  'paused',
-  'failed',
+export const workflowRunStatusSchema = Schema.Literal(
+  'ready',
+  'running',
+  'waiting',
   'done',
+  'failed',
 );
 
-export const workflowSurfaceSummarySchema = Schema.Struct({
-  surfaceId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+export const workflowWaitKindSchema = Schema.Literal(...workflowWaitKinds);
+
+export const workflowBlockingWaitSchema = Schema.Struct({
+  kind: workflowWaitKindSchema,
+  runId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+});
+
+export const workflowRunSummarySchema = Schema.Struct({
+  runId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   rootRunId: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  status: workflowSurfaceStatusSchema,
+  parentRunId: Schema.NullOr(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  workflowKey: Schema.String.pipe(Schema.minLength(1)),
   title: Schema.String.pipe(Schema.minLength(1)),
+  status: workflowRunStatusSchema,
+  paused: Schema.Boolean,
+  waitKind: Schema.NullOr(workflowWaitKindSchema),
+  blockingWait: Schema.NullOr(workflowBlockingWaitSchema),
+  worktreeId: Schema.NullOr(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  surfaceId: Schema.NullOr(Schema.Number.pipe(Schema.int(), Schema.positive())),
   uiFeedback: Schema.optional(workflowUiFeedbackSchema),
   prompt: Schema.optional(
     Schema.Struct({
@@ -172,6 +187,7 @@ export const workflowSurfaceSummarySchema = Schema.Struct({
 });
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
+const booleanStringSchema = Schema.Union(Schema.Boolean, Schema.Literal('true', 'false'));
 const workflowVariablesSchema: Schema.Schema<WorkflowVariables> = Schema.Record({
   key: Schema.String,
   value: Schema.Unknown,
@@ -216,24 +232,31 @@ export const startWorkflowOutputSchema = Schema.Struct({
   workflowKey: Schema.String.pipe(Schema.minLength(1)),
 });
 
-export const workflowSurfaceRouteParamsSchema = Schema.Struct({
-  surfaceId: positiveIntegerSchema,
-});
-
 export const workflowRunRouteParamsSchema = Schema.Struct({
   runId: positiveIntegerSchema,
 });
 
-export const setWorkflowPausedInputSchema = Schema.Struct({
-  paused: Schema.Boolean,
+export const listWorkflowRunsQuerySchema = Schema.Struct({
+  surfaceId: Schema.optional(positiveIntegerSchema),
+  worktreeId: Schema.optional(positiveIntegerSchema),
+  status: Schema.optional(workflowRunStatusSchema),
+  rootOnly: Schema.optional(booleanStringSchema),
+});
+
+export const workflowEventsQuerySchema = Schema.Struct({
+  includeChildren: Schema.optional(booleanStringSchema),
 });
 
 export const advanceWorkflowInputSchema = Schema.Struct({
   answers: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
 });
 
-export const workflowSurfaceControlOutputSchema = Schema.Struct({
-  surfaceId: positiveIntegerSchema,
+export const listWorkflowRunsOutputSchema = Schema.Struct({
+  runs: Schema.Array(workflowRunSummarySchema),
+});
+
+export const getWorkflowRunOutputSchema = Schema.Struct({
+  run: workflowRunSummarySchema,
 });
 
 export const workflowRunControlOutputSchema = Schema.Struct({
@@ -253,17 +276,19 @@ export type WorkflowEventsStreamInputMessage = typeof workflowEventsStreamInputM
 export type WorkflowEventsStreamOutputMessage = typeof workflowEventsStreamOutputMessageSchema.Type;
 export type WorkflowEventsStreamErrorCode = typeof workflowEventsStreamErrorCodeSchema.Type;
 export type WorkflowEventsReplayOutput = typeof workflowEventsReplayOutputSchema.Type;
-export type WorkflowSurfaceStatus = typeof workflowSurfaceStatusSchema.Type;
-export type WorkflowSurfaceSummary = typeof workflowSurfaceSummarySchema.Type;
+export type WorkflowRunStatus = typeof workflowRunStatusSchema.Type;
+export type WorkflowBlockingWait = typeof workflowBlockingWaitSchema.Type;
+export type WorkflowRunSummary = typeof workflowRunSummarySchema.Type;
 export type WorkflowStartContext = typeof workflowStartContextSchema.Type;
 export type WorkflowDescriptorResult = typeof workflowDescriptorResultSchema.Type;
 export type ListWorkflowDescriptorsInput = typeof listWorkflowDescriptorsInputSchema.Type;
 export type ListWorkflowDescriptorsOutput = typeof listWorkflowDescriptorsOutputSchema.Type;
 export type StartWorkflowInput = typeof startWorkflowInputSchema.Type;
 export type StartWorkflowOutput = typeof startWorkflowOutputSchema.Type;
-export type WorkflowSurfaceRouteParams = typeof workflowSurfaceRouteParamsSchema.Type;
 export type WorkflowRunRouteParams = typeof workflowRunRouteParamsSchema.Type;
-export type SetWorkflowPausedInput = typeof setWorkflowPausedInputSchema.Type;
+export type ListWorkflowRunsQuery = typeof listWorkflowRunsQuerySchema.Type;
+export type WorkflowEventsQuery = typeof workflowEventsQuerySchema.Type;
 export type AdvanceWorkflowInput = typeof advanceWorkflowInputSchema.Type;
-export type WorkflowSurfaceControlOutput = typeof workflowSurfaceControlOutputSchema.Type;
+export type ListWorkflowRunsOutput = typeof listWorkflowRunsOutputSchema.Type;
+export type GetWorkflowRunOutput = typeof getWorkflowRunOutputSchema.Type;
 export type WorkflowRunControlOutput = typeof workflowRunControlOutputSchema.Type;

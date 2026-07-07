@@ -39,9 +39,17 @@ import {
   type SurfaceServiceShape,
 } from '../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace/index.js';
-import { chooseSpawnSplit, inject, workflowContext } from './context.js';
+import {
+  chooseSpawnSplit,
+  sendAgentPrompt,
+  WorkflowCapabilities,
+  WorkflowCapabilitiesLive,
+  type WorkflowCapabilitiesService,
+} from './capabilities.js';
+import { workflowContext } from './context.js';
 import {
   WorkflowEventLedger,
+  WorkflowEventLedgerError,
   WorkflowEventLedgerLive,
   type WorkflowEventLedgerService,
 } from './event-ledger.service.js';
@@ -52,7 +60,7 @@ import type { WorkflowRepositoryService } from './repository.js';
 import { resolveTurnEdge } from './resolver.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
-import { deriveWorkflowSurfaceSummary } from './workflow-surface-projection.service.js';
+import { deriveWorkflowRunSummary } from './workflow-run-projection.service.js';
 
 test('drainOnce runs an agentless cont workflow to done', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-cont-'));
@@ -224,12 +232,12 @@ test('drainOnce persists suspend as waiting without progressing it', async () =>
     );
 
     assert.equal(row?.status, 'waiting');
-    assert.equal(row?.waitKind, 'turn');
+    assert.equal(row?.waitKind, 'agent_turn');
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
-      kind: 'turn',
+      kind: 'agent_turn',
       agentSessionId: 10,
       harnessSessionId: 'phase-1-fixture',
-      afterT: '2026-06-18T00:00:00.000Z',
+      sentAt: '2026-06-18T00:00:00.000Z',
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting' });
     assert.equal(row?.owner, null);
@@ -255,10 +263,10 @@ test('drainOnce immediately resumes a turn suspend whose terminal edge already l
               return suspend(
                 { phase: 'await_turn' },
                 {
-                  kind: 'turn',
+                  kind: 'agent_turn',
                   agentSessionId: 10,
                   harnessSessionId: 'harness-a',
-                  afterT: '2026-06-18T00:00:00.000Z',
+                  sentAt: '2026-06-18T00:00:00.000Z',
                 },
               );
             }
@@ -329,12 +337,12 @@ test('drainOnce immediately resumes a headless suspend whose op already complete
           step: async (ctx, state, event) => {
             const current = state as { readonly phase: string };
             if (current.phase === 'arm') {
-              const op = await ctx.runHeadlessPrompt({
+              const op = await ctx.runHeadlessAgent({
                 harness: 'claude',
                 prompt: 'reply ok',
                 timeoutMs: 30_000,
               });
-              return suspend({ phase: 'await_headless' }, { kind: 'headless', ops: [op] });
+              return suspend({ phase: 'await_headless' }, { kind: 'headless_agent', ops: [op] });
             }
             return done(event);
           },
@@ -356,7 +364,7 @@ test('drainOnce immediately resumes a headless suspend whose op already complete
         Effect.provide(
           workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, createWorkflowRegistry()), {
             headless: fakeWorkflowHeadless({
-              runHeadlessPrompt: () =>
+              runHeadlessAgent: () =>
                 Effect.succeed({
                   opId: 'headless:op-1',
                   launch: {
@@ -389,7 +397,7 @@ test('drainOnce immediately resumes a headless suspend whose op already complete
     // The consumed op is evicted from the tracker once its result is delivered.
     assert.deepEqual(released, [['headless:op-1']]);
     assert.deepEqual(JSON.parse(result.completed?.resultJson ?? '{}'), {
-      kind: 'headless',
+      kind: 'headless_agent',
       results: [
         {
           opId: 'headless:op-1',
@@ -612,7 +620,7 @@ test('startWorkflow rejects a new root while a terminal root is waiting for dism
   }
 });
 
-test('workflow surface summary rolls a run tree into one surface state', () => {
+test('root workflow summary reflects root state and tree prompts', () => {
   const root = workflowRunFixture({
     id: 1,
     workflowTitle: 'Gate workflow',
@@ -634,30 +642,34 @@ test('workflow surface summary rolls a run tree into one surface state', () => {
     updatedAt: '2026-06-18T00:00:01.000Z',
   });
 
-  assert.deepEqual(deriveWorkflowSurfaceSummary([root, child], { message: 'Child feedback' }), {
-    surfaceId: 7,
+  assert.deepEqual(deriveWorkflowRunSummary([root, child], { message: 'Child feedback' }), {
+    runId: 1,
     rootRunId: 1,
-    status: 'waiting_user',
+    parentRunId: null,
+    workflowKey: 'fixture',
     title: 'Gate workflow',
+    status: 'running',
+    paused: false,
+    waitKind: null,
+    blockingWait: { kind: 'user_input', runId: 2 },
+    worktreeId: 1,
+    surfaceId: 7,
     uiFeedback: { message: 'Child feedback' },
-    prompt: {
-      runId: 2,
-      questions: [{ kind: 'text', key: 'plan', label: 'Plan' }],
-    },
+    prompt: { runId: 2, questions: [{ kind: 'text', key: 'plan', label: 'Plan' }] },
     error: undefined,
   });
 
   assert.equal(
-    deriveWorkflowSurfaceSummary([
+    deriveWorkflowRunSummary([
       root,
       workflowRunFixture({ id: 3, rootRunId: 1, status: 'waiting', paused: true }),
-    ])?.status,
-    'paused',
+    ])?.paused,
+    true,
   );
 
   // Pausing a run that is itself waiting on the user must derive `paused`, not
   // `waiting_user` — otherwise the bar shows an inert prompt with no Resume.
-  const pausedUserWait = deriveWorkflowSurfaceSummary([
+  const pausedUserWait = deriveWorkflowRunSummary([
     workflowRunFixture({
       id: 6,
       workflowTitle: 'Gate workflow',
@@ -672,10 +684,10 @@ test('workflow surface summary rolls a run tree into one surface state', () => {
       }),
     }),
   ]);
-  assert.equal(pausedUserWait?.status, 'paused');
+  assert.equal(pausedUserWait?.paused, true);
   assert.equal(pausedUserWait?.prompt, undefined);
   assert.deepEqual(
-    deriveWorkflowSurfaceSummary([
+    deriveWorkflowRunSummary([
       workflowRunFixture({
         id: 4,
         surfaceId: 7,
@@ -685,20 +697,61 @@ test('workflow surface summary rolls a run tree into one surface state', () => {
       }),
     ]),
     {
-      surfaceId: 7,
+      runId: 4,
       rootRunId: 4,
-      status: 'failed',
+      parentRunId: null,
+      workflowKey: 'fixture',
       title: 'Fixture workflow',
+      status: 'failed',
+      paused: false,
+      waitKind: null,
+      blockingWait: null,
+      worktreeId: 1,
+      surfaceId: 7,
       uiFeedback: undefined,
       prompt: undefined,
       error: 'Step failed',
     },
   );
-  assert.equal(
-    deriveWorkflowSurfaceSummary([
+  assert.deepEqual(
+    deriveWorkflowRunSummary([
       workflowRunFixture({ id: 5, surfaceId: null, rootRunId: 5, status: 'running' }),
-    ]),
+    ])?.surfaceId,
     null,
+  );
+  assert.deepEqual(
+    deriveWorkflowRunSummary([
+      workflowRunFixture({
+        id: 7,
+        workflowTitle: 'Gate workflow',
+        surfaceId: 7,
+        rootRunId: 7,
+        status: 'running',
+      }),
+      workflowRunFixture({
+        id: 8,
+        parentRunId: 7,
+        rootRunId: 7,
+        status: 'failed',
+        error: JSON.stringify({ message: 'Child failed' }),
+      }),
+    ]),
+    {
+      runId: 7,
+      rootRunId: 7,
+      parentRunId: null,
+      workflowKey: 'fixture',
+      title: 'Gate workflow',
+      status: 'running',
+      paused: false,
+      waitKind: null,
+      blockingWait: null,
+      worktreeId: 1,
+      surfaceId: 7,
+      uiFeedback: undefined,
+      prompt: undefined,
+      error: undefined,
+    },
   );
 });
 
@@ -1197,7 +1250,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
           waitCondition: { kind: 'workflow', runIds: [second.id, first.id] },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: parent.id });
         const readied = yield* repository.findRun(parent.id);
         return { readied };
       }).pipe(Effect.provide(testLayer(dataRoot))),
@@ -1248,7 +1301,7 @@ test('setPaused(false) re-arms a paused workflow JOIN whose children have not al
           waitCondition: { kind: 'workflow', runIds: [child.id] },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: parent.id });
         return {
           parent: yield* repository.findRun(parent.id),
           child: yield* repository.findRun(child.id),
@@ -1349,12 +1402,12 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
               worktreeId: null,
               surfaceId: null,
               status: 'waiting',
-              waitKind: 'turn',
+              waitKind: 'agent_turn',
               waitCondition: JSON.stringify({
-                kind: 'turn',
+                kind: 'agent_turn',
                 agentSessionId: 10,
                 harnessSessionId: 'harness-a',
-                afterT: '2026-06-18T00:00:00.000Z',
+                sentAt: '2026-06-18T00:00:00.000Z',
               }),
               resumePayload: null,
               stateJson: JSON.stringify({ phase: 'waiting_before_start' }),
@@ -1398,12 +1451,12 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
     assert.equal(row?.status, 'waiting');
     assert.equal(row?.paused, true);
     assert.equal(row?.owner, null);
-    assert.equal(row?.waitKind, 'turn');
+    assert.equal(row?.waitKind, 'agent_turn');
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
-      kind: 'turn',
+      kind: 'agent_turn',
       agentSessionId: 10,
       harnessSessionId: 'harness-a',
-      afterT: '2026-06-18T00:00:00.000Z',
+      sentAt: '2026-06-18T00:00:00.000Z',
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting_before_start' });
   } finally {
@@ -1503,12 +1556,12 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:10.000Z',
+            sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
         let pokes = 0;
@@ -1585,6 +1638,82 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
   }
 });
 
+test('paused waiting agent-turn run wakes to ready but is not dispatched', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-paused-turn-wake-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-cont-done',
+          workflowTitle: 'agentless-cont-done',
+          state: { phase: 'await_turn' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'await_turn' },
+          waitKind: 'agent_turn',
+          waitCondition: {
+            kind: 'agent_turn',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            sentAt: '2026-06-18T00:00:10.000Z',
+          },
+        });
+        yield* repository.pauseNonTerminalRuns;
+        yield* resolveTurnEdge({
+          repository,
+          engine,
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:10.000Z',
+            },
+            {
+              type: 'turn_ended',
+              agentSessionId: 10,
+              harnessSessionId: 'harness-a',
+              seq: 1,
+              recordedAt: '2026-06-18T00:00:20.000Z',
+            },
+          ]),
+          edge: {
+            type: 'turn_ended',
+            agentSessionId: 10,
+            harnessSessionId: 'harness-a',
+            recordedAt: '2026-06-18T00:00:20.000Z',
+          },
+        });
+        const afterWake = yield* repository.findRun(run.id);
+        const drain = yield* engine.drainOnce;
+        const afterDrain = yield* repository.findRun(run.id);
+        return { afterWake, afterDrain, drain };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.afterWake?.status, 'ready');
+    assert.equal(result.afterWake?.paused, true);
+    assert.equal(result.afterWake?.waitKind, null);
+    assert.deepEqual(JSON.parse(result.afterWake?.resumePayload ?? '{}'), {
+      outcome: 'ended',
+      recordedAt: '2026-06-18T00:00:20.000Z',
+    });
+    assert.equal(result.drain.claimed, 0);
+    assert.equal(result.afterDrain?.status, 'ready');
+    assert.equal(result.afterDrain?.owner, null);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('step runner passes resume_payload as the workflow event and clears it on done', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-event-'));
   try {
@@ -1617,12 +1746,12 @@ test('step runner passes resume_payload as the workflow event and clears it on d
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'await_turn' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:00.000Z',
+            sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
         yield* resolveTurnEdge({
@@ -1692,12 +1821,12 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'await_turn' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:00.000Z',
+            sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
         yield* resolveTurnEdge({
@@ -1763,7 +1892,7 @@ test('setPaused(false) moves a paused null-wait run back to ready', async () => 
           surfaceId: 1,
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -1795,16 +1924,16 @@ test('setPaused(false) reconciles a satisfied paused turn run to ready', async (
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:10.000Z',
+            sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1876,16 +2005,16 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:10.000Z',
+            sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -1906,7 +2035,7 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
     );
 
     assert.equal(row?.status, 'waiting');
-    assert.equal(row?.waitKind, 'turn');
+    assert.equal(row?.waitKind, 'agent_turn');
     assert.equal(row?.resumePayload, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -1949,16 +2078,16 @@ test('setPaused(false) reconciles turn edges that land while rearming a paused r
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:10.000Z',
+            sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -2015,16 +2144,16 @@ test('setPaused(false) fails a paused turn run when the harness session pin mism
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:10.000Z',
+            sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -2066,7 +2195,7 @@ test('setPaused(false) re-arms paused human waits without satisfying them', asyn
           waitCondition: { kind: 'user_input', questions: [] },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -2103,9 +2232,9 @@ test('setPaused(false) reissues paused headless waits without changing the persi
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'headless',
+          waitKind: 'headless_agent',
           waitCondition: {
-            kind: 'headless',
+            kind: 'headless_agent',
             ops: [
               {
                 opId: 'headless:stable-op',
@@ -2119,7 +2248,7 @@ test('setPaused(false) reissues paused headless waits without changing the persi
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -2137,9 +2266,9 @@ test('setPaused(false) reissues paused headless waits without changing the persi
     );
 
     assert.equal(row?.status, 'waiting');
-    assert.equal(row?.waitKind, 'headless');
+    assert.equal(row?.waitKind, 'headless_agent');
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
-      kind: 'headless',
+      kind: 'headless_agent',
       ops: [
         {
           opId: 'headless:stable-op',
@@ -2193,9 +2322,9 @@ test('setPaused(false) reconciles a headless result that completes while rearmin
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'waiting' },
-          waitKind: 'headless',
+          waitKind: 'headless_agent',
           waitCondition: {
-            kind: 'headless',
+            kind: 'headless_agent',
             ops: [
               {
                 opId: 'headless:race-op',
@@ -2209,7 +2338,7 @@ test('setPaused(false) reconciles a headless result that completes while rearmin
           },
         });
         yield* repository.pauseNonTerminalRuns;
-        yield* engine.setPaused({ surfaceId: 1, paused: false });
+        yield* engine.resume({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(
         Effect.provide(
@@ -2245,7 +2374,7 @@ test('setPaused(false) reconciles a headless result that completes while rearmin
     assert.equal(row?.status, 'ready');
     assert.equal(row?.waitKind, null);
     assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
-      kind: 'headless',
+      kind: 'headless_agent',
       results: [
         {
           opId: 'headless:race-op',
@@ -2276,7 +2405,7 @@ test('setPaused(true) sets the flag without changing lifecycle status or state',
           worktreeId: 1,
           surfaceId: 1,
         });
-        yield* engine.setPaused({ surfaceId: 1, paused: true });
+        yield* engine.pause({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -2312,7 +2441,7 @@ test('clear deletes a non-running surface tree and cascades workflow events', as
           waitCondition: { kind: 'user_continue' },
         });
         const beforeEvents = yield* listWorkflowRunEvents(run.id);
-        yield* engine.clear({ surfaceId: 1 });
+        yield* engine.clear({ runId: run.id });
         const row = yield* repository.findRun(run.id);
         const afterEvents = yield* listWorkflowRunEvents(run.id);
         return { row, beforeEvents, afterEvents };
@@ -2322,6 +2451,64 @@ test('clear deletes a non-running surface tree and cascades workflow events', as
     assert.ok(result.beforeEvents.length > 0);
     assert.equal(result.row, null);
     assert.deepEqual(result.afterEvents, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('root workflow log replay includes child events only when requested', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-child-log-replay-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const ledger = yield* WorkflowEventLedger;
+        const root = yield* repository.createRun({
+          workflowKey: 'root',
+          workflowTitle: 'root',
+          state: { phase: 'root' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        const child = yield* repository.createRun({
+          workflowKey: 'child',
+          workflowTitle: 'child',
+          state: { phase: 'child' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+          parentRunId: root.id,
+          rootRunId: root.id,
+        });
+        yield* ledger.append({
+          runId: root.id,
+          rootRunId: root.rootRunId,
+          surfaceId: root.surfaceId,
+          event: { type: 'log', level: 'info', message: 'root log' },
+        });
+        yield* ledger.append({
+          runId: child.id,
+          rootRunId: child.rootRunId,
+          surfaceId: child.surfaceId,
+          event: { type: 'log', level: 'info', message: 'child log' },
+        });
+
+        return {
+          rootOnly: yield* ledger.readRunEvents({ runId: root.id, includeChildren: false }),
+          withChildren: yield* ledger.readRunEvents({ runId: root.id, includeChildren: true }),
+        };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(
+      result.rootOnly.map((event) => event.type === 'log' && event.message),
+      ['root log'],
+    );
+    assert.deepEqual(
+      result.withChildren.map((event) => event.type === 'log' && event.message),
+      ['root log', 'child log'],
+    );
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -2343,7 +2530,7 @@ test('clear marks a running tree cancel-requested without deleting the claimed r
           surfaceId: 1,
         });
         yield* claimWorkflowRunForTest(repository, run.id);
-        yield* engine.clear({ surfaceId: 1 });
+        yield* engine.clear({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -2377,7 +2564,7 @@ test('retry flips a failed surface root back to ready and clears error', async (
           stateSnapshot: { stateJson: run.stateJson },
           thrown: true,
         });
-        yield* engine.retry({ surfaceId: 1 });
+        yield* engine.retry({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
@@ -2425,12 +2612,12 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
         yield* repository.completeSuspend({
           runId: run.id,
           state: { phase: 'await_turn' },
-          waitKind: 'turn',
+          waitKind: 'agent_turn',
           waitCondition: {
-            kind: 'turn',
+            kind: 'agent_turn',
             agentSessionId: 10,
             harnessSessionId: 'harness-a',
-            afterT: '2026-06-18T00:00:00.000Z',
+            sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
         yield* resolveTurnEdge({
@@ -2464,7 +2651,7 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
         yield* engine.drainOnce;
         const failed = yield* repository.findRun(run.id);
         // Hand-edit-and-retry flow: the failed step is re-run from snapshot.
-        yield* engine.retry({ surfaceId: 1 });
+        yield* engine.retry({ runId: run.id });
         yield* engine.drainOnce;
         const reRun = yield* repository.findRun(run.id);
         return { failed, reRun, events };
@@ -2738,15 +2925,24 @@ test('advance rejects invalid answers and leaves the run waiting', async () => {
   }
 });
 
-test('inject resolves the active agent PTY and writes bracketed paste plus enter', async () => {
+test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste plus enter', async () => {
   const startedAt = Date.now();
   const writes: Array<{ ptyProcessId: number; data: string; elapsedMs: number }> = [];
-  await Effect.runPromise(
-    inject({
+  const sent = await Effect.runPromise(
+    sendAgentPrompt({
       agents: {
         ...fakeAgentSessionService(),
         activePtyProcessId: () => Effect.succeed(20),
       },
+      artifacts: fakeAgentSessionArtifacts({
+        status: 'valid',
+        metadata: {
+          schemaVersion: 1,
+          harnessSessionId: 'harness-a',
+          updatedAt: '2026-06-18T00:00:00.000Z',
+        },
+        metadataPath: '',
+      }),
       pty: {
         ...fakePtyService(),
         writeInput: (input) =>
@@ -2760,6 +2956,9 @@ test('inject resolves the active agent PTY and writes bracketed paste plus enter
     }),
   );
 
+  assert.equal(sent.agentSessionId, 10);
+  assert.equal(sent.harnessSessionId, 'harness-a');
+  assert.match(sent.sentAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(
     writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
     [
@@ -2773,16 +2972,17 @@ test('inject resolves the active agent PTY and writes bracketed paste plus enter
   );
 });
 
-test('inject fails before writing when a turn is in flight', async () => {
+test('sendAgentPrompt fails before writing when a turn is in flight', async () => {
   const writes: Array<{ ptyProcessId: number; data: string }> = [];
   await assert.rejects(
     () =>
       Effect.runPromise(
-        inject({
+        sendAgentPrompt({
           agents: {
             ...fakeAgentSessionService(),
             activePtyProcessId: () => Effect.succeed(20),
           },
+          artifacts: fakeAgentSessionArtifacts(),
           pty: {
             ...fakePtyService(),
             writeInput: (input) =>
@@ -2809,14 +3009,23 @@ test('inject fails before writing when a turn is in flight', async () => {
   assert.deepEqual(writes, []);
 });
 
-test('inject allows a session whose started turn has a synthesized terminal edge', async () => {
+test('sendAgentPrompt allows a session whose started turn has a synthesized terminal edge', async () => {
   const writes: Array<{ ptyProcessId: number; data: string }> = [];
   await Effect.runPromise(
-    inject({
+    sendAgentPrompt({
       agents: {
         ...fakeAgentSessionService(),
         activePtyProcessId: () => Effect.succeed(20),
       },
+      artifacts: fakeAgentSessionArtifacts({
+        status: 'valid',
+        metadata: {
+          schemaVersion: 1,
+          harnessSessionId: 'harness-a',
+          updatedAt: '2026-06-18T00:00:00.000Z',
+        },
+        metadataPath: '',
+      }),
       pty: {
         ...fakePtyService(),
         writeInput: (input) =>
@@ -2900,97 +3109,101 @@ test('chooseSpawnSplit deterministically appends under a column-start layout', (
   );
 });
 
-test('workflow ctx spawnSession splits the captured surface and returns paneId', async () => {
+test('workflow capabilities spawnAgentSessionForRun splits the captured surface and returns paneId', async () => {
   const splitInputs: Parameters<SurfaceServiceShape['splitPane']>[0][] = [];
   const startedAt = Date.now();
   const writes: Array<{ ptyProcessId: number; data: string; elapsedMs: number }> = [];
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: {
-      ...fakeAgentSessionService(),
-      ensureActivePtyProcess: () => Effect.succeed(20),
-      activePtyProcessId: () => Effect.succeed(20),
-    },
-    surfaces: {
-      ...fakeSurfaceService(),
-      getSurfaceDetail: (surfaceId) =>
-        Effect.succeed({
-          id: surfaceId,
-          worktreeId: 1,
-          title: 'Test Surface',
-          activePaneId: 7,
-          layout: { kind: 'leaf', nodeId: 'pane-7', paneId: 7, collapsed: false },
-          panes: [
-            {
-              id: 8,
-              surfaceId,
-              title: 'Pi 2',
-              sortOrder: 1,
-              session: {
-                kind: 'agent_session',
-                agentSession: {
-                  id: 11,
+  const spawned = await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      return yield* capabilities.spawnAgentSessionForRun({
+        run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+        input: { harness: 'pi', prompt: 'seed' },
+      });
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          agents: {
+            ...fakeAgentSessionService(),
+            ensureActivePtyProcess: () => Effect.succeed(20),
+            activePtyProcessId: () => Effect.succeed(20),
+          },
+          surfaces: {
+            ...fakeSurfaceService(),
+            getSurfaceDetail: (surfaceId) =>
+              Effect.succeed({
+                id: surfaceId,
+                worktreeId: 1,
+                title: 'Test Surface',
+                activePaneId: 7,
+                layout: { kind: 'leaf', nodeId: 'pane-7', paneId: 7, collapsed: false },
+                panes: [
+                  {
+                    id: 8,
+                    surfaceId,
+                    title: 'Pi 2',
+                    sortOrder: 1,
+                    session: {
+                      kind: 'agent_session',
+                      agentSession: {
+                        id: 11,
+                        paneId: 8,
+                        worktreeId: 1,
+                        harness: 'pi',
+                        cwd: '/tmp/isagi-test-worktree',
+                        harnessSessionId: 'harness-b',
+                        statusReason: null,
+                        recoveryAction: 'resume_existing',
+                        status: 'running',
+                        diagnosticCode: null,
+                        diagnosticDetail: null,
+                        createdAt: '2026-06-18T00:00:00.000Z',
+                        updatedAt: '2026-06-18T00:00:00.000Z',
+                        lastSeenAt: '2026-06-18T00:00:00.000Z',
+                      },
+                    },
+                  },
+                ],
+              }),
+            splitPane: (input) =>
+              Effect.sync(() => {
+                splitInputs.push(input);
+                return {
+                  worktreeId: input.worktreeId,
+                  surfaceId: 1,
                   paneId: 8,
-                  worktreeId: 1,
-                  harness: 'pi',
-                  cwd: '/tmp/isagi-test-worktree',
-                  harnessSessionId: 'harness-b',
-                  statusReason: null,
-                  recoveryAction: 'resume_existing',
-                  status: 'running',
-                  diagnosticCode: null,
-                  diagnosticDetail: null,
-                  createdAt: '2026-06-18T00:00:00.000Z',
-                  updatedAt: '2026-06-18T00:00:00.000Z',
-                  lastSeenAt: '2026-06-18T00:00:00.000Z',
-                },
-              },
+                  title: 'Pi 2',
+                };
+              }),
+            createSurface: () => Effect.die('workflow spawnAgentSession must not create a surface'),
+          },
+          pty: {
+            ...fakePtyService(),
+            getAttachmentPlan: () =>
+              Effect.succeed({
+                session: fakePtyProcessRecord({ id: 20, logPath: null }),
+                replayBytes: 1,
+                live: true,
+                replaySource: 'backend',
+              }),
+            writeInput: (input) =>
+              Effect.sync(() => {
+                writes.push({ ...input, elapsedMs: Date.now() - startedAt });
+              }),
+          },
+          artifacts: fakeAgentSessionArtifacts({
+            status: 'valid',
+            metadata: {
+              schemaVersion: 1,
+              harnessSessionId: 'harness-b',
+              updatedAt: '2026-06-18T00:00:00.000Z',
             },
-          ],
+            metadataPath: '',
+          }),
         }),
-      splitPane: (input) =>
-        Effect.sync(() => {
-          splitInputs.push(input);
-          return {
-            worktreeId: input.worktreeId,
-            surfaceId: 1,
-            paneId: 8,
-            title: 'Pi 2',
-          };
-        }),
-      createSurface: () => Effect.die('workflow spawnSession must not create a surface'),
-    },
-    pty: {
-      ...fakePtyService(),
-      getAttachmentPlan: () =>
-        Effect.succeed({
-          session: fakePtyProcessRecord({ id: 20, logPath: null }),
-          replayBytes: 1,
-          live: true,
-          replaySource: 'backend',
-        }),
-      writeInput: (input) =>
-        Effect.sync(() => {
-          writes.push({ ...input, elapsedMs: Date.now() - startedAt });
-        }),
-    },
-    artifacts: fakeAgentSessionArtifacts({
-      status: 'valid',
-      metadata: {
-        schemaVersion: 1,
-        harnessSessionId: 'harness-b',
-        updatedAt: '2026-06-18T00:00:00.000Z',
-      },
-      metadataPath: '',
-    }),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
-
-  const spawned = await ctx.spawnSession({ harness: 'pi', prompt: 'seed' });
+      ),
+    ),
+  );
 
   assert.equal(spawned.agentSessionId, 11);
   assert.equal(spawned.harnessSessionId, 'harness-b');
@@ -3022,145 +3235,390 @@ test('workflow ctx spawnSession splits the captured surface and returns paneId',
   );
 });
 
-test('workflow ctx spawnSession hard-fails when the run has no captured surface', async () => {
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: null, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: fakeSurfaceService(),
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts(),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
-
+test('workflow capabilities spawnAgentSessionForRun hard-fails when the run has no captured surface', async () => {
   await assert.rejects(
-    () => ctx.spawnSession({ harness: 'pi', prompt: 'seed' }),
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const capabilities = yield* WorkflowCapabilities;
+          return yield* capabilities.spawnAgentSessionForRun({
+            run: fakeWorkflowRun({ surfaceId: null, worktreeId: 1 }),
+            input: { harness: 'pi', prompt: 'seed' },
+          });
+        }).pipe(Effect.provide(workflowCapabilitiesLayer())),
+      ),
     /cannot spawn without a surface_id/,
   );
 });
 
-test('workflow ctx getHarnessSessionId returns the captured harness session id', async () => {
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: fakeSurfaceService(),
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts({
-      status: 'valid',
-      metadata: {
-        schemaVersion: 1,
-        harnessSessionId: 'harness-z',
-        updatedAt: '2026-06-18T00:00:00.000Z',
-      },
-      metadataPath: '',
-    }),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
+test('workflow capabilities getHarnessSessionId returns the captured harness session id', async () => {
+  const id = await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      return yield* capabilities.getHarnessSessionId(11);
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          artifacts: fakeAgentSessionArtifacts({
+            status: 'valid',
+            metadata: {
+              schemaVersion: 1,
+              harnessSessionId: 'harness-z',
+              updatedAt: '2026-06-18T00:00:00.000Z',
+            },
+            metadataPath: '',
+          }),
+        }),
+      ),
+    ),
+  );
 
-  assert.equal(await ctx.getHarnessSessionId(11), 'harness-z');
+  assert.equal(id, 'harness-z');
 });
 
-test('workflow ctx getHarnessSessionId rejects when metadata has no captured harness session id', async () => {
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: fakeSurfaceService(),
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts({
-      status: 'valid',
-      metadata: {
-        schemaVersion: 1,
-        harnessSessionId: null,
-        updatedAt: '2026-06-18T00:00:00.000Z',
-      },
-      metadataPath: '',
-    }),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
-
+test('workflow capabilities getHarnessSessionId rejects when metadata has no captured harness session id', async () => {
   await assert.rejects(
-    () => ctx.getHarnessSessionId(11),
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const capabilities = yield* WorkflowCapabilities;
+          return yield* capabilities.getHarnessSessionId(11);
+        }).pipe(
+          Effect.provide(
+            workflowCapabilitiesLayer({
+              artifacts: fakeAgentSessionArtifacts({
+                status: 'valid',
+                metadata: {
+                  schemaVersion: 1,
+                  harnessSessionId: null,
+                  updatedAt: '2026-06-18T00:00:00.000Z',
+                },
+                metadataPath: '',
+              }),
+            }),
+          ),
+        ),
+      ),
     /does not have a captured harness session id/,
   );
 });
 
-test('workflow ctx getHarnessSessionId rejects when metadata is missing', async () => {
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: fakeSurfaceService(),
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts({ status: 'missing', metadataPath: '' }),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
-
-  await assert.rejects(() => ctx.getHarnessSessionId(11), /has no captured harness metadata/);
+test('workflow capabilities getHarnessSessionId rejects when metadata is missing', async () => {
+  await assert.rejects(
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const capabilities = yield* WorkflowCapabilities;
+          return yield* capabilities.getHarnessSessionId(11);
+        }).pipe(
+          Effect.provide(
+            workflowCapabilitiesLayer({
+              artifacts: fakeAgentSessionArtifacts({ status: 'missing', metadataPath: '' }),
+            }),
+          ),
+        ),
+      ),
+    /has no captured harness metadata/,
+  );
 });
 
-test('workflow ctx getHarnessSessionId surfaces the diagnostic when metadata is invalid', async () => {
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: fakeSurfaceService(),
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts({
-      status: 'invalid',
-      metadataPath: '',
-      diagnostic: 'metadata file is not valid JSON',
-    }),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
-    worktreePath: '/tmp/isagi-test-worktree',
-  });
-
+test('workflow capabilities getHarnessSessionId surfaces the diagnostic when metadata is invalid', async () => {
   await assert.rejects(
-    () => ctx.getHarnessSessionId(11),
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const capabilities = yield* WorkflowCapabilities;
+          return yield* capabilities.getHarnessSessionId(11);
+        }).pipe(
+          Effect.provide(
+            workflowCapabilitiesLayer({
+              artifacts: fakeAgentSessionArtifacts({
+                status: 'invalid',
+                metadataPath: '',
+                diagnostic: 'metadata file is not valid JSON',
+              }),
+            }),
+          ),
+        ),
+      ),
     /invalid harness metadata: metadata file is not valid JSON/,
   );
 });
 
-test('workflow ctx closePane delegates to the run surface', async () => {
+test('workflow capabilities closePaneForRun delegates to the run surface', async () => {
   const deleted: Array<{ surfaceId: number; paneId: number }> = [];
-  const ctx = workflowContext({
-    repository: fakeWorkflowRepository(),
-    run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-    agents: fakeAgentSessionService(),
-    surfaces: {
-      ...fakeSurfaceService(),
-      deleteSurfacePane: (input) =>
-        Effect.sync(() => {
-          deleted.push(input);
-          return { deletedSurfaceId: null, deletedPaneIds: [input.paneId] };
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      yield* capabilities.closePaneForRun({
+        run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+        paneId: 8,
+      });
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          surfaces: {
+            ...fakeSurfaceService(),
+            deleteSurfacePane: (input) =>
+              Effect.sync(() => {
+                deleted.push(input);
+                return { deletedSurfaceId: null, deletedPaneIds: [input.paneId] };
+              }),
+          },
         }),
+      ),
+    ),
+  );
+
+  assert.deepEqual(deleted, [{ surfaceId: 1, paneId: 8 }]);
+});
+
+test('workflow capabilities runHeadlessAgentForRun associates the op with the owning run', async () => {
+  const headlessInputs: Parameters<WorkflowHeadlessService['runHeadlessAgent']>[0][] = [];
+  const op = await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      return yield* capabilities.runHeadlessAgentForRun({
+        run: fakeWorkflowRun({ id: 123 }),
+        worktreePath: '/tmp/isagi-test-worktree',
+        input: {
+          harness: 'claude',
+          prompt: 'judge',
+          timeoutMs: 30_000,
+        },
+      });
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          headless: fakeWorkflowHeadless({
+            runHeadlessAgent: (input) =>
+              Effect.sync(() => {
+                headlessInputs.push(input);
+                return {
+                  opId: 'headless:op-1',
+                  launch: {
+                    harness: input.prompt.harness,
+                    prompt: input.prompt.prompt,
+                    timeoutMs: input.prompt.timeoutMs ?? 30_000,
+                  },
+                };
+              }),
+          }),
+        }),
+      ),
+    ),
+  );
+
+  assert.deepEqual(headlessInputs, [
+    {
+      runId: 123,
+      worktreePath: '/tmp/isagi-test-worktree',
+      prompt: {
+        harness: 'claude',
+        prompt: 'judge',
+        timeoutMs: 30_000,
+      },
     },
-    pty: fakePtyService(),
-    artifacts: fakeAgentSessionArtifacts(),
-    observer: fakeHarnessLedgerObserver(),
-    headless: fakeWorkflowHeadless(),
-    eventLedger: fakeWorkflowEventLedger(),
+  ]);
+  assert.equal(op.opId, 'headless:op-1');
+});
+
+test('workflow capabilities append workflow log and ui feedback as run-scoped ledger events', async () => {
+  const appends: Parameters<WorkflowEventLedgerService['append']>[0][] = [];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      const run = fakeWorkflowRun({ id: 123 });
+      yield* capabilities.appendWorkflowLog({
+        run,
+        level: 'info',
+        message: 'hello',
+      });
+      yield* capabilities.setWorkflowUiFeedback({
+        run,
+        feedback: { phase: 'working' },
+      });
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          eventLedger: {
+            ...fakeWorkflowEventLedger(),
+            append: (input) =>
+              Effect.sync(() => {
+                appends.push(input);
+                return {
+                  ts: '2026-06-18T00:00:00.000Z',
+                  runId: input.runId,
+                  ...input.event,
+                };
+              }),
+          },
+        }),
+      ),
+    ),
+  );
+
+  assert.deepEqual(appends, [
+    {
+      runId: 123,
+      rootRunId: 99,
+      surfaceId: 1,
+      event: { type: 'log', level: 'info', message: 'hello' },
+    },
+    {
+      runId: 123,
+      rootRunId: 99,
+      surfaceId: 1,
+      event: { type: 'ui_feedback', kind: 'info', phase: 'working', message: undefined },
+    },
+  ]);
+});
+
+test('workflow capabilities keep workflow log and ui feedback append best-effort', async () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const capabilities = yield* WorkflowCapabilities;
+        const run = fakeWorkflowRun({ id: 123 });
+        yield* capabilities.appendWorkflowLog({
+          run,
+          level: 'info',
+          message: 'hello',
+        });
+        yield* capabilities.setWorkflowUiFeedback({
+          run,
+          feedback: { phase: 'working' },
+        });
+      }).pipe(
+        Effect.provide(
+          workflowCapabilitiesLayer({
+            eventLedger: {
+              ...fakeWorkflowEventLedger(),
+              append: () =>
+                Effect.fail(
+                  new WorkflowEventLedgerError({
+                    code: 'event_append_failed',
+                    cause: new Error('ledger unavailable'),
+                  }),
+                ),
+            },
+          }),
+        ),
+      ),
+    );
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test('workflowContext adapts SDK methods to run-bound capabilities', async () => {
+  const run = fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 });
+  const calls: string[] = [];
+  const capabilities: WorkflowCapabilitiesService = {
+    spawnAgentSessionForRun: (input) =>
+      Effect.sync(() => {
+        calls.push(`spawn:${input.run.id}:${input.input.harness}:${input.input.prompt}`);
+        return {
+          agentSessionId: 11,
+          harnessSessionId: 'harness-a',
+          sentAt: '2026-06-18T00:00:00.000Z',
+          paneId: 8,
+        };
+      }),
+    sendAgentPrompt: (input) =>
+      Effect.sync(() => {
+        calls.push(`send:${input.agentSessionId}:${input.text}`);
+        return {
+          agentSessionId: input.agentSessionId,
+          harnessSessionId: 'harness-b',
+          sentAt: '2026-06-18T00:00:01.000Z',
+        };
+      }),
+    closePaneForRun: (input) =>
+      Effect.sync(() => {
+        calls.push(`close:${input.run.id}:${input.paneId}`);
+      }),
+    getConversationHistory: (target) =>
+      Effect.sync(() => {
+        calls.push(`history:${target.agentSessionId}:${target.harnessSessionId}`);
+        return [];
+      }),
+    getHarnessSessionId: (agentSessionId) =>
+      Effect.sync(() => {
+        calls.push(`harness:${agentSessionId}`);
+        return 'harness-c';
+      }),
+    runHeadlessAgentForRun: (input) =>
+      Effect.sync(() => {
+        calls.push(`headless:${input.run.id}:${input.worktreePath}:${input.input.prompt}`);
+        return {
+          opId: 'op-1',
+          launch: {
+            harness: input.input.harness,
+            prompt: input.input.prompt,
+            timeoutMs: input.input.timeoutMs ?? 30_000,
+          },
+        };
+      }),
+    appendWorkflowLog: (input) =>
+      Effect.sync(() => {
+        calls.push(`log:${input.run.id}:${input.level}:${input.message}`);
+      }),
+    setWorkflowUiFeedback: (input) =>
+      Effect.sync(() => {
+        calls.push(`feedback:${input.run.id}:${input.feedback.phase}`);
+      }),
+  };
+  const ctx = workflowContext({
+    capabilities,
+    run,
+    worktreePath: '/tmp/isagi-test-worktree',
+    startWorkflow: (input) =>
+      Effect.sync(() => {
+        calls.push(
+          `child:${input.parentRun.id}:${input.workflowKey}:${input.context?.agentSessionId ?? 'none'}`,
+        );
+        return fakeWorkflowRun({ surfaceId: 1, worktreeId: 1, id: 123 });
+      }),
+  });
+
+  await ctx.spawnAgentSession({ harness: 'pi', prompt: 'seed' });
+  await ctx.sendAgentPrompt(11, 'next');
+  await ctx.closePane(8);
+  await ctx.getConversationHistory({ agentSessionId: 11, harnessSessionId: 'harness-a' });
+  await ctx.getHarnessSessionId(11);
+  await ctx.runHeadlessAgent({ harness: 'claude', prompt: 'judge', timeoutMs: 1000 });
+  await ctx.log('info', 'note');
+  await ctx.setUiFeedback({ phase: 'working' });
+  assert.equal(await ctx.startWorkflow('child', {}, { agentSessionId: 11 }), 123);
+
+  assert.deepEqual(calls, [
+    'spawn:99:pi:seed',
+    'send:11:next',
+    'close:99:8',
+    'history:11:harness-a',
+    'harness:11',
+    'headless:99:/tmp/isagi-test-worktree:judge',
+    'log:99:info:note',
+    'feedback:99:working',
+    'child:99:child:11',
+  ]);
+});
+
+test('workflowContext rejects when a capability Effect fails', async () => {
+  const capabilities: WorkflowCapabilitiesService = {
+    ...fakeWorkflowCapabilities(),
+    sendAgentPrompt: () => Effect.fail(new Error('blocked')),
+  };
+  const ctx = workflowContext({
+    capabilities,
+    run: fakeWorkflowRun(),
     worktreePath: '/tmp/isagi-test-worktree',
   });
 
-  await ctx.closePane(8);
-
-  assert.deepEqual(deleted, [{ surfaceId: 1, paneId: 8 }]);
+  await assert.rejects(() => ctx.sendAgentPrompt(11, 'next'), /blocked/);
 });
 
 const listWorkflowRuns = Effect.gen(function* () {
@@ -3289,6 +3747,19 @@ function workflowLayer(
     write: () => Effect.void,
     writeActiveContextIfFresh: () => Effect.succeed(stateFromActiveContext(1, 10, 1)),
   });
+  const capabilities = WorkflowCapabilitiesLive.pipe(
+    Layer.provide(Layer.succeed(AgentSessionService, fakeAgentSessionService())),
+    Layer.provide(Layer.succeed(SurfaceService, fakeSurfaceService())),
+    Layer.provide(Layer.succeed(PtyService, fakePtyService())),
+    Layer.provide(
+      Layer.succeed(AgentSessionArtifacts, fakes.artifacts ?? fakeAgentSessionArtifacts()),
+    ),
+    Layer.provide(
+      Layer.succeed(HarnessLedgerObserver, fakes.observer ?? fakeHarnessLedgerObserver()),
+    ),
+    Layer.provide(Layer.succeed(WorkflowHeadless, fakes.headless ?? fakeWorkflowHeadless())),
+    Layer.provide(eventLedger),
+  );
   const engine = WorkflowEngineLive.pipe(
     Layer.provide(repository),
     Layer.provide(eventLedger),
@@ -3305,9 +3776,38 @@ function workflowLayer(
       Layer.succeed(HarnessLedgerObserver, fakes.observer ?? fakeHarnessLedgerObserver()),
     ),
     Layer.provide(Layer.succeed(WorkflowHeadless, fakes.headless ?? fakeWorkflowHeadless())),
+    Layer.provide(capabilities),
   );
   return Layer.mergeAll(engine, repository, registry, database, stateFile, eventLedger).pipe(
     Layer.provide(InternalRuntimeEventBusLive),
+  );
+}
+
+function workflowCapabilitiesLayer(
+  fakes: {
+    readonly agents?: AgentSessionServiceShape | undefined;
+    readonly surfaces?: SurfaceServiceShape | undefined;
+    readonly pty?: PtyServiceShape | undefined;
+    readonly artifacts?: AgentSessionArtifactsService | undefined;
+    readonly observer?: HarnessLedgerObserverService | undefined;
+    readonly headless?: WorkflowHeadlessService | undefined;
+    readonly eventLedger?: WorkflowEventLedgerService | undefined;
+  } = {},
+) {
+  return WorkflowCapabilitiesLive.pipe(
+    Layer.provide(Layer.succeed(AgentSessionService, fakes.agents ?? fakeAgentSessionService())),
+    Layer.provide(Layer.succeed(SurfaceService, fakes.surfaces ?? fakeSurfaceService())),
+    Layer.provide(Layer.succeed(PtyService, fakes.pty ?? fakePtyService())),
+    Layer.provide(
+      Layer.succeed(AgentSessionArtifacts, fakes.artifacts ?? fakeAgentSessionArtifacts()),
+    ),
+    Layer.provide(
+      Layer.succeed(HarnessLedgerObserver, fakes.observer ?? fakeHarnessLedgerObserver()),
+    ),
+    Layer.provide(Layer.succeed(WorkflowHeadless, fakes.headless ?? fakeWorkflowHeadless())),
+    Layer.provide(
+      Layer.succeed(WorkflowEventLedger, fakes.eventLedger ?? fakeWorkflowEventLedger()),
+    ),
   );
 }
 
@@ -3529,8 +4029,8 @@ function fakeWorkflowHeadless(
   overrides: Partial<WorkflowHeadlessService> = {},
 ): WorkflowHeadlessService {
   return {
-    runHeadlessPrompt:
-      overrides.runHeadlessPrompt ?? (() => Effect.die('headless runHeadlessPrompt is not used')),
+    runHeadlessAgent:
+      overrides.runHeadlessAgent ?? (() => Effect.die('headless runHeadlessAgent is not used')),
     reissue: overrides.reissue ?? (() => Effect.die('headless reissue is not used')),
     completedResults:
       overrides.completedResults ?? (() => Effect.die('headless completedResults is not used')),
@@ -3539,10 +4039,10 @@ function fakeWorkflowHeadless(
 }
 
 function fakeWorkflowRun(
-  overrides: Partial<Pick<WorkflowRunRow, 'surfaceId' | 'worktreeId'>> = {},
+  overrides: Partial<Pick<WorkflowRunRow, 'id' | 'surfaceId' | 'worktreeId'>> = {},
 ): WorkflowRunRow {
   return {
-    id: 99,
+    id: overrides.id ?? 99,
     workflowKey: 'test-workflow',
     workflowTitle: 'Test workflow',
     worktreeId: 'worktreeId' in overrides ? (overrides.worktreeId ?? null) : 1,
@@ -3565,43 +4065,6 @@ function fakeWorkflowRun(
   };
 }
 
-function fakeWorkflowRepository(): WorkflowRepositoryService {
-  return {
-    createRun: () => Effect.die('workflow createRun is not used'),
-    listReadyRuns: Effect.die('workflow listReadyRuns is not used'),
-    findRun: () => Effect.die('workflow findRun is not used'),
-    findNonTerminalRootRunForSurface: () =>
-      Effect.die('workflow findNonTerminalRootRunForSurface is not used'),
-    findLatestRootRunForSurface: () =>
-      Effect.die('workflow findLatestRootRunForSurface is not used'),
-    findFailedRootRunForSurface: () =>
-      Effect.die('workflow findFailedRootRunForSurface is not used'),
-    listSurfaceRootRuns: Effect.die('workflow listSurfaceRootRuns is not used'),
-    listNonTerminalSurfaceRootRuns: Effect.die(
-      'workflow listNonTerminalSurfaceRootRuns is not used',
-    ),
-    listSurfaceDeletedRootRuns: Effect.die('workflow listSurfaceDeletedRootRuns is not used'),
-    listRunTree: () => Effect.die('workflow listRunTree is not used'),
-    pauseNonTerminalRuns: Effect.die('workflow pauseNonTerminalRuns is not used'),
-    setPausedForRunTree: () => Effect.die('workflow setPausedForRunTree is not used'),
-    requestCancelForRunTree: () => Effect.die('workflow requestCancelForRunTree is not used'),
-    deleteRunTree: () => Effect.die('workflow deleteRunTree is not used'),
-    retryFailedRun: () => Effect.die('workflow retryFailedRun is not used'),
-    claimReadyRun: () => Effect.die('workflow claimReadyRun is not used'),
-    findWaitingTurnRuns: () => Effect.die('workflow findWaitingTurnRuns is not used'),
-    findWaitingWorkflowRuns: () => Effect.die('workflow findWaitingWorkflowRuns is not used'),
-    resolveWorkflowJoin: () => Effect.die('workflow resolveWorkflowJoin is not used'),
-    wakeWaitingRun: () => Effect.die('workflow wakeWaitingRun is not used'),
-    readyPausedRun: () => Effect.die('workflow readyPausedRun is not used'),
-    rearmPausedRun: () => Effect.die('workflow rearmPausedRun is not used'),
-    completeCont: () => Effect.die('workflow completeCont is not used'),
-    completeSuspend: () => Effect.die('workflow completeSuspend is not used'),
-    completeDone: () => Effect.die('workflow completeDone is not used'),
-    failRun: () => Effect.die('workflow failRun is not used'),
-    failNonTerminalRun: () => Effect.die('workflow failNonTerminalRun is not used'),
-  };
-}
-
 function fakeWorkflowEventLedger(): WorkflowEventLedgerService {
   return {
     append: (input) =>
@@ -3610,12 +4073,44 @@ function fakeWorkflowEventLedger(): WorkflowEventLedgerService {
         runId: input.runId,
         ...input.event,
       }),
-    readSurfaceEvents: () => Effect.succeed([]),
+    readRunEvents: () => Effect.succeed([]),
     latestUiFeedbackForRunTree: () => Effect.succeed(undefined),
     deleteRunTreeLedgers: () => Effect.void,
     collectOrphans: Effect.void,
     sweepSurfaceDeletedRuns: Effect.void,
     pathForRun: (runId) => `/tmp/isagi-test-workflow-events/${runId}/events.jsonl`,
+  };
+}
+
+function fakeWorkflowCapabilities(): WorkflowCapabilitiesService {
+  return {
+    spawnAgentSessionForRun: () =>
+      Effect.succeed({
+        agentSessionId: 11,
+        harnessSessionId: 'harness-a',
+        sentAt: '2026-06-18T00:00:00.000Z',
+        paneId: 8,
+      }),
+    sendAgentPrompt: () =>
+      Effect.succeed({
+        agentSessionId: 11,
+        harnessSessionId: 'harness-a',
+        sentAt: '2026-06-18T00:00:00.000Z',
+      }),
+    closePaneForRun: () => Effect.void,
+    getConversationHistory: () => Effect.succeed([]),
+    getHarnessSessionId: () => Effect.succeed('harness-a'),
+    runHeadlessAgentForRun: () =>
+      Effect.succeed({
+        opId: 'op-1',
+        launch: {
+          harness: 'claude',
+          prompt: 'prompt',
+          timeoutMs: 30_000,
+        },
+      }),
+    appendWorkflowLog: () => Effect.void,
+    setWorkflowUiFeedback: () => Effect.void,
   };
 }
 

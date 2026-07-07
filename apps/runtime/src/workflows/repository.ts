@@ -31,17 +31,15 @@ export interface WorkflowRepositoryService {
   }) => Effect.Effect<WorkflowRunRow, DatabaseError>;
   readonly listReadyRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
-  readonly findNonTerminalRootRunForSurface: (
-    surfaceId: number,
-  ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
   readonly findLatestRootRunForSurface: (
     surfaceId: number,
   ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
-  readonly findFailedRootRunForSurface: (
-    surfaceId: number,
-  ) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
-  readonly listSurfaceRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
-  readonly listNonTerminalSurfaceRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly listRuns: (filters: {
+    readonly surfaceId?: number | undefined;
+    readonly worktreeId?: number | undefined;
+    readonly status?: WorkflowStatus | undefined;
+    readonly rootOnly?: boolean | undefined;
+  }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly listSurfaceDeletedRootRuns: Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly listRunTree: (rootRunId: number) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly pauseNonTerminalRuns: Effect.Effect<number, DatabaseError>;
@@ -61,7 +59,7 @@ export interface WorkflowRepositoryService {
     readonly runId: number;
     readonly owner: string;
   }) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
-  readonly findWaitingTurnRuns: (input: {
+  readonly findWaitingAgentTurnRuns: (input: {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
   }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
@@ -134,7 +132,7 @@ export type WorkflowResumePayload =
       readonly kind: 'user_input';
       readonly answers: Record<string, string | string[] | boolean>;
     }
-  | { readonly kind: 'headless'; readonly results: readonly WorkflowHeadlessResult[] }
+  | { readonly kind: 'headless_agent'; readonly results: readonly WorkflowHeadlessResult[] }
   | { readonly kind: 'workflow'; readonly results: readonly WorkflowJoinResult[] };
 
 export interface WorkflowJoinResult {
@@ -205,7 +203,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             });
             return workflowRunRow(row);
           })
-          .pipe(Effect.tap((run) => publishWorkflowRunChanged(eventBus, run))),
+          .pipe(Effect.tap((run) => publishWorkflowRunTouched(eventBus, run))),
       listReadyRuns: database.use('list_ready_workflow_runs', (db) =>
         db
           .select(runColumns)
@@ -229,22 +227,6 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return row ? workflowRunRow(row) : null;
         }),
-      findNonTerminalRootRunForSurface: (surfaceId) =>
-        database.use('find_non_terminal_root_workflow_run_for_surface', (db) => {
-          const row = db
-            .select(runColumns)
-            .from(workflowRuns)
-            .where(
-              and(
-                eq(workflowRuns.surfaceId, surfaceId),
-                sql`${workflowRuns.parentRunId} IS NULL`,
-                sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
-              ),
-            )
-            .orderBy(asc(workflowRuns.id))
-            .get();
-          return row ? workflowRunRow(row) : null;
-        }),
       findLatestRootRunForSurface: (surfaceId) =>
         database.use('find_latest_root_workflow_run_for_surface', (db) => {
           const row = db
@@ -257,53 +239,31 @@ export const WorkflowRepositoryLive = Layer.effect(
             .get();
           return row ? workflowRunRow(row) : null;
         }),
-      findFailedRootRunForSurface: (surfaceId) =>
-        database.use('find_failed_root_workflow_run_for_surface', (db) => {
-          const row = db
-            .select(runColumns)
-            .from(workflowRuns)
-            .where(
-              and(
-                eq(workflowRuns.surfaceId, surfaceId),
-                sql`${workflowRuns.parentRunId} IS NULL`,
-                eq(workflowRuns.status, 'failed'),
-              ),
-            )
-            .orderBy(sql`${workflowRuns.id} DESC`)
-            .get();
-          return row ? workflowRunRow(row) : null;
+      listRuns: (filters) =>
+        database.use('list_workflow_runs', (db) => {
+          const clauses = [];
+          if (filters.surfaceId !== undefined) {
+            clauses.push(eq(workflowRuns.surfaceId, filters.surfaceId));
+          }
+          if (filters.worktreeId !== undefined) {
+            clauses.push(eq(workflowRuns.worktreeId, filters.worktreeId));
+          }
+          if (filters.status !== undefined) {
+            clauses.push(eq(workflowRuns.status, filters.status));
+          }
+          if (filters.rootOnly ?? true) {
+            clauses.push(sql`${workflowRuns.parentRunId} IS NULL`);
+          }
+          const query = db.select(runColumns).from(workflowRuns);
+          const rows =
+            clauses.length > 0
+              ? query
+                  .where(and(...clauses))
+                  .orderBy(asc(workflowRuns.id))
+                  .all()
+              : query.orderBy(asc(workflowRuns.id)).all();
+          return rows.map(workflowRunRow);
         }),
-      listSurfaceRootRuns: database.use('list_surface_root_workflow_runs', (db) =>
-        db
-          .select(runColumns)
-          .from(workflowRuns)
-          .where(
-            and(
-              sql`${workflowRuns.surfaceId} IS NOT NULL`,
-              sql`${workflowRuns.parentRunId} IS NULL`,
-            ),
-          )
-          .orderBy(asc(workflowRuns.id))
-          .all()
-          .map(workflowRunRow),
-      ),
-      listNonTerminalSurfaceRootRuns: database.use(
-        'list_non_terminal_surface_root_workflow_runs',
-        (db) =>
-          db
-            .select(runColumns)
-            .from(workflowRuns)
-            .where(
-              and(
-                sql`${workflowRuns.surfaceId} IS NOT NULL`,
-                sql`${workflowRuns.parentRunId} IS NULL`,
-                sql`${workflowRuns.status} NOT IN ('done', 'failed')`,
-              ),
-            )
-            .orderBy(asc(workflowRuns.id))
-            .all()
-            .map(workflowRunRow),
-      ),
       listSurfaceDeletedRootRuns: database.use('list_surface_deleted_workflow_root_runs', (db) =>
         db
           .select(runColumns)
@@ -343,7 +303,7 @@ export const WorkflowRepositoryLive = Layer.effect(
         .pipe(
           Effect.tap((runs) =>
             Effect.all(
-              runs.map((run) => publishWorkflowRunChanged(eventBus, run)),
+              runs.map((run) => publishWorkflowRunTouched(eventBus, run)),
               {
                 discard: true,
               },
@@ -370,7 +330,7 @@ export const WorkflowRepositoryLive = Layer.effect(
           .pipe(
             Effect.tap((runs) =>
               Effect.all(
-                runs.map((run) => publishWorkflowRunChanged(eventBus, run)),
+                runs.map((run) => publishWorkflowRunTouched(eventBus, run)),
                 {
                   discard: true,
                 },
@@ -403,7 +363,7 @@ export const WorkflowRepositoryLive = Layer.effect(
           })
           .pipe(
             Effect.tap(() =>
-              publishWorkflowSurfaceRecompute(eventBus, {
+              publishWorkflowRunRecompute(eventBus, {
                 rootRunId: input.rootRunId,
                 surfaceId: input.surfaceId,
               }),
@@ -428,7 +388,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return row ? workflowRunRow(row) : null;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
           ),
       claimReadyRun: (input) =>
         database
@@ -449,18 +409,17 @@ export const WorkflowRepositoryLive = Layer.effect(
             return row ? workflowRunRow(row) : null;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
           ),
-      findWaitingTurnRuns: (input) =>
-        database.use('find_waiting_turn_workflow_runs', (db) =>
+      findWaitingAgentTurnRuns: (input) =>
+        database.use('find_waiting_agent_turn_workflow_runs', (db) =>
           db
             .select(runColumns)
             .from(workflowRuns)
             .where(
               and(
                 eq(workflowRuns.status, 'waiting'),
-                eq(workflowRuns.paused, false),
-                eq(workflowRuns.waitKind, 'turn'),
+                eq(workflowRuns.waitKind, 'agent_turn'),
                 sql`json_extract(${workflowRuns.waitCondition}, '$.agentSessionId') = ${input.agentSessionId}`,
                 sql`json_extract(${workflowRuns.waitCondition}, '$.harnessSessionId') = ${input.harnessSessionId}`,
               ),
@@ -477,7 +436,6 @@ export const WorkflowRepositoryLive = Layer.effect(
             .where(
               and(
                 eq(workflowRuns.status, 'waiting'),
-                eq(workflowRuns.paused, false),
                 eq(workflowRuns.waitKind, 'workflow'),
                 sql`EXISTS (SELECT 1 FROM json_each(${workflowRuns.waitCondition}, '$.runIds') WHERE json_each.value = ${childRunId})`,
               ),
@@ -528,7 +486,6 @@ export const WorkflowRepositoryLive = Layer.effect(
                 and(
                   eq(workflowRuns.id, input.runId),
                   eq(workflowRuns.status, 'waiting'),
-                  eq(workflowRuns.paused, false),
                   eq(workflowRuns.cancelRequested, false),
                 ),
               )
@@ -537,7 +494,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return row ? workflowRunRow(row) : null;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.map(Boolean),
           ),
       readyPausedRun: (input) =>
@@ -577,7 +534,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return row ? workflowRunRow(row) : null;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.map(Boolean),
           ),
       rearmPausedRun: (runId) =>
@@ -605,7 +562,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return row ? workflowRunRow(row) : null;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.map(Boolean),
           ),
       completeCont: (input) =>
@@ -638,7 +595,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return workflowRunRow(row);
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.asVoid,
           ),
       completeSuspend: (input) =>
@@ -671,7 +628,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return workflowRunRow(row);
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.asVoid,
           ),
       completeDone: (input) =>
@@ -704,7 +661,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return workflowRunRow(row);
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.asVoid,
           ),
       failRun: (input) =>
@@ -738,7 +695,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return workflowRunRow(row);
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.asVoid,
           ),
       failNonTerminalRun: (input) =>
@@ -778,7 +735,7 @@ export const WorkflowRepositoryLive = Layer.effect(
             return workflowRunRow(row);
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunChanged(eventBus, run) : Effect.void)),
+            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
             Effect.asVoid,
           ),
     } satisfies WorkflowRepositoryService;
@@ -810,24 +767,24 @@ function workflowRunRow(row: WorkflowRunRecord): WorkflowRunRow {
   };
 }
 
-function publishWorkflowRunChanged(
+function publishWorkflowRunTouched(
   eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   run: Pick<WorkflowRunRow, 'id' | 'rootRunId' | 'surfaceId'>,
 ) {
   return eventBus.publish({
-    type: 'workflow_run_changed',
+    type: 'workflow_run_touched',
     runId: run.id,
     rootRunId: run.rootRunId,
     surfaceId: run.surfaceId,
   });
 }
 
-function publishWorkflowSurfaceRecompute(
+function publishWorkflowRunRecompute(
   eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   input: { readonly rootRunId: number; readonly surfaceId: number | null },
 ) {
   return eventBus.publish({
-    type: 'workflow_surface_recompute_requested',
+    type: 'workflow_run_recompute_requested',
     rootRunId: input.rootRunId,
     surfaceId: input.surfaceId,
   });

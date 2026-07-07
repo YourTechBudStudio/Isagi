@@ -1,6 +1,13 @@
 export { registerWorkflowApi } from './api.js';
 export { cont, done, fail, suspend } from '@isagi/workflow-sdk';
-export { inject, workflowContext } from './context.js';
+export {
+  chooseSpawnSplit,
+  sendAgentPrompt,
+  WorkflowCapabilities,
+  WorkflowCapabilitiesLive,
+  type WorkflowCapabilitiesService,
+} from './capabilities.js';
+export { workflowContext } from './context.js';
 export {
   WorkflowEventLedger,
   WorkflowEventLedgerLive,
@@ -33,11 +40,11 @@ export {
   type WorkflowRepositoryService,
 } from './repository.js';
 export {
-  deriveWorkflowSurfaceSummary,
-  WorkflowSurfaceProjection,
-  WorkflowSurfaceProjectionLive,
-  type WorkflowSurfaceProjectionService,
-} from './workflow-surface-projection.service.js';
+  deriveWorkflowRunSummary,
+  WorkflowRunProjection,
+  WorkflowRunProjectionLive,
+  type WorkflowRunProjectionService,
+} from './workflow-run-projection.service.js';
 export type {
   WorkflowContext,
   WorkflowDefinition,

@@ -50,7 +50,7 @@ import {
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeError, formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import { useWorkflowSurfaceStore } from '../../lib/workspace/workflow-surface.js';
+import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
 import {
   EntryList,
   OutcomePanel,
@@ -92,8 +92,8 @@ export function CommandPalette() {
       }),
     [projects, activeWorktreeId, activeSurfaceByWorktreeId, activePaneBySurfaceId],
   );
-  const activeSurfaceWorkflowSummary = useWorkflowSurfaceStore((state) =>
-    baseCtx.activeSurface ? state.summariesBySurfaceId[baseCtx.activeSurface.id] : undefined,
+  const activeSurfaceWorkflowSummary = useWorkflowRunStore(
+    selectRootRunForSurface(baseCtx.activeSurface?.id),
   );
   const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
     enabled: open && baseCtx.activeSurface !== null,

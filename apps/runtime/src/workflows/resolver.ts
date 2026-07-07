@@ -95,7 +95,13 @@ export function resolveWorkflowTerminal(input: {
       const resolution = yield* input.repository.resolveWorkflowJoin(condition);
       if (resolution.status === 'pending') continue;
       if (resolution.status === 'missing') {
-        yield* input.repository.failRun({
+        // The waiting run must be failed with the non-terminal-guarded update, not
+        // `failRun` (which only matches `status = 'running'`). `run` here comes from
+        // `findWaitingWorkflowRuns`, so it is `waiting`; `failRun` would match no row
+        // and leave the run `waiting` while we still publish a `failed` terminal +
+        // lifecycle event — a silent status/log inconsistency. This mirrors the
+        // `failNonTerminalRun` path used by the reconcile/continue siblings.
+        yield* input.repository.failNonTerminalRun({
           runId: run.id,
           error: {
             message: `Workflow run ${run.id} is waiting on missing workflow run ${resolution.runId}.`,
@@ -141,14 +147,14 @@ export function resolveHeadlessCompletion(input: {
 }) {
   return Effect.gen(function* () {
     const run = yield* input.repository.findRun(input.runId);
-    if (!run || run.status !== 'waiting' || run.waitKind !== 'headless') return;
+    if (!run || run.status !== 'waiting' || run.waitKind !== 'headless_agent') return;
     const condition = parseHeadlessWaitCondition(run.waitCondition);
     if (!condition) return;
     const results = yield* input.headless.completedResults(condition);
     if (!results) return;
     const woke = yield* input.repository.wakeWaitingRun({
       runId: run.id,
-      resumePayload: { kind: 'headless', results },
+      resumePayload: { kind: 'headless_agent', results },
     });
     if (woke) {
       yield* appendInternalWorkflowLogBestEffort(
@@ -174,7 +180,7 @@ export function resolveTurnEdge(input: {
   return Effect.gen(function* () {
     const edges = yield* input.observer.getTurnEdges(input.edge.agentSessionId);
     if (!edges.some(isTerminalTurnEdge)) return;
-    const candidates = yield* input.repository.findWaitingTurnRuns({
+    const candidates = yield* input.repository.findWaitingAgentTurnRuns({
       agentSessionId: input.edge.agentSessionId,
       harnessSessionId: input.edge.harnessSessionId,
     });
@@ -232,11 +238,11 @@ function appendLifecycleBestEffort(
 
 function parseHeadlessWaitCondition(
   value: string | null,
-): Extract<WorkflowWaitCondition, { readonly kind: 'headless' }> | null {
+): Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }> | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as WorkflowWaitCondition;
-    return parsed?.kind === 'headless' ? parsed : null;
+    return parsed?.kind === 'headless_agent' ? parsed : null;
   } catch {
     return null;
   }

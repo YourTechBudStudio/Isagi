@@ -30,7 +30,7 @@ export function isTerminalTurnEdge(edge: { readonly type: string }): edge is Ter
 }
 
 export function findSatisfiedTerminalTurnEdge(
-  condition: Extract<WorkflowWaitCondition, { readonly kind: 'turn' }>,
+  condition: Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }>,
   edges: readonly WorkflowObservedTurnEdge[],
 ): TerminalTurnEdge | null {
   const openStarts: TurnStartedEdge[] = [];
@@ -51,7 +51,7 @@ export function findSatisfiedTerminalTurnEdge(
     const start = matchedStart(openStarts, edge);
     if (start) {
       removeStart(openStarts, start);
-      if (start.recordedAt >= condition.afterT) return edge;
+      if (start.recordedAt >= condition.sentAt) return edge;
     }
   }
 
@@ -102,9 +102,9 @@ export function parseTurnWaitCondition(run: WorkflowRunRow) {
     if (
       parsed &&
       typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'turn'
+      (parsed as { readonly kind?: unknown }).kind === 'agent_turn'
     ) {
-      return parsed as WorkflowWaitCondition & { readonly kind: 'turn' };
+      return parsed as WorkflowWaitCondition & { readonly kind: 'agent_turn' };
     }
     return null;
   } catch {
@@ -137,10 +137,10 @@ export function parseHeadlessWaitCondition(run: WorkflowRunRow) {
     if (
       parsed &&
       typeof parsed === 'object' &&
-      (parsed as { readonly kind?: unknown }).kind === 'headless' &&
+      (parsed as { readonly kind?: unknown }).kind === 'headless_agent' &&
       Array.isArray((parsed as { readonly ops?: unknown }).ops)
     ) {
-      return parsed as Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>;
+      return parsed as Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }>;
     }
     return null;
   } catch {

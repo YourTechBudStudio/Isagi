@@ -25,7 +25,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 2. [`product-model.md`](./product-model.md) — the shared nouns and mental model
 3. [`architecture.md`](./architecture.md) — the high-level server/client architecture
 4. [`configuration-model.md`](./configuration-model.md) — how configuration is conceptually organized
-5. [`workflow-engine.md`](./workflow-engine.md) — the durable workflow engine subsystem in the runtime
+5. [`workflow-engine.md`](./workflow-engine.md) — the durable workflow subsystem: engine, run-centric API, event surfaces, and client boundary
 6. [`engineering-guidance/README.md`](./engineering-guidance/README.md) — coding and review guidance for keeping the repo maintainable
 
 ## Docs map
@@ -34,5 +34,5 @@ These docs should explain the shape of Isagi without becoming a running transcri
 - **Product Model**: the seven primary primitives: global config, project, worktree, worktree environment, command, surface/panel, and attention signal.
 - **Architecture**: Electron client plus server/runtime architecture, source-of-truth principles, and integration posture.
 - **Configuration Model**: global/project/worktree configuration layers, command persistence, templates, presets, and agent-assisted configuration direction.
-- **Workflow Engine**: the durable, in-process engine that runs user-authored reducer callbacks as restart-surviving state machines — the resolver/dispatcher/recoverer loops, the `ctx` SDK, turn detection, and persistence.
+- **Workflow Subsystem**: the durable, in-process engine that runs user-authored reducer callbacks as restart-surviving state machines, plus the surrounding run-centric surface — run identity and the status/`paused` lifecycle, the resolver/dispatcher/recoverer loops, the `ctx` SDK and `wait`/`event` helpers, the run API and controls, the three event surfaces, and the web client boundary.
 - **Engineering Guidance**: principles and review lenses for boundaries, module shape, drift prevention, runtime diagnostics, product behavior, and verification.

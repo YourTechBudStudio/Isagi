@@ -251,17 +251,19 @@ function workflowArtifactPath(workflowsPath: string, workflowKey: string, source
 function emptyCtx() {
   return {
     worktreePath: '/tmp/isagi-test-worktree',
-    spawnSession: async () => {
-      throw new Error('spawnSession is not used');
+    spawnAgentSession: async () => {
+      throw new Error('spawnAgentSession is not used');
     },
-    inject: async () => {},
+    sendAgentPrompt: async () => {
+      throw new Error('sendAgentPrompt is not used');
+    },
     closePane: async () => {},
     getConversationHistory: async () => [],
     getHarnessSessionId: async () => {
       throw new Error('getHarnessSessionId is not used');
     },
-    runHeadlessPrompt: async () => {
-      throw new Error('runHeadlessPrompt is not used');
+    runHeadlessAgent: async () => {
+      throw new Error('runHeadlessAgent is not used');
     },
     startWorkflow: async () => {
       throw new Error('startWorkflow is not used');

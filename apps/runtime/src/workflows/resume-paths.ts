@@ -63,7 +63,7 @@ export function continuePausedRun(input: {
       .pipe(Effect.zipRight(input.poke));
   }
 
-  if (input.run.waitKind === 'turn') {
+  if (input.run.waitKind === 'agent_turn') {
     return continuePausedTurnRun(input);
   }
 
@@ -82,7 +82,7 @@ export function continuePausedRun(input: {
       );
   }
 
-  if (input.run.waitKind === 'headless') {
+  if (input.run.waitKind === 'headless_agent') {
     return continuePausedHeadlessRun(input);
   }
 
@@ -218,7 +218,7 @@ function continuePausedHeadlessRun(input: {
     if (results) {
       yield* input.repository.readyPausedRun({
         runId: input.run.id,
-        resumePayload: { kind: 'headless', results },
+        resumePayload: { kind: 'headless_agent', results },
       });
       yield* appendInternalWorkflowLogBestEffort(
         input.eventLedger,
@@ -355,7 +355,7 @@ function continuePausedTurnRun(input: {
 
 export function reconcileArmedTurnWait(input: {
   readonly run: WorkflowRunRow;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'turn' }>;
+  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }>;
   readonly repository: WorkflowRepositoryService;
   readonly observer: HarnessLedgerObserverService;
   readonly eventLedger: WorkflowEventLedgerService;
@@ -386,7 +386,7 @@ export function reconcileArmedTurnWait(input: {
 
 export function reconcileArmedHeadlessWait(input: {
   readonly run: WorkflowRunRow;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless' }>;
+  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }>;
   readonly repository: WorkflowRepositoryService;
   readonly headless: WorkflowHeadlessService;
   readonly eventLedger: WorkflowEventLedgerService;
@@ -397,7 +397,7 @@ export function reconcileArmedHeadlessWait(input: {
     if (!results) return;
     const woke = yield* input.repository.wakeWaitingRun({
       runId: input.run.id,
-      resumePayload: { kind: 'headless', results },
+      resumePayload: { kind: 'headless_agent', results },
     });
     if (woke) {
       yield* appendInternalWorkflowLogBestEffort(

@@ -2,33 +2,35 @@ import { workflowApiErrorSchema } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
   advanceWorkflowInputSchema,
+  getWorkflowRunOutputSchema,
   listWorkflowDescriptorsInputSchema,
   listWorkflowDescriptorsOutputSchema,
-  setWorkflowPausedInputSchema,
+  listWorkflowRunsOutputSchema,
+  listWorkflowRunsQuerySchema,
   startWorkflowInputSchema,
   startWorkflowOutputSchema,
+  workflowEventsQuerySchema,
   workflowEventsReplayOutputSchema,
   workflowEventsStreamInputMessageSchema,
   workflowEventsStreamOutputMessageSchema,
   workflowRunControlOutputSchema,
   workflowRunRouteParamsSchema,
-  workflowSurfaceControlOutputSchema,
-  workflowSurfaceRouteParamsSchema,
 } from './types.js';
 
 export const workflowEventsStreamWebSocketEndpoint = {
   id: 'workflows.eventsStream',
-  path: '/workflows/surfaces/:surfaceId/events-stream',
-  params: workflowSurfaceRouteParamsSchema,
+  path: '/workflows/runs/:runId/events-stream',
+  params: workflowRunRouteParamsSchema,
+  query: workflowEventsQuerySchema,
   clientMessages: workflowEventsStreamInputMessageSchema,
   serverMessages: workflowEventsStreamOutputMessageSchema,
 } as const;
 
 export const workflowsEndpoints = {
-  list: {
-    id: 'workflows.list',
+  descriptors: {
+    id: 'workflows.descriptors',
     method: 'POST',
-    path: '/workflows/list',
+    path: '/workflows/descriptors',
     body: listWorkflowDescriptorsInputSchema,
     output: listWorkflowDescriptorsOutputSchema,
     errors: workflowApiErrorSchema,
@@ -36,42 +38,66 @@ export const workflowsEndpoints = {
   start: {
     id: 'workflows.start',
     method: 'POST',
-    path: '/workflows/start',
+    path: '/workflows/runs',
     body: startWorkflowInputSchema,
     output: startWorkflowOutputSchema,
     errors: workflowApiErrorSchema,
   },
-  surfaceEvents: {
-    id: 'workflows.surfaceEvents',
+  listRuns: {
+    id: 'workflows.listRuns',
     method: 'GET',
-    path: '/workflows/surfaces/:surfaceId/events',
-    params: workflowSurfaceRouteParamsSchema,
+    path: '/workflows/runs',
+    query: listWorkflowRunsQuerySchema,
+    output: listWorkflowRunsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  getRun: {
+    id: 'workflows.getRun',
+    method: 'GET',
+    path: '/workflows/runs/:runId',
+    params: workflowRunRouteParamsSchema,
+    output: getWorkflowRunOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  runEvents: {
+    id: 'workflows.runEvents',
+    method: 'GET',
+    path: '/workflows/runs/:runId/events',
+    params: workflowRunRouteParamsSchema,
+    query: workflowEventsQuerySchema,
     output: workflowEventsReplayOutputSchema,
     errors: workflowApiErrorSchema,
   },
-  setPaused: {
-    id: 'workflows.setPaused',
+  pause: {
+    id: 'workflows.pause',
     method: 'POST',
-    path: '/workflows/surfaces/:surfaceId/set-paused',
-    params: workflowSurfaceRouteParamsSchema,
-    body: setWorkflowPausedInputSchema,
-    output: workflowSurfaceControlOutputSchema,
+    path: '/workflows/runs/:runId/pause',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  resume: {
+    id: 'workflows.resume',
+    method: 'POST',
+    path: '/workflows/runs/:runId/resume',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
   },
   clear: {
     id: 'workflows.clear',
     method: 'POST',
-    path: '/workflows/surfaces/:surfaceId/clear',
-    params: workflowSurfaceRouteParamsSchema,
-    output: workflowSurfaceControlOutputSchema,
+    path: '/workflows/runs/:runId/clear',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
   },
   retry: {
     id: 'workflows.retry',
     method: 'POST',
-    path: '/workflows/surfaces/:surfaceId/retry',
-    params: workflowSurfaceRouteParamsSchema,
-    output: workflowSurfaceControlOutputSchema,
+    path: '/workflows/runs/:runId/retry',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
   },
   advance: {
@@ -84,7 +110,7 @@ export const workflowsEndpoints = {
     errors: workflowApiErrorSchema,
   },
 } as const satisfies {
-  readonly list: ApiEndpoint<
+  readonly descriptors: ApiEndpoint<
     typeof listWorkflowDescriptorsInputSchema,
     typeof listWorkflowDescriptorsOutputSchema,
     typeof workflowApiErrorSchema
@@ -94,29 +120,49 @@ export const workflowsEndpoints = {
     typeof startWorkflowOutputSchema,
     typeof workflowApiErrorSchema
   >;
-  readonly surfaceEvents: ApiEndpoint<
+  readonly listRuns: ApiEndpoint<
+    undefined,
+    typeof listWorkflowRunsOutputSchema,
+    typeof workflowApiErrorSchema,
+    undefined,
+    typeof listWorkflowRunsQuerySchema
+  >;
+  readonly getRun: ApiEndpoint<
+    undefined,
+    typeof getWorkflowRunOutputSchema,
+    typeof workflowApiErrorSchema,
+    typeof workflowRunRouteParamsSchema
+  >;
+  readonly runEvents: ApiEndpoint<
     undefined,
     typeof workflowEventsReplayOutputSchema,
     typeof workflowApiErrorSchema,
-    typeof workflowSurfaceRouteParamsSchema
+    typeof workflowRunRouteParamsSchema,
+    typeof workflowEventsQuerySchema
   >;
-  readonly setPaused: ApiEndpoint<
-    typeof setWorkflowPausedInputSchema,
-    typeof workflowSurfaceControlOutputSchema,
+  readonly pause: ApiEndpoint<
+    undefined,
+    typeof workflowRunControlOutputSchema,
     typeof workflowApiErrorSchema,
-    typeof workflowSurfaceRouteParamsSchema
+    typeof workflowRunRouteParamsSchema
+  >;
+  readonly resume: ApiEndpoint<
+    undefined,
+    typeof workflowRunControlOutputSchema,
+    typeof workflowApiErrorSchema,
+    typeof workflowRunRouteParamsSchema
   >;
   readonly clear: ApiEndpoint<
     undefined,
-    typeof workflowSurfaceControlOutputSchema,
+    typeof workflowRunControlOutputSchema,
     typeof workflowApiErrorSchema,
-    typeof workflowSurfaceRouteParamsSchema
+    typeof workflowRunRouteParamsSchema
   >;
   readonly retry: ApiEndpoint<
     undefined,
-    typeof workflowSurfaceControlOutputSchema,
+    typeof workflowRunControlOutputSchema,
     typeof workflowApiErrorSchema,
-    typeof workflowSurfaceRouteParamsSchema
+    typeof workflowRunRouteParamsSchema
   >;
   readonly advance: ApiEndpoint<
     typeof advanceWorkflowInputSchema,

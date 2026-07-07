@@ -1,10 +1,11 @@
-# Workflow Engine
+# Workflow Subsystem
 
 ## What it is
 
-The workflow engine is a durable, in-process subsystem of the runtime that executes
-**user-authored reducer callbacks as durable state machines**. A workflow drives long-running,
-multi-agent work — spawning agent sessions, injecting prompts, waiting for turns to complete,
+The workflow subsystem is a durable, in-process part of the runtime that executes
+**user-authored reducer callbacks as durable state machines**, together with the run-centric
+API, event surfaces, and client boundary that expose those runs. A workflow drives long-running,
+multi-agent work — spawning agent sessions, sending prompts, waiting for turns to complete,
 routing between agents — and survives runtime restarts mid-run.
 
 It exists to automate Isagi's repeatable agent meta-workflows (e.g. the per-phase
@@ -15,12 +16,19 @@ junctions. The engine is the deterministic plumbing.
 
 The simplest mental model: **a workflow run is a row in a database table, and the engine is a
 small set of loops that move that row through a status lifecycle.** Because the row is the
-source of truth, surviving a crash reduces to "the row survives."
+source of truth, surviving a crash reduces to "the row survives." Everything above the engine —
+the HTTP/WebSocket API, the runtime-bus summary events, and the web store — is a **read-centric
+projection of run rows**. The run, identified by `runId`, is the canonical thing; a surface is
+where a run is _shown_, not what owns it.
+
+This document covers the whole subsystem: the execution model, run identity, the lifecycle, the
+three engine loops, durability and recovery, the author SDK, the wait kinds, the run API, the
+three event surfaces, persistence, and the client boundary.
 
 ## The execution model
 
 A workflow is a `step` reducer over an explicit, serializable `state` object. It is **plain
-async TypeScript** — never Effect — and returns one of three results:
+async TypeScript** — never Effect — and returns one of four results:
 
 - `cont(nextState)` — persist and run again immediately (an internal transition).
 - `suspend(nextState, condition)` — persist and wait until `condition` holds (a long external
@@ -34,14 +42,15 @@ wait on anything slow it **returns a `suspend`** — waiting is _always_ the ret
 hidden inside a verb. On resume the engine calls `step(ctx, state, event)`, where `event` is the
 payload that satisfied the wait; the reducer computes the real next state from it.
 
-This shape is what makes the state machine serializable: every `await_*` phase is a named,
+This shape is what makes the state machine serializable: every wait phase is a named,
 serializable continuation, and anything that must cross a suspension lives in `state`, because
 there is no live closure to hold locals across the wait.
 
 Author-facing types and constructors live in `@isagi/workflow-sdk`: `WorkflowDefinition`,
 `WorkflowLaunchContext`, `WorkflowCommandManifest`, `WorkflowStep`, `WorkflowResult`,
-`WorkflowWaitCondition`, `defineWorkflow`, and `cont`/`suspend`/`done`/`fail`. Runtime-only row,
-status, repository, and engine error types stay inside `apps/runtime`.
+`WorkflowWaitCondition`, `WorkflowContext`, `defineWorkflow`, `cont`/`suspend`/`done`/`fail`, and
+the `wait`/`event` helper objects. Runtime-only row, status, repository, and engine error types
+stay inside `apps/runtime`.
 
 A workflow definition is a data-root TypeScript artifact:
 
@@ -57,24 +66,54 @@ export default defineWorkflow({
 `command`, `validate`, and `init` receive the full launch capture. `step` receives the persisted
 state plus a narrow action `ctx`.
 
-## The status lifecycle
+## Run identity and the lifecycle
+
+### Run identity
+
+Every run is a row with three identity columns:
+
+- **`runId`** (`id`) — the run itself.
+- **`parentRunId`** — the run that started it, or null.
+- **`rootRunId`** — the top of the tree.
+
+A **root run** has `parentRunId = null` and `rootRunId = id`. A **child run** carries its
+parent's `rootRunId`. A **run tree** is every row sharing one `rootRunId`. Child runs exist only
+because a parent suspended on a `workflow` wait over the child's `runId` (see Waits). There is no
+separate parent/child bookkeeping beyond these columns.
+
+`surfaceId` and `worktreeId` are ordinary fields on the row. A surface is a **projection input
+and display target**, never the owner of run identity or controls — this is the core shift of the
+run-centric model. At most one root run may exist per surface at a time: starting a new root is
+rejected with `workflow_surface_busy` while any root run still exists on that surface — including a
+terminal `done`/`failed` one — until it is cleared (or dismissed).
+
+### The lifecycle
+
+Persisted lifecycle status is exactly five values:
 
 ```
-paused → ready → running → (waiting | ready | done | failed)
-waiting → ready → …                       (resolver wakes a waiting run)
-(any non-terminal) → paused               (recoverer, at boot)
+ready → running → (waiting | ready | done | failed)
+waiting → ready → …            (resolver wakes a waiting run)
 ```
 
-- **waiting** — parked on a condition; carries `wait_kind` + `wait_condition`, no `resume_payload`.
 - **ready** — eligible to run now; `wait_kind` is null. Carries `resume_payload` if it was woken
   by an event (vs reaching `ready` via `cont`).
 - **running** — a worker is executing one step; `owner` is stamped.
+- **waiting** — parked on a condition; carries `wait_kind` + `wait_condition`, no `resume_payload`.
 - **done** / **failed** — terminal. `failed` carries an `error`.
-- **paused** — parked awaiting an explicit user _continue_ (see Durability).
+
+**`paused` and `cancel_requested` are orthogonal boolean columns, not statuses.** A run has a
+status _and_ a paused flag, and the two are independent. This is the most important correction
+from earlier models that drew `paused` as a lifecycle node: pausing never changes `status`, it
+gates dispatch (see Durability).
 
 A load-bearing invariant: **`wait_kind != null` ⟺ the run is `waiting`.** Waking a run clears its
-wait fields, so a run's persisted shape unambiguously encodes its lifecycle position. This is what
-lets the continue path branch on `wait_kind` alone.
+wait fields, so a run's persisted shape unambiguously encodes its lifecycle position.
+
+The web **derives presentation** — driving / waiting-for-user / paused / failed / done — from
+`status`, `paused`, and `blockingWait`, where `blockingWait` is a _projection field_ on the run
+summary (see The run API, The client boundary), **not** a persisted lifecycle fact. The engine
+persists only `status`, `paused`, and `wait_kind`/`wait_condition`.
 
 ## The three loops
 
@@ -82,20 +121,26 @@ The engine is three single-purpose pieces (see `workflow-engine.service.ts`):
 
 - **Resolver** — the only harness-aware piece. Subscribes to the runtime event bus; when a
   `waiting` run's condition holds, it writes `resume_payload`, flips the run to `ready`, and pokes
-  the dispatcher. `turn` waits resolve from harness turn edges; human waits resolve from explicit
-  operator operations that directly satisfy the pending gate. The resolver also runs the recovery
-  reconcile path on user _continue_ (below).
+  the dispatcher. `agent_turn` waits resolve from harness turn edges; `workflow` waits from child
+  terminal rows; `headless_agent` waits from the headless tracker; human waits from explicit
+  operator `advance`. The resolver also drives the reconcile-on-resume recovery path (below).
 - **Dispatcher** — the harness-agnostic workhorse. Atomically claims a `ready` row
   (`ready → running`, stamped with `owner`, so two workers can never run one run), executes
   exactly one step, and persists the result. It runs a one-time startup drain, then
-  **coalescing-wake + drain-to-empty**, with **no steady-state poll**: a `cont` re-readies its row
-  and is caught in the same drain pass, so pokes are reserved for readiness created _outside_ a
-  drain (the trigger, the resolver).
-- **Recoverer** — a boot-time step that parks every non-terminal run (`waiting`/`ready`/`running`)
-  as `paused` and clears `owner`. It runs _before_ the dispatcher's startup drain, so boot never
-  processes a row that should be parked.
+  **coalescing-wake + drain-to-empty** over a sliding wake queue, with **no steady-state poll**: a
+  `cont` re-readies its row and is caught in the same drain pass, so pokes are reserved for
+  readiness created _outside_ a drain (the trigger, the resolver). A `ready` run whose
+  `cancel_requested` is set has its tree deleted instead of executed.
+- **Recoverer** — a boot-time step (`repository.pauseNonTerminalRuns`) that sets `paused = true`
+  on every non-terminal run (`waiting`/`ready`/`running`) and clears `owner`, normalizing a
+  mid-flight `running` row back to `ready`. It runs _before_ the dispatcher's startup drain, so
+  boot never processes a row that should be parked.
 
-## Durability model
+The run **projection** — which pushes summaries to clients (see Event surfaces, The client
+boundary) — is a separate read/projection concern and is deliberately _not_ part of the engine's
+execution spine.
+
+## Durability and recovery
 
 The engine is **durable-by-design via snapshot-at-suspension — deliberately not Temporal-style
 replay.** State is an explicit serialized object on the row; the engine never replays completed
@@ -115,26 +160,37 @@ Restart behaviour:
   replayed event — it must **read the JSONL ledger and re-evaluate its condition**.
 - Agents do **not** auto-restart on this desktop app. So recovery is **user-gated**: the recoverer
   parks runs as `paused`; the user reopens the surface (restarting its agent sessions) and issues
-  _continue_, which reconciles the run against the ledger.
-- Recovery _continue_ is distinct from satisfying a workflow's human gate. If a restart parks a run
-  that was waiting on `user_continue` or `user_input`, recovery re-arms the row back to `waiting`
+  `resume`, which unpauses the tree and runs the per-run continue path (`continuePausedRun`),
+  re-evaluating each run's persisted wait against durable truth (harness ledger/artifacts and DB
+  rows), not bus replay.
+- Recovery resume is distinct from satisfying a workflow's human gate. If a restart parks a run
+  that was waiting on `user_continue` or `user_input`, resume re-arms the row back to `waiting`
   with the same condition. It never auto-satisfies the gate.
-- **Fast intra-step effects have no durability in v1.** A crash mid-step replays the step on
-  continue, accepting a rare double `inject`/`spawn`. Idempotency keys (keyed by run/phase/seq) are
-  the deferred lever.
+
+Pause is an orthogonal dispatch gate with precise semantics:
+
+- A paused **`ready`** run is not claimed by the dispatcher.
+- A paused **`waiting`** run may still be woken by the resolver/reconcile into `ready` with
+  `paused = true`; it simply remains gated from dispatch.
+- A paused **`running`** step finishes and persists its normal result; further dispatch is gated.
+- `resume` (unpause) dispatches the current durable state; human waits re-arm rather than
+  auto-satisfy.
+
+**Fast intra-step effects have no durability in v1.** A crash mid-step replays the step on resume,
+accepting a rare double `sendAgentPrompt`/`spawnAgentSession`. Idempotency keys (keyed by
+run/phase/seq) are the deferred lever.
 
 ## Loading and invocation
 
 Workflows live under the runtime data root at `<dataRoot>/workflows/<workflowKey>/index.ts`.
 The runtime scaffolds `<dataRoot>/workflows` on boot with `package.json`, `tsconfig.json`, and a
-copied built `@isagi/workflow-sdk` package under
-`node_modules/@isagi/workflow-sdk`. The copy is version-synced from the app's SDK build and is not a
-package-manager install or symlink.
+copied built `@isagi/workflow-sdk` package under `node_modules/@isagi/workflow-sdk`. The copy is
+version-synced from the app's SDK build and is not a package-manager install or symlink.
 
-Discovery is on-demand: the registry scans workflow directories when listing or starting workflows.
-The registry does not persist workflow definitions in the database. It fingerprints each workflow's
-local TypeScript source by content hash, keeps the loaded definition in memory while that hash is
-current, and compiles changed sources with `esbuild` to
+Discovery is on-demand: the registry scans workflow directories when listing or starting
+workflows. The registry does not persist workflow definitions in the database. It fingerprints
+each workflow's local TypeScript source by content hash, keeps the loaded definition in memory
+while that hash is current, and compiles changed sources with `esbuild` to
 `<dataRoot>/workflows/.cache/workflow-definitions/<workflowKey>/<hash>/index.mjs`. The runtime then
 imports that compiled JavaScript artifact. This gives hand-edited workflows hot reload on the next
 reducer step while letting unchanged workflows reuse compiled artifacts after a runtime restart.
@@ -143,314 +199,405 @@ Starting a workflow is an explicit-context operation. The caller supplies `workt
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating
 `agentSessionId` for `launchCtx`. There is no fallback to persisted active context. A workflow run
 persists only the launch facts the runtime orchestrates on (`worktree_id`, `surface_id`); other
-launch facts are workflow-owned and should be folded into opaque state by `init` if the workflow
-needs them after launch.
+launch facts are workflow-owned and should be folded into opaque state by `init`.
 
-Start flow:
+Start flow (`startWorkflowRun`):
 
-1. Resolve `launchCtx` from explicit ids.
-2. Load the workflow definition.
-3. Run `validate(launchCtx, variables)`. A thrown error rejects the start and creates no row.
-4. Run `init(launchCtx, variables)` and create a `ready` row with `state_json`.
-5. Poke the dispatcher.
+1. Load the workflow definition.
+2. Resolve `launchCtx` from explicit ids (validating worktree, surface, and any pane/agent-session
+   binding).
+3. Run `command(launchCtx)` to obtain the manifest title.
+4. For a root run, reject if the launch has no surface (`workflow_root_surface_required`) or if the
+   surface already has a root run (`workflow_surface_busy`). The check (`findLatestRootRunForSurface`)
+   matches the latest root regardless of status, so even a terminal `done`/`failed` root blocks a new
+   start until it is cleared.
+5. Run `validate(launchCtx, variables)`. A thrown error rejects the start and creates no row.
+6. Run `init(launchCtx, variables)` and create a `ready` row with `state_json`.
+7. Append the `started` lifecycle event and poke the dispatcher.
 
-## The `ctx` SDK
+Child workflows follow the same flow with a `parentRun`: `worktreeId` is derived from the parent,
+`surfaceId` from the parent (or an explicit override on the same worktree), and `rootRunId` from
+the parent's tree. Child-start is an **engine-owned callback** injected into the `ctx` (not a
+capability), which keeps `WorkflowCapabilities` free of a dependency on the engine.
+
+## The author SDK: `ctx` verbs and `wait`/`event` helpers
 
 Workflow callbacks are trusted, in-process, and unsandboxed user code. They run with normal Node
 power and the full `ctx` surface; backend interaction should go through `ctx` verbs, while plain
-Node file and process work remains available to workflow authors. This is a deliberate trust model,
-not a containment boundary.
+Node file and process work remains available. This is a deliberate trust model, not a containment
+boundary.
 
 Callbacks are plain async TypeScript; the engine runs the whole step inside `Effect.tryPromise`, so
-each `ctx` verb is a **Promise-returning** crossing of the Effect→Promise boundary
-(`apps/runtime/src/workflows/context.ts`). A rejected verb Promise becomes a thrown step, which the
-engine records as a `failed` run.
+each `ctx` verb is a **Promise-returning** crossing of the Effect→Promise boundary. A rejected verb
+Promise becomes a thrown step, which the engine records as a `failed` run.
 
-The v1 action surface is `worktreePath` plus eight verbs:
+### The `ctx` verbs
 
-- **`spawnSession({ harness, prompt })` →
-  `{ agentSessionId, harnessSessionId, seededAt, paneId }`.** This verb is allowed to take a
-  couple of seconds. It adds an agent pane to the run's captured surface, waits for the PTY to come
-  live and produce initial startup output, gives the TUI a short settle window, stamps `seededAt`,
-  injects the **seed prompt**, then polls the harness metadata for the `harnessSessionId` (which only
-  appears after the first inject) and returns it. Every wait is bounded (~10s) and times out into a
-  `failed` run rather than hanging the dispatcher.
+The action surface is `worktreePath` plus nine verbs (`WorkflowContext` in
+`packages/workflow-sdk/src/index.ts`):
+
+- **`spawnAgentSession({ harness, prompt, model?, effort? })` →
+  `{ agentSessionId, harnessSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
+  It adds an agent pane to the run's captured surface, waits for the PTY to come live and produce
+  initial startup output, gives the TUI a fixed settle window, stamps `sentAt`, sends the **seed
+  prompt**, then polls the harness metadata for the `harnessSessionId` (which only appears after the
+  first prompt) and returns it. Every wait is bounded (~10s) and times out into a `failed` run
+  rather than hanging the dispatcher. The return value doubles as an **agent-turn wait target**.
   - Placement is deterministic and runtime-owned: a single-pane surface splits `right`; otherwise
-    the runtime descends through the last child of the layout tree and splits that leaf `down`, so
-    repeated agent panes stack in the right/bottom region. A pre-existing vertical-only surface
-    therefore appends at the bottom rather than carving a new right column.
-  - A missing run `surface_id` is a hard verb failure. Workflows never create surfaces; launch must
-    bind the surface explicitly.
-- **`inject(agentSessionId, text)`** — a runtime-internal, backend-direct PTY write
-  (`PtyService.writeInput`), independent of any frontend attachment. It targets the _durable_
-  `agentSessionId` and resolves the _current_ PTY incarnation via
-  `AgentSessionService.activePtyProcessId` (no implicit relaunch). Before writing, it reads
-  `HarnessLedgerObserver.getTurnEdges(agentSessionId)` and rejects if any `turn_started` remains
-  unmatched by a terminal edge. Injection therefore only happens at quiescence and uses bracketed
-  paste + Enter (`\x1b[200~…\x1b[201~`, then `\r`).
-- **`closePane(paneId)`** — closes a pane on the run's captured surface through
-  `SurfaceService.deleteSurfacePane`. The surface service owns the delete plan and session-change
-  publication. If the pane is the last pane, the surface is deleted; workflow authors should close
-  panes they spawned, not the originating pane.
-- **`getConversationHistory({ agentSessionId, harnessSessionId })`** — role-tagged message text
-  from the harness ledger for the pinned harness invocation. Workflow authors must pass both ids:
-  `agentSessionId` identifies the durable agent session, while `harnessSessionId` identifies the
-  exact harness stream being inspected. This mirrors `turn` waits and prevents a workflow from
-  accidentally reading conversation history from a newer harness incarnation of the same durable
-  agent session.
-- **`getHarnessSessionId(agentSessionId)`** — reads the current captured harness session id for a
-  durable agent session. Use this when a workflow starts from an existing agent pane and needs to
-  pin a `turn` wait or conversation-history read to that pane's current harness stream. Spawned
-  sessions already return their `harnessSessionId` from `spawnSession`.
-- **`runHeadlessPrompt({ prompt, harness, model?, effort?, timeoutMs? })` →
-  `{ opId, launch }`.** This launches a trusted, agentic, non-interactive harness run in the
-  worktree cwd and returns immediately. `launch.timeoutMs` is normalized before return
-  (`timeoutMs ?? 600_000`) so workflows persist a self-contained wait condition:
-  `{ kind: 'headless', ops: [{ opId, launch }] }`. The op result is a normalized output transcript,
-  not an interactive conversation history:
-  `{ opId, status: 'completed' | 'failed', output?, error?, exitCode? }`.
-  - Headless prompts are not sandboxed or forced read-only by Isagi. Read-only/idempotent use is an
-    author contract. If a workflow author uses a mutating headless prompt, restart reissue may
-    duplicate the side effect; idempotency keys or a persisted op table are deferred levers.
-  - A non-zero exit becomes a failed per-op result with preserved `output`. Timeout kills the PTY
-    and resolves the op as `{ status: 'failed', error: 'timeout', exitCode: null, output? }`.
-    Failures are delivered to the reducer; they do not automatically fail the workflow run.
-  - The stable `opId` is the workflow handle. On restart, the persisted `opId` is rebound to a new
-    PTY incarnation rather than regenerated.
-- **`startWorkflow(workflowKey, variables?, context?)` → `runId`.** This starts another workflow
-  as a detached, ordinary top-level run in the same worktree. There is no backend parent/child
-  hierarchy: the only link is a parent choosing to suspend on the returned `runId`.
-  - The child `worktreeId` is derived from the parent run. The parent may omit `surfaceId` to use
-    its captured surface, or override to another existing surface in the same worktree.
-  - The parent may pass an explicit `agentSessionId`; the runtime validates that the session belongs
-    to the selected surface and derives `paneId` for launch context when possible. The session id is
-    launch-context input only, not a `workflow_runs` column. Child workflows that need it after
-    launch should persist it through their own opaque `init` state.
-  - `validate` and `init` run before the child row is created. A validation, init, load, or create
-    failure rejects the verb promise, so the parent fails at the call site unless it catches the
-    error. A child that starts successfully and later fails is delivered through a workflow JOIN
-    result instead.
-- **`setUiFeedback({ kind?, phase?, message? })`** — writes the run's display feedback (the engine
-  stores it; the client renders it). `kind` is `info | warning | error`; omitted kind defaults to
-  `info` before persistence, so stored feedback is always explicit.
+    the runtime descends to the last leaf of the layout tree and splits it `down`, so repeated
+    agent panes stack in the right/bottom region.
+  - A missing run `surface_id` is a hard verb failure. Workflows never create surfaces.
+- **`sendAgentPrompt(agentSessionId, text)` → `{ agentSessionId, harnessSessionId, sentAt }`.** A
+  runtime-internal, backend-direct PTY write independent of any frontend attachment. It pins the
+  session's _current_ captured `harnessSessionId`, resolves the current PTY incarnation, and reads
+  the harness turn edges first — rejecting if any `turn_started` is unmatched (the **quiescence
+  guard**), so injection only happens at quiescence. It captures `sentAt` immediately before the
+  bracketed-paste + Enter write and returns the **agent-turn wait target**, so authors write:
 
-**Cancellation tradeoff (v1):** verbs run via `Effect.runPromise`, a detached root fiber, so a
-long `spawnSession` poll or pending `inject` is _not_ interrupted when the engine scope closes on
-shutdown. Acceptable here — the runtime owns these PTY/session resources regardless, and the gate
-runs at concurrency 1. Revisit if verbs ever need to abort cleanly on shutdown.
+  ```ts
+  const sent = await ctx.sendAgentPrompt(agentSessionId, prompt);
+  return suspend(nextState, wait.agentTurn(sent));
+  ```
 
-## Turn detection and the watermark
+- **`closePane(paneId)`** — closes a pane on the run's captured surface. If it is the last pane the
+  surface is deleted; workflow authors should close panes they spawned, not the originating pane.
+- **`getConversationHistory({ agentSessionId, harnessSessionId })`** — role-tagged message text from
+  the harness ledger for the pinned harness invocation. Both ids are required: `agentSessionId`
+  identifies the durable session, `harnessSessionId` the exact harness stream, preventing a read
+  from a newer incarnation of the same durable session.
+- **`getHarnessSessionId(agentSessionId)`** — the current captured harness session id for a durable
+  agent session. Use it when a workflow starts from an existing agent pane and needs to pin a wait
+  or a conversation-history read to that pane's current harness stream.
+- **`runHeadlessAgent({ prompt, harness, model?, effort?, timeoutMs? })` → `{ opId, launch }`.**
+  Launches a trusted, agentic, non-interactive harness run in the worktree cwd and returns
+  immediately. `launch.timeoutMs` is normalized before return so workflows persist a self-contained
+  wait condition. The op result is a normalized output transcript
+  (`{ opId, status: 'completed' | 'failed', output?, error?, exitCode? }`), not a conversation
+  history. Headless prompts are not sandboxed or forced read-only — read-only/idempotent use is an
+  author contract.
+- **`startWorkflow(workflowKey, variables?, context?)` → `runId`.** Starts a child run in the
+  parent's tree (see Loading and invocation). The only link is the parent choosing to suspend on the
+  returned `runId`; a child that later fails is delivered through a `workflow` JOIN result, not an
+  automatic parent failure.
+- **`log(level, message)`** — appends a `log` event (`debug`/`info`/`warning`/`error`) to the run's
+  client event stream.
+- **`setUiFeedback({ kind?, phase?, message? })`** — appends a `ui_feedback` event to the client
+  event stream; `kind` defaults to `info` before persistence.
 
-A workflow waits on an agent **turn** completing. The harness-observation layer emits
-`turn_started` / `turn_ended` / `turn_failed` edges (`runtime-events/internal-event-bus.ts`);
-each carries `agentSessionId`, `harnessSessionId`, `seq`, and `recordedAt`.
+### The `wait` and `event` helpers
 
-- **Watermark (end-time):** a `turn` wait stores `afterT` (= the inject time, `seededAt`), and is
-  satisfied by a terminal edge for the pinned `(agentSessionId, harnessSessionId)` with
-  `recordedAt ≥ afterT`. One `isSatisfied(condition, edge)` evaluator serves both the live bus path
-  and the reconcile-on-continue path.
+The SDK adds two minimal helper objects so authors never hand-write protocol literals:
+
+- **`wait`**: `agentTurn(target)`, `userContinue()`, `userInput(questions)`, `workflow(runIds)`,
+  `headlessAgent(ops)` — construct `WorkflowWaitCondition`s. `workflow` and `headlessAgent` accept
+  one item or a non-empty array.
+- **`event`**: `isUserContinue`, `isUserInput`, `isAgentTurnEnded`, `isAgentTurnFailed`,
+  `requireAgentTurnEnded`, `requireAgentTurnFailed`, `getAgentTurnResult`, `getWorkflowResults`,
+  `getHeadlessAgentResults` — narrow and assert on the resume `event` payload.
+
+"Minimal" scopes the **helper families**, not the verb surface. There are deliberately no helper
+families for conversation, launch context, variables, schemas, state summaries, or headless JSON
+extraction. The conversation _verbs_ (`getConversationHistory`, `getHarnessSessionId`) still exist —
+real workflows need pinned harness reads; only the extra helpers were declined.
+
+### Capabilities vs. context
+
+Two runtime files back the `ctx`:
+
+- **`WorkflowCapabilities`** (`capabilities.ts`) is the Effect-native service that owns the
+  operational work: deterministic pane placement and startup settling, PTY writes, harness-metadata
+  capture, headless launch, and event-ledger writes. It is the set of operations the engine may
+  perform while executing a run — not an external SDK service and not a generic wrapper over every
+  runtime capability.
+- **`context.ts`** is a thin Promise adapter. It binds the current run and worktree path, exposes the
+  SDK `WorkflowContext` verbs, and does only Effect→Promise boundary crossing and light author-facing
+  argument shaping. It owns no operational detail.
+
+**Cancellation tradeoff (v1):** verbs run via a detached root fiber (`Effect.runPromise`), so a long
+`spawnAgentSession` poll or a pending `sendAgentPrompt` is _not_ interrupted when the engine scope
+closes on shutdown. Acceptable here — the runtime owns these PTY/session resources regardless, and
+the gate runs at concurrency 1.
+
+## Waits in detail
+
+Waits are physical facts on the summarized run: the run that suspends is the run that owns the wait.
+
+### Agent-turn waits and the watermark
+
+An `agent_turn` wait stores `{ agentSessionId, harnessSessionId, sentAt }`. The harness-observation
+layer emits `turn_started` / `turn_ended` / `turn_failed` edges, each carrying `agentSessionId`,
+`harnessSessionId`, `seq`, and `recordedAt`.
+
+- **Watermark (start-edge):** the wait is satisfied by the terminal edge (`turn_ended`/`turn_failed`)
+  whose _matched_ `turn_started` — for the pinned `(agentSessionId, harnessSessionId)` — has
+  `recordedAt ≥ sentAt`. The gate is on the turn's **start**, not its end: a turn already in flight
+  when the prompt was sent does not satisfy the wait even if it ends afterward. One
+  `findSatisfiedTerminalTurnEdge(condition, edges)` evaluator serves both the live bus path and the
+  reconcile path, pairing terminal edges to open starts by `seq` (else chronologically). The resume
+  payload carries the matched terminal edge: `{ outcome: 'ended' | 'failed', recordedAt, reason? }`;
+  the `event` helpers narrow it.
 - **The harness-session pin:** a run pins the `harnessSessionId` it is driving (Pi resumes the same
-  id via `--session`, so it is stable across a runtime restart). On continue, the pin is asserted
-  against the latest observed metadata; a genuine mismatch (resume failed / a different agent) marks
-  the run `failed`.
+  id via `--session`, so it is stable across a restart). On resume the pin is asserted against the
+  latest observed metadata; a genuine mismatch marks the run `failed`.
 - **Orphaned turns** — a turn that can never naturally end — are surfaced as synthesized
-  `turn_failed` edges so a waiting run wakes instead of hanging:
-  - **`new_start_supersedes`** — a new `turn_started` arrives while a previous turn is still in
-    flight (the old turn was interrupted). Computed as a generic pass in `deriveHarnessTurnEdges`,
-    harness-agnostically.
-  - **`session_died`** — an in-flight turn whose PTY incarnation is gone (status not `running`, or
-    no longer the session's `activePtyProcessId`). The live path detects this from observed PTY
-    deaths; the boot/reconcile path detects it from the database.
-  - Both synthesized failures use the orphaned turn's own `turn_started.recordedAt` and a null
-    `seq`, so live and read paths produce equivalent edges. A turn that is both superseded and
-    dead-PTY is failed once (supersede first; dead-PTY only on turns still in flight after it).
+  `turn_failed` edges so a waiting run wakes instead of hanging: `new_start_supersedes` (a new
+  `turn_started` arrives while a previous turn is still in flight) and `session_died` (an in-flight
+  turn whose PTY incarnation is gone). Both use the orphaned turn's own `turn_started.recordedAt`, so
+  live and read paths produce equivalent edges.
 
-The reconcile path reads edges through `HarnessLedgerObserver.getTurnEdges(agentSessionId)` — a
-pure read (no bus emission) that returns the full derived stream including synthesized failures —
-so the engine never derives harness edges itself.
+The reconcile path reads edges through `HarnessLedgerObserver.getTurnEdges(agentSessionId)` — a pure
+read that returns the full derived stream including synthesized failures — so the engine never
+derives harness edges itself. Because a workflow sends only at quiescence, the next turn to _start_
+after `sentAt` is unambiguously the workflow's turn.
 
-## Headless waits
+### Headless-agent waits
 
-Headless waits are JOINs over one or more `opId`s. The wait condition stores the stable logical
-`opId` plus the normalized launch parameters for each op. The in-memory headless tracker owns the
-live PTY process id, output capture, timeout, and result for the current runtime process.
+`headless_agent` waits are JOINs over one or more `{ opId, launch }` ops. The in-memory tracker owns
+the live PTY process id, output capture, timeout, and result. When an op reaches a terminal result it
+publishes an internal event; the resolver wakes the run only when every joined `opId` is terminal.
+The resume payload is `{ kind: 'headless_agent', results }`, preserving partial success/failure.
+Tracker entries are reaped once consumed; when a run reaches a terminal state, every still-tracked op
+for that run is cancelled and unpinned so a headless prompt cannot keep mutating the worktree after
+its owning run is dead.
 
-Completion is driven by PTY lifecycle events and timeout timers. When an op reaches a terminal
-result, the tracker publishes a `headless_op_completed` internal event. The workflow resolver then
-reads the persisted wait condition and wakes the run only when every joined `opId` has a terminal
-result. The resume payload is `{ kind: 'headless', results }`, preserving partial success and
-failure for the reducer to handle.
+### Workflow waits
 
-Because a headless PTY has no durable agent, terminal, or command owner, the tracker pins its PTY
-process id in `PtyService` for the op lifetime. The PTY garbage collector skips pinned orphan PTYs.
-Pins are in-memory only: after a restart, abandoned pre-crash headless PTYs can be reaped and the
-paused workflow reissues from the persisted `launch` data on operator continue.
+`workflow` waits are JOINs over one or more child `runIds`. They resolve only after every referenced
+child run is terminal (`done` or `failed`). The resume payload preserves input order:
+`{ kind: 'workflow', results: [{ runId, status, result? | error? }] }`. A **failed child does not
+auto-fail the parent** — the parent reducer inspects the results and decides. Missing referenced run
+ids fail the waiting parent loudly, so it can never wait forever on a row that can never terminate.
 
-Tracker entries are reaped, not accumulated. Once the reducer consumes an op's result — the wake
-transaction that readies the run — the engine and resolver call `releaseOps` to drop the entry. The
-result is already carried in the persisted resume payload, so the in-memory map stays bounded by
-live concurrency rather than growing with a run's cumulative op count. When a run reaches a terminal
-state, the tracker observes `workflow_run_terminal` and cancels every op still tracked for that run:
-an in-flight PTY is terminated and unpinned so a headless prompt cannot keep running — and, since
-prompts are not forced read-only, keep mutating the worktree — after its owning run is already dead.
-One residual edge remains by design: an op a reducer launches but neither suspends on nor terminates
-the run after (e.g. a reducer that returns `cont`) is reclaimed only by its own timeout.
+### Human waits
 
-The engine also reconciles immediately after arming a headless wait. This closes the fast-op race
-where a headless process finishes after the verb returns but before the reducer's `suspend` result
-has been persisted as a waiting row.
+Human waits are long waits resolved by explicit operator actions.
 
-The `inject` guard relies on that same read path. Because superseded and dead-PTY turns are
-synthesized into terminal `turn_failed` edges, an unmatched `turn_started` in the returned stream is
-treated as a genuinely live turn. This makes the existing end-time watermark sufficient for
-workflow loops: a workflow injects only after the previous turn has settled, so the next terminal
-edge after `seededAt` is unambiguously the workflow's turn.
+- **`user_continue`** stores `{ kind: 'user_continue' }`; `advance(runId)` wakes it with
+  `{ kind: 'user_continue' }`.
+- **`user_input`** stores `{ kind: 'user_input', questions }`; `advance(runId, answers)` validates
+  answers against the persisted questions, applies defaults, and wakes with
+  `{ kind: 'user_input', answers }`.
 
-## Workflow waits
+Validation is strict and runtime-owned. A rejected submission leaves the run waiting. A duplicate
+`advance` that arrives after the run has already moved on is reported as **already resolved**, not a
+failure.
 
-Workflow waits are JOINs over one or more workflow run ids:
-`{ kind: 'workflow', runIds }`. They resolve only after every referenced child run is terminal
-(`done` or `failed`). The resume payload preserves the wait condition's input order, independent of
-completion order:
+Note on lifting: the child run owns its human wait. A **root summary** may _lift_ a non-paused child
+`user_continue`/`user_input` gate into `blockingWait` so the operator can see and satisfy it — that
+is projection behaviour (see The run API, The client boundary), not a wait mechanic.
 
-```ts
-{
-  kind: 'workflow',
-  results: [
-    { runId, status: 'done', result },
-    { runId, status: 'failed', error },
-  ],
-}
-```
+### Arm-time reconcile
 
-`result` is the parsed child `result_json` from `done(value)` and remains `unknown` to the parent
-workflow. `error` is the parsed child failure payload. Missing referenced run ids fail the waiting
-parent loudly; otherwise the parent could wait forever on a row that can never become terminal.
+After persisting a `suspend` on `agent_turn`, `headless_agent`, or `workflow`, the engine
+immediately re-checks the just-armed wait against durable truth. This closes the race where the wake
+signal (a terminal turn edge, a fast headless op, a child finishing) lands in the window between the
+step returning and the `waiting` row being persisted.
 
-The child terminal state is already durable in `workflow_runs`, so workflow waits are DB-truth
-reconciliations. The engine re-checks the child rows at three points:
+## The run API and controls
 
-- immediately after arming a workflow wait, closing the race where a child finishes before the
-  parent wait row exists;
-- on live `workflow_run_terminal` events, where the event carries the child `runId` and `status`
-  only as a latency poke;
-- during recovery continue for paused workflow waits.
+Routes are versioned under `/api/v1`. Success responses are enveloped `{ data, meta: { requestId } }`;
+workflow rejections map to API code `workflow_rejected` with the engine reason in `data.reason`.
+Request/response schemas are authoritative in `packages/contracts/src/workflows/api.ts` and
+`types.ts`; the inventory below is method + path + purpose, not a schema transcription.
 
-The guarded `waiting → ready` wake transaction is the idempotency boundary. If arm-time reconcile
-and a live terminal event both notice the same satisfied JOIN, one wake wins and the other is a
-benign no-op.
+**Reads / discovery**
 
-## Human waits
+| Method | Path                                                       | Purpose                                                                                                      |
+| ------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| POST   | `/workflows/descriptors`                                   | List workflow command descriptors for a launch context (POST for a contextual body; a read, not a mutation). |
+| GET    | `/workflows/runs?surfaceId=&worktreeId=&status=&rootOnly=` | List run summaries. `rootOnly` defaults to `true`.                                                           |
+| GET    | `/workflows/runs/:runId`                                   | Get one run summary.                                                                                         |
+| GET    | `/workflows/runs/:runId/events?includeChildren=`           | Replay the client event stream. `includeChildren` defaults `false`; capped to the most recent 1000 events.   |
 
-Human waits are long waits resolved by explicit operator actions rather than harness events.
+**Mutations**
 
-- **`user_continue`** stores `{ kind: 'user_continue' }`. The public
-  `advance(runId)` operation wakes a waiting run with resume payload `{ kind: 'user_continue' }`.
-- **`user_input`** stores `{ kind: 'user_input', questions }`, where `questions` is the static SDK
-  question schema (`text`, `select`, `multi-select`, `confirm`). The public
-  `advance(runId, answers)` operation validates submitted answers against the persisted questions,
-  applies defaults for optional questions, and wakes the run with `{ kind: 'user_input', answers }`.
+| Method | Path                             | Purpose                                                    |
+| ------ | -------------------------------- | ---------------------------------------------------------- |
+| POST   | `/workflows/runs`                | Start a root run.                                          |
+| POST   | `/workflows/runs/:runId/pause`   | Pause a root run tree. **Root-only.**                      |
+| POST   | `/workflows/runs/:runId/resume`  | Resume (unpause) a root run tree. **Root-only.**           |
+| POST   | `/workflows/runs/:runId/clear`   | Cancel/delete a root run tree. **Root-only.**              |
+| POST   | `/workflows/runs/:runId/retry`   | Retry a failed root run. **Root-only.**                    |
+| POST   | `/workflows/runs/:runId/advance` | Satisfy a human wait. **Run-scoped** — may target a child. |
 
-Validation is strict and runtime-owned: unknown keys, missing required keys, wrong primitive types,
-and option values outside the persisted question options are rejected. A rejected submission leaves
-the run waiting. A duplicate operator action that arrives after the run has already moved on is
-reported as already resolved rather than as a runtime failure.
+**Stream**
+
+| Method | Path                                                    | Purpose                                        |
+| ------ | ------------------------------------------------------- | ---------------------------------------------- |
+| WS     | `/workflows/runs/:runId/events-stream?includeChildren=` | Live client event stream (see Event surfaces). |
+
+Notes:
+
+- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with
+  `workflow_root_run_required`. `retry` additionally requires a `failed` root (`workflow_run_not_failed`).
+- `clear` is `POST`, not HTTP `DELETE`, because it requests **async cancellation** when a step is
+  running (the running step finishes, then its tree is reaped); otherwise it deletes the tree
+  immediately.
+- `advance` is the one run-scoped control: it targets the specific waiting run, which is often a
+  **child** (`prompt.runId` / `blockingWait.runId`).
+- Control mutations respond with `{ runId, status }`.
+
+The `WorkflowRunSummary` contract exposes: `runId`, `rootRunId`, `parentRunId`, `workflowKey`,
+`title`, `status`, `paused`, `waitKind`, `blockingWait`, `worktreeId`, `surfaceId`, `uiFeedback?`,
+`prompt?`, `error?`. For a root summary, `runId === rootRunId` and tree facts are aggregated by the
+projection. The contract exposes **no display status** — the client derives presentation.
+
+## Event surfaces — three, don't conflate them
+
+The subsystem has three separate "event" concepts. They live in different places and serve different
+readers; keep them distinct.
+
+1. **Reducer history — the `workflow_run_events` DB table.** Append-only engine history: the initial
+   state plus each reducer outcome (`cont`/`suspend`/`done`/`fail`) with a state snapshot and a small
+   trigger. Internal debugging aid for hand-edited workflows; **never streamed to clients**; cascades
+   on run delete.
+
+2. **The client event stream — the per-run JSONL ledger.** The user-visible workflow log. A typed
+   union `log | ui_feedback | lifecycle` (lifecycle ∈ `started`/`suspended`/`resumed`/`done`/`failed`),
+   one JSONL file per run. It is exposed two ways, both capped to the most recent 1000 events: REST
+   replay (`GET …/events`) and a **per-run WebSocket** (`…/events-stream`). The WS protocol is a
+   handshake: the client sends `workflow_events_requested`, the server replies with a
+   `workflow_events_snapshot`, then streams `workflow_event_appended` frames. `includeChildren`
+   resolves the root (`rootRunId ?? runId`) and merges every run's events in the tree,
+   chronologically — so a root log shows child-workflow events inline. `ctx.log` and
+   `ctx.setUiFeedback` write here.
+
+3. **Run-summary events — on the global runtime bus.** Coarse, per-_root_ summaries broadcast on the
+   global runtime event socket (`/events`), distinct from the per-run stream in #2. `workflow_run_snapshot`
+   (client-requested; carries root summaries), `workflow_run_changed` (its payload **is** a
+   `WorkflowRunSummary`), and `workflow_run_cleared` (`{ runId: rootRunId, rootRunId, surfaceId }`).
+   `WorkflowRunProjection` derives, debounces, and de-duplicates these from repository/ledger signals.
+   These payloads carry `WorkflowRunSummary` by contract; the client caches them (see The client
+   boundary). The old `workflow_surface_*` events are removed, not bridged.
 
 ## Persistence
 
 All run state lives in the `workflow_runs` table (`apps/runtime/src/persistence/schema.ts`). The
-runtime owns the row; five columns carry structured data with distinct ownership rules:
+runtime owns the row; four columns carry structured JSON with distinct ownership rules:
 
 - **`state_json`** — opaque workflow state. The runtime **never** introspects it.
-- **`wait_condition`** (JSON) — the pending condition; the engine _does_ introspect it (the
-  resolver queries it). Only `wait_kind` is an indexed column; the rest lives in the JSON, since
-  `status='waiting' AND wait_kind='turn'` already narrows the set and the condition is a per-kind
-  tagged union.
+- **`wait_condition`** (JSON) — the pending condition; the engine _does_ introspect it (the resolver
+  queries it). Only `wait_kind` is an indexed column; the rest lives in the JSON, since
+  `status='waiting' AND wait_kind='agent_turn'` already narrows the set and the condition is a
+  per-kind tagged union.
 - **`resume_payload`** (JSON) — "what woke you"; the resolver writes it, the step reads it (as the
   `event` arg), and the result write clears it.
-- **`ui_feedback`** (JSON) — display values; the engine passes them through, the client renders
-  them.
-- **`result_json`** (JSON) — terminal value written by `done(value)`. It is separate from
-  `state_json`: `state_json` is the reducer's current state, while `result_json` is the value other
-  workflows can later join on.
+- **`result_json`** (JSON) — terminal value written by `done(value)`. Separate from `state_json`:
+  `state_json` is the reducer's current state, while `result_json` is the value other workflows can
+  later join on.
 
-The `workflow_run_events` table is an append-only reducer history for debugging hand-edited
-workflows. It records the initial state plus each reducer outcome (`cont`, `suspend`, `done`,
-`fail`) with the state snapshot and a small JSON trigger. Pure lifecycle transitions such as
-`wake`, `pause`, `ready`, and `rearm` are not logged because no reducer ran and no workflow state
-changed. Events reference `workflow_runs` with `ON DELETE CASCADE` and are ordered by their
-autoincrement `id`.
+Display feedback is **not** a `workflow_runs` column. `ctx.setUiFeedback` appends a `ui_feedback`
+event to the per-run event ledger (Event surfaces #2), and a run summary's `uiFeedback` is projected
+from the latest such event in the run tree (`error` is a column, holding the terminal failure payload).
 
-Result writes are **targeted** to engine-owned columns so a step's immediate `setUiFeedback` write
-is never clobbered by a stale snapshot. `owner` is cleared on every result transition. Indexes
-cover `status`, `(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`. `wait_kind`
-values are `turn`, `user_continue`, `user_input`, `workflow`, and `headless`; all five are
-behaviorally wired in the current spine. `paused` and `cancel_requested` are orthogonal flags, not
-lifecycle statuses. Expected failures surface as the tagged
-`WorkflowEngineError`
-(`unknown_workflow_key`, `workflow_load_failed`, `worktree_not_found`, `surface_not_found`,
-`surface_worktree_mismatch`, `workflow_surface_busy`, `workflow_run_not_found`,
-`workflow_run_not_failed`, `workflow_wait_not_satisfiable`, `workflow_user_input_invalid`, and
-related context-validation reasons).
+The `workflow_run_events` table is the append-only reducer history described in Event surfaces
+(#1); it references `workflow_runs` with `ON DELETE CASCADE` and is ordered by autoincrement `id`.
 
-## Ownership and the client boundary
+Each result write updates only the engine-owned lifecycle columns for that outcome (`status`,
+`wait_kind`/`wait_condition`, `resume_payload`, `state_json`, `result_json`/`error`) and clears
+`owner` on every result transition. `wait_kind` values are `agent_turn`, `user_continue`,
+`user_input`, `workflow`, and `headless_agent`. `paused`
+and `cancel_requested` are orthogonal flags, not lifecycle statuses. Indexes cover `status`,
+`(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`; `rootOnly` listing narrows on
+`parent_run_id IS NULL`.
 
-A run is scoped to a surface (`surface_id`). The runtime owns run status and the `setPaused`,
-`clear`, `retry`, and `advance` operations; the client renders status and provides the controls and
-input lockdown. Pause and cancel are flags checked at phase boundaries, so an in-flight step
-finishes before a clear request reaps the run tree.
+Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant reasons include
+`unknown_workflow_key`, `workflow_load_failed`, `worktree_not_found`, `surface_not_found`,
+`surface_worktree_mismatch`, `pane_not_found`, `agent_session_not_on_surface`,
+`workflow_launch_context_mismatch`, `validation_failed`, `workflow_root_surface_required`,
+`workflow_surface_busy`, `workflow_root_run_required`, `workflow_run_not_found`,
+`workflow_run_not_failed`, `workflow_wait_not_satisfiable`, and `workflow_user_input_invalid`.
+
+## The client boundary
+
+- **Run store** (`apps/web/src/lib/workspace/workflow-runs.ts`): `runsById: Record<runId, WorkflowRunSummary>`
+  plus `rootRunIdBySurfaceId: Record<surfaceId, rootRunId>` (only root runs with a surface are
+  indexed). The store is bootstrapped by requesting `workflow_run_snapshot` on connect, and updated by
+  `workflow_run_changed` (upsert) and `workflow_run_cleared` (delete, preserving unrelated surface
+  indexes). The denormalized surface index is intentional — active-surface lookup is hot and
+  product-critical.
+- **Presentation derivation** (`workflow-derive.ts`): `paused → 'paused'`; else
+  `blockingWait.kind ∈ { user_continue, user_input } → 'waiting_user'`; else `failed` / `done` /
+  `driving`. `paused` takes precedence. Production web code reads `blockingWait`, **not** the
+  summary's `waitKind`: cross-tree gate aggregation lives only in `blockingWait`, while `waitKind`
+  stays the summarized physical run's own wait and is never aggregated. Surface attention prefers the
+  root run's derived state over aggregated pane/source attention.
+- **Action targeting** (`WorkflowBarContainer` / `WorkflowBar`): the bar renders the **root** summary
+  of the active surface. `pause`/`resume`/`clear`/`retry` target `summary.rootRunId`; `advance`
+  targets `prompt.runId`, which may be a **child** run. The root log stream is opened with
+  `includeChildren=true` anchored on `rootRunId`.
 
 ## Key decisions and rationale
 
-- **Durable state machine, snapshot-at-suspension, not Temporal replay** — for edit-resilience and
-  a natural non-linear phase flow. (The decisive tradeoff of the whole subsystem.)
+- **Durable state machine, snapshot-at-suspension, not Temporal replay** — for edit-resilience and a
+  natural non-linear phase flow. (The decisive tradeoff of the whole subsystem.)
 - **DB is the source of truth** — the row _is_ the run; any in-memory queue/poke is only a latency
   optimization, so restart-survival falls out by construction.
+- **Run-centric identity** — `runId` is canonical; a surface is a projection input and display
+  target, not the owner of controls, logs, or identity. Controls are root-scoped; only `advance`
+  is run-scoped.
 - **State is opaque to the runtime** — decouples the runtime from workflow-internal schema and
   strengthens edit-resilience.
-- **`ctx`-as-activity** — verbs are the activities; there is no formal `Activity` type yet (kept
-  light; extensible later for non-runtime systems).
+- **Capabilities/context split** — Effect-native `WorkflowCapabilities` owns operational work; the
+  Promise `context.ts` only adapts. This lets future callers reuse capabilities without an external
+  SDK/runtime-service junk drawer.
+- **`paused` is an orthogonal gate, not a status** — status stays five values; pause gates dispatch
+  and is surfaced in summaries/events.
+- **`blockingWait` is the single cross-tree gate projection** — the web derives waiting-for-user from
+  it; `waitKind` is never aggregated.
 - **Verbs are fast; suspension is the return** — no hidden blocking verbs, so every wait is an
   explicit, serializable continuation.
 - **No fast-effect durability in v1** — accept a rare double effect on mid-step replay rather than
   journal every activity; idempotency keys are the future lever.
-- **User-gated resume** — agents don't auto-restart on a desktop app, so the recoverer parks runs
-  and the user reopens + continues; the continue path reuses the same `pause`/`continue` machinery.
+- **User-gated resume** — agents don't auto-restart on a desktop app, so the recoverer parks runs and
+  the user reopens + resumes; resume reconciles against durable truth.
 - **No steady-state poll** — coalescing wake + drain-to-empty + a one-time boot drain.
 
-## v1 scope and deferrals
+## Current scope and deferrals
 
-This subsystem currently implements the **engine spine** plus the SDK/loading foundation: the seven
-verbs above, data-root workflow loading with per-step hot reload, command manifests, validation,
-`init`, explicit-context dev start/list triggers, public workflow controls (`setPaused`, `clear`,
-`retry`, `advance`), the `turn`, `user_continue`, `user_input`, `workflow`, and `headless` wait
-kinds, `done(value)`/`fail(reason)`, `result_json`, and the reducer event log.
-Explicitly out of scope here (and tracked in the `agent-workflows` milestone):
+Shipped: the engine spine and SDK/loading foundation; the run-centric API and controls; the three
+event surfaces; `WorkflowRunProjection`; and the web surface — the run store, the workflow bar and
+surface glow, attention aggregation, and command-palette workflow entries with the input flow.
 
-- frontend palette/rail rendering;
-- Reload Configuration / config-source changes for `.isagi/config.yaml`;
-- the frontend surface (rail, lockdown, controls, dynamic panes);
-- the agent-facing "run a workflow" tool.
+Deferred (tracked in the `agent-workflows` milestone):
 
-Deliberately deferred design points: idempotency keys for fast effects; precise
-command-arg-to-variable type inference; production hardening for TypeScript loading in a packaged
-app; richer workflow-controlled pane placement; and an explicit `kill -9` crash test (the engine is
-built durable-by-design and was verified via the `workflow_runs` row/logs, the automated suite, and
-a manual real-agent run rather than an automated crash harness).
+- an **external / agent-harness-facing** "run a workflow" tool — palette and runtime-API invocation
+  are shipped; a harness-facing tool is not;
+- idempotency keys for fast intra-step effects;
+- config-source reload / `Reload Configuration` for `.isagi/config.yaml`;
+- precise command-arg-to-variable type inference;
+- production hardening for TypeScript loading in a packaged app;
+- richer workflow-controlled pane placement;
+- an automated `kill -9` crash harness (the engine is durable-by-design and was verified via the
+  `workflow_runs` row/logs, the automated suite, and a manual real-agent run).
+
+Known residual simplification candidate: the client event-stream WebSocket requires the client to
+send `workflow_events_requested` before the server sends the snapshot. This handshake is documented
+as current behaviour and flagged as a future simplification, not a bug.
 
 ## Where the code lives
 
-- `packages/workflow-sdk` — author-facing workflow types, wait-condition shapes, static question
-  types, launch context and command manifest types, conversation types, `defineWorkflow`, and
-  result constructors.
+- `packages/workflow-sdk` — author-facing types, wait-condition shapes, static question types, launch
+  context and command manifest types, conversation types, `defineWorkflow`, the result constructors,
+  and the `wait`/`event` helpers.
 - `apps/runtime/src/workflows/` — the engine: `types.ts` (runtime-only row/status/error shapes),
-  `context.ts` (the verbs), `scaffold.ts`, `loader.ts`, `registry.ts`, `repository.ts`,
-  `resolver.ts`, `workflow-engine.service.ts` (the loops + dev triggers), `api.ts` (the dev route).
+  `capabilities.ts` (Effect-native `WorkflowCapabilities`), `context.ts` (the Promise adapter),
+  `scaffold.ts`, `loader.ts`, `registry.ts`, `repository.ts`, `resolver.ts`, `resume-paths.ts`,
+  `wait-conditions.ts`, `user-input.ts`, `run-failure.ts`, `headless.ts`, `event-ledger.service.ts`
+  (the client event stream), `workflow-run-projection.service.ts` (`WorkflowRunProjection`),
+  `workflow-engine.service.ts` (the loops + start/controls), and `api.ts` (the run API + WS stream).
+- `packages/contracts/src/workflows/` — `api.ts` (route contracts) and `types.ts` (run summary,
+  event, and control schemas).
+- `packages/contracts/src/runtime-events/` — the `workflow_run_*` runtime-bus event schemas.
 - `apps/runtime/src/persistence/schema.ts` — the `workflow_runs` and `workflow_run_events` tables.
 - `apps/runtime/src/agent-sessions/harness/` — turn-edge derivation (`turns.ts`), the observer and
   `getTurnEdges` (`observer.service.ts`), conversation reads (`conversation.ts`).
-- `apps/runtime/src/runtime-events/internal-event-bus.ts` — the turn-edge events.
+- `apps/web/src/lib/workspace/` — `workflow-runs.ts` (the run store), `runtime-events.ts`
+  (`workflow_run_*` handling), `workflow-derive.ts` (presentation derivation), and
+  `workflow-events/stream.ts` (the per-run event-stream client); `apps/web/src/routes/workspace/`
+  hosts `WorkflowBarContainer`, `WorkflowBar`, `Surface`, and `WorkflowSurfaceGlow`.
 
-Related ADRs: 0005/0006 (durable agent session over disposable PTY incarnations), 0001/0008 (state
-ownership and read composition), 0007 (per-invocation harness instrumentation). Shaping history for
-this subsystem lives in the `agent-workflows` milestone's planning notes.
+Related ADRs: 0001/0008 (state ownership and read composition), 0003 (web actions target explicit
+runtime identifiers), 0004 (localized action feedback), 0005/0006 (durable agent session over
+disposable PTY incarnations), 0007 (per-invocation harness instrumentation). Shaping history for this
+subsystem lives in the `agent-workflows` milestone's planning notes.

@@ -3,11 +3,11 @@ export const workflowInputKinds = ['text', 'select', 'multi-select', 'confirm'] 
 export type WorkflowInputKind = (typeof workflowInputKinds)[number];
 
 export const workflowWaitKinds = [
-  'turn',
+  'agent_turn',
   'user_continue',
   'user_input',
   'workflow',
-  'headless',
+  'headless_agent',
 ] as const;
 
 export type WorkflowWaitKind = (typeof workflowWaitKinds)[number];
@@ -71,6 +71,8 @@ export interface WorkflowUiFeedback {
 
 export type WorkflowVariables = Record<string, unknown>;
 
+export type WorkflowUserInputAnswers = Record<string, string | readonly string[] | boolean>;
+
 export interface WorkflowLaunchContext {
   readonly worktreeId: number;
   readonly worktreePath: string;
@@ -87,18 +89,24 @@ export interface WorkflowCommandManifest {
 
 export type WorkflowWaitCondition =
   | {
-      readonly kind: 'turn';
+      readonly kind: 'agent_turn';
       readonly agentSessionId: number;
       readonly harnessSessionId: string;
-      readonly afterT: string;
+      readonly sentAt: string;
     }
   | { readonly kind: 'user_continue' }
   | { readonly kind: 'user_input'; readonly questions: readonly WorkflowQuestionSpec[] }
   | { readonly kind: 'workflow'; readonly runIds: readonly number[] }
   | {
-      readonly kind: 'headless';
+      readonly kind: 'headless_agent';
       readonly ops: readonly WorkflowHeadlessOp[];
     };
+
+export interface WorkflowAgentPromptSend {
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly sentAt: string;
+}
 
 export interface WorkflowHeadlessLaunch {
   readonly prompt: string;
@@ -108,7 +116,7 @@ export interface WorkflowHeadlessLaunch {
   readonly timeoutMs: number;
 }
 
-export interface WorkflowHeadlessPromptInput {
+export interface WorkflowHeadlessAgentInput {
   readonly prompt: string;
   readonly harness: WorkflowAgentHarness;
   readonly model?: string | undefined;
@@ -131,6 +139,34 @@ export interface WorkflowHeadlessOp {
 
 export type WorkflowLogLevel = 'debug' | 'info' | 'warning' | 'error';
 
+export type WorkflowAgentTurnEvent =
+  | { readonly outcome: 'ended'; readonly recordedAt: string }
+  | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string };
+
+export type WorkflowUserContinueEvent = { readonly kind: 'user_continue' };
+
+export type WorkflowUserInputEvent = {
+  readonly kind: 'user_input';
+  readonly answers: WorkflowUserInputAnswers;
+};
+
+export interface WorkflowJoinResult {
+  readonly runId: number;
+  readonly status: 'done' | 'failed';
+  readonly result?: unknown | undefined;
+  readonly error?: unknown | undefined;
+}
+
+export type WorkflowResultsEvent = {
+  readonly kind: 'workflow';
+  readonly results: readonly WorkflowJoinResult[];
+};
+
+export type WorkflowHeadlessAgentResultsEvent = {
+  readonly kind: 'headless_agent';
+  readonly results: readonly WorkflowHeadlessResult[];
+};
+
 export type WorkflowResult =
   | { readonly type: 'cont'; readonly state: unknown }
   | { readonly type: 'suspend'; readonly state: unknown; readonly condition: WorkflowWaitCondition }
@@ -139,25 +175,23 @@ export type WorkflowResult =
 
 export interface WorkflowContext {
   readonly worktreePath: string;
-  readonly spawnSession: (input: {
+  readonly spawnAgentSession: (input: {
     readonly harness: WorkflowAgentHarness;
     readonly prompt: string;
     readonly model?: string | undefined;
     readonly effort?: string | undefined;
-  }) => Promise<{
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-    readonly seededAt: string;
-    readonly paneId: number;
-  }>;
-  readonly inject: (agentSessionId: number, text: string) => Promise<void>;
+  }) => Promise<WorkflowAgentPromptSend & { readonly paneId: number }>;
+  readonly sendAgentPrompt: (
+    agentSessionId: number,
+    text: string,
+  ) => Promise<WorkflowAgentPromptSend>;
   readonly closePane: (paneId: number) => Promise<void>;
   readonly getConversationHistory: (target: {
     readonly agentSessionId: number;
     readonly harnessSessionId: string;
   }) => Promise<readonly WorkflowConversationMessage[]>;
   readonly getHarnessSessionId: (agentSessionId: number) => Promise<string>;
-  readonly runHeadlessPrompt: (input: WorkflowHeadlessPromptInput) => Promise<WorkflowHeadlessOp>;
+  readonly runHeadlessAgent: (input: WorkflowHeadlessAgentInput) => Promise<WorkflowHeadlessOp>;
   readonly startWorkflow: (
     workflowKey: string,
     variables?: WorkflowVariables,
@@ -200,6 +234,95 @@ export function cont(nextState: unknown): WorkflowResult {
 
 export function suspend(nextState: unknown, condition: WorkflowWaitCondition): WorkflowResult {
   return { type: 'suspend', state: nextState, condition };
+}
+
+export const wait = {
+  agentTurn(
+    target: WorkflowAgentPromptSend,
+  ): Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }> {
+    return {
+      kind: 'agent_turn',
+      agentSessionId: target.agentSessionId,
+      harnessSessionId: target.harnessSessionId,
+      sentAt: target.sentAt,
+    };
+  },
+  userContinue(): Extract<WorkflowWaitCondition, { readonly kind: 'user_continue' }> {
+    return { kind: 'user_continue' };
+  },
+  userInput(
+    questions: readonly WorkflowQuestionSpec[],
+  ): Extract<WorkflowWaitCondition, { readonly kind: 'user_input' }> {
+    return { kind: 'user_input', questions };
+  },
+  workflow(
+    runIds: number | readonly number[],
+  ): Extract<WorkflowWaitCondition, { readonly kind: 'workflow' }> {
+    const normalized = Array.isArray(runIds) ? runIds : [runIds];
+    if (normalized.length === 0) {
+      throw new Error('Workflow wait requires at least one run id.');
+    }
+    return { kind: 'workflow', runIds: normalized };
+  },
+  headlessAgent(
+    ops: WorkflowHeadlessOp | readonly WorkflowHeadlessOp[],
+  ): Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }> {
+    const normalized = Array.isArray(ops) ? ops : [ops];
+    if (normalized.length === 0) {
+      throw new Error('Headless agent wait requires at least one operation.');
+    }
+    return { kind: 'headless_agent', ops: normalized };
+  },
+};
+
+export const event = {
+  isUserContinue(value: unknown): value is WorkflowUserContinueEvent {
+    return isObject(value) && value.kind === 'user_continue';
+  },
+  isUserInput(value: unknown): value is WorkflowUserInputEvent {
+    return isObject(value) && value.kind === 'user_input' && isObject(value.answers);
+  },
+  isAgentTurnEnded(value: unknown): value is Extract<WorkflowAgentTurnEvent, { outcome: 'ended' }> {
+    return isObject(value) && value.outcome === 'ended' && typeof value.recordedAt === 'string';
+  },
+  isAgentTurnFailed(
+    value: unknown,
+  ): value is Extract<WorkflowAgentTurnEvent, { outcome: 'failed' }> {
+    return (
+      isObject(value) &&
+      value.outcome === 'failed' &&
+      typeof value.recordedAt === 'string' &&
+      typeof value.reason === 'string'
+    );
+  },
+  requireAgentTurnEnded(value: unknown): Extract<WorkflowAgentTurnEvent, { outcome: 'ended' }> {
+    if (event.isAgentTurnEnded(value)) return value;
+    throw new Error('Expected an ended agent turn event.');
+  },
+  requireAgentTurnFailed(value: unknown): Extract<WorkflowAgentTurnEvent, { outcome: 'failed' }> {
+    if (event.isAgentTurnFailed(value)) return value;
+    throw new Error('Expected a failed agent turn event.');
+  },
+  getAgentTurnResult(value: unknown): WorkflowAgentTurnEvent | null {
+    if (event.isAgentTurnEnded(value) || event.isAgentTurnFailed(value)) return value;
+    return null;
+  },
+  getWorkflowResults(value: unknown): readonly WorkflowJoinResult[] | null {
+    if (isObject(value) && value.kind === 'workflow' && Array.isArray(value.results)) {
+      return value.results as readonly WorkflowJoinResult[];
+    }
+    return null;
+  },
+  getHeadlessAgentResults(value: unknown): readonly WorkflowHeadlessResult[] | null {
+    if (isObject(value) && value.kind === 'headless_agent' && Array.isArray(value.results)) {
+      return value.results as readonly WorkflowHeadlessResult[];
+    }
+    return null;
+  },
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 /**

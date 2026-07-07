@@ -104,7 +104,7 @@ export const HarnessAdapterRegistryLive = Layer.effect(
             return yield* Effect.fail(
               new HarnessAdapterError(
                 'unsupported_harness',
-                `Harness ${input.harness} is not wired for Isagi headless prompts yet.`,
+                `Harness ${input.harness} is not wired for Isagi headless agent runs yet.`,
               ),
             );
           }

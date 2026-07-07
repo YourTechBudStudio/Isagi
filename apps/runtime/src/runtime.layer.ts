@@ -53,15 +53,16 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
+  WorkflowCapabilitiesLive,
   WorkflowEngineLive,
   WorkflowEventLedgerLive,
   WorkflowHeadlessLive,
+  WorkflowRunProjectionLive,
   WorkflowRegistryLive,
   WorkflowRepositoryLive,
-  WorkflowSurfaceProjectionLive,
   type WorkflowEngineService,
   type WorkflowEventLedgerService,
-  type WorkflowSurfaceProjectionService,
+  type WorkflowRunProjectionService,
 } from './workflows/index.js';
 import {
   WorkspaceRepository,
@@ -148,19 +149,27 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(AgentSessionAttentionProjectionLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
-const WorkflowEngineLayer = WorkflowEngineLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
-  Layer.provide(WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive))),
-  Layer.provide(RepositoryLive),
+const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
   Layer.provide(WorkflowHeadlessLayer),
+  Layer.provide(WorkflowEventLedgerLayer),
 );
-const WorkflowSurfaceProjectionLayer = WorkflowSurfaceProjectionLive.pipe(
+const WorkflowEngineLayer = WorkflowEngineLive.pipe(
+  Layer.provide(WorkflowRepositoryLayer),
+  Layer.provide(WorkflowEventLedgerLayer),
+  Layer.provide(WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive))),
+  Layer.provide(RepositoryLive),
+  Layer.provide(SurfaceServiceLayer),
+  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(HarnessLedgerObserverLayer),
+  Layer.provide(WorkflowHeadlessLayer),
+  Layer.provide(WorkflowCapabilitiesLayer),
+);
+const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
   Layer.provide(WorkflowRepositoryLayer),
   Layer.provide(WorkflowEventLedgerLayer),
 );
@@ -179,7 +188,7 @@ const ApiServicesLayer = Layer.mergeAll(
   SurfaceAndPtyServiceLayer,
   SessionServicesLayer,
   EventProjectionLayer,
-  WorkflowSurfaceProjectionLayer,
+  WorkflowRunProjectionLayer,
   WorkflowEventLedgerLayer,
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
@@ -231,7 +240,7 @@ export type RuntimeServices =
   | SessionGcService
   | WorkflowEngineService
   | WorkflowEventLedgerService
-  | WorkflowSurfaceProjectionService;
+  | WorkflowRunProjectionService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,

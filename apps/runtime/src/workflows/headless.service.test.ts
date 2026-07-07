@@ -83,14 +83,14 @@ test('a terminal workflow run cancels its in-flight headless op', async () => {
     Effect.gen(function* () {
       const headless = yield* WorkflowHeadless;
       const bus = yield* InternalRuntimeEventBus;
-      const op = yield* headless.runHeadlessPrompt({
+      const op = yield* headless.runHeadlessAgent({
         runId: 7,
         worktreePath: '/tmp/wt',
         prompt: launchPrompt,
       });
       yield* bus.publish({ type: 'workflow_run_terminal', runId: 7, status: 'failed' });
       yield* waitUntil(() => calls.terminated.length > 0);
-      const after = yield* headless.completedResults({ kind: 'headless', ops: [op] });
+      const after = yield* headless.completedResults({ kind: 'headless_agent', ops: [op] });
       return { after };
     }).pipe(Effect.provide(makeLayer(calls)), Effect.scoped),
   );
@@ -105,13 +105,13 @@ test('releaseOps tears down a tracked headless op and frees its PTY', async () =
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const headless = yield* WorkflowHeadless;
-      const op = yield* headless.runHeadlessPrompt({
+      const op = yield* headless.runHeadlessAgent({
         runId: 7,
         worktreePath: '/tmp/wt',
         prompt: launchPrompt,
       });
       yield* headless.releaseOps({ opIds: [op.opId] });
-      const after = yield* headless.completedResults({ kind: 'headless', ops: [op] });
+      const after = yield* headless.completedResults({ kind: 'headless_agent', ops: [op] });
       return { after };
     }).pipe(Effect.provide(makeLayer(calls)), Effect.scoped),
   );

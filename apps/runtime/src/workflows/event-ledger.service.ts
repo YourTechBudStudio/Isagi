@@ -55,9 +55,10 @@ export interface WorkflowEventLedgerService {
   readonly append: (
     input: WorkflowEventAppendInput,
   ) => Effect.Effect<WorkflowEvent, WorkflowEventLedgerError>;
-  readonly readSurfaceEvents: (
-    surfaceId: number,
-  ) => Effect.Effect<readonly WorkflowEvent[], WorkflowEventLedgerError | DatabaseError>;
+  readonly readRunEvents: (input: {
+    readonly runId: number;
+    readonly includeChildren: boolean;
+  }) => Effect.Effect<readonly WorkflowEvent[], WorkflowEventLedgerError | DatabaseError>;
   readonly latestUiFeedbackForRunTree: (
     rootRunId: number,
   ) => Effect.Effect<WorkflowUiFeedbackDto | undefined, WorkflowEventLedgerError | DatabaseError>;
@@ -133,11 +134,16 @@ export const WorkflowEventLedgerLive = Layer.effect(
           });
           return event;
         }),
-      readSurfaceEvents: (surfaceId) =>
+      readRunEvents: (input) =>
         Effect.gen(function* () {
-          const rootRun = yield* repository.findLatestRootRunForSurface(surfaceId);
-          if (!rootRun?.rootRunId) return [];
-          return yield* readRunTreeEvents(root, repository, rootRun.rootRunId);
+          const run = yield* repository.findRun(input.runId);
+          if (!run) return [];
+          if (input.includeChildren) {
+            return yield* readRunTreeEvents(root, repository, run.rootRunId ?? run.id);
+          }
+          return yield* readPhysicalRunEvents(root, run).pipe(
+            Effect.map((events) => events.sort(compareIndexedEvents).map(({ event }) => event)),
+          );
         }),
       latestUiFeedbackForRunTree: (rootRunId) =>
         Effect.gen(function* () {
@@ -203,7 +209,7 @@ export const WorkflowEventLedgerLive = Layer.effect(
 function readRunTreeEvents(root: string, repository: WorkflowRepositoryService, rootRunId: number) {
   return Effect.gen(function* () {
     const runs = yield* repository.listRunTree(rootRunId);
-    const reads = yield* Effect.all(runs.map((run) => readRunEvents(root, run)));
+    const reads = yield* Effect.all(runs.map((run) => readPhysicalRunEvents(root, run)));
     return reads
       .flat()
       .sort(compareIndexedEvents)
@@ -211,7 +217,7 @@ function readRunTreeEvents(root: string, repository: WorkflowRepositoryService, 
   });
 }
 
-function readRunEvents(root: string, run: WorkflowRunRow) {
+function readPhysicalRunEvents(root: string, run: WorkflowRunRow) {
   const path = eventPath(root, run.id);
   return Effect.try({
     try: () => {

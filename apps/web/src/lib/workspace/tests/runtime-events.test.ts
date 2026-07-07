@@ -12,7 +12,7 @@ import {
 } from '../query-keys.js';
 import { handleRuntimeEvent } from '../runtime-events.js';
 import { useWorkspaceStore } from '../store.js';
-import { useWorkflowSurfaceStore } from '../workflow-surface.js';
+import { useWorkflowRunStore } from '../workflow-runs.js';
 
 test('runtime session change events invalidate workspace and targeted surface queries', () => {
   queryClient.clear();
@@ -118,41 +118,65 @@ test('command change events patch managed command status when config is malforme
   queryClient.clear();
 });
 
-test('workflow surface events replace, upsert, and clear workflow summaries', () => {
-  useWorkflowSurfaceStore.getState().replace([]);
+test('workflow run events replace, upsert, and clear workflow summaries', () => {
+  useWorkflowRunStore.getState().replace([]);
 
   handleRuntimeEvent({
     id: 'evt_workflow_snapshot',
-    type: 'workflow_surface_snapshot',
+    type: 'workflow_run_snapshot',
     occurredAt: '2026-06-12T00:00:00.000Z',
     payload: {
-      summaries: [{ surfaceId: 3, rootRunId: 42, status: 'driving', title: 'Gate' }],
+      summaries: [
+        workflowSummaryFixture(),
+        workflowSummaryFixture({ runId: 77, rootRunId: 77, surfaceId: 4 }),
+      ],
     },
   });
-  assert.deepEqual(Object.keys(useWorkflowSurfaceStore.getState().summariesBySurfaceId), ['3']);
+  assert.deepEqual(Object.keys(useWorkflowRunStore.getState().runsById), ['42', '77']);
+  assert.equal(useWorkflowRunStore.getState().rootRunIdBySurfaceId[3], 42);
+  assert.equal(useWorkflowRunStore.getState().rootRunIdBySurfaceId[4], 77);
 
   handleRuntimeEvent({
     id: 'evt_workflow_changed',
-    type: 'workflow_surface_changed',
+    type: 'workflow_run_changed',
     occurredAt: '2026-06-12T00:00:01.000Z',
-    payload: {
-      surfaceId: 3,
-      rootRunId: 42,
-      status: 'waiting_user',
-      title: 'Gate',
+    payload: workflowSummaryFixture({
+      status: 'waiting',
+      waitKind: 'user_continue',
+      blockingWait: { kind: 'user_continue', runId: 42 },
       prompt: { runId: 42, questions: [] },
-    },
+    }),
   });
-  assert.equal(useWorkflowSurfaceStore.getState().summariesBySurfaceId[3]?.status, 'waiting_user');
+  assert.equal(useWorkflowRunStore.getState().runsById[42]?.status, 'waiting');
 
   handleRuntimeEvent({
     id: 'evt_workflow_cleared',
-    type: 'workflow_surface_cleared',
+    type: 'workflow_run_cleared',
     occurredAt: '2026-06-12T00:00:02.000Z',
-    payload: { surfaceId: 3 },
+    payload: { runId: 42, rootRunId: 42, surfaceId: 3 },
   });
-  assert.deepEqual(useWorkflowSurfaceStore.getState().summariesBySurfaceId, {});
+  assert.deepEqual(Object.keys(useWorkflowRunStore.getState().runsById), ['77']);
+  assert.deepEqual(useWorkflowRunStore.getState().rootRunIdBySurfaceId, { 4: 77 });
 });
+
+function workflowSummaryFixture(
+  overrides: Partial<import('@isagi/contracts').WorkflowRunSummary> = {},
+): import('@isagi/contracts').WorkflowRunSummary {
+  return {
+    runId: 42,
+    rootRunId: 42,
+    parentRunId: null,
+    workflowKey: 'gate',
+    title: 'Gate',
+    status: 'running',
+    paused: false,
+    waitKind: null,
+    blockingWait: null,
+    worktreeId: 9,
+    surfaceId: 3,
+    ...overrides,
+  };
+}
 
 function agentSessionChangedEvent() {
   return {

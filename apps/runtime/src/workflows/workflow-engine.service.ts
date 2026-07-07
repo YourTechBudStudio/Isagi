@@ -1,15 +1,15 @@
 import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
-import { AgentSessionArtifacts, AgentSessionService } from '../agent-sessions/index.js';
+import { AgentSessionArtifacts } from '../agent-sessions/index.js';
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
 import { diagnosticPhase } from '../diagnostics/phase.js';
 import type { DatabaseError } from '../persistence/index.js';
-import { PtyService } from '../pty-processes/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SurfaceService } from '../surfaces/index.js';
 import type { SurfaceService as SurfaceServiceShape } from '../surfaces/index.js';
 import { WorkspaceRepository } from '../workspace/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
+import { WorkflowCapabilities } from './capabilities.js';
 import { workflowContext } from './context.js';
 import {
   WorkflowEventLedger,
@@ -65,15 +65,17 @@ export interface WorkflowEngineService {
     readonly variables: WorkflowVariables;
     readonly context: WorkflowStartContextInput;
   }) => Effect.Effect<WorkflowRunRow, WorkflowEngineServiceError>;
-  readonly setPaused: (input: {
-    readonly surfaceId: number;
-    readonly paused: boolean;
-  }) => Effect.Effect<WorkflowSurfaceControlResult, WorkflowEngineServiceError>;
+  readonly pause: (input: {
+    readonly runId: number;
+  }) => Effect.Effect<WorkflowRunControlResult, WorkflowEngineServiceError>;
+  readonly resume: (input: {
+    readonly runId: number;
+  }) => Effect.Effect<WorkflowRunControlResult, WorkflowEngineServiceError>;
   readonly clear: (input: {
-    readonly surfaceId: number;
-  }) => Effect.Effect<WorkflowSurfaceControlResult, WorkflowEngineServiceError>;
+    readonly runId: number;
+  }) => Effect.Effect<WorkflowRunControlResult, WorkflowEngineServiceError>;
   readonly retry: (input: {
-    readonly surfaceId: number;
+    readonly runId: number;
   }) => Effect.Effect<WorkflowRunControlResult, WorkflowEngineServiceError>;
   readonly advance: (input: {
     readonly runId: number;
@@ -85,10 +87,6 @@ export interface WorkflowEngineService {
 
 export interface WorkflowDrainSummary {
   readonly claimed: number;
-}
-
-export interface WorkflowSurfaceControlResult {
-  readonly surfaceId: number;
 }
 
 export interface WorkflowRunControlResult {
@@ -134,13 +132,12 @@ export const WorkflowEngineLive = Layer.scoped(
     const registry = yield* WorkflowRegistry;
     const workspaceRepository = yield* WorkspaceRepository;
     const eventBus = yield* InternalRuntimeEventBus;
-    const agents = yield* AgentSessionService;
     const surfaces = yield* SurfaceService;
-    const pty = yield* PtyService;
     const artifacts = yield* AgentSessionArtifacts;
     const observer = yield* HarnessLedgerObserver;
     const headless = yield* WorkflowHeadless;
     const eventLedger = yield* WorkflowEventLedger;
+    const capabilities = yield* WorkflowCapabilities;
     const wakeQueue = yield* Queue.sliding<void>(1);
     const owner = `workflow-engine:${process.pid}:${Date.now()}`;
 
@@ -376,15 +373,8 @@ export const WorkflowEngineLive = Layer.scoped(
         // Built directly (not as a diagnostic phase): constructing the context is
         // synchronous and can't stall the loop, so a marker/phase would be noise.
         const ctx = workflowContext({
-          repository,
           run,
-          agents,
-          surfaces,
-          pty,
-          artifacts,
-          observer,
-          headless,
-          eventLedger,
+          capabilities,
           worktreePath: worktreePath.right,
           startWorkflow: ({ parentRun, workflowKey, variables, context }) =>
             Effect.gen(function* () {
@@ -485,7 +475,7 @@ export const WorkflowEngineLive = Layer.scoped(
         // the run in `waiting` until the next restart re-pauses it for a user-gated
         // continue. The ledger is the source of truth, so re-evaluate the wait we
         // just armed against it; an already-landed terminal edge wakes the run now.
-        if (result.right.type === 'suspend' && result.right.condition.kind === 'turn') {
+        if (result.right.type === 'suspend' && result.right.condition.kind === 'agent_turn') {
           yield* reconcileArmedTurnWait({
             run,
             condition: result.right.condition,
@@ -495,7 +485,7 @@ export const WorkflowEngineLive = Layer.scoped(
             poke,
           });
         }
-        if (result.right.type === 'suspend' && result.right.condition.kind === 'headless') {
+        if (result.right.type === 'suspend' && result.right.condition.kind === 'headless_agent') {
           yield* reconcileArmedHeadlessWait({
             run,
             condition: result.right.condition,
@@ -547,6 +537,63 @@ export const WorkflowEngineLive = Layer.scoped(
       }
       return { claimed } satisfies WorkflowDrainSummary;
     });
+
+    const findRootRunForOperation = (runId: number, operation: string) =>
+      Effect.gen(function* () {
+        const run = yield* findRunOrFail(repository, runId);
+        if (run.parentRunId !== null || run.rootRunId !== run.id) {
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_root_run_required',
+              message: `Workflow operation '${operation}' requires a root run id.`,
+              workflowRunId: run.id,
+              surfaceId: run.surfaceId ?? undefined,
+              operation,
+            }),
+          );
+        }
+        return run;
+      });
+
+    const setPausedForRootRun = (runId: number, paused: boolean, operation: string) =>
+      Effect.gen(function* () {
+        const root = yield* findRootRunForOperation(runId, operation);
+        if (root.status === 'done' || root.status === 'failed') {
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_run_not_found',
+              message: `Workflow run ${root.id} does not have a non-terminal workflow.`,
+              workflowRunId: root.id,
+              surfaceId: root.surfaceId ?? undefined,
+            }),
+          );
+        }
+        const pausedRunsBeforeResume = paused
+          ? []
+          : (yield* repository.listRunTree(root.id)).filter((run) => run.paused);
+        yield* repository.setPausedForRunTree({
+          rootRunId: root.id,
+          paused,
+        });
+        if (!paused) {
+          for (const run of pausedRunsBeforeResume) {
+            yield* continuePausedRun({
+              run,
+              repository,
+              artifacts,
+              observer,
+              headless,
+              eventLedger,
+              workspaceRepository,
+              eventBus,
+              poke,
+            });
+          }
+          yield* poke;
+        }
+        const current = yield* repository.findRun(root.id);
+        return { runId: root.id, status: current?.status ?? root.status };
+      });
 
     const service = {
       listWorkflowDescriptors: (input) =>
@@ -601,60 +648,16 @@ export const WorkflowEngineLive = Layer.scoped(
           return results;
         }),
       startWorkflow: (input) => startWorkflowRun(input),
-      setPaused: (input) =>
-        Effect.gen(function* () {
-          const root = yield* repository.findNonTerminalRootRunForSurface(input.surfaceId);
-          if (!root || root.rootRunId === null) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_run_not_found',
-                message: `Surface ${input.surfaceId} does not have a non-terminal workflow.`,
-                surfaceId: input.surfaceId,
-              }),
-            );
-          }
-          const pausedRunsBeforeResume = input.paused
-            ? []
-            : (yield* repository.listRunTree(root.rootRunId)).filter((run) => run.paused);
-          yield* repository.setPausedForRunTree({
-            rootRunId: root.rootRunId,
-            paused: input.paused,
-          });
-          if (!input.paused) {
-            for (const run of pausedRunsBeforeResume) {
-              yield* continuePausedRun({
-                run,
-                repository,
-                artifacts,
-                observer,
-                headless,
-                eventLedger,
-                workspaceRepository,
-                eventBus,
-                poke,
-              });
-            }
-            yield* poke;
-          }
-          return { surfaceId: input.surfaceId };
-        }),
+      pause: (input) => setPausedForRootRun(input.runId, true, 'pause'),
+      resume: (input) => setPausedForRootRun(input.runId, false, 'resume'),
       clear: (input) =>
         Effect.gen(function* () {
-          const root = yield* repository.findLatestRootRunForSurface(input.surfaceId);
-          if (!root || root.rootRunId === null) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_run_not_found',
-                message: `Surface ${input.surfaceId} does not have a workflow to clear.`,
-                surfaceId: input.surfaceId,
-              }),
-            );
-          }
-          const runs = yield* repository.listRunTree(root.rootRunId);
+          const root = yield* findRootRunForOperation(input.runId, 'clear');
+          const runs = yield* repository.listRunTree(root.id);
           if (runs.some((run) => run.status === 'running')) {
-            yield* repository.requestCancelForRunTree(root.rootRunId);
+            yield* repository.requestCancelForRunTree(root.id);
           } else {
-            yield* eventLedger.deleteRunTreeLedgers(root.rootRunId).pipe(
+            yield* eventLedger.deleteRunTreeLedgers(root.id).pipe(
               Effect.catchAll((error) =>
                 Effect.sync(() => {
                   console.warn('[runtime] Workflow clear ledger cleanup failed', {
@@ -665,43 +668,33 @@ export const WorkflowEngineLive = Layer.scoped(
               ),
             );
             yield* repository.deleteRunTree({
-              rootRunId: root.rootRunId,
+              rootRunId: root.id,
               surfaceId: root.surfaceId,
             });
           }
-          return { surfaceId: input.surfaceId };
+          return { runId: root.id, status: root.status };
         }),
       retry: (input) =>
         Effect.gen(function* () {
-          const activeRoot = yield* repository.findNonTerminalRootRunForSurface(input.surfaceId);
-          if (activeRoot) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_surface_busy',
-                message: `Surface ${input.surfaceId} already has a running workflow.`,
-                activeWorkflowRunId: activeRoot.id,
-                surfaceId: input.surfaceId,
-              }),
-            );
-          }
-          const failedRoot = yield* repository.findFailedRootRunForSurface(input.surfaceId);
-          if (!failedRoot) {
+          const root = yield* findRootRunForOperation(input.runId, 'retry');
+          if (root.status !== 'failed') {
             return yield* Effect.fail(
               new WorkflowEngineError({
                 code: 'workflow_run_not_failed',
-                message: `Surface ${input.surfaceId} does not have a failed workflow to retry.`,
-                surfaceId: input.surfaceId,
+                message: `Workflow run ${root.id} is not failed.`,
+                workflowRunId: root.id,
+                surfaceId: root.surfaceId ?? undefined,
               }),
             );
           }
-          const retried = yield* repository.retryFailedRun(failedRoot.id);
+          const retried = yield* repository.retryFailedRun(root.id);
           if (!retried) {
             return yield* Effect.fail(
               new WorkflowEngineError({
                 code: 'workflow_run_not_failed',
-                message: `Workflow run ${failedRoot.id} is not failed.`,
-                workflowRunId: failedRoot.id,
-                surfaceId: input.surfaceId,
+                message: `Workflow run ${root.id} is not failed.`,
+                workflowRunId: root.id,
+                surfaceId: root.surfaceId ?? undefined,
               }),
             );
           }
@@ -1087,11 +1080,11 @@ function workflowResultSummary(result: WorkflowResult) {
 }
 
 function workflowWaitConditionSummary(condition: WorkflowWaitCondition) {
-  if (condition.kind === 'turn') {
+  if (condition.kind === 'agent_turn') {
     return `turn agentSessionId=${condition.agentSessionId} harnessSessionId=${condition.harnessSessionId}`;
   }
-  if (condition.kind === 'headless') {
-    return `headless ops=${condition.ops.map((op) => op.opId).join(',')}`;
+  if (condition.kind === 'headless_agent') {
+    return `headless_agent ops=${condition.ops.map((op) => op.opId).join(',')}`;
   }
   if (condition.kind === 'workflow') {
     return `workflow runIds=${condition.runIds.join(',')}`;
