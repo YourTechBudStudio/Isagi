@@ -145,9 +145,9 @@ export function resolveWorkflowAccept(
   value: unknown,
   selectedIndex: number | null,
 ): WorkflowAcceptResult {
-  if (question.kind === 'select' && typeof value !== 'string') {
+  if (question.kind === 'select') {
     const option = selectedIndex === null ? undefined : question.options[selectedIndex];
-    if (option) {
+    if (option && option.value !== value) {
       return { kind: 'pick', value: option.value };
     }
   }

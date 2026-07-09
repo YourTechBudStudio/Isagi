@@ -23,6 +23,10 @@ const selectQuestion: WorkflowQuestionSpecDto = {
     { value: 'prod', label: 'Prod' },
   ],
 };
+const defaultedSelectQuestion: WorkflowQuestionSpecDto = {
+  ...selectQuestion,
+  default: 'dev',
+};
 const multiQuestion: WorkflowQuestionSpecDto = {
   kind: 'multi-select',
   key: 'tags',
@@ -88,7 +92,20 @@ test('resolveWorkflowAccept auto-picks the highlighted select option', () => {
 });
 
 test('resolveWorkflowAccept advances once a select value is committed', () => {
-  assert.deepEqual(resolveWorkflowAccept(selectQuestion, 'dev', 1), { kind: 'advance' });
+  assert.deepEqual(resolveWorkflowAccept(selectQuestion, 'dev', 0), { kind: 'advance' });
+});
+
+test('resolveWorkflowAccept keeps a defaulted select keyboard-reselectable', () => {
+  assert.deepEqual(resolveWorkflowAccept(defaultedSelectQuestion, 'dev', 1), {
+    kind: 'pick',
+    value: 'prod',
+  });
+});
+
+test('resolveWorkflowAccept advances when a defaulted select highlight matches the value', () => {
+  assert.deepEqual(resolveWorkflowAccept(defaultedSelectQuestion, 'dev', 0), {
+    kind: 'advance',
+  });
 });
 
 test('resolveWorkflowAccept reports validation errors instead of advancing', () => {
