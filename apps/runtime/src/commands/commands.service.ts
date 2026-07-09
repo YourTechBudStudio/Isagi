@@ -16,7 +16,7 @@ import type {
 } from '@isagi/contracts';
 
 import type { DatabaseError } from '../persistence/index.js';
-import type { WorktreeCommandConfig } from '../project-config/command-config.schema.js';
+import type { WorktreeCommandConfig } from '../project-config/project-config.schema.js';
 import { loadWorktreeCommandCatalog } from '../project-config/project-config.service.js';
 import { PtyRepository, PtyService } from '../pty-processes/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../runtime-events/event-bus.js';

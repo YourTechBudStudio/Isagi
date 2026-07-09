@@ -10,12 +10,17 @@ export function buildOpenCodeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly pluginPath: string;
+    readonly skillScanDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
+    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
     const configContent = JSON.stringify({
       plugin: [pathToFileURL(dependencies.pluginPath).toString()],
+      skills: {
+        paths: [dependencies.skillScanDirectory],
+      },
     });
     console.info('[runtime] OpenCode harness launch envelope prepared', {
       agentSessionId: input.agentSessionId,
@@ -24,6 +29,7 @@ export function buildOpenCodeLaunch(
       model: input.model,
       effort: input.effort,
       pluginPath: dependencies.pluginPath,
+      skillScanDirectory: dependencies.skillScanDirectory,
     });
     return {
       command: 'opencode',
@@ -39,6 +45,7 @@ export function buildOpenCodeLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
+          runtimeUrl: dependencies.runtimeUrl,
           extraEnv: {
             OPENCODE_CONFIG_CONTENT: configContent,
           },

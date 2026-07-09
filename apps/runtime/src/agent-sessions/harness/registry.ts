@@ -38,25 +38,40 @@ export const HarnessAdapterRegistryLive = Layer.effect(
 
     const adapterFactories = {
       pi: (input) =>
-        buildPiLaunch(input, {
-          extensionPath: artifacts.piExtensionPath,
-          artifacts: sessionArtifacts,
-        }),
+        withRuntimeUrl((runtimeUrl) =>
+          buildPiLaunch(input, {
+            extensionPath: artifacts.piExtensionPath,
+            skillDirectory: artifacts.configureIsagiSkill.skillDirectory,
+            artifacts: sessionArtifacts,
+            runtimeUrl,
+          }),
+        ),
       opencode: (input) =>
-        buildOpenCodeLaunch(input, {
-          pluginPath: artifacts.opencodePluginPath,
-          artifacts: sessionArtifacts,
-        }),
+        withRuntimeUrl((runtimeUrl) =>
+          buildOpenCodeLaunch(input, {
+            pluginPath: artifacts.opencodePluginPath,
+            skillScanDirectory: artifacts.configureIsagiSkill.skillScanDirectory,
+            artifacts: sessionArtifacts,
+            runtimeUrl,
+          }),
+        ),
       claude: (input) =>
-        buildClaudeLaunch(input, {
-          settingsPath: artifacts.claudeSettingsPath,
-          artifacts: sessionArtifacts,
-        }),
+        withRuntimeUrl((runtimeUrl) =>
+          buildClaudeLaunch(input, {
+            settingsPath: artifacts.claudeSettingsPath,
+            skillWorkspaceDirectory: artifacts.configureIsagiSkill.claudeSkillWorkspaceDirectory,
+            artifacts: sessionArtifacts,
+            runtimeUrl,
+          }),
+        ),
       codex: (input) =>
-        buildCodexLaunch(input, {
-          hookPath: artifacts.codexHookPath,
-          artifacts: sessionArtifacts,
-        }),
+        withRuntimeUrl((runtimeUrl) =>
+          buildCodexLaunch(input, {
+            hookPath: artifacts.codexHookPath,
+            artifacts: sessionArtifacts,
+            runtimeUrl,
+          }),
+        ),
     } satisfies Record<
       AgentHarness,
       (input: HarnessLaunchContext) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>
@@ -113,3 +128,20 @@ export const HarnessAdapterRegistryLive = Layer.effect(
     } satisfies HarnessAdapterRegistryService;
   }),
 );
+
+function withRuntimeUrl(
+  build: (runtimeUrl: string) => Effect.Effect<LaunchPtyProcessInput, HarnessAdapterError>,
+) {
+  return Effect.gen(function* () {
+    const runtimeUrl = process.env.ISAGI_RUNTIME_URL;
+    if (!runtimeUrl) {
+      return yield* Effect.fail(
+        new HarnessAdapterError(
+          'runtime_url_unavailable',
+          'Cannot launch an agent before the runtime URL is available.',
+        ),
+      );
+    }
+    return yield* build(runtimeUrl);
+  });
+}

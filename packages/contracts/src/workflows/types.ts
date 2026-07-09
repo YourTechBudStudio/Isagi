@@ -213,6 +213,49 @@ export const workflowDescriptorResultSchema = Schema.Union(
   }),
 );
 
+export const workflowVerifyScopeSchema = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal('project'),
+    projectId: positiveIntegerSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal('global'),
+  }),
+);
+
+export const workflowVerifyDiagnosticStageSchema = Schema.Literal(
+  'resolve',
+  'compile',
+  'load',
+  'shape',
+  'command',
+);
+
+export const workflowVerifyDiagnosticSchema = Schema.Struct({
+  stage: workflowVerifyDiagnosticStageSchema,
+  message: Schema.String,
+});
+
+export const verifyWorkflowInputSchema = Schema.Struct({
+  workflowKey: Schema.String.pipe(Schema.minLength(1)),
+  worktreePath: Schema.String.pipe(Schema.minLength(1)),
+});
+
+export const verifyWorkflowOutputSchema = Schema.Union(
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    workflowKey: Schema.String.pipe(Schema.minLength(1)),
+    scope: workflowVerifyScopeSchema,
+    manifest: workflowCommandManifestSchema,
+  }),
+  Schema.Struct({
+    ok: Schema.Literal(false),
+    workflowKey: Schema.String.pipe(Schema.minLength(1)),
+    scope: workflowVerifyScopeSchema,
+    diagnostics: Schema.Array(workflowVerifyDiagnosticSchema),
+  }),
+);
+
 export const listWorkflowDescriptorsInputSchema = Schema.Struct({
   context: workflowStartContextSchema,
 });
@@ -281,6 +324,11 @@ export type WorkflowBlockingWait = typeof workflowBlockingWaitSchema.Type;
 export type WorkflowRunSummary = typeof workflowRunSummarySchema.Type;
 export type WorkflowStartContext = typeof workflowStartContextSchema.Type;
 export type WorkflowDescriptorResult = typeof workflowDescriptorResultSchema.Type;
+export type WorkflowVerifyScope = typeof workflowVerifyScopeSchema.Type;
+export type WorkflowVerifyDiagnosticStage = typeof workflowVerifyDiagnosticStageSchema.Type;
+export type WorkflowVerifyDiagnostic = typeof workflowVerifyDiagnosticSchema.Type;
+export type VerifyWorkflowInput = typeof verifyWorkflowInputSchema.Type;
+export type VerifyWorkflowOutput = typeof verifyWorkflowOutputSchema.Type;
 export type ListWorkflowDescriptorsInput = typeof listWorkflowDescriptorsInputSchema.Type;
 export type ListWorkflowDescriptorsOutput = typeof listWorkflowDescriptorsOutputSchema.Type;
 export type StartWorkflowInput = typeof startWorkflowInputSchema.Type;

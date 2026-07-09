@@ -33,6 +33,10 @@ export {
   WorkflowEngineLive,
   type WorkflowDrainSummary,
   type WorkflowEngineService,
+  type WorkflowVerifyDiagnostic,
+  type WorkflowVerifyDiagnosticStage,
+  type WorkflowVerifyResult,
+  type WorkflowVerifyScope,
 } from './workflow-engine.service.js';
 export {
   WorkflowRepository,

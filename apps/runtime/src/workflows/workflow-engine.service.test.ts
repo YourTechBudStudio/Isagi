@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -54,10 +54,15 @@ import {
   type WorkflowEventLedgerService,
 } from './event-ledger.service.js';
 import { WorkflowHeadless, type WorkflowHeadlessService } from './headless.js';
-import { createWorkflowRegistry, WorkflowRegistry } from './registry.js';
+import {
+  createFilesystemWorkflowRegistry,
+  createWorkflowRegistry,
+  WorkflowRegistry,
+} from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import { resolveTurnEdge } from './resolver.js';
+import { ensureWorkflowsScaffold } from './scaffold.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
 import { deriveWorkflowRunSummary } from './workflow-run-projection.service.js';
@@ -114,6 +119,160 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
     assert.equal(result.completed?.waitCondition, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('verifyWorkflow resolves project scope from lexical worktree path and returns a manifest', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-ok-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        return yield* engine.verifyWorkflow({
+          workflowKey: 'agentless-cont-done',
+          worktreePath: '/tmp/isagi-test-worktree/../isagi-test-worktree',
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(result, {
+      ok: true,
+      workflowKey: 'agentless-cont-done',
+      scope: { kind: 'project', projectId: 1 },
+      manifest: { title: 'Agentless cont/done' },
+    });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('verifyWorkflow uses visible global scope for unmatched worktree paths', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-global-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        return yield* engine.verifyWorkflow({
+          workflowKey: 'agentless-cont-done',
+          worktreePath: '/tmp/not-a-known-worktree',
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.scope.kind, 'global');
+    assert.equal(result.ok, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('verifyWorkflow returns resolve diagnostics for unknown keys', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-resolve-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        return yield* engine.verifyWorkflow({
+          workflowKey: 'missing',
+          worktreePath: '/tmp/not-a-known-worktree',
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.scope.kind, 'global');
+    assert.equal(result.ok ? undefined : result.diagnostics[0]?.stage, 'resolve');
+    assert.match(result.ok ? '' : (result.diagnostics[0]?.message ?? ''), /Known workflow keys/);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('verifyWorkflow returns command diagnostics when command throws', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-command-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* WorkflowRegistry;
+        yield* registry.addWorkflow('command-throws', {
+          command: () => {
+            throw new Error('command exploded');
+          },
+          validate: () => {},
+          init: () => ({}),
+          step: async () => done(),
+        });
+        const engine = yield* WorkflowEngine;
+        return yield* engine.verifyWorkflow({
+          workflowKey: 'command-throws',
+          worktreePath: '/tmp/isagi-test-worktree',
+        });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.ok ? undefined : result.diagnostics[0]?.stage, 'command');
+    assert.match(result.ok ? '' : (result.diagnostics[0]?.message ?? ''), /command exploded/);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('startWorkflow executes a project workflow through the filesystem registry', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-project-workflow-run-'));
+  const projectRoot = '/tmp/isagi-test-project';
+  try {
+    writeFilesystemWorkflow(
+      join(projectRoot, '.isagi', 'workflows', 'project-run'),
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Project run' }),
+  validate: () => {},
+  init: () => ({ phase: 'start' }),
+  step: async () => done({ source: 'project' }),
+});
+`,
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const run = yield* engine.startWorkflow({
+          workflowKey: 'project-run',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1, agentSessionId: 10 },
+        });
+        yield* engine.drainOnce;
+        return yield* repository.findRun(run.id);
+      }).pipe(Effect.provide(workflowLayer(dataRoot, filesystemRegistryLayer(dataRoot)))),
+    );
+
+    assert.equal(result?.status, 'done');
+    assert.equal(result?.workflowTitle, 'Project run');
+    assert.deepEqual(JSON.parse(result?.resultJson ?? '{}'), { source: 'project' });
+    assert.equal(
+      existsSync(
+        join(
+          dataRoot,
+          'workflows',
+          '.cache',
+          'workflow-definitions',
+          'projects',
+          '1',
+          'project-run',
+        ),
+      ),
+      true,
+    );
+    assert.equal(existsSync(join(projectRoot, '.isagi', 'workflows', '.cache')), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(join(projectRoot, '.isagi', 'workflows', 'project-run'), {
+      recursive: true,
+      force: true,
+    });
   }
 });
 
@@ -3699,6 +3858,17 @@ function testLayer(dataRoot: string) {
   return workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, createWorkflowRegistry()));
 }
 
+function filesystemRegistryLayer(dataRoot: string) {
+  const workflowsPath = join(dataRoot, 'workflows');
+  return Layer.effect(
+    WorkflowRegistry,
+    ensureWorkflowsScaffold({ workflowsPath }).pipe(
+      Effect.as(createFilesystemWorkflowRegistry(workflowsPath)),
+      Effect.orDie,
+    ),
+  );
+}
+
 function testLayerWithResumeFakes(
   dataRoot: string,
   input: {
@@ -3825,6 +3995,11 @@ function readWorkflowLedgerEvents(path: string) {
     .map((line) => JSON.parse(line) as WorkflowEvent);
 }
 
+function writeFilesystemWorkflow(workflowPath: string, contents: string) {
+  mkdirSync(workflowPath, { recursive: true });
+  writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
+}
+
 const seedDefaultWorkspace = Effect.gen(function* () {
   const database = yield* RuntimeDatabase;
   yield* database.use('test_seed_default_workspace', (db) => {
@@ -3891,7 +4066,21 @@ const seedDefaultWorkspace = Effect.gen(function* () {
 
 function fakeWorkspaceRepository(): WorkspaceRepositoryService {
   return {
-    findProject: () => Effect.die('workspace findProject is not used'),
+    findProject: (projectId) =>
+      Effect.succeed(
+        projectId === 1
+          ? {
+              id: 1,
+              name: 'Test Project',
+              rootPath: '/tmp/isagi-test-project',
+              status: 'present',
+              createdAt: '2026-06-18T00:00:00.000Z',
+              updatedAt: '2026-06-18T00:00:00.000Z',
+              lastSeenAt: '2026-06-18T00:00:00.000Z',
+              missingReason: null,
+            }
+          : null,
+      ),
     findProjectByRootPath: () => Effect.die('workspace findProjectByRootPath is not used'),
     findWorktree: (worktreeId) =>
       Effect.succeed({
@@ -3915,7 +4104,19 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
       Effect.die('workspace readWorktreeDeleteDiagnostics is not used'),
     insertProject: () => Effect.die('workspace insertProject is not used'),
     listProjects: Effect.die('workspace listProjects is not used'),
-    listWorktrees: Effect.die('workspace listWorktrees is not used'),
+    listWorktrees: Effect.succeed([
+      {
+        id: 1,
+        projectId: 1,
+        path: '/tmp/isagi-test-worktree',
+        branch: 'main',
+        head: 'abc123',
+        createdAt: '2026-06-18T00:00:00.000Z',
+        updatedAt: '2026-06-18T00:00:00.000Z',
+        firstSeenAt: '2026-06-18T00:00:00.000Z',
+        lastSeenAt: '2026-06-18T00:00:00.000Z',
+      },
+    ]),
     reconcileProjectWorktrees: () => Effect.die('workspace reconcileProjectWorktrees is not used'),
     restoreProjectAtRootPath: () => Effect.die('workspace restoreProjectAtRootPath is not used'),
     setProjectStatus: () => Effect.die('workspace setProjectStatus is not used'),

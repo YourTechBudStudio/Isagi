@@ -5,14 +5,12 @@ import { Context, Data, Effect, Layer } from 'effect';
 import { parse, stringify } from 'yaml';
 
 import { DataDirectory } from '../persistence/index.js';
-
-export type RuntimeConfigPtyBackend = 'node-pty' | 'tmux';
-
-export interface RuntimeConfigShape {
-  readonly pty: {
-    readonly backend: RuntimeConfigPtyBackend;
-  };
-}
+import {
+  defaultRuntimeConfig,
+  parseRuntimeConfig,
+  type RuntimeConfigPtyBackend,
+  type RuntimeConfigShape,
+} from './runtime-config.schema.js';
 
 export class RuntimeConfigError extends Data.TaggedError('RuntimeConfigError')<{
   readonly path: string;
@@ -20,10 +18,6 @@ export class RuntimeConfigError extends Data.TaggedError('RuntimeConfigError')<{
 }> {}
 
 export const RuntimeConfig = Context.GenericTag<RuntimeConfigShape>('isagi/RuntimeConfig');
-
-const defaultRuntimeConfig: RuntimeConfigShape = {
-  pty: { backend: 'node-pty' },
-};
 
 export const RuntimeConfigLive = Layer.effect(
   RuntimeConfig,
@@ -43,23 +37,9 @@ function readOrCreateRuntimeConfig(
         writeFileSync(path, stringify(defaultRuntimeConfig), 'utf8');
         return defaultRuntimeConfig;
       }
-      return parseRuntimeConfig(parse(readFileSync(path, 'utf8')), path);
+      return parseRuntimeConfig(parse(readFileSync(path, 'utf8')));
     },
     catch: (cause) => new RuntimeConfigError({ path, cause }),
   });
 }
-
-function parseRuntimeConfig(value: unknown, path: string): RuntimeConfigShape {
-  const backend = isRecord(value) && isRecord(value.pty) ? value.pty.backend : undefined;
-  if (backend === null || backend === undefined) {
-    return defaultRuntimeConfig;
-  }
-  if (backend === 'node-pty' || backend === 'tmux') {
-    return { pty: { backend } };
-  }
-  throw new Error(`${path}: pty.backend must be either "node-pty" or "tmux".`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
+export type { RuntimeConfigPtyBackend, RuntimeConfigShape };

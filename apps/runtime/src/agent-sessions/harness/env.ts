@@ -7,6 +7,7 @@ export function harnessEnvForProcess(input: {
   readonly agentSessionId: number;
   readonly ptyProcessId: number;
   readonly artifacts: AgentSessionArtifactsService;
+  readonly runtimeUrl: string;
   readonly extraEnv?: NodeJS.ProcessEnv | undefined;
 }) {
   return Effect.gen(function* () {
@@ -35,6 +36,7 @@ export function harnessEnvForProcess(input: {
     return {
       ...launchEnv(),
       ...input.extraEnv,
+      ISAGI_RUNTIME_URL: input.runtimeUrl,
       ISAGI_AGENT_SESSION_ID: String(input.agentSessionId),
       ISAGI_PTY_PROCESS_ID: String(input.ptyProcessId),
       ISAGI_HARNESS_ARTIFACT_DIRECTORY: paths.directory,

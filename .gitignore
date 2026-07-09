@@ -3,6 +3,7 @@ node_modules/
 dist/
 dist-electron/
 build/
+apps/runtime/.generated/
 release/
 .turbo/
 coverage/

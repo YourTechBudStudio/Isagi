@@ -9,6 +9,7 @@ export function buildCodexLaunch(
   dependencies: {
     readonly hookPath: string;
     readonly artifacts: AgentSessionArtifactsService;
+    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
@@ -35,6 +36,7 @@ export function buildCodexLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
+          runtimeUrl: dependencies.runtimeUrl,
         }),
     };
   });
