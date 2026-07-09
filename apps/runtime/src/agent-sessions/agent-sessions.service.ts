@@ -39,7 +39,7 @@ export class AgentSessionError extends Error {
       | 'session_not_found'
       | 'active_process_missing'
       | 'active_process_not_running'
-      | 'harness_session_id_missing'
+      | 'harness_metadata_missing'
       | 'harness_metadata_invalid'
       | 'harness_mismatch'
       | 'active_process_mismatch',
@@ -130,27 +130,7 @@ export const AgentSessionServiceLive = Layer.effect(
             });
             return yield* launchProcessForSession(session, options);
           }
-          if (!session.harnessSessionId) {
-            console.warn(
-              '[runtime] Agent session restoration blocked: missing harness session id',
-              {
-                agentSessionId,
-                harness: session.harness,
-                activePtyProcessId: session.activePtyProcessId,
-                activePtyProcessStatus: process?.status ?? null,
-                activePtyProcessStatusReason: process?.statusReason ?? null,
-                activePtyProcessExitCode: process?.exitCode ?? null,
-                activePtyProcessSignal: process?.signal ?? null,
-              },
-            );
-            return yield* Effect.fail(
-              new AgentSessionError(
-                'harness_session_id_missing',
-                `Agent session ${agentSessionId} cannot be restored because no harness session id has been captured.`,
-              ),
-            );
-          }
-          console.info('[runtime] Agent session attach launching resume PTY process', {
+          console.info('[runtime] Agent session attach launching PTY process', {
             agentSessionId,
             harness: session.harness,
             latestHarnessSessionId: session.harnessSessionId,
@@ -225,7 +205,7 @@ function validateHarnessMetadata(session: AgentSessionRow) {
     });
     return Effect.fail(
       new AgentSessionError(
-        'harness_session_id_missing',
+        'harness_metadata_missing',
         `Agent session ${session.id} cannot be restored because harness metadata is missing.`,
       ),
     );

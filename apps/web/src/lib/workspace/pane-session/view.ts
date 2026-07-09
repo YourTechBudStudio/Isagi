@@ -50,7 +50,8 @@ const ptyWebSocketErrorCodes = new Set<string>([
   'session_not_running',
   'active_process_missing',
   'active_process_not_running',
-  'harness_session_id_missing',
+  'harness_metadata_missing',
+  'harness_metadata_invalid',
   'unsupported_harness',
   'session_already_attached',
   'session_attachment_moved',
@@ -73,7 +74,7 @@ export type PaneView =
   | { readonly kind: 'empty' }
   /** Mount the terminal: the session is running, or we are attaching/resuming. */
   | { readonly kind: 'live' }
-  /** Stopped agent session that claim+attach can recover (connect or resume). */
+  /** Stopped agent session that claim+attach can recover. */
   | { readonly kind: 'attachable'; readonly resumeFailed: boolean }
   /** Stopped agent session that can only be replaced — claim+attach would fail. */
   | { readonly kind: 'needs_fresh' }
@@ -96,7 +97,9 @@ export function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession 
  * Decide what a pane renders. The backend's `recoveryAction` is the single
  * source of truth for whether a stopped agent session can be recovered:
  *
- *  - `connect_existing` / `resume_existing` → claim+attach succeeds → attachable
+ *  - `connect_existing` → claim+attach connects to an existing process
+ *  - `resume_existing` → claim+attach relaunches with harness resume metadata
+ *  - `relaunch_fresh` → claim+attach relaunches fresh in the same durable session
  *  - `create_replacement` → claim+attach is guaranteed to fail → needs_fresh
  *
  * Terminals have no durable harness session; reattaching relaunches a fresh

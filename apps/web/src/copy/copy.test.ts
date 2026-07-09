@@ -55,8 +55,12 @@ test('session status reasons produce degraded pane status labels', () => {
   assert.equal(ptyCopy.sessionStatus('failed', 'shell_launch_failed', exit()), 'Launch failed');
   assert.equal(ptyCopy.sessionStatus('failed', 'process_attach_failed', exit()), 'Attach failed');
   assert.equal(
-    ptyCopy.sessionStatus('failed', 'harness_session_id_missing', exit()),
-    'No prior session',
+    ptyCopy.sessionStatus('failed', 'harness_metadata_missing', exit()),
+    'Session record missing',
+  );
+  assert.equal(
+    ptyCopy.sessionStatus('failed', 'harness_metadata_invalid', exit()),
+    'Session record invalid',
   );
   assert.equal(ptyCopy.sessionStatus('failed', 'harness_resume_failed', exit()), 'Resume failed');
   assert.equal(ptyCopy.sessionStatus('failed', 'pty_process_missing', exit()), 'Process missing');
@@ -85,7 +89,7 @@ test('session status reasons produce restrained pane notices', () => {
     harness_process_killed: ptyCopy.sessionNotice('killed', 'harness_process_killed'),
     shell_killed: ptyCopy.sessionNotice('killed', 'shell_killed'),
     process_attach_failed: ptyCopy.sessionNotice('failed', 'process_attach_failed'),
-    harness_session_id_missing: ptyCopy.sessionNotice('failed', 'harness_session_id_missing'),
+    harness_metadata_missing: ptyCopy.sessionNotice('failed', 'harness_metadata_missing'),
     harness_metadata_invalid: ptyCopy.sessionNotice('failed', 'harness_metadata_invalid'),
     harness_resume_failed: ptyCopy.sessionNotice('failed', 'harness_resume_failed'),
     pty_process_missing: ptyCopy.sessionNotice('failed', 'pty_process_missing'),
@@ -100,7 +104,7 @@ test('session status reasons produce restrained pane notices', () => {
   assert.equal(notices.harness_process_killed, null);
   assert.equal(notices.shell_killed, null);
   assert.match(notices.process_attach_failed ?? '', /attach/);
-  assert.match(notices.harness_session_id_missing ?? '', /No harness session/);
+  assert.match(notices.harness_metadata_missing ?? '', /record is missing/);
   assert.match(notices.harness_metadata_invalid ?? '', /unreadable/);
   assert.match(notices.harness_resume_failed ?? '', /resume/);
   assert.match(notices.pty_process_missing ?? '', /backing process/);

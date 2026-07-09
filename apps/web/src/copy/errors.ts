@@ -231,8 +231,10 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   session_not_running: "This session isn't running anymore.",
   active_process_missing: 'This session has no active process to attach to yet.',
   active_process_not_running: "This session's active process is not running.",
-  harness_session_id_missing:
-    'No harness session was captured for this pane, so there is nothing to resume yet.',
+  harness_metadata_missing:
+    'The harness session record is missing, so this pane needs a replacement.',
+  harness_metadata_invalid:
+    'The harness session record is unreadable, so this pane needs a replacement.',
   unsupported_harness: 'This harness is not wired into Isagi yet.',
   session_already_attached: 'This session is already attached in another pane.',
   session_attachment_moved: 'This session moved to another pane.',

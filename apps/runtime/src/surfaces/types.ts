@@ -42,6 +42,13 @@ export interface SurfacePaneRow {
   readonly updatedAt: string;
 }
 
+export interface PaneSessionBinding {
+  readonly paneId: number;
+  readonly sessionKind: 'agent_session' | 'terminal_session';
+  readonly sessionId: number;
+  readonly activePtyProcessId: number | null;
+}
+
 export interface PtyProcessRow {
   readonly id: number;
   readonly backend: PtyProcessBackend;

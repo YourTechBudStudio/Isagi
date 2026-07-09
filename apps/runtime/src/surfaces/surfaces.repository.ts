@@ -1,4 +1,4 @@
-import { and, eq, getTableColumns, inArray } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, isNotNull } from 'drizzle-orm';
 import { Context, Effect, Layer, Schema } from 'effect';
 
 import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contracts';
@@ -43,6 +43,7 @@ import type {
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,
+  PaneSessionBinding,
   SplitSurfacePaneInput,
   SplitSurfacePaneOutput,
   TerminalSessionRow,
@@ -67,6 +68,7 @@ export interface SurfaceRepositoryService {
   readonly listTerminalSessionsForPanes: (
     paneIds: readonly number[],
   ) => Effect.Effect<TerminalSessionRow[], DatabaseError>;
+  readonly listPaneSessionBindings: Effect.Effect<PaneSessionBinding[], DatabaseError>;
   readonly findPaneForSession: (input: {
     readonly sessionKind: 'agent_session' | 'terminal_session';
     readonly sessionId: number;
@@ -190,6 +192,7 @@ export const SurfaceRepositoryLive = Layer.effect(
         listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds),
       listTerminalSessionsForPanes: (paneIds) =>
         listTerminalSessionsForPanes(database, ptyColumns, paneIds),
+      listPaneSessionBindings: listPaneSessionBindings(database),
       findPaneForSession: (input) =>
         database.use('find_pane_for_session', (db) => {
           const row = db
@@ -511,6 +514,60 @@ function listTerminalSessionsForPanes(
       .all()
       .map((row) => terminalSessionRow(row.session, row.process));
   });
+}
+
+function listPaneSessionBindings(database: RuntimeDatabaseService) {
+  return database.use('list_pane_session_bindings', (db) =>
+    db
+      .select({
+        paneId: surfacePanes.id,
+        sessionKind: surfacePanes.sessionKind,
+        sessionId: surfacePanes.sessionId,
+        agentActivePtyProcessId: agentSessions.activePtyProcessId,
+        terminalActivePtyProcessId: terminalSessions.activePtyProcessId,
+      })
+      .from(surfacePanes)
+      .leftJoin(
+        agentSessions,
+        and(
+          eq(surfacePanes.sessionKind, 'agent_session'),
+          eq(surfacePanes.sessionId, agentSessions.id),
+        ),
+      )
+      .leftJoin(
+        terminalSessions,
+        and(
+          eq(surfacePanes.sessionKind, 'terminal_session'),
+          eq(surfacePanes.sessionId, terminalSessions.id),
+        ),
+      )
+      .where(and(isNotNull(surfacePanes.sessionKind), isNotNull(surfacePanes.sessionId)))
+      .orderBy(surfacePanes.id)
+      .all()
+      .flatMap((row): PaneSessionBinding[] => {
+        if (row.sessionKind === 'agent_session' && row.sessionId !== null) {
+          return [
+            {
+              paneId: row.paneId,
+              sessionKind: row.sessionKind,
+              sessionId: row.sessionId,
+              activePtyProcessId: row.agentActivePtyProcessId,
+            },
+          ];
+        }
+        if (row.sessionKind === 'terminal_session' && row.sessionId !== null) {
+          return [
+            {
+              paneId: row.paneId,
+              sessionKind: row.sessionKind,
+              sessionId: row.sessionId,
+              activePtyProcessId: row.terminalActivePtyProcessId,
+            },
+          ];
+        }
+        return [];
+      }),
+  );
 }
 
 export function duplicateSafeTitle(titleBase: string, existingTitles: readonly string[]) {

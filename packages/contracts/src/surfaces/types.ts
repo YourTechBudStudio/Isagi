@@ -89,7 +89,7 @@ export const agentSessionStatusReasonSchema = Schema.Literal(
   'harness_process_killed',
   'runtime_shutdown',
   'process_attach_failed',
-  'harness_session_id_missing',
+  'harness_metadata_missing',
   'harness_metadata_invalid',
   'harness_resume_failed',
   'pty_process_missing',
@@ -107,7 +107,7 @@ export const terminalSessionStatusReasonSchema = Schema.Literal(
 );
 
 export const sessionDiagnosticCodeSchema = Schema.Literal(
-  'harness_session_id_missing',
+  'harness_metadata_missing',
   'harness_metadata_invalid',
   'harness_resume_failed',
   'harness_launch_failed',
@@ -120,6 +120,7 @@ export const sessionDiagnosticCodeSchema = Schema.Literal(
 export const agentSessionRecoveryActionSchema = Schema.Literal(
   'connect_existing',
   'resume_existing',
+  'relaunch_fresh',
   'create_replacement',
 );
 
@@ -313,7 +314,8 @@ export const ptyWebSocketErrorCodeSchema = Schema.Union(
     'session_not_running',
     'active_process_missing',
     'active_process_not_running',
-    'harness_session_id_missing',
+    'harness_metadata_missing',
+    'harness_metadata_invalid',
     'unsupported_harness',
     'session_already_attached',
     'session_attachment_moved',

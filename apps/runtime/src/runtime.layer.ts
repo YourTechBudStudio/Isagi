@@ -42,6 +42,7 @@ import {
 } from './runtime-events/index.js';
 import { SessionGcLive, type SessionGcService } from './session-gc/index.js';
 import { SessionLifecycleLive, type SessionLifecycleService } from './session-lifecycle/index.js';
+import { StartupSessionRestoreLayer } from './session-restore/index.js';
 import {
   SurfaceRepositoryLive,
   SurfaceServiceLive,
@@ -225,6 +226,11 @@ const StartupActivationLayer = Layer.scopedDiscard(
     });
   }),
 ).pipe(Layer.provide(CommandServiceLayer), Layer.provide(RepositoryLive), Layer.provide(StateLive));
+const StartupRestoreLayer = StartupSessionRestoreLayer.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(AgentSessionServiceLayer),
+  Layer.provide(TerminalSessionServiceLayer),
+);
 
 export type RuntimeServices =
   | CommandServiceShape
@@ -247,6 +253,7 @@ const ServicesLayer = Layer.mergeAll(
   CommandServiceLayer,
   WorkflowEngineLayer,
   StartupActivationLayer,
+  StartupRestoreLayer,
   EventLoopWatchdogLive,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));

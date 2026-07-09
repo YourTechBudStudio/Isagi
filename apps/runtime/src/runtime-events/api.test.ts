@@ -186,8 +186,8 @@ function agentSessionChangedEvent() {
       surfaceId: 3,
       paneId: 4,
       status: 'failed',
-      statusReason: 'harness_session_id_missing',
-      diagnosticCode: 'harness_session_id_missing',
+      statusReason: 'harness_metadata_missing',
+      diagnosticCode: 'harness_metadata_missing',
     },
   } satisfies RuntimeEvent;
 }

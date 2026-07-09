@@ -28,8 +28,8 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
   if (session.harnessMetadataStatus === 'missing') {
     return agentState(
       'failed',
-      'harness_session_id_missing',
-      'harness_session_id_missing',
+      'harness_metadata_missing',
+      'harness_metadata_missing',
       'Harness metadata is missing.',
       'create_replacement',
     );
@@ -48,10 +48,10 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
         )
       : agentState(
           'failed',
-          'harness_session_id_missing',
-          'harness_session_id_missing',
-          'No harness session id has been captured for this agent session.',
-          'create_replacement',
+          'pty_process_missing',
+          'pty_process_missing',
+          'No active PTY process exists for this agent session.',
+          'relaunch_fresh',
         );
   }
   switch (process.status) {
@@ -64,7 +64,7 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
         process.statusReason === 'runtime_shutdown' ? 'runtime_shutdown' : 'harness_process_killed',
         null,
         null,
-        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
+        session.harnessSessionId ? 'resume_existing' : 'relaunch_fresh',
       );
     case 'exited':
       return agentState(
@@ -72,7 +72,7 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
         'harness_process_exited',
         null,
         exitDetail(process),
-        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
+        session.harnessSessionId ? 'resume_existing' : 'relaunch_fresh',
       );
     case 'failed':
       if (process.statusReason === 'backend_launch_failed')
@@ -89,7 +89,7 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
               'harness_launch_failed',
               'harness_launch_failed',
               exitDetail(process),
-              'create_replacement',
+              'relaunch_fresh',
             );
       if (process.statusReason === 'backend_attach_failed')
         return agentState(
@@ -97,7 +97,7 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
           'process_attach_failed',
           'pty_process_attach_failed',
           exitDetail(process),
-          session.harnessSessionId ? 'resume_existing' : 'create_replacement',
+          session.harnessSessionId ? 'resume_existing' : 'relaunch_fresh',
         );
       if (
         process.statusReason === 'backend_process_missing' ||
@@ -113,18 +113,17 @@ export function deriveAgentSessionState(session: AgentSessionRow): DerivedAgentS
             )
           : agentState(
               'failed',
-              'harness_session_id_missing',
-              'harness_session_id_missing',
-              exitDetail(process) ??
-                'No harness session id has been captured for this agent session.',
-              'create_replacement',
+              'pty_process_missing',
+              'pty_process_missing',
+              exitDetail(process),
+              'relaunch_fresh',
             );
       return agentState(
         'failed',
         'harness_process_exited',
         'pty_process_not_running',
         exitDetail(process),
-        session.harnessSessionId ? 'resume_existing' : 'create_replacement',
+        session.harnessSessionId ? 'resume_existing' : 'relaunch_fresh',
       );
   }
 }

@@ -71,23 +71,38 @@ describe('derivePaneView', () => {
     }
   });
 
-  it('offers a fresh session when a stopped agent process has no harness session id (the bug)', () => {
-    // Process died before a harness session id was captured: claim+attach is
-    // guaranteed to fail, so the only valid action is creating a replacement.
+  it('treats a stopped agent with valid metadata and no harness session id as attachable', () => {
+    // Process died before a harness session id was captured: claim+attach
+    // relaunches fresh in the same durable session.
     for (const status of ['exited', 'failed', 'killed'] as const) {
       assert.deepEqual(
         derivePaneView(
           agentSession({
             status,
-            recoveryAction: 'create_replacement',
+            recoveryAction: 'relaunch_fresh',
             harnessSessionId: null,
-            diagnosticCode: 'harness_session_id_missing',
+            diagnosticCode: status === 'failed' ? 'pty_process_missing' : null,
           }),
           NO_CONNECTION,
         ),
-        { kind: 'needs_fresh' },
+        { kind: 'attachable', resumeFailed: false },
       );
     }
+  });
+
+  it('goes live for a relaunch_fresh agent session once the user requests attach', () => {
+    assert.deepEqual(
+      derivePaneView(
+        agentSession({
+          status: 'failed',
+          recoveryAction: 'relaunch_fresh',
+          harnessSessionId: null,
+          diagnosticCode: 'pty_process_missing',
+        }),
+        { code: null, attachRequested: true },
+      ),
+      { kind: 'live' },
+    );
   });
 
   it('is attachable when a stopped agent session can resume', () => {

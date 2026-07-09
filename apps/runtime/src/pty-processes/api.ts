@@ -209,8 +209,11 @@ function websocketError(error: unknown): {
     return { code: error.code, message: error.message };
   }
   if (error instanceof AgentSessionError || error instanceof TerminalSessionError) {
-    if (error instanceof AgentSessionError && error.code === 'harness_session_id_missing') {
-      return { code: 'harness_session_id_missing', message: error.message };
+    if (error instanceof AgentSessionError && error.code === 'harness_metadata_missing') {
+      return { code: 'harness_metadata_missing', message: error.message };
+    }
+    if (error instanceof AgentSessionError && error.code === 'harness_metadata_invalid') {
+      return { code: 'harness_metadata_invalid', message: error.message };
     }
     if (error.code === 'active_process_missing') {
       return { code: 'active_process_missing', message: error.message };

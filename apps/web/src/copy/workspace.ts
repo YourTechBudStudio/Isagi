@@ -93,8 +93,10 @@ export const ptyCopy = {
           return 'Killed';
         case 'process_attach_failed':
           return 'Attach failed';
-        case 'harness_session_id_missing':
-          return 'No prior session';
+        case 'harness_metadata_missing':
+          return 'Session record missing';
+        case 'harness_metadata_invalid':
+          return 'Session record invalid';
         case 'harness_resume_failed':
           return 'Resume failed';
         case 'pty_process_missing':
@@ -143,10 +145,10 @@ export const ptyCopy = {
         return null;
       case 'process_attach_failed':
         return 'Isagi could not attach to this session. The pane keeps the evidence it still has.';
-      case 'harness_session_id_missing':
-        return 'No harness session was captured for this pane, so a new one will start fresh.';
+      case 'harness_metadata_missing':
+        return 'The harness session record is missing, so this pane needs a replacement.';
       case 'harness_metadata_invalid':
-        return 'The harness session record is unreadable, so a new one will start fresh.';
+        return 'The harness session record is unreadable, so this pane needs a replacement.';
       case 'harness_resume_failed':
         return 'Could not resume the harness session.';
       case 'pty_process_missing':

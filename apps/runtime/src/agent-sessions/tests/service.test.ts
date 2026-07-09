@@ -87,7 +87,7 @@ test('agent session lifecycle resumes a dead previous process with the latest ob
   assert.equal(state.session.activePtyProcessId, 99);
 });
 
-test('agent session lifecycle refuses to restore a dead previous process without a harness session id', async () => {
+test('agent session lifecycle relaunches a dead previous process fresh without a harness session id', async () => {
   const state = mutableAgentSession({
     activePtyProcessId: 20,
     activePtyProcess: ptyProcess({
@@ -99,22 +99,17 @@ test('agent session lifecycle refuses to restore a dead previous process without
   const launchInputs: RecordedLaunchInput[] = [];
   const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
 
-  const result = await Effect.runPromise(
+  const ptyProcessId = await Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* AgentSessionService;
-      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+      return yield* service.ensureActivePtyProcess(10);
     }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
   );
 
-  assert.equal(Either.isLeft(result), true);
-  assert.equal(
-    Either.isLeft(result) && result.left instanceof AgentSessionError
-      ? result.left.code
-      : undefined,
-    'harness_session_id_missing',
-  );
-  assert.deepEqual(launchInputs, []);
-  assert.deepEqual(ptyLaunches, []);
+  assert.equal(ptyProcessId, 99);
+  assert.deepEqual(launchInputs, [{ latestHarnessSessionId: null }]);
+  assert.deepEqual(ptyLaunches, [{ command: 'pi', args: [], cwd: '/repo/isagi' }]);
+  assert.equal(state.session.activePtyProcessId, 99);
 });
 
 test('agent session lifecycle refuses to launch when harness metadata is missing', async () => {
@@ -139,7 +134,7 @@ test('agent session lifecycle refuses to launch when harness metadata is missing
     Either.isLeft(result) && result.left instanceof AgentSessionError
       ? result.left.code
       : undefined,
-    'harness_session_id_missing',
+    'harness_metadata_missing',
   );
   assert.deepEqual(launchInputs, []);
   assert.deepEqual(ptyLaunches, []);

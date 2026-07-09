@@ -9,11 +9,13 @@ import { Effect, Either } from 'effect';
 
 import { type AgentSessionServiceShape } from '../../agent-sessions/index.js';
 import { RuntimeDatabase } from '../../persistence/index.js';
-import { surfacePanes } from '../../persistence/schema.js';
-import { SurfaceError, SurfaceService } from '../index.js';
+import { surfacePanes, terminalSessions } from '../../persistence/schema.js';
+import { SurfaceError, SurfaceRepository, SurfaceService } from '../index.js';
 import {
+  addPaneToSurface,
   agentSessionRowForTest,
   insertAgentSessionForWorktree,
+  insertPtyProcess,
   insertWorktree,
   testLayer,
 } from './test-support.js';
@@ -138,3 +140,72 @@ test('surface detail composes pane-owned agent session placement', async () => {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('surface repository lists only pane-bound session bindings', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-surfaces-pane-session-bindings-'));
+  try {
+    const bindings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const worktreeId = yield* insertWorktree('/repo/isagi');
+        const surfaces = yield* SurfaceService;
+        const surface = yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Pi',
+        });
+        const agentSessionId = yield* insertAgentSessionForWorktree({
+          worktreeId,
+          paneId: surface.paneId,
+        });
+        const terminalPaneId = yield* addPaneToSurface(surface.surfaceId);
+        const terminal = yield* insertPtyProcess({
+          paneId: terminalPaneId,
+          worktreeId,
+          logPath: null,
+          status: 'exited',
+        });
+        yield* insertOrphanTerminalSession(worktreeId);
+
+        const repository = yield* SurfaceRepository;
+        const paneSessionBindings = yield* repository.listPaneSessionBindings;
+        return { agentSessionId, terminal, paneSessionBindings };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(bindings.paneSessionBindings, [
+      {
+        paneId: 1,
+        sessionKind: 'agent_session',
+        sessionId: bindings.agentSessionId,
+        activePtyProcessId: null,
+      },
+      {
+        paneId: 2,
+        sessionKind: 'terminal_session',
+        sessionId: bindings.terminal.terminalSessionId,
+        activePtyProcessId: bindings.terminal.ptyProcessId,
+      },
+    ]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function insertOrphanTerminalSession(worktreeId: number) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    yield* database.use('test_insert_orphan_terminal_session', (db) => {
+      const now = new Date().toISOString();
+      db.insert(terminalSessions)
+        .values({
+          worktreeId,
+          cwd: '/repo/isagi',
+          shellCommand: 'bash',
+          shellArgsJson: JSON.stringify([]),
+          activePtyProcessId: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    });
+  });
+}

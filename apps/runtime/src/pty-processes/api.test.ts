@@ -12,7 +12,11 @@ import {
 } from '@isagi/contracts';
 
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
-import { AgentSessionService, type AgentSessionServiceShape } from '../agent-sessions/index.js';
+import {
+  AgentSessionError,
+  AgentSessionService,
+  type AgentSessionServiceShape,
+} from '../agent-sessions/index.js';
 import {
   SessionLifecycle,
   SessionLifecycleLive,
@@ -91,6 +95,49 @@ test('PTY websocket API reports unsupported harness adapter failures with stable
       type: 'error',
       code: 'unsupported_harness',
       message: 'Harness claude is not supported yet.',
+    });
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
+test('PTY websocket API reports invalid harness metadata with stable protocol code', async () => {
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      Layer.succeed(
+        AgentSessionService,
+        fakeAgentSessionService({
+          ensureActivePtyProcess: () =>
+            Effect.fail(
+              new AgentSessionError('harness_metadata_invalid', 'Harness metadata is invalid.'),
+            ),
+        }),
+      ),
+      Layer.succeed(TerminalSessionService, fakeTerminalSessionService()),
+      Layer.succeed(
+        PtyService,
+        fakePtyService({ onAttachStarted: () => {}, attachPromise: async () => fakeAttachment() }),
+      ),
+      SessionLifecycleLive,
+    ),
+  );
+
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, runtime as never);
+    await fastify.ready();
+    const token = await issueAgentAttachToken(runtime, 10);
+
+    const ws = await fastify.injectWS(
+      `/api/v1/agent-sessions/10/attach?attachToken=${token.token}`,
+    );
+    const message = await receiveJson(ws);
+    assert.deepEqual(message, {
+      type: 'error',
+      code: 'harness_metadata_invalid',
+      message: 'Harness metadata is invalid.',
     });
   } finally {
     await fastify.close();
