@@ -10,7 +10,9 @@
     ".opencode",
     "coverage",
     ".agents",
-    ".pi"
+    ".pi",
+    "apps/runtime/.generated",
+    "apps/runtime/src/agent-sessions/harness/skill-content/*.md"
   ],
   "semi": true,
   "singleQuote": true,

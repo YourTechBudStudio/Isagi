@@ -4,10 +4,10 @@ export function claudeHookSource() {
   return commandHookSource('claude');
 }
 
-export function claudeSettings(hookPath: string) {
+export function claudeSettings(input: { readonly hookPath: string }) {
   const hook = {
     type: 'command',
-    command: `node ${shellQuote(hookPath)}`,
+    command: `node ${shellQuote(input.hookPath)}`,
     timeout: 2,
   } as const;
   const hookEntry = { hooks: [hook] } as const;

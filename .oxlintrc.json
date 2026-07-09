@@ -20,7 +20,8 @@
     "release",
     ".turbo",
     ".opencode",
-    "coverage"
+    "coverage",
+    "apps/runtime/.generated"
   ],
   "rules": {
     "eslint/no-unused-vars": [

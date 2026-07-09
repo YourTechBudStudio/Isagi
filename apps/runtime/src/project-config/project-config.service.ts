@@ -4,16 +4,13 @@ import { join } from 'node:path';
 import { Data, Effect, Either } from 'effect';
 import { parse } from 'yaml';
 
-import {
-  normalizeCommandCatalogConfig,
-  type WorktreeCommandCatalogConfig,
-} from './command-config.schema.js';
 import { hashWorktreeHooks } from './project-config.hash.js';
 import {
+  normalizeCommandCatalogConfig,
   normalizeWorktreeHooksConfig,
-  summarizeWorktreeHooks,
-  type WorktreeHooksConfig,
-} from './project-config.schema.js';
+} from './project-config.normalize.js';
+import type { WorktreeCommandCatalogConfig, WorktreeHooksConfig } from './project-config.schema.js';
+import { summarizeWorktreeHooks } from './project-config.summary.js';
 
 export class ProjectConfigError extends Data.TaggedError('ProjectConfigError')<{
   readonly code: 'setup_config_invalid';

@@ -8,7 +8,9 @@ export function buildPiLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly extensionPath: string;
+    readonly skillDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
+    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
@@ -19,6 +21,7 @@ export function buildPiLaunch(
       model: input.model,
       effort: input.effort,
       extensionPath: dependencies.extensionPath,
+      skillDirectory: dependencies.skillDirectory,
     });
     return {
       command: 'pi',
@@ -26,6 +29,8 @@ export function buildPiLaunch(
         ...(input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : []),
         ...(input.model ? ['--model', input.model] : []),
         ...(input.effort ? ['--thinking', input.effort] : []),
+        '--skill',
+        dependencies.skillDirectory,
         '-e',
         dependencies.extensionPath,
       ],
@@ -36,6 +41,7 @@ export function buildPiLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
+          runtimeUrl: dependencies.runtimeUrl,
         }),
     };
   });

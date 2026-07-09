@@ -5,10 +5,11 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
-import { Effect } from 'effect';
+import { Effect, Either } from 'effect';
 
-import { loadWorkflowDefinition } from './loader.js';
+import { loadWorkflowDefinition, WorkflowLoadError } from './loader.js';
 import { createFilesystemWorkflowRegistry } from './registry.js';
 import { ensureWorkflowsScaffold } from './scaffold.js';
 
@@ -39,6 +40,7 @@ export default defineWorkflow({
         workflowKey: 'x',
         indexPath: join(workflowPath, 'index.ts'),
         artifactPath: workflowArtifactPath(workflowsPath, 'x', 'first-load'),
+        compileMode: 'external',
       }),
     );
     assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'first-load')), true);
@@ -65,6 +67,7 @@ export default defineWorkflow({
         workflowKey: 'x',
         indexPath: join(workflowPath, 'index.ts'),
         artifactPath: workflowArtifactPath(workflowsPath, 'x', 'second-load'),
+        compileMode: 'external',
       }),
     );
     assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'second-load')), true);
@@ -113,6 +116,77 @@ export default defineWorkflow({
       ],
       { cwd: workflowsPath, stdio: 'pipe' },
     );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('workflow loader tags TypeScript syntax failures as compile diagnostics', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-compile-fail-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  const workflowPath = join(workflowsPath, 'syntax-error');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    writeWorkflow(
+      workflowPath,
+      `import { defineWorkflow } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Syntax error' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => {
+});
+`,
+    );
+
+    const result = await Effect.runPromise(
+      loadWorkflowDefinition({
+        workflowKey: 'syntax-error',
+        indexPath: join(workflowPath, 'index.ts'),
+        artifactPath: workflowArtifactPath(workflowsPath, 'syntax-error', 'syntax-error'),
+        compileMode: 'external',
+      }).pipe(Effect.either),
+    );
+
+    assert.equal(Either.isLeft(result), true);
+    assert.equal(Either.isLeft(result) && result.left instanceof WorkflowLoadError, true);
+    assert.equal(Either.isLeft(result) ? result.left.stage : undefined, 'compile');
+    assert.match(Either.isLeft(result) ? result.left.message : '', /Expected/);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('workflow loader tags missing definition fields as shape diagnostics', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-shape-fail-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  const workflowPath = join(workflowsPath, 'missing-step');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    writeWorkflow(
+      workflowPath,
+      `export default {
+  command: () => ({ title: 'Missing step' }),
+  validate: () => {},
+  init: () => ({}),
+};
+`,
+    );
+
+    const result = await Effect.runPromise(
+      loadWorkflowDefinition({
+        workflowKey: 'missing-step',
+        indexPath: join(workflowPath, 'index.ts'),
+        artifactPath: workflowArtifactPath(workflowsPath, 'missing-step', 'missing-step'),
+        compileMode: 'external',
+      }).pipe(Effect.either),
+    );
+
+    assert.equal(Either.isLeft(result), true);
+    assert.equal(Either.isLeft(result) && result.left instanceof WorkflowLoadError, true);
+    assert.equal(Either.isLeft(result) ? result.left.stage : undefined, 'shape');
+    assert.match(Either.isLeft(result) ? result.left.message : '', /step/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -219,7 +293,120 @@ test('workflow scaffold rewrites runtime-owned files and packages on restart', a
   }
 });
 
+test('workflow scaffold provisions the SDK from embedded build assets', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-sdk-assets-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+
+    const sdkRoot = join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk');
+    const packageJson = readJson(join(sdkRoot, 'package.json')) as {
+      readonly exports?: { readonly '.'?: { readonly import?: string; readonly types?: string } };
+    };
+    assert.equal(packageJson.exports?.['.']?.import, './dist/index.js');
+    assert.equal(packageJson.exports?.['.']?.types, './dist/index.d.ts');
+    assert.match(readFileSync(join(sdkRoot, 'dist', 'index.js'), 'utf8'), /defineWorkflow/);
+    assert.match(readFileSync(join(sdkRoot, 'dist', 'index.d.ts'), 'utf8'), /WorkflowDefinition/);
+
+    const loaded = (await import(pathToFileURL(join(sdkRoot, 'dist', 'index.js')).href)) as {
+      readonly defineWorkflow?: unknown;
+    };
+    assert.equal(typeof loaded.defineWorkflow, 'function');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('filesystem workflow registry merges global and project workflows with project precedence', async () => {
+  const dataRoot = join(tmpdir(), `isagi-workflow-roots-${process.pid}-${Date.now()}`);
+  const projectRoot = join(tmpdir(), `isagi-project-workflows-${process.pid}-${Date.now()}`);
+  const workflowsPath = join(dataRoot, 'workflows');
+  const projectWorkflowsPath = join(projectRoot, '.isagi', 'workflows');
+  try {
+    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    writeWorkflow(
+      join(workflowsPath, 'global-only'),
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Global only' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done('global-only'),
+});
+`,
+    );
+    writeWorkflow(
+      join(workflowsPath, 'shared'),
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Global shared' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done('global-shared'),
+});
+`,
+    );
+    writeWorkflow(
+      join(projectWorkflowsPath, 'project-only'),
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Project only' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done('project-only'),
+});
+`,
+    );
+    writeWorkflow(
+      join(projectWorkflowsPath, 'shared'),
+      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+
+export default defineWorkflow({
+  command: () => ({ title: 'Project shared' }),
+  validate: () => {},
+  init: () => ({}),
+  step: async () => done('project-shared'),
+});
+`,
+    );
+
+    const registry = createFilesystemWorkflowRegistry(workflowsPath);
+    const context = { projectId: 7, projectRoot };
+    assert.deepEqual(await Effect.runPromise(registry.knownKeys(context)), [
+      'global-only',
+      'project-only',
+      'shared',
+    ]);
+
+    const globalOnly = await Effect.runPromise(registry.get('global-only', context));
+    const projectOnly = await Effect.runPromise(registry.get('project-only', context));
+    const shared = await Effect.runPromise(registry.get('shared', context));
+    assert.equal((await globalOnly?.command(emptyLaunchCtx()))?.title, 'Global only');
+    assert.equal((await projectOnly?.command(emptyLaunchCtx()))?.title, 'Project only');
+    assert.equal((await shared?.command(emptyLaunchCtx()))?.title, 'Project shared');
+    assert.deepEqual(await shared?.step(emptyCtx(), {}, undefined), {
+      type: 'done',
+      value: 'project-shared',
+    });
+
+    assert.equal(existsSync(join(projectWorkflowsPath, '.cache')), false);
+    assert.equal(
+      existsSync(join(workflowsPath, '.cache', 'workflow-definitions', 'projects', '7', 'shared')),
+      true,
+    );
+    assert.equal(existsSync(join(projectRoot, 'node_modules')), false);
+    assert.equal(existsSync(join(projectRoot, '.isagi', 'node_modules')), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 function writeWorkflow(workflowPath: string, contents: string) {
+  mkdirSync(workflowPath, { recursive: true });
   writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
 }
 
@@ -270,5 +457,15 @@ function emptyCtx() {
     },
     log: async () => {},
     setUiFeedback: async () => {},
+  };
+}
+
+function emptyLaunchCtx() {
+  return {
+    worktreeId: 1,
+    worktreePath: '/tmp/isagi-test-worktree',
+    surfaceId: 1,
+    paneId: null,
+    agentSessionId: null,
   };
 }

@@ -5,6 +5,11 @@ import { Effect } from 'effect';
 
 import { claudeHookSource, claudeSettings } from './claude/artifacts.js';
 import { codexHookSource } from './codex/artifacts.js';
+import {
+  configureIsagiSkillArtifactPaths,
+  type ConfigureIsagiSkillArtifacts,
+  writeConfigureIsagiSkillArtifacts,
+} from './configure-isagi-skill.js';
 import { opencodePluginSource } from './opencode/artifacts.js';
 import { piExtensionSource } from './pi/artifacts.js';
 import { HarnessAdapterError } from './types.js';
@@ -15,6 +20,7 @@ export interface HarnessIntegrationArtifacts {
   readonly claudeSettingsPath: string;
   readonly claudeHookPath: string;
   readonly codexHookPath: string;
+  readonly configureIsagiSkill: ConfigureIsagiSkillArtifacts;
 }
 
 export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
@@ -26,14 +32,24 @@ export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
       writeArtifact(artifacts.claudeHookPath, claudeHookSource());
       writeArtifact(
         artifacts.claudeSettingsPath,
-        `${JSON.stringify(claudeSettings(artifacts.claudeHookPath), null, 2)}\n`,
+        `${JSON.stringify(
+          claudeSettings({
+            hookPath: artifacts.claudeHookPath,
+          }),
+          null,
+          2,
+        )}\n`,
       );
+      writeConfigureIsagiSkillArtifacts(dataRoot);
       writeArtifact(artifacts.codexHookPath, codexHookSource());
       console.info('[runtime] Harness integration artifacts prepared', {
         piExtensionPath: artifacts.piExtensionPath,
         opencodePluginPath: artifacts.opencodePluginPath,
         claudeSettingsPath: artifacts.claudeSettingsPath,
         codexHookPath: artifacts.codexHookPath,
+        configureIsagiSkillDirectory: artifacts.configureIsagiSkill.skillDirectory,
+        configureIsagiSkillClaudeWorkspace:
+          artifacts.configureIsagiSkill.claudeSkillWorkspaceDirectory,
       });
       return artifacts;
     },
@@ -54,6 +70,7 @@ function artifactPaths(dataRoot: string): HarnessIntegrationArtifacts {
     claudeSettingsPath: resolve(root, 'claude', 'settings.json'),
     claudeHookPath: resolve(root, 'claude', 'isagi-claude-hook.mjs'),
     codexHookPath: resolve(root, 'codex', 'isagi-codex-hook.mjs'),
+    configureIsagiSkill: configureIsagiSkillArtifactPaths(dataRoot),
   };
 }
 

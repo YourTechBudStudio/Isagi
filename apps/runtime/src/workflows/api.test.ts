@@ -85,6 +85,51 @@ test('list route returns workflow descriptors from the engine', async () => {
   });
 });
 
+test('verify route returns workflow verification result from the engine', async () => {
+  const fastify = Fastify({ logger: false });
+  let verifyInput: unknown = null;
+
+  registerWorkflowApi(fastify, {
+    runPromise: async <A>(effect: Effect.Effect<A, unknown, WorkflowEngineService>) =>
+      Effect.runPromise(
+        Effect.provideService(effect, WorkflowEngine, {
+          verifyWorkflow: (input: unknown) =>
+            Effect.sync(() => {
+              verifyInput = input;
+              return {
+                ok: false,
+                workflowKey: 'broken',
+                scope: { kind: 'global' },
+                diagnostics: [{ stage: 'compile', message: 'Build failed with 1 error.' }],
+              };
+            }),
+        } as never),
+      ),
+  } as never);
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/verify',
+    payload: { workflowKey: 'broken', worktreePath: '/repo/worktree' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(verifyInput, { workflowKey: 'broken', worktreePath: '/repo/worktree' });
+  const body = JSON.parse(response.body) as {
+    readonly data: unknown;
+    readonly meta: { readonly requestId: string };
+  };
+  assert.deepEqual(body, {
+    data: {
+      ok: false,
+      workflowKey: 'broken',
+      scope: { kind: 'global' },
+      diagnostics: [{ stage: 'compile', message: 'Build failed with 1 error.' }],
+    },
+    meta: { requestId: body.meta.requestId },
+  });
+});
+
 test('start route starts a workflow with launch context and variables', async () => {
   const fastify = Fastify({ logger: false });
   let startInput: unknown = null;

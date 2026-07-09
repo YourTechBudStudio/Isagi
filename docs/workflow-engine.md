@@ -182,18 +182,47 @@ run/phase/seq) are the deferred lever.
 
 ## Loading and invocation
 
-Workflows live under the runtime data root at `<dataRoot>/workflows/<workflowKey>/index.ts`.
+Workflows load from two roots:
+
+- **global workflows** under the runtime data root:
+  `<dataRoot>/workflows/<workflowKey>/index.ts`;
+- **project workflows** under the project repository root:
+  `<projectRoot>/.isagi/workflows/<workflowKey>/index.ts`.
+
+When both roots define the same `workflowKey`, the project workflow wins for runs launched from that
+project. Descriptor listing returns the key once, using the winning definition; the public contract
+does not expose which root supplied it. The runtime logs a diagnostic when a project workflow shadows
+a global workflow so "why did my global edit not apply?" has a support trail.
+
 The runtime scaffolds `<dataRoot>/workflows` on boot with `package.json`, `tsconfig.json`, and a
 copied built `@isagi/workflow-sdk` package under `node_modules/@isagi/workflow-sdk`. The copy is
-version-synced from the app's SDK build and is not a package-manager install or symlink.
+version-synced from the app's SDK build, embedded into the runtime bundle at build time, and is not a
+package-manager install or symlink. Project workflow directories are never scaffolded: the runtime
+does not write `node_modules`, `tsconfig.json`, or cache files into the user's repository. Project
+authors rely on the shipped Isagi configuration skill's SDK reference rather than repo-local editor
+IntelliSense in v1.
 
 Discovery is on-demand: the registry scans workflow directories when listing or starting
 workflows. The registry does not persist workflow definitions in the database. It fingerprints
 each workflow's local TypeScript source by content hash, keeps the loaded definition in memory
-while that hash is current, and compiles changed sources with `esbuild` to
-`<dataRoot>/workflows/.cache/workflow-definitions/<workflowKey>/<hash>/index.mjs`. The runtime then
-imports that compiled JavaScript artifact. This gives hand-edited workflows hot reload on the next
-reducer step while letting unchanged workflows reuse compiled artifacts after a runtime restart.
+while that hash is current, and compiles changed sources with `esbuild`. Global workflow artifacts
+keep the original cache shape:
+`<dataRoot>/workflows/.cache/workflow-definitions/<workflowKey>/<hash>/index.mjs`. Project workflow
+artifacts live under the data root, namespaced by project id:
+`<dataRoot>/workflows/.cache/workflow-definitions/projects/<projectId>/<workflowKey>/<hash>/index.mjs`.
+No generated cache artifact is written below `<projectRoot>/.isagi/workflows`.
+
+Global workflow artifacts externalize `@isagi/workflow-sdk` and resolve it from the data-root
+scaffold. Project workflow artifacts bundle the SDK into the compiled output, resolving it from that
+same data-root scaffold during compilation so repo-located workflows do not need `node_modules`.
+
+The runtime then imports the compiled JavaScript artifact. This gives hand-edited workflows hot
+reload on the next reducer step while letting unchanged workflows reuse compiled artifacts after a
+runtime restart. Root precedence is also evaluated on each load. Deleting or adding a project
+override while a run is suspended can therefore change which definition handles the next step. This
+is the same accepted edit-resilience tradeoff as editing a workflow's source mid-run: the engine
+does not replay or pin old code, so authors should keep in-flight state shapes stable or finish runs
+before replacing definitions.
 
 Starting a workflow is an explicit-context operation. The caller supplies `worktreeId`,
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating
@@ -203,7 +232,7 @@ launch facts are workflow-owned and should be folded into opaque state by `init`
 
 Start flow (`startWorkflowRun`):
 
-1. Load the workflow definition.
+1. Resolve the worktree's project from explicit ids and load the winning workflow definition.
 2. Resolve `launchCtx` from explicit ids (validating worktree, surface, and any pane/agent-session
    binding).
 3. Run `command(launchCtx)` to obtain the manifest title.
@@ -217,8 +246,10 @@ Start flow (`startWorkflowRun`):
 
 Child workflows follow the same flow with a `parentRun`: `worktreeId` is derived from the parent,
 `surfaceId` from the parent (or an explicit override on the same worktree), and `rootRunId` from
-the parent's tree. Child-start is an **engine-owned callback** injected into the `ctx` (not a
-capability), which keeps `WorkflowCapabilities` free of a dependency on the engine.
+the parent's tree. Because root resolution is derived from the run's worktree, child workflows and
+resumed runs inherit project workflow precedence structurally rather than through a persisted root
+flag. Child-start is an **engine-owned callback** injected into the `ctx` (not a capability), which
+keeps `WorkflowCapabilities` free of a dependency on the engine.
 
 ## The author SDK: `ctx` verbs and `wait`/`event` helpers
 
@@ -566,7 +597,6 @@ Deferred (tracked in the `agent-workflows` milestone):
 - idempotency keys for fast intra-step effects;
 - config-source reload / `Reload Configuration` for `.isagi/config.yaml`;
 - precise command-arg-to-variable type inference;
-- production hardening for TypeScript loading in a packaged app;
 - richer workflow-controlled pane placement;
 - an automated `kill -9` crash harness (the engine is durable-by-design and was verified via the
   `workflow_runs` row/logs, the automated suite, and a manual real-agent run).

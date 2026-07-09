@@ -34,25 +34,8 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
 
       const fastify = Fastify({ logger: false });
       startupFastify = fastify;
-      fastify.setNotFoundHandler((request, reply) =>
-        sendApiError(reply, {
-          code: 'api_route_not_found',
-          status: 404,
-          message: `Route not found: ${request.method} ${request.url}`,
-          requestId: String(request.id),
-          data: { method: request.method, url: request.url },
-        }),
-      );
-      fastify.setErrorHandler((error, request, reply) => {
-        const status = errorStatusCode(error);
-        return sendApiError(reply, {
-          code: status === 400 ? 'api_request_parsing_failed' : 'api_unhandled_error',
-          status,
-          message: errorMessage(error),
-          requestId: String(request.id),
-          data: { method: request.method, url: request.url },
-        });
-      });
+      configureApiErrorHandlers(fastify);
+
       fastify.addHook('onClose', async () => {
         await runtime.dispose();
         runtimeDisposed = true;
@@ -84,6 +67,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
           port: options.port ?? 0,
         }),
       ).pipe(Effect.uninterruptible);
+      process.env.ISAGI_RUNTIME_URL = url;
 
       startupOwnsResources = false;
       return { server: fastify, url };
@@ -124,6 +108,28 @@ export function parsePort(value: string | undefined) {
   }
 
   return Effect.succeed(port);
+}
+
+function configureApiErrorHandlers(fastify: FastifyInstance) {
+  fastify.setNotFoundHandler((request, reply) =>
+    sendApiError(reply, {
+      code: 'api_route_not_found',
+      status: 404,
+      message: `Route not found: ${request.method} ${request.url}`,
+      requestId: String(request.id),
+      data: { method: request.method, url: request.url },
+    }),
+  );
+  fastify.setErrorHandler((error, request, reply) => {
+    const status = errorStatusCode(error);
+    return sendApiError(reply, {
+      code: status === 400 ? 'api_request_parsing_failed' : 'api_unhandled_error',
+      status,
+      message: errorMessage(error),
+      requestId: String(request.id),
+      data: { method: request.method, url: request.url },
+    });
+  });
 }
 
 function closeFastify(server: FastifyInstance) {

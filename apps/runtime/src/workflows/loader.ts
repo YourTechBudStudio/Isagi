@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { Data, Effect } from 'effect';
-import { build } from 'esbuild';
+import { build, type BuildOptions } from 'esbuild';
 
 import type { WorkflowDefinition } from './types.js';
 
 export class WorkflowLoadError extends Data.TaggedError('WorkflowLoadError')<{
+  readonly stage: 'compile' | 'load' | 'shape';
   readonly message: string;
   readonly workflowKey: string;
   readonly cause?: unknown;
@@ -19,27 +20,66 @@ export function loadWorkflowDefinition(input: {
   readonly workflowKey: string;
   readonly indexPath: string;
   readonly artifactPath: string;
+  readonly compileMode: WorkflowCompileMode;
+  readonly workflowSdkPackageRoot?: string | undefined;
 }) {
   return Effect.tryPromise({
     try: async () => {
-      await ensureWorkflowArtifact(input);
-      const loaded = (await import(pathToFileURL(input.artifactPath).href)) as {
-        readonly default?: unknown;
-      };
-      return workflowDefinitionFromDefault(input.workflowKey, loaded.default);
+      try {
+        await ensureWorkflowArtifact(input);
+      } catch (cause: unknown) {
+        throw new WorkflowLoadError({
+          stage: 'compile',
+          workflowKey: input.workflowKey,
+          message: `Failed to compile workflow ${input.workflowKey}: ${errorMessage(cause)}`,
+          cause,
+        });
+      }
+
+      try {
+        const loaded = (await import(pathToFileURL(input.artifactPath).href)) as {
+          readonly default?: unknown;
+        };
+        return loaded;
+      } catch (cause: unknown) {
+        throw new WorkflowLoadError({
+          stage: 'load',
+          workflowKey: input.workflowKey,
+          message: `Failed to import workflow ${input.workflowKey}: ${errorMessage(cause)}`,
+          cause,
+        });
+      }
     },
     catch: (cause) =>
-      new WorkflowLoadError({
-        workflowKey: input.workflowKey,
-        message: `Failed to load workflow ${input.workflowKey}: ${errorMessage(cause)}`,
-        cause,
+      cause instanceof WorkflowLoadError
+        ? cause
+        : new WorkflowLoadError({
+            stage: 'load',
+            workflowKey: input.workflowKey,
+            message: `Failed to load workflow ${input.workflowKey}: ${errorMessage(cause)}`,
+            cause,
+          }),
+  }).pipe(
+    Effect.flatMap((loaded) =>
+      Effect.try({
+        try: () => workflowDefinitionFromDefault(input.workflowKey, loaded.default),
+        catch: (cause) =>
+          new WorkflowLoadError({
+            stage: 'shape',
+            workflowKey: input.workflowKey,
+            message: `Failed to read workflow ${input.workflowKey}: ${errorMessage(cause)}`,
+            cause,
+          }),
       }),
-  });
+    ),
+  );
 }
 
 async function ensureWorkflowArtifact(input: {
   readonly indexPath: string;
   readonly artifactPath: string;
+  readonly compileMode: WorkflowCompileMode;
+  readonly workflowSdkPackageRoot?: string | undefined;
 }) {
   if (existsSync(input.artifactPath)) return;
   const inFlight = workflowArtifactBuilds.get(input.artifactPath);
@@ -55,18 +95,41 @@ async function ensureWorkflowArtifact(input: {
 async function buildWorkflowArtifact(input: {
   readonly indexPath: string;
   readonly artifactPath: string;
+  readonly compileMode: WorkflowCompileMode;
+  readonly workflowSdkPackageRoot?: string | undefined;
 }) {
   mkdirSync(dirname(input.artifactPath), { recursive: true });
-  await build({
+  const options: BuildOptions = {
     entryPoints: [input.indexPath],
     outfile: input.artifactPath,
     bundle: true,
     platform: 'node',
     format: 'esm',
     target: 'node22',
-    packages: 'external',
     logLevel: 'silent',
-  });
+  };
+  if (input.compileMode === 'external') {
+    options.packages = 'external';
+  } else {
+    options.plugins = [workflowSdkResolvePlugin(input.workflowSdkPackageRoot)];
+  }
+  await build(options);
+}
+
+export type WorkflowCompileMode = 'external' | 'bundle-workflow-sdk';
+
+function workflowSdkResolvePlugin(workflowSdkPackageRoot: string | undefined) {
+  if (!workflowSdkPackageRoot) {
+    throw new Error('workflowSdkPackageRoot is required when bundling the workflow SDK.');
+  }
+  return {
+    name: 'isagi-workflow-sdk-resolver',
+    setup(buildApi: import('esbuild').PluginBuild) {
+      buildApi.onResolve({ filter: /^@isagi\/workflow-sdk$/ }, () => ({
+        path: join(workflowSdkPackageRoot, 'dist', 'index.js'),
+      }));
+    },
+  } satisfies import('esbuild').Plugin;
 }
 
 function workflowDefinitionFromDefault(

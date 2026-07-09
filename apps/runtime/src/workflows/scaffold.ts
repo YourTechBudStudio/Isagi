@@ -1,8 +1,10 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import { Data, Effect } from 'effect';
+
+import { workflowSdkDistSources, workflowSdkPackageVersion } from '../runtime-assets.js';
 
 export class WorkflowScaffoldError extends Data.TaggedError('WorkflowScaffoldError')<{
   readonly message: string;
@@ -35,35 +37,19 @@ function ensureWorkflowsScaffoldSync(workflowsPath: string) {
 }
 
 function syncWorkflowSdkCopy(workflowsPath: string) {
-  const sourceRoot = workflowSdkSourceRoot();
-  const sourcePackage = readJson(join(sourceRoot, 'package.json')) as {
-    readonly version?: unknown;
-  };
-  const version = typeof sourcePackage.version === 'string' ? sourcePackage.version : '0.0.0';
-  const sourceDist = join(sourceRoot, 'dist');
-  if (!existsSync(sourceDist)) {
-    throw new Error(`Built workflow SDK dist was not found at ${sourceDist}. Run the SDK build.`);
-  }
-
   const targetRoot = join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk');
   rmSync(targetRoot, { recursive: true, force: true });
   mkdirSync(join(targetRoot, 'dist'), { recursive: true });
-  cpSync(sourceDist, join(targetRoot, 'dist'), { recursive: true });
-  writeFileSync(join(targetRoot, 'package.json'), workflowSdkPackageJson(version), 'utf8');
-}
-
-function workflowSdkSourceRoot() {
-  const require = createRequire(import.meta.url);
-  let current = dirname(require.resolve('@isagi/workflow-sdk'));
-  while (true) {
-    const packagePath = join(current, 'package.json');
-    if (existsSync(packagePath)) return current;
-    const parent = dirname(current);
-    if (parent === current) {
-      throw new Error('Could not locate @isagi/workflow-sdk package root.');
-    }
-    current = parent;
+  for (const [relativePath, contents] of Object.entries(workflowSdkDistSources)) {
+    const targetPath = join(targetRoot, 'dist', relativePath);
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, contents, 'utf8');
   }
+  writeFileSync(
+    join(targetRoot, 'package.json'),
+    workflowSdkPackageJson(workflowSdkPackageVersion),
+    'utf8',
+  );
 }
 
 function packageSourceRoot(packageName: string, require = createRequire(import.meta.url)) {

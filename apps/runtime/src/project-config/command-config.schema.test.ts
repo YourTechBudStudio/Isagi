@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeCommandCatalogConfig } from './command-config.schema.js';
+import { normalizeCommandCatalogConfig } from './project-config.normalize.js';
 
 const root = '/repo/isagi';
 
@@ -116,7 +116,15 @@ test('command catalog rejects malformed command shape', () => {
         { commands: [{ name: 'dev', command: '' }] },
         { worktreeRootPath: root },
       ),
-    /command must be a non-empty string/,
+    /commands\[0\]\.command/,
+  );
+  assert.throws(
+    () =>
+      normalizeCommandCatalogConfig(
+        { commands: [{ name: 'dev', command: '   ' }] },
+        { worktreeRootPath: root },
+      ),
+    /commands\[0\]\.command/,
   );
 });
 
@@ -127,7 +135,7 @@ test('command catalog rejects invalid lifecycle fields and nulls', () => {
         { commands: [{ name: 'dev', command: 'pnpm dev', lifecycle: null }] },
         { worktreeRootPath: root },
       ),
-    /lifecycle must be an object/,
+    /commands\[0\]\.lifecycle/,
   );
   assert.throws(
     () =>
@@ -156,7 +164,7 @@ test('command catalog validates ports and env shape', () => {
         { commands: [{ name: 'dev', command: 'pnpm dev', ports: [0] }] },
         { worktreeRootPath: root },
       ),
-    /ports\[0\] must be an integer from 1 to 65535/,
+    /commands\[0\]\.ports\[0\]/,
   );
   assert.throws(
     () =>
@@ -164,7 +172,7 @@ test('command catalog validates ports and env shape', () => {
         { commands: [{ name: 'dev', command: 'pnpm dev', env: { PORT: 5173 } }] },
         { worktreeRootPath: root },
       ),
-    /env.PORT must be a string/,
+    /commands\[0\]\.env\.PORT/,
   );
   assert.throws(
     () =>
@@ -183,7 +191,15 @@ test('command catalog validates path syntax and worktree boundary only', () => {
         { commands: [{ name: 'dev', command: 'pnpm dev', cwd: '' }] },
         { worktreeRootPath: root },
       ),
-    /cwd must be a non-empty relative path/,
+    /commands\[0\]\.cwd/,
+  );
+  assert.throws(
+    () =>
+      normalizeCommandCatalogConfig(
+        { commands: [{ name: 'dev', command: 'pnpm dev', cwd: '   ' }] },
+        { worktreeRootPath: root },
+      ),
+    /commands\[0\]\.cwd/,
   );
   assert.throws(
     () =>
@@ -200,6 +216,14 @@ test('command catalog validates path syntax and worktree boundary only', () => {
         { worktreeRootPath: root },
       ),
     /envFiles\[0\] must stay inside the worktree root/,
+  );
+  assert.throws(
+    () =>
+      normalizeCommandCatalogConfig(
+        { commands: [{ name: 'dev', command: 'pnpm dev', envFiles: ['   '] }] },
+        { worktreeRootPath: root },
+      ),
+    /commands\[0\]\.envFiles\[0\]/,
   );
 
   assert.deepEqual(
