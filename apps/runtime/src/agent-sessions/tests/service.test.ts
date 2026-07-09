@@ -188,6 +188,30 @@ test('agent session lifecycle reuses an active running process', async () => {
   assert.deepEqual(ptyLaunches, []);
 });
 
+test('agent session startup restore replaces stale node-pty running process rows', async () => {
+  const state = mutableAgentSession({
+    activePtyProcessId: 20,
+    harnessSessionId: 'pi-session-123',
+    activePtyProcess: ptyProcess({ id: 20, status: 'running', statusReason: null }),
+  });
+  const launchInputs: RecordedLaunchInput[] = [];
+  const ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }> = [];
+
+  const ptyProcessId = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10, { replaceEphemeralProcess: true });
+    }).pipe(Effect.provide(testLayer({ state, launchInputs, ptyLaunches }))),
+  );
+
+  assert.equal(ptyProcessId, 99);
+  assert.deepEqual(launchInputs, [{ latestHarnessSessionId: 'pi-session-123' }]);
+  assert.deepEqual(ptyLaunches, [
+    { command: 'pi', args: ['--session', 'pi-session-123'], cwd: '/repo/isagi' },
+  ]);
+  assert.equal(state.session.activePtyProcessId, 99);
+});
+
 function testLayer(input: {
   readonly state: ReturnType<typeof mutableAgentSession>;
   readonly launchInputs: RecordedLaunchInput[];

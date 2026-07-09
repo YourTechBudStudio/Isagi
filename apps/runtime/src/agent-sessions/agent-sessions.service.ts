@@ -22,7 +22,7 @@ export interface AgentSessionService {
   ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
   readonly ensureActivePtyProcess: (
     agentSessionId: number,
-    options?: HarnessLaunchOptions,
+    options?: AgentSessionEnsureActiveOptions,
   ) => Effect.Effect<
     number,
     DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError
@@ -30,6 +30,10 @@ export interface AgentSessionService {
   readonly activePtyProcessId: (
     agentSessionId: number,
   ) => Effect.Effect<number, DatabaseError | AgentSessionError>;
+}
+
+export interface AgentSessionEnsureActiveOptions extends HarnessLaunchOptions {
+  readonly replaceEphemeralProcess?: boolean | undefined;
 }
 
 export class AgentSessionError extends Error {
@@ -67,77 +71,35 @@ export const AgentSessionServiceLive = Layer.effect(
 
     const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
       Effect.gen(function* () {
-        console.info('[runtime] Agent session launch requested', {
-          agentSessionId: session.id,
-          harness: session.harness,
-          cwd: session.cwd,
-          latestHarnessSessionId: session.harnessSessionId,
-          previousPtyProcessId: session.activePtyProcessId,
-          previousPtyProcessStatus: session.activePtyProcess?.status ?? null,
-          previousPtyProcessStatusReason: session.activePtyProcess?.statusReason ?? null,
-        });
         const launch = yield* agentLaunchEnvelope(harnesses, session, options);
-        console.info('[runtime] Agent session launch envelope built', {
-          agentSessionId: session.id,
-          harness: session.harness,
-          command: launch.command,
-          args: launch.args,
-          cwd: launch.cwd,
-          injectsProcessEnv: Boolean(launch.envForProcess),
-        });
         const process = yield* pty.launch(launch);
         yield* repository.setActivePtyProcess({
           agentSessionId: session.id,
           ptyProcessId: process.ptyProcessId,
         });
-        console.info('[runtime] Agent session active PTY process set', {
-          agentSessionId: session.id,
-          ptyProcessId: process.ptyProcessId,
-          harness: session.harness,
-        });
         yield* publishChanged(session.id);
         return process.ptyProcessId;
       });
 
-    const ensureActivePtyProcess = (agentSessionId: number, options?: HarnessLaunchOptions) =>
+    const ensureActivePtyProcess = (
+      agentSessionId: number,
+      options?: AgentSessionEnsureActiveOptions,
+    ) =>
       lifecycle.withRestoreLock(
         { kind: 'agent_session', sessionId: agentSessionId },
         Effect.gen(function* () {
           const session = yield* findAgentSessionOrFail(repository, agentSessionId);
           yield* validateHarnessMetadata(session);
           const process = session.activePtyProcess;
-          if (session.activePtyProcessId && process?.status === 'running') {
-            console.info('[runtime] Agent session attach reusing running PTY process', {
-              agentSessionId,
-              ptyProcessId: session.activePtyProcessId,
-              harness: session.harness,
-            });
+          const replaceEphemeralProcess =
+            options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+          const canReuseActiveProcess =
+            session.activePtyProcessId &&
+            !replaceEphemeralProcess &&
+            (process?.status === 'running' || process?.status === 'starting');
+          if (canReuseActiveProcess) {
             return session.activePtyProcessId;
           }
-          if (session.activePtyProcessId && process?.status === 'starting') {
-            console.info('[runtime] Agent session attach reusing starting PTY process', {
-              agentSessionId,
-              ptyProcessId: session.activePtyProcessId,
-              harness: session.harness,
-            });
-            return session.activePtyProcessId;
-          }
-          if (!session.activePtyProcessId) {
-            console.info('[runtime] Agent session attach launching fresh PTY process', {
-              agentSessionId,
-              harness: session.harness,
-              cwd: session.cwd,
-            });
-            return yield* launchProcessForSession(session, options);
-          }
-          console.info('[runtime] Agent session attach launching PTY process', {
-            agentSessionId,
-            harness: session.harness,
-            latestHarnessSessionId: session.harnessSessionId,
-            previousPtyProcessId: session.activePtyProcessId,
-            previousPtyProcessStatus: process?.status ?? null,
-            previousPtyProcessStatusReason: process?.statusReason ?? null,
-          });
           return yield* launchProcessForSession(session, options);
         }),
       );

@@ -15,31 +15,33 @@ type RestoreOutcome =
   | { readonly kind: 'skipped_unrecoverable'; readonly binding: PaneSessionBinding }
   | { readonly kind: 'failed'; readonly binding: PaneSessionBinding };
 
-export const StartupSessionRestoreLayer = Layer.scopedDiscard(
-  Effect.gen(function* () {
-    const repository = yield* SurfaceRepository;
-    const bindings = yield* repository.listPaneSessionBindings;
+const restoreStartupSessionsEffect = Effect.gen(function* () {
+  const repository = yield* SurfaceRepository;
+  const bindings = yield* repository.listPaneSessionBindings;
 
-    // Deliberately unbounded: boot restores the small set of sessions the user
-    // already had pane-bound before runtime restart.
-    const outcomes = yield* Effect.forEach(bindings, restoreBinding, {
-      concurrency: 'unbounded',
-    });
+  // Deliberately unbounded: boot restores the small set of sessions the user
+  // already had pane-bound before runtime restart.
+  const outcomes = yield* Effect.forEach(bindings, restoreBinding, {
+    concurrency: 'unbounded',
+  });
 
-    const summary = summarize(outcomes);
-    console.info('[runtime] Startup session restore completed', summary);
-  }).pipe(
-    Effect.catchAll((error) =>
-      Effect.sync(() => {
-        console.warn('[runtime] Startup session restore skipped: binding discovery failed', {
-          errorTag: errorTag(error),
-          errorCode: errorCode(error),
-          message: errorMessage(error),
-        });
-      }),
-    ),
+  const summary = summarize(outcomes);
+  console.info('[runtime][startup-restore] Completed pane-bound session restore', summary);
+});
+
+export const restoreStartupSessions = restoreStartupSessionsEffect.pipe(
+  Effect.catchAll((error) =>
+    Effect.sync(() => {
+      console.warn('[runtime][startup-restore] Skipped: binding discovery failed', {
+        errorTag: errorTag(error),
+        errorCode: errorCode(error),
+        message: errorMessage(error),
+      });
+    }),
   ),
 );
+
+export const StartupSessionRestoreLayer = Layer.scopedDiscard(restoreStartupSessions);
 
 function restoreBinding(binding: PaneSessionBinding) {
   return Effect.gen(function* () {
@@ -48,8 +50,12 @@ function restoreBinding(binding: PaneSessionBinding) {
     return yield* restoreWithIsolation(
       binding,
       binding.sessionKind === 'agent_session'
-        ? agentSessions.ensureActivePtyProcess(binding.sessionId)
-        : terminalSessions.ensureActivePtyProcess(binding.sessionId),
+        ? agentSessions.ensureActivePtyProcess(binding.sessionId, {
+            replaceEphemeralProcess: true,
+          })
+        : terminalSessions.ensureActivePtyProcess(binding.sessionId, {
+            replaceEphemeralProcess: true,
+          }),
     );
   });
 }
@@ -69,10 +75,9 @@ function restoreWithIsolation(
 
     const error = result.left;
     const kind = unrecoverableMetadataError(error) ? 'skipped_unrecoverable' : 'failed';
-    console.warn('[runtime] Startup session restore failed for pane-bound session', {
-      paneId: binding.paneId,
-      sessionKind: binding.sessionKind,
-      sessionId: binding.sessionId,
+    console.warn('[runtime][startup-restore] Failed for pane-bound session', {
+      ...bindingDiagnostic(binding),
+      outcome: kind,
       errorTag: errorTag(error),
       errorCode: errorCode(error),
       message: errorMessage(error),
@@ -89,6 +94,15 @@ function summarize(outcomes: readonly RestoreOutcome[]) {
     skippedUnrecoverable: outcomes.filter((outcome) => outcome.kind === 'skipped_unrecoverable')
       .length,
     failed: outcomes.filter((outcome) => outcome.kind === 'failed').length,
+  };
+}
+
+function bindingDiagnostic(binding: PaneSessionBinding) {
+  return {
+    paneId: binding.paneId,
+    sessionKind: binding.sessionKind,
+    sessionId: binding.sessionId,
+    activePtyProcessId: binding.activePtyProcessId,
   };
 }
 

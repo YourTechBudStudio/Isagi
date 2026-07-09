@@ -11,6 +11,7 @@ import { registerPathsApi } from './paths/api.js';
 import { registerPtyApi } from './pty-processes/index.js';
 import { registerRuntimeEventsApi } from './runtime-events/index.js';
 import { RuntimeLayer } from './runtime.layer.js';
+import { restoreStartupSessions } from './session-restore/index.js';
 import { registerSurfacesApi } from './surfaces/index.js';
 import { registerWorkflowApi } from './workflows/index.js';
 import { registerWorkspaceApi } from './workspace/api.js';
@@ -68,6 +69,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
         }),
       ).pipe(Effect.uninterruptible);
       process.env.ISAGI_RUNTIME_URL = url;
+      yield* runInRuntime(runtime, restoreStartupSessions);
 
       startupOwnsResources = false;
       return { server: fastify, url };
@@ -144,6 +146,13 @@ function initializeRuntime<R, E>(runtime: ManagedRuntime.ManagedRuntime<R, E>) {
   return Effect.promise(() => runtime.runPromiseExit(Effect.void)).pipe(
     Effect.flatMap((exit) => (Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.void)),
   );
+}
+
+function runInRuntime<R, E, A, E2>(
+  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+  effect: Effect.Effect<A, E2, R>,
+) {
+  return Effect.promise(() => runtime.runPromise(effect));
 }
 
 function tryPromise<T>(run: () => T | PromiseLike<T>) {

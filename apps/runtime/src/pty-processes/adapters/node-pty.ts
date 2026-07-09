@@ -85,6 +85,14 @@ export const NodePtyBackendLive = Layer.effect(
                 }),
             });
             pty.onData((data) => {
+              if (live.attachment === null) {
+                for (const response of terminalProbeResponses(data, {
+                  cols: input.cols,
+                  rows: input.rows,
+                })) {
+                  live.process.write(response);
+                }
+              }
               const visible = parser.push(data);
               if (visible.length === 0) return;
               appendBackendLog(input.logPath, visible, input.ptyProcessId);
@@ -292,6 +300,50 @@ export function nodePtyLaunchCommand(command: string, args: readonly string[]) {
     command,
     args: [...args],
   };
+}
+
+export function terminalProbeResponses(
+  data: string,
+  size: { readonly cols: number; readonly rows: number },
+) {
+  const responses: Array<{ readonly index: number; readonly data: string }> = [];
+  let offset = 0;
+  while (offset < data.length) {
+    const index = data.indexOf(ESC, offset);
+    if (index === -1) break;
+    const slice = data.slice(index);
+    const response = terminalProbeResponse(slice, size);
+    if (response) responses.push({ index, data: response });
+    offset = index + 1;
+  }
+  return responses.sort((left, right) => left.index - right.index).map((response) => response.data);
+}
+
+const ESC = '\x1b';
+const BEL = '\x07';
+const ST = `${ESC}\\`;
+
+function terminalProbeResponse(
+  data: string,
+  size: { readonly cols: number; readonly rows: number },
+) {
+  if (data.startsWith(`${ESC}[c`) || data.startsWith(`${ESC}[0c`)) return `${ESC}[?1;2c`;
+  if (data.startsWith(`${ESC}[>c`) || data.startsWith(`${ESC}[>0c`)) return `${ESC}[>0;276;0c`;
+  if (data.startsWith(`${ESC}[5n`)) return `${ESC}[0n`;
+  if (data.startsWith(`${ESC}[6n`)) return `${ESC}[1;1R`;
+  if (data.startsWith(`${ESC}[?6n`)) return `${ESC}[?1;1R`;
+  if (data.startsWith(`${ESC}[18t`)) return `${ESC}[8;${size.rows};${size.cols}t`;
+  if (data.startsWith(`${ESC}]10;?${BEL}`) || data.startsWith(`${ESC}]10;?${ST}`)) {
+    return `${ESC}]10;${defaultTerminalColor('10')}${ST}`;
+  }
+  if (data.startsWith(`${ESC}]11;?${BEL}`) || data.startsWith(`${ESC}]11;?${ST}`)) {
+    return `${ESC}]11;${defaultTerminalColor('11')}${ST}`;
+  }
+  return null;
+}
+
+function defaultTerminalColor(color: string) {
+  return color === '10' ? 'rgb:cdd6/cdd6/f4f4' : 'rgb:1e1e/1e1e/2e2e';
 }
 
 function appendBackendLog(path: string | null, data: string, ptyProcessId: number) {

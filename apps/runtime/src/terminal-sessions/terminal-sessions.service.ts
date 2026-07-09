@@ -18,10 +18,15 @@ export interface TerminalSessionService {
   ) => Effect.Effect<TerminalSessionRow, DatabaseError | TerminalSessionError>;
   readonly ensureActivePtyProcess: (
     terminalSessionId: number,
+    options?: TerminalSessionEnsureActiveOptions,
   ) => Effect.Effect<number, DatabaseError | TerminalSessionError | PtyLaunchError>;
   readonly activePtyProcessId: (
     terminalSessionId: number,
   ) => Effect.Effect<number, DatabaseError | TerminalSessionError>;
+}
+
+export interface TerminalSessionEnsureActiveOptions {
+  readonly replaceEphemeralProcess?: boolean | undefined;
 }
 
 export class TerminalSessionError extends Error {
@@ -65,16 +70,22 @@ export const TerminalSessionServiceLive = Layer.effect(
         return process.ptyProcessId;
       });
 
-    const ensureActivePtyProcess = (terminalSessionId: number) =>
+    const ensureActivePtyProcess = (
+      terminalSessionId: number,
+      options?: TerminalSessionEnsureActiveOptions,
+    ) =>
       lifecycle.withRestoreLock(
         { kind: 'terminal_session', sessionId: terminalSessionId },
         Effect.gen(function* () {
           const session = yield* findTerminalSessionOrFail(repository, terminalSessionId);
           const process = session.activePtyProcess;
-          if (session.activePtyProcessId && process?.status === 'running') {
-            return session.activePtyProcessId;
-          }
-          if (session.activePtyProcessId && process?.status === 'starting') {
+          const replaceEphemeralProcess =
+            options?.replaceEphemeralProcess === true && process?.backend === 'node_pty';
+          const canReuseActiveProcess =
+            session.activePtyProcessId &&
+            !replaceEphemeralProcess &&
+            (process?.status === 'running' || process?.status === 'starting');
+          if (canReuseActiveProcess) {
             return session.activePtyProcessId;
           }
           return yield* launchProcessForSession(session);

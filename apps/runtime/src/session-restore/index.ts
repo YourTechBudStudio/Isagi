@@ -1,1 +1,1 @@
-export { StartupSessionRestoreLayer } from './session-restore.js';
+export { restoreStartupSessions, StartupSessionRestoreLayer } from './session-restore.js';

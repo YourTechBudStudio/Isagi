@@ -68,9 +68,9 @@ test('startup session restore ensures every pane-bound session and isolates fail
               terminalBinding({ paneId: 4, sessionId: 13, activePtyProcessId: 23 }),
             ],
             agentService: {
-              ensureActivePtyProcess: (agentSessionId) =>
+              ensureActivePtyProcess: (agentSessionId, options) =>
                 Effect.gen(function* () {
-                  calls.push(`agent:${agentSessionId}`);
+                  calls.push(`agent:${agentSessionId}:${options?.replaceEphemeralProcess}`);
                   if (agentSessionId === 12) {
                     return yield* Effect.fail(
                       new AgentSessionError('harness_metadata_missing', 'metadata missing'),
@@ -80,9 +80,9 @@ test('startup session restore ensures every pane-bound session and isolates fail
                 }),
             },
             terminalService: {
-              ensureActivePtyProcess: (terminalSessionId) =>
+              ensureActivePtyProcess: (terminalSessionId, options) =>
                 Effect.gen(function* () {
-                  calls.push(`terminal:${terminalSessionId}`);
+                  calls.push(`terminal:${terminalSessionId}:${options?.replaceEphemeralProcess}`);
                   if (terminalSessionId === 13) {
                     return yield* Effect.fail(
                       new TerminalSessionError('session_not_found', 'session missing'),
@@ -98,7 +98,12 @@ test('startup session restore ensures every pane-bound session and isolates fail
     ),
   );
 
-  assert.deepEqual(calls.sort(), ['agent:10', 'agent:12', 'terminal:11', 'terminal:13']);
+  assert.deepEqual(calls.sort(), [
+    'agent:10:true',
+    'agent:12:true',
+    'terminal:11:true',
+    'terminal:13:true',
+  ]);
   assert.equal(logs.warn.length, 2);
   assert.deepEqual(logs.info.at(-1)?.[1], {
     attempted: 4,
@@ -274,6 +279,7 @@ const seedRestoreIntegrationRows = Effect.gen(function* () {
       })
       .run();
     for (const processId of [41, 42, 43, 51]) {
+      const runningAtPreviousShutdown = processId === 41 || processId === 51;
       db.insert(ptyProcesses)
         .values({
           id: processId,
@@ -287,16 +293,16 @@ const seedRestoreIntegrationRows = Effect.gen(function* () {
           command: processId === 51 ? 'bash' : 'pi',
           argsJson: JSON.stringify([]),
           cwd: '/repo/isagi',
-          status: processId === 51 ? 'exited' : 'failed',
-          statusReason: 'runtime_ephemeral_lost',
+          status: runningAtPreviousShutdown ? 'running' : 'failed',
+          statusReason: runningAtPreviousShutdown ? null : 'runtime_ephemeral_lost',
           exitCode: null,
           signal: null,
           logMode: 'none',
           logPath: null,
           createdAt: now,
           updatedAt: now,
-          exitedAt: now,
-          lastSeenAt: null,
+          exitedAt: runningAtPreviousShutdown ? null : now,
+          lastSeenAt: runningAtPreviousShutdown ? now : null,
         })
         .run();
     }
