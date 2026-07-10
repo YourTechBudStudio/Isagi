@@ -209,7 +209,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.match(skillRouter, /name: configure-isagi/);
     assert.match(skillRouter, /metadata:\n  version: "0\.0\.1"/);
     assert.match(skillRouter, /references\/config-global\.md/);
-    assert.match(skillRouter, /references\/workflow-style\.md/);
+    assert.match(skillRouter, /references\/workflows\.md/);
+    assert.doesNotMatch(skillRouter, /workflow-style\.md/);
     assert.doesNotMatch(skillRouter, /compatibility:/);
     assert.doesNotMatch(skillRouter, /allowed-tools:/);
 
@@ -247,12 +248,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     );
     assert.match(workflowReference, /ISAGI_RUNTIME_URL/);
     assert.match(workflowReference, /<workflow-key>/);
-
-    const workflowStyleReference = readFileSync(
-      resolve(artifacts.configureIsagiSkill.skillDirectory, 'references', 'workflow-style.md'),
-      'utf8',
-    );
-    assert.doesNotMatch(workflowStyleReference, /^## Contents$/m);
+    assert.match(workflowReference, /state\.stage\.kind/);
+    assert.doesNotMatch(workflowReference, /^## Contents$/m);
 
     const sdkReference = readFileSync(
       resolve(artifacts.configureIsagiSkill.skillDirectory, 'references', 'sdk', 'index.ts'),

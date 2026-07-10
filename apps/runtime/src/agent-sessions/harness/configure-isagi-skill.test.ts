@@ -7,7 +7,6 @@ import test from 'node:test';
 import { projectConfigSchema } from '../../project-config/project-config.schema.js';
 import {
   configSchemaReferenceSources,
-  configureIsagiExampleWorkflowSource,
   configureIsagiSkillContentSources,
   runtimePackageVersion,
 } from '../../runtime-assets.js';
@@ -38,7 +37,6 @@ const substitutions = {
   PROJECT_CONFIG_SCHEMA: trimTrailingNewline(
     configSchemaReferenceSources['project-config.schema.ts'],
   ),
-  EXAMPLE_WORKFLOW: trimTrailingNewline(configureIsagiExampleWorkflowSource),
 } as const;
 
 /** Which template carries which placeholder, and where it is emitted. */
@@ -54,9 +52,8 @@ const templates = {
   },
   'workflows.md': {
     emittedAs: 'references/workflows.md',
-    tokens: ['DATA_ROOT', 'EXAMPLE_WORKFLOW', 'VERIFY_COMMAND'],
+    tokens: ['DATA_ROOT', 'VERIFY_COMMAND'],
   },
-  'workflow-style.md': { emittedAs: 'references/workflow-style.md', tokens: [] },
 } as const satisfies Record<
   keyof typeof configureIsagiSkillContentSources,
   { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
@@ -121,7 +118,6 @@ test('the skill package holds exactly the indexed references', () => {
       'references/config-global.md',
       'references/config-project.md',
       'references/workflows.md',
-      'references/workflow-style.md',
     ],
   );
   assert.equal(files.has('references/sdk/index.ts'), true);

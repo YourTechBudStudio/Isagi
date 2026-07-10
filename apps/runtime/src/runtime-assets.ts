@@ -31,12 +31,7 @@ export const configureIsagiSkillContentSources = {
   'config-global.md': readTextAsset('configure-isagi/config-global.md'),
   'config-project.md': readTextAsset('configure-isagi/config-project.md'),
   'workflows.md': readTextAsset('configure-isagi/workflows.md'),
-  'workflow-style.md': readTextAsset('configure-isagi/workflow-style.md'),
 } as const;
-
-export const configureIsagiExampleWorkflowSource = readTextAsset(
-  'configure-isagi/example-workflow.fixture.ts',
-);
 
 function findRuntimeAssetRoot() {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));

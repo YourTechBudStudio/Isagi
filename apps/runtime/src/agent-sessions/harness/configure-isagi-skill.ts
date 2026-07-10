@@ -3,7 +3,6 @@ import { dirname, resolve } from 'node:path';
 
 import {
   configSchemaReferenceSources,
-  configureIsagiExampleWorkflowSource,
   configureIsagiSkillContentSources,
   runtimePackageVersion,
   workflowSdkReferenceSources,
@@ -79,7 +78,6 @@ export function configureIsagiSkillPackageFiles(dataRoot: string): ReadonlyMap<s
       'PROJECT_CONFIG_SCHEMA',
       trimTrailingNewline(configSchemaReferenceSources['project-config.schema.ts']),
     ],
-    ['EXAMPLE_WORKFLOW', trimTrailingNewline(configureIsagiExampleWorkflowSource)],
   ]);
 
   const files = new Map<string, string>();
@@ -87,7 +85,6 @@ export function configureIsagiSkillPackageFiles(dataRoot: string): ReadonlyMap<s
   files.set('references/config-global.md', render('config-global.md', substitutions));
   files.set('references/config-project.md', render('config-project.md', substitutions));
   files.set('references/workflows.md', render('workflows.md', substitutions));
-  files.set('references/workflow-style.md', render('workflow-style.md', substitutions));
 
   for (const [path, source] of Object.entries(workflowSdkReferenceSources)) {
     files.set(`references/sdk/${flattenReferencePath(path)}`, source);

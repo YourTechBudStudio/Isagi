@@ -52,14 +52,7 @@ function syncAssets(assetRoot) {
     'harness',
     'skill-content',
   );
-  for (const name of [
-    'SKILL.md',
-    'config-global.md',
-    'config-project.md',
-    'workflows.md',
-    'workflow-style.md',
-    'example-workflow.fixture.ts',
-  ]) {
+  for (const name of ['SKILL.md', 'config-global.md', 'config-project.md', 'workflows.md']) {
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'configure-isagi', name));
   }
 }

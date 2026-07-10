@@ -29,10 +29,9 @@ and it is not something you can suppress.
 any edit, run the verify command in [Workflows](references/workflows.md) and fix what it reports.
 Never tell the user a workflow is ready before verification answers `"ok":true`.
 
-**Read both workflow references before authoring one.** [Workflows](references/workflows.md) is the
-mechanics. [Workflow style](references/workflow-style.md) is how to write one that survives a real
-run. A workflow built from the mechanics alone will compile, start, and then strand itself three
-suspensions later.
+**Read the workflow reference before authoring one.** [Workflows](references/workflows.md) covers the
+durable execution model, reducer shape, agent lifecycle, judgments, and verification. Use the
+[SDK source](references/sdk/index.ts) for exact types and signatures.
 
 **When Isagi does not configure something, say so plainly.** The surface below is the entire surface.
 If the user asks for themes, keybindings, default models, pane layouts, or anything else not listed,
@@ -47,7 +46,7 @@ nothing, and leaves the user believing it worked.
 | Files copied or symlinked into every new worktree, or a setup command run once when a worktree is created                                                  | Worktree hooks (`worktrees.hooks`) | [Project config](references/config-project.md)                                            |
 | A named command they can run in a worktree, optionally started or stopped as the worktree is created, activated, deactivated, or deleted                   | Commands (`commands`)              | [Project config](references/config-project.md)                                            |
 | A different terminal backend for the processes Isagi launches                                                                                              | Runtime config (`pty`)             | [Global config](references/config-global.md)                                              |
-| Several agents driven through a repeatable, multi-step process - spawning agents, waiting on their turns, pausing for the user, running headless judgments | A workflow                         | [Workflows](references/workflows.md), then [Workflow style](references/workflow-style.md) |
+| Several agents driven through a repeatable, multi-step process - spawning agents, waiting on their turns, pausing for the user, running headless judgments | A workflow                         | [Workflows](references/workflows.md)                                        |
 
 A one-off task an agent can just do is not a workflow. Workflows earn their cost when the process
 repeats, spans hours, must survive an app restart, or needs a human at a specific junction.
@@ -70,9 +69,8 @@ project. This is the usual reason a change to a global workflow appears to do no
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | [Global config](references/config-global.md)   | Changing the pty backend, or explaining what the runtime config file holds.                    |
 | [Project config](references/config-project.md) | Writing or editing worktree hooks and commands.                                                |
-| [Workflows](references/workflows.md)           | Learning what a workflow is, where it goes, what the SDK offers, and how to verify one.        |
-| [Workflow style](references/workflow-style.md) | Authoring or reviewing a workflow. The rules that keep one correct after the first suspension. |
-| [SDK source](references/sdk/index.ts)          | Checking an exact type, verb signature, or helper. This is the source Isagi runs.              |
+| [Workflows](references/workflows.md)           | Authoring or reviewing a durable workflow and verifying that it loads.             |
+| [SDK source](references/sdk/index.ts)          | Checking an exact type, verb signature, or helper. This is the source Isagi runs.   |
 
 The two config references embed the schema Isagi validates against. The field descriptions in that
 schema are authoritative: when the prose and the schema disagree, the schema is right.
