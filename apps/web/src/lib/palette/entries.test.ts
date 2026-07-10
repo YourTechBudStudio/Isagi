@@ -39,7 +39,7 @@ test('workflow descriptors assemble into workflow entries', () => {
 test('broken workflow descriptors stay visible as disabled entries', () => {
   const entries = assembleEntries(
     ctx({
-      workflowDescriptors: [{ ok: false, workflowKey: 'broken', message: 'Import failed.' }],
+      workflowDescriptors: [{ ok: false, workflowKey: 'broken', reason: 'artifact_load_failed' }],
     }),
   );
 
@@ -47,7 +47,7 @@ test('broken workflow descriptors stay visible as disabled entries', () => {
   assert.equal(entry?.group, 'workflows');
   assert.equal(entry?.label, 'broken');
   assert.equal(entry?.sub, 'Manifest did not load.');
-  assert.deepEqual(entry?.disabled, { reason: 'Import failed.' });
+  assert.deepEqual(entry?.disabled, { reason: "Couldn't load this workflow's verified artifact." });
 });
 
 test('workflow entries are disabled while the active surface is occupied', () => {

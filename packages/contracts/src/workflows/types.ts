@@ -1,6 +1,4 @@
-import { Schema } from 'effect';
-
-import { workflowInputKinds, workflowWaitKinds } from '@isagi/workflow-sdk';
+import { workflowInputKinds, workflowWaitKinds } from '@yourtechbudstudio/isagi-workflow-sdk';
 import type {
   WorkflowCommandManifest,
   WorkflowLogLevel,
@@ -8,7 +6,8 @@ import type {
   WorkflowQuestionSpec,
   WorkflowUiFeedback,
   WorkflowVariables,
-} from '@isagi/workflow-sdk';
+} from '@yourtechbudstudio/isagi-workflow-sdk';
+import { Schema } from 'effect';
 
 export const workflowInputKindSchema = Schema.Literal(...workflowInputKinds);
 
@@ -200,6 +199,19 @@ export const workflowStartContextSchema = Schema.Struct({
   agentSessionId: Schema.optional(Schema.NullOr(positiveIntegerSchema)),
 });
 
+export const workflowLoadFailureReasonSchema = Schema.Literal(
+  'missing_build',
+  'invalid_manifest',
+  'unsupported_manifest',
+  'unsupported_contract',
+  'invalid_package',
+  'stale_source',
+  'artifact_tampered',
+  'artifact_load_failed',
+  'invalid_export',
+  'pinned_artifact_unavailable',
+);
+
 export const workflowDescriptorResultSchema = Schema.Union(
   Schema.Struct({
     ok: Schema.Literal(true),
@@ -209,50 +221,8 @@ export const workflowDescriptorResultSchema = Schema.Union(
   Schema.Struct({
     ok: Schema.Literal(false),
     workflowKey: Schema.String.pipe(Schema.minLength(1)),
-    message: Schema.String,
-  }),
-);
-
-export const workflowVerifyScopeSchema = Schema.Union(
-  Schema.Struct({
-    kind: Schema.Literal('project'),
-    projectId: positiveIntegerSchema,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal('global'),
-  }),
-);
-
-export const workflowVerifyDiagnosticStageSchema = Schema.Literal(
-  'resolve',
-  'compile',
-  'load',
-  'shape',
-  'command',
-);
-
-export const workflowVerifyDiagnosticSchema = Schema.Struct({
-  stage: workflowVerifyDiagnosticStageSchema,
-  message: Schema.String,
-});
-
-export const verifyWorkflowInputSchema = Schema.Struct({
-  workflowKey: Schema.String.pipe(Schema.minLength(1)),
-  worktreePath: Schema.String.pipe(Schema.minLength(1)),
-});
-
-export const verifyWorkflowOutputSchema = Schema.Union(
-  Schema.Struct({
-    ok: Schema.Literal(true),
-    workflowKey: Schema.String.pipe(Schema.minLength(1)),
-    scope: workflowVerifyScopeSchema,
-    manifest: workflowCommandManifestSchema,
-  }),
-  Schema.Struct({
-    ok: Schema.Literal(false),
-    workflowKey: Schema.String.pipe(Schema.minLength(1)),
-    scope: workflowVerifyScopeSchema,
-    diagnostics: Schema.Array(workflowVerifyDiagnosticSchema),
+    reason: workflowLoadFailureReasonSchema,
+    diagnostic: Schema.optional(Schema.String),
   }),
 );
 
@@ -323,12 +293,8 @@ export type WorkflowRunStatus = typeof workflowRunStatusSchema.Type;
 export type WorkflowBlockingWait = typeof workflowBlockingWaitSchema.Type;
 export type WorkflowRunSummary = typeof workflowRunSummarySchema.Type;
 export type WorkflowStartContext = typeof workflowStartContextSchema.Type;
+export type WorkflowLoadFailureReason = typeof workflowLoadFailureReasonSchema.Type;
 export type WorkflowDescriptorResult = typeof workflowDescriptorResultSchema.Type;
-export type WorkflowVerifyScope = typeof workflowVerifyScopeSchema.Type;
-export type WorkflowVerifyDiagnosticStage = typeof workflowVerifyDiagnosticStageSchema.Type;
-export type WorkflowVerifyDiagnostic = typeof workflowVerifyDiagnosticSchema.Type;
-export type VerifyWorkflowInput = typeof verifyWorkflowInputSchema.Type;
-export type VerifyWorkflowOutput = typeof verifyWorkflowOutputSchema.Type;
 export type ListWorkflowDescriptorsInput = typeof listWorkflowDescriptorsInputSchema.Type;
 export type ListWorkflowDescriptorsOutput = typeof listWorkflowDescriptorsOutputSchema.Type;
 export type StartWorkflowInput = typeof startWorkflowInputSchema.Type;

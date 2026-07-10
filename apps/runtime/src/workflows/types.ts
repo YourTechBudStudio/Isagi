@@ -1,6 +1,8 @@
+import type {
+  WorkflowWaitCondition,
+  WorkflowWaitKind,
+} from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Data } from 'effect';
-
-import type { WorkflowWaitCondition, WorkflowWaitKind } from '@isagi/workflow-sdk';
 
 import type { DatabaseError } from '../persistence/index.js';
 
@@ -22,7 +24,7 @@ export type {
   WorkflowVariables,
   WorkflowWaitCondition,
   WorkflowWaitKind,
-} from '@isagi/workflow-sdk';
+} from '@yourtechbudstudio/isagi-workflow-sdk';
 
 export type WorkflowStatus = 'waiting' | 'ready' | 'running' | 'done' | 'failed';
 
@@ -30,6 +32,7 @@ export interface WorkflowRunRow {
   readonly id: number;
   readonly workflowKey: string;
   readonly workflowTitle: string;
+  readonly workflowArtifactHash: string | null;
   readonly worktreeId: number | null;
   readonly surfaceId: number | null;
   readonly parentRunId: number | null;
@@ -73,6 +76,9 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'workflow_user_input_invalid';
   readonly message: string;
   readonly workflowKey?: string | undefined;
+  readonly workflowLoadFailureReason?:
+    | import('@isagi/contracts').WorkflowLoadFailureReason
+    | undefined;
   readonly knownWorkflowKeys?: readonly string[] | undefined;
   readonly workflowRunId?: number | undefined;
   readonly activeWorkflowRunId?: number | undefined;

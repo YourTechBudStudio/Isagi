@@ -1,19 +1,19 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
+import { cont, done, suspend, wait } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
-import { cont, done, suspend, wait } from '@isagi/workflow-sdk';
 
 import { DataDirectory } from '../persistence/index.js';
 import {
-  loadWorkflowDefinition,
-  type WorkflowCompileMode,
-  type WorkflowLoadError,
+  loadPinnedWorkflowArtifact,
+  validateAndPublishWorkflowPackage,
+  WorkflowLoadError,
+  type WorkflowDefinitionCache,
+  type LoadedWorkflowArtifact,
 } from './loader.js';
-import { ensureWorkflowsScaffold, type WorkflowScaffoldError } from './scaffold.js';
 import type { WorkflowDefinition } from './types.js';
 
 export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryError')<{
@@ -23,10 +23,14 @@ export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryErr
 }> {}
 
 export interface WorkflowRegistryService {
-  readonly get: (
+  readonly resolveLatest: (
     workflowKey: string,
     context?: WorkflowRegistryContext,
-  ) => Effect.Effect<WorkflowDefinition<unknown> | null, WorkflowRegistryError | WorkflowLoadError>;
+  ) => Effect.Effect<LoadedWorkflowArtifact | null, WorkflowRegistryError | WorkflowLoadError>;
+  readonly loadPinned: (
+    artifactHash: string,
+    workflowKey?: string,
+  ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
   readonly knownKeys: (
     context?: WorkflowRegistryContext,
   ) => Effect.Effect<readonly string[], WorkflowRegistryError>;
@@ -43,41 +47,34 @@ export const WorkflowRegistryLive = Layer.effect(
   WorkflowRegistry,
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
-    yield* ensureWorkflowsScaffold({ workflowsPath: directory.paths.workflowsPath });
-    return createFilesystemWorkflowRegistry(directory.paths.workflowsPath);
+    return createFilesystemWorkflowRegistry(
+      directory.paths.workflowsPath,
+      join(directory.paths.root, 'workflow-artifacts'),
+    );
   }),
 );
 
-export function createFilesystemWorkflowRegistry(workflowsPath: string): WorkflowRegistryService {
-  const workflowSdkPackageRoot = join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk');
+export function createFilesystemWorkflowRegistry(
+  workflowsPath: string,
+  cacheRoot: string,
+): WorkflowRegistryService {
   const shadowLogKeys = new Set<string>();
-  const loadedDefinitions = new Map<
-    string,
-    {
-      readonly sourceHash: string;
-      readonly definition: WorkflowDefinition<unknown>;
-    }
-  >();
+  const definitionCache: WorkflowDefinitionCache = new Map();
 
   return {
-    get: (workflowKey, context) =>
+    resolveLatest: (workflowKey, context) =>
       Effect.gen(function* () {
         const resolved = yield* resolveWorkflow(workflowsPath, workflowKey, context, shadowLogKeys);
         if (!resolved) return null;
-        const sourceHash = yield* workflowDefinitionHash(resolved);
-        const cacheKey = loadedDefinitionCacheKey(resolved);
-        const cached = loadedDefinitions.get(cacheKey);
-        if (cached?.sourceHash === sourceHash) return cached.definition;
-        const definition = yield* loadWorkflowDefinition({
+        return yield* validateAndPublishWorkflowPackage({
           workflowKey,
-          indexPath: workflowIndexPath(resolved.rootPath, workflowKey),
-          artifactPath: workflowArtifactPath(workflowsPath, resolved, sourceHash),
-          compileMode: resolved.compileMode,
-          workflowSdkPackageRoot,
+          packageRoot: join(resolved.rootPath, workflowKey),
+          cacheRoot,
+          definitionCache,
         });
-        loadedDefinitions.set(cacheKey, { sourceHash, definition });
-        return definition;
       }),
+    loadPinned: (artifactHash, workflowKey) =>
+      loadPinnedWorkflowArtifact({ artifactHash, cacheRoot, workflowKey, definitionCache }),
     knownKeys: (context) => knownWorkflowKeys(workflowsPath, context, shadowLogKeys),
     addWorkflow: () =>
       Effect.fail(
@@ -93,8 +90,25 @@ export function createWorkflowRegistry(
   entries: Record<string, WorkflowDefinition<unknown>> = testWorkflows(),
 ): WorkflowRegistryService {
   const workflows = new Map(Object.entries(entries));
+  const hash = '0'.repeat(64);
   return {
-    get: (workflowKey) => Effect.succeed(workflows.get(workflowKey) ?? null),
+    resolveLatest: (workflowKey) => {
+      const definition = workflows.get(workflowKey);
+      return Effect.succeed(definition ? { artifactHash: hash, definition } : null);
+    },
+    loadPinned: (_artifactHash, workflowKey) => {
+      const definition = workflowKey ? workflows.get(workflowKey) : undefined;
+      return definition
+        ? Effect.succeed({ artifactHash: hash, definition })
+        : Effect.fail(
+            new WorkflowLoadError({
+              reason: 'pinned_artifact_unavailable',
+              message: 'Pinned test workflow was not found.',
+              workflowKey,
+              artifactHash: _artifactHash,
+            }),
+          );
+    },
     knownKeys: () => Effect.sync(() => [...workflows.keys()].sort()),
     addWorkflow: (workflowKey, definition) =>
       Effect.sync(() => {
@@ -237,7 +251,6 @@ type ResolvedWorkflowRoot =
       readonly kind: 'global';
       readonly rootPath: string;
       readonly workflowKey: string;
-      readonly compileMode: WorkflowCompileMode;
     }
   | {
       readonly kind: 'project';
@@ -245,7 +258,6 @@ type ResolvedWorkflowRoot =
       readonly projectRoot: string;
       readonly rootPath: string;
       readonly workflowKey: string;
-      readonly compileMode: WorkflowCompileMode;
     };
 
 function knownWorkflowKeys(
@@ -289,9 +301,9 @@ function resolveWorkflow(
 ) {
   return Effect.try({
     try: (): ResolvedWorkflowRoot | null => {
-      const globalExists = existsSync(workflowIndexPath(workflowsPath, workflowKey));
+      const globalExists = existsSync(join(workflowsPath, workflowKey));
       const projectRoot = projectWorkflowsPath(context);
-      if (projectRoot && existsSync(workflowIndexPath(projectRoot, workflowKey))) {
+      if (projectRoot && existsSync(join(projectRoot, workflowKey))) {
         if (globalExists) {
           logProjectWorkflowShadow({
             shadowLogKeys,
@@ -307,7 +319,6 @@ function resolveWorkflow(
           projectRoot: requireProjectRoot(context),
           rootPath: projectRoot,
           workflowKey,
-          compileMode: 'bundle-workflow-sdk',
         };
       }
       if (!globalExists) return null;
@@ -315,7 +326,6 @@ function resolveWorkflow(
         kind: 'global',
         rootPath: workflowsPath,
         workflowKey,
-        compileMode: 'external',
       };
     },
     catch: (cause) =>
@@ -333,68 +343,7 @@ function scanWorkflowKeys(rootPath: string) {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((name) => !name.startsWith('.') && name !== 'node_modules')
-    .filter((name) => existsSync(workflowIndexPath(rootPath, name)))
     .sort();
-}
-
-function workflowIndexPath(workflowsPath: string, workflowKey: string) {
-  return join(workflowsPath, workflowKey, 'index.ts');
-}
-
-function workflowDefinitionHash(root: ResolvedWorkflowRoot) {
-  return Effect.try({
-    try: () => {
-      const workflowPath = join(root.rootPath, root.workflowKey);
-      const hash = createHash('sha256');
-      hash.update(`isagi-workflow-loader-esbuild-v2:${root.compileMode}\0`);
-      for (const path of listWorkflowSourceFiles(workflowPath)) {
-        hash.update(relative(workflowPath, path));
-        hash.update('\0');
-        hash.update(readFileSync(path));
-        hash.update('\0');
-      }
-      return hash.digest('hex');
-    },
-    catch: (cause) =>
-      new WorkflowRegistryError({
-        code: 'scan_failed',
-        message: `Could not fingerprint workflow ${root.workflowKey}.`,
-        cause,
-      }),
-  });
-}
-
-function workflowArtifactPath(
-  workflowsPath: string,
-  root: ResolvedWorkflowRoot,
-  sourceHash: string,
-) {
-  if (root.kind === 'global') {
-    return join(
-      workflowsPath,
-      '.cache',
-      'workflow-definitions',
-      root.workflowKey,
-      sourceHash,
-      'index.mjs',
-    );
-  }
-  return join(
-    workflowsPath,
-    '.cache',
-    'workflow-definitions',
-    'projects',
-    String(root.projectId),
-    root.workflowKey,
-    sourceHash,
-    'index.mjs',
-  );
-}
-
-function loadedDefinitionCacheKey(root: ResolvedWorkflowRoot) {
-  return root.kind === 'global'
-    ? `global:${root.workflowKey}`
-    : `project:${root.projectId}:${root.workflowKey}`;
 }
 
 function projectWorkflowsPath(context: WorkflowRegistryContext | undefined) {
@@ -430,27 +379,4 @@ function logProjectWorkflowShadow(input: {
   });
 }
 
-function listWorkflowSourceFiles(root: string): readonly string[] {
-  const files: string[] = [];
-  visitWorkflowSourceDirectory(root, files);
-  return files.sort();
-}
-
-function visitWorkflowSourceDirectory(path: string, files: string[]) {
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) {
-      visitWorkflowSourceDirectory(child, files);
-      continue;
-    }
-    if (entry.isFile() && entry.name.endsWith('.ts')) {
-      files.push(child);
-    }
-  }
-}
-
-export type WorkflowRegistryServiceError =
-  | WorkflowRegistryError
-  | WorkflowLoadError
-  | WorkflowScaffoldError;
+export type WorkflowRegistryServiceError = WorkflowRegistryError | WorkflowLoadError;

@@ -22,6 +22,7 @@ export interface WorkflowRepositoryService {
   readonly createRun: (input: {
     readonly workflowKey: string;
     readonly workflowTitle: string;
+    readonly workflowArtifactHash: string;
     readonly state: unknown;
     readonly stateVersion: number;
     readonly worktreeId?: number | null | undefined;
@@ -167,6 +168,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .values({
                 workflowKey: input.workflowKey,
                 workflowTitle: input.workflowTitle,
+                workflowArtifactHash: input.workflowArtifactHash,
                 worktreeId: input.worktreeId ?? null,
                 surfaceId: input.surfaceId ?? null,
                 parentRunId: input.parentRunId ?? null,
@@ -745,6 +747,7 @@ function workflowRunRow(row: WorkflowRunRecord): WorkflowRunRow {
     id: row.id,
     workflowKey: row.workflowKey,
     workflowTitle: row.workflowTitle,
+    workflowArtifactHash: row.workflowArtifactHash,
     worktreeId: row.worktreeId,
     surfaceId: row.surfaceId,
     parentRunId: row.parentRunId,

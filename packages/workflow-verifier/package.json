@@ -1,0 +1,56 @@
+{
+  "name": "@yourtechbudstudio/isagi-workflow-verifier",
+  "version": "0.0.1",
+  "description": "Build and verify standalone Isagi workflow artifacts.",
+  "license": "ISC",
+  "author": "YourTechBud",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YourTechBudStudio/Isagi.git",
+    "directory": "packages/workflow-verifier"
+  },
+  "bin": {
+    "isagi-workflow-verify": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "types": "./dist/receipt.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/receipt.d.ts",
+      "import": "./dist/receipt.js"
+    },
+    "./receipt": {
+      "types": "./dist/receipt.d.ts",
+      "import": "./dist/receipt.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm pack --dry-run",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.0.1",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.21.0"
+  },
+  "peerDependencies": {
+    "@yourtechbudstudio/isagi-workflow-sdk": "0.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

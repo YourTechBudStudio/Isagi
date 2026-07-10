@@ -1,4 +1,9 @@
+import { Schema } from 'effect';
+
+import { workflowRejectedErrorSchema } from '@isagi/contracts';
 import type { ApiError, PtyWebSocketErrorCode } from '@isagi/contracts';
+
+import { workflowLoadFailureReasonCopyOrFallback } from './workflows.js';
 
 // User-facing copy for runtime failures. The runtime and contracts emit stable
 // error codes (plus dry, diagnostic-only `message` strings for logs and bug
@@ -208,6 +213,10 @@ export const runtimeErrorCopy = {
       return genericApiError;
     }
     const reason = readReason(apiError.data);
+    if (reason === 'workflow_load_failed' && Schema.is(workflowRejectedErrorSchema)(apiError)) {
+      const loadReason = apiError.data.workflowLoadFailureReason;
+      if (loadReason) return workflowLoadFailureReasonCopyOrFallback(loadReason);
+    }
     return (reason && entry.byReason?.[reason]) || entry.summary;
   },
   // Compact diagnostic suffix so early users can quote something in a bug report.

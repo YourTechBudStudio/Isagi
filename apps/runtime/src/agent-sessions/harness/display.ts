@@ -1,14 +1,7 @@
 import type { AgentHarness } from '@isagi/contracts';
 
+import { harnessDefinition } from './definitions.js';
+
 export function displayNameForHarness(harness: AgentHarness) {
-  switch (harness) {
-    case 'opencode':
-      return 'OpenCode';
-    case 'claude':
-      return 'Claude';
-    case 'codex':
-      return 'Codex';
-    case 'pi':
-      return 'Pi';
-  }
+  return harnessDefinition(harness).displayName;
 }

@@ -20,6 +20,11 @@ import {
 } from './commands/index.js';
 import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
 import { GitLive } from './git/index.js';
+import {
+  HostInventoryLive,
+  type HostInventoryService,
+  UserShellLive,
+} from './host-inventory/index.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
 import {
@@ -76,6 +81,7 @@ import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktre
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
+const HostInventoryLayer = HostInventoryLive.pipe(Layer.provide(UserShellLive));
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
 const PtyForegroundStateLayer = PtyForegroundStateLive;
@@ -243,7 +249,8 @@ export type RuntimeServices =
   | SurfaceRepositoryService
   | WorkflowEngineService
   | WorkflowEventLedgerService
-  | WorkflowRunProjectionService;
+  | WorkflowRunProjectionService
+  | HostInventoryService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
@@ -251,6 +258,7 @@ const ServicesLayer = Layer.mergeAll(
   WorkflowEngineLayer,
   StartupActivationLayer,
   EventLoopWatchdogLive,
+  HostInventoryLayer,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 

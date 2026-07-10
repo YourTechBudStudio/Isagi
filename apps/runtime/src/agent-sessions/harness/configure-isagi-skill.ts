@@ -11,12 +11,6 @@ import {
 /** The skill's directory name and its `name:` frontmatter field. Must match `skill-content/SKILL.md`. */
 export const configureIsagiSkillName = 'configure-isagi';
 
-export const configureIsagiSkillVerifyCommand = `curl -sS "$ISAGI_RUNTIME_URL/api/v1/workflows/verify" \\
-  -H 'content-type: application/json' \\
-  --data-binary @- <<JSON
-{"workflowKey":"<workflow-key>","worktreePath":"$PWD"}
-JSON`;
-
 export interface ConfigureIsagiSkillArtifacts {
   readonly skillDirectory: string;
   readonly skillScanDirectory: string;
@@ -69,7 +63,6 @@ export function configureIsagiSkillPackageFiles(dataRoot: string): ReadonlyMap<s
   const substitutions = new Map([
     ['VERSION', runtimePackageVersion],
     ['DATA_ROOT', dataRoot],
-    ['VERIFY_COMMAND', configureIsagiSkillVerifyCommand],
     [
       'RUNTIME_CONFIG_SCHEMA',
       trimTrailingNewline(configSchemaReferenceSources['runtime-config.schema.ts']),

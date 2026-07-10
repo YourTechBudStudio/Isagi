@@ -48,16 +48,6 @@ export function registerWorkflowApi(
 ) {
   const run = runWithRuntime(runtime);
 
-  registerApiEndpoint(fastify, apiEndpoints.workflows.verify, {
-    handle: (input) =>
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.verifyWorkflow(input);
-      }),
-    mapError: (error, context) => toWorkflowApiError(error, context),
-    run,
-  });
-
   registerApiEndpoint(fastify, apiEndpoints.workflows.descriptors, {
     handle: (input) =>
       Effect.gen(function* () {
@@ -349,6 +339,9 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       data: {
         reason: error.code,
         ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
+        ...(error.workflowLoadFailureReason
+          ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
+          : {}),
         ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
         ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
         ...(error.operation ? { operation: error.operation } : {}),

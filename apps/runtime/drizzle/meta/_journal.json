@@ -8,6 +8,13 @@
       "when": 1782452696003,
       "tag": "0000_lazy_morbius",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1783717374131,
+      "tag": "0001_durable_workflow_artifact_pin",
+      "breakpoints": true
     }
   ]
 }

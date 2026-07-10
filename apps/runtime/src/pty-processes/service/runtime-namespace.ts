@@ -8,8 +8,14 @@ export function terminalShellCommand() {
 
 export function launchEnv() {
   return {
-    ...process.env,
+    ...userShellBaseEnv(),
     PATH: pathWithRuntimeNodeBin(process.env.PATH),
+  } satisfies NodeJS.ProcessEnv;
+}
+
+export function userShellBaseEnv() {
+  return {
+    ...process.env,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   } satisfies NodeJS.ProcessEnv;

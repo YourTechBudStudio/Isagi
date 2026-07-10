@@ -33,7 +33,6 @@ function syncAssets(assetRoot) {
     )}\n`,
   );
 
-  copyDirectory(resolve(sdkRoot, 'dist'), resolve(assetRoot, 'workflow-sdk', 'dist'));
   copyDirectory(resolve(sdkRoot, 'src'), resolve(assetRoot, 'workflow-sdk', 'src'));
 
   copyFile(

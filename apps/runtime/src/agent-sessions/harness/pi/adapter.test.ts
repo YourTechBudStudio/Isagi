@@ -14,12 +14,11 @@ import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from '../opencode/ad
 import { HarnessAdapterError } from '../types.js';
 import { buildPiHeadlessLaunch, buildPiLaunch } from './adapter.js';
 
-const runtimeUrl = 'http://runtime.test';
-
 test('Pi adapter builds a fresh launch envelope with runtime-owned extension injection', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-harness-artifacts-'));
   try {
     const artifacts = await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
+    const piExtensionPath = resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts');
     const sessionArtifacts = fakeArtifacts(dataRoot);
     const launch = await Effect.runPromise(
       buildPiLaunch(
@@ -30,10 +29,9 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
           latestHarnessSessionId: null,
         },
         {
-          extensionPath: artifacts.piExtensionPath,
+          extensionPath: piExtensionPath,
           skillDirectory: artifacts.configureIsagiSkill.skillDirectory,
           artifacts: sessionArtifacts,
-          runtimeUrl,
         },
       ),
     );
@@ -43,13 +41,13 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
       '--skill',
       artifacts.configureIsagiSkill.skillDirectory,
       '-e',
-      artifacts.piExtensionPath,
+      piExtensionPath,
     ]);
     assert.equal(launch.args.includes('--no-extensions'), false);
     assert.equal(launch.cwd, '/repo/isagi');
     assert.equal(launch.launchMode, 'user_shell');
 
-    const extensionSource = readFileSync(artifacts.piExtensionPath, 'utf8');
+    const extensionSource = readFileSync(piExtensionPath, 'utf8');
     assert.match(extensionSource, /agent_start/);
     assert.match(extensionSource, /agent_end/);
     assert.match(extensionSource, /agent_error/);
@@ -74,7 +72,7 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
       launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
     );
     assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-    assert.equal(env.ISAGI_RUNTIME_URL, runtimeUrl);
+    assert.equal(env.ISAGI_RUNTIME_URL, undefined);
     assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
     assert.equal(
       env.ISAGI_HARNESS_METADATA_PATH,
@@ -94,6 +92,7 @@ test('Pi adapter resumes using the latest observed harness session id', async ()
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pi-adapter-resume-'));
   try {
     const artifacts = await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
+    const piExtensionPath = resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts');
     const launch = await Effect.runPromise(
       buildPiLaunch(
         {
@@ -103,10 +102,9 @@ test('Pi adapter resumes using the latest observed harness session id', async ()
           latestHarnessSessionId: 'pi-session-123',
         },
         {
-          extensionPath: artifacts.piExtensionPath,
+          extensionPath: piExtensionPath,
           skillDirectory: artifacts.configureIsagiSkill.skillDirectory,
           artifacts: fakeArtifacts(dataRoot),
-          runtimeUrl,
         },
       ),
     );
@@ -117,7 +115,7 @@ test('Pi adapter resumes using the latest observed harness session id', async ()
       '--skill',
       artifacts.configureIsagiSkill.skillDirectory,
       '-e',
-      artifacts.piExtensionPath,
+      piExtensionPath,
     ]);
     assert.equal(launch.args.includes('--no-extensions'), false);
   } finally {
@@ -129,21 +127,41 @@ test('harness integration artifacts are prepared once under the runtime data roo
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-harness-artifacts-'));
   try {
     const artifacts = await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
+    const piExtensionPath = resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts');
+    const opencodePluginPath = resolve(
+      dataRoot,
+      'harness-integrations',
+      'opencode',
+      'isagi-session-plugin.js',
+    );
+    const claudeSettingsPath = resolve(dataRoot, 'harness-integrations', 'claude', 'settings.json');
+    const claudeHookPath = resolve(
+      dataRoot,
+      'harness-integrations',
+      'claude',
+      'isagi-claude-hook.mjs',
+    );
+    const codexHookPath = resolve(
+      dataRoot,
+      'harness-integrations',
+      'codex',
+      'isagi-codex-hook.mjs',
+    );
 
     assert.equal(
-      artifacts.piExtensionPath,
+      piExtensionPath,
       resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts'),
     );
     assert.equal(
-      artifacts.opencodePluginPath,
+      opencodePluginPath,
       resolve(dataRoot, 'harness-integrations', 'opencode', 'isagi-session-plugin.js'),
     );
     assert.equal(
-      artifacts.claudeSettingsPath,
+      claudeSettingsPath,
       resolve(dataRoot, 'harness-integrations', 'claude', 'settings.json'),
     );
     assert.equal(
-      artifacts.codexHookPath,
+      codexHookPath,
       resolve(dataRoot, 'harness-integrations', 'codex', 'isagi-codex-hook.mjs'),
     );
     assert.equal(
@@ -159,7 +177,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
       resolve(dataRoot, 'harness-integrations', 'claude', 'skill-workspace'),
     );
 
-    const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
+    const opencodeSource = readFileSync(opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /session\.status/);
     assert.doesNotMatch(opencodeSource, /session\.idle/);
@@ -184,7 +202,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.doesNotMatch(opencodeSource, /tool\.execute/);
     assert.doesNotMatch(opencodeSource, /ISAGI_HARNESS_EVENT_URL/);
 
-    const claudeSettings = JSON.parse(readFileSync(artifacts.claudeSettingsPath, 'utf8'));
+    const claudeSettings = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
     assert.equal(claudeSettings.hooks.UserPromptSubmit[0].hooks[0].type, 'command');
     assert.match(
       claudeSettings.hooks.UserPromptSubmit[0].hooks[0].command,
@@ -246,8 +264,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
       resolve(artifacts.configureIsagiSkill.skillDirectory, 'references', 'workflows.md'),
       'utf8',
     );
-    assert.match(workflowReference, /ISAGI_RUNTIME_URL/);
-    assert.match(workflowReference, /<workflow-key>/);
+    assert.doesNotMatch(workflowReference, /ISAGI_RUNTIME_URL/);
+    assert.match(workflowReference, /pnpm verify/);
     assert.match(workflowReference, /state\.stage\.kind/);
     assert.doesNotMatch(workflowReference, /^## Contents$/m);
 
@@ -257,7 +275,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     );
     assert.match(sdkReference, /defineWorkflow/);
 
-    const claudeHook = readFileSync(artifacts.claudeHookPath, 'utf8');
+    const claudeHook = readFileSync(claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
     assert.match(claudeHook, /hook_event_name/);
     assert.doesNotMatch(claudeHook, /last_assistant_message/);
@@ -269,7 +287,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.doesNotMatch(claudeHook, /ISAGI_HARNESS_JSONL_PATH/);
     assert.doesNotMatch(claudeHook, /ISAGI_HARNESS_EVENT_URL/);
 
-    const codexHook = readFileSync(artifacts.codexHookPath, 'utf8');
+    const codexHook = readFileSync(codexHookPath, 'utf8');
     assert.match(codexHook, /session_id/);
     assert.match(codexHook, /hook_event_name/);
     assert.doesNotMatch(codexHook, /last_assistant_message/);
@@ -364,7 +382,6 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
         pluginPath: '/runtime/harness-integrations/opencode/isagi-session-plugin.js',
         skillScanDirectory: '/runtime/skills/shared',
         artifacts: fakeArtifacts(dataRoot),
-        runtimeUrl,
       },
     ),
   );
@@ -378,7 +395,7 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   )) as NodeJS.ProcessEnv;
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, runtimeUrl);
+  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
   assert.match(env.ISAGI_HARNESS_ARTIFACT_DIRECTORY ?? '', /agent-sessions\/10$/);
@@ -408,7 +425,6 @@ test('OpenCode adapter resumes using --session from cwd without a project argume
         pluginPath: '/runtime/harness-integrations/opencode/isagi-session-plugin.js',
         skillScanDirectory: '/runtime/skills/shared',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -435,7 +451,6 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
         settingsPath: '/runtime/harness-integrations/claude/settings.json',
         skillWorkspaceDirectory: '/runtime/harness-integrations/claude/skill-workspace',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -457,7 +472,7 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, runtimeUrl);
+  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
@@ -474,7 +489,6 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
       {
         hookPath: '/runtime/harness-integrations/codex/isagi-codex-hook.mjs',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -496,7 +510,7 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, runtimeUrl);
+  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
@@ -515,7 +529,6 @@ test('Codex adapter applies per-invocation model and reasoning effort to interac
       {
         hookPath: '/runtime/harness-integrations/codex/isagi-codex-hook.mjs',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -547,7 +560,6 @@ test('Pi adapter applies per-invocation model and reasoning effort to interactiv
         extensionPath: '/runtime/harness-integrations/pi/extension.mjs',
         skillDirectory: '/runtime/skills/shared/configure-isagi',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -580,7 +592,6 @@ test('Claude adapter applies per-invocation model and reasoning effort to intera
         settingsPath: '/runtime/harness-integrations/claude/settings.json',
         skillWorkspaceDirectory: '/runtime/harness-integrations/claude/skill-workspace',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );
@@ -613,7 +624,6 @@ test('OpenCode adapter applies per-invocation model and reasoning effort to inte
         pluginPath: '/runtime/harness-integrations/opencode/plugin.mjs',
         skillScanDirectory: '/runtime/skills/shared',
         artifacts: fakeArtifacts('/runtime'),
-        runtimeUrl,
       },
     ),
   );

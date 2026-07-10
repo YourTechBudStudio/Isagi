@@ -10,16 +10,19 @@ restart, or needs the user at a deliberate junction.
 ## Location and loading
 
 ```text
-{{DATA_ROOT}}/workflows/<key>/index.ts      global - available in every project
-.isagi/workflows/<key>/index.ts             project - committed with the repository
+{{DATA_ROOT}}/workflows/<key>/      global - available in every project
+.isagi/workflows/<key>/             project - committed with the repository
 ```
 
-The directory name is the workflow key. `index.ts` must default-export `defineWorkflow(...)`.
-Related files may sit beside it; import them with relative paths ending in `.js`.
+The directory name is the workflow key. Each directory is an independent package with authored code
+under `src/`, tests under `tests/`, exact SDK and verifier pins, one supported lockfile, and verified
+`dist/index.js` plus `dist/isagi-workflow-build.json`. `src/index.ts` must default-export
+`defineWorkflow(...)`; import related source with relative paths ending in `.js`.
 
-When both roots contain the same key, the project workflow wins. Project workflow directories have
-no `node_modules` or `tsconfig.json`; editors may not resolve `@isagi/workflow-sdk`, but Isagi does
-when it compiles the workflow.
+When both roots contain the same key, the project workflow wins. The runtime never installs,
+compiles, tests, or repairs a workflow package. It loads only fresh compatible artifacts produced by
+the verifier. Existing runs stay pinned to the artifact they started with; newly verified code is
+used by new runs.
 
 ## Execution model
 
@@ -148,24 +151,11 @@ copy such as `Workflow setup failed` after setup is already complete.
 
 ## Verify
 
-After every edit, run this from the worktree root:
+After every edit, run the package's `verify` script from the workflow package root using the package
+manager declared in `packageManager` (`pnpm verify`, `npm run verify`, or `bun run verify`).
 
-```sh
-{{VERIFY_COMMAND}}
-```
-
-Replace `<workflow-key>` with the directory name. `$ISAGI_RUNTIME_URL` points at the local runtime.
-A successful API envelope contains `"data":{"ok":true}`. Failures contain diagnostics with one of
-these stages:
-
-| Stage     | Meaning                                                               |
-| --------- | --------------------------------------------------------------------- |
-| `resolve` | No workflow with that key was found.                                  |
-| `compile` | TypeScript did not compile.                                            |
-| `load`    | The compiled module could not be imported.                             |
-| `shape`   | The default export is missing `command`, `validate`, `init`, or `step`. |
-| `command` | `command()` threw while building the manifest.                         |
-
-Fix and rerun until `ok` is true. Check `data.scope`: it reports whether the project or global root
-answered. Verification proves that the workflow resolves, compiles, imports, and builds its manifest.
-It does not call `validate`, `init`, or `step`, and it does not prove the state machine is correct.
+Verification runs the package's typecheck and tests, builds a standalone artifact, imports it without
+the workflow's `node_modules`, validates its exported shape and `command()`, and publishes `dist`
+only after every gate passes. Fix failures and rerun until verification succeeds. Unverified or stale
+workflow packages remain visible in Isagi but do not run. A new run picks up the newest verified
+artifact; an existing run remains pinned to the artifact it started with.

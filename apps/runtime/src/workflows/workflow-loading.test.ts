@@ -1,468 +1,223 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
 
+import {
+  hashArtifact,
+  hashWorkflowInputs,
+  serializeWorkflowBuildManifest,
+  workflowSdkPackage,
+  workflowVerifierPackage,
+} from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 import { Effect, Either } from 'effect';
 
-import { loadWorkflowDefinition, WorkflowLoadError } from './loader.js';
+import { WorkflowLoadError } from './loader.js';
 import { createFilesystemWorkflowRegistry } from './registry.js';
-import { ensureWorkflowsScaffold } from './scaffold.js';
 
-const require = createRequire(import.meta.url);
+const artifact = `export default {
+  command: () => ({ title: 'Packaged workflow' }),
+  validate: () => {},
+  init: () => ({ version: 1 }),
+  step: async () => ({ type: 'done' })
+};\n`;
 
-test('scaffolded workflows load through compiled artifacts using the copied built SDK', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-loading-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const workflowPath = join(workflowsPath, 'x');
+test('loads a verified standalone package and reuses its content-addressed pin', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-loader-'));
   try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    mkdirSync(workflowPath, { recursive: true });
-    writeWorkflow(
-      workflowPath,
-      `import { cont, defineWorkflow } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Loaded workflow' }),
-  validate: () => {},
-  init: (_ctx, variables) => ({ phase: String(variables.phase ?? 'initial') }),
-  step: async () => cont({ phase: 'first-load' }),
-});
-`,
-    );
-
-    const loaded = await Effect.runPromise(
-      loadWorkflowDefinition({
-        workflowKey: 'x',
-        indexPath: join(workflowPath, 'index.ts'),
-        artifactPath: workflowArtifactPath(workflowsPath, 'x', 'first-load'),
-        compileMode: 'external',
-      }),
-    );
-    assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'first-load')), true);
-    assert.deepEqual(await loaded.step(emptyCtx(), {}, undefined), {
-      type: 'cont',
-      state: { phase: 'first-load' },
-    });
-
-    writeWorkflow(
-      workflowPath,
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Reloaded workflow' }),
-  validate: () => {},
-  init: () => ({ phase: 'edited' }),
-  step: async () => done({ phase: 'second-load' }),
-});
-`,
-    );
-
-    const reloaded = await Effect.runPromise(
-      loadWorkflowDefinition({
-        workflowKey: 'x',
-        indexPath: join(workflowPath, 'index.ts'),
-        artifactPath: workflowArtifactPath(workflowsPath, 'x', 'second-load'),
-        compileMode: 'external',
-      }),
-    );
-    assert.equal(existsSync(workflowArtifactPath(workflowsPath, 'x', 'second-load')), true);
-    assert.deepEqual(await reloaded.step(emptyCtx(), {}, undefined), {
-      type: 'done',
-      value: { phase: 'second-load' },
-    });
+    const workflows = join(root, 'workflows');
+    const cache = join(root, 'cache');
+    await writePackage(join(workflows, 'packaged'), artifact);
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
+    const latest = await Effect.runPromise(registry.resolveLatest('packaged'));
+    assert.ok(latest);
+    assert.equal((await latest.definition.command({} as never)).title, 'Packaged workflow');
+    await rm(join(workflows, 'packaged', 'node_modules'), { recursive: true, force: true });
+    const pinned = await Effect.runPromise(registry.loadPinned(latest.artifactHash, 'packaged'));
+    assert.equal((await pinned.definition.command({} as never)).title, 'Packaged workflow');
+    assert.equal(await readFile(join(cache, latest.artifactHash, 'index.mjs'), 'utf8'), artifact);
   } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('scaffolded workflows typecheck with Node globals in editors', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-types-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const workflowPath = join(workflowsPath, 'node-types');
+test('reloads a newly verified artifact while the previous pin remains loadable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-reload-'));
   try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    assert.equal(existsSync(join(workflowsPath, 'node_modules', '@types', 'node')), true);
-    assert.equal(existsSync(join(workflowsPath, 'node_modules', 'undici-types')), true);
-
-    mkdirSync(workflowPath, { recursive: true });
-    writeWorkflow(
-      workflowPath,
-      `import { join } from 'node:path';
-import { defineWorkflow, done } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: join('Node', 'typed workflow') }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done(process.cwd()),
-});
-`,
-    );
-
-    execFileSync(
-      process.execPath,
-      [
-        require.resolve('typescript/bin/tsc'),
-        '--noEmit',
-        '-p',
-        'tsconfig.json',
-        '--pretty',
-        'false',
-      ],
-      { cwd: workflowsPath, stdio: 'pipe' },
-    );
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('workflow loader tags TypeScript syntax failures as compile diagnostics', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-compile-fail-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const workflowPath = join(workflowsPath, 'syntax-error');
-  try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    writeWorkflow(
-      workflowPath,
-      `import { defineWorkflow } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Syntax error' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => {
-});
-`,
-    );
-
-    const result = await Effect.runPromise(
-      loadWorkflowDefinition({
-        workflowKey: 'syntax-error',
-        indexPath: join(workflowPath, 'index.ts'),
-        artifactPath: workflowArtifactPath(workflowsPath, 'syntax-error', 'syntax-error'),
-        compileMode: 'external',
-      }).pipe(Effect.either),
-    );
-
-    assert.equal(Either.isLeft(result), true);
-    assert.equal(Either.isLeft(result) && result.left instanceof WorkflowLoadError, true);
-    assert.equal(Either.isLeft(result) ? result.left.stage : undefined, 'compile');
-    assert.match(Either.isLeft(result) ? result.left.message : '', /Expected/);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('workflow loader tags missing definition fields as shape diagnostics', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-shape-fail-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const workflowPath = join(workflowsPath, 'missing-step');
-  try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    writeWorkflow(
-      workflowPath,
-      `export default {
-  command: () => ({ title: 'Missing step' }),
-  validate: () => {},
-  init: () => ({}),
-};
-`,
-    );
-
-    const result = await Effect.runPromise(
-      loadWorkflowDefinition({
-        workflowKey: 'missing-step',
-        indexPath: join(workflowPath, 'index.ts'),
-        artifactPath: workflowArtifactPath(workflowsPath, 'missing-step', 'missing-step'),
-        compileMode: 'external',
-      }).pipe(Effect.either),
-    );
-
-    assert.equal(Either.isLeft(result), true);
-    assert.equal(Either.isLeft(result) && result.left instanceof WorkflowLoadError, true);
-    assert.equal(Either.isLeft(result) ? result.left.stage : undefined, 'shape');
-    assert.match(Either.isLeft(result) ? result.left.message : '', /step/);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('filesystem workflow registry caches definitions until source files change', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-registry-cache-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const workflowPath = join(workflowsPath, 'cached');
-  try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    mkdirSync(workflowPath, { recursive: true });
-    writeWorkflowHelper(workflowPath, `export const value = 1;\n`);
-    writeWorkflow(
-      workflowPath,
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
-import { value } from './helper.js';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Cached workflow' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done(value),
-});
-`,
-    );
-
-    const registry = createFilesystemWorkflowRegistry(workflowsPath);
-    const first = await Effect.runPromise(registry.get('cached'));
-    const second = await Effect.runPromise(registry.get('cached'));
+    const workflows = join(root, 'workflows');
+    const cache = join(root, 'cache');
+    const packageRoot = join(workflows, 'packaged');
+    await writePackage(packageRoot, artifact);
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
+    const first = await Effect.runPromise(registry.resolveLatest('packaged'));
     assert.ok(first);
-    assert.equal(second, first);
-    assert.deepEqual(await second.step(emptyCtx(), {}, undefined), {
-      type: 'done',
-      value: 1,
-    });
-
-    writeWorkflowHelper(workflowPath, `export const value = 2;\n`);
-
-    const reloaded = await Effect.runPromise(registry.get('cached'));
-    assert.ok(reloaded);
-    assert.notEqual(reloaded, first);
-    assert.deepEqual(await reloaded.step(emptyCtx(), {}, undefined), {
-      type: 'done',
-      value: 2,
-    });
-    assert.equal(existsSync(join(workflowsPath, '.cache', 'workflow-definitions')), true);
+    const changed = artifact.replace('Packaged workflow', 'Changed workflow');
+    await writePackage(packageRoot, changed);
+    const second = await Effect.runPromise(registry.resolveLatest('packaged'));
+    assert.ok(second);
+    assert.notEqual(first.artifactHash, second.artifactHash);
+    assert.equal((await second.definition.command({} as never)).title, 'Changed workflow');
+    const pinned = await Effect.runPromise(registry.loadPinned(first.artifactHash, 'packaged'));
+    assert.equal((await pinned.definition.command({} as never)).title, 'Packaged workflow');
   } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('workflow scaffold rewrites runtime-owned files and packages on restart', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-refresh-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
+test('reports stable reasons for legacy, stale, tampered, and missing pinned artifacts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-failures-'));
   try {
-    writeFile(workflowsPath, 'package.json', '{"stale":true}\n');
-    writeFile(workflowsPath, 'tsconfig.json', '{"compilerOptions":{"types":["stale"]}}\n');
-    writeFile(
-      workflowsPath,
-      join('node_modules', '@isagi', 'workflow-sdk', 'package.json'),
-      '{}\n',
-    );
-    writeFile(workflowsPath, join('node_modules', '@isagi', 'workflow-sdk', 'stale.txt'), 'stale');
-    writeFile(workflowsPath, join('node_modules', '@types', 'node', 'package.json'), '{}\n');
-    writeFile(workflowsPath, join('node_modules', '@types', 'node', 'stale.txt'), 'stale');
-    writeFile(workflowsPath, join('node_modules', 'undici-types', 'package.json'), '{}\n');
-    writeFile(workflowsPath, join('node_modules', 'undici-types', 'stale.txt'), 'stale');
-    writeFile(workflowsPath, join('node_modules', 'user-installed', 'package.json'), '{}\n');
+    const workflows = join(root, 'workflows');
+    const cache = join(root, 'cache');
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
+    await mkdir(join(workflows, 'legacy'), { recursive: true });
+    await writeFile(join(workflows, 'legacy', 'index.ts'), 'export default {};\n');
+    assert.equal(await reason(registry.resolveLatest('legacy')), 'missing_build');
 
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
+    const staleRoot = join(workflows, 'stale');
+    await writePackage(staleRoot, artifact);
+    await writeFile(join(staleRoot, 'src', 'index.ts'), '// changed\n');
+    assert.equal(await reason(registry.resolveLatest('stale')), 'stale_source');
 
-    const packageJson = readJson(join(workflowsPath, 'package.json')) as {
-      readonly dependencies?: Record<string, string>;
-      readonly devDependencies?: Record<string, string>;
-      readonly stale?: boolean;
-    };
-    const tsconfigJson = readJson(join(workflowsPath, 'tsconfig.json')) as {
-      readonly compilerOptions?: { readonly types?: readonly string[] };
-    };
+    const tamperedRoot = join(workflows, 'tampered');
+    await writePackage(tamperedRoot, artifact);
+    await writeFile(join(tamperedRoot, 'dist', 'index.js'), `${artifact}// tampered\n`);
+    assert.equal(await reason(registry.resolveLatest('tampered')), 'artifact_tampered');
 
-    assert.equal(packageJson.stale, undefined);
-    assert.equal(packageJson.dependencies?.['@isagi/workflow-sdk'], '0.0.1');
-    assert.equal(typeof packageJson.devDependencies?.['@types/node'], 'string');
-    assert.deepEqual(tsconfigJson.compilerOptions?.types, ['node']);
     assert.equal(
-      existsSync(join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk', 'stale.txt')),
-      false,
-    );
-    assert.equal(
-      existsSync(join(workflowsPath, 'node_modules', '@types', 'node', 'stale.txt')),
-      false,
-    );
-    assert.equal(
-      existsSync(join(workflowsPath, 'node_modules', 'undici-types', 'stale.txt')),
-      false,
-    );
-    assert.equal(
-      existsSync(join(workflowsPath, 'node_modules', 'user-installed', 'package.json')),
-      true,
+      await reason(registry.loadPinned('f'.repeat(64), 'missing')),
+      'pinned_artifact_unavailable',
     );
   } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('workflow scaffold provisions the SDK from embedded build assets', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-sdk-assets-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
+test('preserves project precedence without writing under the project root', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-precedence-'));
   try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-
-    const sdkRoot = join(workflowsPath, 'node_modules', '@isagi', 'workflow-sdk');
-    const packageJson = readJson(join(sdkRoot, 'package.json')) as {
-      readonly exports?: { readonly '.'?: { readonly import?: string; readonly types?: string } };
-    };
-    assert.equal(packageJson.exports?.['.']?.import, './dist/index.js');
-    assert.equal(packageJson.exports?.['.']?.types, './dist/index.d.ts');
-    assert.match(readFileSync(join(sdkRoot, 'dist', 'index.js'), 'utf8'), /defineWorkflow/);
-    assert.match(readFileSync(join(sdkRoot, 'dist', 'index.d.ts'), 'utf8'), /WorkflowDefinition/);
-
-    const loaded = (await import(pathToFileURL(join(sdkRoot, 'dist', 'index.js')).href)) as {
-      readonly defineWorkflow?: unknown;
-    };
-    assert.equal(typeof loaded.defineWorkflow, 'function');
+    const workflows = join(root, 'global');
+    const project = join(root, 'project');
+    const projectWorkflows = join(project, '.isagi', 'workflows');
+    const cache = join(root, 'cache');
+    await writePackage(join(workflows, 'shared'), artifact);
+    await writePackage(join(projectWorkflows, 'shared'), artifact.replace('Packaged', 'Project'));
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
+    const loaded = await Effect.runPromise(
+      registry.resolveLatest('shared', { projectId: 1, projectRoot: project }),
+    );
+    assert.ok(loaded);
+    assert.equal((await loaded.definition.command({} as never)).title, 'Project workflow');
+    await assert.rejects(readFile(join(projectWorkflows, '.cache')));
   } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('filesystem workflow registry merges global and project workflows with project precedence', async () => {
-  const dataRoot = join(tmpdir(), `isagi-workflow-roots-${process.pid}-${Date.now()}`);
-  const projectRoot = join(tmpdir(), `isagi-project-workflows-${process.pid}-${Date.now()}`);
-  const workflowsPath = join(dataRoot, 'workflows');
-  const projectWorkflowsPath = join(projectRoot, '.isagi', 'workflows');
+test('distinguishes unsupported manifest, unsupported contract, and invalid package pins', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-compatibility-'));
   try {
-    await Effect.runPromise(ensureWorkflowsScaffold({ workflowsPath }));
-    writeWorkflow(
-      join(workflowsPath, 'global-only'),
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+    const workflows = join(root, 'workflows');
+    const cache = join(root, 'cache');
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
 
-export default defineWorkflow({
-  command: () => ({ title: 'Global only' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done('global-only'),
-});
-`,
-    );
-    writeWorkflow(
-      join(workflowsPath, 'shared'),
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
+    for (const [key, field, value, expected] of [
+      ['manifest', 'manifestVersion', 2, 'unsupported_manifest'],
+      ['contract', 'workflowContractVersion', 2, 'unsupported_contract'],
+    ] as const) {
+      const packageRoot = join(workflows, key);
+      await writePackage(packageRoot, artifact);
+      const manifestPath = join(packageRoot, 'dist', 'isagi-workflow-build.json');
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+      manifest[field] = value;
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      assert.equal(await reason(registry.resolveLatest(key)), expected);
+    }
 
-export default defineWorkflow({
-  command: () => ({ title: 'Global shared' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done('global-shared'),
-});
-`,
-    );
-    writeWorkflow(
-      join(projectWorkflowsPath, 'project-only'),
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Project only' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done('project-only'),
-});
-`,
-    );
-    writeWorkflow(
-      join(projectWorkflowsPath, 'shared'),
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Project shared' }),
-  validate: () => {},
-  init: () => ({}),
-  step: async () => done('project-shared'),
-});
-`,
-    );
-
-    const registry = createFilesystemWorkflowRegistry(workflowsPath);
-    const context = { projectId: 7, projectRoot };
-    assert.deepEqual(await Effect.runPromise(registry.knownKeys(context)), [
-      'global-only',
-      'project-only',
-      'shared',
-    ]);
-
-    const globalOnly = await Effect.runPromise(registry.get('global-only', context));
-    const projectOnly = await Effect.runPromise(registry.get('project-only', context));
-    const shared = await Effect.runPromise(registry.get('shared', context));
-    assert.equal((await globalOnly?.command(emptyLaunchCtx()))?.title, 'Global only');
-    assert.equal((await projectOnly?.command(emptyLaunchCtx()))?.title, 'Project only');
-    assert.equal((await shared?.command(emptyLaunchCtx()))?.title, 'Project shared');
-    assert.deepEqual(await shared?.step(emptyCtx(), {}, undefined), {
-      type: 'done',
-      value: 'project-shared',
-    });
-
-    assert.equal(existsSync(join(projectWorkflowsPath, '.cache')), false);
-    assert.equal(
-      existsSync(join(workflowsPath, '.cache', 'workflow-definitions', 'projects', '7', 'shared')),
-      true,
-    );
-    assert.equal(existsSync(join(projectRoot, 'node_modules')), false);
-    assert.equal(existsSync(join(projectRoot, '.isagi', 'node_modules')), false);
+    const invalidRoot = join(workflows, 'invalid-package');
+    await writePackage(invalidRoot, artifact);
+    const packagePath = join(invalidRoot, 'package.json');
+    const packageJson = JSON.parse(await readFile(packagePath, 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
+    packageJson.dependencies[workflowSdkPackage] = '^0.0.1';
+    await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    const invalid = await failure(registry.resolveLatest('invalid-package'));
+    assert.equal(invalid.reason, 'invalid_package');
+    assert.match(invalid.message, /dependencies.*exact semver/);
   } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-    rmSync(projectRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-function writeWorkflow(workflowPath: string, contents: string) {
-  mkdirSync(workflowPath, { recursive: true });
-  writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
+test('concurrent latest loads publish one valid immutable artifact', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-concurrent-'));
+  try {
+    const workflows = join(root, 'workflows');
+    const cache = join(root, 'cache');
+    await writePackage(join(workflows, 'packaged'), artifact);
+    const registry = createFilesystemWorkflowRegistry(workflows, cache);
+    const loaded = await Promise.all(
+      Array.from({ length: 8 }, () => Effect.runPromise(registry.resolveLatest('packaged'))),
+    );
+    assert.ok(loaded.every((entry) => entry?.artifactHash === loaded[0]?.artifactHash));
+    const hash = loaded[0]?.artifactHash;
+    assert.ok(hash);
+    assert.equal(hashArtifact(await readFile(join(cache, hash, 'index.mjs'))), hash);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function reason(effect: Effect.Effect<unknown, unknown>) {
+  return (await failure(effect)).reason;
 }
 
-function writeWorkflowHelper(workflowPath: string, contents: string) {
-  writeFileSync(join(workflowPath, 'helper.ts'), contents, 'utf8');
+async function failure(effect: Effect.Effect<unknown, unknown>) {
+  const result = await Effect.runPromise(Effect.either(effect));
+  assert.equal(Either.isLeft(result), true);
+  assert.ok(Either.isLeft(result) && result.left instanceof WorkflowLoadError);
+  return result.left;
 }
 
-function writeFile(root: string, path: string, contents: string) {
-  const target = join(root, path);
-  mkdirSync(join(target, '..'), { recursive: true });
-  writeFileSync(target, contents, 'utf8');
-}
-
-function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, 'utf8')) as unknown;
-}
-
-function workflowArtifactPath(workflowsPath: string, workflowKey: string, sourceHash: string) {
-  return join(
-    workflowsPath,
-    '.cache',
-    'workflow-definitions',
-    workflowKey,
-    sourceHash,
-    'index.mjs',
+async function writePackage(root: string, artifactText: string) {
+  const packageJson = `${JSON.stringify(
+    {
+      name: 'fixture-workflow',
+      private: true,
+      packageManager: 'pnpm@11.4.0',
+      dependencies: { [workflowSdkPackage]: '0.0.1' },
+      devDependencies: { [workflowVerifierPackage]: '0.0.1' },
+    },
+    null,
+    2,
+  )}\n`;
+  const inputs = [
+    { path: 'src/index.ts', bytes: Buffer.from('// source\n') },
+    { path: 'tests/index.test.ts', bytes: Buffer.from('// test\n') },
+    { path: 'package.json', bytes: Buffer.from(packageJson) },
+    { path: 'tsconfig.json', bytes: Buffer.from('{}\n') },
+    { path: 'pnpm-lock.yaml', bytes: Buffer.from('lockfileVersion: 9.0\n') },
+  ];
+  await mkdir(join(root, 'src'), { recursive: true });
+  await mkdir(join(root, 'tests'), { recursive: true });
+  await mkdir(join(root, 'dist'), { recursive: true });
+  for (const input of inputs) await writeFile(join(root, input.path), input.bytes);
+  await writeFile(join(root, 'dist', 'index.js'), artifactText);
+  await writeFile(
+    join(root, 'dist', 'isagi-workflow-build.json'),
+    serializeWorkflowBuildManifest({
+      manifestVersion: 1,
+      workflowContractVersion: 1,
+      sdk: { name: workflowSdkPackage, version: '0.0.1' },
+      verifier: { name: workflowVerifierPackage, version: '0.0.1' },
+      toolchain: {
+        nodeVersion: process.versions.node,
+        packageManager: { name: 'pnpm', version: '11.4.0' },
+      },
+      source: { sha256: hashWorkflowInputs(inputs) },
+      artifact: { entry: 'dist/index.js', sha256: hashArtifact(Buffer.from(artifactText)) },
+    }),
   );
-}
-
-function emptyCtx() {
-  return {
-    worktreePath: '/tmp/isagi-test-worktree',
-    spawnAgentSession: async () => {
-      throw new Error('spawnAgentSession is not used');
-    },
-    sendAgentPrompt: async () => {
-      throw new Error('sendAgentPrompt is not used');
-    },
-    closePane: async () => {},
-    getConversationHistory: async () => [],
-    runHeadlessAgent: async () => {
-      throw new Error('runHeadlessAgent is not used');
-    },
-    startWorkflow: async () => {
-      throw new Error('startWorkflow is not used');
-    },
-    log: async () => {},
-    setUiFeedback: async () => {},
-  };
-}
-
-function emptyLaunchCtx() {
-  return {
-    worktreeId: 1,
-    worktreePath: '/tmp/isagi-test-worktree',
-    surfaceId: 1,
-    paneId: null,
-    agentSessionId: null,
-  };
 }

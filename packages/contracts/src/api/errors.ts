@@ -1,5 +1,7 @@
 import { Schema } from 'effect';
 
+import { workflowLoadFailureReasonSchema } from '../workflows/types.js';
+
 export const projectPathRejectionReasonSchema = Schema.Literal(
   'path_not_found',
   'not_directory',
@@ -290,6 +292,8 @@ export const workflowRejectedErrorSchema = Schema.Struct({
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
   }),
 });
 

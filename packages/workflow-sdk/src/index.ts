@@ -1,3 +1,5 @@
+export const workflowContractVersion = 1 as const;
+
 export const workflowInputKinds = ['text', 'select', 'multi-select', 'confirm'] as const;
 
 export type WorkflowInputKind = (typeof workflowInputKinds)[number];

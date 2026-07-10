@@ -200,7 +200,9 @@ export function taggedErrorContext(cause: unknown): Record<string, unknown> {
   const context: Record<string, unknown> = {};
   const tag = (cause as { readonly _tag?: unknown })['_tag'];
   const code = (cause as { readonly code?: unknown }).code;
+  const reason = (cause as { readonly reason?: unknown }).reason;
   if (typeof tag === 'string') context.errorTag = tag;
   if (typeof code === 'string') context.errorCode = code;
+  if (typeof reason === 'string') context.errorReason = reason;
   return context;
 }

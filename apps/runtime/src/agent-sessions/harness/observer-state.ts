@@ -1,6 +1,7 @@
-import type { AttentionState, SessionStatus } from '@isagi/contracts';
+import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
+import { harnessDefinition } from './definitions.js';
 import type { AgentSessionHarnessMetadataRead } from './ledger.js';
 import {
   lifecycleTurnEdges,
@@ -80,6 +81,7 @@ export function createAgentObserverState(
 
 export function projectAgentObserverState(input: {
   readonly agentSessionId: number;
+  readonly harness: AgentHarness | undefined;
   readonly state: AgentObserverState;
   readonly activePtyProcessId: number | null;
   readonly processFacts: ReadonlyMap<number, ProcessFact>;
@@ -96,6 +98,21 @@ export function projectAgentObserverState(input: {
   const diagnostics: HarnessLifecycleDiagnostic[] = [];
   const attentionByHarnessSessionId = new Map<string, AttentionState>();
   const stickyFailures = new Map(input.state.stickyFailures);
+  if (!input.harness) {
+    return {
+      projection,
+      edges,
+      attention: 'idle' as const,
+      marker: markerString([
+        metadataMarker(input.state.metadata),
+        input.activePtyProcessId,
+        'idle',
+      ]),
+      diagnostics,
+      stickyFailures,
+    };
+  }
+  const definition = harnessDefinition(input.harness);
 
   for (const harnessSessionId of streamIds) {
     const records = currentIncarnationRecords(
@@ -104,17 +121,13 @@ export function projectAgentObserverState(input: {
     const codexRecords = currentIncarnationRecords(
       input.state.codexRecordsByHarnessSessionId.get(harnessSessionId) ?? [],
     );
-    const harness = codexRecords.length > 0 ? 'codex' : records[0]?.harness;
-    if (!harness) continue;
-    const lifecycle = reduceHarnessLifecycle({ harness, records, codexRecords });
+    const lifecycle = reduceHarnessLifecycle({ harness: input.harness, records, codexRecords });
     diagnostics.push(...lifecycle.diagnostics);
     let streamAttention = lifecycle.attention;
     const observed = lifecycleTurnEdges({
       lifecycle,
       openingRecordedAt: (seq) =>
-        harness === 'codex'
-          ? (codexRecords.find((record) => record.seq === seq)?.recordedAt ?? null)
-          : (records.find((record) => record.seq === seq)?.recordedAt ?? null),
+        definition.lifecycle.openingRecordedAt({ records, codexRecords }, seq),
     }).map((edge) => ({
       ...edge,
       agentSessionId: input.agentSessionId,

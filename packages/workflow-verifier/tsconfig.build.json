@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "composite": false, "sourceMap": true },
+  "exclude": ["src/**/*.test.ts"]
+}

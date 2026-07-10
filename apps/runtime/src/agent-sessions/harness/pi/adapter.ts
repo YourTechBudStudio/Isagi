@@ -10,7 +10,6 @@ export function buildPiLaunch(
     readonly extensionPath: string;
     readonly skillDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
-    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
@@ -41,7 +40,6 @@ export function buildPiLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
-          runtimeUrl: dependencies.runtimeUrl,
         }),
     };
   });

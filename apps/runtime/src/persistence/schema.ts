@@ -1,3 +1,4 @@
+import { workflowWaitKinds } from '@yourtechbudstudio/isagi-workflow-sdk';
 import {
   index,
   integer,
@@ -6,8 +7,6 @@ import {
   uniqueIndex,
   type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core';
-
-import { workflowWaitKinds } from '@isagi/workflow-sdk';
 
 export const projects = sqliteTable(
   'projects',
@@ -227,6 +226,7 @@ export const workflowRuns = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     workflowKey: text('workflow_key').notNull(),
     workflowTitle: text('workflow_title').notNull(),
+    workflowArtifactHash: text('workflow_artifact_hash'),
     worktreeId: integer('worktree_id').references(() => worktrees.id, { onDelete: 'cascade' }),
     surfaceId: integer('surface_id').references(() => worktreeSurfaces.id, {
       onDelete: 'set null',

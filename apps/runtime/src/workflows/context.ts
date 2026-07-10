@@ -1,6 +1,5 @@
+import type { WorkflowVariables } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Effect } from 'effect';
-
-import type { WorkflowVariables } from '@isagi/workflow-sdk';
 
 import type { WorkflowCapabilitiesService } from './capabilities.js';
 import type { WorkflowContext, WorkflowRunRow } from './types.js';

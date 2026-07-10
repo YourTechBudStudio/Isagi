@@ -1,5 +1,5 @@
 export { registerWorkflowApi } from './api.js';
-export { cont, done, fail, suspend } from '@isagi/workflow-sdk';
+export { cont, done, fail, suspend } from '@yourtechbudstudio/isagi-workflow-sdk';
 export {
   chooseSpawnSplit,
   sendAgentPrompt,
@@ -33,10 +33,6 @@ export {
   WorkflowEngineLive,
   type WorkflowDrainSummary,
   type WorkflowEngineService,
-  type WorkflowVerifyDiagnostic,
-  type WorkflowVerifyDiagnosticStage,
-  type WorkflowVerifyResult,
-  type WorkflowVerifyScope,
 } from './workflow-engine.service.js';
 export {
   WorkflowRepository,

@@ -39,6 +39,7 @@ test('a touched run publishes one workflow_run_changed and dedupes an identical 
           const run = yield* ctx.repository.createRun({
             workflowKey: 'projection-changed',
             workflowTitle: 'Projection Changed',
+            workflowArtifactHash: '0'.repeat(64),
             state: { phase: 'a' },
             stateVersion: 1,
             worktreeId: WORKTREE_ID,
@@ -88,6 +89,7 @@ test('rapid touches for one run coalesce into a single published frame', async (
           const run = yield* ctx.repository.createRun({
             workflowKey: 'projection-coalesce',
             workflowTitle: 'Projection Coalesce',
+            workflowArtifactHash: '0'.repeat(64),
             state: { phase: 'a' },
             stateVersion: 1,
             worktreeId: WORKTREE_ID,
@@ -124,6 +126,7 @@ test('ui_feedback is projected into the summary and a tree delete clears the run
           const run = yield* ctx.repository.createRun({
             workflowKey: 'projection-clear',
             workflowTitle: 'Projection Clear',
+            workflowArtifactHash: '0'.repeat(64),
             state: { phase: 'a' },
             stateVersion: 1,
             worktreeId: WORKTREE_ID,
@@ -188,6 +191,7 @@ test('a deleted surface clears the root runs shown on it', async () => {
           const run = yield* ctx.repository.createRun({
             workflowKey: 'projection-surface',
             workflowTitle: 'Projection Surface',
+            workflowArtifactHash: '0'.repeat(64),
             state: { phase: 'a' },
             stateVersion: 1,
             worktreeId: WORKTREE_ID,

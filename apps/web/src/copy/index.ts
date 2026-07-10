@@ -17,4 +17,8 @@ export {
 } from './palette.js';
 export { toastCopy } from './toasts.js';
 export { workbenchCopy } from './workbench.js';
-export { workflowCopy } from './workflows.js';
+export {
+  workflowCopy,
+  workflowLoadFailureReasonCopy,
+  workflowLoadFailureReasonCopyOrFallback,
+} from './workflows.js';

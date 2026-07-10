@@ -48,6 +48,20 @@ test('workflow API error reasons map to web-owned copy', () => {
     } satisfies ApiError),
     'That action needs the main workflow run.',
   );
+  assert.equal(
+    runtimeErrorCopy.fromApiError({
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: {
+        reason: 'workflow_load_failed',
+        workflowKey: 'stale',
+        workflowLoadFailureReason: 'stale_source',
+      },
+    } satisfies ApiError),
+    'This workflow changed after its last verified build.',
+  );
 });
 
 test('session status reasons produce degraded pane status labels', () => {

@@ -9,8 +9,6 @@ import {
   listWorkflowRunsQuerySchema,
   startWorkflowInputSchema,
   startWorkflowOutputSchema,
-  verifyWorkflowInputSchema,
-  verifyWorkflowOutputSchema,
   workflowEventsQuerySchema,
   workflowEventsReplayOutputSchema,
   workflowEventsStreamInputMessageSchema,
@@ -29,14 +27,6 @@ export const workflowEventsStreamWebSocketEndpoint = {
 } as const;
 
 export const workflowsEndpoints = {
-  verify: {
-    id: 'workflows.verify',
-    method: 'POST',
-    path: '/workflows/verify',
-    body: verifyWorkflowInputSchema,
-    output: verifyWorkflowOutputSchema,
-    errors: workflowApiErrorSchema,
-  },
   descriptors: {
     id: 'workflows.descriptors',
     method: 'POST',
@@ -120,11 +110,6 @@ export const workflowsEndpoints = {
     errors: workflowApiErrorSchema,
   },
 } as const satisfies {
-  readonly verify: ApiEndpoint<
-    typeof verifyWorkflowInputSchema,
-    typeof verifyWorkflowOutputSchema,
-    typeof workflowApiErrorSchema
-  >;
   readonly descriptors: ApiEndpoint<
     typeof listWorkflowDescriptorsInputSchema,
     typeof listWorkflowDescriptorsOutputSchema,

@@ -1,8 +1,4 @@
-import { resolve } from 'node:path';
-
-import { Cause, Context, Effect, Either, Layer, Queue, Schema } from 'effect';
-
-import { workflowCommandManifestSchema } from '@isagi/contracts';
+import { Cause, Context, Effect, Either, Layer, Queue } from 'effect';
 
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
 import { diagnosticPhase } from '../diagnostics/phase.js';
@@ -41,7 +37,6 @@ import {
   findRunOrFail,
   publishWorkflowRunTerminal,
   stepErrorPayload,
-  unknownWorkflowError,
   unknownWorkflowMessage,
   userInputError,
   worktreePathForRun,
@@ -61,10 +56,6 @@ import { validateWorkflowUserInputAnswers } from './user-input.js';
 import { parseResumePayload, parseState, parseUserInputWaitCondition } from './wait-conditions.js';
 
 export interface WorkflowEngineService {
-  readonly verifyWorkflow: (input: {
-    readonly workflowKey: string;
-    readonly worktreePath: string;
-  }) => Effect.Effect<WorkflowVerifyResult, WorkflowEngineServiceError>;
   readonly listWorkflowDescriptors: (input: {
     readonly context: WorkflowStartContextInput;
   }) => Effect.Effect<readonly WorkflowDescriptorResult[], WorkflowEngineServiceError>;
@@ -128,32 +119,8 @@ export type WorkflowDescriptorResult =
   | {
       readonly ok: false;
       readonly workflowKey: string;
-      readonly message: string;
-    };
-
-export type WorkflowVerifyScope =
-  | { readonly kind: 'project'; readonly projectId: number }
-  | { readonly kind: 'global' };
-
-export type WorkflowVerifyDiagnosticStage = 'resolve' | 'compile' | 'load' | 'shape' | 'command';
-
-export interface WorkflowVerifyDiagnostic {
-  readonly stage: WorkflowVerifyDiagnosticStage;
-  readonly message: string;
-}
-
-export type WorkflowVerifyResult =
-  | {
-      readonly ok: true;
-      readonly workflowKey: string;
-      readonly scope: WorkflowVerifyScope;
-      readonly manifest: WorkflowCommandManifest;
-    }
-  | {
-      readonly ok: false;
-      readonly workflowKey: string;
-      readonly scope: WorkflowVerifyScope;
-      readonly diagnostics: readonly WorkflowVerifyDiagnostic[];
+      readonly reason: import('@isagi/contracts').WorkflowLoadFailureReason;
+      readonly diagnostic?: string | undefined;
     };
 
 export const WorkflowEngine = Context.GenericTag<WorkflowEngineService>('isagi/WorkflowEngine');
@@ -213,7 +180,7 @@ export const WorkflowEngineLive = Layer.scoped(
         const definition = yield* diagnosticPhase(
           'workflow.start.load_definition',
           diagnosticContext,
-          registry.get(input.workflowKey, registryContext).pipe(Effect.either),
+          registry.resolveLatest(input.workflowKey, registryContext).pipe(Effect.either),
         );
         if (Either.isLeft(definition)) {
           return yield* Effect.fail(
@@ -221,6 +188,10 @@ export const WorkflowEngineLive = Layer.scoped(
               code: 'workflow_load_failed',
               message: definition.left.message,
               workflowKey: input.workflowKey,
+              workflowLoadFailureReason:
+                definition.left instanceof WorkflowLoadError
+                  ? definition.left.reason
+                  : 'artifact_load_failed',
             }),
           );
         }
@@ -244,7 +215,7 @@ export const WorkflowEngineLive = Layer.scoped(
             }),
           );
         }
-        const loadedDefinition = definition.right;
+        const loadedDefinition = definition.right.definition;
         const launchCtx = yield* diagnosticPhase(
           'workflow.start.build_launch_context',
           diagnosticContext,
@@ -342,6 +313,7 @@ export const WorkflowEngineLive = Layer.scoped(
           repository.createRun({
             workflowKey: input.workflowKey,
             workflowTitle: manifest.title,
+            workflowArtifactHash: definition.right.artifactHash,
             state: initialState,
             stateVersion: 1,
             worktreeId: launchCtx.worktreeId,
@@ -378,28 +350,21 @@ export const WorkflowEngineLive = Layer.scoped(
         const definition = yield* diagnosticPhase(
           'workflow.claimed.load_definition',
           phaseContext,
-          workflowRegistryContextForRun(run, workspaceRepository).pipe(
-            Effect.flatMap((registryContext) => registry.get(run.workflowKey, registryContext)),
-          ),
+          run.workflowArtifactHash === null
+            ? Effect.fail(
+                new WorkflowLoadError({
+                  reason: 'pinned_artifact_unavailable',
+                  message: 'Legacy workflow run has no artifact pin.',
+                  workflowKey: run.workflowKey,
+                }),
+              )
+            : registry.loadPinned(run.workflowArtifactHash, run.workflowKey),
         ).pipe(Effect.either);
         if (Either.isLeft(definition)) {
           yield* failRun(run, stepErrorPayload(definition.left, run), { stateJson: run.stateJson });
           return;
         }
-        if (!definition.right) {
-          const knownWorkflowKeys = yield* workflowRegistryContextForRun(
-            run,
-            workspaceRepository,
-          ).pipe(
-            Effect.flatMap((registryContext) => registry.knownKeys(registryContext)),
-            Effect.catchAll(() => Effect.succeed([])),
-          );
-          yield* failRun(run, unknownWorkflowError(run.workflowKey, knownWorkflowKeys), {
-            stateJson: run.stateJson,
-          });
-          return;
-        }
-        const loadedDefinition = definition.right;
+        const loadedDefinition = definition.right.definition;
         const worktreePath = yield* diagnosticPhase(
           'workflow.claimed.resolve_worktree_path',
           phaseContext,
@@ -636,133 +601,7 @@ export const WorkflowEngineLive = Layer.scoped(
         return { runId: root.id, status: current?.status ?? root.status };
       });
 
-    const resolveVerifyScope = (worktreePath: string) =>
-      Effect.gen(function* () {
-        const normalizedWorktreePath = normalizeWorktreePath(worktreePath);
-        const worktrees = yield* workspaceRepository.listWorktrees;
-        const worktree = worktrees.find(
-          (candidate) => normalizeWorktreePath(candidate.path) === normalizedWorktreePath,
-        );
-        if (!worktree) {
-          return {
-            normalizedWorktreePath,
-            scope: { kind: 'global' } as const,
-            registryContext: undefined,
-            diagnostics: [],
-          };
-        }
-
-        const project = yield* workspaceRepository.findProject(worktree.projectId);
-        if (!project) {
-          return {
-            normalizedWorktreePath,
-            scope: { kind: 'global' } as const,
-            registryContext: undefined,
-            diagnostics: [
-              {
-                stage: 'resolve' as const,
-                message: `Project ${worktree.projectId} for matched worktree ${worktree.id} was not found.`,
-              },
-            ],
-          };
-        }
-
-        return {
-          normalizedWorktreePath,
-          scope: { kind: 'project', projectId: project.id } as const,
-          registryContext: {
-            projectId: project.id,
-            projectRoot: project.rootPath,
-          } satisfies WorkflowRegistryContext,
-          diagnostics: [],
-        };
-      });
-
-    const verifyWorkflow = (input: {
-      readonly workflowKey: string;
-      readonly worktreePath: string;
-    }) =>
-      Effect.gen(function* () {
-        const resolved = yield* resolveVerifyScope(input.worktreePath);
-        if (resolved.diagnostics.length > 0) {
-          return {
-            ok: false,
-            workflowKey: input.workflowKey,
-            scope: resolved.scope,
-            diagnostics: resolved.diagnostics,
-          } satisfies WorkflowVerifyResult;
-        }
-
-        const definitionResult = yield* registry
-          .get(input.workflowKey, resolved.registryContext)
-          .pipe(Effect.either);
-        if (Either.isLeft(definitionResult)) {
-          return {
-            ok: false,
-            workflowKey: input.workflowKey,
-            scope: resolved.scope,
-            diagnostics: [workflowLoadDiagnostic(definitionResult.left)],
-          } satisfies WorkflowVerifyResult;
-        }
-        if (!definitionResult.right) {
-          const knownKeys = yield* registry.knownKeys(resolved.registryContext).pipe(Effect.either);
-          const knownMessage = Either.isRight(knownKeys)
-            ? ` Known workflow keys: ${knownKeys.right.length > 0 ? knownKeys.right.join(', ') : '(none)'}.`
-            : ` Could not list known workflow keys: ${knownKeys.left.message}`;
-          return {
-            ok: false,
-            workflowKey: input.workflowKey,
-            scope: resolved.scope,
-            diagnostics: [
-              {
-                stage: 'resolve',
-                message: `Workflow '${input.workflowKey}' was not found.${knownMessage}`,
-              },
-            ],
-          } satisfies WorkflowVerifyResult;
-        }
-        const definition = definitionResult.right;
-
-        const launchCtx = {
-          worktreeId: 0,
-          worktreePath: resolved.normalizedWorktreePath,
-          surfaceId: 0,
-        };
-        const manifestResult = yield* Effect.tryPromise({
-          try: async () => definition.command(launchCtx),
-          catch: (cause) => cause,
-        }).pipe(Effect.either);
-        if (Either.isLeft(manifestResult)) {
-          return {
-            ok: false,
-            workflowKey: input.workflowKey,
-            scope: resolved.scope,
-            diagnostics: [{ stage: 'command', message: errorMessage(manifestResult.left) }],
-          } satisfies WorkflowVerifyResult;
-        }
-
-        const manifest = yield* Effect.sync(() =>
-          Schema.decodeUnknownSync(workflowCommandManifestSchema)(manifestResult.right),
-        ).pipe(Effect.either);
-        if (Either.isLeft(manifest)) {
-          return {
-            ok: false,
-            workflowKey: input.workflowKey,
-            scope: resolved.scope,
-            diagnostics: [{ stage: 'command', message: errorMessage(manifest.left) }],
-          } satisfies WorkflowVerifyResult;
-        }
-
-        return {
-          ok: true,
-          workflowKey: input.workflowKey,
-          scope: resolved.scope,
-          manifest: manifest.right,
-        } satisfies WorkflowVerifyResult;
-      });
-
     const service = {
-      verifyWorkflow,
       listWorkflowDescriptors: (input) =>
         Effect.gen(function* () {
           const launchCtx = yield* buildLaunchContext(input.context, {
@@ -785,13 +624,17 @@ export const WorkflowEngineLive = Layer.scoped(
           const results: WorkflowDescriptorResult[] = [];
           for (const workflowKey of keys) {
             const definition = yield* registry
-              .get(workflowKey, registryContext)
+              .resolveLatest(workflowKey, registryContext)
               .pipe(Effect.either);
             if (Either.isLeft(definition)) {
               results.push({
                 ok: false,
                 workflowKey,
-                message: definition.left.message,
+                reason:
+                  definition.left instanceof WorkflowLoadError
+                    ? definition.left.reason
+                    : 'artifact_load_failed',
+                diagnostic: definition.left.message,
               });
               continue;
             }
@@ -799,11 +642,12 @@ export const WorkflowEngineLive = Layer.scoped(
               results.push({
                 ok: false,
                 workflowKey,
-                message: unknownWorkflowMessage(workflowKey, keys),
+                reason: 'missing_build',
+                diagnostic: unknownWorkflowMessage(workflowKey, keys),
               });
               continue;
             }
-            const loadedDefinition = definition.right;
+            const loadedDefinition = definition.right.definition;
             const manifest = yield* Effect.tryPromise({
               try: async () => loadedDefinition.command(launchCtx),
               catch: (cause) => cause,
@@ -812,7 +656,8 @@ export const WorkflowEngineLive = Layer.scoped(
               results.push({
                 ok: false,
                 workflowKey,
-                message: errorMessage(manifest.left),
+                reason: 'invalid_export',
+                diagnostic: errorMessage(manifest.left),
               });
               continue;
             }
@@ -979,17 +824,6 @@ export const WorkflowEngineLive = Layer.scoped(
   }),
 );
 
-function normalizeWorktreePath(path: string) {
-  return resolve(path);
-}
-
-function workflowLoadDiagnostic(error: unknown): WorkflowVerifyDiagnostic {
-  if (error instanceof WorkflowLoadError) {
-    return { stage: error.stage, message: error.message };
-  }
-  return { stage: 'resolve', message: errorMessage(error) };
-}
-
 function buildLaunchContext(
   context: WorkflowStartContextInput,
   services: {
@@ -1095,14 +929,6 @@ function buildLaunchContext(
       agentSessionId: pane?.session?.kind === 'agent_session' ? pane.session.agentSession.id : null,
     } satisfies WorkflowLaunchContext;
   });
-}
-
-function workflowRegistryContextForRun(
-  run: WorkflowRunRow,
-  workspaceRepository: WorkspaceRepositoryService,
-): Effect.Effect<WorkflowRegistryContext, WorkflowEngineServiceError> {
-  if (run.worktreeId === null) return Effect.succeed({});
-  return workflowRegistryContextForWorktreeId(run.worktreeId, workspaceRepository);
 }
 
 function workflowRegistryContextForWorktreeId(

@@ -25,9 +25,10 @@ asks the user to trust it before running it. Any edit changes the hash, so the u
 approve their hooks again on the next worktree they create. Tell them to expect it. It is not a bug,
 and it is not something you can suppress.
 
-**Verify every workflow you touch.** Workflows are TypeScript that Isagi compiles and imports. After
-any edit, run the verify command in [Workflows](references/workflows.md) and fix what it reports.
-Never tell the user a workflow is ready before verification answers `"ok":true`.
+**Verify every workflow you touch.** Workflows are packages whose verifier publishes a standalone
+artifact. After any edit, run the package's verify script described in
+[Workflows](references/workflows.md) and fix what it reports. Never tell the user a workflow is ready
+before verification succeeds.
 
 **Read the workflow reference before authoring one.** [Workflows](references/workflows.md) covers the
 durable execution model, reducer shape, agent lifecycle, judgments, and verification. Use the
@@ -57,8 +58,8 @@ repeats, spans hours, must survive an app restart, or needs a human at a specifi
 | -------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------- |
 | `{{DATA_ROOT}}/config.yaml`                              | Runtime, shared across every project                         | On restart. The setting is read once, when Isagi starts. |
 | `.isagi/config.yaml` in the repository root              | One project                                                  | Immediately. Isagi re-reads this file on each operation. |
-| `{{DATA_ROOT}}/workflows/<key>/index.ts`                 | Workflows available in every project                         | On the workflow's next step.                             |
-| `.isagi/workflows/<key>/index.ts` in the repository root | Workflows available in this project, committed with the repo | On the workflow's next step.                             |
+| `{{DATA_ROOT}}/workflows/<key>/`                         | Workflow package available in every project                  | New runs after a successful verification.                |
+| `.isagi/workflows/<key>/` in the repository root         | Workflow package available in this project                   | New runs after a successful verification.                |
 
 When the same workflow key exists in both places, the project copy wins for runs launched from that
 project. This is the usual reason a change to a global workflow appears to do nothing.

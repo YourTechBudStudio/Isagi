@@ -66,9 +66,12 @@ importers:
       '@isagi/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@isagi/workflow-sdk':
+      '@yourtechbudstudio/isagi-workflow-sdk':
         specifier: workspace:*
         version: link:../../packages/workflow-sdk
+      '@yourtechbudstudio/isagi-workflow-verifier':
+        specifier: workspace:*
+        version: link:../../packages/workflow-verifier
       better-sqlite3:
         specifier: ^12.10.0
         version: 12.10.0
@@ -78,9 +81,6 @@ importers:
       effect:
         specifier: ^3.21.2
         version: 3.21.2
-      esbuild:
-        specifier: ^0.28.0
-        version: 0.28.0
       fastify:
         specifier: ^5.8.5
         version: 5.8.5
@@ -188,7 +188,7 @@ importers:
 
   packages/contracts:
     dependencies:
-      '@isagi/workflow-sdk':
+      '@yourtechbudstudio/isagi-workflow-sdk':
         specifier: workspace:*
         version: link:../workflow-sdk
       effect:
@@ -210,6 +210,22 @@ importers:
       vite-plugin-dts:
         specifier: ^4.5.4
         version: 4.5.4(@types/node@24.12.4)(typescript@6.0.3)(vite@8.0.14(@types/node@24.12.4)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0))
+
+  packages/workflow-verifier:
+    dependencies:
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.12.4
+      '@yourtechbudstudio/isagi-workflow-sdk':
+        specifier: workspace:0.0.1
+        version: link:../workflow-sdk
+      tsx:
+        specifier: ^4.21.0
+        version: 4.22.3
 
 packages:
 

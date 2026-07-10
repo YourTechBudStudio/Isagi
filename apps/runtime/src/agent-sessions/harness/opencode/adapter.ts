@@ -12,7 +12,6 @@ export function buildOpenCodeLaunch(
     readonly pluginPath: string;
     readonly skillScanDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
-    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
@@ -45,7 +44,6 @@ export function buildOpenCodeLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
-          runtimeUrl: dependencies.runtimeUrl,
           extraEnv: {
             OPENCODE_CONFIG_CONTENT: configContent,
             // Keep foreground subagents and every other experimental feature

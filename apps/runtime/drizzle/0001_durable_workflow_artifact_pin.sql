@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_runs` ADD `workflow_artifact_hash` text;

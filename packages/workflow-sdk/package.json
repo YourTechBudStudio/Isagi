@@ -1,19 +1,40 @@
 {
-  "name": "@isagi/workflow-sdk",
+  "name": "@yourtechbudstudio/isagi-workflow-sdk",
   "version": "0.0.1",
-  "private": true,
+  "description": "Public authoring contract for Isagi workflows.",
+  "license": "ISC",
+  "author": "YourTechBud",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YourTechBudStudio/Isagi.git",
+    "directory": "packages/workflow-sdk"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vite build",
-    "check": "pnpm typecheck && pnpm build",
+    "check": "pnpm typecheck && pnpm build && pnpm pack --dry-run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "vite": "^8.0.14",
     "vite-plugin-dts": "^4.5.4"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

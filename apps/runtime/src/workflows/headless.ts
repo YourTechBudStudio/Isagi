@@ -1,19 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { Context, Effect, Layer } from 'effect';
-
 import type {
   WorkflowAgentHarness,
   WorkflowHeadlessLaunch,
   WorkflowHeadlessAgentInput,
   WorkflowHeadlessResult,
   WorkflowWaitCondition,
-} from '@isagi/workflow-sdk';
+} from '@yourtechbudstudio/isagi-workflow-sdk';
+import { Context, Effect, Layer } from 'effect';
 
+import { harnessDefinition } from '../agent-sessions/harness/definitions.js';
 import { HarnessAdapterRegistry } from '../agent-sessions/harness/index.js';
 import type { HarnessAdapterError } from '../agent-sessions/index.js';
-import { stripAnsi } from '../lib/ansi.js';
 import { PtyService } from '../pty-processes/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
@@ -365,216 +364,12 @@ function outputForPty(
 }
 
 export function extractHeadlessOutput(harness: WorkflowAgentHarness, raw: string): string {
-  const clean = stripAnsi(raw);
-  if (harness === 'claude') return extractClaudeOutput(clean);
-  if (harness === 'pi') return extractPiOutput(clean);
-  if (harness === 'opencode') return extractOpenCodeOutput(clean);
-  if (harness === 'codex') return extractCodexOutput(clean);
-  return clean.trim();
+  return harnessDefinition(harness).launch.extractHeadlessOutput(raw);
 }
 
 export function semanticErrorForHeadlessOutput(
   harness: WorkflowAgentHarness,
   raw: string,
 ): string | null {
-  if (harness !== 'pi') return null;
-  const records = parseJsonLines(stripAnsi(raw));
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const stopReason =
-      stringAt(records[index], ['event', 'message', 'stopReason']) ??
-      stringAt(records[index], ['message', 'stopReason']) ??
-      stringAt(records[index], ['stopReason']);
-    if (stopReason === 'error' || stopReason === 'aborted') return stopReason;
-  }
-  return null;
-}
-
-function extractClaudeOutput(raw: string) {
-  const trimmed = raw.trim();
-  const parsed = parseJson(trimmed) ?? parseFirstJsonValue(trimmed);
-  if (Array.isArray(parsed)) {
-    for (let index = parsed.length - 1; index >= 0; index -= 1) {
-      const result = stringAt(parsed[index], ['result']);
-      if (result) return result.trim();
-    }
-  }
-  const result = stringAt(parsed, ['result']);
-  if (result) return result.trim();
-  return trimmed;
-}
-
-function extractCodexOutput(raw: string) {
-  const records = parseJsonLines(raw);
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    const text =
-      stringAt(record, ['last_assistant_message']) ??
-      stringAt(record, ['lastAssistantMessage']) ??
-      stringAt(record, ['item', 'text']) ??
-      stringAt(record, ['item', 'content', 0, 'text']) ??
-      stringAt(record, ['message', 'content', 0, 'text']) ??
-      stringAt(record, ['output_text']) ??
-      stringAt(record, ['text']);
-    if (text) return text.trim();
-  }
-  return raw.trim();
-}
-
-function extractPiOutput(raw: string) {
-  const records = parseJsonLines(raw);
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    const messages = arrayAt(record, ['messages']) ?? arrayAt(record, ['event', 'messages']);
-    const fromMessages = textFromLastAssistantMessage(messages);
-    if (fromMessages) return fromMessages.trim();
-    const fromMessage = textFromMessage(
-      objectAt(record, ['message']) ?? objectAt(record, ['event', 'message']),
-    );
-    if (fromMessage) return fromMessage.trim();
-  }
-  return raw.trim();
-}
-
-function extractOpenCodeOutput(raw: string) {
-  const records = parseJsonLines(raw);
-  const textByMessage = new Map<string, string[]>();
-  const completedMessageIds: string[] = [];
-  for (const record of records) {
-    const part =
-      objectAt(record, ['event', 'properties', 'part']) ??
-      objectAt(record, ['properties', 'part']) ??
-      objectAt(record, ['part']);
-    const messageId = stringAt(part, ['messageID']) ?? stringAt(part, ['messageId']);
-    const text = stringAt(part, ['text']);
-    if (messageId && text) {
-      const existing = textByMessage.get(messageId) ?? [];
-      existing.push(text);
-      textByMessage.set(messageId, existing);
-    }
-    const info =
-      objectAt(record, ['event', 'properties', 'info']) ??
-      objectAt(record, ['properties', 'info']) ??
-      objectAt(record, ['info']);
-    const id = stringAt(info, ['id']);
-    const role = stringAt(info, ['role']);
-    if (id && role === 'assistant') completedMessageIds.push(id);
-    const direct = stringAt(record, ['text']) ?? stringAt(record, ['message', 'text']);
-    if (direct) {
-      textByMessage.set('__direct__', [direct]);
-      completedMessageIds.push('__direct__');
-    }
-  }
-  const lastId = completedMessageIds.at(-1);
-  if (lastId) return (textByMessage.get(lastId) ?? []).join('').trim();
-  return raw.trim();
-}
-
-function textFromLastAssistantMessage(messages: readonly unknown[] | null) {
-  if (!messages) return null;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = objectAt(messages[index], []);
-    if (stringAt(message, ['role']) !== 'assistant') continue;
-    const text = textFromMessage(message);
-    if (text) return text;
-  }
-  return null;
-}
-
-function textFromMessage(message: Record<string, unknown> | null) {
-  if (!message) return null;
-  const content = unknownAt(message, ['content']);
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .flatMap((part) => {
-        const text = stringAt(part, ['text']);
-        return text ? [text] : [];
-      })
-      .join('');
-  }
-  return null;
-}
-
-function parseJson(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function parseFirstJsonValue(value: string): unknown {
-  const start = value.search(/[[{]/);
-  if (start === -1) return null;
-  const opening = value[start];
-  const closing = opening === '[' ? ']' : '}';
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < value.length; index += 1) {
-    const char = value[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === opening) depth += 1;
-    if (char === closing) depth -= 1;
-    if (depth === 0) return parseJson(value.slice(start, index + 1));
-  }
-  return null;
-}
-
-function parseJsonLines(value: string): unknown[] {
-  return value.split(/\r?\n/).flatMap((line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return [];
-    const parsed = parseJson(trimmed);
-    return parsed === null ? [] : [parsed];
-  });
-}
-
-function stringAt(value: unknown, path: readonly (string | number)[]): string | null {
-  const found = unknownAt(value, path);
-  return typeof found === 'string' ? found : null;
-}
-
-function objectAt(
-  value: unknown,
-  path: readonly (string | number)[],
-): Record<string, unknown> | null {
-  const found = unknownAt(value, path);
-  return found && typeof found === 'object' && !Array.isArray(found)
-    ? (found as Record<string, unknown>)
-    : null;
-}
-
-function arrayAt(value: unknown, path: readonly (string | number)[]): readonly unknown[] | null {
-  const found = unknownAt(value, path);
-  return Array.isArray(found) ? found : null;
-}
-
-function unknownAt(value: unknown, path: readonly (string | number)[]): unknown {
-  let current = value;
-  for (const segment of path) {
-    if (typeof segment === 'number') {
-      if (!Array.isArray(current)) return undefined;
-      current = current[segment];
-      continue;
-    }
-    if (!current || typeof current !== 'object') return undefined;
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
+  return harnessDefinition(harness).launch.semanticHeadlessError?.(raw) ?? null;
 }

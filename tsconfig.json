@@ -4,6 +4,7 @@
   "files": [],
   "references": [
     { "path": "./packages/workflow-sdk" },
+    { "path": "./packages/workflow-verifier" },
     { "path": "./packages/contracts" },
     { "path": "./apps/runtime" },
     { "path": "./apps/web" },

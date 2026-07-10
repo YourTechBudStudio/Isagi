@@ -46,7 +46,7 @@ This shape is what makes the state machine serializable: every wait phase is a n
 serializable continuation, and anything that must cross a suspension lives in `state`, because
 there is no live closure to hold locals across the wait.
 
-Author-facing types and constructors live in `@isagi/workflow-sdk`: `WorkflowDefinition`,
+Author-facing types and constructors live in `@yourtechbudstudio/isagi-workflow-sdk`: `WorkflowDefinition`,
 `WorkflowLaunchContext`, `WorkflowCommandManifest`, `WorkflowStep`, `WorkflowResult`,
 `WorkflowWaitCondition`, `WorkflowContext`, `defineWorkflow`, `cont`/`suspend`/`done`/`fail`, and
 the `wait`/`event` helper objects. Runtime-only row, status, repository, and engine error types
@@ -185,44 +185,37 @@ run/phase/seq) are the deferred lever.
 Workflows load from two roots:
 
 - **global workflows** under the runtime data root:
-  `<dataRoot>/workflows/<workflowKey>/index.ts`;
+  `<dataRoot>/workflows/<workflowKey>/`;
 - **project workflows** under the project repository root:
-  `<projectRoot>/.isagi/workflows/<workflowKey>/index.ts`.
+  `<projectRoot>/.isagi/workflows/<workflowKey>/`.
 
 When both roots define the same `workflowKey`, the project workflow wins for runs launched from that
 project. Descriptor listing returns the key once, using the winning definition; the public contract
 does not expose which root supplied it. The runtime logs a diagnostic when a project workflow shadows
 a global workflow so "why did my global edit not apply?" has a support trail.
 
-The runtime scaffolds `<dataRoot>/workflows` on boot with `package.json`, `tsconfig.json`, and a
-copied built `@isagi/workflow-sdk` package under `node_modules/@isagi/workflow-sdk`. The copy is
-version-synced from the app's SDK build, embedded into the runtime bundle at build time, and is not a
-package-manager install or symlink. Project workflow directories are never scaffolded: the runtime
-does not write `node_modules`, `tsconfig.json`, or cache files into the user's repository. Project
-authors rely on the shipped Isagi configuration skill's SDK reference rather than repo-local editor
-IntelliSense in v1.
+Every workflow directory is an independent package with authored code under `src/`, tests under
+`tests/`, exact SDK/verifier pins, one supported lockfile, and a verified `dist/index.js` plus
+`dist/isagi-workflow-build.json`. The package verifier owns typechecking, tests, bundling, isolated
+import, export/`command()` validation, and transactional `dist` publication. The runtime never runs
+a package manager, package script, TypeScript, tests, or a bundler.
 
-Discovery is on-demand: the registry scans workflow directories when listing or starting
-workflows. The registry does not persist workflow definitions in the database. It fingerprints
-each workflow's local TypeScript source by content hash, keeps the loaded definition in memory
-while that hash is current, and compiles changed sources with `esbuild`. Global workflow artifacts
-keep the original cache shape:
-`<dataRoot>/workflows/.cache/workflow-definitions/<workflowKey>/<hash>/index.mjs`. Project workflow
-artifacts live under the data root, namespaced by project id:
-`<dataRoot>/workflows/.cache/workflow-definitions/projects/<projectId>/<workflowKey>/<hash>/index.mjs`.
-No generated cache artifact is written below `<projectRoot>/.isagi/workflows`.
+Discovery is on demand. The runtime recomputes the receipt's source and artifact identities,
+validates the manifest format, workflow contract, canonical package identities, and internally
+consistent exact pins, then copies the verified artifact bytes to
+`<dataRoot>/workflow-artifacts/<artifactSha256>/index.mjs`. It imports that immutable copy rather
+than the mutable package path. No generated content is written below a project workflow root.
+Source-only, stale, corrupt, incompatible, or otherwise unverified packages remain discoverable as
+broken descriptors but cannot run.
 
-Global workflow artifacts externalize `@isagi/workflow-sdk` and resolve it from the data-root
-scaffold. Project workflow artifacts bundle the SDK into the compiled output, resolving it from that
-same data-root scaffold during compilation so repo-located workflows do not need `node_modules`.
-
-The runtime then imports the compiled JavaScript artifact. This gives hand-edited workflows hot
-reload on the next reducer step while letting unchanged workflows reuse compiled artifacts after a
-runtime restart. Root precedence is also evaluated on each load. Deleting or adding a project
-override while a run is suspended can therefore change which definition handles the next step. This
-is the same accepted edit-resilience tradeoff as editing a workflow's source mid-run: the engine
-does not replay or pin old code, so authors should keep in-flight state shapes stable or finish runs
-before replacing definitions.
+New runs use the newest winning verified package. The validated artifact hash is persisted on the
+run in the same database transaction that creates it; cache publication happens first, and an
+unreferenced immutable entry is retained if run creation later fails. Every callback for that run,
+including retries and continuation after a runtime restart, reloads by the persisted hash. Cached
+bytes are rehashed before import and the export shape is revalidated. Missing or corrupt pinned
+artifacts fail closed without falling back to the latest package. Pre-cutover rows without a pin are
+unsupported. Phase 3 performs no cache eviction; future collection must derive liveness from durable
+run pins.
 
 Starting a workflow is an explicit-context operation. The caller supplies `worktreeId`,
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating
@@ -232,7 +225,7 @@ launch facts are workflow-owned and should be folded into opaque state by `init`
 
 Start flow (`startWorkflowRun`):
 
-1. Resolve the worktree's project from explicit ids and load the winning workflow definition.
+1. Resolve the worktree's project and fully validate/cache the winning workflow package.
 2. Resolve `launchCtx` from explicit ids (validating worktree, surface, and any pane/agent-session
    binding).
 3. Run `command(launchCtx)` to obtain the manifest title.
@@ -241,15 +234,16 @@ Start flow (`startWorkflowRun`):
    matches the latest root regardless of status, so even a terminal `done`/`failed` root blocks a new
    start until it is cleared.
 5. Run `validate(launchCtx, variables)`. A thrown error rejects the start and creates no row.
-6. Run `init(launchCtx, variables)` and create a `ready` row with `state_json`.
+6. Run `init(launchCtx, variables)` and create a `ready` row with `state_json` and the validated
+   artifact hash.
 7. Append the `started` lifecycle event and poke the dispatcher.
 
 Child workflows follow the same flow with a `parentRun`: `worktreeId` is derived from the parent,
 `surfaceId` from the parent (or an explicit override on the same worktree), and `rootRunId` from
-the parent's tree. Because root resolution is derived from the run's worktree, child workflows and
-resumed runs inherit project workflow precedence structurally rather than through a persisted root
-flag. Child-start is an **engine-owned callback** injected into the `ctx` (not a capability), which
-keeps `WorkflowCapabilities` free of a dependency on the engine.
+the parent's tree. A child is a new run and therefore resolves the newest winning verified artifact;
+after creation it continues from its own persisted pin like every other run. Child-start is an
+**engine-owned callback** injected into the `ctx` (not a capability), which keeps
+`WorkflowCapabilities` free of a dependency on the engine.
 
 ## The author SDK: `ctx` verbs and `wait`/`event` helpers
 
@@ -459,7 +453,10 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 Notes:
 
 - `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with
-  `workflow_root_run_required`. `retry` additionally requires a `failed` root (`workflow_run_not_failed`).
+  `workflow_root_run_required`. `retry` additionally requires a `failed` root
+  (`workflow_run_not_failed`) and deliberately retains the run's artifact pin. Verifying changed
+  workflow code affects new runs, not a retry of an existing run; clear and start a new run to use
+  the new artifact.
 - `clear` is `POST`, not HTTP `DELETE`, because it requests **async cancellation** when a step is
   running (the running step finishes, then its tree is reaped); otherwise it deletes the tree
   immediately.
@@ -611,7 +608,7 @@ as current behaviour and flagged as a future simplification, not a bug.
   and the `wait`/`event` helpers.
 - `apps/runtime/src/workflows/` — the engine: `types.ts` (runtime-only row/status/error shapes),
   `capabilities.ts` (Effect-native `WorkflowCapabilities`), `context.ts` (the Promise adapter),
-  `scaffold.ts`, `loader.ts`, `registry.ts`, `repository.ts`, `resolver.ts`, `resume-paths.ts`,
+  `loader.ts`, `registry.ts`, `repository.ts`, `resolver.ts`, `resume-paths.ts`,
   `wait-conditions.ts`, `user-input.ts`, `run-failure.ts`, `headless.ts`, `event-ledger.service.ts`
   (the client event stream), `workflow-run-projection.service.ts` (`WorkflowRunProjection`),
   `workflow-engine.service.ts` (the loops + start/controls), and `api.ts` (the run API + WS stream).

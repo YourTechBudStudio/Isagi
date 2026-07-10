@@ -1,11 +1,7 @@
 import type { AttentionState } from '@isagi/contracts';
 
-import { reduceClaudeLifecycle } from './claude/lifecycle.js';
-import {
-  reduceCodexRolloutLifecycle,
-  type CodexRolloutLifecycleRecord,
-} from './codex/lifecycle.js';
-import { reduceOpenCodeLifecycle } from './opencode/lifecycle.js';
+import { type CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
+import { harnessDefinition } from './definitions.js';
 import { derivePiRunningAttention } from './pi/attention.js';
 import { derivePiTurnEdges } from './pi/turns.js';
 import type { HarnessObservationRecord } from './projection.js';
@@ -72,16 +68,7 @@ export function reduceHarnessLifecycle(input: {
   readonly records: readonly HarnessObservationRecord[];
   readonly codexRecords?: readonly CodexRolloutLifecycleRecord[] | undefined;
 }): HarnessLifecycleResult {
-  switch (input.harness) {
-    case 'claude':
-      return reduceClaudeLifecycle(input.records);
-    case 'codex':
-      return reduceCodexRolloutLifecycle(input.codexRecords ?? []);
-    case 'opencode':
-      return reduceOpenCodeLifecycle(input.records);
-    case 'pi':
-      return reducePiLifecycle(input.records);
-  }
+  return harnessDefinition(input.harness).lifecycle.reduce(input);
 }
 
 /**

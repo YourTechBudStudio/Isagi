@@ -1,6 +1,6 @@
 import { ArrowRight, Workflow } from 'lucide-react';
 
-import { paletteCopy } from '../../copy/index.js';
+import { paletteCopy, workflowLoadFailureReasonCopy } from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
@@ -53,7 +53,7 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         icon: Workflow,
         group: 'workflows',
         sub: paletteCopy.workflows.disabled.broken,
-        disabled: { reason: descriptor.message },
+        disabled: { reason: workflowLoadFailureReasonCopy(descriptor.reason) },
         run: () => {},
       });
     }

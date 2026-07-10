@@ -1,8 +1,5 @@
 import { statSync } from 'node:fs';
 
-import { Context, Effect, Layer } from 'effect';
-
-import type { AgentHarness, SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 import type {
   WorkflowAgentHarness,
   WorkflowAgentPromptSend,
@@ -10,7 +7,10 @@ import type {
   WorkflowHeadlessAgentInput,
   WorkflowHeadlessOp,
   WorkflowLogLevel,
-} from '@isagi/workflow-sdk';
+} from '@yourtechbudstudio/isagi-workflow-sdk';
+import { Context, Effect, Layer } from 'effect';
+
+import type { AgentHarness, SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
 import { getConversationHistory as readConversationHistory } from '../agent-sessions/harness/conversation.js';
 import type { AgentSessionArtifactsService } from '../agent-sessions/harness/ledger.js';

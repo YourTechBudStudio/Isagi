@@ -42,7 +42,8 @@ test('list route returns workflow descriptors from the engine', async () => {
                 {
                   ok: false as const,
                   workflowKey: 'broken',
-                  message: 'Could not load workflow.',
+                  reason: 'artifact_load_failed' as const,
+                  diagnostic: 'Could not load workflow.',
                 },
               ];
             }),
@@ -77,54 +78,10 @@ test('list route returns workflow descriptors from the engine', async () => {
         {
           ok: false,
           workflowKey: 'broken',
-          message: 'Could not load workflow.',
+          reason: 'artifact_load_failed',
+          diagnostic: 'Could not load workflow.',
         },
       ],
-    },
-    meta: { requestId: body.meta.requestId },
-  });
-});
-
-test('verify route returns workflow verification result from the engine', async () => {
-  const fastify = Fastify({ logger: false });
-  let verifyInput: unknown = null;
-
-  registerWorkflowApi(fastify, {
-    runPromise: async <A>(effect: Effect.Effect<A, unknown, WorkflowEngineService>) =>
-      Effect.runPromise(
-        Effect.provideService(effect, WorkflowEngine, {
-          verifyWorkflow: (input: unknown) =>
-            Effect.sync(() => {
-              verifyInput = input;
-              return {
-                ok: false,
-                workflowKey: 'broken',
-                scope: { kind: 'global' },
-                diagnostics: [{ stage: 'compile', message: 'Build failed with 1 error.' }],
-              };
-            }),
-        } as never),
-      ),
-  } as never);
-
-  const response = await fastify.inject({
-    method: 'POST',
-    url: '/api/v1/workflows/verify',
-    payload: { workflowKey: 'broken', worktreePath: '/repo/worktree' },
-  });
-
-  assert.equal(response.statusCode, 200);
-  assert.deepEqual(verifyInput, { workflowKey: 'broken', worktreePath: '/repo/worktree' });
-  const body = JSON.parse(response.body) as {
-    readonly data: unknown;
-    readonly meta: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    data: {
-      ok: false,
-      workflowKey: 'broken',
-      scope: { kind: 'global' },
-      diagnostics: [{ stage: 'compile', message: 'Build failed with 1 error.' }],
     },
     meta: { requestId: body.meta.requestId },
   });
@@ -204,6 +161,48 @@ test('workflow API maps wrapped workflow engine errors to contract errors', asyn
       message: 'Invalid workflow input.',
       requestId: body.error.requestId,
       data: { reason: 'workflow_user_input_invalid', workflowRunId: 1 },
+    },
+  });
+});
+
+test('workflow API preserves the contracted load reason for web-owned copy', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(fastify, {
+    runPromise: async () =>
+      Either.left(
+        new WorkflowEngineError({
+          code: 'workflow_load_failed',
+          message: 'Workflow source differs from the verified build.',
+          workflowKey: 'stale',
+          workflowLoadFailureReason: 'stale_source',
+        }),
+      ),
+  } as never);
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs',
+    payload: {
+      workflowKey: 'stale',
+      context: { worktreeId: 7, surfaceId: 42 },
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  const body = JSON.parse(response.body) as {
+    readonly error: { readonly requestId: string };
+  };
+  assert.deepEqual(body, {
+    error: {
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'Workflow source differs from the verified build.',
+      requestId: body.error.requestId,
+      data: {
+        reason: 'workflow_load_failed',
+        workflowKey: 'stale',
+        workflowLoadFailureReason: 'stale_source',
+      },
     },
   });
 });

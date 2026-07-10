@@ -10,7 +10,6 @@ export function buildClaudeLaunch(
     readonly settingsPath: string;
     readonly skillWorkspaceDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
-    readonly runtimeUrl: string;
   },
 ) {
   return Effect.sync(() => {
@@ -41,7 +40,6 @@ export function buildClaudeLaunch(
           agentSessionId: input.agentSessionId,
           ptyProcessId,
           artifacts: dependencies.artifacts,
-          runtimeUrl: dependencies.runtimeUrl,
         }),
     };
   });

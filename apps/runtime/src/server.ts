@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { registerCommandsApi } from './commands/index.js';
 import { registerHealthApi } from './health/api.js';
+import { HostInventory } from './host-inventory/index.js';
 import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
@@ -68,7 +69,10 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
           port: options.port ?? 0,
         }),
       ).pipe(Effect.uninterruptible);
-      process.env.ISAGI_RUNTIME_URL = url;
+      yield* runInRuntime(
+        runtime,
+        Effect.flatMap(HostInventory, (inventory) => inventory.startRefresh),
+      );
       yield* runInRuntime(runtime, restoreStartupSessions);
 
       startupOwnsResources = false;

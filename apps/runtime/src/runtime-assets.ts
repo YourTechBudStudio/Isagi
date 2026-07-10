@@ -17,8 +17,6 @@ export const workflowSdkPackageVersion =
     ? manifest.workflowSdkPackageVersion
     : '0.0.0';
 
-export const workflowSdkDistSources = readTextAssetTree('workflow-sdk/dist');
-
 export const workflowSdkReferenceSources = readTextAssetTree('workflow-sdk/src');
 
 export const configSchemaReferenceSources = {

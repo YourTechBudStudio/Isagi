@@ -6,12 +6,8 @@ import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contrac
 import { RuntimeDatabase } from '../../persistence/index.js';
 import { agentSessions, ptyProcesses } from '../../persistence/schema.js';
 import { InternalRuntimeEventBus, type InternalRuntimeEvent } from '../../runtime-events/index.js';
-import {
-  hookCodexRolloutPaths,
-  locateCodexRolloutPaths,
-  type CodexRolloutEntry,
-  type CodexRolloutPath,
-} from './codex/native-artifacts.js';
+import { type CodexRolloutEntry, type CodexRolloutPath } from './codex/native-artifacts.js';
+import { harnessDefinition } from './definitions.js';
 import {
   discoverHarnessJsonlFiles,
   jsonlFileState,
@@ -265,12 +261,13 @@ export const HarnessLedgerObserverLive = Layer.scoped(
         }),
       );
 
-    const codexSources = (agentSessionId: number) =>
+    const nativeSources = (agentSessionId: number) =>
       Effect.gen(function* () {
         const state = stateFor(agentSessionId);
-        if (harnessByAgent.get(agentSessionId) !== 'codex' || state.metadata.status !== 'valid') {
-          return [];
-        }
+        const harness = harnessByAgent.get(agentSessionId);
+        if (!harness || state.metadata.status !== 'valid') return [];
+        const locate = harnessDefinition(harness).observation.locateNativeSources;
+        if (!locate) return [];
         const harnessSessionId = state.metadata.metadata.harnessSessionId;
         if (!harnessSessionId) return [];
         if (
@@ -289,10 +286,10 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           readonly HarnessObservationRecord[],
         ][];
         const sources = [
-          ...hookCodexRolloutPaths(streams),
-          ...(yield* locateCodexRolloutPaths({
+          ...(yield* locate({
             agentSessionId,
             harnessSessionId,
+            streams,
             discovery: 'index_only',
           })),
         ].filter((source) => sourceIsAvailable(source.path));
@@ -303,9 +300,10 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           // supported hook/index locators remain unavailable.
           if (state.codexLocatorMissCount === 1 || state.codexLocatorMissCount % 20 === 0) {
             sources.push(
-              ...(yield* locateCodexRolloutPaths({
+              ...(yield* locate({
                 agentSessionId,
                 harnessSessionId,
+                streams,
                 discovery: 'full',
               })).filter((source) => sourceIsAvailable(source.path)),
             );
@@ -372,7 +370,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           );
         }
         state.metadata = yield* artifacts.readMetadata(agentSessionId);
-        for (const source of yield* codexSources(agentSessionId)) {
+        for (const source of yield* nativeSources(agentSessionId)) {
           yield* sourceOrElse(
             agentSessionId,
             source.path,
@@ -384,6 +382,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
         }
         const result = projectAgentObserverState({
           agentSessionId,
+          harness: harnessByAgent.get(agentSessionId),
           state,
           activePtyProcessId: activePtyByAgent.get(agentSessionId) ?? null,
           processFacts,
@@ -511,7 +510,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           markerString(priorMetadata) !== markerString(metadataMarker(state.metadata));
         if (metadataChanged) changed = true;
 
-        for (const source of yield* codexSources(agentSessionId)) {
+        for (const source of yield* nativeSources(agentSessionId)) {
           const cursor = state.rolloutCursors.get(source.path);
           if (!cursor) {
             if (
@@ -625,6 +624,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
         const state = stateFor(agentSessionId);
         const result = projectAgentObserverState({
           agentSessionId,
+          harness: harnessByAgent.get(agentSessionId),
           state,
           activePtyProcessId: activePtyByAgent.get(agentSessionId) ?? null,
           processFacts,

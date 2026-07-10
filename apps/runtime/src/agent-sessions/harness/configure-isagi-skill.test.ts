@@ -15,7 +15,6 @@ import {
   configureIsagiSkillArtifactPaths,
   configureIsagiSkillName,
   configureIsagiSkillPackageFiles,
-  configureIsagiSkillVerifyCommand,
   writeConfigureIsagiSkillArtifacts,
 } from './configure-isagi-skill.js';
 
@@ -30,7 +29,6 @@ const trimTrailingNewline = (source: string) => source.replace(/\n+$/, '');
 const substitutions = {
   VERSION: runtimePackageVersion,
   DATA_ROOT: dataRoot,
-  VERIFY_COMMAND: configureIsagiSkillVerifyCommand,
   RUNTIME_CONFIG_SCHEMA: trimTrailingNewline(
     configSchemaReferenceSources['runtime-config.schema.ts'],
   ),
@@ -52,7 +50,7 @@ const templates = {
   },
   'workflows.md': {
     emittedAs: 'references/workflows.md',
-    tokens: ['DATA_ROOT', 'VERIFY_COMMAND'],
+    tokens: ['DATA_ROOT'],
   },
 } as const satisfies Record<
   keyof typeof configureIsagiSkillContentSources,
@@ -132,17 +130,11 @@ test('the skill name matches its frontmatter and its directory', () => {
   assert.equal(dirname(artifacts.skillDirectory), artifacts.skillScanDirectory);
 });
 
-test('the documented verify command uses the runtime URL curl contract', () => {
-  assert.match(configureIsagiSkillVerifyCommand, /curl -sS/);
-  assert.match(configureIsagiSkillVerifyCommand, /\$ISAGI_RUNTIME_URL\/api\/v1\/workflows\/verify/);
-  assert.match(configureIsagiSkillVerifyCommand, /"workflowKey":"<workflow-key>"/);
-});
-
 test('the router and the SDK reference read as a skill package', () => {
   const router = files.get('SKILL.md') ?? '';
   assert.match(router, new RegExp(`^  version: "${runtimePackageVersion}"$`, 'm'));
   assert.equal(router.includes(`${dataRoot}/config.yaml`), true);
-  assert.equal(router.includes(`${dataRoot}/workflows/<key>/index.ts`), true);
+  assert.equal(router.includes(`${dataRoot}/workflows/<key>/`), true);
 
   const sdk = files.get('references/sdk/index.ts') ?? '';
   assert.match(sdk, /export function defineWorkflow/);

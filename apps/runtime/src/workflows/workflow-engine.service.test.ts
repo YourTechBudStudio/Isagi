@@ -4,11 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { cont, done, fail, suspend } from '@yourtechbudstudio/isagi-workflow-sdk';
+import {
+  hashArtifact,
+  hashWorkflowInputs,
+  serializeWorkflowBuildManifest,
+  workflowSdkPackage,
+  workflowVerifierPackage,
+} from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 import { eq } from 'drizzle-orm';
 import { Effect, Either, Layer } from 'effect';
 
 import type { WorkflowEvent } from '@isagi/contracts';
-import { cont, done, fail, suspend } from '@isagi/workflow-sdk';
 
 import {
   AgentSessionArtifacts,
@@ -62,7 +69,6 @@ import {
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import { resolveTurnEdge } from './resolver.js';
-import { ensureWorkflowsScaffold } from './scaffold.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
 import { deriveWorkflowRunSummary } from './workflow-run-projection.service.js';
@@ -78,6 +84,7 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -122,157 +129,31 @@ test('drainOnce runs an agentless cont workflow to done', async () => {
   }
 });
 
-test('verifyWorkflow resolves project scope from lexical worktree path and returns a manifest', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-ok-'));
+test('startWorkflow persists the real hash resolved by the filesystem registry', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-filesystem-start-'));
   try {
-    const result = await Effect.runPromise(
+    const artifactHash = writeVerifiedWorkflowPackage(
+      join(dataRoot, 'workflows', 'filesystem-start'),
+    );
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+    const run = await Effect.runPromise(
       Effect.gen(function* () {
         const engine = yield* WorkflowEngine;
-        return yield* engine.verifyWorkflow({
-          workflowKey: 'agentless-cont-done',
-          worktreePath: '/tmp/isagi-test-worktree/../isagi-test-worktree',
-        });
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.deepEqual(result, {
-      ok: true,
-      workflowKey: 'agentless-cont-done',
-      scope: { kind: 'project', projectId: 1 },
-      manifest: { title: 'Agentless cont/done' },
-    });
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('verifyWorkflow uses visible global scope for unmatched worktree paths', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-global-'));
-  try {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.verifyWorkflow({
-          workflowKey: 'agentless-cont-done',
-          worktreePath: '/tmp/not-a-known-worktree',
-        });
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.equal(result.scope.kind, 'global');
-    assert.equal(result.ok, true);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('verifyWorkflow returns resolve diagnostics for unknown keys', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-resolve-'));
-  try {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        return yield* engine.verifyWorkflow({
-          workflowKey: 'missing',
-          worktreePath: '/tmp/not-a-known-worktree',
-        });
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.equal(result.ok, false);
-    assert.equal(result.scope.kind, 'global');
-    assert.equal(result.ok ? undefined : result.diagnostics[0]?.stage, 'resolve');
-    assert.match(result.ok ? '' : (result.diagnostics[0]?.message ?? ''), /Known workflow keys/);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('verifyWorkflow returns command diagnostics when command throws', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-verify-command-'));
-  try {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const registry = yield* WorkflowRegistry;
-        yield* registry.addWorkflow('command-throws', {
-          command: () => {
-            throw new Error('command exploded');
-          },
-          validate: () => {},
-          init: () => ({}),
-          step: async () => done(),
-        });
-        const engine = yield* WorkflowEngine;
-        return yield* engine.verifyWorkflow({
-          workflowKey: 'command-throws',
-          worktreePath: '/tmp/isagi-test-worktree',
-        });
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    assert.equal(result.ok, false);
-    assert.equal(result.ok ? undefined : result.diagnostics[0]?.stage, 'command');
-    assert.match(result.ok ? '' : (result.diagnostics[0]?.message ?? ''), /command exploded/);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('startWorkflow executes a project workflow through the filesystem registry', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-project-workflow-run-'));
-  const projectRoot = '/tmp/isagi-test-project';
-  try {
-    writeFilesystemWorkflow(
-      join(projectRoot, '.isagi', 'workflows', 'project-run'),
-      `import { defineWorkflow, done } from '@isagi/workflow-sdk';
-
-export default defineWorkflow({
-  command: () => ({ title: 'Project run' }),
-  validate: () => {},
-  init: () => ({ phase: 'start' }),
-  step: async () => done({ source: 'project' }),
-});
-`,
-    );
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const engine = yield* WorkflowEngine;
-        const repository = yield* WorkflowRepository;
-        const run = yield* engine.startWorkflow({
-          workflowKey: 'project-run',
+        return yield* engine.startWorkflow({
+          workflowKey: 'filesystem-start',
           variables: {},
-          context: { worktreeId: 1, surfaceId: 1, agentSessionId: 10 },
+          context: { worktreeId: 1, surfaceId: 1 },
         });
-        yield* engine.drainOnce;
-        return yield* repository.findRun(run.id);
-      }).pipe(Effect.provide(workflowLayer(dataRoot, filesystemRegistryLayer(dataRoot)))),
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
     );
 
-    assert.equal(result?.status, 'done');
-    assert.equal(result?.workflowTitle, 'Project run');
-    assert.deepEqual(JSON.parse(result?.resultJson ?? '{}'), { source: 'project' });
-    assert.equal(
-      existsSync(
-        join(
-          dataRoot,
-          'workflows',
-          '.cache',
-          'workflow-definitions',
-          'projects',
-          '1',
-          'project-run',
-        ),
-      ),
-      true,
-    );
-    assert.equal(existsSync(join(projectRoot, '.isagi', 'workflows', '.cache')), false);
+    assert.equal(run.workflowArtifactHash, artifactHash);
+    assert.equal(existsSync(join(dataRoot, 'workflow-artifacts', artifactHash, 'index.mjs')), true);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
-    rmSync(join(projectRoot, '.isagi', 'workflows', 'project-run'), {
-      recursive: true,
-      force: true,
-    });
   }
 });
 
@@ -293,6 +174,7 @@ test('done(value) writes result_json and records reducer transition events', asy
         const run = yield* repository.createRun({
           workflowKey: 'done-with-value',
           workflowTitle: 'done-with-value',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -342,6 +224,7 @@ test('returned fail(reason) marks failed and records a non-thrown failure event'
         const run = yield* repository.createRun({
           workflowKey: 'returned-fail',
           workflowTitle: 'returned-fail',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'decide' },
           stateVersion: 1,
           worktreeId: 1,
@@ -380,6 +263,7 @@ test('drainOnce persists suspend as waiting without progressing it', async () =>
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -436,6 +320,7 @@ test('drainOnce immediately resumes a turn suspend whose terminal edge already l
         const run = yield* repository.createRun({
           workflowKey: 'suspend-race-catchup',
           workflowTitle: 'suspend-race-catchup',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -509,6 +394,7 @@ test('drainOnce immediately resumes a headless suspend whose op already complete
         const run = yield* repository.createRun({
           workflowKey: 'headless-race-catchup',
           workflowTitle: 'headless-race-catchup',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -590,6 +476,7 @@ test('thrown workflow step marks failed and preserves pre-step state and ui feed
         const run = yield* repository.createRun({
           workflowKey: 'feedback-then-throws',
           workflowTitle: 'feedback-then-throws',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'before_throw' },
           stateVersion: 1,
           worktreeId: 1,
@@ -622,6 +509,7 @@ test('thrown workflow step records a thrown failure event', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'agentless-throws',
           workflowTitle: 'agentless-throws',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'before_throw' },
           stateVersion: 1,
           worktreeId: 1,
@@ -656,6 +544,7 @@ test('deleting a workflow run cascades its event history', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -676,20 +565,30 @@ test('deleting a workflow run cascades its event history', async () => {
   }
 });
 
-test('runtime unknown workflow key uses the failed path with a diagnostic', async () => {
+test('legacy unpinned workflow run fails without resolving the latest workflow', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-unknown-runtime-'));
   try {
     const row = await Effect.runPromise(
       Effect.gen(function* () {
         const repository = yield* WorkflowRepository;
+        const database = yield* RuntimeDatabase;
         const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'removed-workflow',
           workflowTitle: 'removed-workflow',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'stale' },
           stateVersion: 1,
           worktreeId: 1,
         });
+
+        yield* database.use('test_clear_workflow_artifact_pin', (db) =>
+          db
+            .update(workflowRuns)
+            .set({ workflowArtifactHash: null })
+            .where(eq(workflowRuns.id, run.id))
+            .run(),
+        );
 
         yield* engine.drainOnce;
         return yield* repository.findRun(run.id);
@@ -697,7 +596,7 @@ test('runtime unknown workflow key uses the failed path with a diagnostic', asyn
     );
 
     assert.equal(row?.status, 'failed');
-    assert.match(JSON.parse(row?.error ?? '{}').message, /Unknown workflow_key 'removed-workflow'/);
+    assert.match(JSON.parse(row?.error ?? '{}').message, /no artifact pin/);
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'stale' });
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -781,6 +680,7 @@ test('root workflow summary reflects root state and tree prompts', () => {
   const root = workflowRunFixture({
     id: 1,
     workflowTitle: 'Gate workflow',
+    workflowArtifactHash: '0'.repeat(64),
     surfaceId: 7,
     rootRunId: 1,
     status: 'running',
@@ -830,6 +730,7 @@ test('root workflow summary reflects root state and tree prompts', () => {
     workflowRunFixture({
       id: 6,
       workflowTitle: 'Gate workflow',
+      workflowArtifactHash: '0'.repeat(64),
       surfaceId: 7,
       rootRunId: 6,
       status: 'waiting',
@@ -881,6 +782,7 @@ test('root workflow summary reflects root state and tree prompts', () => {
       workflowRunFixture({
         id: 7,
         workflowTitle: 'Gate workflow',
+        workflowArtifactHash: '0'.repeat(64),
         surfaceId: 7,
         rootRunId: 7,
         status: 'running',
@@ -1333,6 +1235,7 @@ test('workflow JOIN arm-time reconcile resumes when children are already termina
         const child = yield* repository.createRun({
           workflowKey: 'already-done-child',
           workflowTitle: 'already-done-child',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1374,6 +1277,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         const first = yield* repository.createRun({
           workflowKey: 'child-a',
           workflowTitle: 'child-a',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1382,6 +1286,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         const second = yield* repository.createRun({
           workflowKey: 'child-b',
           workflowTitle: 'child-b',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'done' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1394,6 +1299,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         const parent = yield* repository.createRun({
           workflowKey: 'parent',
           workflowTitle: 'parent',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'waiting' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1438,6 +1344,7 @@ test('setPaused(false) re-arms a paused workflow JOIN whose children have not al
         const child = yield* repository.createRun({
           workflowKey: 'child-pending',
           workflowTitle: 'child-pending',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'running' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1445,6 +1352,7 @@ test('setPaused(false) re-arms a paused workflow JOIN whose children have not al
         const parent = yield* repository.createRun({
           workflowKey: 'parent-pending',
           workflowTitle: 'parent-pending',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'waiting' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1490,6 +1398,7 @@ test('startup recoverer parks ready rows before the dispatcher startup drain', a
             .values({
               workflowKey: 'startup-fixture',
               workflowTitle: 'startup-fixture',
+              workflowArtifactHash: '0'.repeat(64),
               worktreeId: null,
               surfaceId: null,
               status: 'ready',
@@ -1556,6 +1465,7 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
             .values({
               workflowKey: 'startup-fixture',
               workflowTitle: 'startup-fixture',
+              workflowArtifactHash: '0'.repeat(64),
               worktreeId: null,
               surfaceId: null,
               status: 'waiting',
@@ -1628,6 +1538,7 @@ test('drainOnce claim leaves already-claimed ready rows to the winning worker', 
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -1675,6 +1586,7 @@ test('result writes do not clobber ui feedback from the same step', async () => 
         const run = yield* repository.createRun({
           workflowKey: 'feedback-then-cont',
           workflowTitle: 'feedback-then-cont',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'set_feedback' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1703,6 +1615,7 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1801,6 +1714,7 @@ test('resolver wakes an armed wait for a discovered Codex terminal despite a new
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1880,6 +1794,7 @@ test('paused waiting agent-turn run wakes to ready but is not dispatched', async
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'await_turn' },
           stateVersion: 1,
           worktreeId: 1,
@@ -1969,6 +1884,7 @@ test('step runner passes resume_payload as the workflow event and clears it on d
         const run = yield* repository.createRun({
           workflowKey: 'resume-consumer',
           workflowTitle: 'resume-consumer',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'unused' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2043,6 +1959,7 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'resume-fails',
           workflowTitle: 'resume-fails',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'unused' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2115,6 +2032,7 @@ test('setPaused(false) moves a paused null-wait run back to ready', async () => 
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -2144,6 +2062,7 @@ test('setPaused(false) reconciles a satisfied paused turn across a changed harne
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2210,6 +2129,7 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2282,6 +2202,7 @@ test('setPaused(false) reconciles turn edges that land while rearming a paused r
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2347,6 +2268,7 @@ test('setPaused(false) re-arms a paused turn when metadata changed and no termin
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2394,6 +2316,7 @@ test('setPaused(false) re-arms paused human waits without satisfying them', asyn
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2435,6 +2358,7 @@ test('setPaused(false) reissues paused headless waits without changing the persi
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2525,6 +2449,7 @@ test('setPaused(false) reconciles a headless result that completes while rearmin
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2612,6 +2537,7 @@ test('setPaused(true) sets the flag without changing lifecycle status or state',
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2640,6 +2566,7 @@ test('clear deletes a non-running surface tree and cascades workflow events', as
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2678,6 +2605,7 @@ test('root workflow log replay includes child events only when requested', async
         const root = yield* repository.createRun({
           workflowKey: 'root',
           workflowTitle: 'root',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'root' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2686,6 +2614,7 @@ test('root workflow log replay includes child events only when requested', async
         const child = yield* repository.createRun({
           workflowKey: 'child',
           workflowTitle: 'child',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'child' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2736,6 +2665,7 @@ test('clear marks a running tree cancel-requested without deleting the claimed r
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2764,6 +2694,7 @@ test('retry flips a failed surface root back to ready and clears error', async (
         const run = yield* repository.createRun({
           workflowKey: 'agentless-throws',
           workflowTitle: 'agentless throws',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'before_throw' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2815,6 +2746,7 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
         const run = yield* repository.createRun({
           workflowKey: 'resume-retry',
           workflowTitle: 'resume-retry',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'unused' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2900,6 +2832,7 @@ test('sweepSurfaceDeletedRuns tears down run trees orphaned by surface deletion'
         const orphan = yield* repository.createRun({
           workflowKey: 'orphaned',
           workflowTitle: 'orphaned',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'await_turn' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2917,6 +2850,7 @@ test('sweepSurfaceDeletedRuns tears down run trees orphaned by surface deletion'
         const kept = yield* repository.createRun({
           workflowKey: 'kept',
           workflowTitle: 'kept',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'running' },
           stateVersion: 1,
           worktreeId: 1,
@@ -2968,6 +2902,7 @@ test('advance wakes a waiting user_continue run with a tagged event', async () =
         const run = yield* repository.createRun({
           workflowKey: 'human-continue',
           workflowTitle: 'human-continue',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -3002,6 +2937,7 @@ test('advance treats no-longer-waiting runs as already resolved', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'agentless-cont-done',
           workflowTitle: 'agentless-cont-done',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'a', snapshots: ['a'] },
           stateVersion: 1,
           worktreeId: 1,
@@ -3058,6 +2994,7 @@ test('advance validates answers against persisted questions and applies defaults
         const run = yield* repository.createRun({
           workflowKey: 'human-input',
           workflowTitle: 'human-input',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'arm' },
           stateVersion: 1,
           worktreeId: 1,
@@ -3097,6 +3034,7 @@ test('advance rejects invalid answers and leaves the run waiting', async () => {
         const run = yield* repository.createRun({
           workflowKey: 'agentless-suspend',
           workflowTitle: 'agentless-suspend',
+          workflowArtifactHash: '0'.repeat(64),
           state: { phase: 'start' },
           stateVersion: 1,
           worktreeId: 1,
@@ -3783,6 +3721,7 @@ function workflowRunFixture(
     id,
     workflowKey: 'fixture',
     workflowTitle: 'Fixture workflow',
+    workflowArtifactHash: '0'.repeat(64),
     worktreeId: 1,
     surfaceId: 1,
     parentRunId: null,
@@ -3817,17 +3756,6 @@ function drainEngineUntilSettled(
 
 function testLayer(dataRoot: string) {
   return workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, createWorkflowRegistry()));
-}
-
-function filesystemRegistryLayer(dataRoot: string) {
-  const workflowsPath = join(dataRoot, 'workflows');
-  return Layer.effect(
-    WorkflowRegistry,
-    ensureWorkflowsScaffold({ workflowsPath }).pipe(
-      Effect.as(createFilesystemWorkflowRegistry(workflowsPath)),
-      Effect.orDie,
-    ),
-  );
 }
 
 function testLayerWithResumeFakes(
@@ -3956,9 +3884,53 @@ function readWorkflowLedgerEvents(path: string) {
     .map((line) => JSON.parse(line) as WorkflowEvent);
 }
 
-function writeFilesystemWorkflow(workflowPath: string, contents: string) {
-  mkdirSync(workflowPath, { recursive: true });
-  writeFileSync(join(workflowPath, 'index.ts'), contents, 'utf8');
+function writeVerifiedWorkflowPackage(root: string): string {
+  const artifact = `export default {
+  command: () => ({ title: 'Filesystem start' }),
+  validate: () => {},
+  init: () => ({ phase: 'start' }),
+  step: async () => ({ type: 'done' })
+};\n`;
+  const packageJson = `${JSON.stringify(
+    {
+      name: 'filesystem-start',
+      private: true,
+      packageManager: 'pnpm@11.4.0',
+      dependencies: { [workflowSdkPackage]: '0.0.1' },
+      devDependencies: { [workflowVerifierPackage]: '0.0.1' },
+    },
+    null,
+    2,
+  )}\n`;
+  const inputs = [
+    { path: 'src/index.ts', bytes: Buffer.from('// source\n') },
+    { path: 'tests/index.test.ts', bytes: Buffer.from('// test\n') },
+    { path: 'package.json', bytes: Buffer.from(packageJson) },
+    { path: 'tsconfig.json', bytes: Buffer.from('{}\n') },
+    { path: 'pnpm-lock.yaml', bytes: Buffer.from('lockfileVersion: 9.0\n') },
+  ];
+  mkdirSync(join(root, 'src'), { recursive: true });
+  mkdirSync(join(root, 'tests'), { recursive: true });
+  mkdirSync(join(root, 'dist'), { recursive: true });
+  for (const input of inputs) writeFileSync(join(root, input.path), input.bytes);
+  writeFileSync(join(root, 'dist', 'index.js'), artifact);
+  const artifactHash = hashArtifact(Buffer.from(artifact));
+  writeFileSync(
+    join(root, 'dist', 'isagi-workflow-build.json'),
+    serializeWorkflowBuildManifest({
+      manifestVersion: 1,
+      workflowContractVersion: 1,
+      sdk: { name: workflowSdkPackage, version: '0.0.1' },
+      verifier: { name: workflowVerifierPackage, version: '0.0.1' },
+      toolchain: {
+        nodeVersion: process.versions.node,
+        packageManager: { name: 'pnpm', version: '11.4.0' },
+      },
+      source: { sha256: hashWorkflowInputs(inputs) },
+      artifact: { entry: 'dist/index.js', sha256: artifactHash },
+    }),
+  );
+  return artifactHash;
 }
 
 const seedDefaultWorkspace = Effect.gen(function* () {
@@ -4206,6 +4178,7 @@ function fakeWorkflowRun(
     id: overrides.id ?? 99,
     workflowKey: 'test-workflow',
     workflowTitle: 'Test workflow',
+    workflowArtifactHash: '0'.repeat(64),
     worktreeId: 'worktreeId' in overrides ? (overrides.worktreeId ?? null) : 1,
     surfaceId: 'surfaceId' in overrides ? (overrides.surfaceId ?? null) : 1,
     parentRunId: null,
