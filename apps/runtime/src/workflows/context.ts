@@ -53,10 +53,8 @@ export function workflowContext(input: {
           paneId,
         }),
       ),
-    getConversationHistory: (target) =>
-      runEffect(input.capabilities.getConversationHistory(target)),
-    getHarnessSessionId: (agentSessionId) =>
-      runEffect(input.capabilities.getHarnessSessionId(agentSessionId)),
+    getConversationHistory: (agentSessionId) =>
+      runEffect(input.capabilities.getConversationHistory(agentSessionId)),
     runHeadlessAgent: (prompt) =>
       runEffect(
         input.capabilities.runHeadlessAgentForRun({

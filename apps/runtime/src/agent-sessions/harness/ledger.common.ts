@@ -8,45 +8,30 @@ async function readStdinJson() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString("utf8").trim();
-  if (!raw) return {};
+  if (!raw) return { ok: false, reason: "empty_stdin" };
   try {
-    return JSON.parse(raw);
+    const input = JSON.parse(raw);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return { ok: false, reason: "invalid_envelope" };
+    }
+    return { ok: true, input };
   } catch {
-    return {};
+    return { ok: false, reason: "invalid_json" };
   }
 }
 
-const input = await readStdinJson();
-const sessionId = typeof input.session_id === "string" ? input.session_id : null;
-const nativeEvent = typeof input.hook_event_name === "string" ? input.hook_event_name : null;
-await writeHarnessMetadata(sessionId);
-await appendHarnessEvent(sessionId, nativeEvent, {
-  nativeEvent,
-  notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
-  input: safeJsonValue(harnessHookInput(input)),
-});
-
-function harnessHookInput(input) {
-  return {
-    session_id: stringOrNull(input.session_id),
-    transcript_path: stringOrNull(input.transcript_path),
-    cwd: stringOrNull(input.cwd),
-    hook_event_name: stringOrNull(input.hook_event_name),
-    model: stringOrNull(input.model),
-    permission_mode: stringOrNull(input.permission_mode),
-    notification_type: stringOrNull(input.notification_type),
-    turn_id: stringOrNull(input.turn_id),
-    source: stringOrNull(input.source),
-    stop_hook_active: booleanOrNull(input.stop_hook_active),
-  };
-}
-
-function stringOrNull(value) {
-  return typeof value === "string" ? value : null;
-}
-
-function booleanOrNull(value) {
-  return typeof value === "boolean" ? value : null;
+const stdin = await readStdinJson();
+if (!stdin.ok) {
+  console.error("[isagi] Harness observation skipped: malformed hook input.");
+} else {
+  const sessionId = typeof stdin.input.session_id === "string" && stdin.input.session_id ? stdin.input.session_id : null;
+  const nativeEvent = typeof stdin.input.hook_event_name === "string" && stdin.input.hook_event_name ? stdin.input.hook_event_name : null;
+  if (!sessionId || !nativeEvent) {
+    console.error("[isagi] Harness observation skipped: malformed hook input.");
+  } else {
+    await writeHarnessMetadata(sessionId);
+    await appendHarnessEvent(sessionId, nativeEvent, safeJsonValue(stdin.input));
+  }
 }
 `;
 }
@@ -71,22 +56,70 @@ async function writeHarnessMetadata(${params}) {
   }
   try {
     const fs = await import("node:fs/promises");
-    await fs.access(metadataPath);
-    await fs.writeFile(
-      metadataPath,
-      JSON.stringify(
-        {
-          schemaVersion: 1,
-          harnessSessionId,
-          updatedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      ) + "\n",
-      "utf8",
-    );
+    if (!(await ensureSecureArtifactDirectory(fs))) return;
+    const file = await openSecureArtifactFile(fs, metadataPath, "w");
+    if (!file) return;
+    try {
+      await file.writeFile(
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            harnessSessionId,
+            updatedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ) + "\n",
+        "utf8",
+      );
+    } finally {
+      await file.close();
+    }
   } catch {
     // Observation must never block or fail the user's harness interaction.
+  }
+}
+
+async function ensureSecureArtifactDirectory(fs) {
+  if (!harnessArtifactDirectory) return false;
+  try {
+    await fs.mkdir(harnessArtifactDirectory, { recursive: true, mode: 0o700 });
+    const stat = await fs.lstat(harnessArtifactDirectory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (process.platform === "win32") return true;
+    await fs.chmod(harnessArtifactDirectory, 0o700);
+    return ((await fs.lstat(harnessArtifactDirectory)).mode & 0o777) === 0o700;
+  } catch {
+    return false;
+  }
+}
+
+async function openSecureArtifactFile(fs, path, mode) {
+  try {
+    try {
+      const stat = await fs.lstat(path);
+      if (!stat.isFile() || stat.isSymbolicLink()) return null;
+      if (process.platform !== "win32") await fs.chmod(path, 0o600);
+    } catch (error) {
+      if (error?.code !== "ENOENT") return null;
+    }
+    const nodeFs = await import("node:fs");
+    const flags = mode === "a" ? nodeFs.constants.O_APPEND | nodeFs.constants.O_CREAT | nodeFs.constants.O_WRONLY : nodeFs.constants.O_CREAT | nodeFs.constants.O_TRUNC | nodeFs.constants.O_WRONLY;
+    if (process.platform !== "win32" && !nodeFs.constants.O_NOFOLLOW) return null;
+    const file = await fs.open(
+      path,
+      flags | (process.platform === "win32" ? 0 : nodeFs.constants.O_NOFOLLOW),
+      0o600,
+    );
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      await file.close();
+      return null;
+    }
+    if (process.platform !== "win32") await file.chmod(0o600);
+    return file;
+  } catch {
+    return null;
   }
 }
 `;
@@ -123,25 +156,30 @@ async function appendHarnessEvent(harnessSessionId, nativeEvent, event) {
   try {
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
-    await fs.mkdir(harnessArtifactDirectory, { recursive: true });
+    if (!(await ensureSecureArtifactDirectory(fs))) return;
     const jsonlPath = path.join(
       harnessArtifactDirectory,
       harnessSessionLogFileName(harnessSessionId),
     );
-    await fs.appendFile(
-      jsonlPath,
-      JSON.stringify({
-        schemaVersion: 1,
-        recordedAt: new Date().toISOString(),
-        agentSessionId,
-        harnessSessionId,
-        ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
-        harness: ${JSON.stringify(harness)},
-        nativeEvent,
-        event,
-      }) + "\n",
-      "utf8",
-    );
+    const file = await openSecureArtifactFile(fs, jsonlPath, "a");
+    if (!file) return;
+    try {
+      await file.writeFile(
+        JSON.stringify({
+          schemaVersion: 1,
+          recordedAt: new Date().toISOString(),
+          agentSessionId,
+          harnessSessionId,
+          ptyProcessId: Number.isSafeInteger(ptyProcessId) && ptyProcessId > 0 ? ptyProcessId : null,
+          harness: ${JSON.stringify(harness)},
+          nativeEvent,
+          event,
+        }) + "\n",
+        "utf8",
+      );
+    } finally {
+      await file.close();
+    }
   } catch {
     // Observation must never block or fail the user's harness interaction.
   }

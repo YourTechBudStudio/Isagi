@@ -29,55 +29,60 @@ export function isTerminalTurnEdge(edge: { readonly type: string }): edge is Ter
   return edge.type === 'turn_ended' || edge.type === 'turn_failed';
 }
 
+export function hasInFlightTurn(edges: readonly WorkflowObservedTurnEdge[]) {
+  const activeByHarnessSessionId = new Map<string, number | null>();
+  for (const edge of edges) {
+    if (edge.type === 'turn_started') {
+      activeByHarnessSessionId.set(
+        edge.harnessSessionId,
+        typeof edge.seq === 'number' ? edge.seq : null,
+      );
+      continue;
+    }
+    const activeSeq = activeByHarnessSessionId.get(edge.harnessSessionId);
+    if (activeSeq === undefined) continue;
+    if (typeof edge.seq !== 'number' || edge.seq === activeSeq) {
+      activeByHarnessSessionId.delete(edge.harnessSessionId);
+    }
+  }
+  return activeByHarnessSessionId.size > 0;
+}
+
 export function findSatisfiedTerminalTurnEdge(
   condition: Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }>,
   edges: readonly WorkflowObservedTurnEdge[],
 ): TerminalTurnEdge | null {
-  const openStarts: TurnStartedEdge[] = [];
+  const start = edges
+    .filter(
+      (edge): edge is TurnStartedEdge =>
+        edge.type === 'turn_started' &&
+        edge.agentSessionId === condition.agentSessionId &&
+        edge.recordedAt >= condition.sentAt,
+    )
+    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))[0];
+  if (!start) return null;
 
-  for (const edge of edges) {
-    if (
-      edge.agentSessionId !== condition.agentSessionId ||
-      edge.harnessSessionId !== condition.harnessSessionId
-    ) {
-      continue;
-    }
-
-    if (edge.type === 'turn_started') {
-      openStarts.push(edge);
-      continue;
-    }
-
-    const start = matchedStart(openStarts, edge);
-    if (start) {
-      removeStart(openStarts, start);
-      if (start.recordedAt >= condition.sentAt) return edge;
-    }
-  }
-
-  return null;
+  return (
+    edges
+      .filter(
+        (edge): edge is TerminalTurnEdge =>
+          isTerminalTurnEdge(edge) &&
+          edge.agentSessionId === start.agentSessionId &&
+          edge.harnessSessionId === start.harnessSessionId &&
+          terminalMatchesStart(start, edge),
+      )
+      .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))[0] ?? null
+  );
 }
 
-function matchedStart(
-  openStarts: readonly TurnStartedEdge[],
-  terminal: TerminalTurnEdge,
-): TurnStartedEdge | null {
+function terminalMatchesStart(start: TurnStartedEdge, terminal: TerminalTurnEdge) {
   if (typeof terminal.seq === 'number') {
-    const sameSeq = openStarts.find((start) => start.seq === terminal.seq);
-    if (sameSeq) return sameSeq;
+    return start.seq === terminal.seq;
   }
 
-  for (let index = openStarts.length - 1; index >= 0; index -= 1) {
-    const start = openStarts[index];
-    if (start && start.recordedAt <= terminal.recordedAt) return start;
-  }
-
-  return null;
-}
-
-function removeStart(openStarts: TurnStartedEdge[], start: TurnStartedEdge) {
-  const index = openStarts.indexOf(start);
-  if (index >= 0) openStarts.splice(index, 1);
+  // Null-sequence failures are retained only for genuinely uncorrelated legacy
+  // process failures. Native provider terminals always pair by opening seq.
+  return start.recordedAt <= terminal.recordedAt;
 }
 
 export function resumePayload(edge: {

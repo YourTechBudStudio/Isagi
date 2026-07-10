@@ -395,7 +395,6 @@ test('drainOnce persists suspend as waiting without progressing it', async () =>
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
       kind: 'agent_turn',
       agentSessionId: 10,
-      harnessSessionId: 'phase-1-fixture',
       sentAt: '2026-06-18T00:00:00.000Z',
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting' });
@@ -424,7 +423,6 @@ test('drainOnce immediately resumes a turn suspend whose terminal edge already l
                 {
                   kind: 'agent_turn',
                   agentSessionId: 10,
-                  harnessSessionId: 'harness-a',
                   sentAt: '2026-06-18T00:00:00.000Z',
                 },
               );
@@ -462,7 +460,7 @@ test('drainOnce immediately resumes a turn suspend whose terminal edge already l
                 type: 'turn_ended',
                 agentSessionId: 10,
                 harnessSessionId: 'harness-a',
-                seq: 1,
+                seq: 0,
                 recordedAt: '2026-06-18T00:00:02.000Z',
               },
             ],
@@ -1565,7 +1563,6 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
               waitCondition: JSON.stringify({
                 kind: 'agent_turn',
                 agentSessionId: 10,
-                harnessSessionId: 'harness-a',
                 sentAt: '2026-06-18T00:00:00.000Z',
               }),
               resumePayload: null,
@@ -1614,7 +1611,6 @@ test('startup recoverer parks non-terminal rows and preserves wait shape', async
     assert.deepEqual(JSON.parse(row?.waitCondition ?? '{}'), {
       kind: 'agent_turn',
       agentSessionId: 10,
-      harnessSessionId: 'harness-a',
       sentAt: '2026-06-18T00:00:00.000Z',
     });
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'waiting_before_start' });
@@ -1719,7 +1715,6 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -1759,14 +1754,14 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
             {
               type: 'turn_started',
               agentSessionId: 10,
-              harnessSessionId: 'harness-a',
+              harnessSessionId: 'harness-after-slash-new',
               seq: 1,
               recordedAt: '2026-06-18T00:00:10.000Z',
             },
             {
               type: 'turn_ended',
               agentSessionId: 10,
-              harnessSessionId: 'harness-a',
+              harnessSessionId: 'harness-after-slash-new',
               seq: 1,
               recordedAt: '2026-06-18T00:00:10.000Z',
             },
@@ -1774,7 +1769,7 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
           edge: {
             type: 'turn_ended',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
+            harnessSessionId: 'harness-after-slash-new',
             recordedAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -1791,6 +1786,84 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:10.000Z',
     });
+    assert.equal(result.pokes, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('resolver wakes an armed wait for a discovered Codex terminal despite a newer active turn', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-codex-first-source-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const run = yield* repository.createRun({
+          workflowKey: 'agentless-suspend',
+          workflowTitle: 'agentless-suspend',
+          state: { phase: 'start' },
+          stateVersion: 1,
+          worktreeId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* repository.completeSuspend({
+          runId: run.id,
+          state: { phase: 'waiting' },
+          waitKind: 'agent_turn',
+          waitCondition: {
+            kind: 'agent_turn',
+            agentSessionId: 10,
+            sentAt: '2026-07-09T00:00:10.000Z',
+          },
+        });
+        const latestTerminal = {
+          type: 'turn_ended' as const,
+          agentSessionId: 10,
+          harnessSessionId: 'codex-session',
+          seq: 3,
+          recordedAt: '2026-07-09T00:00:12.000Z',
+        };
+        let pokes = 0;
+        yield* resolveTurnEdge({
+          repository,
+          engine: { poke: Effect.sync(() => void (pokes += 1)) },
+          observer: fakeHarnessLedgerObserver([
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'codex-session',
+              seq: 1,
+              recordedAt: '2026-07-09T00:00:01.000Z',
+            },
+            {
+              type: 'turn_ended',
+              agentSessionId: 10,
+              harnessSessionId: 'codex-session',
+              seq: 1,
+              recordedAt: '2026-07-09T00:00:02.000Z',
+            },
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'codex-session',
+              seq: 3,
+              recordedAt: '2026-07-09T00:00:10.000Z',
+            },
+            latestTerminal,
+            {
+              type: 'turn_started',
+              agentSessionId: 10,
+              harnessSessionId: 'codex-session',
+              seq: 5,
+              recordedAt: '2026-07-09T00:00:13.000Z',
+            },
+          ]),
+          edge: latestTerminal,
+        });
+        return { row: yield* repository.findRun(run.id), pokes };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+    assert.equal(result.row?.status, 'ready');
     assert.equal(result.pokes, 1);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
@@ -1820,7 +1893,6 @@ test('paused waiting agent-turn run wakes to ready but is not dispatched', async
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -1909,7 +1981,6 @@ test('step runner passes resume_payload as the workflow event and clears it on d
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
@@ -1984,7 +2055,6 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
@@ -2064,7 +2134,7 @@ test('setPaused(false) moves a paused null-wait run back to ready', async () => 
   }
 });
 
-test('setPaused(false) reconciles a satisfied paused turn run to ready', async () => {
+test('setPaused(false) reconciles a satisfied paused turn across a changed harness session', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-satisfied-'));
   try {
     const row = await Effect.runPromise(
@@ -2087,7 +2157,6 @@ test('setPaused(false) reconciles a satisfied paused turn run to ready', async (
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -2110,21 +2179,7 @@ test('setPaused(false) reconciles a satisfied paused turn run to ready', async (
                 type: 'turn_ended',
                 agentSessionId: 10,
                 harnessSessionId: 'other-harness',
-                seq: 1,
-                recordedAt: '2026-06-18T00:00:12.000Z',
-              },
-              {
-                type: 'turn_started',
-                agentSessionId: 10,
-                harnessSessionId: 'harness-a',
-                seq: 2,
-                recordedAt: '2026-06-18T00:00:11.000Z',
-              },
-              {
-                type: 'turn_ended',
-                agentSessionId: 10,
-                harnessSessionId: 'harness-a',
-                seq: 2,
+                seq: 0,
                 recordedAt: '2026-06-18T00:00:12.000Z',
               },
             ],
@@ -2168,7 +2223,6 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -2241,7 +2295,6 @@ test('setPaused(false) reconciles turn edges that land while rearming a paused r
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -2284,8 +2337,8 @@ test('setPaused(false) reconciles turn edges that land while rearming a paused r
   }
 });
 
-test('setPaused(false) fails a paused turn run when the harness session pin mismatches', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-pin-mismatch-'));
+test('setPaused(false) re-arms a paused turn when metadata changed and no terminal exists', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-metadata-change-'));
   try {
     const row = await Effect.runPromise(
       Effect.gen(function* () {
@@ -2307,7 +2360,6 @@ test('setPaused(false) fails a paused turn run when the harness session pin mism
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:10.000Z',
           },
         });
@@ -2324,8 +2376,9 @@ test('setPaused(false) fails a paused turn run when the harness session pin mism
       ),
     );
 
-    assert.equal(row?.status, 'failed');
-    assert.match(JSON.parse(row?.error ?? '{}').message, /harness session pin mismatch/);
+    assert.equal(row?.status, 'waiting');
+    assert.equal(row?.paused, false);
+    assert.equal(row?.error, null);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -2775,7 +2828,6 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
           waitCondition: {
             kind: 'agent_turn',
             agentSessionId: 10,
-            harnessSessionId: 'harness-a',
             sentAt: '2026-06-18T00:00:00.000Z',
           },
         });
@@ -3093,15 +3145,6 @@ test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste p
         ...fakeAgentSessionService(),
         activePtyProcessId: () => Effect.succeed(20),
       },
-      artifacts: fakeAgentSessionArtifacts({
-        status: 'valid',
-        metadata: {
-          schemaVersion: 1,
-          harnessSessionId: 'harness-a',
-          updatedAt: '2026-06-18T00:00:00.000Z',
-        },
-        metadataPath: '',
-      }),
       pty: {
         ...fakePtyService(),
         writeInput: (input) =>
@@ -3116,7 +3159,6 @@ test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste p
   );
 
   assert.equal(sent.agentSessionId, 10);
-  assert.equal(sent.harnessSessionId, 'harness-a');
   assert.match(sent.sentAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(
     writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
@@ -3131,6 +3173,39 @@ test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste p
   );
 });
 
+test('sendAgentPrompt establishes the observer baseline before the first write', async () => {
+  let projectionReads = 0;
+  const writes: Array<{ ptyProcessId: number; data: string }> = [];
+  await Effect.runPromise(
+    sendAgentPrompt({
+      agents: {
+        ...fakeAgentSessionService(),
+        activePtyProcessId: () => Effect.succeed(20),
+      },
+      pty: {
+        ...fakePtyService(),
+        writeInput: (input) =>
+          Effect.sync(() => {
+            writes.push(input);
+          }),
+      },
+      observer: {
+        ...fakeHarnessLedgerObserver(),
+        getProjection: () =>
+          Effect.sync(() => {
+            projectionReads += 1;
+            return projectionReads === 1 ? undefined : { recordsByHarnessSessionId: new Map() };
+          }),
+      },
+      agentSessionId: 10,
+      text: 'first prompt',
+    }),
+  );
+
+  assert.equal(projectionReads, 2);
+  assert.equal(writes.length, 2);
+});
+
 test('sendAgentPrompt fails before writing when a turn is in flight', async () => {
   const writes: Array<{ ptyProcessId: number; data: string }> = [];
   await assert.rejects(
@@ -3141,7 +3216,6 @@ test('sendAgentPrompt fails before writing when a turn is in flight', async () =
             ...fakeAgentSessionService(),
             activePtyProcessId: () => Effect.succeed(20),
           },
-          artifacts: fakeAgentSessionArtifacts(),
           pty: {
             ...fakePtyService(),
             writeInput: (input) =>
@@ -3176,15 +3250,6 @@ test('sendAgentPrompt allows a session whose started turn has a synthesized term
         ...fakeAgentSessionService(),
         activePtyProcessId: () => Effect.succeed(20),
       },
-      artifacts: fakeAgentSessionArtifacts({
-        status: 'valid',
-        metadata: {
-          schemaVersion: 1,
-          harnessSessionId: 'harness-a',
-          updatedAt: '2026-06-18T00:00:00.000Z',
-        },
-        metadataPath: '',
-      }),
       pty: {
         ...fakePtyService(),
         writeInput: (input) =>
@@ -3365,7 +3430,6 @@ test('workflow capabilities spawnAgentSessionForRun splits the captured surface 
   );
 
   assert.equal(spawned.agentSessionId, 11);
-  assert.equal(spawned.harnessSessionId, 'harness-b');
   assert.equal(spawned.paneId, 8);
   assert.deepEqual(splitInputs, [
     {
@@ -3407,100 +3471,6 @@ test('workflow capabilities spawnAgentSessionForRun hard-fails when the run has 
         }).pipe(Effect.provide(workflowCapabilitiesLayer())),
       ),
     /cannot spawn without a surface_id/,
-  );
-});
-
-test('workflow capabilities getHarnessSessionId returns the captured harness session id', async () => {
-  const id = await Effect.runPromise(
-    Effect.gen(function* () {
-      const capabilities = yield* WorkflowCapabilities;
-      return yield* capabilities.getHarnessSessionId(11);
-    }).pipe(
-      Effect.provide(
-        workflowCapabilitiesLayer({
-          artifacts: fakeAgentSessionArtifacts({
-            status: 'valid',
-            metadata: {
-              schemaVersion: 1,
-              harnessSessionId: 'harness-z',
-              updatedAt: '2026-06-18T00:00:00.000Z',
-            },
-            metadataPath: '',
-          }),
-        }),
-      ),
-    ),
-  );
-
-  assert.equal(id, 'harness-z');
-});
-
-test('workflow capabilities getHarnessSessionId rejects when metadata has no captured harness session id', async () => {
-  await assert.rejects(
-    () =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const capabilities = yield* WorkflowCapabilities;
-          return yield* capabilities.getHarnessSessionId(11);
-        }).pipe(
-          Effect.provide(
-            workflowCapabilitiesLayer({
-              artifacts: fakeAgentSessionArtifacts({
-                status: 'valid',
-                metadata: {
-                  schemaVersion: 1,
-                  harnessSessionId: null,
-                  updatedAt: '2026-06-18T00:00:00.000Z',
-                },
-                metadataPath: '',
-              }),
-            }),
-          ),
-        ),
-      ),
-    /does not have a captured harness session id/,
-  );
-});
-
-test('workflow capabilities getHarnessSessionId rejects when metadata is missing', async () => {
-  await assert.rejects(
-    () =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const capabilities = yield* WorkflowCapabilities;
-          return yield* capabilities.getHarnessSessionId(11);
-        }).pipe(
-          Effect.provide(
-            workflowCapabilitiesLayer({
-              artifacts: fakeAgentSessionArtifacts({ status: 'missing', metadataPath: '' }),
-            }),
-          ),
-        ),
-      ),
-    /has no captured harness metadata/,
-  );
-});
-
-test('workflow capabilities getHarnessSessionId surfaces the diagnostic when metadata is invalid', async () => {
-  await assert.rejects(
-    () =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          const capabilities = yield* WorkflowCapabilities;
-          return yield* capabilities.getHarnessSessionId(11);
-        }).pipe(
-          Effect.provide(
-            workflowCapabilitiesLayer({
-              artifacts: fakeAgentSessionArtifacts({
-                status: 'invalid',
-                metadataPath: '',
-                diagnostic: 'metadata file is not valid JSON',
-              }),
-            }),
-          ),
-        ),
-      ),
-    /invalid harness metadata: metadata file is not valid JSON/,
   );
 });
 
@@ -3681,7 +3651,6 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
         calls.push(`spawn:${input.run.id}:${input.input.harness}:${input.input.prompt}`);
         return {
           agentSessionId: 11,
-          harnessSessionId: 'harness-a',
           sentAt: '2026-06-18T00:00:00.000Z',
           paneId: 8,
         };
@@ -3691,7 +3660,6 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
         calls.push(`send:${input.agentSessionId}:${input.text}`);
         return {
           agentSessionId: input.agentSessionId,
-          harnessSessionId: 'harness-b',
           sentAt: '2026-06-18T00:00:01.000Z',
         };
       }),
@@ -3699,15 +3667,10 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
       Effect.sync(() => {
         calls.push(`close:${input.run.id}:${input.paneId}`);
       }),
-    getConversationHistory: (target) =>
+    getConversationHistory: (agentSessionId) =>
       Effect.sync(() => {
-        calls.push(`history:${target.agentSessionId}:${target.harnessSessionId}`);
+        calls.push(`history:${agentSessionId}`);
         return [];
-      }),
-    getHarnessSessionId: (agentSessionId) =>
-      Effect.sync(() => {
-        calls.push(`harness:${agentSessionId}`);
-        return 'harness-c';
       }),
     runHeadlessAgentForRun: (input) =>
       Effect.sync(() => {
@@ -3746,8 +3709,7 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
   await ctx.spawnAgentSession({ harness: 'pi', prompt: 'seed' });
   await ctx.sendAgentPrompt(11, 'next');
   await ctx.closePane(8);
-  await ctx.getConversationHistory({ agentSessionId: 11, harnessSessionId: 'harness-a' });
-  await ctx.getHarnessSessionId(11);
+  await ctx.getConversationHistory(11);
   await ctx.runHeadlessAgent({ harness: 'claude', prompt: 'judge', timeoutMs: 1000 });
   await ctx.log('info', 'note');
   await ctx.setUiFeedback({ phase: 'working' });
@@ -3757,8 +3719,7 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
     'spawn:99:pi:seed',
     'send:11:next',
     'close:99:8',
-    'history:11:harness-a',
-    'harness:11',
+    'history:11',
     'headless:99:/tmp/isagi-test-worktree:judge',
     'log:99:info:note',
     'feedback:99:working',
@@ -4209,7 +4170,6 @@ function fakeAgentSessionArtifacts(
     prepareProcessArtifacts: () => Effect.die('artifacts prepareProcessArtifacts is not used'),
     readMetadata: () =>
       metadata ? Effect.succeed(metadata) : Effect.die('artifacts readMetadata is not used'),
-    readJsonlForAgentSession: () => Effect.die('artifacts readJsonlForAgentSession is not used'),
     listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.die('artifacts writeHarnessSessionId is not used'),
     removeDirectory: () => Effect.die('artifacts removeDirectory is not used'),
@@ -4220,9 +4180,9 @@ function fakeHarnessLedgerObserver(
   edges: readonly ObservedHarnessTurnEdge[] = [],
 ): HarnessLedgerObserverService {
   return {
-    reconcileAgentSession: () => Effect.void,
-    getProjection: () => Effect.succeed(undefined),
+    getProjection: () => Effect.succeed({ recordsByHarnessSessionId: new Map() }),
     getTurnEdges: () => Effect.succeed(edges),
+    getAttention: () => Effect.succeed('idle' as const),
   };
 }
 
@@ -4288,19 +4248,16 @@ function fakeWorkflowCapabilities(): WorkflowCapabilitiesService {
     spawnAgentSessionForRun: () =>
       Effect.succeed({
         agentSessionId: 11,
-        harnessSessionId: 'harness-a',
         sentAt: '2026-06-18T00:00:00.000Z',
         paneId: 8,
       }),
     sendAgentPrompt: () =>
       Effect.succeed({
         agentSessionId: 11,
-        harnessSessionId: 'harness-a',
         sentAt: '2026-06-18T00:00:00.000Z',
       }),
     closePaneForRun: () => Effect.void,
     getConversationHistory: () => Effect.succeed([]),
-    getHarnessSessionId: () => Effect.succeed('harness-a'),
     runHeadlessAgentForRun: () =>
       Effect.succeed({
         opId: 'op-1',

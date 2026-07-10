@@ -1,4 +1,16 @@
-import { type Dirent, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  constants,
+  chmodSync,
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import { Context, Data, Effect, Layer } from 'effect';
@@ -29,12 +41,6 @@ export interface AgentSessionHarnessJsonlRecord {
   readonly event: unknown;
 }
 
-export interface AgentSessionHarnessJsonlRead {
-  readonly path: string;
-  readonly records: readonly AgentSessionHarnessJsonlRecord[];
-  readonly ignoredLineCount: number;
-}
-
 export type AgentSessionHarnessMetadataRead =
   | {
       readonly status: 'valid';
@@ -56,7 +62,7 @@ export class AgentSessionArtifactError extends Data.TaggedError('AgentSessionArt
     | 'metadata_init_failed'
     | 'metadata_write_failed'
     | 'jsonl_init_failed'
-    | 'jsonl_read_failed'
+    | 'artifact_permissions_insecure'
     | 'artifact_cleanup_failed';
   readonly agentSessionId: number;
   readonly path: string;
@@ -76,9 +82,6 @@ export interface AgentSessionArtifactsService {
     readonly ptyProcessId: number;
   }) => Effect.Effect<AgentSessionArtifactPaths, AgentSessionArtifactError>;
   readonly readMetadata: (agentSessionId: number) => Effect.Effect<AgentSessionHarnessMetadataRead>;
-  readonly readJsonlForAgentSession: (
-    agentSessionId: number,
-  ) => Effect.Effect<readonly AgentSessionHarnessJsonlRead[], AgentSessionArtifactError>;
   readonly listAgentSessionIds: Effect.Effect<readonly number[]>;
   readonly writeHarnessSessionId: (input: {
     readonly agentSessionId: number;
@@ -98,6 +101,13 @@ export const AgentSessionArtifactsLive = Layer.effect(
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
     const root = join(directory.paths.sessionsPath, 'agent-sessions');
+    try {
+      ensureSecureArtifactDirectory(root);
+    } catch {
+      console.warn(
+        '[runtime] Harness artifact root could not be secured; observation will degrade.',
+      );
+    }
 
     const service = {
       paths: (input) => artifactPaths(root, input),
@@ -105,8 +115,12 @@ export const AgentSessionArtifactsLive = Layer.effect(
         Effect.try({
           try: () => {
             const paths = artifactPaths(root, { agentSessionId });
-            mkdirSync(paths.directory, { recursive: true });
-            writeFileSync(paths.metadataPath, `${JSON.stringify(initialMetadata(), null, 2)}\n`);
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
+            writeSecureArtifactFile(
+              paths.metadataPath,
+              `${JSON.stringify(initialMetadata(), null, 2)}\n`,
+            );
           },
           catch: (cause) =>
             new AgentSessionArtifactError({
@@ -120,7 +134,8 @@ export const AgentSessionArtifactsLive = Layer.effect(
         Effect.try({
           try: () => {
             const paths = artifactPaths(root, input);
-            mkdirSync(paths.directory, { recursive: true });
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
             return paths;
           },
           catch: (cause) =>
@@ -135,6 +150,8 @@ export const AgentSessionArtifactsLive = Layer.effect(
         Effect.sync(() => {
           const paths = artifactPaths(root, { agentSessionId });
           try {
+            assertSecureArtifactPath(paths.directory, 'directory');
+            assertSecureArtifactPath(paths.metadataPath, 'file');
             return {
               status: 'valid',
               metadata: parseMetadata(readFileSync(paths.metadataPath, 'utf8')),
@@ -153,52 +170,29 @@ export const AgentSessionArtifactsLive = Layer.effect(
             } satisfies AgentSessionHarnessMetadataRead;
           }
         }),
-      readJsonlForAgentSession: (agentSessionId) =>
-        Effect.try({
-          try: () => {
-            const paths = artifactPaths(root, { agentSessionId });
-            let entries: Dirent[];
-            try {
-              entries = readdirSync(paths.directory, { withFileTypes: true });
-            } catch (error) {
-              if (isMissingFileError(error)) return [];
-              throw error;
-            }
-            return entries
-              .filter((entry) => entry.isFile())
-              .map((entry) => entry.name)
-              .filter(isHarnessJsonlFileName)
-              .sort((a, b) => a.localeCompare(b))
-              .map((fileName) => {
-                const filePath = join(paths.directory, fileName);
-                return parseJsonl(filePath, readFileSync(filePath, 'utf8'));
-              });
-          },
-          catch: (error) =>
-            new AgentSessionArtifactError({
-              code: 'jsonl_read_failed',
-              agentSessionId,
-              path: artifactPaths(root, { agentSessionId }).directory,
-              cause: error,
-            }),
-        }),
       listAgentSessionIds: Effect.sync(() => {
         try {
+          assertSecureArtifactPath(root, 'directory');
           return readdirSync(root, { withFileTypes: true })
             .filter((entry) => entry.isDirectory())
             .map((entry) => Number(entry.name))
             .filter((id) => Number.isSafeInteger(id) && id > 0);
         } catch (error) {
           if (isMissingFileError(error)) return [];
-          throw error;
+          console.warn('[runtime] Harness artifact inventory is unavailable', {
+            root,
+            error,
+          });
+          return [];
         }
       }),
       writeHarnessSessionId: (input) =>
         Effect.try({
           try: () => {
             const paths = artifactPaths(root, { agentSessionId: input.agentSessionId });
-            mkdirSync(paths.directory, { recursive: true });
-            writeFileSync(
+            ensureSecureArtifactDirectory(root);
+            ensureSecureArtifactDirectory(paths.directory);
+            writeSecureArtifactFile(
               paths.metadataPath,
               `${JSON.stringify(
                 {
@@ -252,23 +246,62 @@ function artifactPaths(
   };
 }
 
-export function parseJsonl(path: string, raw: string): AgentSessionHarnessJsonlRead {
-  const records: AgentSessionHarnessJsonlRecord[] = [];
-  let ignoredLineCount = 0;
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const record = parseJsonlRecord(line);
-      if (record) records.push(record);
-      else ignoredLineCount += 1;
-    } catch {
-      ignoredLineCount += 1;
-    }
+function ensureSecureArtifactDirectory(path: string) {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error('Harness artifact directory is not a real directory.');
   }
-  return { path, records, ignoredLineCount };
+  if (process.platform === 'win32') return;
+  // `mkdir` leaves an existing directory's mode untouched, so every write path
+  // deliberately re-applies the sensitive-artifact policy.
+  chmodSync(path, 0o700);
+  const secured = lstatSync(path);
+  if ((secured.mode & 0o777) !== 0o700) {
+    throw new Error('Harness artifact directory permissions are insecure.');
+  }
 }
 
-function parseJsonlRecord(line: string): AgentSessionHarnessJsonlRecord | null {
+function assertSecureArtifactPath(path: string, kind: 'directory' | 'file') {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || (kind === 'directory' ? !stat.isDirectory() : !stat.isFile())) {
+    throw new Error(`Harness artifact path is not a regular ${kind}.`);
+  }
+}
+
+function writeSecureArtifactFile(path: string, content: string) {
+  try {
+    assertSecureArtifactPath(path, 'file');
+    if (process.platform !== 'win32') chmodSync(path, 0o600);
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+  }
+  if (process.platform !== 'win32' && !constants.O_NOFOLLOW) {
+    throw new Error('Secure no-follow file writes are unavailable.');
+  }
+  const fd = openSync(
+    path,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_TRUNC |
+      (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
+    0o600,
+  );
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('Harness artifact is not a regular file.');
+    writeFileSync(fd, content, 'utf8');
+    if (process.platform === 'win32') return;
+    chmodSync(path, 0o600);
+    if ((lstatSync(path).mode & 0o777) !== 0o600) {
+      throw new Error('Harness artifact permissions are insecure.');
+    }
+  } finally {
+    // `writeFileSync` does not own a caller-provided descriptor.
+    closeSync(fd);
+  }
+}
+
+export function parseJsonlRecord(line: string): AgentSessionHarnessJsonlRecord | null {
   const parsed = JSON.parse(line) as unknown;
   if (!parsed || typeof parsed !== 'object') return null;
   const record = parsed as Record<string, unknown>;
@@ -304,10 +337,6 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isAgentHarness(value: unknown): value is AgentHarness {
   return value === 'pi' || value === 'opencode' || value === 'claude' || value === 'codex';
-}
-
-function isHarnessJsonlFileName(fileName: string) {
-  return /^[^.]+\.harness\.jsonl$/.test(fileName);
 }
 
 function initialMetadata(): AgentSessionHarnessMetadata {

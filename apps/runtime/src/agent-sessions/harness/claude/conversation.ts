@@ -187,7 +187,8 @@ function stopHookTranscriptPaths(
   for (const [harnessSessionId, records] of streams) {
     for (const record of records) {
       if (record.harness !== 'claude' || record.nativeEvent !== 'Stop') continue;
-      const transcriptPath = stringField(eventObject(record.event).input, 'transcript_path');
+      const event = eventObject(record.event);
+      const transcriptPath = stringField(event, 'transcript_path');
       if (!transcriptPath || seen.has(transcriptPath)) continue;
       seen.add(transcriptPath);
       paths.push({ harnessSessionId, path: transcriptPath });

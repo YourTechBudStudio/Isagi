@@ -58,7 +58,6 @@ test('the skill example workflow suspends on the turn it just started', async ()
   await withLoadedExample(async (definition) => {
     const spawned = {
       agentSessionId: 7,
-      harnessSessionId: 'harness-session-1',
       sentAt: '2026-01-01T00:00:00.000Z',
       paneId: 9,
     };
@@ -79,7 +78,6 @@ test('the skill example workflow suspends on the turn it just started', async ()
     assert.deepEqual(result.condition, {
       kind: 'agent_turn',
       agentSessionId: spawned.agentSessionId,
-      harnessSessionId: spawned.harnessSessionId,
       sentAt: spawned.sentAt,
     });
     assert.deepEqual(phases, ['Asking a reviewer']);
@@ -139,7 +137,6 @@ function stubContext(overrides: {
     sendAgentPrompt: unexpected('sendAgentPrompt'),
     closePane: unexpected('closePane'),
     getConversationHistory: unexpected('getConversationHistory'),
-    getHarnessSessionId: unexpected('getHarnessSessionId'),
     runHeadlessAgent: unexpected('runHeadlessAgent'),
     startWorkflow: unexpected('startWorkflow'),
     log: async () => {},

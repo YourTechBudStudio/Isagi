@@ -50,7 +50,6 @@ test('runtime events websocket answers explicit attention snapshot requests', as
     Layer.mergeAll(
       RuntimeEventBusLive,
       Layer.succeed(AgentSessionAttentionProjection, {
-        reconcileAgentSession: () => Effect.void,
         agentSessionAttention: () => Effect.succeed('idle' as const),
         terminalSessionAttention: () => 'idle' as const,
         listAttentionSources: Effect.succeed([

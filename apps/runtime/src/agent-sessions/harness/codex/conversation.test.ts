@@ -80,11 +80,7 @@ function record(
     ptyProcessId: 20,
     harness: 'codex',
     nativeEvent,
-    event: {
-      nativeEvent,
-      notificationType: null,
-      input: { hook_event_name: nativeEvent, ...input },
-    },
+    event: { hook_event_name: nativeEvent, ...input },
   };
 }
 

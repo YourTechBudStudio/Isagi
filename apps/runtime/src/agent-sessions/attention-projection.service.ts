@@ -14,13 +14,10 @@ import {
 import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
 import { deriveAgentSessionState } from '../surfaces/session-status.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
-import { deriveLastKnownHarnessAttention } from './harness/attention.js';
 import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './harness/ledger.js';
 import { HarnessLedgerObserver } from './harness/observer.service.js';
-import type { HarnessObservationProjection } from './harness/projection.js';
 
 export interface AgentSessionAttentionProjectionService {
-  readonly reconcileAgentSession: (agentSessionId: number) => Effect.Effect<void>;
   readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
   readonly terminalSessionAttention: (session: TerminalSessionRow) => TerminalAttentionState;
   readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
@@ -40,18 +37,16 @@ export const AgentSessionAttentionProjectionLive = Layer.effect(
     const observer = yield* HarnessLedgerObserver;
 
     const service: AgentSessionAttentionProjectionService = {
-      reconcileAgentSession: observer.reconcileAgentSession,
       agentSessionAttention: (session) =>
         Effect.gen(function* () {
-          const projection = yield* observer.getProjection(session.id);
-          return deriveAgentSessionAttention(session, projection);
+          const harnessAttention = yield* observer.getAttention(session.id);
+          return deriveAgentSessionAttention(session, harnessAttention ?? 'idle');
         }),
       terminalSessionAttention: (session) => deriveTerminalSessionAttention(session, foreground),
       listAttentionSources: Effect.suspend(() =>
         listAttentionSources(artifacts, database, service),
       ),
     };
-
     return service;
   }),
 );
@@ -232,7 +227,7 @@ function decodeArgs(json: string) {
 
 function deriveAgentSessionAttention(
   session: AgentSessionRow,
-  projection: HarnessObservationProjection | undefined,
+  harnessAttention: AttentionState,
 ): AttentionState {
   // Attention is a function of the single derived session state shared with the
   // surface projection (`deriveAgentSessionState`), so the rail dot and the pane
@@ -244,7 +239,7 @@ function deriveAgentSessionAttention(
   const state = deriveAgentSessionState(session);
   switch (state.status) {
     case 'running':
-      return deriveObservedHarnessAttention(session, projection);
+      return harnessAttention;
     case 'starting':
       // Spinning up, or resumable with no live process yet — calm until it runs.
       return 'idle';
@@ -258,16 +253,6 @@ function deriveAgentSessionAttention(
       // attach failed — a genuine failure the user must recover from.
       return 'error';
   }
-}
-
-function deriveObservedHarnessAttention(
-  session: AgentSessionRow,
-  projection: HarnessObservationProjection | undefined,
-): AttentionState {
-  const records = session.harnessSessionId
-    ? (projection?.recordsByHarnessSessionId.get(session.harnessSessionId) ?? [])
-    : [];
-  return deriveLastKnownHarnessAttention(session.harness, records);
 }
 
 function killedAgentAttention(process: PtyProcessRow | null): AttentionState {

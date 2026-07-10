@@ -434,6 +434,44 @@ test('Claude conversation warns and returns empty for unreadable transcript path
   }
 });
 
+test('Claude conversation reads raw Stop transcript_path records', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-raw-hook-transcript-'));
+  try {
+    const transcript = join(root, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      entry({
+        uuid: 'user-1',
+        type: 'user',
+        promptSource: 'typed',
+        message: { role: 'user', content: 'raw hook fallback' },
+      }),
+      'utf8',
+    );
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [
+          [
+            'claude-1',
+            [
+              {
+                ...stopRecord(0, transcript),
+                event: { hook_event_name: 'Stop', transcript_path: transcript },
+              },
+            ],
+          ],
+        ],
+      }),
+    );
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'raw hook fallback' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function stopRecord(seq: number, transcriptPath: string): HarnessObservationRecord {
   return {
     recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
@@ -442,11 +480,8 @@ function stopRecord(seq: number, transcriptPath: string): HarnessObservationReco
     harness: 'claude',
     nativeEvent: 'Stop',
     event: {
-      nativeEvent: 'Stop',
-      input: {
-        hook_event_name: 'Stop',
-        transcript_path: transcriptPath,
-      },
+      hook_event_name: 'Stop',
+      transcript_path: transcriptPath,
     },
   };
 }

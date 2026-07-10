@@ -91,10 +91,6 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
           ) {
             return;
           }
-          const agent = yield* agents
-            .findByActivePtyProcessId(event.ptyProcessId)
-            .pipe(Effect.orElseSucceed(() => null));
-          if (agent) yield* publishAgentSessionChanged(publicBus, surfaces, attention, agent);
           const terminal = yield* terminals
             .findByActivePtyProcessId(event.ptyProcessId)
             .pipe(Effect.orElseSucceed(() => null));

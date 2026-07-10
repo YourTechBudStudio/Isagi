@@ -1,5 +1,5 @@
+import type { HarnessTurnEdge } from '../lifecycle.js';
 import type { HarnessObservationRecord } from '../projection.js';
-import type { HarnessTurnEdge } from '../turns.js';
 
 export function derivePiTurnEdges(
   records: readonly HarnessObservationRecord[],

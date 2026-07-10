@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 
 import { harnessEnvForProcess } from '../env.js';
+import { shellQuote } from '../ledger.common.js';
 import type { AgentSessionArtifactsService } from '../ledger.js';
 import type { HarnessHeadlessLaunchContext, HarnessLaunchContext } from '../types.js';
 
@@ -69,7 +70,6 @@ export function buildCodexHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
 function codexHookArgs(hookPath: string) {
   const command = `node ${shellQuote(hookPath)}`;
   const hook = `{ type = "command", command = ${tomlString(command)}, timeout = 5, statusMessage = "Recording Codex session" }`;
-  const inputHook = `{ hooks = [${hook}] }`;
   const sessionStartHook = `{ matcher = "startup|resume", hooks = [${hook}] }`;
   return [
     '--enable',
@@ -79,17 +79,9 @@ function codexHookArgs(hookPath: string) {
     '--dangerously-bypass-hook-trust',
     '-c',
     `hooks.SessionStart=[${sessionStartHook}]`,
-    '-c',
-    `hooks.UserPromptSubmit=[${inputHook}]`,
-    '-c',
-    `hooks.Stop=[${inputHook}]`,
   ];
 }
 
 function tomlString(value: string) {
   return JSON.stringify(value);
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

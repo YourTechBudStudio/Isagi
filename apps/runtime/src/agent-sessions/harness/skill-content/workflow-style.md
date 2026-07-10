@@ -177,15 +177,21 @@ case 'await_review': {
 
 ## Session discipline
 
-**Re-pin from every `sendAgentPrompt` return.** The verb returns the `harnessSessionId` and `sentAt`
-it actually used. If you keep an agent's identity in state and reuse it, overwrite those two fields
-with what you just got back. A stale `harnessSessionId` makes the next conversation read point at a
-stream that no longer exists, and the next wait point at a turn that will never come.
+**Keep provider identity out of workflow state.** Store the durable `agentSessionId` and any `paneId`
+needed for cleanup. `sendAgentPrompt` returns a fresh provider-agnostic turn target; pass that target
+directly to `wait.agentTurn`. The runtime correlates it with provider-native lifecycle evidence.
 
 ```ts
 const sent = await ctx.sendAgentPrompt(reviewer.agentSessionId, prompt);
-const pinned = { ...reviewer, harnessSessionId: sent.harnessSessionId, sentAt: sent.sentAt };
+return suspend(
+  { ...state, phase: 'await_review' },
+  wait.agentTurn(sent),
+);
 ```
+
+Switching or resetting the underlying harness conversation while a workflow-controlled turn is
+active is unsupported. The wait remains attached to the original correlated turn rather than moving
+to a later conversation.
 
 **Validate the launch context you actually need.** A workflow that drives the pane it was launched
 from must reject a null `launchCtx.agentSessionId` in `validate`, with a message that tells the user

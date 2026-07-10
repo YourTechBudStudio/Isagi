@@ -48,6 +48,13 @@ export function buildOpenCodeLaunch(
           runtimeUrl: dependencies.runtimeUrl,
           extraEnv: {
             OPENCODE_CONFIG_CONTENT: configContent,
+            // Keep foreground subagents and every other experimental feature
+            // available. This narrowly prevents a root session from becoming
+            // terminal before an Isagi-unobservable background child completes.
+            OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'false',
+            ...(input.latestHarnessSessionId
+              ? { ISAGI_OPENCODE_RESUMED_ROOT_SESSION_ID: input.latestHarnessSessionId }
+              : {}),
           },
         }),
     };

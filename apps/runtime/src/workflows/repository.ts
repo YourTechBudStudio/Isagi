@@ -59,10 +59,9 @@ export interface WorkflowRepositoryService {
     readonly runId: number;
     readonly owner: string;
   }) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
-  readonly findWaitingAgentTurnRuns: (input: {
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-  }) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
+  readonly findWaitingAgentTurnRuns: (
+    agentSessionId: number,
+  ) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
   readonly findWaitingWorkflowRuns: (
     childRunId: number,
   ) => Effect.Effect<WorkflowRunRow[], DatabaseError>;
@@ -411,7 +410,7 @@ export const WorkflowRepositoryLive = Layer.effect(
           .pipe(
             Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
           ),
-      findWaitingAgentTurnRuns: (input) =>
+      findWaitingAgentTurnRuns: (agentSessionId) =>
         database.use('find_waiting_agent_turn_workflow_runs', (db) =>
           db
             .select(runColumns)
@@ -420,8 +419,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               and(
                 eq(workflowRuns.status, 'waiting'),
                 eq(workflowRuns.waitKind, 'agent_turn'),
-                sql`json_extract(${workflowRuns.waitCondition}, '$.agentSessionId') = ${input.agentSessionId}`,
-                sql`json_extract(${workflowRuns.waitCondition}, '$.harnessSessionId') = ${input.harnessSessionId}`,
+                sql`json_extract(${workflowRuns.waitCondition}, '$.agentSessionId') = ${agentSessionId}`,
               ),
             )
             .orderBy(asc(workflowRuns.id))

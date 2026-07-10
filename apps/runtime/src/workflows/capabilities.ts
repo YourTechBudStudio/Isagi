@@ -30,6 +30,7 @@ import { WorkflowEventLedger, workflowEventLedgerWarningPayload } from './event-
 import { WorkflowHeadless } from './headless.js';
 import { appendInternalWorkflowLogBestEffort } from './run-failure.js';
 import type { WorkflowRunRow, WorkflowUiFeedback } from './types.js';
+import { hasInFlightTurn } from './wait-conditions.js';
 
 type Eq<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const harnessParity: Eq<WorkflowAgentHarness, AgentHarness> = true;
@@ -70,11 +71,9 @@ export interface WorkflowCapabilitiesService {
     readonly run: WorkflowRunRow;
     readonly paneId: number;
   }) => Effect.Effect<void, unknown>;
-  readonly getConversationHistory: (target: {
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-  }) => Effect.Effect<readonly WorkflowConversationMessage[], unknown>;
-  readonly getHarnessSessionId: (agentSessionId: number) => Effect.Effect<string, unknown>;
+  readonly getConversationHistory: (
+    agentSessionId: number,
+  ) => Effect.Effect<readonly WorkflowConversationMessage[], unknown>;
   readonly runHeadlessAgentForRun: (input: {
     readonly run: WorkflowRunRow;
     readonly worktreePath: string;
@@ -121,7 +120,6 @@ export const WorkflowCapabilitiesLive = Layer.effect(
         sendAgentPrompt({
           agents,
           pty,
-          artifacts,
           observer,
           agentSessionId: input.agentSessionId,
           text: input.text,
@@ -132,16 +130,18 @@ export const WorkflowCapabilitiesLive = Layer.effect(
           surfaces,
           paneId: input.paneId,
         }),
-      getConversationHistory: (target) =>
+      getConversationHistory: (agentSessionId) =>
         Effect.gen(function* () {
-          const session = yield* agents.get(target.agentSessionId);
+          const session = yield* agents.get(agentSessionId);
+          const harnessSessionId = yield* harnessSessionIdForAgentSession(
+            artifacts,
+            agentSessionId,
+          );
           return yield* readConversationHistory({
             ...session,
-            harnessSessionId: target.harnessSessionId,
+            harnessSessionId,
           }).pipe(Effect.provideService(HarnessLedgerObserver, observer));
         }),
-      getHarnessSessionId: (agentSessionId) =>
-        harnessSessionIdForAgentSession(artifacts, agentSessionId),
       runHeadlessAgentForRun: (input) =>
         headless.runHeadlessAgent({
           runId: input.run.id,
@@ -184,21 +184,17 @@ function normalizeUiFeedback(feedback: WorkflowUiFeedback): WorkflowUiFeedback {
 export function sendAgentPrompt(input: {
   readonly agents: AgentSessionServiceShape;
   readonly pty: PtyServiceShape;
-  readonly artifacts: AgentSessionArtifactsService;
   readonly observer: HarnessLedgerObserverService;
   readonly agentSessionId: number;
   readonly text: string;
 }) {
   return Effect.gen(function* () {
+    yield* waitForObserverInitialization(input.observer, input.agentSessionId);
     if (yield* isTurnInFlight(input.observer, input.agentSessionId)) {
       throw new Error(
         `Cannot send an agent prompt into session ${input.agentSessionId}: a turn is already in flight.`,
       );
     }
-    const harnessSessionId = yield* harnessSessionIdForAgentSession(
-      input.artifacts,
-      input.agentSessionId,
-    );
     const ptyProcessId = yield* input.agents.activePtyProcessId(input.agentSessionId);
     const sentAt = new Date().toISOString();
     yield* writePromptToPty({
@@ -208,7 +204,6 @@ export function sendAgentPrompt(input: {
     });
     return {
       agentSessionId: input.agentSessionId,
-      harnessSessionId,
       sentAt,
     };
   });
@@ -303,6 +298,7 @@ function spawnAgentSession(input: {
           }),
         ),
     );
+    yield* waitForObserverInitialization(input.observer, agentSessionId);
     yield* diagnosticPhase(
       'workflow.spawn.await_startup_output',
       { ...sessionContext, ptyProcessId },
@@ -331,7 +327,7 @@ function spawnAgentSession(input: {
         text: input.input.prompt,
       }),
     );
-    const harnessSessionId = yield* diagnosticPhase(
+    yield* diagnosticPhase(
       'workflow.spawn.await_harness_session_id',
       { ...sessionContext, ptyProcessId },
       waitForHarnessSessionId({
@@ -351,7 +347,6 @@ function spawnAgentSession(input: {
     );
     return {
       agentSessionId,
-      harnessSessionId,
       sentAt,
       paneId: created.paneId,
     };
@@ -429,17 +424,18 @@ function lastLeafPaneId(layout: SurfaceLayoutNode): number {
 function isTurnInFlight(observer: HarnessLedgerObserverService, agentSessionId: number) {
   return Effect.gen(function* () {
     const edges = yield* observer.getTurnEdges(agentSessionId);
-    const activeByHarnessSessionId = new Set<string>();
-    for (const edge of edges) {
-      if (edge.type === 'turn_started') {
-        activeByHarnessSessionId.add(edge.harnessSessionId);
-        continue;
-      }
-      if (edge.type === 'turn_ended' || edge.type === 'turn_failed') {
-        activeByHarnessSessionId.delete(edge.harnessSessionId);
-      }
-    }
-    return activeByHarnessSessionId.size > 0;
+    return hasInFlightTurn(edges);
+  });
+}
+
+function waitForObserverInitialization(
+  observer: HarnessLedgerObserverService,
+  agentSessionId: number,
+): Effect.Effect<void, unknown, never> {
+  return Effect.gen(function* () {
+    if ((yield* observer.getProjection(agentSessionId)) !== undefined) return;
+    yield* Effect.sleep(`${startupPollMs} millis`);
+    return yield* waitForObserverInitialization(observer, agentSessionId);
   });
 }
 

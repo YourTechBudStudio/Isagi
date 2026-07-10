@@ -13,7 +13,6 @@ import {
 
 type ReviewerPane = {
   readonly agentSessionId: number;
-  readonly harnessSessionId: string;
   readonly paneId: number;
   readonly sentAt: string;
 };
@@ -78,10 +77,7 @@ export default defineWorkflow<State, Variables>({
         const turnFailed = await requireEndedTurn(ctx, event, 'the reviewer');
         if (turnFailed) return turnFailed;
 
-        const history = await ctx.getConversationHistory({
-          agentSessionId: reviewer.agentSessionId,
-          harnessSessionId: reviewer.harnessSessionId,
-        });
+        const history = await ctx.getConversationHistory(reviewer.agentSessionId);
         const review = latestAssistantText(history);
         if (!review) {
           await ctx.setUiFeedback({

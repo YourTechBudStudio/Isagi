@@ -446,9 +446,6 @@ function emptyCtx() {
     },
     closePane: async () => {},
     getConversationHistory: async () => [],
-    getHarnessSessionId: async () => {
-      throw new Error('getHarnessSessionId is not used');
-    },
     runHeadlessAgent: async () => {
       throw new Error('runHeadlessAgent is not used');
     },

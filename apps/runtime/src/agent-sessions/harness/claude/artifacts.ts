@@ -11,10 +11,13 @@ export function claudeSettings(input: { readonly hookPath: string }) {
     timeout: 2,
   } as const;
   const hookEntry = { hooks: [hook] } as const;
+  const askUserQuestionEntry = { matcher: 'AskUserQuestion', hooks: [hook] } as const;
   return {
     hooks: {
       UserPromptSubmit: [hookEntry],
-      Notification: [{ matcher: 'idle_prompt', hooks: [hook] }],
+      PreToolUse: [askUserQuestionEntry],
+      PostToolUse: [askUserQuestionEntry],
+      PostToolUseFailure: [askUserQuestionEntry],
       Stop: [hookEntry],
       StopFailure: [hookEntry],
     },

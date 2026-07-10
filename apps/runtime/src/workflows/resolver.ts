@@ -180,10 +180,7 @@ export function resolveTurnEdge(input: {
   return Effect.gen(function* () {
     const edges = yield* input.observer.getTurnEdges(input.edge.agentSessionId);
     if (!edges.some(isTerminalTurnEdge)) return;
-    const candidates = yield* input.repository.findWaitingAgentTurnRuns({
-      agentSessionId: input.edge.agentSessionId,
-      harnessSessionId: input.edge.harnessSessionId,
-    });
+    const candidates = yield* input.repository.findWaitingAgentTurnRuns(input.edge.agentSessionId);
     let wokeAny = false;
     for (const run of candidates) {
       const condition = parseTurnWaitCondition(run);

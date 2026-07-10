@@ -9,7 +9,6 @@ export { AgentSessionArtifacts, AgentSessionArtifactsLive } from './harness/ledg
 export type {
   AgentSessionArtifactPaths,
   AgentSessionArtifactsService,
-  AgentSessionHarnessJsonlRead,
   AgentSessionHarnessJsonlRecord,
   AgentSessionHarnessMetadata,
   AgentSessionHarnessMetadataRead,

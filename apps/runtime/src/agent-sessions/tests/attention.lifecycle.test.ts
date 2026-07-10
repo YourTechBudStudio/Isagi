@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,12 +8,12 @@ import { Effect } from 'effect';
 
 import { PtyForegroundState } from '../../pty-processes/index.js';
 import { AgentSessionAttentionProjection } from '../attention-projection.service.js';
-import { AgentSessionArtifacts } from '../harness/ledger.js';
 import {
   agentSession,
   appendRecord,
   harnessLogPath,
   ptyProcess,
+  seedActiveAgentSession,
   terminalSession,
   testLayer,
 } from './test-support.js';
@@ -23,14 +23,7 @@ test('agent attention is idle when cleanly exited and error when the process is 
   try {
     const states = await Effect.runPromise(
       Effect.gen(function* () {
-        const artifacts = yield* AgentSessionArtifacts;
         const attention = yield* AgentSessionAttentionProjection;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
-        appendRecord(harnessLogPath(paths.directory), 'agent_start', null);
-        yield* attention.reconcileAgentSession(10);
         const exited = yield* attention.agentSessionAttention(
           agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
         );
@@ -55,14 +48,7 @@ test('agent attention ignores last-known waiting once the process is gone', asyn
   try {
     const states = await Effect.runPromise(
       Effect.gen(function* () {
-        const artifacts = yield* AgentSessionArtifacts;
         const attention = yield* AgentSessionAttentionProjection;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
-        appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
-        yield* attention.reconcileAgentSession(10);
         const exited = yield* attention.agentSessionAttention(
           agentSession({ activePtyProcess: ptyProcess({ id: 20, status: 'exited' }) }),
         );
@@ -87,14 +73,7 @@ test('agent attention treats only deliberate kill reasons as idle, all others as
   try {
     const states = await Effect.runPromise(
       Effect.gen(function* () {
-        const artifacts = yield* AgentSessionArtifacts;
         const attention = yield* AgentSessionAttentionProjection;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
-        // Idle observed harness state (no records yet) overlaid with a killed PTY.
-        yield* attention.reconcileAgentSession(10);
         const killedByUser = yield* attention.agentSessionAttention(
           agentSession({
             activePtyProcess: ptyProcess({
@@ -130,8 +109,6 @@ test('agent attention treats only deliberate kill reasons as idle, all others as
 
         // A non-benign kill is an error even when the last-observed harness state
         // was waiting — a dead process is never "waiting on you".
-        appendRecord(harnessLogPath(paths.directory), 'agent_end', false);
-        yield* attention.reconcileAgentSession(10);
         const failureKillStaysError = yield* attention.agentSessionAttention(
           agentSession({
             activePtyProcess: ptyProcess({
@@ -211,8 +188,18 @@ test('terminal attention treats only deliberate kill reasons as idle, all others
 test('startup attention reads pre-existing harness logs before applying process lifecycle', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-attention-startup-overlay-'));
   try {
+    await seedActiveAgentSession(dataRoot);
     const directory = join(dataRoot, 'sessions', 'agent-sessions', '10');
-    mkdirSync(directory, { recursive: true });
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(directory, 'harness.json'),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        harnessSessionId: 'pi-session-1',
+        updatedAt: '2026-07-09T00:00:00.000Z',
+      })}\n`,
+      { mode: 0o600 },
+    );
     appendRecord(harnessLogPath(directory), 'agent_start', null);
 
     const state = await Effect.runPromise(

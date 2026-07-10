@@ -143,7 +143,6 @@ function testWorkflows(): Record<string, WorkflowDefinition<unknown>> {
           { phase: 'waiting' },
           wait.agentTurn({
             agentSessionId: 10,
-            harnessSessionId: 'phase-1-fixture',
             sentAt: '2026-06-18T00:00:00.000Z',
           }),
         ),
@@ -172,7 +171,6 @@ function agentGateWorkflow(input: {
       const current = state as {
         readonly phase: 'spawn' | 'await_turn';
         readonly agentSessionId?: number | undefined;
-        readonly harnessSessionId?: string | undefined;
         readonly sentAt?: string | undefined;
       };
       if (current.phase === 'spawn') {
@@ -192,7 +190,6 @@ function agentGateWorkflow(input: {
           {
             phase: 'await_turn',
             agentSessionId: seeded.agentSessionId,
-            harnessSessionId: seeded.harnessSessionId,
             sentAt: seeded.sentAt,
           },
           wait.agentTurn(seeded),
@@ -206,13 +203,10 @@ function agentGateWorkflow(input: {
       if (payload?.outcome === 'failed') {
         throw new Error(`${input.label} workflow gate turn failed: ${payload.reason}`);
       }
-      if (payload?.outcome !== 'ended' || !current.agentSessionId || !current.harnessSessionId) {
+      if (payload?.outcome !== 'ended' || !current.agentSessionId) {
         throw new Error(`${input.label} workflow gate resumed without a completed turn payload.`);
       }
-      const history = await ctx.getConversationHistory({
-        agentSessionId: current.agentSessionId,
-        harnessSessionId: current.harnessSessionId,
-      });
+      const history = await ctx.getConversationHistory(current.agentSessionId);
       const message = latestAssistantText(history) ?? `${input.label} completed the workflow gate.`;
       await ctx.setUiFeedback({ phase: 'done', message });
       return done();

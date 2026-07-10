@@ -3,120 +3,110 @@ import { appendHarnessEventSource, writeHarnessMetadataSource } from '../ledger.
 export function opencodePluginSource() {
   return String.raw`${writeHarnessMetadataSource()}
 ${appendHarnessEventSource('opencode')}
-${writeOpenCodeStatusSource()}
 
 function sessionIdFromEvent(event) {
-  const properties = event?.properties;
-  return (
-    properties?.sessionID ??
-    properties?.sessionId ??
-    properties?.info?.sessionID ??
-    properties?.info?.sessionId ??
-    properties?.part?.sessionID ??
-    properties?.part?.sessionId ??
-    properties?.session?.id ??
-    properties?.info?.id ??
-    null
-  );
+  const sessionId = event?.properties?.sessionID;
+  return typeof sessionId === "string" && sessionId ? sessionId : null;
 }
 
 function sessionIdFromHookInput(input) {
-  return input?.sessionID ?? input?.sessionId ?? input?.session?.id ?? null;
+  const sessionId = input?.sessionID;
+  return typeof sessionId === "string" && sessionId ? sessionId : null;
+}
+
+function isQuestionEvent(event) {
+  return event?.type === "question.asked" || event?.type === "question.replied" || event?.type === "question.rejected";
+}
+
+const establishedRootSessionIds = new Set();
+const resumedRootSessionId = process.env.ISAGI_OPENCODE_RESUMED_ROOT_SESSION_ID;
+let latestRootSessionId = null;
+if (typeof resumedRootSessionId === "string" && resumedRootSessionId) {
+  establishedRootSessionIds.add(resumedRootSessionId);
+  latestRootSessionId = resumedRootSessionId;
+}
+let ignoredUnknownRootEvents = 0;
+
+function rootSessionIdFromCreated(event) {
+  const info = event?.properties?.info;
+  if (!info || typeof info !== "object") return null;
+  if (typeof info.id !== "string" || !info.id) return null;
+  if (info.parentID !== undefined && info.parentID !== null) return null;
+  return info.id;
+}
+
+function establishRootSession(sessionId) {
+  establishedRootSessionIds.add(sessionId);
+  latestRootSessionId = sessionId;
+}
+
+function isEstablishedRootSession(sessionId) {
+  return typeof sessionId === "string" && establishedRootSessionIds.has(sessionId);
+}
+
+async function writeLatestRootMetadata(sessionId) {
+  if (sessionId !== latestRootSessionId) return;
+  await writeHarnessMetadata(sessionId);
+}
+
+function diagnoseUnknownRootEvent() {
+  if (ignoredUnknownRootEvents >= 16) return;
+  ignoredUnknownRootEvents += 1;
+  console.error("[isagi] OpenCode observation skipped: root session is not established.");
 }
 
 export const IsagiSessionObserver = async () => {
   return {
     event: async ({ event }) => {
       if (!event) return;
+      if (event.type === "session.created") {
+        const sessionId = rootSessionIdFromCreated(event);
+        if (!sessionId) return;
+        establishRootSession(sessionId);
+        await writeLatestRootMetadata(sessionId);
+        await appendHarnessEvent(sessionId, "session.created", safeJsonValue(event));
+        return;
+      }
       if (event.type === "session.status") {
         const sessionId = sessionIdFromEvent(event);
-        await writeHarnessMetadata(sessionId);
-        await appendHarnessEvent(sessionId, "session.status", {
-          nativeEvent: "session.status",
-          event: minimalOpenCodeEvent(event),
-          orderKey: openCodeEventOrderKey(event),
-          status: sessionStatusFromEvent(event),
-        });
+        if (!isEstablishedRootSession(sessionId)) {
+          diagnoseUnknownRootEvent();
+          return;
+        }
+        await writeLatestRootMetadata(sessionId);
+        await appendHarnessEvent(sessionId, "session.status", safeJsonValue(event));
         return;
       }
-      if (event.type === "session.idle" || event.type === "session.error") {
+      if (event.type === "session.error") {
         const sessionId = sessionIdFromEvent(event);
-        await writeHarnessMetadata(sessionId);
-        await appendHarnessEvent(sessionId, event.type, {
-          nativeEvent: event.type,
-          event: minimalOpenCodeEvent(event),
-          orderKey: openCodeEventOrderKey(event),
-        });
+        if (!isEstablishedRootSession(sessionId)) {
+          diagnoseUnknownRootEvent();
+          return;
+        }
+        await writeLatestRootMetadata(sessionId);
+        await appendHarnessEvent(sessionId, event.type, safeJsonValue(event));
         return;
       }
-      if (event.type === "session.created" || event.type === "session.updated") {
-        await writeHarnessMetadata(sessionIdFromEvent(event));
+      if (isQuestionEvent(event)) {
+        const sessionId = sessionIdFromEvent(event);
+        if (!isEstablishedRootSession(sessionId)) {
+          diagnoseUnknownRootEvent();
+          return;
+        }
+        await writeLatestRootMetadata(sessionId);
+        await appendHarnessEvent(sessionId, event.type, safeJsonValue(event));
+        return;
+      }
+      if (event.type === "session.updated") {
+        const sessionId = sessionIdFromEvent(event);
+        if (isEstablishedRootSession(sessionId)) await writeLatestRootMetadata(sessionId);
       }
     },
     "chat.params": async (input) => {
-      await writeHarnessMetadata(sessionIdFromHookInput(input));
-    },
-    "chat.message": async (input, output) => {
-      await writeHarnessMetadata(sessionIdFromHookInput(input));
-      await appendHarnessEvent(sessionIdFromHookInput(input), "agent_start", {
-        nativeEvent: "agent_start",
-        sessionId: sessionIdFromHookInput(input),
-        messageId: openCodeHookMessageId(input),
-        orderKey: openCodeHookOrderKey(input),
-      });
+      const sessionId = sessionIdFromHookInput(input);
+      if (isEstablishedRootSession(sessionId)) await writeLatestRootMetadata(sessionId);
     },
   };
 };
-`;
-}
-
-function writeOpenCodeStatusSource() {
-  return String.raw`function sessionStatusFromEvent(event) {
-  const status = event?.properties?.status ?? event?.properties?.session?.status ?? event?.status;
-  if (typeof status === "string" && status) return status;
-  if (status && typeof status === "object" && typeof status.type === "string" && status.type) {
-    return status.type;
-  }
-  return null;
-}
-
-function minimalOpenCodeEvent(event) {
-  return {
-    id: stringOrNull(event?.id),
-    type: stringOrNull(event?.type),
-    properties: {
-      sessionID: sessionIdFromEvent(event),
-      status: sessionStatusFromEvent(event),
-    },
-  };
-}
-
-function openCodeEventOrderKey(event) {
-  return sortableOpenCodeId(stringOrNull(event?.id));
-}
-
-function openCodeHookOrderKey(input) {
-  return sortableOpenCodeId(openCodeHookMessageId(input) ?? stringOrNull(input?.event?.id));
-}
-
-function openCodeHookMessageId(input) {
-  return (
-    stringOrNull(input?.messageID) ??
-    stringOrNull(input?.messageId) ??
-    stringOrNull(input?.message?.id) ??
-    stringOrNull(input?.info?.id) ??
-    null
-  );
-}
-
-function sortableOpenCodeId(id) {
-  if (!id) return null;
-  const separator = id.indexOf("_");
-  return separator >= 0 ? id.slice(separator + 1) : id;
-}
-
-function stringOrNull(value) {
-  return typeof value === "string" && value ? value : null;
-}
 `;
 }

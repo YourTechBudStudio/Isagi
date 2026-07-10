@@ -11,10 +11,7 @@
 
 import { Effect, Either } from 'effect';
 
-import type {
-  AgentSessionArtifactsService,
-  HarnessLedgerObserverService,
-} from '../agent-sessions/index.js';
+import type { HarnessLedgerObserverService } from '../agent-sessions/index.js';
 import type { InternalRuntimeEventBusService } from '../runtime-events/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import type { WorkflowEventLedgerService } from './event-ledger.service.js';
@@ -39,7 +36,6 @@ import {
 export function continuePausedRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
-  readonly artifacts: AgentSessionArtifactsService;
   readonly observer: HarnessLedgerObserverService;
   readonly headless: WorkflowHeadlessService;
   readonly eventLedger: WorkflowEventLedgerService;
@@ -270,7 +266,6 @@ function continuePausedHeadlessRun(input: {
 function continuePausedTurnRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
-  readonly artifacts: AgentSessionArtifactsService;
   readonly observer: HarnessLedgerObserverService;
   readonly eventLedger: WorkflowEventLedgerService;
   readonly eventBus: InternalRuntimeEventBusService;
@@ -287,30 +282,6 @@ function continuePausedTurnRun(input: {
         error: {
           message: `Workflow run ${input.run.id} has an invalid turn wait_condition.`,
           context: { workflowRunId: input.run.id },
-        },
-        stateSnapshot: { stateJson: input.run.stateJson },
-      });
-      return;
-    }
-
-    const metadata = yield* input.artifacts.readMetadata(condition.agentSessionId);
-    const currentHarnessSessionId =
-      metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null;
-    if (currentHarnessSessionId !== condition.harnessSessionId) {
-      yield* failWorkflowRunAndPublish({
-        repository: input.repository,
-        eventBus: input.eventBus,
-        eventLedger: input.eventLedger,
-        run: input.run,
-        error: {
-          message: `Workflow run ${input.run.id} cannot continue: harness session pin mismatch.`,
-          context: {
-            workflowRunId: input.run.id,
-            agentSessionId: condition.agentSessionId,
-            expectedHarnessSessionId: condition.harnessSessionId,
-            currentHarnessSessionId,
-            metadataStatus: metadata.status,
-          },
         },
         stateSnapshot: { stateJson: input.run.stateJson },
       });

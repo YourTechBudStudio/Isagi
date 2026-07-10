@@ -77,7 +77,11 @@ export const AgentSessionServiceLive = Layer.effect(
           agentSessionId: session.id,
           ptyProcessId: process.ptyProcessId,
         });
-        yield* publishChanged(session.id);
+        yield* eventBus.publish({
+          type: 'agent_session_active_process_changed',
+          agentSessionId: session.id,
+          ptyProcessId: process.ptyProcessId,
+        });
         return process.ptyProcessId;
       });
 

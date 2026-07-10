@@ -264,26 +264,27 @@ Promise becomes a thrown step, which the engine records as a `failed` run.
 
 ### The `ctx` verbs
 
-The action surface is `worktreePath` plus nine verbs (`WorkflowContext` in
+The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
 `packages/workflow-sdk/src/index.ts`):
 
 - **`spawnAgentSession({ harness, prompt, model?, effort? })` →
-  `{ agentSessionId, harnessSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
+  `{ agentSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
   It adds an agent pane to the run's captured surface, waits for the PTY to come live and produce
   initial startup output, gives the TUI a fixed settle window, stamps `sentAt`, sends the **seed
-  prompt**, then polls the harness metadata for the `harnessSessionId` (which only appears after the
-  first prompt) and returns it. Every wait is bounded (~10s) and times out into a `failed` run
-  rather than hanging the dispatcher. The return value doubles as an **agent-turn wait target**.
+  prompt**, then waits for the harness to capture launch metadata. Existing startup waits are
+  bounded (~10s) and time out into a `failed` run rather than hanging the dispatcher. Harness
+  metadata is launch/discovery state, not workflow turn identity. The return value doubles as an
+  **agent-turn wait target**.
   - Placement is deterministic and runtime-owned: a single-pane surface splits `right`; otherwise
     the runtime descends to the last leaf of the layout tree and splits it `down`, so repeated
     agent panes stack in the right/bottom region.
   - A missing run `surface_id` is a hard verb failure. Workflows never create surfaces.
-- **`sendAgentPrompt(agentSessionId, text)` → `{ agentSessionId, harnessSessionId, sentAt }`.** A
-  runtime-internal, backend-direct PTY write independent of any frontend attachment. It pins the
-  session's _current_ captured `harnessSessionId`, resolves the current PTY incarnation, and reads
-  the harness turn edges first — rejecting if any `turn_started` is unmatched (the **quiescence
-  guard**), so injection only happens at quiescence. It captures `sentAt` immediately before the
-  bracketed-paste + Enter write and returns the **agent-turn wait target**, so authors write:
+- **`sendAgentPrompt(agentSessionId, text)` → `{ agentSessionId, sentAt }`.** A runtime-internal,
+  backend-direct PTY write independent of any frontend attachment. It first waits for the observer's
+  empty/current baseline, resolves the current PTY incarnation, and reads the harness turn edges —
+  rejecting if any `turn_started` is unmatched (the **quiescence guard**), so injection only happens
+  at quiescence. It captures `sentAt` immediately before the bracketed-paste + Enter write and
+  returns the provider-agnostic **agent-turn wait target**, so authors write:
 
   ```ts
   const sent = await ctx.sendAgentPrompt(agentSessionId, prompt);
@@ -292,13 +293,9 @@ The action surface is `worktreePath` plus nine verbs (`WorkflowContext` in
 
 - **`closePane(paneId)`** — closes a pane on the run's captured surface. If it is the last pane the
   surface is deleted; workflow authors should close panes they spawned, not the originating pane.
-- **`getConversationHistory({ agentSessionId, harnessSessionId })`** — role-tagged message text from
-  the harness ledger for the pinned harness invocation. Both ids are required: `agentSessionId`
-  identifies the durable session, `harnessSessionId` the exact harness stream, preventing a read
-  from a newer incarnation of the same durable session.
-- **`getHarnessSessionId(agentSessionId)`** — the current captured harness session id for a durable
-  agent session. Use it when a workflow starts from an existing agent pane and needs to pin a wait
-  or a conversation-history read to that pane's current harness stream.
+- **`getConversationHistory(agentSessionId)`** — role-tagged message text from the durable agent's
+  current harness conversation. Runtime resolves provider identity internally from captured
+  metadata; workflow code never stores or supplies a harness session id.
 - **`runHeadlessAgent({ prompt, harness, model?, effort?, timeoutMs? })` → `{ opId, launch }`.**
   Launches a trusted, agentic, non-interactive harness run in the worktree cwd and returns
   immediately. `launch.timeoutMs` is normalized before return so workflows persist a self-contained
@@ -328,8 +325,8 @@ The SDK adds two minimal helper objects so authors never hand-write protocol lit
 
 "Minimal" scopes the **helper families**, not the verb surface. There are deliberately no helper
 families for conversation, launch context, variables, schemas, state summaries, or headless JSON
-extraction. The conversation _verbs_ (`getConversationHistory`, `getHarnessSessionId`) still exist —
-real workflows need pinned harness reads; only the extra helpers were declined.
+extraction. Conversation remains a direct `getConversationHistory` verb; only the extra helpers were
+declined.
 
 ### Capabilities vs. context
 
@@ -355,21 +352,23 @@ Waits are physical facts on the summarized run: the run that suspends is the run
 
 ### Agent-turn waits and the watermark
 
-An `agent_turn` wait stores `{ agentSessionId, harnessSessionId, sentAt }`. The harness-observation
-layer emits `turn_started` / `turn_ended` / `turn_failed` edges, each carrying `agentSessionId`,
-`harnessSessionId`, `seq`, and `recordedAt`.
+An `agent_turn` wait stores `{ agentSessionId, sentAt }`. The harness-observation layer emits
+`turn_started` / `turn_ended` / `turn_failed` edges, each carrying internal `agentSessionId`,
+`harnessSessionId`, `seq`, and `recordedAt` correlation facts.
 
 - **Watermark (start-edge):** the wait is satisfied by the terminal edge (`turn_ended`/`turn_failed`)
-  whose _matched_ `turn_started` — for the pinned `(agentSessionId, harnessSessionId)` — has
-  `recordedAt ≥ sentAt`. The gate is on the turn's **start**, not its end: a turn already in flight
-  when the prompt was sent does not satisfy the wait even if it ends afterward. One
-  `findSatisfiedTerminalTurnEdge(condition, edges)` evaluator serves both the live bus path and the
-  reconcile path, pairing terminal edges to open starts by `seq` (else chronologically). The resume
-  payload carries the matched terminal edge: `{ outcome: 'ended' | 'failed', recordedAt, reason? }`;
-  the `event` helpers narrow it.
-- **The harness-session pin:** a run pins the `harnessSessionId` it is driving (Pi resumes the same
-  id via `--session`, so it is stable across a restart). On resume the pin is asserted against the
-  latest observed metadata; a genuine mismatch marks the run `failed`.
+  paired with the earliest `turn_started` for `agentSessionId` whose `recordedAt ≥ sentAt`. The gate
+  is on the turn's **start**, not its end: a turn already in flight when the prompt was sent does not
+  satisfy the wait even if it ends afterward. Once that first start is selected, later completed
+  turns cannot steal the wait. One `findSatisfiedTerminalTurnEdge(condition, edges)` evaluator serves
+  both the live bus path and the reconcile path, using internal harness id plus opening `seq` for
+  exact pairing (else chronological legacy-failure pairing). The resume payload carries the matched
+  terminal edge: `{ outcome: 'ended' | 'failed', recordedAt, reason? }`; the `event` helpers narrow it.
+- **Provider identity stays internal:** metadata can be null for a fresh session or stale after a
+  harness-level reset such as `/new`. The first provider-native start after submission establishes
+  the stream being driven. Resetting or switching the underlying harness conversation while that
+  workflow-controlled turn is active is unsupported; Isagi does not transfer the wait to a later
+  conversation. There is intentionally no inferred completion or new start timeout.
 - **Orphaned turns** — a turn that can never naturally end — are surfaced as synthesized
   `turn_failed` edges so a waiting run wakes instead of hanging: `new_start_supersedes` (a new
   `turn_started` arrives while a previous turn is still in flight) and `session_died` (an in-flight

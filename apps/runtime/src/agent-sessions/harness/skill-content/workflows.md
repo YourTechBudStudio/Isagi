@@ -122,8 +122,7 @@ is what `suspend` is for.
 | `spawnAgentSession({ harness, prompt, model?, effort? })`            | Adds a pane, waits for the process, sends the seed prompt. Takes a few seconds. Returns an agent-turn wait target plus `paneId`. Fails if the run has no surface; workflows never create surfaces.         |
 | `sendAgentPrompt(agentSessionId, text)`                              | Writes into an existing agent. **Rejects if that agent has a turn in flight.** Returns an agent-turn wait target.                                                                                          |
 | `closePane(paneId)`                                                  | Closes a pane on the run's surface. Close the panes you spawned. Do not close the pane the workflow was launched from.                                                                                     |
-| `getConversationHistory({ agentSessionId, harnessSessionId })`       | Role-tagged messages. Both ids required.                                                                                                                                                                   |
-| `getHarnessSessionId(agentSessionId)`                                | The current harness session id for a durable agent session. Use it when starting from an existing pane.                                                                                                    |
+| `getConversationHistory(agentSessionId)`                             | Role-tagged messages from the agent's current harness conversation.                                                                                                                                        |
 | `runHeadlessAgent({ prompt, harness, model?, effort?, timeoutMs? })` | Launches a non-interactive agent and returns immediately with `{ opId, launch }`. The result is an output transcript, not a conversation. Not sandboxed and not read-only - that is your contract to keep. |
 | `startWorkflow(key, variables?, context?)`                           | Starts a child run and returns its `runId`. Suspend on it with `wait.workflow`.                                                                                                                            |
 | `log(level, message)`                                                | Forensic detail for whoever debugs this run.                                                                                                                                                               |
@@ -132,27 +131,28 @@ is what `suspend` is for.
 `log` and `setUiFeedback` write to the same user-visible stream but do different jobs. See
 [Workflow style](workflow-style.md).
 
-## Pinning a harness session
+## Correlating an agent turn
 
-An agent-turn wait pins three things: the durable `agentSessionId`, the exact `harnessSessionId` the
-prompt went to, and `sentAt`. That triple is exactly what `spawnAgentSession` and `sendAgentPrompt`
-return, which is why you pass their return value straight into `wait.agentTurn`.
+An agent-turn wait stores the durable `agentSessionId` and the time the prompt was submitted. The
+runtime correlates that target with the first provider-native turn that starts after submission and
+waits only for the terminal paired with that exact start. Harness session ids remain an internal
+observer detail.
 
-The pin matters because a durable agent session can be restarted and get a new harness session
-underneath it. A wait pinned to the old one, or a conversation read pinned to the old one, is reading
-a stream that no longer exists.
-
-**Re-pin from every `sendAgentPrompt` return.** If you keep an agent's identity in `state`, overwrite
-its `harnessSessionId` and `sentAt` with what the verb just gave you:
+Pass the return value from `spawnAgentSession` or `sendAgentPrompt` straight into `wait.agentTurn`.
+If you keep an agent in workflow state, retain its durable `agentSessionId` and any `paneId` you need
+for cleanup. A later prompt returns a fresh turn target:
 
 ```ts
 const sent = await ctx.sendAgentPrompt(reviewer.agentSessionId, prompt);
-const pinned = { ...reviewer, harnessSessionId: sent.harnessSessionId, sentAt: sent.sentAt };
 return suspend(
-  { ...state, phase: { kind: 'await_review', reviewer: pinned } },
+  { ...state, phase: { kind: 'await_review', reviewer } },
   wait.agentTurn(sent),
 );
 ```
+
+Do not reset, resume, or switch the underlying harness conversation while a workflow-controlled turn
+is active. Isagi keeps waiting for the turn it originally correlated; it never transfers the wait to
+a later conversation. There is intentionally no inferred completion or start timeout.
 
 ## Runs, pausing, and restarts
 

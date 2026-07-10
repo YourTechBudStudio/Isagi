@@ -162,14 +162,18 @@ test('harness integration artifacts are prepared once under the runtime data roo
     const opencodeSource = readFileSync(artifacts.opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /session\.status/);
-    assert.match(opencodeSource, /session\.idle/);
+    assert.doesNotMatch(opencodeSource, /session\.idle/);
     assert.match(opencodeSource, /session\.error/);
+    assert.match(opencodeSource, /question\.asked/);
+    assert.match(opencodeSource, /question\.replied/);
+    assert.match(opencodeSource, /question\.rejected/);
     assert.doesNotMatch(opencodeSource, /message\.updated/);
     assert.doesNotMatch(opencodeSource, /message\.part\.updated/);
     assert.match(opencodeSource, /appendHarnessEvent/);
     assert.match(opencodeSource, /harness: "opencode"/);
     assert.match(opencodeSource, /chat\.params/);
-    assert.match(opencodeSource, /chat\.message/);
+    assert.doesNotMatch(opencodeSource, /chat\.message/);
+    assert.doesNotMatch(opencodeSource, /agent_start/);
     assert.doesNotMatch(opencodeSource, /output: safeJsonValue/);
     assert.doesNotMatch(opencodeSource, /input: safeJsonValue/);
     assert.doesNotMatch(opencodeSource, /completedAssistantMessageIds/);
@@ -187,10 +191,13 @@ test('harness integration artifacts are prepared once under the runtime data roo
       /isagi-claude-hook\.mjs/,
     );
     assert.equal(claudeSettings.hooks.UserPromptSubmit[0].hooks[0].timeout, 2);
-    assert.equal(claudeSettings.hooks.Notification[0].matcher, 'idle_prompt');
-    assert.match(claudeSettings.hooks.Notification[0].hooks[0].command, /isagi-claude-hook\.mjs/);
+    for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure']) {
+      assert.equal(claudeSettings.hooks[event][0].matcher, 'AskUserQuestion');
+      assert.match(claudeSettings.hooks[event][0].hooks[0].command, /isagi-claude-hook\.mjs/);
+    }
     assert.match(claudeSettings.hooks.Stop[0].hooks[0].command, /isagi-claude-hook\.mjs/);
     assert.match(claudeSettings.hooks.StopFailure[0].hooks[0].command, /isagi-claude-hook\.mjs/);
+    assert.equal(claudeSettings.hooks.Notification, undefined);
     assert.equal(claudeSettings.hooks.SessionStart, undefined);
     assert.equal(claudeSettings.hooks.SessionEnd, undefined);
     assert.equal(claudeSettings.permissions, undefined);
@@ -386,6 +393,8 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
     },
   });
   assert.equal(env.OPENCODE_PURE, undefined);
+  assert.equal(env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS, 'false');
+  assert.equal(env.ISAGI_OPENCODE_RESUMED_ROOT_SESSION_ID, undefined);
   rmSync(dataRoot, { recursive: true, force: true });
 });
 
@@ -409,6 +418,11 @@ test('OpenCode adapter resumes using --session from cwd without a project argume
 
   assert.deepEqual(launch.args, ['--session', 'opencode-session-123']);
   assert.equal(launch.cwd, '/repo/isagi');
+  const env = (await Effect.runPromise(
+    launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
+  )) as NodeJS.ProcessEnv;
+  assert.equal(env.OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS, 'false');
+  assert.equal(env.ISAGI_OPENCODE_RESUMED_ROOT_SESSION_ID, 'opencode-session-123');
 });
 
 test('Claude adapter uses runtime-owned settings and resumes from cwd', async () => {
@@ -475,8 +489,8 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   assert.equal(launch.args.includes('--cd'), false);
   assert.deepEqual(launch.args.slice(-2), ['resume', 'codex-session-123']);
   assert.match(launch.args.join(' '), /hooks\.SessionStart/);
-  assert.match(launch.args.join(' '), /hooks\.UserPromptSubmit/);
-  assert.match(launch.args.join(' '), /hooks\.Stop/);
+  assert.doesNotMatch(launch.args.join(' '), /hooks\.UserPromptSubmit/);
+  assert.doesNotMatch(launch.args.join(' '), /hooks\.Stop/);
   assert.match(launch.args.join(' '), /isagi-codex-hook\.mjs/);
   assert.equal(launch.cwd, '/repo/isagi');
   assert.equal(launch.launchMode, 'user_shell');
@@ -737,7 +751,6 @@ function fakeArtifacts(root: string): AgentSessionArtifactsService {
           updatedAt: '2026-06-16T00:00:00.000Z',
         },
       }),
-    readJsonlForAgentSession: () => Effect.succeed([]),
     listAgentSessionIds: Effect.succeed([]),
     writeHarnessSessionId: () => Effect.void,
     removeDirectory: () => Effect.void,

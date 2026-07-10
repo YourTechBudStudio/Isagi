@@ -4,7 +4,6 @@ import { Cause, Context, Effect, Either, Layer, Queue, Schema } from 'effect';
 
 import { workflowCommandManifestSchema } from '@isagi/contracts';
 
-import { AgentSessionArtifacts } from '../agent-sessions/index.js';
 import { HarnessLedgerObserver } from '../agent-sessions/index.js';
 import { diagnosticPhase } from '../diagnostics/phase.js';
 import type { DatabaseError } from '../persistence/index.js';
@@ -167,7 +166,6 @@ export const WorkflowEngineLive = Layer.scoped(
     const workspaceRepository = yield* WorkspaceRepository;
     const eventBus = yield* InternalRuntimeEventBus;
     const surfaces = yield* SurfaceService;
-    const artifacts = yield* AgentSessionArtifacts;
     const observer = yield* HarnessLedgerObserver;
     const headless = yield* WorkflowHeadless;
     const eventLedger = yield* WorkflowEventLedger;
@@ -624,7 +622,6 @@ export const WorkflowEngineLive = Layer.scoped(
             yield* continuePausedRun({
               run,
               repository,
-              artifacts,
               observer,
               headless,
               eventLedger,
@@ -1308,7 +1305,7 @@ function workflowResultSummary(result: WorkflowResult) {
 
 function workflowWaitConditionSummary(condition: WorkflowWaitCondition) {
   if (condition.kind === 'agent_turn') {
-    return `turn agentSessionId=${condition.agentSessionId} harnessSessionId=${condition.harnessSessionId}`;
+    return `turn agentSessionId=${condition.agentSessionId}`;
   }
   if (condition.kind === 'headless_agent') {
     return `headless_agent ops=${condition.ops.map((op) => op.opId).join(',')}`;

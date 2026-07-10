@@ -10,6 +10,13 @@ export type InternalRuntimeEvent =
       readonly agentSessionId: number;
     }
   | {
+      // Private handoff after AgentSession owns the active-process pointer.
+      // Generic PTY events remain owner-unaware.
+      readonly type: 'agent_session_active_process_changed';
+      readonly agentSessionId: number;
+      readonly ptyProcessId: number;
+    }
+  | {
       readonly type: 'turn_started';
       readonly agentSessionId: number;
       readonly harnessSessionId: string;

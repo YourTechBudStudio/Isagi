@@ -91,7 +91,6 @@ export type WorkflowWaitCondition =
   | {
       readonly kind: 'agent_turn';
       readonly agentSessionId: number;
-      readonly harnessSessionId: string;
       readonly sentAt: string;
     }
   | { readonly kind: 'user_continue' }
@@ -104,7 +103,6 @@ export type WorkflowWaitCondition =
 
 export interface WorkflowAgentPromptSend {
   readonly agentSessionId: number;
-  readonly harnessSessionId: string;
   readonly sentAt: string;
 }
 
@@ -186,11 +184,9 @@ export interface WorkflowContext {
     text: string,
   ) => Promise<WorkflowAgentPromptSend>;
   readonly closePane: (paneId: number) => Promise<void>;
-  readonly getConversationHistory: (target: {
-    readonly agentSessionId: number;
-    readonly harnessSessionId: string;
-  }) => Promise<readonly WorkflowConversationMessage[]>;
-  readonly getHarnessSessionId: (agentSessionId: number) => Promise<string>;
+  readonly getConversationHistory: (
+    agentSessionId: number,
+  ) => Promise<readonly WorkflowConversationMessage[]>;
   readonly runHeadlessAgent: (input: WorkflowHeadlessAgentInput) => Promise<WorkflowHeadlessOp>;
   readonly startWorkflow: (
     workflowKey: string,
@@ -243,7 +239,6 @@ export const wait = {
     return {
       kind: 'agent_turn',
       agentSessionId: target.agentSessionId,
-      harnessSessionId: target.harnessSessionId,
       sentAt: target.sentAt,
     };
   },

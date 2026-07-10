@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
 import {
-  appendFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer } from 'effect';
+import { Effect, Either, Layer } from 'effect';
 
 import { DataDirectory } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
@@ -65,48 +67,6 @@ test('agent session artifacts expose the harness artifact directory without crea
   }
 });
 
-test('agent session artifacts discover hook-owned JSONL files and tolerate bad lines', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-jsonl-'));
-  try {
-    const reads = await Effect.runPromise(
-      Effect.gen(function* () {
-        const artifacts = yield* AgentSessionArtifacts;
-        const paths = yield* artifacts.prepareProcessArtifacts({
-          agentSessionId: 10,
-          ptyProcessId: 20,
-        });
-        const jsonlPath = join(paths.directory, harnessLogFileName());
-        assert.equal(existsSync(jsonlPath), false);
-        appendFileSync(jsonlPath, '{ nope\n', 'utf8');
-        appendFileSync(
-          jsonlPath,
-          `${JSON.stringify({
-            schemaVersion: 1,
-            recordedAt: '2026-06-18T00:00:00.000Z',
-            agentSessionId: 10,
-            harnessSessionId: 'pi-session-1',
-            ptyProcessId: 20,
-            harness: 'pi',
-            nativeEvent: 'agent_start',
-            event: { nativeEvent: 'agent_start' },
-          })}\n`,
-          'utf8',
-        );
-        return yield* artifacts.readJsonlForAgentSession(10);
-      }).pipe(Effect.provide(testLayer(dataRoot))),
-    );
-
-    const read = reads[0];
-    assert.ok(read);
-    assert.equal(read.ignoredLineCount, 1);
-    assert.equal(read.records.length, 1);
-    assert.equal(read.records[0]?.nativeEvent, 'agent_start');
-    assert.equal(read.records[0]?.harnessSessionId, 'pi-session-1');
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
 test('agent session artifacts distinguish missing and invalid metadata', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-invalid-'));
   try {
@@ -155,6 +115,53 @@ test('agent session artifacts write observed harness session ids and remove dire
     assert.equal(existsAfterRemove, false);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts harden only their own directories and files on Unix', async (context) => {
+  if (process.platform === 'win32') {
+    context.skip('Unix permission modes are not portable to Windows.');
+    return;
+  }
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-permissions-'));
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        yield* artifacts.initializeMetadata(10);
+        yield* artifacts.prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 });
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+    const directory = join(dataRoot, 'sessions', 'agent-sessions', '10');
+    const metadata = join(directory, 'harness.json');
+    assert.equal(statSync(join(dataRoot, 'sessions', 'agent-sessions')).mode & 0o777, 0o700);
+    assert.equal(statSync(directory).mode & 0o777, 0o700);
+    assert.equal(statSync(metadata).mode & 0o777, 0o600);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('agent session artifacts reject a symlinked Isagi harness directory', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-symlink-'));
+  const external = mkdtempSync(join(tmpdir(), 'isagi-agent-artifact-external-'));
+  try {
+    const root = join(dataRoot, 'sessions', 'agent-sessions');
+    mkdirSync(join(dataRoot, 'sessions'), { recursive: true });
+    symlinkSync(external, root);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const artifacts = yield* AgentSessionArtifacts;
+        return yield* artifacts
+          .prepareProcessArtifacts({ agentSessionId: 10, ptyProcessId: 20 })
+          .pipe(Effect.either);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+    assert.equal(Either.isLeft(result), true);
+    assert.equal(existsSync(join(external, '10')), false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
   }
 });
 

@@ -40,86 +40,6 @@ export function appendRecord(
   );
 }
 
-export function appendOpenCodeRecord(path: string, status: 'busy' | 'idle') {
-  appendFileSync(
-    path,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      recordedAt: new Date().toISOString(),
-      agentSessionId: 10,
-      harnessSessionId: 'opencode-session-1',
-      ptyProcessId: 20,
-      harness: 'opencode',
-      nativeEvent: 'session.status',
-      event: {
-        nativeEvent: 'session.status',
-        status,
-      },
-    })}\n`,
-    'utf8',
-  );
-}
-
-export function appendNestedOpenCodeRecord(path: string, status: 'busy' | 'idle') {
-  appendFileSync(
-    path,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      recordedAt: new Date().toISOString(),
-      agentSessionId: 10,
-      harnessSessionId: 'opencode-session-1',
-      ptyProcessId: 20,
-      harness: 'opencode',
-      nativeEvent: 'session.status',
-      event: {
-        nativeEvent: 'session.status',
-        event: {
-          id: 'evt_1',
-          type: 'session.status',
-          properties: {
-            sessionID: 'ses_1',
-            status: { type: status },
-          },
-        },
-        status: null,
-      },
-    })}\n`,
-    'utf8',
-  );
-}
-
-export function appendCommandHookRecord(
-  path: string,
-  harness: 'claude' | 'codex',
-  harnessSessionId: string,
-  nativeEvent: string,
-  input: Record<string, unknown> = {},
-) {
-  appendFileSync(
-    path,
-    `${JSON.stringify({
-      schemaVersion: 1,
-      recordedAt: new Date().toISOString(),
-      agentSessionId: 10,
-      harnessSessionId,
-      ptyProcessId: 20,
-      harness,
-      nativeEvent,
-      event: {
-        nativeEvent,
-        notificationType:
-          typeof input.notification_type === 'string' ? input.notification_type : null,
-        input: {
-          hook_event_name: nativeEvent,
-          session_id: harnessSessionId,
-          ...input,
-        },
-      },
-    })}\n`,
-    'utf8',
-  );
-}
-
 export function harnessLogPath(directory: string, harnessSessionId = 'pi-session-1') {
   return join(directory, `${Buffer.from(harnessSessionId, 'utf8').toString('hex')}.harness.jsonl`);
 }
@@ -181,7 +101,10 @@ export function ptyProcess(overrides: Partial<PtyProcessRow> = {}): PtyProcessRo
   };
 }
 
-export async function seedActiveAgentSession(dataRoot: string) {
+export async function seedActiveAgentSession(
+  dataRoot: string,
+  harness: 'pi' | 'claude' | 'codex' | 'opencode' = 'pi',
+) {
   await Effect.runPromise(
     Effect.gen(function* () {
       const database = yield* RuntimeDatabase;
@@ -236,7 +159,7 @@ export async function seedActiveAgentSession(dataRoot: string) {
           .values({
             id: 10,
             worktreeId: 1,
-            harness: 'pi',
+            harness,
             cwd: '/repo/isagi',
             activePtyProcessId: 20,
             createdAt: now,
