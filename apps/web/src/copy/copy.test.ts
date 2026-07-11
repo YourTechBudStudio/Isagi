@@ -37,6 +37,29 @@ test('command API error reasons map to web-owned copy', () => {
   );
 });
 
+test('session launch rejection reasons map to specific HTTP copy', () => {
+  const reasons = [
+    'onboarding_incomplete',
+    'config_invalid',
+    'inventory_pending',
+    'harness_disabled',
+    'harness_missing',
+    'harness_incompatible',
+    'harness_probe_failed',
+  ] as const;
+
+  for (const reason of reasons) {
+    const copy = runtimeErrorCopy.fromApiError({
+      code: 'session_launch_rejected',
+      status: 409,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason, harness: 'pi' },
+    } satisfies ApiError);
+    assert.notEqual(copy, "Couldn't start a session there.");
+  }
+});
+
 test('workflow API error reasons map to web-owned copy', () => {
   assert.equal(
     runtimeErrorCopy.fromApiError({

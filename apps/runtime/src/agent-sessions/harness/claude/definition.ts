@@ -14,6 +14,7 @@ export const claudeHarnessDefinition = {
   executable: 'claude',
   probe: { command: 'claude', args: ['--version'] },
   docs: {
+    explicitInvocationSupported: true,
     kind: 'skill',
     invocation: '/isagi-docs',
     nativePolicy: 'skill_frontmatter',
@@ -31,7 +32,6 @@ export const claudeHarnessDefinition = {
     interactive: (input, dependencies) =>
       buildClaudeLaunch(input, {
         settingsPath: resolve(dependencies.dataRoot, 'harness-integrations/claude/settings.json'),
-        skillWorkspaceDirectory: dependencies.configureIsagiSkill.claudeSkillWorkspaceDirectory,
         artifacts: dependencies.artifacts,
       }),
     headless: buildClaudeHeadlessLaunch,

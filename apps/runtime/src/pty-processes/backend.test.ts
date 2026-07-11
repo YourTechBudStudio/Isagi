@@ -3,7 +3,11 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
-import { RuntimeConfig, type RuntimeConfigShape } from '../runtime-config/index.js';
+import {
+  defaultRuntimeConfig,
+  RuntimeConfig,
+  type RuntimeConfigService,
+} from '../runtime-config/index.js';
 import { NodePtyBackend } from './adapters/node-pty.js';
 import { TmuxBackend } from './adapters/tmux.js';
 import { PtyBackend, PtyBackendLive } from './backend.js';
@@ -43,12 +47,20 @@ test('PTY backend warns when configured tmux is unavailable', async () => {
   }
 });
 
-function selectedBackend(config: RuntimeConfigShape, options: { readonly tmuxAvailable: boolean }) {
+function selectedBackend(
+  config: { readonly pty: { readonly backend: 'node-pty' | 'tmux' } },
+  options: { readonly tmuxAvailable: boolean },
+) {
+  const value = { ...defaultRuntimeConfig, pty: config.pty };
+  const service = {
+    get: Effect.succeed(value),
+    acceptHarnessPolicy: () => Effect.die('acceptHarnessPolicy is not used'),
+  } satisfies RuntimeConfigService;
   return Effect.gen(function* () {
     return yield* PtyBackend;
   }).pipe(
     Effect.provide(PtyBackendLive),
-    Effect.provideService(RuntimeConfig, config),
+    Effect.provideService(RuntimeConfig, service),
     Effect.provide(Layer.succeed(NodePtyBackend, fakeBackend('node_pty', true))),
     Effect.provide(Layer.succeed(TmuxBackend, fakeBackend('tmux', options.tmuxAvailable))),
   );

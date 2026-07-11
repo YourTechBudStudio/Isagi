@@ -34,6 +34,7 @@ export const HostInventoryLive = Layer.scoped(
     const scope = yield* Effect.scope;
     const state = yield* Ref.make<HostInventoryState>({ _tag: 'Pending' });
     const activeRefresh = yield* Ref.make<Deferred.Deferred<HostInventorySnapshot> | null>(null);
+    const generation = yield* Ref.make(0);
 
     const collect = collectHostInventory(shell);
     const beginRefresh = Effect.uninterruptibleMask(() =>
@@ -67,8 +68,13 @@ export const HostInventoryLive = Layer.scoped(
                 Effect.tap((inventory) =>
                   Effect.gen(function* () {
                     const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+                    const nextGeneration = yield* Ref.updateAndGet(
+                      generation,
+                      (value) => value + 1,
+                    );
                     yield* Ref.set(state, {
                       _tag: 'Ready',
+                      generation: nextGeneration,
                       inventory,
                       refreshedAt: new Date(now).toISOString(),
                     });

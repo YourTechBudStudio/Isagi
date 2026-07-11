@@ -12,6 +12,7 @@ import {
 
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { errorMessage } from '../lib/api/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
@@ -201,10 +202,15 @@ function decodeClientMessage(raw: string): PtyWebSocketInputMessage | null {
   }
 }
 
-function websocketError(error: unknown): {
+export function websocketError(error: unknown): {
   readonly code: PtyWebSocketErrorCode;
   readonly message?: string;
 } {
+  if (error instanceof HarnessLaunchBlocked)
+    return {
+      code: error.reason,
+      message: `Harness process creation is blocked: ${error.reason}.${error.diagnostic ? ` ${error.diagnostic}` : ''}`,
+    };
   if (error instanceof SessionAttachProtocolError) {
     return { code: error.code, message: error.message };
   }

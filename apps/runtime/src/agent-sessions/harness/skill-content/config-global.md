@@ -1,5 +1,23 @@
 # Global config
 
+## Harness policy
+
+The top-level `harnesses` section controls whether Isagi may create new processes for each supported
+harness and whether it maintains the reserved, explicit-only global `isagi-docs` integration.
+Missing entries and booleans default to `false`. A missing `harnesses` section means onboarding is
+incomplete; `harnesses: {}` is a completed policy with no enabled harnesses.
+
+```yaml
+harnesses:
+  codex:
+    enabled: true
+    installIsagiDocs: true
+```
+
+Disabling a harness or Docs installation does not remove content installed earlier. Isagi replaces
+the exact `isagi-docs` target when installation is enabled; edits to that reserved target are not
+preserved on reconciliation.
+
 Runtime configuration. One file, shared by every project on this machine.
 
 ## The file
@@ -11,9 +29,9 @@ Runtime configuration. One file, shared by every project on this machine.
 It may not exist. Isagi runs on defaults when it is missing, so creating it is the normal way to
 change a setting for the first time.
 
-Everything in this file is read once, when Isagi starts. **Changing it does nothing until Isagi is
-restarted.** Say so when you propose an edit; a user who edits the pty backend and sees no change has
-hit exactly this, and will otherwise assume the edit was wrong.
+Isagi reads the file at startup. The runtime policy API updates the live harness policy after an
+accepted write; manual YAML edits take effect on the next restart. PTY backend changes always
+require a restart.
 
 Project-level settings - hooks and commands - do not live here. They live in `.isagi/config.yaml` in
 the repository root and are described in [Project config](config-project.md).

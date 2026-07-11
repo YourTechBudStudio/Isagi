@@ -21,6 +21,7 @@ import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 import { displayNameForHarness } from '../agent-sessions/harness/display.js';
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import type { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import type { DatabaseError } from '../persistence/index.js';
 import {
   activePtyProcessIdsForSessions,
@@ -61,7 +62,11 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
 }> {}
 
 export type SurfaceServiceError = DatabaseError | SurfaceError;
-type PaneSessionClaimError = SurfaceServiceError | PtyLaunchError | HarnessAdapterError;
+type PaneSessionClaimError =
+  | SurfaceServiceError
+  | PtyLaunchError
+  | HarnessAdapterError
+  | HarnessLaunchBlocked;
 
 export interface SurfaceService {
   readonly getSurfaceDetail: (

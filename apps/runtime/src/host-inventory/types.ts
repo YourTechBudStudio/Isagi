@@ -51,6 +51,22 @@ export type HostInventoryState =
   | { readonly _tag: 'Pending' }
   | {
       readonly _tag: 'Ready';
+      readonly generation: number;
       readonly inventory: HostInventory;
       readonly refreshedAt: string;
     };
+
+export type ExecutableAvailability = 'available' | 'missing' | 'incompatible' | 'probe_failed';
+
+export function executableAvailability(result: ExecutableProbeResult): ExecutableAvailability {
+  switch (result._tag) {
+    case 'Available':
+      return 'available';
+    case 'Missing':
+      return 'missing';
+    case 'Incompatible':
+      return 'incompatible';
+    case 'ProbeFailed':
+      return 'probe_failed';
+  }
+}

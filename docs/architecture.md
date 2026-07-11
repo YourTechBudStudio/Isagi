@@ -39,6 +39,7 @@ The server/runtime owns the operational side of Isagi:
 - state persistence
 - integration boundaries with harnesses and future tool systems
 - future remote execution path
+- cached host inventory, harness launch policy, and explicit Docs reconciliation
 
 The runtime is the place where Isagi understands what is running, where it is running, and which worktree/worktree environment it belongs to.
 

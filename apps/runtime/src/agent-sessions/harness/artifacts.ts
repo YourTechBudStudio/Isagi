@@ -3,15 +3,12 @@ import { dirname } from 'node:path';
 
 import { Effect } from 'effect';
 
-import {
-  type ConfigureIsagiSkillArtifacts,
-  writeConfigureIsagiSkillArtifacts,
-} from './configure-isagi-skill.js';
 import { supportedHarnesses, harnessDefinition } from './definitions.js';
+import { type IsagiDocsArtifacts, writeIsagiDocsArtifacts } from './isagi-docs.js';
 import { HarnessAdapterError } from './types.js';
 
 export interface HarnessIntegrationArtifacts {
-  readonly configureIsagiSkill: ConfigureIsagiSkillArtifacts;
+  readonly isagiDocs: IsagiDocsArtifacts;
 }
 
 export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
@@ -24,13 +21,12 @@ export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
           artifactPaths.push(artifact.path);
         }
       }
-      const configureIsagiSkill = writeConfigureIsagiSkillArtifacts(dataRoot);
+      const isagiDocs = writeIsagiDocsArtifacts(dataRoot);
       console.info('[runtime] Harness integration artifacts prepared', {
         artifactPaths,
-        configureIsagiSkillDirectory: configureIsagiSkill.skillDirectory,
-        configureIsagiSkillClaudeWorkspace: configureIsagiSkill.claudeSkillWorkspaceDirectory,
+        isagiDocsDirectory: isagiDocs.skillDirectory,
       });
-      return { configureIsagiSkill } satisfies HarnessIntegrationArtifacts;
+      return { isagiDocs } satisfies HarnessIntegrationArtifacts;
     },
     catch: (cause) =>
       new HarnessAdapterError(

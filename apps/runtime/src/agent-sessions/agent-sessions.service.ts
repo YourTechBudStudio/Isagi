@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
+import { HarnessControlPlane, type HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
@@ -16,7 +17,7 @@ export interface AgentSessionService {
     readonly worktreeId: number;
     readonly harness: AgentHarness;
     readonly cwd: string;
-  }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError>;
+  }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError | HarnessLaunchBlocked>;
   readonly get: (
     agentSessionId: number,
   ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
@@ -25,7 +26,7 @@ export interface AgentSessionService {
     options?: AgentSessionEnsureActiveOptions,
   ) => Effect.Effect<
     number,
-    DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError
+    DatabaseError | AgentSessionError | PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked
   >;
   readonly activePtyProcessId: (
     agentSessionId: number,
@@ -65,12 +66,14 @@ export const AgentSessionServiceLive = Layer.effect(
     const harnesses = yield* HarnessAdapterRegistry;
     const eventBus = yield* InternalRuntimeEventBus;
     const lifecycle = yield* SessionLifecycle;
+    const controlPlane = yield* HarnessControlPlane;
 
     const publishChanged = (agentSessionId: number) =>
       eventBus.publish({ type: 'agent_session_changed', agentSessionId });
 
     const launchProcessForSession = (session: AgentSessionRow, options?: HarnessLaunchOptions) =>
       Effect.gen(function* () {
+        yield* controlPlane.assertCanCreateProcess(session.harness);
         const launch = yield* agentLaunchEnvelope(harnesses, session, options);
         const process = yield* pty.launch(launch);
         yield* repository.setActivePtyProcess({
@@ -111,6 +114,7 @@ export const AgentSessionServiceLive = Layer.effect(
     return {
       startFresh: (input) =>
         Effect.gen(function* () {
+          yield* controlPlane.assertCanCreateProcess(input.harness);
           const agentSessionId = yield* repository.create({
             worktreeId: input.worktreeId,
             harness: input.harness,

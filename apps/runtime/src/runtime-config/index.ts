@@ -1,2 +1,10 @@
-export { RuntimeConfig, RuntimeConfigError, RuntimeConfigLive } from './runtime-config.service.js';
-export type { RuntimeConfigPtyBackend, RuntimeConfigShape } from './runtime-config.service.js';
+export {
+  RuntimeConfig,
+  RuntimeConfigConflict,
+  RuntimeConfigError,
+  RuntimeConfigLive,
+  RuntimeHarnessConfigInvalid,
+} from './runtime-config.service.js';
+export type { RuntimeConfigService } from './runtime-config.service.js';
+export * from './runtime-config.schema.js';
+export * from './runtime-config.policy.js';

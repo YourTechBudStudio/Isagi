@@ -7,6 +7,11 @@ import {
   HarnessAdapterRegistry,
   type HarnessAdapterRegistryService,
 } from '../agent-sessions/harness/index.js';
+import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
+import {
+  AllowAllHarnessControlPlaneLayer,
+  blockedHarnessControlPlaneLayer,
+} from '../harness-control-plane/test-support.js';
 import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
 import { InternalRuntimeEventBus, InternalRuntimeEventBusLive } from '../runtime-events/index.js';
@@ -20,11 +25,12 @@ type PtyCalls = { readonly terminated: number[]; readonly unpinned: number[] };
 
 const firstPtyProcessId = 100;
 
-function makeFakePty(calls: PtyCalls): PtyServiceShape {
+function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyServiceShape {
   let nextPtyProcessId = firstPtyProcessId;
   return {
     launch: () =>
       Effect.sync(() => {
+        onLaunch?.();
         const ptyProcessId = nextPtyProcessId;
         nextPtyProcessId += 1;
         return { ptyProcessId, command: 'agent', args: [], cwd: '/tmp/wt', logPath: null };
@@ -55,14 +61,19 @@ const fakeHarnesses: HarnessAdapterRegistryService = {
     Effect.succeed({ command: 'agent', args: [], cwd: '/tmp/wt' } satisfies LaunchPtyProcessInput),
 };
 
-function makeLayer(calls: PtyCalls) {
+function makeLayer(
+  calls: PtyCalls,
+  controlPlaneLayer = AllowAllHarnessControlPlaneLayer,
+  onLaunch?: (() => void) | undefined,
+) {
   // The bus layer is shared by reference, so the tracker's subscription and the
   // test's publisher resolve to the same in-memory event bus instance.
   const bus = InternalRuntimeEventBusLive;
   const headless = WorkflowHeadlessLive.pipe(
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses)),
-    Layer.provide(Layer.succeed(PtyService, makeFakePty(calls))),
+    Layer.provide(Layer.succeed(PtyService, makeFakePty(calls, onLaunch))),
     Layer.provide(bus),
+    Layer.provide(controlPlaneLayer),
   );
   return Layer.merge(headless, bus);
 }
@@ -76,6 +87,29 @@ const waitUntil = (predicate: () => boolean) =>
   });
 
 const launchPrompt = { harness: 'claude', prompt: 'judge', timeoutMs: 60_000 } as const;
+
+test('headless workflow launch is blocked before a PTY is created', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  let launchCalls = 0;
+  const layer = makeLayer(calls, blockedHarnessControlPlaneLayer('harness_disabled'), () => {
+    launchCalls += 1;
+  });
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      return yield* headless
+        .runHeadlessAgent({ runId: 7, worktreePath: '/tmp/wt', prompt: launchPrompt })
+        .pipe(Effect.either);
+    }).pipe(Effect.provide(layer), Effect.scoped),
+  );
+  assert.equal(launchCalls, 0);
+  assert.equal(
+    result._tag === 'Left' && result.left instanceof HarnessLaunchBlocked
+      ? result.left.reason
+      : null,
+    'harness_disabled',
+  );
+});
 
 test('a terminal workflow run cancels its in-flight headless op', async () => {
   const calls: PtyCalls = { terminated: [], unpinned: [] };

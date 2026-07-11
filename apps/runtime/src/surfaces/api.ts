@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
+import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
@@ -135,7 +136,18 @@ export function registerSurfacesApi(
   });
 }
 
-function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
+export function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
+  if (error instanceof HarnessLaunchBlocked)
+    return {
+      code: 'session_launch_rejected',
+      status: 400,
+      message: `Harness process creation is blocked: ${error.reason}.`,
+      requestId: context.requestId,
+      data: {
+        reason: error.reason,
+        ...(error.diagnostic ? { diagnostic: error.diagnostic } : {}),
+      },
+    };
   if (error instanceof SurfaceError) {
     if (context.endpointId === apiEndpoints.surfaces.setWorktreeEnvironmentFocus.id)
       return {

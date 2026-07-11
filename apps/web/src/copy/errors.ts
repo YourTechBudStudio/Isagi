@@ -17,6 +17,15 @@ const worktreeGone = "Can't find that worktree. Did it get removed?";
 const surfaceGone = "That surface isn't here anymore.";
 const setupConfigInvalid = "This project's .isagi setup config is malformed.";
 const setupTrustMismatch = 'The setup hooks changed since you last trusted them.';
+const harnessLaunchBlockCopy = {
+  onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
+  config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
+  inventory_pending: 'Isagi is still checking this harness. Try opening the session again shortly.',
+  harness_disabled: 'This harness is disabled in Isagi configuration.',
+  harness_missing: 'This harness is not installed in the runtime environment.',
+  harness_incompatible: 'This harness version is not compatible with Isagi.',
+  harness_probe_failed: 'Isagi could not determine whether this harness is available.',
+} as const;
 
 interface CodeCopy {
   readonly summary: string;
@@ -120,6 +129,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     summary: "Couldn't start a session there.",
     byReason: {
       worktree_not_found: worktreeGone,
+      ...harnessLaunchBlockCopy,
     },
   },
   workflow_rejected: {
@@ -245,6 +255,7 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
   harness_metadata_invalid:
     'The harness session record is unreadable, so this pane needs a replacement.',
   unsupported_harness: 'This harness is not wired into Isagi yet.',
+  ...harnessLaunchBlockCopy,
   session_already_attached: 'This session is already attached in another pane.',
   session_attachment_moved: 'This session moved to another pane.',
   stream_superseded: 'This stream opened somewhere else.',

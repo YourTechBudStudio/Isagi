@@ -64,7 +64,16 @@ export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
   'pane_not_found',
 );
 
-export const sessionLaunchRejectionReasonSchema = Schema.Literal('worktree_not_found');
+export const sessionLaunchRejectionReasonSchema = Schema.Literal(
+  'worktree_not_found',
+  'onboarding_incomplete',
+  'config_invalid',
+  'inventory_pending',
+  'harness_disabled',
+  'harness_missing',
+  'harness_incompatible',
+  'harness_probe_failed',
+);
 
 export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
   'worktree_not_found',
@@ -260,6 +269,7 @@ export const sessionLaunchRejectedErrorSchema = Schema.Struct({
   data: Schema.Struct({
     reason: sessionLaunchRejectionReasonSchema,
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    diagnostic: Schema.optional(Schema.String),
   }),
 });
 

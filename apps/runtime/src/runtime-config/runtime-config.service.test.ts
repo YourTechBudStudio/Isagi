@@ -82,7 +82,9 @@ test('runtime config rejects unsupported PTY backends', async () => {
 
 function readConfig(root: string) {
   return Effect.gen(function* () {
-    return yield* RuntimeConfig;
+    const config = yield* RuntimeConfig;
+    const current = yield* config.get;
+    return { pty: current.pty };
   }).pipe(
     Effect.provide(RuntimeConfigLive),
     Effect.provideService(DataDirectory, { paths: paths(root) }),

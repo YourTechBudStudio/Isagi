@@ -14,6 +14,7 @@ export const openCodeHarnessDefinition = {
   executable: 'opencode',
   probe: { command: 'opencode', args: ['--version'] },
   docs: {
+    explicitInvocationSupported: true,
     kind: 'command',
     invocation: '/isagi-docs',
     nativePolicy: 'explicit_command',
@@ -27,7 +28,6 @@ export const openCodeHarnessDefinition = {
           dependencies.dataRoot,
           'harness-integrations/opencode/isagi-session-plugin.js',
         ),
-        skillScanDirectory: dependencies.configureIsagiSkill.skillScanDirectory,
         artifacts: dependencies.artifacts,
       }),
     headless: buildOpenCodeHeadlessLaunch,

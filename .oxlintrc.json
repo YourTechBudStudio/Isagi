@@ -31,6 +31,7 @@
         "argsIgnorePattern": "^_"
       }
     ],
+    "eslint/no-underscore-dangle": ["error", { "allow": ["_tag"] }],
     "tailwindcss/enforce-canonical": "error"
   },
   "overrides": [

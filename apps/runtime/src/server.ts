@@ -4,8 +4,9 @@ import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { registerCommandsApi } from './commands/index.js';
+import { registerControlPlaneApi } from './harness-control-plane/api.js';
+import { HarnessControlPlane } from './harness-control-plane/index.js';
 import { registerHealthApi } from './health/api.js';
-import { HostInventory } from './host-inventory/index.js';
 import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
@@ -55,6 +56,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       yield* tryPromise(() => fastify.register(websocket));
 
       registerHealthApi(fastify);
+      registerControlPlaneApi(fastify, runtime);
       registerCommandsApi(fastify, runtime);
       registerWorkspaceApi(fastify, runtime);
       registerSurfacesApi(fastify, runtime);
@@ -71,7 +73,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       ).pipe(Effect.uninterruptible);
       yield* runInRuntime(
         runtime,
-        Effect.flatMap(HostInventory, (inventory) => inventory.startRefresh),
+        Effect.flatMap(HarnessControlPlane, (controlPlane) => controlPlane.start),
       );
       yield* runInRuntime(runtime, restoreStartupSessions);
 

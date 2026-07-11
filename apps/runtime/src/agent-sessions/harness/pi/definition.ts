@@ -14,6 +14,7 @@ export const piHarnessDefinition = {
   executable: 'pi',
   probe: { command: 'pi', args: ['--version'] },
   docs: {
+    explicitInvocationSupported: true,
     kind: 'skill',
     invocation: '/skill:isagi-docs',
     nativePolicy: 'skill_frontmatter',
@@ -31,7 +32,6 @@ export const piHarnessDefinition = {
     interactive: (input, dependencies) =>
       buildPiLaunch(input, {
         extensionPath: resolve(dependencies.dataRoot, 'harness-integrations/pi/isagi-session.ts'),
-        skillDirectory: dependencies.configureIsagiSkill.skillDirectory,
         artifacts: dependencies.artifacts,
       }),
     headless: buildPiHeadlessLaunch,

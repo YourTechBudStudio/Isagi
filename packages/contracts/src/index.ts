@@ -1,4 +1,5 @@
 import { commandsEndpoints } from './commands/api.js';
+import { controlPlaneEndpoints } from './control-plane/api.js';
 import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
@@ -10,6 +11,7 @@ import { worktreesEndpoints } from './worktrees/api.js';
 
 export const apiEndpoints = {
   commands: commandsEndpoints,
+  controlPlane: controlPlaneEndpoints,
   health: healthEndpoint,
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
@@ -19,6 +21,9 @@ export const apiEndpoints = {
   workflows: workflowsEndpoints,
   paths: pathsEndpoints,
 } as const;
+
+export { controlPlaneEndpoints, controlPlaneErrorSchema } from './control-plane/api.js';
+export * from './control-plane/types.js';
 
 export {
   apiBaseErrorResponseSchema,

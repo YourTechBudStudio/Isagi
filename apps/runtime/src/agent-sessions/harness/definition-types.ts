@@ -37,6 +37,7 @@ export type HarnessDocsTargetResolution =
     };
 
 export interface HarnessDocsIntegration {
+  readonly explicitInvocationSupported: boolean;
   readonly kind: 'skill' | 'command';
   readonly invocation: string;
   readonly nativePolicy: 'skill_frontmatter' | 'codex_agent_policy' | 'explicit_command';
@@ -51,11 +52,6 @@ export interface HarnessProbeDefinition {
 
 export interface HarnessDefinitionDependencies {
   readonly dataRoot: string;
-  readonly configureIsagiSkill: {
-    readonly skillDirectory: string;
-    readonly skillScanDirectory: string;
-    readonly claudeSkillWorkspaceDirectory: string;
-  };
   readonly artifacts: AgentSessionArtifactsService;
 }
 

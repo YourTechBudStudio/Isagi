@@ -1,5 +1,6 @@
 ---
-name: configure-isagi
+name: isagi-docs
+disable-model-invocation: true
 description: Teaches agents how to configure Isagi - its config.yaml files, worktree hooks, commands, pty backend, and workflows. Use when the user mentions Isagi by name, asks what Isagi can configure, or asks for a change to how Isagi behaves. Not for general development work that never mentions Isagi.
 metadata:
   version: "{{VERSION}}"
@@ -32,7 +33,7 @@ before verification succeeds.
 
 **Read the workflow reference before authoring one.** [Workflows](references/workflows.md) covers the
 durable execution model, reducer shape, agent lifecycle, judgments, and verification. Use the
-[SDK source](references/sdk/index.ts) for exact types and signatures.
+installed `@yourtechbudstudio/isagi-workflow-sdk` package for exact types and signatures.
 
 **When Isagi does not configure something, say so plainly.** The surface below is the entire surface.
 If the user asks for themes, keybindings, default models, pane layouts, or anything else not listed,
@@ -47,6 +48,7 @@ nothing, and leaves the user believing it worked.
 | Files copied or symlinked into every new worktree, or a setup command run once when a worktree is created                                                  | Worktree hooks (`worktrees.hooks`) | [Project config](references/config-project.md)                                            |
 | A named command they can run in a worktree, optionally started or stopped as the worktree is created, activated, deactivated, or deleted                   | Commands (`commands`)              | [Project config](references/config-project.md)                                            |
 | A different terminal backend for the processes Isagi launches                                                                                              | Runtime config (`pty`)             | [Global config](references/config-global.md)                                              |
+| Enabling supported harnesses or maintaining their explicit-only Docs integration                                                                            | Harness policy (`harnesses`)        | [Global config](references/config-global.md)                                              |
 | Several agents driven through a repeatable, multi-step process - spawning agents, waiting on their turns, pausing for the user, running headless judgments | A workflow                         | [Workflows](references/workflows.md)                                        |
 
 A one-off task an agent can just do is not a workflow. Workflows earn their cost when the process
@@ -71,7 +73,6 @@ project. This is the usual reason a change to a global workflow appears to do no
 | [Global config](references/config-global.md)   | Changing the pty backend, or explaining what the runtime config file holds.                    |
 | [Project config](references/config-project.md) | Writing or editing worktree hooks and commands.                                                |
 | [Workflows](references/workflows.md)           | Authoring or reviewing a durable workflow and verifying that it loads.             |
-| [SDK source](references/sdk/index.ts)          | Checking an exact type, verb signature, or helper. This is the source Isagi runs.   |
 
 The two config references embed the schema Isagi validates against. The field descriptions in that
 schema are authoritative: when the prose and the schema disagree, the schema is right.

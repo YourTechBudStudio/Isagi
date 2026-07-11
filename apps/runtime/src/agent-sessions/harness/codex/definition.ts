@@ -17,6 +17,7 @@ export const codexHarnessDefinition = {
   executable: 'codex',
   probe: { command: 'codex', args: ['--version'] },
   docs: {
+    explicitInvocationSupported: true,
     kind: 'skill',
     invocation: '$isagi-docs',
     nativePolicy: 'codex_agent_policy',

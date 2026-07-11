@@ -29,13 +29,12 @@ export const HarnessAdapterRegistryLive = Layer.effect(
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
     const sessionArtifacts = yield* AgentSessionArtifacts;
-    const artifacts = yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
+    yield* prepareHarnessIntegrationArtifacts(directory.paths.root);
 
     return {
       buildLaunch: (input) =>
         harnessDefinition(input.harness).launch.interactive(input, {
           dataRoot: directory.paths.root,
-          configureIsagiSkill: artifacts.configureIsagiSkill,
           artifacts: sessionArtifacts,
         }),
       buildHeadlessLaunch: (input) => harnessDefinition(input.harness).launch.headless(input),

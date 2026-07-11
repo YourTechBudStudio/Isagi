@@ -15,6 +15,7 @@ User-level configuration shared across projects.
 Examples:
 
 - known harnesses
+- enabled harness and explicit-only Docs installation policy
 - global agent presets
 - user preferences
 - default shell/runtime behavior

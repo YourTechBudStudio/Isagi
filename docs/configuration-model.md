@@ -17,6 +17,7 @@ Configuration shared across projects.
 Examples:
 
 - known agent harnesses
+- per-harness process-creation and explicit-only `isagi-docs` installation policy
 - global agent presets
 - default shell/runtime launch preferences
 - default launch commands and flags for agent harnesses
@@ -137,3 +138,14 @@ Prefer documenting durable concepts:
 - what should degrade gracefully
 
 Avoid committing global docs to low-level schema details before the product proves them.
+
+## Harness policy
+
+The runtime owns supported-harness discovery, availability, launch enforcement, and global Docs
+reconciliation. Policy records user intent independently from current executable availability. A
+missing `harnesses` section means onboarding is incomplete; a present empty section is a completed
+policy with no enabled harnesses. Missing entries and booleans default to false.
+
+Policy gates creation of a new harness process, including restoration that needs to spawn. It does
+not block attachment to an already-running PTY or read-only observation. Enabling Docs lets Isagi
+replace the reserved native `isagi-docs` target. Disabling it does not uninstall prior content.

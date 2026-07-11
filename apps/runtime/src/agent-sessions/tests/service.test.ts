@@ -3,6 +3,11 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
+import { HarnessLaunchBlocked } from '../../harness-control-plane/index.js';
+import {
+  AllowAllHarnessControlPlaneLayer,
+  blockedHarnessControlPlaneLayer,
+} from '../../harness-control-plane/test-support.js';
 import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
 import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
@@ -188,6 +193,92 @@ test('agent session lifecycle reuses an active running process', async () => {
   assert.deepEqual(ptyLaunches, []);
 });
 
+test('agent session creation checks policy before writing a durable row', async () => {
+  const state = mutableAgentSession({ activePtyProcessId: null, activePtyProcess: null });
+  const createCalls: number[] = [];
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service
+        .startFresh({ worktreeId: 1, harness: 'pi', cwd: '/repo/isagi' })
+        .pipe(Effect.either);
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          state,
+          launchInputs: [],
+          ptyLaunches: [],
+          createCalls,
+          controlPlaneLayer: blockedHarnessControlPlaneLayer('harness_disabled'),
+        }),
+      ),
+    ),
+  );
+  assert.equal(Either.isLeft(result), true);
+  assert.equal(
+    Either.isLeft(result) && result.left instanceof HarnessLaunchBlocked
+      ? result.left.reason
+      : null,
+    'harness_disabled',
+  );
+  assert.deepEqual(createCalls, []);
+});
+
+test('blocked policy allows reuse of a live process but rejects a relaunch', async () => {
+  const running = mutableAgentSession({
+    activePtyProcessId: 20,
+    activePtyProcess: ptyProcess({ id: 20, status: 'running', statusReason: null }),
+  });
+  const blockedLayer = blockedHarnessControlPlaneLayer('harness_disabled');
+  const reused = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10);
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          state: running,
+          launchInputs: [],
+          ptyLaunches: [],
+          controlPlaneLayer: blockedLayer,
+        }),
+      ),
+    ),
+  );
+  assert.equal(reused, 20);
+
+  running.session = {
+    ...running.session,
+    activePtyProcess: ptyProcess({
+      id: 20,
+      status: 'failed',
+      statusReason: 'runtime_ephemeral_lost',
+    }),
+  };
+  const relaunched = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* AgentSessionService;
+      return yield* service.ensureActivePtyProcess(10).pipe(Effect.either);
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          state: running,
+          launchInputs: [],
+          ptyLaunches: [],
+          controlPlaneLayer: blockedLayer,
+        }),
+      ),
+    ),
+  );
+  assert.equal(Either.isLeft(relaunched), true);
+  assert.equal(
+    Either.isLeft(relaunched) && relaunched.left instanceof HarnessLaunchBlocked
+      ? relaunched.left.reason
+      : null,
+    'harness_disabled',
+  );
+});
+
 test('agent session startup restore replaces stale node-pty running process rows', async () => {
   const state = mutableAgentSession({
     activePtyProcessId: 20,
@@ -216,21 +307,31 @@ function testLayer(input: {
   readonly state: ReturnType<typeof mutableAgentSession>;
   readonly launchInputs: RecordedLaunchInput[];
   readonly ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>;
+  readonly createCalls?: number[] | undefined;
+  readonly controlPlaneLayer?: ReturnType<typeof blockedHarnessControlPlaneLayer> | undefined;
 }) {
   return AgentSessionServiceLive.pipe(
-    Layer.provide(Layer.succeed(AgentSessionRepository, fakeRepository(input.state))),
+    Layer.provide(
+      Layer.succeed(AgentSessionRepository, fakeRepository(input.state, input.createCalls)),
+    ),
     Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches))),
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses(input.launchInputs))),
     Layer.provide(SessionLifecycleLive),
     Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(input.controlPlaneLayer ?? AllowAllHarnessControlPlaneLayer),
   );
 }
 
 function fakeRepository(
   state: ReturnType<typeof mutableAgentSession>,
+  createCalls: number[] = [],
 ): AgentSessionRepositoryService {
   return {
-    create: () => Effect.die('create is not used'),
+    create: () =>
+      Effect.sync(() => {
+        createCalls.push(1);
+        return 11;
+      }),
     setActivePtyProcess: (input) =>
       Effect.sync(() => {
         state.session = {

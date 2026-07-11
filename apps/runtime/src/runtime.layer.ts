@@ -21,6 +21,10 @@ import {
 import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
 import { GitLive } from './git/index.js';
 import {
+  HarnessControlPlaneLive,
+  type HarnessControlPlaneService,
+} from './harness-control-plane/index.js';
+import {
   HostInventoryLive,
   type HostInventoryService,
   UserShellLive,
@@ -82,6 +86,11 @@ const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const HostInventoryLayer = HostInventoryLive.pipe(Layer.provide(UserShellLive));
+const HarnessControlPlaneLayer = HarnessControlPlaneLive.pipe(
+  Layer.provide(HostInventoryLayer),
+  Layer.provide(RuntimeConfigLayer),
+  Layer.provide(DataDirectoryLive),
+);
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
 const PtyForegroundStateLayer = PtyForegroundStateLive;
@@ -126,6 +135,7 @@ const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
 const WorkflowHeadlessLayer = WorkflowHeadlessLive.pipe(
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(PtyServiceLayer),
+  Layer.provide(HarnessControlPlaneLayer),
 );
 const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -140,6 +150,7 @@ const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(PtyServiceLayer),
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(SessionLifecycleLayer),
+  Layer.provide(HarnessControlPlaneLayer),
 );
 const TerminalSessionServiceLayer = TerminalSessionServiceLive.pipe(
   Layer.provide(TerminalSessionRepositoryLayer),
@@ -250,7 +261,8 @@ export type RuntimeServices =
   | WorkflowEngineService
   | WorkflowEventLedgerService
   | WorkflowRunProjectionService
-  | HostInventoryService;
+  | HostInventoryService
+  | HarnessControlPlaneService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
@@ -259,6 +271,7 @@ const ServicesLayer = Layer.mergeAll(
   StartupActivationLayer,
   EventLoopWatchdogLive,
   HostInventoryLayer,
+  HarnessControlPlaneLayer,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 

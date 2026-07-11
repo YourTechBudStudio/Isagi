@@ -18,6 +18,8 @@ import {
   HarnessAdapterRegistry,
   type HarnessAdapterRegistryService,
 } from '../agent-sessions/index.js';
+import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
+import { AllowAllHarnessControlPlaneLayer } from '../harness-control-plane/test-support.js';
 import {
   DataDirectory,
   DatabaseError,
@@ -66,6 +68,7 @@ test('startup session restore ensures every pane-bound session and isolates fail
               terminalBinding({ paneId: 2, sessionId: 11, activePtyProcessId: 21 }),
               agentBinding({ paneId: 3, sessionId: 12, activePtyProcessId: 22 }),
               terminalBinding({ paneId: 4, sessionId: 13, activePtyProcessId: 23 }),
+              agentBinding({ paneId: 5, sessionId: 14, activePtyProcessId: 24 }),
             ],
             agentService: {
               ensureActivePtyProcess: (agentSessionId, options) =>
@@ -74,6 +77,15 @@ test('startup session restore ensures every pane-bound session and isolates fail
                   if (agentSessionId === 12) {
                     return yield* Effect.fail(
                       new AgentSessionError('harness_metadata_missing', 'metadata missing'),
+                    );
+                  }
+                  if (agentSessionId === 14) {
+                    return yield* Effect.fail(
+                      new HarnessLaunchBlocked({
+                        harness: 'pi',
+                        reason: 'harness_disabled',
+                        diagnostic: null,
+                      }),
                     );
                   }
                   return 30;
@@ -101,16 +113,17 @@ test('startup session restore ensures every pane-bound session and isolates fail
   assert.deepEqual(calls.sort(), [
     'agent:10:true',
     'agent:12:true',
+    'agent:14:true',
     'terminal:11:true',
     'terminal:13:true',
   ]);
-  assert.equal(logs.warn.length, 2);
+  assert.equal(logs.warn.length, 3);
   assert.deepEqual(logs.info.at(-1)?.[1], {
-    attempted: 4,
+    attempted: 5,
     relaunched: 1,
     reused: 1,
     skippedUnrecoverable: 1,
-    failed: 1,
+    failed: 2,
   });
 });
 
@@ -213,6 +226,7 @@ function realRestoreLayer(
     fakeHarnessRegistry(harnessLaunches),
   );
   const agentService = AgentSessionServiceLive.pipe(
+    Layer.provide(AllowAllHarnessControlPlaneLayer),
     Layer.provide(agentRepository),
     Layer.provide(pty),
     Layer.provide(harnessRegistry),

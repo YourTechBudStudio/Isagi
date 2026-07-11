@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,8 +33,6 @@ function syncAssets(assetRoot) {
     )}\n`,
   );
 
-  copyDirectory(resolve(sdkRoot, 'src'), resolve(assetRoot, 'workflow-sdk', 'src'));
-
   copyFile(
     resolve(runtimeRoot, 'src', 'runtime-config', 'runtime-config.schema.ts'),
     resolve(assetRoot, 'config-schemas', 'runtime-config.schema.ts'),
@@ -52,13 +50,7 @@ function syncAssets(assetRoot) {
     'skill-content',
   );
   for (const name of ['SKILL.md', 'config-global.md', 'config-project.md', 'workflows.md']) {
-    copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'configure-isagi', name));
-  }
-}
-
-function copyDirectory(sourceRoot, targetRoot) {
-  for (const path of listFiles(sourceRoot)) {
-    copyFile(path, resolve(targetRoot, path.slice(sourceRoot.length + 1)));
+    copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }
 }
 
@@ -73,14 +65,4 @@ function writeText(path, source) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function listFiles(root) {
-  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
-    const path = resolve(root, entry.name);
-    if (entry.isDirectory()) return listFiles(path);
-    if (!entry.isFile()) return [];
-    statSync(path);
-    return [path];
-  });
 }

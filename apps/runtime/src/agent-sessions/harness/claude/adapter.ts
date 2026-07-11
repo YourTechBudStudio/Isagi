@@ -8,7 +8,6 @@ export function buildClaudeLaunch(
   input: HarnessLaunchContext,
   dependencies: {
     readonly settingsPath: string;
-    readonly skillWorkspaceDirectory: string;
     readonly artifacts: AgentSessionArtifactsService;
   },
 ) {
@@ -20,7 +19,6 @@ export function buildClaudeLaunch(
       model: input.model,
       effort: input.effort,
       settingsPath: dependencies.settingsPath,
-      skillWorkspaceDirectory: dependencies.skillWorkspaceDirectory,
     });
     return {
       command: 'claude',
@@ -28,8 +26,6 @@ export function buildClaudeLaunch(
         ...(input.latestHarnessSessionId ? ['--resume', input.latestHarnessSessionId] : []),
         ...(input.model ? ['--model', input.model] : []),
         ...(input.effort ? ['--effort', input.effort] : []),
-        '--add-dir',
-        dependencies.skillWorkspaceDirectory,
         '--settings',
         dependencies.settingsPath,
       ],

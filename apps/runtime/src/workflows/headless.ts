@@ -13,6 +13,7 @@ import { Context, Effect, Layer } from 'effect';
 import { harnessDefinition } from '../agent-sessions/harness/definitions.js';
 import { HarnessAdapterRegistry } from '../agent-sessions/harness/index.js';
 import type { HarnessAdapterError } from '../agent-sessions/index.js';
+import { HarnessControlPlane, type HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { PtyService } from '../pty-processes/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
@@ -27,13 +28,13 @@ export interface WorkflowHeadlessService {
     readonly prompt: WorkflowHeadlessAgentInput;
   }) => Effect.Effect<
     { readonly opId: string; readonly launch: WorkflowHeadlessLaunch },
-    PtyLaunchError | HarnessAdapterError
+    PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked
   >;
   readonly reissue: (input: {
     readonly runId: number;
     readonly worktreePath: string;
     readonly ops: readonly WorkflowHeadlessWaitOp[];
-  }) => Effect.Effect<void, PtyLaunchError | HarnessAdapterError>;
+  }) => Effect.Effect<void, PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked>;
   readonly completedResults: (
     condition: Extract<WorkflowWaitCondition, { readonly kind: 'headless_agent' }>,
   ) => Effect.Effect<readonly WorkflowHeadlessResult[] | null>;
@@ -76,6 +77,7 @@ export const WorkflowHeadlessLive = Layer.scoped(
     const harnesses = yield* HarnessAdapterRegistry;
     const pty = yield* PtyService;
     const eventBus = yield* InternalRuntimeEventBus;
+    const controlPlane = yield* HarnessControlPlane;
     const byOpId = new Map<string, TrackedHeadlessOp>();
     const opIdByPtyProcessId = new Map<number, string>();
 
@@ -109,6 +111,7 @@ export const WorkflowHeadlessLive = Layer.scoped(
       readonly launch: WorkflowHeadlessLaunch;
     }) =>
       Effect.gen(function* () {
+        yield* controlPlane.assertCanCreateProcess(input.launch.harness);
         const existing = byOpId.get(input.opId);
         if (existing && !('result' in existing)) return;
         const launchInput = yield* harnesses.buildHeadlessLaunch({

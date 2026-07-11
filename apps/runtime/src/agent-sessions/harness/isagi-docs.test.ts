@@ -1,26 +1,26 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { projectConfigSchema } from '../../project-config/project-config.schema.js';
 import {
   configSchemaReferenceSources,
-  configureIsagiSkillContentSources,
+  isagiDocsContentSources,
   runtimePackageVersion,
 } from '../../runtime-assets.js';
 import { runtimeConfigSchema } from '../../runtime-config/runtime-config.schema.js';
 import {
-  configureIsagiSkillArtifactPaths,
-  configureIsagiSkillName,
-  configureIsagiSkillPackageFiles,
-  writeConfigureIsagiSkillArtifacts,
-} from './configure-isagi-skill.js';
+  isagiDocsArtifactPaths,
+  isagiDocsName,
+  isagiDocsPackageFiles,
+  writeIsagiDocsArtifacts,
+} from './isagi-docs.js';
 
 const dataRoot = '/Users/example/.isagi';
-const files = configureIsagiSkillPackageFiles(dataRoot);
-const handwritten = [...files].filter(([path]) => !path.startsWith('references/sdk/'));
+const files = isagiDocsPackageFiles(dataRoot);
+const handwritten = [...files];
 
 /** Mirrors the generator's own trimming so a value assertion compares like with like. */
 const trimTrailingNewline = (source: string) => source.replace(/\n+$/, '');
@@ -53,7 +53,7 @@ const templates = {
     tokens: ['DATA_ROOT'],
   },
 } as const satisfies Record<
-  keyof typeof configureIsagiSkillContentSources,
+  keyof typeof isagiDocsContentSources,
   { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
 >;
 
@@ -77,7 +77,7 @@ test('no placeholder survives into an emitted skill file', () => {
  */
 test('each content template carries the placeholders it is meant to carry', () => {
   for (const [name, { tokens }] of Object.entries(templates)) {
-    const template = configureIsagiSkillContentSources[name as keyof typeof templates];
+    const template = isagiDocsContentSources[name as keyof typeof templates];
     for (const token of tokens) {
       assert.equal(
         template.includes(`{{${token}}}`),
@@ -118,26 +118,28 @@ test('the skill package holds exactly the indexed references', () => {
       'references/workflows.md',
     ],
   );
-  assert.equal(files.has('references/sdk/index.ts'), true);
+  assert.equal(
+    [...files].some(([path]) => path.startsWith('references/sdk/')),
+    false,
+  );
 });
 
 test('the skill name matches its frontmatter and its directory', () => {
   const router = files.get('SKILL.md') ?? '';
-  assert.match(router, new RegExp(`^name: ${configureIsagiSkillName}$`, 'm'));
+  assert.match(router, new RegExp(`^name: ${isagiDocsName}$`, 'm'));
 
-  const artifacts = configureIsagiSkillArtifactPaths(dataRoot);
-  assert.equal(basename(artifacts.skillDirectory), configureIsagiSkillName);
-  assert.equal(dirname(artifacts.skillDirectory), artifacts.skillScanDirectory);
+  const artifacts = isagiDocsArtifactPaths(dataRoot);
+  assert.equal(basename(artifacts.skillDirectory), isagiDocsName);
+  assert.equal(dirname(artifacts.skillDirectory), resolve(dataRoot, 'skills', 'shared'));
 });
 
-test('the router and the SDK reference read as a skill package', () => {
+test('the router reads as a versioned skill package', () => {
   const router = files.get('SKILL.md') ?? '';
   assert.match(router, new RegExp(`^  version: "${runtimePackageVersion}"$`, 'm'));
   assert.equal(router.includes(`${dataRoot}/config.yaml`), true);
   assert.equal(router.includes(`${dataRoot}/workflows/<key>/`), true);
 
-  const sdk = files.get('references/sdk/index.ts') ?? '';
-  assert.match(sdk, /export function defineWorkflow/);
+  assert.match(router, /@yourtechbudstudio\/isagi-workflow-sdk/);
 });
 
 /**
@@ -163,26 +165,6 @@ test('the router names every top-level config key the schemas define', () => {
       `SKILL.md never names the top-level config key \`${key}\``,
     );
   }
-});
-
-/**
- * OpenCode scans `skillScanDirectory` recursively for any `SKILL.md`, and the Claude wrapper holds a
- * second copy of the very same package. The wrapper is safe only while it sits outside that scan
- * root; today that holds by path construction alone. A refactor that moved the wrapper under
- * `skills/` would put two `configure-isagi` skills in front of every OpenCode session with nothing
- * failing. This asserts the structural half of the duplicate-discovery guard. The runtime
- * observation - that OpenCode really does list the skill once - remains a manual check.
- */
-test('the Claude wrapper sits outside the OpenCode scan root', () => {
-  const { claudeSkillWorkspaceDirectory, skillScanDirectory } =
-    configureIsagiSkillArtifactPaths(dataRoot);
-
-  const descent = relative(skillScanDirectory, claudeSkillWorkspaceDirectory);
-  assert.equal(
-    descent.startsWith('..') || isAbsolute(descent),
-    true,
-    'the Claude wrapper is inside the directory OpenCode scans recursively',
-  );
 });
 
 test('skill references do not carry generated contents sections', () => {
@@ -223,47 +205,15 @@ test('skill prose is portable and self-contained', () => {
 test('regeneration removes a skill directory left behind under an older name', () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-skill-rename-'));
   try {
-    const artifacts = configureIsagiSkillArtifactPaths(root);
-    const staleSkill = resolve(artifacts.skillScanDirectory, 'isagi-configure');
-    const staleClaudeSkill = resolve(
-      artifacts.claudeSkillWorkspaceDirectory,
-      '.claude',
-      'skills',
-      'isagi-configure',
-    );
-    for (const stale of [staleSkill, staleClaudeSkill]) {
-      mkdirSync(stale, { recursive: true });
-      writeFileSync(resolve(stale, 'SKILL.md'), '---\nname: isagi-configure\n---\n', 'utf8');
-    }
+    const artifacts = isagiDocsArtifactPaths(root);
+    const staleSkill = resolve(root, 'skills', 'shared', 'isagi-configure');
+    mkdirSync(staleSkill, { recursive: true });
+    writeFileSync(resolve(staleSkill, 'SKILL.md'), '---\nname: isagi-configure\n---\n', 'utf8');
 
-    writeConfigureIsagiSkillArtifacts(root);
+    writeIsagiDocsArtifacts(root);
 
     assert.equal(existsSync(staleSkill), false, 'stale skill survived under the shared scan root');
-    assert.equal(existsSync(staleClaudeSkill), false, 'stale skill survived in the Claude wrapper');
     assert.equal(existsSync(resolve(artifacts.skillDirectory, 'SKILL.md')), true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('both harness trees receive byte-identical skill files', () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-skill-trees-'));
-  try {
-    const artifacts = writeConfigureIsagiSkillArtifacts(root);
-    const claudeSkillDirectory = resolve(
-      artifacts.claudeSkillWorkspaceDirectory,
-      '.claude',
-      'skills',
-      'configure-isagi',
-    );
-
-    for (const [path] of configureIsagiSkillPackageFiles(root)) {
-      assert.equal(
-        readFileSync(resolve(artifacts.skillDirectory, path), 'utf8'),
-        readFileSync(resolve(claudeSkillDirectory, path), 'utf8'),
-        `${path} differs between the canonical and Claude trees`,
-      );
-    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
