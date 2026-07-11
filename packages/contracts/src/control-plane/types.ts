@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 
-import { agentHarnessSchema } from '../surfaces/types.js';
+import { agentHarnessSchema, harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
 
 export const harnessPolicyEntrySchema = Schema.Struct({
   enabled: Schema.Boolean,
@@ -35,10 +35,21 @@ export const docsReconciliationReasonSchema = Schema.Literal(
   'publication_failed',
   'rollback_failed',
 );
+// Whether the runtime would create a process for this harness right now, and if
+// not, why. Availability is kept as a separate fact; this projection folds
+// onboarding/config/policy/inventory/availability into the single launchability
+// answer the runtime enforces, so the web never re-derives that ladder. It
+// carries no diagnostic string — diagnostics stay on the runtime and, for panes,
+// on the last socket/claim error.
+export const harnessLaunchProjectionSchema = Schema.Union(
+  Schema.Struct({ status: Schema.Literal('launchable') }),
+  Schema.Struct({ status: Schema.Literal('blocked'), reason: harnessLaunchBlockReasonSchema }),
+);
 export const harnessControlPlaneEntrySchema = Schema.Struct({
   harness: agentHarnessSchema,
   availability: Schema.Literal('pending', 'available', 'missing', 'incompatible', 'probe_failed'),
   policy: harnessPolicyEntrySchema,
+  launch: harnessLaunchProjectionSchema,
 });
 export const docsHarnessResultSchema = Schema.Struct({
   harness: agentHarnessSchema,
@@ -98,5 +109,13 @@ export const acceptHarnessPolicyOutputSchema = Schema.Struct({
   reconciliation: docsReconciliationResultSchema,
 });
 export type HarnessPolicy = Schema.Schema.Type<typeof harnessPolicySchema>;
+export type HarnessLaunchProjection = Schema.Schema.Type<typeof harnessLaunchProjectionSchema>;
+export type HarnessControlPlaneEntry = Schema.Schema.Type<typeof harnessControlPlaneEntrySchema>;
 export type ControlPlaneSnapshot = Schema.Schema.Type<typeof controlPlaneSnapshotSchema>;
 export type DocsReconciliationResult = Schema.Schema.Type<typeof docsReconciliationResultSchema>;
+export type DocsHarnessResult = Schema.Schema.Type<typeof docsHarnessResultSchema>;
+export type DocsReconciliationAction = Schema.Schema.Type<typeof docsReconciliationActionSchema>;
+export type DocsReconciliationReason = Schema.Schema.Type<typeof docsReconciliationReasonSchema>;
+export type AcceptHarnessPolicyInput = Schema.Schema.Type<typeof acceptHarnessPolicyInputSchema>;
+export type AcceptHarnessPolicyOutput = Schema.Schema.Type<typeof acceptHarnessPolicyOutputSchema>;
+export type RefreshInventoryOutput = Schema.Schema.Type<typeof refreshInventoryOutputSchema>;

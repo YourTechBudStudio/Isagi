@@ -2,10 +2,18 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Effect, Schema } from 'effect';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ptyWebSocketOutputMessageSchema, type PtyWebSocketOutputMessage } from '@isagi/contracts';
+import {
+  ptyWebSocketOutputMessageSchema,
+  type ControlPlaneSnapshot,
+  type HarnessLaunchProjection,
+  type PtyWebSocketOutputMessage,
+} from '@isagi/contracts';
 
 import { ptySocketErrorCopy } from '../../copy/index.js';
-import { runRuntimeEffect } from '../../lib/runtime/run.js';
+import { harnessLaunch } from '../../lib/control-plane/launchability.js';
+import { controlPlaneQueryKey, useControlPlaneQuery } from '../../lib/control-plane/queries.js';
+import { RuntimeApiError } from '../../lib/runtime/client.js';
+import { runRuntimeEffect, unwrapRuntimeFailure } from '../../lib/runtime/run.js';
 import {
   NO_EXIT,
   paneNotice,
@@ -16,7 +24,9 @@ import {
 import {
   claimInputForSession,
   derivePaneView,
+  isLaunchBlockCode,
   isPtyWebSocketErrorCode,
+  recoveryRequiresProcessCreation,
   startFreshInputForSession,
   type PaneConnectionSnapshot,
   type PaneView,
@@ -34,6 +44,7 @@ import {
   claimPaneSession,
   createPaneSession,
   formatRuntimeError,
+  refreshInventory,
   resolveAgentSessionPtyWebSocketUrl,
   resolveTerminalSessionPtyWebSocketUrl,
 } from '../../lib/workspace/runtime-data.js';
@@ -66,6 +77,9 @@ export interface UsePaneSessionResult {
   readonly startFreshPending: boolean;
   /** The last "start fresh" failure, shown on the recovery prompt. Cleared on retry. */
   readonly startFreshError: string | null;
+  /** Refresh host facts and re-evaluate an unavailable pane; attaches if now launchable. */
+  readonly checkAgain: () => void;
+  readonly checking: boolean;
 }
 
 /**
@@ -83,6 +97,7 @@ export function usePaneSession({
   autoAttach = false,
 }: UsePaneSessionInput): UsePaneSessionResult {
   const queryClient = useQueryClient();
+  const controlPlane = useControlPlaneQuery();
   const autoAttachSessionKeyRef = useRef<string | null>(null);
 
   const [exit, setExit] = useState<ExitInfo>(NO_EXIT);
@@ -90,7 +105,18 @@ export function usePaneSession({
   const [userAttach, setUserAttach] = useState(false);
   const [attachEpoch, setAttachEpoch] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [startFreshError, setStartFreshError] = useState<string | null>(null);
+
+  // The runtime's launch projection for this pane's harness, authoritative over any
+  // stale socket/claim failure. Terminals are always launchable.
+  const launch: HarnessLaunchProjection = useMemo(
+    () =>
+      session?.kind === 'agent_session' && controlPlane.data
+        ? harnessLaunch(controlPlane.data, session.harness)
+        : { status: 'launchable' },
+    [session, controlPlane.data],
+  );
 
   const sessionId = session?.id ?? null;
   const sessionKind = session?.kind ?? null;
@@ -124,13 +150,27 @@ export function usePaneSession({
     setExit(nextExit);
   }, []);
 
-  const handleResolveError = useCallback((error: unknown) => {
-    const detail = formatRuntimeError(error);
-    return {
-      message: detail,
-      output: ptySocketErrorCopy.connectFailed(detail),
-    };
-  }, []);
+  const handleResolveError = useCallback(
+    (error: unknown) => {
+      const detail = formatRuntimeError(error);
+      // A claim can be rejected by launch policy before any socket exists. Treat
+      // that as a sign our snapshot is stale: refetch the control plane so the pane
+      // reprojects from the authoritative launch fact. The message stays as history.
+      const failure = unwrapRuntimeFailure(error);
+      if (
+        failure instanceof RuntimeApiError &&
+        failure.apiError.code === 'session_launch_rejected' &&
+        isLaunchBlockCode(readErrorReason(failure.apiError.data))
+      ) {
+        void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+      }
+      return {
+        message: detail,
+        output: ptySocketErrorCopy.connectFailed(detail),
+      };
+    },
+    [queryClient],
+  );
 
   const handleSocketError = useCallback(
     () => ({ message: ptySocketErrorCopy.byReason('socket_unavailable') }),
@@ -177,8 +217,13 @@ export function usePaneSession({
     if (connection.phase === 'errored' || connection.phase === 'disconnected') {
       setUserAttach(false);
       void queryClient.invalidateQueries({ queryKey: surfaceDetailQueryKey(surfaceId) });
+      // A launch-block code over the socket means the same thing as at claim time:
+      // reproject the pane from a fresh control-plane snapshot.
+      if (isLaunchBlockCode(connection.notice?.code)) {
+        void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+      }
     }
-  }, [connection.phase, queryClient, surfaceId]);
+  }, [connection.phase, connection.notice?.code, queryClient, surfaceId]);
 
   const attach = useCallback(() => {
     setUserAttach(true);
@@ -186,7 +231,7 @@ export function usePaneSession({
   }, []);
 
   useEffect(() => {
-    if (!autoAttach || !isAutoAttachableSession(session)) {
+    if (!autoAttach || !isAutoAttachableSession(session, launch)) {
       return;
     }
 
@@ -197,7 +242,29 @@ export function usePaneSession({
 
     autoAttachSessionKeyRef.current = sessionKey;
     attach();
-  }, [autoAttach, session, attach]);
+  }, [autoAttach, session, launch, attach]);
+
+  // "Check again" for an unavailable pane: refresh authoritative host facts first,
+  // reproject from the fresh snapshot, and only then retry attachment if the
+  // harness is now launchable. Repeating the claim against stale facts would just
+  // fail the same way.
+  const checkAgain = useCallback(async () => {
+    setChecking(true);
+    try {
+      await runRuntimeEffect(refreshInventory());
+      await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+      const fresh = queryClient.getQueryData<ControlPlaneSnapshot>(controlPlaneQueryKey);
+      if (
+        fresh &&
+        session?.kind === 'agent_session' &&
+        harnessLaunch(fresh, session.harness).status === 'launchable'
+      ) {
+        attach();
+      }
+    } finally {
+      setChecking(false);
+    }
+  }, [queryClient, session, attach]);
 
   const startFresh = useCallback(() => {
     if (session === null || creating) {
@@ -226,8 +293,8 @@ export function usePaneSession({
   }, [session, creating, worktreeId, paneId, surfaceId, queryClient]);
 
   const view = useMemo(
-    () => derivePaneView(session, paneConnectionSnapshot(connection)),
-    [session, connection],
+    () => derivePaneView(session, paneConnectionSnapshot(connection), launch),
+    [session, connection, launch],
   );
 
   const attention = paneViewAttention(view, paneAttention, session);
@@ -235,8 +302,13 @@ export function usePaneSession({
     view.kind === 'attachable' ||
     view.kind === 'needs_fresh' ||
     view.kind === 'moved' ||
-    view.kind === 'unsupported';
-  const errored = view.kind === 'unsupported' || (view.kind === 'attachable' && view.resumeFailed);
+    view.kind === 'unsupported' ||
+    view.kind === 'blocked' ||
+    view.kind === 'unavailable';
+  const errored =
+    view.kind === 'unsupported' ||
+    view.kind === 'blocked' ||
+    (view.kind === 'attachable' && view.resumeFailed);
   const statusLabel = paneStatusLabel(view, session, connection.phase, exit);
   const notice = paneNotice(view, session, connection, rendererWarning);
 
@@ -254,6 +326,8 @@ export function usePaneSession({
     startFresh,
     startFreshPending: creating,
     startFreshError,
+    checkAgain,
+    checking,
   };
 }
 
@@ -273,12 +347,30 @@ function resolveSessionPtyWebSocketUrl(
   });
 }
 
-function isAutoAttachableSession(session: PtyPaneSession | null): session is PtyPaneSession {
+function isAutoAttachableSession(
+  session: PtyPaneSession | null,
+  launch: HarnessLaunchProjection,
+): session is PtyPaneSession {
   if (session === null || session.status === 'starting' || session.status === 'running') {
     return false;
   }
+  if (session.kind === 'terminal_session') {
+    return true;
+  }
+  if (session.recoveryAction === 'create_replacement') {
+    return false;
+  }
+  // Do not auto-attach into a launch the runtime would block: the recovery would
+  // create a process and fail. `connect_existing` is pure attach and stays allowed.
+  return !(recoveryRequiresProcessCreation(session.recoveryAction) && launch.status === 'blocked');
+}
 
-  return session.kind === 'terminal_session' || session.recoveryAction !== 'create_replacement';
+function readErrorReason(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'reason' in data) {
+    const reason = (data as { readonly reason?: unknown }).reason;
+    return typeof reason === 'string' ? reason : null;
+  }
+  return null;
 }
 
 function paneConnectionSnapshot(connection: PtyStreamConnectionState): PaneConnectionSnapshot {

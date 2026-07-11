@@ -15,6 +15,7 @@ export {
   worktreeCreateCopy,
   worktreeSetupReviewCopy,
 } from './palette.js';
+export { docsResultCopy, onboardingCopy, startupCopy } from './startup.js';
 export { toastCopy } from './toasts.js';
 export { workbenchCopy } from './workbench.js';
 export {

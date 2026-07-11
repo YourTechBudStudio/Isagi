@@ -1,4 +1,4 @@
-import type { SurfaceDetail, WorkflowStartContext } from '@isagi/contracts';
+import type { AgentHarness, SurfaceDetail, WorkflowStartContext } from '@isagi/contracts';
 
 import type { Project, Worktree } from '../workspace/types.js';
 import type { PaletteContext } from './types.js';
@@ -17,11 +17,12 @@ export function buildPaletteContext(
   projects: readonly Project[],
   activeWorktreeId: number | null,
   options: {
+    readonly launchableHarnesses: readonly AgentHarness[];
     readonly activeSurfaceByWorktreeId?: Readonly<Record<number, number>>;
     readonly activePaneBySurfaceId?: Readonly<Record<number, number>>;
     readonly workflowDescriptors?: PaletteContext['workflowDescriptors'];
     readonly activeSurfaceWorkflowSummary?: PaletteContext['activeSurfaceWorkflowSummary'];
-  } = {},
+  },
 ): PaletteContext {
   const activeWorktree =
     projects
@@ -45,6 +46,7 @@ export function buildPaletteContext(
     activePaneId: activeSurface
       ? (options.activePaneBySurfaceId?.[activeSurface.id] ?? null)
       : null,
+    launchableHarnesses: options.launchableHarnesses,
     workflowDescriptors: options.workflowDescriptors,
     activeSurfaceWorkflowSummary: options.activeSurfaceWorkflowSummary,
   };

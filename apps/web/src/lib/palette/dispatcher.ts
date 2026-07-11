@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 
 import { toastCopy } from '../../copy/index.js';
+import { useLaunchableHarnesses } from '../control-plane/queries.js';
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
 import { useWorkspace } from '../workspace/hooks.js';
@@ -92,6 +93,7 @@ const emptyPaletteContext: PaletteContext = {
   activeWorktree: null,
   activeSurface: null,
   activePaneId: null,
+  launchableHarnesses: [],
 };
 
 export async function resolveCommandPreflight(
@@ -108,15 +110,23 @@ export async function resolveCommandPreflight(
 export function useCommandDispatcher() {
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
   const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
+  const launchableHarnesses = useLaunchableHarnesses();
   const openPalette = usePaletteStore((state) => state.openPalette);
   const pushRecent = usePaletteStore((state) => state.pushRecent);
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
+        launchableHarnesses,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
       }),
-    [projects, activeWorktreeId, activeSurfaceByWorktreeId, activePaneBySurfaceId],
+    [
+      projects,
+      activeWorktreeId,
+      launchableHarnesses,
+      activeSurfaceByWorktreeId,
+      activePaneBySurfaceId,
+    ],
   );
   const entries = useMemo(() => assembleEntries(ctx), [ctx]);
 

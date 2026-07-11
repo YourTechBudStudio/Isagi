@@ -83,6 +83,7 @@ export const surfaceActionsCopy = {
     rename: 'Rename surface',
     delete: 'Delete surface…',
   },
+  chooseHarness: 'Choose a harness before splitting this pane.',
   deletePane: {
     title: 'Delete this pane?',
     body: 'This session is still running. Isagi will delete the pane; cleanup runs in the background.',

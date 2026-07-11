@@ -1,10 +1,16 @@
-import type {
-  AgentSessionMetadata,
-  PaneSessionClaimInput,
-  PaneSessionCreateInput,
-  PtyWebSocketErrorCode,
-  SurfacePane,
-  TerminalSessionMetadata,
+import { Schema } from 'effect';
+
+import {
+  ptyWebSocketErrorCodeSchema,
+  type AgentSessionMetadata,
+  type AgentSessionRecoveryAction,
+  type HarnessLaunchBlockReason,
+  type HarnessLaunchProjection,
+  type PaneSessionClaimInput,
+  type PaneSessionCreateInput,
+  type PtyWebSocketErrorCode,
+  type SurfacePane,
+  type TerminalSessionMetadata,
 } from '@isagi/contracts';
 
 /**
@@ -37,33 +43,33 @@ export type PaneConnectionSnapshot = {
   readonly attachRequested: boolean;
 };
 
-const ptyWebSocketErrorCodes = new Set<string>([
-  'invalid_message',
-  'stream_superseded',
-  'backend_unavailable',
-  'backend_session_missing',
-  'backend_attach_failed',
-  'log_read_failed',
-  'pty_state_load_failed',
-  'invalid_session_id',
-  'session_not_found',
-  'session_not_running',
-  'active_process_missing',
-  'active_process_not_running',
-  'harness_metadata_missing',
-  'harness_metadata_invalid',
-  'unsupported_harness',
-  'session_already_attached',
-  'session_attachment_moved',
-  'attach_token_missing',
-  'attach_token_invalid',
-  'attach_token_expired',
-  'pty_write_failed',
-  'unknown',
-]);
+// Contract-backed: the code already arrived on a schema-validated message, so the
+// authoritative union is the single source of truth. A hand-maintained list here
+// silently dropped launch-block codes (`harness_disabled` and friends) before they
+// could reach a pane, which is exactly the drift we no longer want.
+export const isPtyWebSocketErrorCode: (code: unknown) => code is PtyWebSocketErrorCode = Schema.is(
+  ptyWebSocketErrorCodeSchema,
+);
 
-export function isPtyWebSocketErrorCode(code: string): code is PtyWebSocketErrorCode {
-  return ptyWebSocketErrorCodes.has(code);
+const isHarnessLaunchBlockCode = Schema.is(
+  Schema.Literal(
+    'onboarding_incomplete',
+    'config_invalid',
+    'inventory_pending',
+    'harness_disabled',
+    'harness_missing',
+    'harness_incompatible',
+    'harness_probe_failed',
+  ),
+);
+
+/**
+ * Whether a launch-block code should move a pane out of its stale blocker on the
+ * next control-plane snapshot. The runtime projection is authoritative for the
+ * view; this only decides whether a socket/claim failure warrants a refetch.
+ */
+export function isLaunchBlockCode(code: string | null | undefined): boolean {
+  return code != null && isHarnessLaunchBlockCode(code);
 }
 
 /**
@@ -81,7 +87,20 @@ export type PaneView =
   /** The attachment was taken over by another pane. */
   | { readonly kind: 'moved' }
   /** The harness has no runtime adapter wired yet. */
-  | { readonly kind: 'unsupported' };
+  | { readonly kind: 'unsupported' }
+  /**
+   * Recovering this pane would create a process, but harness policy forbids it
+   * (disabled, or the config/onboarding is not in a launchable state). Terminal
+   * and close-only — retry-in-place would just fail for the same reason. It clears
+   * itself when policy makes the harness launchable again.
+   */
+  | { readonly kind: 'blocked'; readonly reason: HarnessLaunchBlockReason }
+  /**
+   * Recovering this pane would create a process, but the harness is unavailable or
+   * inventory is still settling. Retained, with an honest recheck that refreshes
+   * inventory before re-evaluating.
+   */
+  | { readonly kind: 'unavailable'; readonly reason: HarnessLaunchBlockReason };
 
 export function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession | null {
   if (!session) {
@@ -109,6 +128,7 @@ export function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession 
 export function derivePaneView(
   session: PtyPaneSession | null,
   connection: PaneConnectionSnapshot,
+  launch: HarnessLaunchProjection,
 ): PaneView {
   if (!session) {
     return { kind: 'empty' };
@@ -117,6 +137,8 @@ export function derivePaneView(
     return { kind: 'unsupported' };
   }
   if (connection.code === 'session_attachment_moved') {
+    // Reclaiming a moved attachment connects to a live process — it never creates
+    // one — so it stays available even under a blocked launch projection.
     return { kind: 'moved' };
   }
 
@@ -129,6 +151,14 @@ export function derivePaneView(
     return { kind: 'live' };
   }
 
+  // Non-running agent session. If recovering it would create a process and the
+  // runtime says this harness is not launchable, surface the blocker instead of a
+  // Resume / Start-fresh action that would fail for the same reason. Pure attach
+  // (`connect_existing`) is never gated here.
+  if (recoveryRequiresProcessCreation(session.recoveryAction) && launch.status === 'blocked') {
+    return blockedView(launch.reason);
+  }
+
   if (session.recoveryAction === 'create_replacement') {
     return { kind: 'needs_fresh' };
   }
@@ -139,6 +169,29 @@ export function derivePaneView(
     kind: 'attachable',
     resumeFailed: session.diagnosticCode === 'harness_resume_failed',
   };
+}
+
+// `connect_existing` attaches to an already-running process; the other recovery
+// actions relaunch/replace and therefore need a fresh process the launch policy
+// governs.
+export function recoveryRequiresProcessCreation(action: AgentSessionRecoveryAction): boolean {
+  return (
+    action === 'resume_existing' || action === 'relaunch_fresh' || action === 'create_replacement'
+  );
+}
+
+// Policy blocks (disabled / onboarding / config) are terminal from the pane —
+// only a config change fixes them, so the state is close-only. Availability blocks
+// are recheckable in place.
+function blockedView(reason: HarnessLaunchBlockReason): PaneView {
+  if (
+    reason === 'harness_disabled' ||
+    reason === 'onboarding_incomplete' ||
+    reason === 'config_invalid'
+  ) {
+    return { kind: 'blocked', reason };
+  }
+  return { kind: 'unavailable', reason };
 }
 
 export function claimInputForSession(

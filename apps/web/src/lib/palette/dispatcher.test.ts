@@ -12,6 +12,7 @@ const ctx: PaletteContext = {
   activeWorktree: null,
   activeSurface: null,
   activePaneId: null,
+  launchableHarnesses: [],
 };
 
 test('dispatcher immediate command run pushes recent after success', async () => {

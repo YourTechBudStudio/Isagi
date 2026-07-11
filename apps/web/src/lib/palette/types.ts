@@ -1,4 +1,4 @@
-import type { WorkflowDescriptorResult, WorkflowRunSummary } from '@isagi/contracts';
+import type { AgentHarness, WorkflowDescriptorResult, WorkflowRunSummary } from '@isagi/contracts';
 
 import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
@@ -26,6 +26,13 @@ export interface PaletteContext {
   readonly activeProject: Project | null;
   readonly activeSurface: Surface | null;
   readonly activePaneId: number | null;
+  /**
+   * Harnesses the runtime would launch right now (enabled and available), sourced
+   * from the control-plane snapshot. Required, never optional: a missing input
+   * must read as an empty list, not a silent "no facts yet" fallback that a select
+   * could mistake for "nothing available".
+   */
+  readonly launchableHarnesses: readonly AgentHarness[];
   readonly workflowDescriptors?: readonly WorkflowDescriptorResult[] | undefined;
   readonly activeSurfaceWorkflowSummary?: WorkflowRunSummary | undefined;
 }

@@ -108,6 +108,7 @@ function ctx(options: Partial<PaletteContext> = {}): PaletteContext {
     },
     activeSurface: { id: 42, title: 'Main', paneKinds: [], attention: 'idle' },
     activePaneId: null,
+    launchableHarnesses: [],
     ...options,
   };
 }

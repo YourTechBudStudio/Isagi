@@ -17,6 +17,10 @@ import {
   type ApiEndpointParams,
   type ApiEndpointRequestArgs,
   type ApiInfrastructureError,
+  type AcceptHarnessPolicyInput,
+  type AcceptHarnessPolicyOutput,
+  type ControlPlaneSnapshot,
+  type RefreshInventoryOutput,
   type CreateSurfaceInput,
   type CreateSurfaceOutput,
   type DeleteWorktreeInput,
@@ -298,6 +302,20 @@ export interface RuntimeClient {
     StartWorkflowOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.start>
   >;
+  readonly getControlPlane: () => Effect.Effect<
+    ControlPlaneSnapshot,
+    RuntimeEndpointError<typeof apiEndpoints.controlPlane.get>
+  >;
+  readonly refreshInventory: () => Effect.Effect<
+    RefreshInventoryOutput,
+    RuntimeEndpointError<typeof apiEndpoints.controlPlane.refreshInventory>
+  >;
+  readonly acceptHarnessPolicy: (
+    input: AcceptHarnessPolicyInput,
+  ) => Effect.Effect<
+    AcceptHarnessPolicyOutput,
+    RuntimeEndpointError<typeof apiEndpoints.controlPlane.acceptPolicy>
+  >;
 }
 
 export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
@@ -400,6 +418,9 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
+    getControlPlane: () => request(apiEndpoints.controlPlane.get),
+    refreshInventory: () => request(apiEndpoints.controlPlane.refreshInventory),
+    acceptHarnessPolicy: (input) => request(apiEndpoints.controlPlane.acceptPolicy, input),
   };
 }
 

@@ -1,3 +1,5 @@
+import type { HarnessLaunchBlockReason } from '@isagi/contracts';
+
 /**
  * The recovery prompts an agent pane shows when no live process is attached and
  * the durable agent session needs the user to choose how to proceed. These are
@@ -28,5 +30,34 @@ export const agentSessionCopy = {
     resume: 'Resume session',
     retry: 'Retry resume',
     startFresh: 'Start a fresh session',
+  },
+  // A durable agent pane whose harness the runtime will not launch right now.
+  // `blocked` (a policy state — disabled/onboarding/config) is close-only; a
+  // config change is the only fix. `unavailable` (missing/incompatible/probe/
+  // inventory) is retained and offers an honest recheck.
+  launchBlock: {
+    harnessStatus: (harness: string, status: string) => `${harness} · ${status}`,
+    status: {
+      onboarding_incomplete: 'Setup needed',
+      config_invalid: 'Config error',
+      inventory_pending: 'Checking',
+      harness_disabled: 'Disabled',
+      harness_missing: 'Not installed',
+      harness_incompatible: 'Incompatible',
+      harness_probe_failed: 'Unknown',
+    } satisfies Record<HarnessLaunchBlockReason, string>,
+    body: {
+      onboarding_incomplete: 'Finish Isagi setup to use this agent.',
+      config_invalid: 'Fix your harness config to use this agent.',
+      inventory_pending: 'Isagi is still checking this agent. Give it a moment.',
+      harness_disabled: 'This harness is disabled in your Isagi configuration.',
+      harness_missing: 'This harness is not installed in your environment.',
+      harness_incompatible: 'This harness version is not compatible with Isagi.',
+      harness_probe_failed: "Isagi couldn't tell whether this harness is available.",
+    } satisfies Record<HarnessLaunchBlockReason, string>,
+    disabledHint: 'Re-enable it in Configure harnesses, then start a new session.',
+    close: 'Close pane',
+    checkAgain: 'Check again',
+    checking: 'Checking…',
   },
 } as const;

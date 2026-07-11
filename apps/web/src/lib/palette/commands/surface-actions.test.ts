@@ -29,6 +29,7 @@ test('delete-active-pane preflight falls back to the first pane when no active p
   const preflight = await deleteActivePaneCommand.preflight?.(
     {
       projects: [],
+      launchableHarnesses: [],
       activeProject: null,
       activeWorktree: {
         id: 10,
@@ -69,6 +70,7 @@ test('rename-active-surface validation surfaces inline copy', async () => {
       { surfaceId: '501', title: '   ' },
       {
         projects: [],
+        launchableHarnesses: [],
         activeProject: null,
         activeWorktree: null,
         activeSurface: {
@@ -103,6 +105,7 @@ test('delete-active-pane preflight opens review for a running fallback pane', as
   const preflight = await deleteActivePaneCommand.preflight?.(
     {
       projects: [],
+      launchableHarnesses: [],
       activeProject: null,
       activeWorktree: {
         id: 10,

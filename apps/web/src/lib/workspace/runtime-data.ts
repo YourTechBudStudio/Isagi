@@ -1,10 +1,13 @@
 import { Effect } from 'effect';
 
 import type {
+  AcceptHarnessPolicyInput,
+  AcceptHarnessPolicyOutput,
   ActiveContextOutput,
   ActiveContextPersistenceInput,
   AddProjectOutput,
   AgentHarness,
+  ControlPlaneSnapshot,
   CreateSurfaceInput,
   CreateSurfaceOutput,
   DeleteWorktreeInput,
@@ -34,6 +37,7 @@ import type {
   CommandActionOutput,
   CommandLogMetadataOutput,
   ReconcileWorkspaceOutput,
+  RefreshInventoryOutput,
   RelocateProjectOutput,
   WorkspaceSnapshot,
   AdvanceWorkflowInput,
@@ -344,6 +348,20 @@ export function suggestProjectPaths(
   limit = 25,
 ): Effect.Effect<PathSuggestOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.suggestProjectPaths(input, limit)));
+}
+
+export function fetchControlPlane(): Effect.Effect<ControlPlaneSnapshot, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getControlPlane()));
+}
+
+export function refreshInventory(): Effect.Effect<RefreshInventoryOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.refreshInventory()));
+}
+
+export function acceptHarnessPolicy(
+  input: AcceptHarnessPolicyInput,
+): Effect.Effect<AcceptHarnessPolicyOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.acceptHarnessPolicy(input)));
 }
 
 function getClient() {

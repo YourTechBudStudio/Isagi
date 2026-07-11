@@ -1,8 +1,7 @@
 import { Bot, SquareTerminal } from 'lucide-react';
 
-import type { AgentHarness } from '@isagi/contracts';
-
 import { worktreeActionsCopy } from '../../../copy/index.js';
+import { harnessLabel, parseAgentHarness } from '../../harness-labels.js';
 import {
   startAgentSessionFromPalette,
   startTerminalSessionFromPalette,
@@ -14,12 +13,10 @@ export const harnessSelectArg: Extract<ArgSpec, { readonly kind: 'select' }> = {
   key: 'harness',
   label: 'Harness',
   defaultSelection: 'none',
-  options: () => [
-    { value: 'pi', label: 'Pi' },
-    { value: 'opencode', label: 'OpenCode' },
-    { value: 'claude', label: 'Claude' },
-    { value: 'codex', label: 'Codex' },
-  ],
+  // Only harnesses the runtime would launch right now, from the control-plane
+  // snapshot threaded through the palette context — never a hardcoded list.
+  options: (ctx) =>
+    ctx.launchableHarnesses.map((harness) => ({ value: harness, label: harnessLabel(harness) })),
 };
 
 /**
@@ -58,10 +55,11 @@ export const startAgentSessionCommand: PaletteCommand = {
   args: [harnessSelectArg],
   run: async (values, ctx) => {
     const worktreeId = worktreeIdFromValues(values, ctx);
-    if (worktreeId === null) {
+    const harness = parseAgentHarness(values.harness);
+    if (worktreeId === null || harness === null) {
       return;
     }
-    await startAgentSessionFromPalette(worktreeId, values.harness as AgentHarness);
+    await startAgentSessionFromPalette(worktreeId, harness);
   },
 };
 

@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
 import { workflowLoadFailureReasonSchema } from '../workflows/types.js';
 
 export const projectPathRejectionReasonSchema = Schema.Literal(
@@ -64,15 +65,9 @@ export const worktreeEnvironmentFocusRejectionReasonSchema = Schema.Literal(
   'pane_not_found',
 );
 
-export const sessionLaunchRejectionReasonSchema = Schema.Literal(
-  'worktree_not_found',
-  'onboarding_incomplete',
-  'config_invalid',
-  'inventory_pending',
-  'harness_disabled',
-  'harness_missing',
-  'harness_incompatible',
-  'harness_probe_failed',
+export const sessionLaunchRejectionReasonSchema = Schema.Union(
+  Schema.Literal('worktree_not_found'),
+  harnessLaunchBlockReasonSchema,
 );
 
 export const worktreeCommandsRejectionReasonSchema = Schema.Literal(

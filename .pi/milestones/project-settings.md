@@ -44,6 +44,13 @@ Initial setting areas may include:
   `error > working > waiting > idle`; this should become adjustable after a
   dedicated brainstorm on whether attention semantics belong in global user
   preferences, project settings, or another settings layer.
+- agent harness policy: which harnesses are enabled and the install
+  isagi-docs skill choice. First-run onboarding edits this once; the
+  in-workspace "Configure harnesses" palette command and reconfigure modal
+  were removed (2026-07) so day-to-day changes land here with the rest of
+  the config surface. Note this policy lives in Isagi's global config, not
+  project-scoped `.isagi/config.yaml` — when this milestone hardens, decide
+  whether it sits on this surface or a global-settings sibling.
 
 For the worktree hook trust model, settings should complement the command-palette approval flow. The palette can ask at the moment of worktree creation; the settings page should let the user inspect and change that decision later.
 

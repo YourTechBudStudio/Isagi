@@ -4,6 +4,7 @@ import type {
   AgentHarness,
   ControlPlaneSnapshot,
   DocsReconciliationResult,
+  HarnessLaunchBlockReason,
   HarnessPolicy,
 } from '@isagi/contracts';
 
@@ -20,15 +21,11 @@ import {
   type RuntimeHarnessPolicyState,
 } from '../runtime-config/index.js';
 import { docsReconciliationFingerprint, reconcileDocs } from './docs-reconciler.js';
+import { harnessLaunchDecision } from './launch-decision.js';
 
-export type HarnessLaunchBlockReason =
-  | 'onboarding_incomplete'
-  | 'config_invalid'
-  | 'inventory_pending'
-  | 'harness_disabled'
-  | 'harness_missing'
-  | 'harness_incompatible'
-  | 'harness_probe_failed';
+// The launch-block reason set is owned by the contract so the wire projection,
+// the PTY/HTTP error surfaces, and this enforcement path can never disagree.
+export type { HarnessLaunchBlockReason };
 export class HarnessLaunchBlocked extends Data.TaggedError('HarnessLaunchBlocked')<{
   readonly harness: AgentHarness;
   readonly reason: HarnessLaunchBlockReason;
@@ -149,18 +146,33 @@ export const HarnessControlPlaneLive = Layer.scoped(
       refreshInventory: refresh,
       acceptPolicy: (input) =>
         Effect.gen(function* () {
+          // Prove reconciliation can run before committing: ensure inventory is
+          // Ready, refreshing once if it is still pending. If it cannot become
+          // Ready, fail BEFORE any config write so policy and revision stay
+          // untouched. This keeps the endpoint honest under ADR 0002 — a request
+          // failure never leaves a committed policy the caller cannot see.
+          let cached = yield* inventory.getCached;
+          if (cached._tag === 'Pending') {
+            yield* inventory.refresh;
+            cached = yield* inventory.getCached;
+          }
+          if (cached._tag === 'Pending')
+            return yield* Effect.fail(
+              new ControlPlaneNotReady({ reason: 'inventory_unavailable' }),
+            );
+
           const accepted = yield* config.acceptHarnessPolicy({
             expectedPolicyRevision: input.expectedPolicyRevision,
             policy: input.policy as RuntimeHarnessPolicy,
           });
-          let result = yield* reconcileCurrent(false);
-          if (!result) {
-            yield* inventory.refresh;
-            result = yield* reconcileCurrent(false);
-          }
+          // Inventory is Ready and the committed policy is valid, so reconciliation
+          // always yields a result. A null here would be a defect, never a
+          // post-commit ControlPlaneNotReady that could strand the caller's
+          // revision.
+          const result = yield* reconcileCurrent(false);
           if (!result)
-            return yield* Effect.fail(
-              new ControlPlaneNotReady({ reason: 'inventory_unavailable' }),
+            return yield* Effect.dieMessage(
+              'Docs reconciliation produced no result after committing a valid policy with ready inventory.',
             );
           return {
             acceptedPolicyRevision: accepted.harnesses.revision,
@@ -174,31 +186,20 @@ export const HarnessControlPlaneLive = Layer.scoped(
       assertCanCreateProcess: (harness) =>
         Effect.gen(function* () {
           const current = yield* config.get;
-          if (current.harnesses.status === 'missing')
-            return yield* blocked(harness, 'onboarding_incomplete');
-          if (current.harnesses.status === 'invalid')
-            return yield* blocked(harness, 'config_invalid', current.harnesses.diagnostic);
-          if (!current.harnesses.policy[harness].enabled)
-            return yield* blocked(harness, 'harness_disabled');
           const cached = yield* inventory.getCached;
-          if (cached._tag === 'Pending') return yield* blocked(harness, 'inventory_pending');
-          const availability = cached.inventory.harnesses[harness];
-          if (availability._tag === 'Available') return;
-          if (availability._tag === 'Missing') return yield* blocked(harness, 'harness_missing');
-          if (availability._tag === 'Incompatible')
-            return yield* blocked(harness, 'harness_incompatible');
-          return yield* blocked(harness, 'harness_probe_failed', availability.diagnostic);
+          const decision = harnessLaunchDecision(current.harnesses, cached, harness);
+          if (decision.status === 'blocked')
+            return yield* Effect.fail(
+              new HarnessLaunchBlocked({
+                harness,
+                reason: decision.reason,
+                diagnostic: decision.diagnostic,
+              }),
+            );
         }),
     } satisfies HarnessControlPlaneService;
   }),
 );
-function blocked(
-  harness: AgentHarness,
-  reason: HarnessLaunchBlockReason,
-  diagnostic: string | null = null,
-) {
-  return Effect.fail(new HarnessLaunchBlocked({ harness, reason, diagnostic }));
-}
 function snapshotOf(
   policyState: RuntimeHarnessPolicyState,
   inventory: HostInventoryState,
@@ -224,14 +225,21 @@ function snapshotOf(
               bun: executableAvailability(inventory.inventory.packageManagers.bun),
             },
           },
-    harnesses: supportedHarnesses.map((harness) => ({
-      harness,
-      availability:
-        inventory._tag === 'Pending'
-          ? 'pending'
-          : executableAvailability(inventory.inventory.harnesses[harness]),
-      policy: policyState.policy[harness],
-    })),
+    harnesses: supportedHarnesses.map((harness) => {
+      const decision = harnessLaunchDecision(policyState, inventory, harness);
+      return {
+        harness,
+        availability:
+          inventory._tag === 'Pending'
+            ? 'pending'
+            : executableAvailability(inventory.inventory.harnesses[harness]),
+        policy: policyState.policy[harness],
+        launch:
+          decision.status === 'launchable'
+            ? ({ status: 'launchable' } as const)
+            : ({ status: 'blocked', reason: decision.reason } as const),
+      };
+    }),
     reconciliation: {
       desiredFingerprint: rec.desiredFingerprint,
       runningFingerprint: rec.runningFingerprint,

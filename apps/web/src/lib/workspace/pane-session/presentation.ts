@@ -59,6 +59,9 @@ export function paneStatusLabel(
       // Sourced from the same place as the start-fresh prompt so the header and
       // the prompt can never drift.
       return agentSessionCopy.status.start_fresh;
+    case 'blocked':
+    case 'unavailable':
+      return agentSessionCopy.launchBlock.status[view.reason];
     case 'live':
       if (phase === 'connecting' || phase === 'replaying') {
         return ptyCopy.attaching;
@@ -85,6 +88,9 @@ export function paneNotice(
     case 'attachable':
     case 'needs_fresh':
       return session ? ptyCopy.sessionNotice(session.status, session.statusReason) : null;
+    case 'blocked':
+    case 'unavailable':
+      return agentSessionCopy.launchBlock.body[view.reason];
     case 'live': {
       const noticeMessage = resolveSocketNotice(connection.notice);
       const phaseNotice =

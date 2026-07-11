@@ -1,11 +1,11 @@
 import { Route, Routes } from 'react-router';
 
-import { WorkspacePage } from './routes/workspace/WorkspacePage.js';
+import { StartupGate } from './routes/startup/StartupGate.js';
 
 export function App() {
   return (
     <Routes>
-      <Route element={<WorkspacePage />} path="*" />
+      <Route element={<StartupGate />} path="*" />
     </Routes>
   );
 }

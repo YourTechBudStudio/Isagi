@@ -128,6 +128,20 @@ export const ptyProcessBackendSchema = Schema.Literal('tmux', 'node_pty');
 export const ptyProcessLogModeSchema = Schema.Literal('backend_file', 'none');
 export const agentHarnessSchema = Schema.Literal('pi', 'opencode', 'claude', 'codex');
 
+// The reasons the runtime refuses to create a harness process. This is the single
+// canonical list; the PTY WebSocket error union, the session-launch rejection
+// reason, and the control-plane launch projection all compose it so the set can
+// never drift between the wire surfaces that carry it.
+export const harnessLaunchBlockReasonSchema = Schema.Literal(
+  'onboarding_incomplete',
+  'config_invalid',
+  'inventory_pending',
+  'harness_disabled',
+  'harness_missing',
+  'harness_incompatible',
+  'harness_probe_failed',
+);
+
 const sessionProjectionFields = {
   status: sessionStatusSchema,
   diagnosticCode: Schema.NullOr(sessionDiagnosticCodeSchema),
@@ -317,13 +331,6 @@ export const ptyWebSocketErrorCodeSchema = Schema.Union(
     'harness_metadata_missing',
     'harness_metadata_invalid',
     'unsupported_harness',
-    'onboarding_incomplete',
-    'config_invalid',
-    'inventory_pending',
-    'harness_disabled',
-    'harness_missing',
-    'harness_incompatible',
-    'harness_probe_failed',
     'session_already_attached',
     'session_attachment_moved',
     'attach_token_missing',
@@ -331,6 +338,7 @@ export const ptyWebSocketErrorCodeSchema = Schema.Union(
     'attach_token_expired',
     'pty_write_failed',
   ),
+  harnessLaunchBlockReasonSchema,
 );
 
 export const ptyWebSocketErrorMessageSchema = Schema.Struct({
@@ -376,6 +384,7 @@ export type AgentSessionRecoveryAction = Schema.Schema.Type<
 export type PtyProcessBackend = Schema.Schema.Type<typeof ptyProcessBackendSchema>;
 export type PtyProcessLogMode = Schema.Schema.Type<typeof ptyProcessLogModeSchema>;
 export type AgentHarness = Schema.Schema.Type<typeof agentHarnessSchema>;
+export type HarnessLaunchBlockReason = Schema.Schema.Type<typeof harnessLaunchBlockReasonSchema>;
 export type PaneSessionKind = Schema.Schema.Type<typeof paneSessionKindSchema>;
 export type AgentSessionMetadata = Schema.Schema.Type<typeof agentSessionMetadataSchema>;
 export type TerminalSessionMetadata = Schema.Schema.Type<typeof terminalSessionMetadataSchema>;

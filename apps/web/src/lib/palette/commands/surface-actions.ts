@@ -1,7 +1,6 @@
 import { PanelBottom, PanelRight, Pencil, Trash2 } from 'lucide-react';
 
 import type {
-  AgentHarness,
   SessionStatus,
   SplitPaneDirection,
   SurfaceDetail,
@@ -9,6 +8,7 @@ import type {
 } from '@isagi/contracts';
 
 import { surfaceActionsCopy } from '../../../copy/index.js';
+import { parseAgentHarness } from '../../harness-labels.js';
 import { queryClient } from '../../query/client.js';
 import { runRuntimeEffect } from '../../runtime/run.js';
 import { resolveActivePaneId } from '../../workspace/model.js';
@@ -250,15 +250,16 @@ function splitPaneCommand(input: {
       }
       const sourceKind = values.sourceKind;
       if (sourceKind === 'agent_session') {
-        if (!isAgentHarness(values.harness)) {
-          throw new UserVisibleError('Choose a harness before splitting this pane.');
+        const harness = parseAgentHarness(values.harness);
+        if (harness === null) {
+          throw new UserVisibleError(surfaceActionsCopy.chooseHarness);
         }
         await splitPaneFromPalette({
           ...target,
           split: {
             paneId,
             direction: input.direction,
-            newPane: { kind: 'agent_session', harness: values.harness as AgentHarness },
+            newPane: { kind: 'agent_session', harness },
           },
         });
         return;
@@ -275,10 +276,6 @@ function splitPaneCommand(input: {
       }
     },
   };
-}
-
-function isAgentHarness(value: string | undefined): value is AgentHarness {
-  return value === 'pi' || value === 'opencode' || value === 'claude' || value === 'codex';
 }
 
 function activeSurfaceTarget(ctx: PaletteContext) {

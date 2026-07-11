@@ -12,6 +12,7 @@ test('palette context carries active surface and frontend active pane target', (
   const projects = [project({ surfaces: [surfaceA, surfaceB], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
+    launchableHarnesses: [],
     activeSurfaceByWorktreeId: { 10: surfaceB.id },
     activePaneBySurfaceId: { [surfaceB.id]: 501 },
   });
@@ -27,6 +28,7 @@ test('palette context ignores stale active surface overrides', () => {
   const projects = [project({ surfaces: [surfaceA], activeSurfaceId: surfaceA.id })];
 
   const ctx = buildPaletteContext(projects, 10, {
+    launchableHarnesses: [],
     activeSurfaceByWorktreeId: { 10: 999 },
     activePaneBySurfaceId: { [surfaceA.id]: 501 },
   });

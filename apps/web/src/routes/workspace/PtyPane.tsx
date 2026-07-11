@@ -11,7 +11,12 @@ import {
 import type { ReactElement } from 'react';
 import { useCallback, useMemo, useRef } from 'react';
 
-import type { SessionDiagnosticCode, SurfaceDetail, SurfacePane } from '@isagi/contracts';
+import type {
+  HarnessLaunchBlockReason,
+  SessionDiagnosticCode,
+  SurfaceDetail,
+  SurfacePane,
+} from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { Button } from '../../components/Button.js';
@@ -26,6 +31,7 @@ import { activatePane, usePaneFocusTarget } from '../../lib/workspace/activation
 import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
+import { BlockedPanePrompt, paneHasSharedActions } from './BlockedPanePrompt.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneSession } from './usePaneSession.js';
 
@@ -75,6 +81,8 @@ export function PtyPane({
     startFresh,
     startFreshPending,
     startFreshError,
+    checkAgain,
+    checking,
   } = usePaneSession({
     session,
     worktreeId: surface.worktreeId,
@@ -111,14 +119,15 @@ export function PtyPane({
     ],
     [onDelete, onSplitDown, onSplitRight],
   );
+  const sharedPaneActions = paneHasSharedActions(view.kind);
   const withPaneMenu = useCallback(
     (children: ReactElement) =>
-      paneMenuItems.length > 0 ? (
+      sharedPaneActions && paneMenuItems.length > 0 ? (
         <ContextMenu items={paneMenuItems}>{children}</ContextMenu>
       ) : (
         children
       ),
-    [paneMenuItems],
+    [paneMenuItems, sharedPaneActions],
   );
 
   return (
@@ -191,6 +200,20 @@ export function PtyPane({
             />
           </div>,
         )
+      ) : view.kind === 'blocked' ? (
+        <div className="flex min-h-0 flex-1">
+          <BlockedPanePrompt
+            harness={session?.kind === 'agent_session' ? session.harness : null}
+            reason={view.reason}
+            onClose={onDelete}
+          />
+        </div>
+      ) : view.kind === 'unavailable' ? (
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <UnavailablePrompt reason={view.reason} onCheckAgain={checkAgain} checking={checking} />
+          </div>,
+        )
       ) : view.kind === 'live' && session ? (
         <PaneTerminal
           key={terminalKey}
@@ -208,11 +231,13 @@ export function PtyPane({
           </div>,
         )
       )}
-      <PaneActionCluster
-        onSplitRight={onSplitRight}
-        onSplitDown={onSplitDown}
-        onDelete={onDelete}
-      />
+      {sharedPaneActions ? (
+        <PaneActionCluster
+          onSplitRight={onSplitRight}
+          onSplitDown={onSplitDown}
+          onDelete={onDelete}
+        />
+      ) : null}
     </section>
   );
 }
@@ -334,6 +359,45 @@ function MovedPrompt({
             {ptyCopy.movedAttachment.action.claim}
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// A durable agent pane whose harness is unavailable (or still being probed). The
+// pane is retained; "Check again" refreshes host facts before re-evaluating.
+function UnavailablePrompt({
+  reason,
+  checking,
+  onCheckAgain,
+}: {
+  readonly reason: HarnessLaunchBlockReason;
+  readonly checking: boolean;
+  readonly onCheckAgain: () => void;
+}) {
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <CircleDashed size={18} aria-hidden className="text-fg-subtle" />
+        <div className="space-y-1">
+          <p className="font-mono text-[12px] text-fg-muted">
+            {agentSessionCopy.launchBlock.status[reason]}
+          </p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+            {agentSessionCopy.launchBlock.body[reason]}
+          </p>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={RotateCw}
+          disabled={checking}
+          onClick={onCheckAgain}
+        >
+          {checking
+            ? agentSessionCopy.launchBlock.checking
+            : agentSessionCopy.launchBlock.checkAgain}
+        </Button>
       </div>
     </div>
   );

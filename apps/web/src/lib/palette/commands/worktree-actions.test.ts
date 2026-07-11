@@ -193,5 +193,6 @@ function ctx(input: {
     },
     activeSurface: null,
     activePaneId: null,
+    launchableHarnesses: [],
   };
 }

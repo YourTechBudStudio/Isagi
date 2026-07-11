@@ -16,7 +16,13 @@ import {
   type RuntimeHarnessPolicy,
   type RuntimeHarnessPolicyState,
 } from '../runtime-config/index.js';
-import { HarnessControlPlane, HarnessControlPlaneLive, HarnessLaunchBlocked } from './index.js';
+import {
+  ControlPlaneNotReady,
+  HarnessControlPlane,
+  HarnessControlPlaneLive,
+  HarnessLaunchBlocked,
+} from './index.js';
+import { harnessLaunchDecision } from './launch-decision.js';
 
 const available = { _tag: 'Available', command: 'agent', version: '1.0.0' } as const;
 const missing = { _tag: 'Missing', command: 'agent' } as const;
@@ -148,6 +154,103 @@ test('an identical successful refresh remains current without another reconcilia
     result.second.reconciliation.lastAppliedFingerprint,
     result.second.reconciliation.desiredFingerprint,
   );
+});
+
+test('harnessLaunchDecision reports every reason, carries diagnostics, and permits an available enabled harness', () => {
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('missing', disabledPolicy), { _tag: 'Pending' }, 'pi'),
+    { status: 'blocked', reason: 'onboarding_incomplete', diagnostic: null },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('invalid', disabledPolicy), { _tag: 'Pending' }, 'pi'),
+    { status: 'blocked', reason: 'config_invalid', diagnostic: 'invalid policy' },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('valid', disabledPolicy), ready(available), 'pi'),
+    { status: 'blocked', reason: 'harness_disabled', diagnostic: null },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('valid', enabledPolicy()), { _tag: 'Pending' }, 'pi'),
+    { status: 'blocked', reason: 'inventory_pending', diagnostic: null },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('valid', enabledPolicy()), ready(missing), 'pi'),
+    { status: 'blocked', reason: 'harness_missing', diagnostic: null },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(
+      policyState('valid', enabledPolicy()),
+      ready({ _tag: 'Incompatible', command: 'agent', version: '0.1.0', minimumVersion: '1.0.0' }),
+      'pi',
+    ),
+    { status: 'blocked', reason: 'harness_incompatible', diagnostic: null },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(
+      policyState('valid', enabledPolicy()),
+      ready({ _tag: 'ProbeFailed', command: 'agent', reason: 'timeout', diagnostic: 'timed out' }),
+      'pi',
+    ),
+    { status: 'blocked', reason: 'harness_probe_failed', diagnostic: 'timed out' },
+  );
+  assert.deepEqual(
+    harnessLaunchDecision(policyState('valid', enabledPolicy()), ready(available), 'pi'),
+    { status: 'launchable' },
+  );
+});
+
+test('the snapshot launch projection mirrors the enforced decision per harness', async () => {
+  const snapshot = await runControlPlane(
+    policyState('valid', enabledPolicy()),
+    ready(available),
+    (service) => service.snapshot,
+  );
+  const byHarness = Object.fromEntries(snapshot.harnesses.map((entry) => [entry.harness, entry]));
+  assert.deepEqual(byHarness.pi?.launch, { status: 'launchable' });
+  assert.deepEqual(byHarness.opencode?.launch, { status: 'blocked', reason: 'harness_disabled' });
+});
+
+test('acceptPolicy rejects with control_plane_not_ready before committing when inventory stays pending', async () => {
+  let committed = false;
+  const config: RuntimeConfigService = {
+    get: Effect.succeed({
+      pty: { backend: 'node-pty' },
+      harnesses: policyState('missing', disabledPolicy),
+    }),
+    acceptHarnessPolicy: () => {
+      committed = true;
+      return Effect.die('policy must not be committed when inventory is unavailable');
+    },
+  };
+  const stuckInventory = Layer.succeed(HostInventory, {
+    getCached: Effect.succeed<HostInventoryState>({ _tag: 'Pending' }),
+    startRefresh: Effect.void,
+    refresh: Effect.succeed(ready(available).inventory),
+  } satisfies HostInventoryService);
+  const layer = HarnessControlPlaneLive.pipe(
+    Layer.provide(stuckInventory),
+    Layer.provide(Layer.succeed(RuntimeConfig, config)),
+    Layer.provide(
+      Layer.succeed(DataDirectory, {
+        paths: dataPaths(resolve(tmpdir(), 'isagi-control-plane-not-ready')),
+      }),
+    ),
+  );
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* HarnessControlPlane;
+        return yield* service
+          .acceptPolicy({
+            expectedPolicyRevision: harnessPolicyRevision('missing', disabledPolicy),
+            policy: disabledPolicy,
+          })
+          .pipe(Effect.either);
+      }).pipe(Effect.provide(layer)),
+    ),
+  );
+  assert.ok(result._tag === 'Left' && result.left instanceof ControlPlaneNotReady);
+  assert.equal(committed, false);
 });
 
 function runControlPlane<A>(

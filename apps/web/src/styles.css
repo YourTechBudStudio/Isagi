@@ -81,9 +81,14 @@
   --shadow-lift: 0 24px 64px rgb(0 0 0 / 0.45);
 
   /* Ambient attention motion — calm, never frantic.
-     working: a slow breathe; waiting: a soft outward glow. */
+     working: a slow breathe; waiting: a soft outward glow; ray: a light streak
+     sweeping a filled progress bar so a long-lived phase still reads as alive.
+     Linear timing on the ray is a deliberate exception to the expo curve — it is
+     a continuous loop whose reset happens off-screen, so constant speed reads
+     best (same rationale as the palette's progress sweep). */
   --animate-breathe: breathe 2.6s var(--ease-expo) infinite;
   --animate-glow: glow 2.8s var(--ease-expo) infinite;
+  --animate-ray: ray 2.6s linear infinite;
 }
 
 @keyframes breathe {
@@ -103,6 +108,17 @@
   }
   50% {
     box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-waiting) 0%, transparent);
+  }
+}
+
+/* The ray element is half its container's width; -100% → 300% of its own width
+   carries it fully off both edges, leaving a natural pause between passes. */
+@keyframes ray {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
   }
 }
 
