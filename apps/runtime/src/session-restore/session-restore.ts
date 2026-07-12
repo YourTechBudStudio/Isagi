@@ -1,6 +1,7 @@
 import { Effect, Either, Layer } from 'effect';
 
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { SurfaceRepository } from '../surfaces/index.js';
 import type { PaneSessionBinding } from '../surfaces/types.js';
 import { TerminalSessionService } from '../terminal-sessions/index.js';
@@ -80,6 +81,7 @@ function restoreWithIsolation(
       outcome: kind,
       errorTag: errorTag(error),
       errorCode: errorCode(error),
+      ...harnessLaunchDiagnostic(error),
       message: errorMessage(error),
     });
     return { kind, binding } satisfies RestoreOutcome;
@@ -127,6 +129,18 @@ function errorCode(error: unknown) {
     : null;
 }
 
+function harnessLaunchDiagnostic(error: unknown) {
+  if (!(error instanceof HarnessLaunchBlocked)) return {};
+  return {
+    harness: error.harness,
+    errorReason: error.reason,
+    errorDiagnostic: error.diagnostic,
+  };
+}
+
 function errorMessage(error: unknown) {
+  if (error instanceof HarnessLaunchBlocked) {
+    return `Harness ${error.harness} launch blocked: ${error.reason}.`;
+  }
   return error instanceof Error ? error.message : String(error);
 }

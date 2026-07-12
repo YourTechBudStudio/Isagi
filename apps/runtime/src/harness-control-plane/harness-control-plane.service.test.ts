@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { Effect, Layer, Ref } from 'effect';
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect';
 
 import { HostInventory, type HostInventoryService } from '../host-inventory/index.js';
 import type { ExecutableProbeResult, HostInventoryState } from '../host-inventory/types.js';
@@ -102,6 +102,65 @@ test('launch policy reports each fail-closed state and permits an available enab
           : 'unexpected',
       item.expected,
     );
+  }
+});
+
+test('start does not complete until initial host inventory is ready', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-control-plane-start-'));
+  try {
+    const refreshStarted = Effect.runSync(Deferred.make<void>());
+    const releaseRefresh = Effect.runSync(Deferred.make<void>());
+    const inventoryLayer = Layer.effect(
+      HostInventory,
+      Effect.gen(function* () {
+        const state = yield* Ref.make<HostInventoryState>({ _tag: 'Pending' });
+        const refresh = Effect.gen(function* () {
+          yield* Deferred.succeed(refreshStarted, undefined);
+          yield* Deferred.await(releaseRefresh);
+          const next = ready(available);
+          yield* Ref.set(state, next);
+          return next.inventory;
+        });
+        return {
+          getCached: Ref.get(state),
+          startRefresh: Effect.asVoid(refresh),
+          refresh,
+        } satisfies HostInventoryService;
+      }),
+    );
+    const layer = HarnessControlPlaneLive.pipe(
+      Layer.provide(inventoryLayer),
+      Layer.provide(
+        Layer.succeed(RuntimeConfig, {
+          get: Effect.succeed({
+            pty: { backend: 'node-pty' },
+            harnesses: policyState('valid', enabledPolicy()),
+          }),
+          acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
+        } satisfies RuntimeConfigService),
+      ),
+      Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),
+    );
+
+    const completedBeforeInventory = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const controlPlane = yield* HarnessControlPlane;
+          const startFiber = yield* Effect.fork(controlPlane.start);
+          yield* Deferred.await(refreshStarted);
+          yield* Effect.yieldNow();
+          const before = yield* Fiber.poll(startFiber);
+          yield* Deferred.succeed(releaseRefresh, undefined);
+          yield* Fiber.join(startFiber);
+          yield* controlPlane.assertCanCreateProcess('pi');
+          return Option.isSome(before);
+        }).pipe(Effect.provide(layer)),
+      ),
+    );
+
+    assert.equal(completedBeforeInventory, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

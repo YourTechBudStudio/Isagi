@@ -118,6 +118,24 @@ test('startup session restore ensures every pane-bound session and isolates fail
     'terminal:13:true',
   ]);
   assert.equal(logs.warn.length, 3);
+  assert.deepEqual(
+    logs.warn.find(
+      (entry) => (entry[1] as { readonly paneId?: number } | undefined)?.paneId === 5,
+    )?.[1],
+    {
+      paneId: 5,
+      sessionKind: 'agent_session',
+      sessionId: 14,
+      activePtyProcessId: 24,
+      outcome: 'failed',
+      errorTag: 'HarnessLaunchBlocked',
+      errorCode: null,
+      harness: 'pi',
+      errorReason: 'harness_disabled',
+      errorDiagnostic: null,
+      message: 'Harness pi launch blocked: harness_disabled.',
+    },
+  );
   assert.deepEqual(logs.info.at(-1)?.[1], {
     attempted: 5,
     relaunched: 1,

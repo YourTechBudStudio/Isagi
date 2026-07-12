@@ -128,15 +128,10 @@ export const HarnessControlPlaneLive = Layer.scoped(
       return { generation: cached.generation };
     });
     return {
-      start: Effect.asVoid(
-        Effect.forkIn(
-          Effect.gen(function* () {
-            yield* inventory.refresh;
-            yield* reconcileCurrent(true);
-          }),
-          scope,
-        ),
-      ),
+      start: Effect.gen(function* () {
+        yield* inventory.refresh;
+        yield* Effect.forkIn(reconcileCurrent(true), scope);
+      }),
       snapshot: Effect.gen(function* () {
         const current = yield* config.get;
         const cached = yield* inventory.getCached;
