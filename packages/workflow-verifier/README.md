@@ -6,9 +6,9 @@ Verify an already-built Isagi workflow package and write its build receipt:
 isagi-workflow-verify --workflow .
 ```
 
-The workflow package owns compilation through its canonical `build` script and exact `esbuild` development dependency. Run that script before verification. The verifier never builds or installs dependencies: it runs the package's `typecheck` and `test` scripts, validates the existing `dist/index.js` workflow export and command manifest in a bounded child process, and writes `dist/isagi-workflow-build.json` only after every gate passes.
+The verifier has one job: raise the probability that the Isagi runtime loads the workflow build without errors. It checks ahead of time exactly what the runtime checks at load time — exact SDK and verifier pins, an exact `packageManager` declaration, a single matching lockfile, symlink-free sources, and a `dist/index.js` bundle that default-exports a loadable workflow definition with a valid `command()` manifest (validated in a bounded child process). When every gate passes it fingerprints the sources and the artifact into `dist/isagi-workflow-build.json`; the runtime re-checks that receipt and refuses to run a workflow whose source or artifact no longer matches it.
 
-Workflow packages must preserve the canonical `build` and `verify` scripts, exact SDK, verifier, and esbuild versions, and an exact `packageManager` declaration. The current versions are `@yourtechbudstudio/isagi-workflow-sdk@0.0.1`, `@yourtechbudstudio/isagi-workflow-verifier@0.0.1`, and `esbuild@0.28.0`. For the full authoring guide, use Isagi's installed `isagi-docs` skill.
+The workflow package owns compilation and quality. Run the canonical `build` script before verification, and run your own `typecheck` and `test` scripts before that: the verifier never compiles, installs dependencies, or runs package scripts, and it does not gate on tests. The current versions are `@yourtechbudstudio/isagi-workflow-sdk@0.0.1`, `@yourtechbudstudio/isagi-workflow-verifier@0.0.1`, and `esbuild@0.28.0`. For the full authoring guide, use Isagi's installed `isagi-docs` skill.
 
 ## Trust boundary
 

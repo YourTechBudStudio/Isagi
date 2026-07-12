@@ -108,10 +108,12 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
     'manifest',
   );
   if (input.manifestVersion !== workflowBuildManifestVersion)
-    throw new Error(`Unsupported manifestVersion; expected ${workflowBuildManifestVersion}.`);
+    throw new Error(
+      `Unsupported manifestVersion ${JSON.stringify(input.manifestVersion)}; this verifier supports ${workflowBuildManifestVersion}.`,
+    );
   if (input.workflowContractVersion !== supportedWorkflowContractVersion)
     throw new Error(
-      `Unsupported workflowContractVersion; expected ${supportedWorkflowContractVersion}.`,
+      `Unsupported workflowContractVersion ${JSON.stringify(input.workflowContractVersion)}; this verifier supports ${supportedWorkflowContractVersion}.`,
     );
   const sdk = packageIdentity(input.sdk, 'sdk', workflowSdkPackage);
   const verifier = packageIdentity(input.verifier, 'verifier', workflowVerifierPackage);
@@ -124,7 +126,9 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
   assertExactKeys(input.toolchain.packageManager, ['name', 'version'], 'toolchain.packageManager');
   const name = input.toolchain.packageManager.name;
   if (name !== 'pnpm' && name !== 'npm' && name !== 'bun')
-    throw new Error('toolchain.packageManager.name is unsupported.');
+    throw new Error(
+      `toolchain.packageManager.name must be pnpm, npm, or bun; found ${JSON.stringify(name)}.`,
+    );
   const managerVersion = requiredString(
     input.toolchain.packageManager.version,
     'toolchain.packageManager.version',
@@ -189,10 +193,14 @@ function assertExactKeys(
   expected: readonly string[],
   field: string,
 ): void {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  if (actual.join('\0') !== wanted.join('\0'))
-    throw new Error(`${field} has unexpected or missing fields.`);
+  const missing = expected.filter((key) => !Object.hasOwn(value, key));
+  const unexpected = Object.keys(value).filter((key) => !expected.includes(key));
+  if (missing.length === 0 && unexpected.length === 0) return;
+  const parts = [
+    ...(missing.length ? [`missing fields: ${missing.join(', ')}`] : []),
+    ...(unexpected.length ? [`unexpected fields: ${unexpected.join(', ')}`] : []),
+  ];
+  throw new Error(`${field} has ${parts.join('; ')}.`);
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
