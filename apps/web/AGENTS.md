@@ -13,7 +13,7 @@ The React frontend for Isagi. Electron loads this app, and it can later be hoste
 - **Base UI** (`@base-ui/react`) for unstyled, accessible UI primitives that we style with Tailwind.
 - **lucide-react** for icons. Prefer Lucide icons over text/emoji glyphs in chrome.
 - **Framer Motion** (`motion`, imported from `motion/react`) for animation. It is the default for transitions, the morphing command palette, and any orchestrated entrance. Use the design system's easing/duration tokens rather than ad-hoc values.
-- **TypeScript 6** for type safety.
+- **TypeScript 7** for type safety.
 
 ## Structure
 

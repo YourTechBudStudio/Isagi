@@ -27,8 +27,7 @@
     "cross-env": "^10.1.0",
     "oxfmt": "^0.52.0",
     "oxlint": "^1.67.0",
-    "oxlint-tailwindcss": "^1.0.0",
-    "typescript": "^6.0.3"
+    "oxlint-tailwindcss": "^1.0.0"
   },
   "devEngines": {
     "runtime": {

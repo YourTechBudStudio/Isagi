@@ -26,13 +26,13 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && tsc -b tsconfig.json --force",
     "check": "pnpm typecheck && pnpm build && pnpm pack --dry-run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "vite": "^8.0.14",
-    "vite-plugin-dts": "^4.5.4"
+    "typescript": "^7.0.2",
+    "vite": "^8.0.14"
   },
   "engines": {
     "node": ">=22"

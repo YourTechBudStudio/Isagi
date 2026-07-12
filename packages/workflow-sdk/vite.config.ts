@@ -1,13 +1,13 @@
 import { defineConfig } from 'vite';
-import dts from 'vite-plugin-dts';
 
 export default defineConfig({
   build: {
+    // Workspace consumers can build in parallel while runtime refreshes the SDK package.
+    emptyOutDir: false,
     lib: {
       entry: 'src/index.ts',
       fileName: 'index',
       formats: ['es'],
     },
   },
-  plugins: [dts({ tsconfigPath: './tsconfig.json' })],
 });
