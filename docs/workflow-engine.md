@@ -194,11 +194,7 @@ project. Descriptor listing returns the key once, using the winning definition; 
 does not expose which root supplied it. The runtime logs a diagnostic when a project workflow shadows
 a global workflow so "why did my global edit not apply?" has a support trail.
 
-Every workflow directory is an independent package with authored code under `src/`, tests under
-`tests/`, exact SDK/verifier pins, one supported lockfile, and a verified `dist/index.js` plus
-`dist/isagi-workflow-build.json`. The package verifier owns typechecking, tests, bundling, isolated
-import, export/`command()` validation, and transactional `dist` publication. The runtime never runs
-a package manager, package script, TypeScript, tests, or a bundler.
+Every workflow directory is an independent package with authored code under `src/`, tests under `tests/`, exact SDK/verifier/esbuild pins, one supported lockfile, and a verified `dist/index.js` plus `dist/isagi-workflow-build.json`. The package owns bundling through its canonical `build` script. After the author runs that build, the verifier owns typechecking, tests, isolated import, export/`command()` validation, and build-receipt creation. Neither the verifier nor the runtime invokes the workflow build. The runtime never runs a package manager, package script, TypeScript, tests, or a bundler.
 
 Discovery is on demand. The runtime recomputes the receipt's source and artifact identities,
 validates the manifest format, workflow contract, canonical package identities, and internally

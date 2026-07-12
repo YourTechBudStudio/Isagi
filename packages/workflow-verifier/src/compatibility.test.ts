@@ -7,10 +7,14 @@ import { workflowContractVersion } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 import {
   supportedWorkflowContractVersion,
+  workflowBuilderPackage,
+  workflowBuilderVersion,
+  workflowBuildCommand,
   workflowSdkPackage,
   workflowSdkVersion,
   workflowVerifierPackage,
   workflowVerifierVersion,
+  workflowVerifyCommand,
 } from './receipt.js';
 
 // The receipt constants are the single source of truth for the recommended pair. Nothing enforces
@@ -36,10 +40,15 @@ test('the receipt pair matches the published SDK and verifier package manifests'
   assert.equal(verifierPkg.peerDependencies?.[workflowSdkPackage], workflowSdkVersion);
 });
 
-test('the canonical scaffold pins the receipt pair exactly', () => {
+test('the canonical scaffold pins the toolchain and commands exactly', () => {
   const pkg = readJson(resolve(fixtureRoot, 'package.json'));
   assert.equal(pkg.dependencies?.[workflowSdkPackage], workflowSdkVersion);
   assert.equal(pkg.devDependencies?.[workflowVerifierPackage], workflowVerifierVersion);
+  assert.equal(pkg.devDependencies?.[workflowBuilderPackage], workflowBuilderVersion);
+  assert.equal(pkg.scripts?.build, workflowBuildCommand);
+  assert.equal(pkg.scripts?.verify, workflowVerifyCommand);
+  const verifierPkg = readJson(resolve(verifierRoot, 'package.json'));
+  assert.equal(verifierPkg.dependencies?.[workflowBuilderPackage], undefined);
 });
 
 test('the SDK and verifier agree on the workflow contract version', () => {
@@ -64,5 +73,9 @@ test('the READMEs name the versions each package owns', () => {
   assert.ok(
     verifierReadme.includes(`${workflowVerifierPackage}@${workflowVerifierVersion}`),
     'verifier README should name the verifier pin',
+  );
+  assert.ok(
+    verifierReadme.includes(`${workflowBuilderPackage}@${workflowBuilderVersion}`),
+    'verifier README should name the builder pin',
   );
 });

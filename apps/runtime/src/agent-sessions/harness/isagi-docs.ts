@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import {
+  workflowBuilderVersion,
   workflowSdkVersion,
   workflowVerifierVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
@@ -50,6 +51,7 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
     ['DATA_ROOT', dataRoot],
     ['SDK_VERSION', workflowSdkVersion],
     ['VERIFIER_VERSION', workflowVerifierVersion],
+    ['BUILDER_VERSION', workflowBuilderVersion],
     [
       'RUNTIME_CONFIG_SCHEMA',
       trimTrailingNewline(configSchemaReferenceSources['runtime-config.schema.ts']),

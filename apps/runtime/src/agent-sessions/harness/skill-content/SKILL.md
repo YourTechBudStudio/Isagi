@@ -24,7 +24,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 
 - When the user requests a change, make the in-scope change without adding a separate proposal step.
 - Warn the user that editing `worktrees.hooks` causes Isagi to ask them to trust the hooks again.
-- Finish workflow authoring by running the workflow package's `verify` script. A workflow is not complete until verification succeeds.
+- Finish workflow authoring by running the workflow package's `build` script followed by its `verify` script. A workflow is not complete until both succeed in that order.
 - Do not invent configuration keys. If a requested surface is not represented above or in the authoritative schemas, say that Isagi does not configure it today.
 
 ## Default locations

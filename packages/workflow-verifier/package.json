@@ -1,7 +1,7 @@
 {
   "name": "@yourtechbudstudio/isagi-workflow-verifier",
   "version": "0.0.1",
-  "description": "Build and verify standalone Isagi workflow artifacts.",
+  "description": "Verify standalone Isagi workflow artifacts and issue build receipts.",
   "license": "ISC",
   "author": "YourTechBud",
   "repository": {
@@ -38,13 +38,9 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "dependencies": {
-    "esbuild": "^0.28.0"
-  },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.0.1",
-    "esbuild": "^0.28.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   },

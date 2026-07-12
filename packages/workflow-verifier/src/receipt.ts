@@ -6,6 +6,11 @@ export const workflowSdkPackage = '@yourtechbudstudio/isagi-workflow-sdk' as con
 export const workflowVerifierPackage = '@yourtechbudstudio/isagi-workflow-verifier' as const;
 export const workflowSdkVersion = '0.0.1' as const;
 export const workflowVerifierVersion = '0.0.1' as const;
+export const workflowBuilderPackage = 'esbuild' as const;
+export const workflowBuilderVersion = '0.28.0' as const;
+export const workflowBuildCommand =
+  'esbuild src/index.ts --bundle --format=esm --platform=node --target=node22 --log-override:unsupported-dynamic-import=error --outfile=dist/index.js' as const;
+export const workflowVerifyCommand = 'isagi-workflow-verify --workflow .' as const;
 export const verifierReservedPrefix = '.isagi-workflow-verifier-' as const;
 
 export type PackageManagerName = 'pnpm' | 'npm' | 'bun';

@@ -231,7 +231,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
       'utf8',
     );
     assert.doesNotMatch(workflowReference, /ISAGI_RUNTIME_URL/);
-    assert.match(workflowReference, /pnpm verify/);
+    assert.match(workflowReference, /pnpm build && pnpm verify/);
     assert.match(workflowReference, /discriminated union/);
     assert.match(workflowReference, /node_modules\/@yourtechbudstudio\/isagi-workflow-sdk/);
     assert.doesNotMatch(workflowReference, /^## Contents$/m);

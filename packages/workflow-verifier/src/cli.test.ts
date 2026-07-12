@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import test from 'node:test';
@@ -23,6 +23,13 @@ import {
 const repoRoot = resolve(import.meta.dirname, '../../..');
 
 const canonicalFixture = resolve(import.meta.dirname, '../fixtures/minimal-workflow');
+const validArtifact = `export default {
+  command() { return { title: 'Minimal workflow', inputs: [] }; },
+  validate() {},
+  init() { return {}; },
+  async step() { return { type: 'done' }; }
+};
+`;
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'isagi-verifier-test-'));
@@ -47,6 +54,11 @@ async function fixture(): Promise<string> {
     '@yourtechbudstudio/isagi-workflow-verifier',
     join(repoRoot, 'packages/workflow-verifier'),
   );
+  const builderPath = join(root, 'node_modules/esbuild/package.json');
+  await mkdir(dirname(builderPath), { recursive: true });
+  await writeFile(builderPath, JSON.stringify({ name: 'esbuild', version: '0.28.0' }));
+  await mkdir(join(root, 'dist'));
+  await writeFile(join(root, 'dist/index.js'), validArtifact);
   return root;
 }
 
@@ -90,12 +102,15 @@ test('verifies a standalone artifact and deterministic receipt', async () => {
   assert.equal(await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'), first);
 });
 
-test('restores previous dist when a trusted script fails', async () => {
+test('leaves the existing build and receipt untouched when a trusted script fails', async () => {
   const root = await fixture();
-  await mkdir(join(root, 'dist'));
-  await writeFile(join(root, 'dist/old.txt'), 'old');
+  await writeFile(join(root, 'dist/isagi-workflow-build.json'), 'previous receipt');
   await assert.rejects(verifyWorkflow(root, testRunner('test')), /test failed/);
-  assert.equal(await readFile(join(root, 'dist/old.txt'), 'utf8'), 'old');
+  assert.equal(await readFile(join(root, 'dist/index.js'), 'utf8'), validArtifact);
+  assert.equal(
+    await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'),
+    'previous receipt',
+  );
 });
 
 test('fails closed for an existing lock or transaction evidence', async () => {
@@ -156,13 +171,10 @@ test('selects authoritative lifecycle runners for pnpm, npm, and Bun', () => {
   );
 });
 
-test('rejects syntax errors and restores the previous verified dist', async () => {
+test('requires the workflow-owned build before verification', async () => {
   const root = await fixture();
-  await mkdir(join(root, 'dist'));
-  await writeFile(join(root, 'dist/old.txt'), 'old');
-  await writeFile(join(root, 'src/index.ts'), 'export default { nope: ; }\n');
-  await assert.rejects(verifyWorkflow(root, testRunner()), /Unexpected|Expected|error/i);
-  assert.equal(await readFile(join(root, 'dist/old.txt'), 'utf8'), 'old');
+  await rm(join(root, 'dist/index.js'));
+  await assert.rejects(verifyWorkflow(root, testRunner()), /Run the package build command/);
 });
 
 test('rejects missing workflow functions, throwing command, and invalid command manifest', async () => {
@@ -172,9 +184,23 @@ test('rejects missing workflow functions, throwing command, and invalid command 
     'export default { command() { return { title: "x", inputs: [{ kind: "select", key: "k", label: "K" }] } }, validate(){}, init(){}, step(){} };',
   ]) {
     const root = await fixture();
-    await writeFile(join(root, 'src/index.ts'), source);
+    await writeFile(join(root, 'dist/index.js'), source);
     await assert.rejects(verifyWorkflow(root, testRunner()), /Workflow|command|exited/i);
   }
+});
+
+test('fails when trusted scripts mutate the workflow-owned build output', async () => {
+  const root = await fixture();
+  const runner: ProcessRunner = async (spec) => {
+    if (spec.args.includes('--version')) return { stdout: '11.4.0\n', stderr: '' };
+    if (spec.args.at(-1) === 'test') {
+      await writeFile(join(root, 'dist/index.js'), `${validArtifact}\n// changed\n`);
+      return { stdout: '', stderr: '' };
+    }
+    if (spec.args.includes('run')) return { stdout: '', stderr: '' };
+    return runProcess(spec);
+  };
+  await assert.rejects(verifyWorkflow(root, runner), /build output changed/);
 });
 
 test('fails when trusted scripts mutate a declared input', async () => {
@@ -191,7 +217,7 @@ test('fails when trusted scripts mutate a declared input', async () => {
   await assert.rejects(verifyWorkflow(root, runner), /source inputs changed/);
 });
 
-test('rejects unsupported lockfiles and source symlinks before moving dist', async () => {
+test('rejects unsupported lockfiles and source symlinks before verification', async () => {
   const lockRoot = await fixture();
   await writeFile(join(lockRoot, 'bun.lockb'), 'legacy');
   await assert.rejects(verifyWorkflow(lockRoot, testRunner()), /bun.lockb is unsupported/);

@@ -128,9 +128,11 @@ async function main() {
         : 'install complete (pnpm printed no reuse/download summary)',
     );
 
-    // 5. Verify (typecheck, tests, bundle, isolated import + command validation, publish dist).
+    // 5. Build through the workflow-owned command, then verify the existing artifact.
+    run('pnpm', ['run', 'build'], workflowDir);
+    log('build', 'workflow-owned build produced dist/index.js');
     run('pnpm', ['run', 'verify'], workflowDir);
-    log('verify', 'workflow verified; dist and build manifest published');
+    log('verify', 'workflow verified; build receipt written');
 
     // 6. Delete node_modules — everything below must work from the standalone artifact.
     rmSync(join(workflowDir, 'node_modules'), { recursive: true, force: true });

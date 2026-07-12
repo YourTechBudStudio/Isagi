@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import {
-  copyFile,
   lstat,
-  mkdir,
   mkdtemp,
   open,
   readFile,
@@ -13,12 +11,9 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-
-import { build } from 'esbuild';
 
 import {
   hashArtifact,
@@ -28,10 +23,14 @@ import {
   supportedWorkflowContractVersion,
   verifierReservedPrefix,
   workflowBuildManifestVersion,
+  workflowBuilderPackage,
+  workflowBuilderVersion,
+  workflowBuildCommand,
   workflowSdkPackage,
   workflowSdkVersion,
   workflowVerifierPackage,
   workflowVerifierVersion,
+  workflowVerifyCommand,
   workflowLockfileByPackageManager,
   supportedWorkflowLockfiles,
   unsupportedWorkflowLockfiles,
@@ -156,9 +155,9 @@ export async function verifyWorkflow(
   const lockPath = join(root, lockName);
   const lock = await acquireLock(lockPath);
   let transaction = '';
-  let backup = '';
-  let distMoved = false;
-  let publicationStarted = false;
+  let receiptBackup = '';
+  let receiptMoved = false;
+  let receiptWritten = false;
   let failure: unknown;
   try {
     const leftovers = (await readdir(root)).filter((name) => name.startsWith(transactionPrefix));
@@ -167,15 +166,12 @@ export async function verifyWorkflow(
         `Verifier transaction evidence exists (${leftovers.join(', ')}). Inspect it manually before retrying.`,
       );
     transaction = await mkdtemp(join(root, transactionPrefix));
-    backup = join(transaction, 'previous-dist');
     const facts = await readPackageFacts(root, runner);
     const initialInputs = await readSourceInputs(root, facts.manager);
     const initialHash = hashWorkflowInputs(initialInputs);
-    const dist = join(root, 'dist');
-    if (await exists(dist)) {
-      await rename(dist, backup);
-      distMoved = true;
-    }
+    const artifactPath = join(root, 'dist', 'index.js');
+    const initialArtifactBytes = await readArtifact(artifactPath);
+    const initialArtifactHash = hashArtifact(initialArtifactBytes);
     await runScript(root, facts, 'typecheck', runner);
     await runScript(root, facts, 'test', runner);
     const rechecked = await readPackageFacts(root, runner);
@@ -186,12 +182,10 @@ export async function verifyWorkflow(
     const finalHash = hashWorkflowInputs(await readSourceInputs(root, facts.manager));
     if (finalHash !== initialHash)
       throw new VerificationError('Declared workflow source inputs changed during verification.');
-    const stagedDist = join(transaction, 'staged-dist');
-    await mkdir(stagedDist);
-    const artifactPath = join(stagedDist, 'index.js');
-    await bundleWorkflow(root, artifactPath);
+    const artifactBytes = await readArtifact(artifactPath);
+    if (hashArtifact(artifactBytes) !== initialArtifactHash)
+      throw new VerificationError('Workflow build output changed during verification.');
     await validateArtifact(root, artifactPath, runner);
-    const artifactBytes = await readFile(artifactPath);
     const manifest: WorkflowBuildManifest = {
       manifestVersion: workflowBuildManifestVersion,
       workflowContractVersion: supportedWorkflowContractVersion,
@@ -204,28 +198,35 @@ export async function verifyWorkflow(
       source: { sha256: finalHash },
       artifact: { entry: 'dist/index.js', sha256: hashArtifact(artifactBytes) },
     };
-    await writeFile(
-      join(stagedDist, 'isagi-workflow-build.json'),
-      serializeWorkflowBuildManifest(manifest),
-    );
-    publicationStarted = true;
-    if (await exists(dist)) await rm(dist, { recursive: true, force: true });
-    await rename(stagedDist, dist);
-    if (await exists(backup)) await rm(backup, { recursive: true });
-    await rm(transaction, { recursive: true });
+    const receiptPath = join(root, 'dist', 'isagi-workflow-build.json');
+    const stagedReceipt = join(transaction, 'isagi-workflow-build.json');
+    receiptBackup = join(transaction, 'previous-isagi-workflow-build.json');
+    await writeFile(stagedReceipt, serializeWorkflowBuildManifest(manifest));
+    if (await exists(receiptPath)) {
+      await rename(receiptPath, receiptBackup);
+      receiptMoved = true;
+    }
+    await rename(stagedReceipt, receiptPath);
+    receiptWritten = true;
+    if (receiptMoved) await rm(receiptBackup);
+    receiptMoved = false;
+    receiptWritten = false;
+    const completedTransaction = transaction;
     transaction = '';
+    await rm(completedTransaction, { recursive: true });
   } catch (error) {
     const recovery: string[] = [];
     try {
-      if ((distMoved || publicationStarted) && (await exists(join(root, 'dist'))))
-        await rm(join(root, 'dist'), { recursive: true, force: true });
+      if (receiptWritten)
+        await rm(join(root, 'dist', 'isagi-workflow-build.json'), { force: true });
     } catch (cause) {
-      recovery.push(`could not remove partial dist: ${message(cause)}`);
+      recovery.push(`could not remove the new build receipt: ${message(cause)}`);
     }
     try {
-      if (distMoved && backup && (await exists(backup))) await rename(backup, join(root, 'dist'));
+      if (receiptMoved && receiptBackup && (await exists(receiptBackup)))
+        await rename(receiptBackup, join(root, 'dist', 'isagi-workflow-build.json'));
     } catch (cause) {
-      recovery.push(`could not restore previous dist: ${message(cause)}`);
+      recovery.push(`could not restore the previous build receipt: ${message(cause)}`);
     }
     if (transaction && recovery.length === 0) {
       try {
@@ -288,6 +289,7 @@ async function readPackageFacts(root: string, runner: ProcessRunner): Promise<Pa
   requireScripts(pkg.scripts);
   requirePins(pkg);
   await validateInstalledVersion(root, workflowSdkPackage, workflowSdkVersion);
+  await validateInstalledVersion(root, workflowBuilderPackage, workflowBuilderVersion);
   const verifierPackageJson = await validateInstalledVersion(
     root,
     workflowVerifierPackage,
@@ -353,13 +355,13 @@ function requireScripts(scripts: unknown): void {
   if (!scripts || typeof scripts !== 'object')
     throw new VerificationError('Workflow package scripts are missing.');
   const value = scripts as Record<string, unknown>;
-  const command = 'isagi-workflow-verify --workflow .';
   for (const name of ['typecheck', 'test'])
     if (typeof value[name] !== 'string' || !value[name])
       throw new VerificationError(`Workflow script ${name} is required.`);
-  for (const name of ['build', 'verify'])
-    if (value[name] !== command)
-      throw new VerificationError(`Workflow script ${name} must be exactly: ${command}`);
+  if (value.build !== workflowBuildCommand)
+    throw new VerificationError(`Workflow script build must be exactly: ${workflowBuildCommand}`);
+  if (value.verify !== workflowVerifyCommand)
+    throw new VerificationError(`Workflow script verify must be exactly: ${workflowVerifyCommand}`);
 }
 
 function requirePins(pkg: Record<string, any>): void {
@@ -370,6 +372,10 @@ function requirePins(pkg: Record<string, any>): void {
   if (pkg.devDependencies?.[workflowVerifierPackage] !== workflowVerifierVersion)
     throw new VerificationError(
       `${workflowVerifierPackage} must be exactly ${workflowVerifierVersion} in devDependencies.`,
+    );
+  if (pkg.devDependencies?.[workflowBuilderPackage] !== workflowBuilderVersion)
+    throw new VerificationError(
+      `${workflowBuilderPackage} must be exactly ${workflowBuilderVersion} in devDependencies.`,
     );
 }
 
@@ -440,36 +446,19 @@ async function validateTsconfig(root: string): Promise<void> {
   }
 }
 
-async function bundleWorkflow(root: string, outfile: string): Promise<void> {
-  const entry = join(root, 'src', 'index.ts');
-  const result = await build({
-    entryPoints: [entry],
-    outfile,
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    target: 'node22',
-    splitting: false,
-    sourcemap: false,
-    metafile: true,
-    external: [...builtinModules, ...builtinModules.map((name) => `node:${name}`)],
-    logLevel: 'silent',
-  });
-  const opaqueDynamicImport = result.warnings.find(
-    (warning) =>
-      warning.id.includes('unsupported-dynamic-import') || warning.text.includes('dynamic import'),
-  );
-  if (opaqueDynamicImport)
+async function readArtifact(path: string): Promise<Buffer> {
+  let info;
+  try {
+    info = await lstat(path);
+  } catch (cause) {
     throw new VerificationError(
-      `Opaque dynamic import is unsupported: ${opaqueDynamicImport.text}`,
+      'Workflow build output is missing. Run the package build command before verification.',
+      { cause },
     );
-  const outputs = Object.keys(result.metafile.outputs);
-  if (outputs.length !== 1)
-    throw new VerificationError(
-      `Workflow build emitted unsupported chunks or assets: ${outputs.join(', ')}`,
-    );
-  const native = Object.keys(result.metafile.inputs).find((path) => path.endsWith('.node'));
-  if (native) throw new VerificationError(`Native addon is unsupported: ${native}`);
+  }
+  if (info.isSymbolicLink() || !info.isFile())
+    throw new VerificationError('Workflow build output must be a regular dist/index.js file.');
+  return readFile(path);
 }
 
 async function validateArtifact(
@@ -480,7 +469,7 @@ async function validateArtifact(
   const isolatedRoot = await mkdtemp(join(tmpdir(), 'isagi-workflow-validation-'));
   try {
     const isolatedArtifact = join(isolatedRoot, 'index.mjs');
-    await copyFile(artifact, isolatedArtifact);
+    await writeFile(isolatedArtifact, await readFile(artifact));
     const validator = join(isolatedRoot, 'validate.mjs');
     await writeFile(
       validator,
@@ -526,5 +515,5 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (args.length !== 2 || args[0] !== '--workflow' || !args[1])
     throw new VerificationError('Usage: isagi-workflow-verify --workflow <exact-directory>');
   await verifyWorkflow(args[1]);
-  process.stdout.write('Workflow verified. dist is ready.\n');
+  process.stdout.write('Workflow verified. Build receipt is ready.\n');
 }

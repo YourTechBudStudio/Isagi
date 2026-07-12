@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  workflowBuilderVersion,
   workflowSdkVersion,
   workflowVerifierVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
@@ -37,6 +38,7 @@ const substitutions = {
   DATA_ROOT: dataRoot,
   SDK_VERSION: workflowSdkVersion,
   VERIFIER_VERSION: workflowVerifierVersion,
+  BUILDER_VERSION: workflowBuilderVersion,
   RUNTIME_CONFIG_SCHEMA: trimTrailingNewline(
     configSchemaReferenceSources['runtime-config.schema.ts'],
   ),
@@ -58,7 +60,7 @@ const templates = {
   },
   'workflows.md': {
     emittedAs: 'references/workflows.md',
-    tokens: ['SDK_VERSION', 'VERIFIER_VERSION'],
+    tokens: ['SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
   },
 } as const satisfies Record<
   keyof typeof isagiDocsContentSources,
@@ -293,6 +295,10 @@ test('the rendered workflow reference and shipped scaffold name the recommended 
     workflows.includes(`@yourtechbudstudio/isagi-workflow-verifier@${workflowVerifierVersion}`),
     'workflow reference states the verifier pin',
   );
+  assert.ok(
+    workflows.includes(`esbuild@${workflowBuilderVersion}`),
+    'workflow reference states the builder pin',
+  );
 
   const scaffold = files.get('references/minimal-workflow/package.json') ?? '';
   assert.ok(
@@ -302,6 +308,10 @@ test('the rendered workflow reference and shipped scaffold name the recommended 
   assert.ok(
     scaffold.includes(`"@yourtechbudstudio/isagi-workflow-verifier": "${workflowVerifierVersion}"`),
     'scaffold pins the verifier exactly',
+  );
+  assert.ok(
+    scaffold.includes(`"esbuild": "${workflowBuilderVersion}"`),
+    'scaffold pins the builder exactly',
   );
 });
 
