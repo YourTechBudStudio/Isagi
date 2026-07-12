@@ -2,9 +2,15 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import {
+  workflowSdkVersion,
+  workflowVerifierVersion,
+} from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+
+import {
   configSchemaReferenceSources,
   isagiDocsContentSources,
   runtimePackageVersion,
+  workflowScaffoldSources,
 } from '../../runtime-assets.js';
 
 /** The skill's directory name and its `name:` frontmatter field. Must match `skill-content/SKILL.md`. */
@@ -42,6 +48,8 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   const substitutions = new Map([
     ['VERSION', runtimePackageVersion],
     ['DATA_ROOT', dataRoot],
+    ['SDK_VERSION', workflowSdkVersion],
+    ['VERIFIER_VERSION', workflowVerifierVersion],
     [
       'RUNTIME_CONFIG_SCHEMA',
       trimTrailingNewline(configSchemaReferenceSources['runtime-config.schema.ts']),
@@ -57,6 +65,12 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   files.set('references/config-global.md', render('config-global.md', substitutions));
   files.set('references/config-project.md', render('config-project.md', substitutions));
   files.set('references/workflows.md', render('workflows.md', substitutions));
+
+  for (const [relativePath, source] of workflowScaffoldSources) {
+    // Emitted verbatim (never through render) so the shipped scaffold is byte-identical to the
+    // verifier fixture and untouched by placeholder substitution.
+    files.set(`references/minimal-workflow/${relativePath}`, source);
+  }
 
   return files;
 }

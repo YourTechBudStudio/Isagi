@@ -149,7 +149,7 @@ function reconcileHarness(
   );
 }
 
-function renderForHarness(
+export function renderForHarness(
   harness: AgentHarness,
   dataRoot: string,
   files: ReadonlyMap<string, string>,

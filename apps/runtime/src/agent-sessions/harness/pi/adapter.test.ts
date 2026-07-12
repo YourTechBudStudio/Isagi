@@ -232,7 +232,8 @@ test('harness integration artifacts are prepared once under the runtime data roo
     );
     assert.doesNotMatch(workflowReference, /ISAGI_RUNTIME_URL/);
     assert.match(workflowReference, /pnpm verify/);
-    assert.match(workflowReference, /state\.stage\.kind/);
+    assert.match(workflowReference, /discriminated union/);
+    assert.match(workflowReference, /node_modules\/@yourtechbudstudio\/isagi-workflow-sdk/);
     assert.doesNotMatch(workflowReference, /^## Contents$/m);
 
     const claudeHook = readFileSync(claudeHookPath, 'utf8');

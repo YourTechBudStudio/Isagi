@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -10,49 +10,33 @@ import {
   verifyWorkflow,
   type ProcessRunner,
 } from './cli.js';
-import { parseWorkflowBuildManifestJson } from './receipt.js';
+import {
+  parseWorkflowBuildManifestJson,
+  supportedWorkflowContractVersion,
+  workflowBuildManifestVersion,
+  workflowSdkPackage,
+  workflowSdkVersion,
+  workflowVerifierPackage,
+  workflowVerifierVersion,
+} from './receipt.js';
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 
+const canonicalFixture = resolve(import.meta.dirname, '../fixtures/minimal-workflow');
+
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'isagi-verifier-test-'));
-  await mkdir(join(root, 'src'));
-  await mkdir(join(root, 'tests'));
-  await writeFile(
-    join(root, 'src/index.ts'),
-    `import { defineWorkflow } from '@yourtechbudstudio/isagi-workflow-sdk';\nexport default defineWorkflow({command:async()=>({title:'Fixture'}),validate:async()=>{},init:async()=>({}),step:async()=>({type:'done'})});\n`,
-  );
-  await writeFile(join(root, 'tests/workflow.test.ts'), 'export {};\n');
-  await writeFile(
-    join(root, 'tsconfig.json'),
-    JSON.stringify({
-      compilerOptions: {
-        strict: true,
-        module: 'NodeNext',
-        moduleResolution: 'NodeNext',
-        target: 'ES2022',
-      },
-      include: ['src', 'tests'],
-    }),
-  );
+  // The canonical scaffold is the single source of truth. It ships without a lockfile or
+  // node_modules (a pre-install scaffold), so the copy adds the test-only lockfile and links the
+  // workspace SDK and verifier the way an author's install would.
+  await cp(canonicalFixture, root, {
+    recursive: true,
+    filter: (source) => {
+      const top = source.slice(canonicalFixture.length + 1).split(sep)[0];
+      return top !== 'node_modules' && top !== 'dist';
+    },
+  });
   await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
-  await writeFile(
-    join(root, 'package.json'),
-    JSON.stringify({
-      name: 'fixture',
-      private: true,
-      type: 'module',
-      packageManager: 'pnpm@11.4.0',
-      scripts: {
-        typecheck: 'tsc --noEmit',
-        test: 'node --test',
-        build: 'isagi-workflow-verify --workflow .',
-        verify: 'isagi-workflow-verify --workflow .',
-      },
-      dependencies: { '@yourtechbudstudio/isagi-workflow-sdk': '0.0.1' },
-      devDependencies: { '@yourtechbudstudio/isagi-workflow-verifier': '0.0.1' },
-    }),
-  );
   await linkPackage(
     root,
     '@yourtechbudstudio/isagi-workflow-sdk',
@@ -93,6 +77,14 @@ test('verifies a standalone artifact and deterministic receipt', async () => {
     await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'),
   );
   assert.equal(manifest.artifact.entry, 'dist/index.js');
+  // The generated receipt must record the recommended pair and the supported contract/manifest
+  // versions, binding the emitted manifest to the receipt constants.
+  assert.equal(manifest.manifestVersion, workflowBuildManifestVersion);
+  assert.equal(manifest.workflowContractVersion, supportedWorkflowContractVersion);
+  assert.equal(manifest.sdk.name, workflowSdkPackage);
+  assert.equal(manifest.sdk.version, workflowSdkVersion);
+  assert.equal(manifest.verifier.name, workflowVerifierPackage);
+  assert.equal(manifest.verifier.version, workflowVerifierVersion);
   const first = await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8');
   await verifyWorkflow(root, testRunner());
   assert.equal(await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'), first);

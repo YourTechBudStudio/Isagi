@@ -2,11 +2,19 @@
 
 ## What this is
 
-The local-or-remote Isagi runtime. It will own Git, worktrees, PTYs, commands, agent sessions, and persistence over time.
+The local-or-remote Isagi runtime. It owns Git, worktrees, PTYs, commands, agent sessions, workflows, configuration, and persistence.
 
 ## Structure
 
-- `src/` contains the Fastify server, API route registration, and runtime implementation.
+- `src/index.ts` composes the runtime and starts the Fastify boundary.
+- `src/lib/api`, `src/health`, `src/runtime-events`, and the feature `api.ts` files expose the versioned runtime API.
+- `src/runtime-config`, `src/project-config`, and `src/paths` own configuration and path policy.
+- `src/workspace`, `src/git`, `src/worktree-setup`, and `src/commands` own repository and worktree operations.
+- `src/agent-sessions`, `src/terminal-sessions`, and `src/pty-processes` own durable sessions and their disposable processes.
+- `src/host-inventory` and `src/harness-control-plane` discover harness capabilities and apply harness policy.
+- `src/workflows` discovers, loads, and executes verified workflow artifacts.
+- `src/persistence`, `src/session-lifecycle`, `src/session-restore`, and `src/session-gc` own durable state and session lifecycle.
+- `src/agent-sessions/harness/skill-content` contains the handwritten `isagi-docs` skill source. `packages/workflow-verifier/fixtures/minimal-workflow` is its canonical workflow scaffold.
 - `dist/` is generated build output.
 - `drizzle/` contains Drizzle Kit-generated migration artifacts. Do not edit generated migration files by hand; change the Drizzle schema and regenerate migrations instead.
 

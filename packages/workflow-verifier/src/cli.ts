@@ -25,7 +25,9 @@ import {
   hashWorkflowInputs,
   isWorkflowSourcePath,
   serializeWorkflowBuildManifest,
+  supportedWorkflowContractVersion,
   verifierReservedPrefix,
+  workflowBuildManifestVersion,
   workflowSdkPackage,
   workflowSdkVersion,
   workflowVerifierPackage,
@@ -191,8 +193,8 @@ export async function verifyWorkflow(
     await validateArtifact(root, artifactPath, runner);
     const artifactBytes = await readFile(artifactPath);
     const manifest: WorkflowBuildManifest = {
-      manifestVersion: 1,
-      workflowContractVersion: 1,
+      manifestVersion: workflowBuildManifestVersion,
+      workflowContractVersion: supportedWorkflowContractVersion,
       sdk: { name: workflowSdkPackage, version: workflowSdkVersion },
       verifier: { name: workflowVerifierPackage, version: workflowVerifierVersion },
       toolchain: {

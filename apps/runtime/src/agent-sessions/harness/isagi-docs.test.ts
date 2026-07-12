@@ -4,11 +4,17 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
+import {
+  workflowSdkVersion,
+  workflowVerifierVersion,
+} from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+
 import { projectConfigSchema } from '../../project-config/project-config.schema.js';
 import {
   configSchemaReferenceSources,
   isagiDocsContentSources,
   runtimePackageVersion,
+  workflowScaffoldSources,
 } from '../../runtime-assets.js';
 import { runtimeConfigSchema } from '../../runtime-config/runtime-config.schema.js';
 import {
@@ -29,6 +35,8 @@ const trimTrailingNewline = (source: string) => source.replace(/\n+$/, '');
 const substitutions = {
   VERSION: runtimePackageVersion,
   DATA_ROOT: dataRoot,
+  SDK_VERSION: workflowSdkVersion,
+  VERIFIER_VERSION: workflowVerifierVersion,
   RUNTIME_CONFIG_SCHEMA: trimTrailingNewline(
     configSchemaReferenceSources['runtime-config.schema.ts'],
   ),
@@ -50,7 +58,7 @@ const templates = {
   },
   'workflows.md': {
     emittedAs: 'references/workflows.md',
-    tokens: ['DATA_ROOT'],
+    tokens: ['SDK_VERSION', 'VERIFIER_VERSION'],
   },
 } as const satisfies Record<
   keyof typeof isagiDocsContentSources,
@@ -116,6 +124,10 @@ test('the skill package holds exactly the indexed references', () => {
       'references/config-global.md',
       'references/config-project.md',
       'references/workflows.md',
+      'references/minimal-workflow/package.json',
+      'references/minimal-workflow/src/index.ts',
+      'references/minimal-workflow/tests/workflow.test.ts',
+      'references/minimal-workflow/tsconfig.json',
     ],
   );
   assert.equal(
@@ -138,8 +150,36 @@ test('the router reads as a versioned skill package', () => {
   assert.match(router, new RegExp(`^  version: "${runtimePackageVersion}"$`, 'm'));
   assert.equal(router.includes(`${dataRoot}/config.yaml`), true);
   assert.equal(router.includes(`${dataRoot}/workflows/<key>/`), true);
+  assert.match(router, /Read only the reference that matches the request/);
+});
 
-  assert.match(router, /@yourtechbudstudio\/isagi-workflow-sdk/);
+test('the workflow reference uses the scaffold and installed SDK as authoring sources', () => {
+  const workflows = files.get('references/workflows.md') ?? '';
+  assert.match(workflows, /Read every file in the bundled/);
+  assert.match(
+    workflows,
+    /node_modules\/@yourtechbudstudio\/isagi-workflow-sdk\/dist\/index\.d\.ts/,
+  );
+  assert.match(workflows, /After all authoring changes are complete/);
+  assert.doesNotMatch(workflows, /After every edit/);
+  assert.doesNotMatch(workflows, /build receipt|artifact hash|pinned artifact/i);
+});
+
+test('the workflow reference preserves non-type-level authoring conventions', () => {
+  const workflows = files.get('references/workflows.md') ?? '';
+  for (const convention of [
+    /state\.stage\.kind/,
+    /JSON-serializable/,
+    /wait\.workflow/,
+    /operational calls as replayable/,
+    /latest complete assistant turn/,
+    /judgment prompt and parser as one contract/,
+    /setUiFeedback/,
+    /one Node ESM artifact/,
+    /tests hermetic/,
+  ]) {
+    assert.match(workflows, convention);
+  }
 });
 
 /**
@@ -176,6 +216,8 @@ test('skill references do not carry generated contents sections', () => {
 
 test('skill prose is portable and self-contained', () => {
   for (const [path, source] of handwritten) {
+    // Prose portability applies to the Markdown references; the scaffold ships real code files.
+    if (!path.endsWith('.md')) continue;
     // The reader has neither the Isagi repository nor its docs. Nothing may point at them.
     assert.doesNotMatch(source, /docs\//, `${path} references a repository doc path`);
     assert.doesNotMatch(source, /workflow-engine\.md/, `${path} references a repository doc`);
@@ -217,4 +259,53 @@ test('regeneration removes a skill directory left behind under an older name', (
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+/**
+ * The scaffold is shipped as reference files copied verbatim from the verifier fixture. Emitting it
+ * raw (never through placeholder substitution) is what keeps the installed bytes identical to the
+ * canonical fixture an author copies. This holds that line, and the exact-set assertion catches a
+ * scaffold file added or removed without the sync/generator following.
+ */
+test('the emitted scaffold files are byte-identical to the source assets', () => {
+  assert.ok(workflowScaffoldSources.size > 0, 'expected scaffold source assets');
+  for (const [relativePath, source] of workflowScaffoldSources) {
+    assert.equal(
+      files.get(`references/minimal-workflow/${relativePath}`),
+      source,
+      `references/minimal-workflow/${relativePath} drifted from its source asset`,
+    );
+  }
+  const emitted = [...files.keys()]
+    .filter((path) => path.startsWith('references/minimal-workflow/'))
+    .map((path) => path.slice('references/minimal-workflow/'.length))
+    .sort();
+  assert.deepEqual(emitted, [...workflowScaffoldSources.keys()].sort());
+});
+
+test('the rendered workflow reference and shipped scaffold name the recommended pair', () => {
+  const workflows = files.get('references/workflows.md') ?? '';
+  assert.ok(
+    workflows.includes(`@yourtechbudstudio/isagi-workflow-sdk@${workflowSdkVersion}`),
+    'workflow reference states the SDK pin',
+  );
+  assert.ok(
+    workflows.includes(`@yourtechbudstudio/isagi-workflow-verifier@${workflowVerifierVersion}`),
+    'workflow reference states the verifier pin',
+  );
+
+  const scaffold = files.get('references/minimal-workflow/package.json') ?? '';
+  assert.ok(
+    scaffold.includes(`"@yourtechbudstudio/isagi-workflow-sdk": "${workflowSdkVersion}"`),
+    'scaffold pins the SDK exactly',
+  );
+  assert.ok(
+    scaffold.includes(`"@yourtechbudstudio/isagi-workflow-verifier": "${workflowVerifierVersion}"`),
+    'scaffold pins the verifier exactly',
+  );
+});
+
+test('the canonical skill is manual-only', () => {
+  const router = files.get('SKILL.md') ?? '';
+  assert.match(router, /^disable-model-invocation: true$/m);
 });

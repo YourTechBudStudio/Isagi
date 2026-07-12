@@ -11,7 +11,9 @@ bundle, validates its workflow export and command manifest in a bounded child pr
 `dist` only after every gate passes. It never installs dependencies.
 
 `build` and `verify` scripts should both run the command above. Workflow packages must use exact SDK
-and verifier versions and an exact `packageManager` declaration.
+and verifier versions and an exact `packageManager` declaration. The current pair is
+`@yourtechbudstudio/isagi-workflow-sdk@0.0.1` and `@yourtechbudstudio/isagi-workflow-verifier@0.0.1`.
+For the full authoring guide, use Isagi's installed `isagi-docs` skill.
 
 ## Trust boundary
 

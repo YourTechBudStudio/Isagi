@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { isagiDocsPackageFiles } from '../agent-sessions/harness/isagi-docs.js';
 import { disabledHarnessPolicy } from '../runtime-config/index.js';
-import { publishDocsTarget, reconcileDocs, type PublicationFileSystem } from './docs-reconciler.js';
+import {
+  publishDocsTarget,
+  reconcileDocs,
+  renderForHarness,
+  type PublicationFileSystem,
+} from './docs-reconciler.js';
 const probes = {
   pi: { _tag: 'Missing', command: 'pi' },
   opencode: { _tag: 'Missing', command: 'opencode' },
@@ -127,4 +133,38 @@ test('failed staged publication restores the previous exact-name target', async 
     [...entries.keys()].some((path) => path.includes('.isagi-docs-backup-')),
     false,
   );
+});
+
+// renderForHarness is the one place the canonical package becomes per-harness native content. These
+// pin the invariant that every native form reaches the same canonical content with explicit-only
+// (manual) invocation metadata: Pi/Claude/Codex carry the package verbatim; OpenCode routes to it.
+const renderDataRoot = '/tmp/isagi-render';
+const canonicalDocs = isagiDocsPackageFiles(renderDataRoot);
+
+test('OpenCode renders one command that routes to the canonical skill', () => {
+  const rendered = renderForHarness('opencode', renderDataRoot, canonicalDocs);
+  assert.equal(rendered.size, 1);
+  const command = rendered.get('') ?? '';
+  assert.ok(
+    command.includes(resolve(renderDataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md')),
+    'OpenCode command must reference the canonical SKILL.md path',
+  );
+  assert.match(command, /follow its references/);
+});
+
+test('Pi and Claude receive the canonical package verbatim and manual-only', () => {
+  for (const harness of ['pi', 'claude'] as const) {
+    const rendered = renderForHarness(harness, renderDataRoot, canonicalDocs);
+    for (const [path, content] of canonicalDocs)
+      assert.equal(rendered.get(path), content, `${harness} dropped or altered ${path}`);
+    assert.match(rendered.get('SKILL.md') ?? '', /^disable-model-invocation: true$/m);
+  }
+});
+
+test('Codex receives the canonical package plus a manual-only policy file', () => {
+  const rendered = renderForHarness('codex', renderDataRoot, canonicalDocs);
+  for (const [path, content] of canonicalDocs)
+    assert.equal(rendered.get(path), content, `codex dropped or altered ${path}`);
+  assert.match(rendered.get('SKILL.md') ?? '', /^disable-model-invocation: true$/m);
+  assert.match(rendered.get('agents/openai.yaml') ?? '', /allow_implicit_invocation: false/);
 });

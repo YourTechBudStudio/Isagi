@@ -1,0 +1,22 @@
+{
+  "name": "my-workflow",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "isagi-workflow-verify --workflow .",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify": "isagi-workflow-verify --workflow ."
+  },
+  "dependencies": {
+    "@yourtechbudstudio/isagi-workflow-sdk": "0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@yourtechbudstudio/isagi-workflow-verifier": "0.0.1",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3"
+  },
+  "packageManager": "pnpm@11.4.0"
+}

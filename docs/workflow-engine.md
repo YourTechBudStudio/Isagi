@@ -213,9 +213,9 @@ run in the same database transaction that creates it; cache publication happens 
 unreferenced immutable entry is retained if run creation later fails. Every callback for that run,
 including retries and continuation after a runtime restart, reloads by the persisted hash. Cached
 bytes are rehashed before import and the export shape is revalidated. Missing or corrupt pinned
-artifacts fail closed without falling back to the latest package. Pre-cutover rows without a pin are
-unsupported. Phase 3 performs no cache eviction; future collection must derive liveness from durable
-run pins.
+artifacts fail closed without falling back to the latest package. A run without a persisted artifact
+pin is unsupported and fails closed. The runtime performs no cache eviction today; future collection
+must derive liveness from durable run pins.
 
 Starting a workflow is an explicit-context operation. The caller supplies `worktreeId`,
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating

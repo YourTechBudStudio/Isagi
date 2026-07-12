@@ -19,8 +19,8 @@ export const supportedWorkflowLockfiles = Object.values(workflowLockfileByPackag
 export const unsupportedWorkflowLockfiles = ['bun.lockb'] as const;
 
 export interface WorkflowBuildManifest {
-  readonly manifestVersion: 1;
-  readonly workflowContractVersion: 1;
+  readonly manifestVersion: typeof workflowBuildManifestVersion;
+  readonly workflowContractVersion: typeof supportedWorkflowContractVersion;
   readonly sdk: { readonly name: typeof workflowSdkPackage; readonly version: string };
   readonly verifier: { readonly name: typeof workflowVerifierPackage; readonly version: string };
   readonly toolchain: {
@@ -102,9 +102,12 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
     ],
     'manifest',
   );
-  if (input.manifestVersion !== 1) throw new Error('Unsupported manifestVersion; expected 1.');
-  if (input.workflowContractVersion !== 1)
-    throw new Error('Unsupported workflowContractVersion; expected 1.');
+  if (input.manifestVersion !== workflowBuildManifestVersion)
+    throw new Error(`Unsupported manifestVersion; expected ${workflowBuildManifestVersion}.`);
+  if (input.workflowContractVersion !== supportedWorkflowContractVersion)
+    throw new Error(
+      `Unsupported workflowContractVersion; expected ${supportedWorkflowContractVersion}.`,
+    );
   const sdk = packageIdentity(input.sdk, 'sdk', workflowSdkPackage);
   const verifier = packageIdentity(input.verifier, 'verifier', workflowVerifierPackage);
   if (!isRecord(input.toolchain)) throw new Error('toolchain must be an object.');
@@ -130,8 +133,8 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
   if (!sha256Pattern.test(artifactHash))
     throw new Error('artifact.sha256 must be a lowercase SHA-256 digest.');
   return {
-    manifestVersion: 1,
-    workflowContractVersion: 1,
+    manifestVersion: workflowBuildManifestVersion,
+    workflowContractVersion: supportedWorkflowContractVersion,
     sdk,
     verifier,
     toolchain: {
