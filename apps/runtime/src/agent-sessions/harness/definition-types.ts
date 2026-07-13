@@ -38,11 +38,20 @@ export type HarnessDocsTargetResolution =
 
 export interface HarnessDocsIntegration {
   readonly explicitInvocationSupported: boolean;
-  readonly kind: 'skill' | 'command';
-  readonly invocation: string;
-  readonly nativePolicy: 'skill_frontmatter' | 'codex_agent_policy' | 'explicit_command';
+  readonly nativePolicy:
+    | 'skill_frontmatter'
+    | 'codex_agent_policy'
+    | 'prompt_template'
+    | 'explicit_command';
   readonly implicitInvocationPolicy: 'disabled';
   readonly resolveTarget: (environment: ApprovedHostEnvironment) => HarnessDocsTargetResolution;
+  readonly resolveLegacyTargets: (
+    environment: ApprovedHostEnvironment,
+  ) => readonly HarnessDocsTargetResolution[];
+  readonly project: (input: {
+    readonly dataRoot: string;
+    readonly canonicalFiles: ReadonlyMap<string, string>;
+  }) => ReadonlyMap<string, string>;
 }
 
 export interface HarnessProbeDefinition {
@@ -71,6 +80,10 @@ export interface HarnessDefinition {
   readonly executable: string;
   readonly probe: HarnessProbeDefinition;
   readonly docs: HarnessDocsIntegration;
+  readonly prompt: {
+    readonly renderSkillToken: (name: string) => string;
+    readonly renderCommandToken: (name: string) => string;
+  };
   readonly launch: {
     readonly interactive: (
       input: HarnessLaunchContext,

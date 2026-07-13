@@ -16,6 +16,27 @@ export type WorkflowWaitKind = (typeof workflowWaitKinds)[number];
 
 export type WorkflowAgentHarness = 'pi' | 'opencode' | 'claude' | 'codex';
 
+export interface WorkflowSkillModifier {
+  readonly kind: 'skill';
+  readonly name: string;
+}
+
+export interface WorkflowCommandModifier {
+  readonly kind: 'command';
+  readonly name: string;
+}
+
+export type WorkflowPromptModifier = WorkflowSkillModifier | WorkflowCommandModifier;
+
+export type WorkflowPromptModifiers =
+  | readonly WorkflowSkillModifier[]
+  | readonly [WorkflowCommandModifier];
+
+export interface WorkflowPromptInput {
+  readonly prompt?: string | undefined;
+  readonly modifiers?: WorkflowPromptModifiers | undefined;
+}
+
 export interface WorkflowQuestionOption {
   readonly value: string;
   readonly label?: string | undefined;
@@ -116,8 +137,7 @@ export interface WorkflowHeadlessLaunch {
   readonly timeoutMs: number;
 }
 
-export interface WorkflowHeadlessAgentInput {
-  readonly prompt: string;
+export interface WorkflowHeadlessAgentInput extends WorkflowPromptInput {
   readonly harness: WorkflowAgentHarness;
   readonly model?: string | undefined;
   readonly effort?: string | undefined;
@@ -175,15 +195,15 @@ export type WorkflowResult =
 
 export interface WorkflowContext {
   readonly worktreePath: string;
-  readonly spawnAgentSession: (input: {
-    readonly harness: WorkflowAgentHarness;
-    readonly prompt: string;
-    readonly model?: string | undefined;
-    readonly effort?: string | undefined;
-  }) => Promise<WorkflowAgentPromptSend & { readonly paneId: number }>;
+  readonly spawnAgentSession: (
+    input: WorkflowPromptInput & {
+      readonly harness: WorkflowAgentHarness;
+      readonly model?: string | undefined;
+      readonly effort?: string | undefined;
+    },
+  ) => Promise<WorkflowAgentPromptSend & { readonly paneId: number }>;
   readonly sendAgentPrompt: (
-    agentSessionId: number,
-    text: string,
+    input: WorkflowPromptInput & { readonly agentSessionId: number },
   ) => Promise<WorkflowAgentPromptSend>;
   readonly closePane: (paneId: number) => Promise<void>;
   readonly getConversationHistory: (

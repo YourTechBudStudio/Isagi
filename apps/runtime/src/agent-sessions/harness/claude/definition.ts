@@ -15,8 +15,6 @@ export const claudeHarnessDefinition = {
   probe: { command: 'claude', args: ['--version'] },
   docs: {
     explicitInvocationSupported: true,
-    kind: 'skill',
-    invocation: '/isagi-docs',
     nativePolicy: 'skill_frontmatter',
     implicitInvocationPolicy: 'disabled',
     resolveTarget: (environment) =>
@@ -27,6 +25,12 @@ export const claudeHarnessDefinition = {
         defaultSegments: ['.claude'],
         targetSegments: ['skills', 'isagi-docs'],
       }),
+    resolveLegacyTargets: () => [],
+    project: ({ canonicalFiles }) => new Map(canonicalFiles),
+  },
+  prompt: {
+    renderSkillToken: (name) => `/${name}`,
+    renderCommandToken: (name) => `/${name}`,
   },
   launch: {
     interactive: (input, dependencies) =>

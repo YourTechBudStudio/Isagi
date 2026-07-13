@@ -61,6 +61,7 @@ import {
   type WorkflowEventLedgerService,
 } from './event-ledger.service.js';
 import { WorkflowHeadless, type WorkflowHeadlessService } from './headless.js';
+import { WorkflowPromptInputError } from './prompt-renderer.js';
 import {
   createFilesystemWorkflowRegistry,
   createWorkflowRegistry,
@@ -3091,8 +3092,11 @@ test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste p
           }),
       },
       observer: fakeHarnessLedgerObserver(),
-      agentSessionId: 10,
-      text: 'line 1\r\nline 2',
+      promptInput: {
+        agentSessionId: 10,
+        modifiers: [{ kind: 'command', name: 'isagi-docs' }],
+        prompt: 'line 1\r\nline 2',
+      },
     }),
   );
 
@@ -3101,7 +3105,7 @@ test('sendAgentPrompt resolves the active agent PTY and writes bracketed paste p
   assert.deepEqual(
     writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
     [
-      { ptyProcessId: 20, data: '\x1b[200~line 1\nline 2\x1b[201~' },
+      { ptyProcessId: 20, data: '\x1b[200~/isagi-docs line 1\nline 2\x1b[201~' },
       { ptyProcessId: 20, data: '\r' },
     ],
   );
@@ -3135,8 +3139,7 @@ test('sendAgentPrompt establishes the observer baseline before the first write',
             return projectionReads === 1 ? undefined : { recordsByHarnessSessionId: new Map() };
           }),
       },
-      agentSessionId: 10,
-      text: 'first prompt',
+      promptInput: { agentSessionId: 10, prompt: 'first prompt' },
     }),
   );
 
@@ -3170,8 +3173,7 @@ test('sendAgentPrompt fails before writing when a turn is in flight', async () =
               recordedAt: '2026-06-18T00:00:00.000Z',
             },
           ]),
-          agentSessionId: 10,
-          text: 'blocked',
+          promptInput: { agentSessionId: 10, prompt: 'blocked' },
         }),
       ),
     /turn is already in flight/,
@@ -3212,8 +3214,7 @@ test('sendAgentPrompt allows a session whose started turn has a synthesized term
           reason: 'new_start_supersedes',
         },
       ]),
-      agentSessionId: 10,
-      text: 'allowed',
+      promptInput: { agentSessionId: 10, prompt: 'allowed' },
     }),
   );
 
@@ -3280,7 +3281,7 @@ test('workflow capabilities spawnAgentSessionForRun splits the captured surface 
       const capabilities = yield* WorkflowCapabilities;
       return yield* capabilities.spawnAgentSessionForRun({
         run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
-        input: { harness: 'pi', prompt: 'seed' },
+        input: { harness: 'pi', modifiers: [{ kind: 'command', name: 'isagi-docs' }] },
       });
     }).pipe(
       Effect.provide(
@@ -3382,7 +3383,7 @@ test('workflow capabilities spawnAgentSessionForRun splits the captured surface 
   assert.deepEqual(
     writes.map(({ elapsedMs: _elapsedMs, ...write }) => write),
     [
-      { ptyProcessId: 20, data: '\x1b[200~seed\x1b[201~' },
+      { ptyProcessId: 20, data: '\x1b[200~/isagi-docs\x1b[201~' },
       { ptyProcessId: 20, data: '\r' },
     ],
   );
@@ -3410,6 +3411,48 @@ test('workflow capabilities spawnAgentSessionForRun hard-fails when the run has 
       ),
     /cannot spawn without a surface_id/,
   );
+});
+
+test('workflow spawn validation fails before surface or PTY work', async () => {
+  let surfaceReads = 0;
+  let ptyEnsures = 0;
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      return yield* capabilities
+        .spawnAgentSessionForRun({
+          run: fakeWorkflowRun({ surfaceId: 1, worktreeId: 1 }),
+          input: { harness: 'pi', prompt: ' \n ' },
+        })
+        .pipe(Effect.either);
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          surfaces: {
+            ...fakeSurfaceService(),
+            getSurfaceDetail: () =>
+              Effect.sync(() => {
+                surfaceReads += 1;
+                throw new Error('surface lookup must not run');
+              }),
+          },
+          agents: {
+            ...fakeAgentSessionService(),
+            ensureActivePtyProcess: () =>
+              Effect.sync(() => {
+                ptyEnsures += 1;
+                throw new Error('PTY ensure must not run');
+              }),
+          },
+        }),
+      ),
+    ),
+  );
+
+  assert.equal(result._tag, 'Left');
+  assert.ok(result._tag === 'Left' && result.left instanceof WorkflowPromptInputError);
+  assert.equal(surfaceReads, 0);
+  assert.equal(ptyEnsures, 0);
 });
 
 test('workflow capabilities closePaneForRun delegates to the run surface', async () => {
@@ -3465,7 +3508,7 @@ test('workflow capabilities runHeadlessAgentForRun associates the op with the ow
                   opId: 'headless:op-1',
                   launch: {
                     harness: input.prompt.harness,
-                    prompt: input.prompt.prompt,
+                    prompt: input.prompt.prompt ?? 'judge',
                     timeoutMs: input.prompt.timeoutMs ?? 30_000,
                   },
                 };
@@ -3595,7 +3638,7 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
       }),
     sendAgentPrompt: (input) =>
       Effect.sync(() => {
-        calls.push(`send:${input.agentSessionId}:${input.text}`);
+        calls.push(`send:${input.agentSessionId}:${input.prompt}`);
         return {
           agentSessionId: input.agentSessionId,
           sentAt: '2026-06-18T00:00:01.000Z',
@@ -3617,7 +3660,7 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
           opId: 'op-1',
           launch: {
             harness: input.input.harness,
-            prompt: input.input.prompt,
+            prompt: input.input.prompt ?? 'judge',
             timeoutMs: input.input.timeoutMs ?? 30_000,
           },
         };
@@ -3645,7 +3688,7 @@ test('workflowContext adapts SDK methods to run-bound capabilities', async () =>
   });
 
   await ctx.spawnAgentSession({ harness: 'pi', prompt: 'seed' });
-  await ctx.sendAgentPrompt(11, 'next');
+  await ctx.sendAgentPrompt({ agentSessionId: 11, prompt: 'next' });
   await ctx.closePane(8);
   await ctx.getConversationHistory(11);
   await ctx.runHeadlessAgent({ harness: 'claude', prompt: 'judge', timeoutMs: 1000 });
@@ -3676,7 +3719,10 @@ test('workflowContext rejects when a capability Effect fails', async () => {
     worktreePath: '/tmp/isagi-test-worktree',
   });
 
-  await assert.rejects(() => ctx.sendAgentPrompt(11, 'next'), /blocked/);
+  await assert.rejects(
+    () => ctx.sendAgentPrompt({ agentSessionId: 11, prompt: 'next' }),
+    /blocked/,
+  );
 });
 
 const listWorkflowRuns = Effect.gen(function* () {
@@ -4053,7 +4099,21 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
 function fakeAgentSessionService(): AgentSessionServiceShape {
   return {
     startFresh: () => Effect.die('agent startFresh is not used'),
-    get: () => Effect.die('agent get is not used'),
+    get: (agentSessionId) =>
+      Effect.succeed({
+        id: agentSessionId,
+        worktreeId: 1,
+        harness: 'pi',
+        cwd: '/tmp/isagi-test-worktree',
+        harnessSessionId: 'harness-a',
+        harnessMetadataStatus: 'valid',
+        harnessMetadataDiagnostic: null,
+        activePtyProcessId: null,
+        createdAt: '2026-06-18T00:00:00.000Z',
+        updatedAt: '2026-06-18T00:00:00.000Z',
+        lastSeenAt: '2026-06-18T00:00:00.000Z',
+        activePtyProcess: null,
+      }),
     ensureActivePtyProcess: () => Effect.die('agent ensureActivePtyProcess is not used'),
     activePtyProcessId: () => Effect.die('agent activePtyProcessId is not used'),
   };

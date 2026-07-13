@@ -10,7 +10,7 @@ import {
 
 test('normalizeHeadlessLaunch resolves timeout before persistence', () => {
   assert.deepEqual(
-    normalizeHeadlessLaunch({ harness: 'claude', prompt: 'judge', model: 'sonnet' }),
+    normalizeHeadlessLaunch({ harness: 'claude', prompt: 'judge', model: 'sonnet' }, 'judge'),
     {
       harness: 'claude',
       prompt: 'judge',
@@ -20,7 +20,8 @@ test('normalizeHeadlessLaunch resolves timeout before persistence', () => {
     },
   );
   assert.equal(
-    normalizeHeadlessLaunch({ harness: 'claude', prompt: 'judge', timeoutMs: 30_000 }).timeoutMs,
+    normalizeHeadlessLaunch({ harness: 'claude', prompt: 'judge', timeoutMs: 30_000 }, 'judge')
+      .timeoutMs,
     30_000,
   );
 });

@@ -16,6 +16,7 @@ import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
 import { InternalRuntimeEventBus, InternalRuntimeEventBusLive } from '../runtime-events/index.js';
 import { WorkflowHeadless, WorkflowHeadlessLive } from './headless.js';
+import { WorkflowPromptInputError } from './prompt-renderer.js';
 
 // The live tracker owns PTY lifetime for headless ops. These tests cover the
 // resource-ownership edges: an op must not outlive its run, and consumed ops must
@@ -65,12 +66,13 @@ function makeLayer(
   calls: PtyCalls,
   controlPlaneLayer = AllowAllHarnessControlPlaneLayer,
   onLaunch?: (() => void) | undefined,
+  harnesses: HarnessAdapterRegistryService = fakeHarnesses,
 ) {
   // The bus layer is shared by reference, so the tracker's subscription and the
   // test's publisher resolve to the same in-memory event bus instance.
   const bus = InternalRuntimeEventBusLive;
   const headless = WorkflowHeadlessLive.pipe(
-    Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses)),
+    Layer.provide(Layer.succeed(HarnessAdapterRegistry, harnesses)),
     Layer.provide(Layer.succeed(PtyService, makeFakePty(calls, onLaunch))),
     Layer.provide(bus),
     Layer.provide(controlPlaneLayer),
@@ -109,6 +111,115 @@ test('headless workflow launch is blocked before a PTY is created', async () => 
       : null,
     'harness_disabled',
   );
+});
+
+test('headless workflow renders before adapter and PTY launch and persists rendered text', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  const adapterPrompts: string[] = [];
+  const harnesses: HarnessAdapterRegistryService = {
+    ...fakeHarnesses,
+    buildHeadlessLaunch: (input) =>
+      Effect.sync(() => {
+        adapterPrompts.push(input.prompt);
+        return { command: 'agent', args: [], cwd: input.cwd } satisfies LaunchPtyProcessInput;
+      }),
+  };
+  const op = await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      return yield* headless.runHeadlessAgent({
+        runId: 7,
+        worktreePath: '/tmp/wt',
+        prompt: {
+          harness: 'codex',
+          modifiers: [{ kind: 'skill', name: 'review' }],
+          prompt: '  inspect this',
+          timeoutMs: 60_000,
+        },
+      });
+    }).pipe(
+      Effect.provide(makeLayer(calls, AllowAllHarnessControlPlaneLayer, undefined, harnesses)),
+      Effect.scoped,
+    ),
+  );
+
+  assert.deepEqual(adapterPrompts, ['$review   inspect this']);
+  assert.equal(op.launch.prompt, '$review   inspect this');
+});
+
+test('invalid headless workflow input fails before adapter and PTY launch', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  let adapterCalls = 0;
+  let launchCalls = 0;
+  const harnesses: HarnessAdapterRegistryService = {
+    ...fakeHarnesses,
+    buildHeadlessLaunch: () =>
+      Effect.sync(() => {
+        adapterCalls += 1;
+        return { command: 'agent', args: [], cwd: '/tmp/wt' } satisfies LaunchPtyProcessInput;
+      }),
+  };
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      return yield* headless
+        .runHeadlessAgent({
+          runId: 7,
+          worktreePath: '/tmp/wt',
+          prompt: { harness: 'pi', prompt: '   ' },
+        })
+        .pipe(Effect.either);
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          calls,
+          AllowAllHarnessControlPlaneLayer,
+          () => {
+            launchCalls += 1;
+          },
+          harnesses,
+        ),
+      ),
+      Effect.scoped,
+    ),
+  );
+
+  assert.ok(result._tag === 'Left' && result.left instanceof WorkflowPromptInputError);
+  assert.equal(adapterCalls, 0);
+  assert.equal(launchCalls, 0);
+});
+
+test('headless reissue submits the persisted rendered prompt without rendering again', async () => {
+  const calls: PtyCalls = { terminated: [], unpinned: [] };
+  const adapterPrompts: string[] = [];
+  const harnesses: HarnessAdapterRegistryService = {
+    ...fakeHarnesses,
+    buildHeadlessLaunch: (input) =>
+      Effect.sync(() => {
+        adapterPrompts.push(input.prompt);
+        return { command: 'agent', args: [], cwd: input.cwd } satisfies LaunchPtyProcessInput;
+      }),
+  };
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const headless = yield* WorkflowHeadless;
+      yield* headless.reissue({
+        runId: 7,
+        worktreePath: '/tmp/wt',
+        ops: [
+          {
+            opId: 'headless:persisted',
+            launch: { harness: 'codex', prompt: '$review preserved', timeoutMs: 60_000 },
+          },
+        ],
+      });
+    }).pipe(
+      Effect.provide(makeLayer(calls, AllowAllHarnessControlPlaneLayer, undefined, harnesses)),
+      Effect.scoped,
+    ),
+  );
+
+  assert.deepEqual(adapterPrompts, ['$review preserved']);
 });
 
 test('a terminal workflow run cancels its in-flight headless op', async () => {

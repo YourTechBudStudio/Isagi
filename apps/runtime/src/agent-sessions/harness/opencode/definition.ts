@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { HarnessDefinition } from '../definition-types.js';
 import { resolveOpenCodeDocsTarget } from '../docs-targets.js';
 import { extractOpenCodeHeadlessOutput } from '../headless-output.js';
+import { isagiDocsCommandRouter } from '../isagi-docs.js';
 import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from './adapter.js';
 import { opencodePluginSource } from './artifacts.js';
 import { readOpenCodeConversation } from './conversation.js';
@@ -15,11 +16,15 @@ export const openCodeHarnessDefinition = {
   probe: { command: 'opencode', args: ['--version'] },
   docs: {
     explicitInvocationSupported: true,
-    kind: 'command',
-    invocation: '/isagi-docs',
     nativePolicy: 'explicit_command',
     implicitInvocationPolicy: 'disabled',
     resolveTarget: resolveOpenCodeDocsTarget,
+    resolveLegacyTargets: () => [],
+    project: ({ dataRoot }) => isagiDocsCommandRouter(dataRoot),
+  },
+  prompt: {
+    renderSkillToken: (name) => `/${name}`,
+    renderCommandToken: (name) => `/${name}`,
   },
   launch: {
     interactive: (input, dependencies) =>

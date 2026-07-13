@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { Data, Effect } from 'effect';
@@ -24,6 +32,7 @@ type HarnessResult = DocsReconciliationResult['results'][number];
 
 export interface PublicationFileSystem {
   readonly exists: (path: string) => boolean;
+  readonly copy: (source: string, destination: string) => void;
   readonly mkdir: (path: string) => void;
   readonly readdir: (path: string) => readonly string[];
   readonly rename: (source: string, destination: string) => void;
@@ -33,6 +42,8 @@ export interface PublicationFileSystem {
 
 const nodeFileSystem: PublicationFileSystem = {
   exists: existsSync,
+  copy: (source, destination) =>
+    cpSync(source, destination, { recursive: true, errorOnExist: true }),
   mkdir: (path) => mkdirSync(path, { recursive: true }),
   readdir: readdirSync,
   rename: renameSync,
@@ -55,8 +66,17 @@ export function docsReconciliationFingerprint(input: DocsReconciliationInput) {
   const projection = supportedHarnesses.map((harness) => ({
     harness,
     intent: input.policy[harness],
+    nativePolicy: harnessDefinition(harness).docs.nativePolicy,
     target: harnessDefinition(harness).docs.resolveTarget(input.inventory.environment.values),
-    files: [...renderForHarness(harness, input.dataRoot, canonical)],
+    legacyTargets: harnessDefinition(harness).docs.resolveLegacyTargets(
+      input.inventory.environment.values,
+    ),
+    files: [
+      ...harnessDefinition(harness).docs.project({
+        dataRoot: input.dataRoot,
+        canonicalFiles: canonical,
+      }),
+    ],
   }));
   return createHash('sha256').update(JSON.stringify(projection)).digest('hex');
 }
@@ -126,8 +146,26 @@ function reconcileHarness(
       destination: null,
       diagnostic: `${target.required} is unavailable.`,
     });
+  const legacyTargets = docs.resolveLegacyTargets(input.inventory.environment.values);
+  const unresolvedLegacyTarget = legacyTargets.find((legacy) => legacy._tag !== 'Resolved');
+  if (unresolvedLegacyTarget?._tag === 'MissingEnvironmentRoot')
+    return Effect.succeed({
+      harness,
+      availability,
+      action: 'failed',
+      reason: 'target_resolution_failed',
+      destination: target.path,
+      diagnostic: `${unresolvedLegacyTarget.required} is unavailable.`,
+    });
+  const resolvedLegacyTargets = legacyTargets.flatMap((legacy) =>
+    legacy._tag === 'Resolved' ? [legacy.path] : [],
+  );
   const existed = nodeFileSystem.exists(target.path);
-  return publishDocsTarget(target.path, renderForHarness(harness, input.dataRoot, canonical)).pipe(
+  return publishDocsTargets({
+    destination: target.path,
+    legacyDestinations: resolvedLegacyTargets,
+    files: docs.project({ dataRoot: input.dataRoot, canonicalFiles: canonical }),
+  }).pipe(
     Effect.as({
       harness,
       availability,
@@ -149,32 +187,17 @@ function reconcileHarness(
   );
 }
 
-export function renderForHarness(
-  harness: AgentHarness,
-  dataRoot: string,
-  files: ReadonlyMap<string, string>,
-): ReadonlyMap<string, string> {
-  if (harness === 'opencode')
-    return new Map([
-      [
-        '',
-        `# Isagi Docs\n\nRead ${resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md')} and follow its references for the user's request.\n`,
-      ],
-    ]);
-  const rendered = new Map(files);
-  if (harness === 'codex')
-    rendered.set('agents/openai.yaml', 'policy:\n  allow_implicit_invocation: false\n');
-  return rendered;
-}
-
-export function publishDocsTarget(
-  destination: string,
-  files: ReadonlyMap<string, string>,
+export function publishDocsTargets(
+  input: {
+    readonly destination: string;
+    readonly legacyDestinations: readonly string[];
+    readonly files: ReadonlyMap<string, string>;
+  },
   fileSystem: PublicationFileSystem = nodeFileSystem,
 ): Effect.Effect<void, DocsPublicationFailure> {
   return Effect.uninterruptible(
     Effect.try({
-      try: () => publishTransaction(destination, files, fileSystem),
+      try: () => publishTransaction(input, fileSystem),
       catch: (cause) =>
         cause instanceof DocsPublicationFailure
           ? cause
@@ -187,48 +210,133 @@ export function publishDocsTarget(
 }
 
 function publishTransaction(
-  destination: string,
-  files: ReadonlyMap<string, string>,
+  input: {
+    readonly destination: string;
+    readonly legacyDestinations: readonly string[];
+    readonly files: ReadonlyMap<string, string>;
+  },
   fileSystem: PublicationFileSystem,
 ) {
-  const parent = dirname(destination);
-  fileSystem.mkdir(parent);
-  if (
-    fileSystem
-      .readdir(parent)
-      .some(
-        (name) => name.startsWith('.isagi-docs-stage-') || name.startsWith('.isagi-docs-backup-'),
-      )
-  )
-    throw new DocsPublicationFailure({
-      reason: 'transaction_evidence',
-      diagnostic: 'Existing Isagi Docs transaction evidence requires manual recovery.',
-    });
   const token = randomUUID();
-  const stage = resolve(parent, `.isagi-docs-stage-${token}`);
-  const backup = resolve(parent, `.isagi-docs-backup-${token}`);
+  const destinationParent = dirname(input.destination);
+  const legacyDestinations = [
+    ...new Set(input.legacyDestinations.filter((destination) => destination !== input.destination)),
+  ];
+  const transactionParents = [...new Set([destinationParent, ...legacyDestinations.map(dirname)])];
+  fileSystem.mkdir(destinationParent);
+  for (const parent of transactionParents) {
+    if (!fileSystem.exists(parent)) continue;
+    if (
+      fileSystem
+        .readdir(parent)
+        .some(
+          (name) => name.startsWith('.isagi-docs-stage-') || name.startsWith('.isagi-docs-backup-'),
+        )
+    )
+      throw new DocsPublicationFailure({
+        reason: 'transaction_evidence',
+        diagnostic: 'Existing Isagi Docs transaction evidence requires manual recovery.',
+      });
+  }
+
+  const stage = resolve(destinationParent, `.isagi-docs-stage-${token}`);
+  const currentBackup = resolve(destinationParent, `.isagi-docs-backup-${token}-current`);
+  const rollbackBundle = resolve(destinationParent, `.isagi-docs-backup-${token}-rollback`);
+  const currentRecovery = resolve(rollbackBundle, 'current');
+  const legacyBackups = legacyDestinations.map((destination, index) => ({
+    destination,
+    backup: resolve(dirname(destination), `.isagi-docs-backup-${token}-legacy-${index}`),
+    recovery: resolve(rollbackBundle, `legacy-${index}`),
+    moved: false,
+  }));
+  let currentMoved = false;
+  let published = false;
   try {
-    writeStage(stage, files, fileSystem);
-    if (fileSystem.exists(destination)) fileSystem.rename(destination, backup);
-    try {
-      fileSystem.rename(stage, destination);
-    } catch (publicationError) {
-      try {
-        if (fileSystem.exists(backup)) fileSystem.rename(backup, destination);
-      } catch (rollbackError) {
-        throw new DocsPublicationFailure({
-          reason: 'rollback_failed',
-          diagnostic: boundedDiagnostic(
-            `${String(publicationError)}; rollback: ${String(rollbackError)}`,
-          ),
-        });
-      }
-      throw publicationError;
+    writeStage(stage, input.files, fileSystem);
+    if (fileSystem.exists(input.destination)) {
+      fileSystem.rename(input.destination, currentBackup);
+      currentMoved = true;
     }
-    if (fileSystem.exists(backup)) fileSystem.remove(backup);
+    for (const legacy of legacyBackups) {
+      if (!fileSystem.exists(legacy.destination)) continue;
+      fileSystem.rename(legacy.destination, legacy.backup);
+      legacy.moved = true;
+    }
+    fileSystem.rename(stage, input.destination);
+    published = true;
+    if (currentMoved || legacyBackups.some((legacy) => legacy.moved)) {
+      fileSystem.mkdir(rollbackBundle);
+      if (currentMoved) fileSystem.copy(currentBackup, currentRecovery);
+      for (const legacy of legacyBackups) {
+        if (legacy.moved) fileSystem.copy(legacy.backup, legacy.recovery);
+      }
+      for (const legacy of legacyBackups) {
+        if (legacy.moved) fileSystem.remove(legacy.backup);
+      }
+      if (currentMoved) fileSystem.remove(currentBackup);
+      fileSystem.remove(rollbackBundle);
+    }
+  } catch (publicationError) {
+    try {
+      rollbackPublication({
+        destination: input.destination,
+        currentBackup,
+        currentRecovery,
+        currentMoved,
+        published,
+        legacyBackups,
+        rollbackBundle,
+        fileSystem,
+      });
+    } catch (rollbackError) {
+      throw new DocsPublicationFailure({
+        reason: 'rollback_failed',
+        diagnostic: boundedDiagnostic(
+          `${String(publicationError)}; rollback: ${String(rollbackError)}`,
+        ),
+      });
+    }
+    throw publicationError;
   } finally {
     if (fileSystem.exists(stage)) fileSystem.remove(stage);
   }
+}
+
+function rollbackPublication(input: {
+  readonly destination: string;
+  readonly currentBackup: string;
+  readonly currentRecovery: string;
+  readonly currentMoved: boolean;
+  readonly published: boolean;
+  readonly legacyBackups: readonly {
+    readonly destination: string;
+    readonly backup: string;
+    readonly recovery: string;
+    readonly moved: boolean;
+  }[];
+  readonly rollbackBundle: string;
+  readonly fileSystem: PublicationFileSystem;
+}) {
+  if (input.published && input.fileSystem.exists(input.destination)) {
+    input.fileSystem.remove(input.destination);
+  }
+  if (input.currentMoved && input.fileSystem.exists(input.currentBackup)) {
+    input.fileSystem.rename(input.currentBackup, input.destination);
+  } else if (input.currentMoved && input.fileSystem.exists(input.currentRecovery)) {
+    input.fileSystem.copy(input.currentRecovery, input.destination);
+  } else if (input.currentMoved) {
+    throw new Error(`Cannot restore the previous Isagi Docs destination.`);
+  }
+  for (const legacy of input.legacyBackups) {
+    if (legacy.moved && input.fileSystem.exists(legacy.backup)) {
+      input.fileSystem.rename(legacy.backup, legacy.destination);
+    } else if (legacy.moved && input.fileSystem.exists(legacy.recovery)) {
+      input.fileSystem.copy(legacy.recovery, legacy.destination);
+    } else if (legacy.moved) {
+      throw new Error(`Cannot restore a previous Isagi Docs legacy destination.`);
+    }
+  }
+  if (input.fileSystem.exists(input.rollbackBundle)) input.fileSystem.remove(input.rollbackBundle);
 }
 
 function writeStage(

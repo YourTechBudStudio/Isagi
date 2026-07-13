@@ -257,11 +257,12 @@ Promise becomes a thrown step, which the engine records as a `failed` run.
 The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
 `packages/workflow-sdk/src/index.ts`):
 
-- **`spawnAgentSession({ harness, prompt, model?, effort? })` →
+- **`spawnAgentSession({ harness, prompt?, modifiers?, model?, effort? })` →
   `{ agentSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
   It adds an agent pane to the run's captured surface, waits for the PTY to come live and produce
-  initial startup output, gives the TUI a fixed settle window, stamps `sentAt`, sends the **seed
-  prompt**, then waits for the harness to capture launch metadata. Existing startup waits are
+  initial startup output, gives the TUI a fixed settle window, stamps `sentAt`, sends the **rendered
+  seed text** (see Prompt input and modifiers), then waits for the harness to capture launch
+  metadata. Existing startup waits are
   bounded (~10s) and time out into a `failed` run rather than hanging the dispatcher. Harness
   metadata is launch/discovery state, not workflow turn identity. The return value doubles as an
   **agent-turn wait target**.
@@ -269,15 +270,16 @@ The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
     the runtime descends to the last leaf of the layout tree and splits it `down`, so repeated
     agent panes stack in the right/bottom region.
   - A missing run `surface_id` is a hard verb failure. Workflows never create surfaces.
-- **`sendAgentPrompt(agentSessionId, text)` → `{ agentSessionId, sentAt }`.** A runtime-internal,
-  backend-direct PTY write independent of any frontend attachment. It first waits for the observer's
+- **`sendAgentPrompt({ agentSessionId, prompt?, modifiers? })` → `{ agentSessionId, sentAt }`.** A
+  runtime-internal, backend-direct PTY write independent of any frontend attachment. It resolves the
+  target session's harness and renders the prompt input first, then waits for the observer's
   empty/current baseline, resolves the current PTY incarnation, and reads the harness turn edges —
   rejecting if any `turn_started` is unmatched (the **quiescence guard**), so injection only happens
   at quiescence. It captures `sentAt` immediately before the bracketed-paste + Enter write and
   returns the provider-agnostic **agent-turn wait target**, so authors write:
 
   ```ts
-  const sent = await ctx.sendAgentPrompt(agentSessionId, prompt);
+  const sent = await ctx.sendAgentPrompt({ agentSessionId, prompt });
   return suspend(nextState, wait.agentTurn(sent));
   ```
 
@@ -286,10 +288,13 @@ The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
 - **`getConversationHistory(agentSessionId)`** — role-tagged message text from the durable agent's
   current harness conversation. Runtime resolves provider identity internally from captured
   metadata; workflow code never stores or supplies a harness session id.
-- **`runHeadlessAgent({ prompt, harness, model?, effort?, timeoutMs? })` → `{ opId, launch }`.**
-  Launches a trusted, agentic, non-interactive harness run in the worktree cwd and returns
-  immediately. `launch.timeoutMs` is normalized before return so workflows persist a self-contained
-  wait condition. The op result is a normalized output transcript
+- **`runHeadlessAgent({ prompt?, modifiers?, harness, model?, effort?, timeoutMs? })` →
+  `{ opId, launch }`.** Launches a trusted, agentic, non-interactive harness run in the worktree cwd
+  and returns immediately. `launch.timeoutMs` is normalized before return so workflows persist a
+  self-contained wait condition. The prompt input is rendered once before launch and stored as the
+  required, already-rendered `launch.prompt`; reissue after a runtime restart replays that stored
+  text without re-applying modifiers, so recovery cannot reinterpret the operation under later
+  rendering rules. The op result is a normalized output transcript
   (`{ opId, status: 'completed' | 'failed', output?, error?, exitCode? }`), not a conversation
   history. Headless prompts are not sandboxed or forced read-only — read-only/idempotent use is an
   author contract.
@@ -301,6 +306,69 @@ The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
   client event stream.
 - **`setUiFeedback({ kind?, phase?, message? })`** — appends a `ui_feedback` event to the client
   event stream; `kind` defaults to `info` before persistence.
+
+### Prompt input and modifiers
+
+The three prompt-producing verbs — `spawnAgentSession`, `sendAgentPrompt`, and `runHeadlessAgent` — share one input from the SDK: an optional `prompt` plus optional `modifiers`. A modifier is a semantic request, `{ kind: 'skill', name }` or `{ kind: 'command', name }`, where `name` is the author's asset name, never a pre-rendered token. One pure renderer (`renderWorkflowPrompt` in `apps/runtime/src/workflows/prompt-renderer.ts`) validates the input, asks the selected harness definition for each token, and returns the rendered string that the existing interactive or headless transport then submits. Isagi guarantees deterministic validation, rendering, and submission — not asset availability, discovery, stacking capability, or successful native interpretation.
+
+The renderer enforces a fixed set of rules:
+
+- `modifiers` is optional and behaves as an empty array when omitted. Skills stack in caller order with no framework count limit; the workflow author owns whether the selected harness or an installed extension actually stacks them, regardless of native support.
+- A command must be the sole modifier. A command mixed with any skill, or a second command, is rejected.
+- `prompt` is optional. A whitespace-only prompt normalizes to absent, but a non-whitespace prompt is preserved by the renderer, not trimmed or rewritten.
+- An input with no modifiers and no non-whitespace prompt is rejected before any pane, PTY, or headless process is created.
+- Modifier names must be non-empty, contain no whitespace or Unicode control/format characters, and omit a leading `/` or `$` sigil. Other punctuation, including namespaced `plugin:skill` names, is author-controlled and passes through unchanged.
+- Rendered tokens keep caller order and are separated by one ASCII space. A present prompt is appended after one ASCII separator; modifier-only input has no trailing separator.
+
+Preservation is renderer-scoped: the renderer never trims or rewrites prompt characters. Within Isagi, interactive prompt content is normalized only from CRLF to LF before bracketed-paste framing (`writePromptToPty` in `apps/runtime/src/workflows/capabilities.ts`).
+
+Structural validation failures surface as `WorkflowPromptInputError` — a runtime-internal tagged diagnostic, not an SDK export or a value authors branch on. It carries one of three coarse reasons: `invalid_prompt` (a non-string prompt), `invalid_modifier` (a non-array, malformed, mixed, repeated-command, or unsafe-name modifier), or `empty_input` (no effective prompt or modifier). Each verb catches this expected error and rejects, which the engine records as a `failed` run.
+
+Validation and rendering precede operational side effects, but the exact point differs per verb: `spawnAgentSession` and `runHeadlessAgent` render before allocating the pane/PTY or launching the process, while `sendAgentPrompt` first resolves the durable session's harness, then renders before the observer/quiescence baseline, PTY resolution, and write.
+
+Harness token syntax (the renderer tests are the behavioral authority):
+
+| Harness    | `{ kind: 'skill', name }` | `{ kind: 'command', name }` |
+| ---------- | ------------------------- | --------------------------- |
+| `pi`       | `/skill:<name>`           | `/<name>`                   |
+| `opencode` | `/<name>`                 | `/<name>`                   |
+| `claude`   | `/<name>`                 | `/<name>`                   |
+| `codex`    | `$<name>`                 | `$<name>`                   |
+
+Only Pi renders a skill (`/skill:<name>`) differently from a command (`/<name>`). Claude and Codex have no native command or prompt-template concept, so a command modifier deliberately renders the same token as a skill; authors who need first-class command semantics must choose `pi` or `opencode`. This is generic per-harness rendering, not asset-name detection.
+
+Compact call shapes:
+
+```ts
+// plain prompt
+await ctx.sendAgentPrompt({ agentSessionId, prompt: 'Review the diff.' });
+// modifier-only command
+await ctx.spawnAgentSession({
+  harness: 'pi',
+  modifiers: [{ kind: 'command', name: 'isagi-docs' }],
+});
+// stacked skills with a prompt
+await ctx.spawnAgentSession({
+  harness: 'claude',
+  modifiers: [
+    { kind: 'skill', name: 'plan' },
+    { kind: 'skill', name: 'review' },
+  ],
+  prompt: 'Implement phase 2.',
+});
+// object-form send
+await ctx.sendAgentPrompt({
+  agentSessionId,
+  modifiers: [{ kind: 'skill', name: 'review' }],
+  prompt: 'Focus on auth.',
+});
+```
+
+`isagi-docs` is invoked with `{ kind: 'command', name: 'isagi-docs' }` on every harness: the generic command renderer produces `/isagi-docs` for Pi, OpenCode, and Claude, and `$isagi-docs` for Codex. Whether the invocation resolves depends on the corresponding installed asset — the Pi or OpenCode `isagi-docs` router, or the Claude or Codex `isagi-docs` skill — not on any renderer special case or availability check.
+
+Submission is best-effort; native harness behavior stays authoritative once the text is submitted. One case is worth calling out: headless OpenCode's current plain `run` transport may submit slash-looking text as ordinary model prompt text instead of invoking the native command endpoint. Isagi's rendering and submission guarantee still holds even there; the native interpretation does not.
+
+A spawn or send return value is the agent-turn wait target for the supported normal path — an ordinary prompt, one or more skills, or a command router that starts an agent turn. Isagi does not promise a resolvable turn for arbitrary operational or UI-only commands such as a harness's `/help` or `/model`; those are outside the workflow command-modifier contract, and pairing one with `wait.agentTurn` can wait indefinitely.
 
 ### The `wait` and `event` helpers
 

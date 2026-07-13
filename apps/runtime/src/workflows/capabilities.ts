@@ -7,6 +7,7 @@ import type {
   WorkflowHeadlessAgentInput,
   WorkflowHeadlessOp,
   WorkflowLogLevel,
+  WorkflowPromptInput,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Context, Effect, Layer } from 'effect';
 
@@ -28,6 +29,7 @@ import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import { SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
 import { WorkflowEventLedger, workflowEventLedgerWarningPayload } from './event-ledger.service.js';
 import { WorkflowHeadless } from './headless.js';
+import { renderWorkflowPromptEffect } from './prompt-renderer.js';
 import { appendInternalWorkflowLogBestEffort } from './run-failure.js';
 import type { WorkflowRunRow, WorkflowUiFeedback } from './types.js';
 import { hasInFlightTurn } from './wait-conditions.js';
@@ -58,15 +60,15 @@ export interface WorkflowCapabilitiesService {
     readonly run: WorkflowRunRow;
     readonly input: {
       readonly harness: WorkflowAgentHarness;
-      readonly prompt: string;
       readonly model?: string | undefined;
       readonly effort?: string | undefined;
-    };
+    } & WorkflowPromptInput;
   }) => Effect.Effect<WorkflowAgentPromptSend & { readonly paneId: number }, unknown>;
-  readonly sendAgentPrompt: (input: {
-    readonly agentSessionId: number;
-    readonly text: string;
-  }) => Effect.Effect<WorkflowAgentPromptSend, unknown>;
+  readonly sendAgentPrompt: (
+    input: {
+      readonly agentSessionId: number;
+    } & WorkflowPromptInput,
+  ) => Effect.Effect<WorkflowAgentPromptSend, unknown>;
   readonly closePaneForRun: (input: {
     readonly run: WorkflowRunRow;
     readonly paneId: number;
@@ -121,8 +123,7 @@ export const WorkflowCapabilitiesLive = Layer.effect(
           agents,
           pty,
           observer,
-          agentSessionId: input.agentSessionId,
-          text: input.text,
+          promptInput: input,
         }),
       closePaneForRun: (input) =>
         closePane({
@@ -185,25 +186,31 @@ export function sendAgentPrompt(input: {
   readonly agents: AgentSessionServiceShape;
   readonly pty: PtyServiceShape;
   readonly observer: HarnessLedgerObserverService;
-  readonly agentSessionId: number;
-  readonly text: string;
+  readonly promptInput: WorkflowPromptInput & { readonly agentSessionId: number };
 }) {
   return Effect.gen(function* () {
-    yield* waitForObserverInitialization(input.observer, input.agentSessionId);
-    if (yield* isTurnInFlight(input.observer, input.agentSessionId)) {
+    const agentSessionId = input.promptInput.agentSessionId;
+    const session = yield* input.agents.get(agentSessionId);
+    const renderedPrompt = yield* renderWorkflowPromptEffect({
+      harness: session.harness,
+      promptInput: input.promptInput,
+      operation: 'send_agent_prompt',
+    });
+    yield* waitForObserverInitialization(input.observer, agentSessionId);
+    if (yield* isTurnInFlight(input.observer, agentSessionId)) {
       throw new Error(
-        `Cannot send an agent prompt into session ${input.agentSessionId}: a turn is already in flight.`,
+        `Cannot send an agent prompt into session ${agentSessionId}: a turn is already in flight.`,
       );
     }
-    const ptyProcessId = yield* input.agents.activePtyProcessId(input.agentSessionId);
+    const ptyProcessId = yield* input.agents.activePtyProcessId(agentSessionId);
     const sentAt = new Date().toISOString();
     yield* writePromptToPty({
       pty: input.pty,
       ptyProcessId,
-      text: input.text,
+      text: renderedPrompt,
     });
     return {
-      agentSessionId: input.agentSessionId,
+      agentSessionId,
       sentAt,
     };
   });
@@ -234,12 +241,16 @@ function spawnAgentSession(input: {
   readonly observer: HarnessLedgerObserverService;
   readonly input: {
     readonly harness: WorkflowAgentHarness;
-    readonly prompt: string;
     readonly model?: string | undefined;
     readonly effort?: string | undefined;
-  };
+  } & WorkflowPromptInput;
 }) {
   return Effect.gen(function* () {
+    const renderedPrompt = yield* renderWorkflowPromptEffect({
+      harness: input.input.harness,
+      promptInput: input.input,
+      operation: 'spawn_agent_session',
+    });
     if (input.run.worktreeId === null) {
       throw new Error(`Workflow run ${input.run.id} cannot spawn without a worktree_id.`);
     }
@@ -324,7 +335,7 @@ function spawnAgentSession(input: {
       writePromptToPty({
         pty: input.pty,
         ptyProcessId,
-        text: input.input.prompt,
+        text: renderedPrompt,
       }),
     );
     yield* diagnosticPhase(

@@ -28,7 +28,7 @@
   "scripts": {
     "build": "vite build && tsc -b tsconfig.json --force",
     "check": "pnpm typecheck && pnpm build && pnpm pack --dry-run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.type-tests.json"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

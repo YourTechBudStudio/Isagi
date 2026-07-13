@@ -184,6 +184,28 @@ test('the workflow reference preserves non-type-level authoring conventions', ()
   }
 });
 
+test('the workflow reference documents prompt modifiers', () => {
+  const workflows = files.get('references/workflows.md') ?? '';
+  // Section presence and the durable authoring rules, asserted as facts rather than pinned prose.
+  assert.match(workflows, /^## Prompt input and modifiers$/m);
+  assert.match(workflows, /skills stack/i);
+  assert.match(workflows, /command must be the only modifier/i);
+  assert.match(workflows, /does not check that a skill or command exists/i);
+  assert.match(workflows, /Headless OpenCode/);
+  assert.match(workflows, /UI-only commands/i);
+  // Per-harness rendering tokens: Pi's skill form, the shared slash-command form, and Codex's sigil.
+  for (const token of ['/skill:<name>', '/<name>', '$<name>']) {
+    assert.ok(workflows.includes(token), `workflow reference lost the ${token} rendering token`);
+  }
+  for (const harness of ['pi', 'opencode', 'claude', 'codex']) {
+    assert.match(
+      workflows,
+      new RegExp('`' + harness + '`'),
+      `workflow reference never names the ${harness} harness`,
+    );
+  }
+});
+
 /**
  * Field-level drift cannot happen: the schema source is embedded verbatim and the router declares it
  * authoritative over the prose. A new *top-level* section is the gap. The router would keep silently

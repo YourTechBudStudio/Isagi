@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { HarnessDefinition } from '../definition-types.js';
 import { resolveDocsTarget } from '../docs-targets.js';
 import { extractPiHeadlessOutput, piHeadlessSemanticError } from '../headless-output.js';
+import { isagiDocsCommandRouter } from '../isagi-docs.js';
 import { reducePiLifecycle } from '../lifecycle.js';
 import { buildPiHeadlessLaunch, buildPiLaunch } from './adapter.js';
 import { piExtensionSource } from './artifacts.js';
@@ -15,9 +16,7 @@ export const piHarnessDefinition = {
   probe: { command: 'pi', args: ['--version'] },
   docs: {
     explicitInvocationSupported: true,
-    kind: 'skill',
-    invocation: '/skill:isagi-docs',
-    nativePolicy: 'skill_frontmatter',
+    nativePolicy: 'prompt_template',
     implicitInvocationPolicy: 'disabled',
     resolveTarget: (environment) =>
       resolveDocsTarget({
@@ -25,8 +24,22 @@ export const piHarnessDefinition = {
         environment,
         configuredRoot: 'PI_CODING_AGENT_DIR',
         defaultSegments: ['.pi', 'agent'],
+        targetSegments: ['prompts', 'isagi-docs.md'],
+      }),
+    resolveLegacyTargets: (environment) => [
+      resolveDocsTarget({
+        harness: 'pi',
+        environment,
+        configuredRoot: 'PI_CODING_AGENT_DIR',
+        defaultSegments: ['.pi', 'agent'],
         targetSegments: ['skills', 'isagi-docs'],
       }),
+    ],
+    project: ({ dataRoot }) => isagiDocsCommandRouter(dataRoot),
+  },
+  prompt: {
+    renderSkillToken: (name) => `/skill:${name}`,
+    renderCommandToken: (name) => `/${name}`,
   },
   launch: {
     interactive: (input, dependencies) =>

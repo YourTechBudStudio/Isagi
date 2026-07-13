@@ -77,6 +77,15 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   return files;
 }
 
+export function isagiDocsCommandRouter(dataRoot: string): ReadonlyMap<string, string> {
+  return new Map([
+    [
+      '',
+      `# Isagi Docs\n\nRead ${resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md')} and follow its references for the user's request.\n\n$ARGUMENTS\n`,
+    ],
+  ]);
+}
+
 function render(
   name: keyof typeof isagiDocsContentSources,
   substitutions: ReadonlyMap<string, string>,

@@ -21,6 +21,8 @@ test('harness definitions are exhaustive and expose real capabilities', () => {
     assert.equal(typeof definition.lifecycle.reduce, 'function');
     assert.equal(typeof definition.conversation.read, 'function');
     assert.equal(typeof definition.observation.runtimeArtifacts, 'function');
+    assert.equal(typeof definition.prompt.renderSkillToken, 'function');
+    assert.equal(typeof definition.prompt.renderCommandToken, 'function');
   }
 
   assert.equal(
@@ -30,12 +32,28 @@ test('harness definitions are exhaustive and expose real capabilities', () => {
   assert.equal(harnessDefinition('pi').observation.locateNativeSources, undefined);
 });
 
+test('harness definitions own generic workflow modifier token syntax', () => {
+  const cases = [
+    ['pi', '/skill:isagi-docs', '/isagi-docs'],
+    ['opencode', '/isagi-docs', '/isagi-docs'],
+    ['claude', '/isagi-docs', '/isagi-docs'],
+    ['codex', '$isagi-docs', '$isagi-docs'],
+  ] as const;
+  for (const [harness, skillToken, commandToken] of cases) {
+    assert.equal(harnessDefinition(harness).prompt.renderSkillToken('isagi-docs'), skillToken);
+    assert.equal(harnessDefinition(harness).prompt.renderCommandToken('isagi-docs'), commandToken);
+  }
+});
+
 test('Docs integrations resolve documented native targets without manufacturing home paths', () => {
   const home = '/Users/dev person';
   assert.deepEqual(harnessDefinition('pi').docs.resolveTarget({ HOME: home }), {
     _tag: 'Resolved',
-    path: '/Users/dev person/.pi/agent/skills/isagi-docs',
+    path: '/Users/dev person/.pi/agent/prompts/isagi-docs.md',
   });
+  assert.deepEqual(harnessDefinition('pi').docs.resolveLegacyTargets({ HOME: home }), [
+    { _tag: 'Resolved', path: '/Users/dev person/.pi/agent/skills/isagi-docs' },
+  ]);
   assert.deepEqual(
     harnessDefinition('claude').docs.resolveTarget({
       HOME: home,

@@ -38,13 +38,7 @@ export function workflowContext(input: {
           input: session,
         }),
       ),
-    sendAgentPrompt: (agentSessionId, text) =>
-      runEffect(
-        input.capabilities.sendAgentPrompt({
-          agentSessionId,
-          text,
-        }),
-      ),
+    sendAgentPrompt: (prompt) => runEffect(input.capabilities.sendAgentPrompt(prompt)),
     closePane: (paneId) =>
       runEffect(
         input.capabilities.closePaneForRun({

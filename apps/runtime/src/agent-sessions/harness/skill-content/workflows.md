@@ -43,6 +43,51 @@ type State = {
 - Keep provider and harness-session identity out of workflow state. Durable `agentSessionId` and `paneId` values are sufficient.
 - Close panes created by the workflow when they are no longer needed. Never close the pane from which the workflow was launched.
 
+## Prompt input and modifiers
+
+Every agent-input verb — `spawnAgentSession`, `sendAgentPrompt`, and `runHeadlessAgent` — accepts an optional `prompt` and optional `modifiers`. Treat the installed `dist/index.d.ts` as the authority for their exact shapes; this section covers only semantics and per-harness rendering.
+
+- A modifier is a semantic request: `{ kind: 'skill', name }` or `{ kind: 'command', name }`. Provide a plain asset name, not a rendered token — no leading `/` or `$`, and no whitespace or Unicode control or format characters. Isagi renders the harness-native token for you.
+- Skills stack in caller order with no count limit. Whether a harness actually applies several skills at once is the harness's behavior, not Isagi's guarantee; stacking beyond a harness's native support is your choice as the author.
+- A command must be the only modifier. You cannot stack commands or mix a command with skills.
+- `prompt` is optional. A whitespace-only prompt is treated as absent; a non-whitespace prompt is preserved as-is by the renderer (not trimmed), though interactive submission normalizes CRLF line endings to LF. An input with no modifier and no non-whitespace prompt is rejected and fails the step — before `spawnAgentSession` or `runHeadlessAgent` create any resources, and before `sendAgentPrompt` writes to its existing session.
+- Rendered tokens keep your order, separated by one space, and a present prompt is appended after one space.
+
+Isagi guarantees deterministic rendering and submission. It does not check that a skill or command exists, detect name collisions, or verify that the harness will interpret it. Availability and native interpretation remain the harness's responsibility.
+
+| Harness    | `{ kind: 'skill', name }` | `{ kind: 'command', name }` |
+| ---------- | ------------------------- | --------------------------- |
+| `pi`       | `/skill:<name>`           | `/<name>`                   |
+| `opencode` | `/<name>`                 | `/<name>`                   |
+| `claude`   | `/<name>`                 | `/<name>`                   |
+| `codex`    | `$<name>`                 | `$<name>`                   |
+
+Pi is the only harness that renders a skill differently from a command. Claude and Codex have no native command concept, so a command modifier renders the same token as a skill on those harnesses; choose `pi` or `opencode` when you need first-class command syntax. This is generic per-harness rendering, not detection of a specific name.
+
+```ts
+// plain prompt
+await ctx.sendAgentPrompt({ agentSessionId, prompt: "Review the diff." });
+// modifier-only command
+await ctx.spawnAgentSession({ harness: "pi", modifiers: [{ kind: "command", name: "isagi-docs" }] });
+// stacked skills with a prompt
+await ctx.spawnAgentSession({
+  harness: "claude",
+  modifiers: [
+    { kind: "skill", name: "plan" },
+    { kind: "skill", name: "review" },
+  ],
+  prompt: "Implement phase 2.",
+});
+// object-form send
+await ctx.sendAgentPrompt({
+  agentSessionId,
+  modifiers: [{ kind: "skill", name: "review" }],
+  prompt: "Focus on auth.",
+});
+```
+
+Use command modifiers only for harness-native prompt templates or commands you expect to start an agent turn, and pass the spawn or send result to `wait.agentTurn` as usual. UI-only commands such as `/help`, `/settings`, or `/model` do not start a turn and are outside this contract; do not wait on one. Headless OpenCode is a further caveat: its plain `run` transport may treat slash-looking text as ordinary model prompt text rather than invoking a native command, though Isagi still renders and submits the text you asked for.
+
 ## Conversations and judgments
 
 - Treat conversation history as role-tagged messages. A turn may contain several assistant messages; collect the latest complete assistant turn instead of assuming the final message is the full reply.

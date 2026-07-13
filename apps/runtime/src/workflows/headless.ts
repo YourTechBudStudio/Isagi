@@ -17,6 +17,7 @@ import { HarnessControlPlane, type HarnessLaunchBlocked } from '../harness-contr
 import { PtyService } from '../pty-processes/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import { renderWorkflowPromptEffect, type WorkflowPromptInputError } from './prompt-renderer.js';
 
 export const defaultHeadlessTimeoutMs = 10 * 60_000;
 const timeoutTerminationGraceMs = 1_000;
@@ -28,7 +29,7 @@ export interface WorkflowHeadlessService {
     readonly prompt: WorkflowHeadlessAgentInput;
   }) => Effect.Effect<
     { readonly opId: string; readonly launch: WorkflowHeadlessLaunch },
-    PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked
+    PtyLaunchError | HarnessAdapterError | HarnessLaunchBlocked | WorkflowPromptInputError
   >;
   readonly reissue: (input: {
     readonly runId: number;
@@ -284,7 +285,12 @@ export const WorkflowHeadlessLive = Layer.scoped(
     const service = {
       runHeadlessAgent: (input) =>
         Effect.gen(function* () {
-          const launch = normalizeHeadlessLaunch(input.prompt);
+          const renderedPrompt = yield* renderWorkflowPromptEffect({
+            harness: input.prompt.harness,
+            promptInput: input.prompt,
+            operation: 'run_headless_agent',
+          });
+          const launch = normalizeHeadlessLaunch(input.prompt, renderedPrompt);
           const opId = `headless:${randomUUID()}`;
           yield* launchOp({
             runId: input.runId,
@@ -341,9 +347,12 @@ export const WorkflowHeadlessLive = Layer.scoped(
   }),
 );
 
-export function normalizeHeadlessLaunch(input: WorkflowHeadlessAgentInput): WorkflowHeadlessLaunch {
+export function normalizeHeadlessLaunch(
+  input: WorkflowHeadlessAgentInput,
+  renderedPrompt: string,
+): WorkflowHeadlessLaunch {
   return {
-    prompt: input.prompt,
+    prompt: renderedPrompt,
     harness: input.harness,
     model: input.model,
     effort: input.effort,
