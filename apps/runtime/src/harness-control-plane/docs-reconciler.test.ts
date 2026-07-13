@@ -35,12 +35,6 @@ test('Docs installation follows intent despite missing executables and replaces 
           _tag: 'Available' as const,
           values: { HOME: home, CODEX_HOME: join(home, '.codex') },
         },
-        node: { _tag: 'Missing' as const, command: 'node' },
-        packageManagers: {
-          pnpm: { _tag: 'Missing' as const, command: 'pnpm' },
-          npm: { _tag: 'Missing' as const, command: 'npm' },
-          bun: { _tag: 'Missing' as const, command: 'bun' },
-        },
         harnesses: probes,
       },
     };
@@ -78,12 +72,6 @@ test('failed environment capture blocks every requested publication', async () =
             _tag: 'ProbeFailed',
             values: { HOME: join(root, 'fallback') },
             diagnostic: 'capture failed',
-          },
-          node: { _tag: 'Missing', command: 'node' },
-          packageManagers: {
-            pnpm: { _tag: 'Missing', command: 'pnpm' },
-            npm: { _tag: 'Missing', command: 'npm' },
-            bun: { _tag: 'Missing', command: 'bun' },
           },
           harnesses: probes,
         },

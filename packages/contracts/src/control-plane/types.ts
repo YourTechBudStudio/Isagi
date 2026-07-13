@@ -84,11 +84,6 @@ export const controlPlaneSnapshotSchema = Schema.Struct({
       status: Schema.Literal('ready'),
       generation: Schema.Number.pipe(Schema.int(), Schema.positive()),
       environment: Schema.Literal('trusted', 'probe_failed'),
-      node: executableAvailabilitySchema,
-      packageManagers: Schema.Record({
-        key: Schema.Literal('pnpm', 'npm', 'bun'),
-        value: executableAvailabilitySchema,
-      }),
     }),
   ),
   harnesses: Schema.Array(harnessControlPlaneEntrySchema),

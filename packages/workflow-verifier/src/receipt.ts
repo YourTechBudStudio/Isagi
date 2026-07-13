@@ -13,25 +13,11 @@ export const workflowBuildCommand =
 export const workflowVerifyCommand = 'isagi-workflow-verify --workflow .' as const;
 export const verifierReservedPrefix = '.isagi-workflow-verifier-' as const;
 
-export type PackageManagerName = 'pnpm' | 'npm' | 'bun';
-
-export const workflowLockfileByPackageManager = {
-  pnpm: 'pnpm-lock.yaml',
-  npm: 'package-lock.json',
-  bun: 'bun.lock',
-} as const satisfies Record<PackageManagerName, string>;
-export const supportedWorkflowLockfiles = Object.values(workflowLockfileByPackageManager);
-export const unsupportedWorkflowLockfiles = ['bun.lockb'] as const;
-
 export interface WorkflowBuildManifest {
   readonly manifestVersion: typeof workflowBuildManifestVersion;
   readonly workflowContractVersion: typeof supportedWorkflowContractVersion;
   readonly sdk: { readonly name: typeof workflowSdkPackage; readonly version: string };
   readonly verifier: { readonly name: typeof workflowVerifierPackage; readonly version: string };
-  readonly toolchain: {
-    readonly nodeVersion: string;
-    readonly packageManager: { readonly name: PackageManagerName; readonly version: string };
-  };
   readonly source: { readonly sha256: string };
   readonly artifact: { readonly entry: 'dist/index.js'; readonly sha256: string };
 }
@@ -57,9 +43,6 @@ export function isWorkflowSourcePath(path: string): boolean {
   return (
     normalized === 'package.json' ||
     normalized === 'tsconfig.json' ||
-    supportedWorkflowLockfiles.includes(
-      normalized as (typeof supportedWorkflowLockfiles)[number],
-    ) ||
     normalized.startsWith('src/') ||
     normalized.startsWith('tests/')
   );
@@ -96,15 +79,7 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
   if (!isRecord(input)) throw new Error('Build manifest must be an object.');
   assertExactKeys(
     input,
-    [
-      'manifestVersion',
-      'workflowContractVersion',
-      'sdk',
-      'verifier',
-      'toolchain',
-      'source',
-      'artifact',
-    ],
+    ['manifestVersion', 'workflowContractVersion', 'sdk', 'verifier', 'source', 'artifact'],
     'manifest',
   );
   if (input.manifestVersion !== workflowBuildManifestVersion)
@@ -117,22 +92,6 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
     );
   const sdk = packageIdentity(input.sdk, 'sdk', workflowSdkPackage);
   const verifier = packageIdentity(input.verifier, 'verifier', workflowVerifierPackage);
-  if (!isRecord(input.toolchain)) throw new Error('toolchain must be an object.');
-  assertExactKeys(input.toolchain, ['nodeVersion', 'packageManager'], 'toolchain');
-  if (typeof input.toolchain.nodeVersion !== 'string' || !input.toolchain.nodeVersion)
-    throw new Error('toolchain.nodeVersion must be a non-empty string.');
-  if (!isRecord(input.toolchain.packageManager))
-    throw new Error('toolchain.packageManager must be an object.');
-  assertExactKeys(input.toolchain.packageManager, ['name', 'version'], 'toolchain.packageManager');
-  const name = input.toolchain.packageManager.name;
-  if (name !== 'pnpm' && name !== 'npm' && name !== 'bun')
-    throw new Error(
-      `toolchain.packageManager.name must be pnpm, npm, or bun; found ${JSON.stringify(name)}.`,
-    );
-  const managerVersion = requiredString(
-    input.toolchain.packageManager.version,
-    'toolchain.packageManager.version',
-  );
   const source = digestObject(input.source, 'source');
   if (!isRecord(input.artifact)) throw new Error('artifact must be an object.');
   assertExactKeys(input.artifact, ['entry', 'sha256'], 'artifact');
@@ -146,10 +105,6 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
     workflowContractVersion: supportedWorkflowContractVersion,
     sdk,
     verifier,
-    toolchain: {
-      nodeVersion: input.toolchain.nodeVersion,
-      packageManager: { name, version: managerVersion },
-    },
     source,
     artifact: { entry: 'dist/index.js', sha256: artifactHash },
   };

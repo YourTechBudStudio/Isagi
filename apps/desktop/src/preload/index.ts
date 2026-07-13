@@ -16,8 +16,8 @@ contextBridge.exposeInMainWorld('isagi', {
   getRuntimeUrl: () => ipcRenderer.invoke('isagi:runtime-url') as Promise<string>,
   setHostChromeVisible: (visible: boolean) =>
     ipcRenderer.invoke('isagi:host-chrome-visible', visible) as Promise<void>,
-  // The startup gate's terminal error surfaces (missing toolchain, invalid
-  // config) offer an honest "Quit Isagi"; a renderer cannot reliably close its
+  // The startup gate's terminal invalid-config surface offers an honest
+  // "Quit Isagi"; a renderer cannot reliably close its
   // own window, so it asks the host to quit.
   quitApp: () => ipcRenderer.invoke('isagi:quit-app') as Promise<void>,
 });

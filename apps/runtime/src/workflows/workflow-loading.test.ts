@@ -186,7 +186,6 @@ async function writePackage(root: string, artifactText: string) {
     {
       name: 'fixture-workflow',
       private: true,
-      packageManager: 'pnpm@11.4.0',
       dependencies: { [workflowSdkPackage]: '0.0.1' },
       devDependencies: { [workflowVerifierPackage]: '0.0.1' },
     },
@@ -198,7 +197,6 @@ async function writePackage(root: string, artifactText: string) {
     { path: 'tests/index.test.ts', bytes: Buffer.from('// test\n') },
     { path: 'package.json', bytes: Buffer.from(packageJson) },
     { path: 'tsconfig.json', bytes: Buffer.from('{}\n') },
-    { path: 'pnpm-lock.yaml', bytes: Buffer.from('lockfileVersion: 9.0\n') },
   ];
   await mkdir(join(root, 'src'), { recursive: true });
   await mkdir(join(root, 'tests'), { recursive: true });
@@ -212,10 +210,6 @@ async function writePackage(root: string, artifactText: string) {
       workflowContractVersion: 1,
       sdk: { name: workflowSdkPackage, version: '0.0.1' },
       verifier: { name: workflowVerifierPackage, version: '0.0.1' },
-      toolchain: {
-        nodeVersion: process.versions.node,
-        packageManager: { name: 'pnpm', version: '11.4.0' },
-      },
       source: { sha256: hashWorkflowInputs(inputs) },
       artifact: { entry: 'dist/index.js', sha256: hashArtifact(Buffer.from(artifactText)) },
     }),

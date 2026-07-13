@@ -2,10 +2,7 @@ import { motion } from 'motion/react';
 import { useState } from 'react';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
-import {
-  useControlPlaneQuery,
-  useRefreshInventoryMutation,
-} from '../../lib/control-plane/queries.js';
+import { useControlPlaneQuery } from '../../lib/control-plane/queries.js';
 import { DURATION, EASE_EXPO } from '../../lib/motion.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { WorkspacePage } from '../workspace/WorkspacePage.js';
@@ -15,8 +12,7 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
 /**
  * The single route into the workspace. It renders `WorkspacePage` — and therefore
  * mounts every workspace hook, subscription, and the command palette — only once
- * the runtime's control plane reports a supported toolchain and completed
- * onboarding.
+ * the runtime's control plane reports completed onboarding.
  *
  * Everything before that is one persistent `BootSurface`: the gate maps its
  * query/snapshot state to a `BootView` and lets the surface morph between states
@@ -30,7 +26,6 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
  */
 export function StartupGate() {
   const query = useControlPlaneQuery();
-  const refreshInventory = useRefreshInventoryMutation();
   const [onboardingHeld, setOnboardingHeld] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
@@ -60,14 +55,7 @@ export function StartupGate() {
       ? { kind: 'environment_pending' }
       : gate?.kind === 'config_invalid'
         ? { kind: 'config_invalid', diagnostic: gate.diagnostic }
-        : gate?.kind === 'toolchain_blocked'
-          ? {
-              kind: 'toolchain_blocked',
-              gate,
-              checking: refreshInventory.isPending,
-              onCheckAgain: () => refreshInventory.mutate(),
-            }
-          : null; // 'ready' — onboarding is handled above.
+        : null; // 'ready' — onboarding is handled above.
 
   if (view) {
     return <BootSurface view={view} />;

@@ -13,7 +13,6 @@ import {
   supportedWorkflowContractVersion,
   workflowSdkPackage,
   workflowVerifierPackage,
-  supportedWorkflowLockfiles,
   type HashInput,
   type WorkflowBuildManifest,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
@@ -184,8 +183,6 @@ async function validatePackageMetadata(
   const devDependencies = record(packageJson.devDependencies);
   const sdkVersion = dependencies[workflowSdkPackage];
   const verifierVersion = devDependencies[workflowVerifierPackage];
-  const packageManager = packageJson.packageManager;
-  const expectedManagerPrefix = `${manifest.toolchain.packageManager.name}@`;
   requireRecordedPin('dependencies', workflowSdkPackage, sdkVersion, manifest.sdk.version, input);
   requireRecordedPin(
     'devDependencies',
@@ -194,24 +191,6 @@ async function validatePackageMetadata(
     manifest.verifier.version,
     input,
   );
-  if (typeof packageManager !== 'string' || !packageManager.startsWith(expectedManagerPrefix)) {
-    throw failure(
-      'invalid_package',
-      input,
-      `packageManager must declare ${manifest.toolchain.packageManager.name}@<exact-version>.`,
-    );
-  }
-  const managerVersion = packageManager.slice(expectedManagerPrefix.length);
-  if (
-    !exactSemver.test(managerVersion) ||
-    managerVersion !== manifest.toolchain.packageManager.version
-  ) {
-    throw failure(
-      'invalid_package',
-      input,
-      `packageManager version ${managerVersion || '(missing)'} does not match the recorded ${manifest.toolchain.packageManager.version}.`,
-    );
-  }
 }
 
 function requireRecordedPin(
@@ -241,16 +220,13 @@ async function readSourceInputs(root: string, input: { readonly workflowKey: str
   const entries: HashInput[] = [];
   await visit(root, 'src', entries, input);
   await visit(root, 'tests', entries, input);
-  let lockfiles = 0;
-  for (const name of ['package.json', 'tsconfig.json', ...supportedWorkflowLockfiles]) {
+  for (const name of ['package.json', 'tsconfig.json']) {
     const path = join(root, name);
     try {
       const stat = await lstat(path);
       if (stat.isSymbolicLink() || !stat.isFile())
         throw new Error(`${name} is not a regular file.`);
       entries.push({ path: name, bytes: await readFile(path) });
-      if (supportedWorkflowLockfiles.includes(name as (typeof supportedWorkflowLockfiles)[number]))
-        lockfiles += 1;
     } catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw failure(
@@ -261,13 +237,6 @@ async function readSourceInputs(root: string, input: { readonly workflowKey: str
         );
       }
     }
-  }
-  if (lockfiles !== 1) {
-    throw failure(
-      'invalid_package',
-      input,
-      'Workflow package must contain exactly one supported lockfile.',
-    );
   }
   return entries.filter((entry) => isWorkflowSourcePath(entry.path));
 }

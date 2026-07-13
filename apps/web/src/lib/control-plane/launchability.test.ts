@@ -26,8 +26,6 @@ function snapshot(overrides: Partial<ControlPlaneSnapshot> = {}): ControlPlaneSn
       status: 'ready',
       generation: 1,
       environment: 'trusted',
-      node: 'available',
-      packageManagers: { pnpm: 'available', npm: 'missing', bun: 'missing' },
     },
     harnesses: [
       harnessEntry('pi', { status: 'launchable' }),
@@ -51,8 +49,6 @@ function readyInventory(overrides: Partial<ReadyInventory>): ReadyInventory {
     status: 'ready',
     generation: 1,
     environment: 'trusted',
-    node: 'available',
-    packageManagers: { pnpm: 'available', npm: 'missing', bun: 'missing' },
     ...overrides,
   };
 }
@@ -64,39 +60,18 @@ test('deriveStartupGate routes inventory pending before every other state', () =
   );
 });
 
-test('deriveStartupGate routes invalid config before the toolchain check', () => {
+test('deriveStartupGate routes invalid config before onboarding', () => {
   const gate = deriveStartupGate(
     snapshot({
       configStatus: 'invalid',
       configDiagnostic: 'harnesses.pi.enabled must be a boolean',
       onboardingComplete: false,
-      inventory: readyInventory({
-        node: 'missing',
-        packageManagers: { pnpm: 'missing', npm: 'missing', bun: 'missing' },
-      }),
     }),
   );
   assert.deepEqual(gate, {
     kind: 'config_invalid',
     diagnostic: 'harnesses.pi.enabled must be a boolean',
   });
-});
-
-test('deriveStartupGate blocks when external Node is not available', () => {
-  const gate = deriveStartupGate(snapshot({ inventory: readyInventory({ node: 'incompatible' }) }));
-  assert.equal(gate.kind, 'toolchain_blocked');
-  assert.equal(gate.kind === 'toolchain_blocked' && gate.node, 'incompatible');
-});
-
-test('deriveStartupGate blocks when no package manager is available', () => {
-  const gate = deriveStartupGate(
-    snapshot({
-      inventory: readyInventory({
-        packageManagers: { pnpm: 'missing', npm: 'missing', bun: 'probe_failed' },
-      }),
-    }),
-  );
-  assert.equal(gate.kind, 'toolchain_blocked');
 });
 
 test('deriveStartupGate does not treat a failed environment capture as a hard block', () => {

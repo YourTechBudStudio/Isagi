@@ -10,8 +10,6 @@ import type { DocsReconciliationAction, DocsReconciliationReason } from '@isagi/
 // the whisper `aside`. Blocker titles carry their own weight; the old eyebrows are
 // gone.
 
-type ExecutableAvailability = 'available' | 'missing' | 'incompatible' | 'probe_failed';
-
 export const startupCopy = {
   connecting: {
     status: 'Reaching the runtime…',
@@ -35,23 +33,6 @@ export const startupCopy = {
     body: "The harnesses section of Isagi's global config.yaml didn't parse. Fix it and restart Isagi — the runtime reads this once, at startup.",
     diagnosticLabel: 'config.yaml',
     quit: 'Quit Isagi',
-  },
-  toolchain: {
-    title: 'Isagi needs an external toolchain.',
-    body: 'Workflows are authored and verified with your own Node and package manager. Install what is missing, then check again.',
-    nodeLabel: 'Node 22 or newer',
-    environmentNote:
-      'Isagi could not read your shell environment, so these results may be unreliable.',
-    checkAgain: 'Check again',
-    checking: 'Checking…',
-    quit: 'Quit Isagi',
-    aside: '// Isagi runs in your login shell; a fresh install shows up on the next check',
-    availabilityLabel: {
-      available: 'ready',
-      missing: 'not found',
-      incompatible: 'wrong version',
-      probe_failed: "couldn't check",
-    } satisfies Record<ExecutableAvailability, string>,
   },
 } as const;
 

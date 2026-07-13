@@ -31,6 +31,7 @@ test('owns source inclusion and reserved path policy', () => {
   assert.equal(isWorkflowSourcePath('src/data.txt'), true);
   assert.equal(isWorkflowSourcePath('tests/case.ts'), true);
   assert.equal(isWorkflowSourcePath('vite.config.ts'), false);
+  assert.equal(isWorkflowSourcePath('pnpm-lock.yaml'), false);
   assert.equal(isWorkflowSourcePath('.isagi-workflow-verifier-lock'), false);
   assert.throws(() => isWorkflowSourcePath('../escape'));
 });
@@ -41,7 +42,6 @@ test('parses and canonically serializes manifest format 1', () => {
     workflowContractVersion: 1,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.0.1' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.0.1' },
-    toolchain: { nodeVersion: '22.22.3', packageManager: { name: 'pnpm', version: '11.4.0' } },
     source: { sha256: 'a'.repeat(64) },
     artifact: { entry: 'dist/index.js', sha256: 'b'.repeat(64) },
   };

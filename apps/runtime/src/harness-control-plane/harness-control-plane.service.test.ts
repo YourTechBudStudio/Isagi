@@ -395,8 +395,6 @@ function ready(
       environment: environmentFailed
         ? { _tag: 'ProbeFailed', values: { HOME: '/fallback' }, diagnostic: 'capture failed' }
         : { _tag: 'Available', values: { HOME: '/home/test' } },
-      node: available,
-      packageManagers: { pnpm: available, npm: missing, bun: missing },
       harnesses: { pi, opencode: missing, claude: missing, codex: missing },
     },
   };

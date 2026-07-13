@@ -17,7 +17,6 @@ import { UserShell, type UserShellCommandResult } from './user-shell.service.js'
 const probeTimeoutMs = 5_000;
 const probeOutputLimitBytes = 16 * 1024;
 const environmentOutputLimitBytes = 128 * 1024;
-const nodeIdentityPrefix = 'ISAGI_NODE_IDENTITY=';
 
 export interface HostInventoryService {
   readonly getCached: Effect.Effect<HostInventoryState>;
@@ -102,13 +101,9 @@ export const HostInventoryLive = Layer.scoped(
 
 function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
   return Effect.gen(function* () {
-    const environment = yield* captureApprovedEnvironment(shell);
-    const node = yield* probeNode(shell);
-    const [pnpm, npm, bun, pi, opencode, claude, codex] = yield* Effect.all(
+    const [environment, pi, opencode, claude, codex] = yield* Effect.all(
       [
-        probeVersion(shell, { command: 'pnpm', args: ['--version'] }),
-        probeVersion(shell, { command: 'npm', args: ['--version'] }),
-        probeVersion(shell, { command: 'bun', args: ['--version'] }),
+        captureApprovedEnvironment(shell),
         probeVersion(shell, harnessDefinitions.pi.probe),
         probeVersion(shell, harnessDefinitions.opencode.probe),
         probeVersion(shell, harnessDefinitions.claude.probe),
@@ -118,8 +113,6 @@ function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
     );
     return {
       environment,
-      node,
-      packageManagers: { pnpm, npm, bun },
       harnesses: { pi, opencode, claude, codex },
     } satisfies HostInventorySnapshot;
   });
@@ -148,48 +141,6 @@ function captureApprovedEnvironment(
         return { _tag: 'Available', values: approvedEnvironment(parseEnvironment(result.stdout)) };
       }),
     );
-}
-
-function probeNode(shell: Context.Tag.Service<typeof UserShell>) {
-  const source = `console.log(${JSON.stringify(nodeIdentityPrefix)} + JSON.stringify({ version: process.versions.node, electron: process.versions.electron ?? null, execPath: process.execPath }))`;
-  return runProbe(shell, { command: 'node', args: ['-e', source] }).pipe(
-    Effect.map((result) => {
-      const failure = probeFailure('node', result);
-      if (failure) return failure;
-      const identityLine = result.stdout
-        .split(/\r?\n/)
-        .find((line) => line.startsWith(nodeIdentityPrefix));
-      if (!identityLine) return malformedProbe('node', 'Node identity marker was not returned.');
-      try {
-        const identity = JSON.parse(identityLine.slice(nodeIdentityPrefix.length)) as {
-          readonly version?: unknown;
-          readonly electron?: unknown;
-          readonly execPath?: unknown;
-        };
-        if (typeof identity.version !== 'string' || identity.electron !== null) {
-          return malformedProbe('node', 'The probed command is not an external Node.js process.');
-        }
-        const major = Number.parseInt(identity.version.split('.')[0] ?? '', 10);
-        if (!Number.isInteger(major)) return malformedProbe('node', 'Node version was malformed.');
-        if (major < 22) {
-          return {
-            _tag: 'Incompatible',
-            command: 'node',
-            version: identity.version,
-            minimumVersion: '22.0.0',
-          } satisfies ExecutableProbeResult;
-        }
-        return {
-          _tag: 'Available',
-          command: 'node',
-          version: identity.version,
-          ...(typeof identity.execPath === 'string' ? { resolvedPath: identity.execPath } : {}),
-        } satisfies ExecutableProbeResult;
-      } catch {
-        return malformedProbe('node', 'Node identity output was malformed.');
-      }
-    }),
-  );
 }
 
 function probeVersion(shell: Context.Tag.Service<typeof UserShell>, probe: HarnessProbeDefinition) {

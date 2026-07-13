@@ -24,9 +24,8 @@ const validArtifact = `export default {
 };
 `;
 
-// The canonical scaffold is the single source of truth. It ships without a lockfile, node_modules,
-// or dist (a pre-install scaffold), so the copy adds the test-only lockfile and a prebuilt artifact
-// the way an author's build would.
+// The canonical scaffold is the single source of truth. It ships without node_modules or dist,
+// so the copy adds a prebuilt artifact the way an author's build would.
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'isagi-verifier-test-'));
   await cp(canonicalFixture, root, {
@@ -36,7 +35,6 @@ async function fixture(): Promise<string> {
       return top !== 'node_modules' && top !== 'dist';
     },
   });
-  await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
   await mkdir(join(root, 'dist'));
   await writeFile(join(root, 'dist/index.js'), validArtifact);
   return root;
@@ -65,7 +63,6 @@ test('verifies a workflow and writes a deterministic receipt', async () => {
   assert.equal(manifest.sdk.version, workflowSdkVersion);
   assert.equal(manifest.verifier.name, workflowVerifierPackage);
   assert.equal(manifest.verifier.version, workflowVerifierVersion);
-  assert.equal(manifest.toolchain.packageManager.name, 'pnpm');
   const first = await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8');
   await verifyWorkflow(root);
   assert.equal(await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'), first);
@@ -98,20 +95,15 @@ test('requires src/ and a prebuilt dist/index.js with actionable messages', asyn
   );
 });
 
-test('states the packageManager rule with the found declaration', async () => {
-  const missing = await fixture();
-  await editPackageJson(missing, (pkg) => {
+test('does not require package-manager metadata or a lockfile', async () => {
+  const root = await fixture();
+  await editPackageJson(root, (pkg) => {
     delete pkg.packageManager;
   });
-  await assert.rejects(
-    verifyWorkflow(missing),
-    /"packageManager" as an exact pnpm@, npm@, or bun@/,
+  await verifyWorkflow(root);
+  parseWorkflowBuildManifestJson(
+    await readFile(join(root, 'dist/isagi-workflow-build.json'), 'utf8'),
   );
-  const inexact = await fixture();
-  await editPackageJson(inexact, (pkg) => {
-    pkg.packageManager = 'pnpm@^11';
-  });
-  await assert.rejects(verifyWorkflow(inexact), /Found "pnpm@\^11"/);
 });
 
 test('states the pin rules with expected and found versions', async () => {
@@ -123,18 +115,6 @@ test('states the pin rules with expected and found versions', async () => {
     verifyWorkflow(root),
     new RegExp(`must be exactly "${workflowSdkVersion}"; found "\\^0\\.0\\.1"`),
   );
-});
-
-test('requires exactly one lockfile matching the declared manager', async () => {
-  const extra = await fixture();
-  await writeFile(join(extra, 'package-lock.json'), '{}');
-  await assert.rejects(
-    verifyWorkflow(extra),
-    /Exactly one pnpm-lock\.yaml lockfile is required.*found pnpm-lock\.yaml, package-lock\.json/,
-  );
-  const legacy = await fixture();
-  await writeFile(join(legacy, 'bun.lockb'), 'legacy');
-  await assert.rejects(verifyWorkflow(legacy), /bun\.lockb is the legacy binary format/);
 });
 
 test('rejects symlinked sources and states the rule', async () => {

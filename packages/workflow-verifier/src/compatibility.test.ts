@@ -40,7 +40,7 @@ test('the receipt pair matches the published SDK and verifier package manifests'
   assert.equal(verifierPkg.peerDependencies?.[workflowSdkPackage], workflowSdkVersion);
 });
 
-test('the canonical scaffold pins the toolchain and commands exactly', () => {
+test('the canonical scaffold pins the workflow dependencies and commands exactly', () => {
   const pkg = readJson(resolve(fixtureRoot, 'package.json'));
   assert.equal(pkg.dependencies?.[workflowSdkPackage], workflowSdkVersion);
   assert.equal(pkg.devDependencies?.[workflowVerifierPackage], workflowVerifierVersion);

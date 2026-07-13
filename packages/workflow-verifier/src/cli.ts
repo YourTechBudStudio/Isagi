@@ -12,24 +12,17 @@ import {
   isWorkflowSourcePath,
   serializeWorkflowBuildManifest,
   supportedWorkflowContractVersion,
-  supportedWorkflowLockfiles,
-  unsupportedWorkflowLockfiles,
   workflowBuildManifestVersion,
-  workflowLockfileByPackageManager,
   workflowSdkPackage,
   workflowSdkVersion,
   workflowVerifierPackage,
   workflowVerifierVersion,
   type HashInput,
-  type PackageManagerName,
   type WorkflowBuildManifest,
 } from './receipt.js';
 
 const outputLimit = 128 * 1024;
 const subprocessTimeoutMs = 120_000;
-const exactVersion =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-
 export interface ProcessSpec {
   readonly command: string;
   readonly args: readonly string[];
@@ -138,10 +131,8 @@ export async function verifyWorkflow(
 ): Promise<void> {
   const root = resolve(workflowArgument);
   const packageJson = await readPackageJson(root);
-  const declared = readPackageManagerDeclaration(packageJson);
   requirePins(packageJson);
-  await requireLockfile(root, declared.name);
-  const sourceHash = hashWorkflowInputs(await readSourceInputs(root, declared.name));
+  const sourceHash = hashWorkflowInputs(await readSourceInputs(root));
   const artifactPath = join(root, 'dist', 'index.js');
   const artifactBytes = await readArtifact(artifactPath);
   await validateArtifact(root, artifactPath, runner);
@@ -150,10 +141,6 @@ export async function verifyWorkflow(
     workflowContractVersion: supportedWorkflowContractVersion,
     sdk: { name: workflowSdkPackage, version: workflowSdkVersion },
     verifier: { name: workflowVerifierPackage, version: workflowVerifierVersion },
-    toolchain: {
-      nodeVersion: process.versions.node,
-      packageManager: { name: declared.name, version: declared.version },
-    },
     source: { sha256: sourceHash },
     artifact: { entry: 'dist/index.js', sha256: hashArtifact(artifactBytes) },
   };
@@ -177,20 +164,6 @@ async function readPackageJson(root: string): Promise<Record<string, any>> {
   }
 }
 
-function readPackageManagerDeclaration(packageJson: Record<string, any>): {
-  name: PackageManagerName;
-  version: string;
-} {
-  const declaration = packageJson.packageManager;
-  const rule =
-    'package.json must declare "packageManager" as an exact pnpm@, npm@, or bun@ version, for example "pnpm@11.4.0". The Isagi runtime rejects workflow packages whose declaration differs from the build receipt.';
-  if (typeof declaration !== 'string') throw new VerificationError(`${rule} The field is missing.`);
-  const match = /^(pnpm|npm|bun)@(.+)$/.exec(declaration);
-  if (!match || !exactVersion.test(match[2]!))
-    throw new VerificationError(`${rule} Found "${declaration}".`);
-  return { name: match[1] as PackageManagerName, version: match[2]! };
-}
-
 function requirePins(packageJson: Record<string, any>): void {
   const sdkPin = packageJson.dependencies?.[workflowSdkPackage];
   if (sdkPin !== workflowSdkVersion)
@@ -208,22 +181,8 @@ function found(value: unknown): string {
   return value === undefined ? 'nothing' : JSON.stringify(value);
 }
 
-async function requireLockfile(root: string, manager: PackageManagerName): Promise<void> {
-  const expected = workflowLockfileByPackageManager[manager];
-  const present: string[] = [];
-  for (const lockfile of [...supportedWorkflowLockfiles, ...unsupportedWorkflowLockfiles])
-    if (await exists(join(root, lockfile))) present.push(lockfile);
-  if (present.length === 1 && present[0] === expected) return;
-  const hint = present.includes('bun.lockb')
-    ? ' bun.lockb is the legacy binary format; delete it and let bun write bun.lock.'
-    : '';
-  throw new VerificationError(
-    `Exactly one ${expected} lockfile is required because packageManager declares ${manager}; found ${present.join(', ') || 'none'}. Remove the others, and run the ${manager} install command if ${expected} is missing.${hint}`,
-  );
-}
-
-async function readSourceInputs(root: string, manager: PackageManagerName): Promise<HashInput[]> {
-  const paths = ['package.json', workflowLockfileByPackageManager[manager]];
+async function readSourceInputs(root: string): Promise<HashInput[]> {
+  const paths = ['package.json'];
   if (await exists(join(root, 'tsconfig.json'))) paths.push('tsconfig.json');
   await walk(root, 'src', paths, { required: true });
   await walk(root, 'tests', paths, { required: false });

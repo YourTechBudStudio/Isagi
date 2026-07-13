@@ -38,12 +38,6 @@ export type HostEnvironmentResult =
 
 export interface HostInventory {
   readonly environment: HostEnvironmentResult;
-  readonly node: ExecutableProbeResult;
-  readonly packageManagers: Readonly<{
-    pnpm: ExecutableProbeResult;
-    npm: ExecutableProbeResult;
-    bun: ExecutableProbeResult;
-  }>;
   readonly harnesses: Readonly<Record<AgentHarness, ExecutableProbeResult>>;
 }
 

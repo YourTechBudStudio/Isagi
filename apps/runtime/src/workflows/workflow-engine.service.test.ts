@@ -3895,7 +3895,6 @@ function writeVerifiedWorkflowPackage(root: string): string {
     {
       name: 'filesystem-start',
       private: true,
-      packageManager: 'pnpm@11.4.0',
       dependencies: { [workflowSdkPackage]: '0.0.1' },
       devDependencies: { [workflowVerifierPackage]: '0.0.1' },
     },
@@ -3907,7 +3906,6 @@ function writeVerifiedWorkflowPackage(root: string): string {
     { path: 'tests/index.test.ts', bytes: Buffer.from('// test\n') },
     { path: 'package.json', bytes: Buffer.from(packageJson) },
     { path: 'tsconfig.json', bytes: Buffer.from('{}\n') },
-    { path: 'pnpm-lock.yaml', bytes: Buffer.from('lockfileVersion: 9.0\n') },
   ];
   mkdirSync(join(root, 'src'), { recursive: true });
   mkdirSync(join(root, 'tests'), { recursive: true });
@@ -3922,10 +3920,6 @@ function writeVerifiedWorkflowPackage(root: string): string {
       workflowContractVersion: 1,
       sdk: { name: workflowSdkPackage, version: '0.0.1' },
       verifier: { name: workflowVerifierPackage, version: '0.0.1' },
-      toolchain: {
-        nodeVersion: process.versions.node,
-        packageManager: { name: 'pnpm', version: '11.4.0' },
-      },
       source: { sha256: hashWorkflowInputs(inputs) },
       artifact: { entry: 'dist/index.js', sha256: artifactHash },
     }),

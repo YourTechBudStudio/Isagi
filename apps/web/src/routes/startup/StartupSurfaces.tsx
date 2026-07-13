@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 
 import { Button } from '../../components/Button.js';
 import { startupCopy } from '../../copy/index.js';
-import type { StartupGate } from '../../lib/control-plane/launchability.js';
 import { canQuit, requestQuit } from '../../lib/desktop-bridge.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 
@@ -13,10 +12,7 @@ import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 // narrative — fill *position* says which boot beat we're in (reach the runtime →
 // probe the environment → first-run setup → open), fill *color* says how it's
 // going: blue→violet running, amber blocked on the user, red only for the
-// runtime itself being gone. Retry resumes the boot: the frozen fill turns
-// blue-violet again while the check runs.
-
-export type ToolchainGate = Extract<StartupGate, { kind: 'toolchain_blocked' }>;
+// runtime itself being gone.
 
 export type BootView =
   | { kind: 'connecting' }
@@ -24,7 +20,6 @@ export type BootView =
   | { kind: 'opening' }
   | { kind: 'runtime_unreachable'; error: string; retrying: boolean; onRetry: () => void }
   | { kind: 'config_invalid'; diagnostic: string | null }
-  | { kind: 'toolchain_blocked'; gate: ToolchainGate; checking: boolean; onCheckAgain: () => void }
   // First-run setup, mounted as the third boot beat. The owner (OnboardingFlow)
   // supplies the unfolded content and drives `live` (a save or retry is running),
   // the whisper, and `stepKey` (form vs results) so step changes crossfade.
@@ -45,16 +40,10 @@ const FILL: Record<BootKind, number> = {
   opening: 100,
   runtime_unreachable: 25,
   config_invalid: 50,
-  toolchain_blocked: 50,
 };
 
 // Views that compact the mark and unfold content below the track.
-const COMPACT_KINDS: readonly BootKind[] = [
-  'runtime_unreachable',
-  'config_invalid',
-  'toolchain_blocked',
-  'setup',
-];
+const COMPACT_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid', 'setup'];
 
 function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
   switch (view.kind) {
@@ -67,8 +56,6 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
     // retry is actually running.
     case 'setup':
       return { tone: 'running', live: view.live };
-    case 'toolchain_blocked':
-      return view.checking ? { tone: 'running', live: true } : { tone: 'blocked', live: false };
     case 'runtime_unreachable':
       return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
     case 'config_invalid':
@@ -86,7 +73,6 @@ function statusText(view: BootView): string | null {
 function whisperText(view: BootView): string | null {
   if (view.kind === 'connecting') return startupCopy.connecting.aside;
   if (view.kind === 'environment_pending') return startupCopy.environmentPending.aside;
-  if (view.kind === 'toolchain_blocked') return startupCopy.toolchain.aside;
   if (view.kind === 'setup') return view.whisper;
   return null;
 }
@@ -213,56 +199,9 @@ function BootActions({ children }: { children: ReactNode }) {
   return <div className="mt-5 flex gap-2.5">{children}</div>;
 }
 
-function RequirementRow({
-  label,
-  availability,
-}: {
-  label: string;
-  availability: ToolchainGate['node'];
-}) {
-  const ok = availability === 'available';
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-line/15 py-2 last:border-b-0">
-      <span className={`text-[13px] ${ok ? 'text-fg-muted' : 'text-fg'}`}>{label}</span>
-      <span
-        className={`font-mono text-[11.5px] tracking-[0.02em] ${ok ? 'text-green/80' : 'text-error'}`}
-      >
-        {startupCopy.toolchain.availabilityLabel[availability]}
-      </span>
-    </div>
-  );
-}
-
 function BootDetail({ view }: { view: BootView }) {
   if (view.kind === 'setup') {
     return <>{view.children}</>;
-  }
-  if (view.kind === 'toolchain_blocked') {
-    return (
-      <>
-        <BootTitle>{startupCopy.toolchain.title}</BootTitle>
-        <BootBody>{startupCopy.toolchain.body}</BootBody>
-        <div className="mt-3.5 w-72.5 text-left">
-          <RequirementRow label={startupCopy.toolchain.nodeLabel} availability={view.gate.node} />
-          <RequirementRow label="pnpm" availability={view.gate.packageManagers.pnpm} />
-          <RequirementRow label="npm" availability={view.gate.packageManagers.npm} />
-          <RequirementRow label="Bun" availability={view.gate.packageManagers.bun} />
-        </div>
-        {view.gate.environment === 'probe_failed' ? (
-          <DiagnosticChip tone="muted">{startupCopy.toolchain.environmentNote}</DiagnosticChip>
-        ) : null}
-        <BootActions>
-          <Button variant="primary" size="sm" disabled={view.checking} onClick={view.onCheckAgain}>
-            {view.checking ? startupCopy.toolchain.checking : startupCopy.toolchain.checkAgain}
-          </Button>
-          {canQuit() ? (
-            <Button variant="secondary" size="sm" disabled={view.checking} onClick={requestQuit}>
-              {startupCopy.toolchain.quit}
-            </Button>
-          ) : null}
-        </BootActions>
-      </>
-    );
   }
   if (view.kind === 'config_invalid') {
     return (

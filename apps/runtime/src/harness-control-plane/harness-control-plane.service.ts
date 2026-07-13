@@ -213,12 +213,6 @@ function snapshotOf(
             generation: inventory.generation,
             environment:
               inventory.inventory.environment._tag === 'Available' ? 'trusted' : 'probe_failed',
-            node: executableAvailability(inventory.inventory.node),
-            packageManagers: {
-              pnpm: executableAvailability(inventory.inventory.packageManagers.pnpm),
-              npm: executableAvailability(inventory.inventory.packageManagers.npm),
-              bun: executableAvailability(inventory.inventory.packageManagers.bun),
-            },
           },
     harnesses: supportedHarnesses.map((harness) => {
       const decision = harnessLaunchDecision(policyState, inventory, harness);

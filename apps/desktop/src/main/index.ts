@@ -109,9 +109,8 @@ ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
   );
 });
 
-// A terminal startup-gate surface (missing external toolchain, invalid harness
-// config) asks the host to quit rather than pretending a renderer `window.close()`
-// is reliable.
+// The terminal invalid-harness-config surface asks the host to quit rather than
+// pretending a renderer `window.close()` is reliable.
 ipcMain.handle('isagi:quit-app', () => {
   console.info('[desktop] quit requested by renderer');
   app.quit();

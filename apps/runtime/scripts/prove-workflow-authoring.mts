@@ -6,19 +6,11 @@
  * Run it from the repo root:
  *   pnpm --dir apps/runtime exec tsx scripts/prove-workflow-authoring.mts
  *
- * It never rewrites the fixture or selects a different package manager. If the detected package
- * manager does not match the scaffold's declared `packageManager`, it fails early with a diagnostic.
+ * It never rewrites the fixture. This repository proof uses pnpm as development tooling, while the
+ * workflow contract remains package-manager agnostic.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -41,10 +33,6 @@ function run(command: string, args: string[], cwd: string): string {
   return execFileSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-function readJson(path: string): Record<string, any> {
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
 async function main() {
   const temp = mkdtempSync(join(tmpdir(), 'isagi-workflow-proof-'));
   const tarballs = join(temp, 'tarballs');
@@ -55,23 +43,7 @@ async function main() {
   mkdirSync(workflowsRoot, { recursive: true });
 
   try {
-    // 1. Declared-vs-detected package-manager preflight. No auto-fix, no fallback.
-    const declaredPm = String(readJson(join(fixtureDir, 'package.json')).packageManager ?? '');
-    const match = /^(pnpm|npm|bun)@(.+)$/.exec(declaredPm);
-    if (!match)
-      throw new Error(`Scaffold packageManager is not an exact declaration: ${declaredPm}`);
-    const [, manager, declaredVersion] = match;
-    const detected = run(manager!, ['--version'], repoRoot).trim();
-    if (detected !== declaredVersion) {
-      throw new Error(
-        `Declared ${manager}@${declaredVersion} but detected ${manager}@${detected}. ` +
-          `Install the declared version (or edit the scaffold's packageManager) and re-run; ` +
-          `this proof does not rewrite the scaffold or switch managers.`,
-      );
-    }
-    log('preflight', `package manager ${manager}@${detected} matches the scaffold`);
-
-    // 2. Pack the public tarballs from freshly built packages.
+    // 1. Pack the public tarballs from freshly built packages.
     run('pnpm', ['build'], sdkDir);
     run('pnpm', ['build'], verifierDir);
     run('pnpm', ['pack', '--pack-destination', tarballs], sdkDir);
@@ -85,7 +57,7 @@ async function main() {
     const verifierTarball = tarball('isagi-workflow-verifier');
     log('pack', `sdk=${sdkTarball}\n        verifier=${verifierTarball}`);
 
-    // 3. Copy the scaffold verbatim, then point the exact dependency names at the local tarballs
+    // 2. Copy the scaffold verbatim, then point the exact dependency names at the local tarballs
     //    through pnpm overrides. The exact semver declarations stay untouched.
     cpSync(fixtureDir, workflowDir, {
       recursive: true,
@@ -111,7 +83,7 @@ async function main() {
       ].join('\n'),
     );
 
-    // 4. Install — generates the single lockfile and node_modules. Record store vs network.
+    // 3. Install the proof dependencies. Record store vs network.
     const install = spawnSync('pnpm', ['install', '--prefer-offline'], {
       cwd: workflowDir,
       encoding: 'utf8',
@@ -128,17 +100,17 @@ async function main() {
         : 'install complete (pnpm printed no reuse/download summary)',
     );
 
-    // 5. Build through the workflow-owned command, then verify the existing artifact.
+    // 4. Build through the workflow-owned command, then verify the existing artifact.
     run('pnpm', ['run', 'build'], workflowDir);
     log('build', 'workflow-owned build produced dist/index.js');
     run('pnpm', ['run', 'verify'], workflowDir);
     log('verify', 'workflow verified; build receipt written');
 
-    // 6. Delete node_modules — everything below must work from the standalone artifact.
+    // 5. Delete node_modules — everything below must work from the standalone artifact.
     rmSync(join(workflowDir, 'node_modules'), { recursive: true, force: true });
     log('standalone', 'removed node_modules');
 
-    // 7. Import the standalone artifact directly.
+    // 6. Import the standalone artifact directly.
     const artifact = await import(pathToFileURL(join(workflowDir, 'dist/index.js')).href);
     const workflow = artifact.default;
     for (const name of ['command', 'validate', 'init', 'step'])
@@ -154,7 +126,7 @@ async function main() {
       throw new Error(`unexpected artifact title: ${directManifest.title}`);
     log('import', `standalone artifact command title = ${directManifest.title}`);
 
-    // 8. Load through the real runtime verified-package path (validate → publish → import).
+    // 7. Load through the real runtime verified-package path (validate → publish → import).
     const registry = createFilesystemWorkflowRegistry(workflowsRoot, cacheRoot);
     const loaded = await Effect.runPromise(registry.resolveLatest(workflowKey));
     if (!loaded) throw new Error('runtime registry returned no definition');

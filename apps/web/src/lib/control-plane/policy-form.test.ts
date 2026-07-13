@@ -45,8 +45,6 @@ function snapshotWith(
       status: 'ready',
       generation: 1,
       environment: 'trusted',
-      node: 'available',
-      packageManagers: { pnpm: 'available', npm: 'missing', bun: 'missing' },
     },
     harnesses: SUPPORTED_HARNESSES.map((harness) => ({
       harness,

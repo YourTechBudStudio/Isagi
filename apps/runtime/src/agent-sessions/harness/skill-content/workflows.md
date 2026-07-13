@@ -5,12 +5,12 @@ Use this reference to create, modify, or review a workflow package and verify th
 ## Procedure
 
 1. Read every file in the bundled [`minimal-workflow/`](minimal-workflow/) scaffold before editing the target workflow. For a new workflow, copy the scaffold. For an existing workflow, preserve its authored code and use the scaffold to repair or update its package structure.
-2. Match the scaffold's exact toolchain: `@yourtechbudstudio/isagi-workflow-sdk@{{SDK_VERSION}}` in `dependencies`, plus `@yourtechbudstudio/isagi-workflow-verifier@{{VERIFIER_VERSION}}` and `esbuild@{{BUILDER_VERSION}}` in `devDependencies`. Preserve the scaffold's `build` and `verify` scripts.
-3. Use the user's chosen package manager: pnpm, npm, or Bun. Set `packageManager` to that manager and its installed exact version, keep only its matching lockfile, and run its install command in the workflow package.
+2. Match the scaffold's exact package contract: `@yourtechbudstudio/isagi-workflow-sdk@{{SDK_VERSION}}` in `dependencies`, plus `@yourtechbudstudio/isagi-workflow-verifier@{{VERIFIER_VERSION}}` and `esbuild@{{BUILDER_VERSION}}` in `devDependencies`. Preserve the scaffold's `build` and `verify` scripts.
+3. Prepare the package dependencies using the target repository's existing conventions.
 4. Read `node_modules/@yourtechbudstudio/isagi-workflow-sdk/dist/index.d.ts` completely. Treat those declarations as the authority for workflow types, constructors, helpers, and signatures. Do not recreate the SDK API from this reference.
 5. Implement the user's requested workflow changes and tests using the conventions below.
 6. After all authoring changes are complete, run the package's `typecheck` and `test` scripts and fix every failure. The verifier does not run them; typecheck and tests are the author's quality gate.
-7. Then run the package's `build` script and its `verify` script with its declared package manager. The verifier never compiles on the author's behalf; it checks that the Isagi runtime will be able to load the existing `dist/index.js` build — exact pins, the `packageManager` declaration, a single matching lockfile, symlink-free sources, and a loadable workflow export. Fix failures, rebuild, and rerun verification until both commands succeed; the runtime refuses to load a build whose sources changed after verification.
+7. Then run the package's `build` script and its `verify` script. The verifier never compiles on the author's behalf; it checks that the Isagi runtime will be able to load the existing `dist/index.js` build — exact pins, symlink-free sources, and a loadable workflow export. Fix failures, rebuild, and rerun verification until both commands succeed; the runtime refuses to load a build whose sources changed after verification.
 
 ## Definition and state
 
