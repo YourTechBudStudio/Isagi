@@ -14,6 +14,8 @@ unattended. The governing idea: the _plumbing_ between agents is deterministic a
 code; the _judgment_ is stochastic and lives in the agents; the human is the switchman at
 junctions. The engine is the deterministic plumbing.
 
+Orchestrated agents may skip, combine, or complete steps beyond the phase they were given. Workflow authors should use one reusable judgment contract per orchestrated agent session after every relevant turn, with the current phase as input rather than a restriction on possible outcomes; deterministic reducer code maps each outcome to continuing, jumping to another phase, finishing, requesting user input, or failing.
+
 The simplest mental model: **a workflow run is a row in a database table, and the engine is a
 small set of loops that move that row through a status lifecycle.** Because the row is the
 source of truth, surviving a crash reduces to "the row survives." Everything above the engine —

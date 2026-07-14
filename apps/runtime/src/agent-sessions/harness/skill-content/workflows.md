@@ -91,8 +91,9 @@ Use command modifiers only for harness-native prompt templates or commands you e
 ## Conversations and judgments
 
 - Treat conversation history as role-tagged messages. A turn may contain several assistant messages; collect the latest complete assistant turn instead of assuming the final message is the full reply.
-- Use a headless judgment for one closed routing question. Keep its prompt, exact parser, and result type together when extracting them improves reducer readability.
-- Model outgoing workflow edges, not every nuance in prose. Collapse responses that take the same edge into one tagged outcome and state precedence when outcomes overlap.
+- Orchestrated agents are non-deterministic and may skip, combine, or complete steps beyond the phase they were given.
+- Define one reusable judgment contract — its prompt, exact parser, and result type — for each orchestrated agent session, and apply it after every relevant turn instead of creating phase-specific judgments for the same agent.
+- Give that contract every workflow-relevant outcome the agent could produce. The current workflow phase is input to the judgment, but must not restrict its possible answers; let deterministic reducer code map each tagged outcome to continuing, jumping to another phase, finishing, requesting user input, or failing clearly. Collapse responses that take the same route and state precedence when outcomes overlap.
 - Treat a judgment prompt and parser as one contract. Request one exact JSON object; validate its key set and value domain; reject extra fields; log the judgment name and raw output on parse failure.
 - Tell workflow-driven agents they are unattended. Give them the goal, inputs, constraints, success criteria, stop conditions, and a path forward when uncertain. Do not make progress depend on a user answering mid-turn.
 
@@ -107,6 +108,6 @@ Use command modifiers only for harness-native prompt templates or commands you e
 - Default-export `defineWorkflow(...)` from `src/index.ts`. Use relative imports with `.js` extensions under NodeNext TypeScript.
 - Keep the static import graph resolvable from declared dependencies. Do not rely on files that exist only elsewhere on the author's machine.
 - Keep the bundle to one Node ESM artifact: no native addons, opaque dynamic imports, code splitting, or emitted side assets. Run native or external work in a process launched at workflow runtime.
-- Keep tests hermetic. Exercise representative transitions, waits, success, and failure outcomes without depending on a live Isagi runtime or agent provider.
+- Keep tests hermetic. Exercise representative transitions, waits, success, and failure outcomes without depending on a live Isagi runtime or agent provider. For each judgment contract, cover every tagged judgment outcome and its resulting route, including non-linear jumps.
 
 Typecheck and tests are the author's quality gate; build followed by verification is the completion gate for runtime compatibility. Report the commands that passed; do not claim the workflow is ready when any of them failed or was skipped.
