@@ -34,6 +34,19 @@ export const startupCopy = {
     diagnosticLabel: 'config.yaml',
     quit: 'Quit Isagi',
   },
+  // Terminal runtime failure (packaged app): the runtime never started or died
+  // after readiness. Stage-neutral and serious — no humour, no retry, no promise
+  // that process or session state survived. Distinct from the retryable
+  // `runtimeUnreachable`. `rows` labels the diagnostic facts; `message` uses the
+  // general `diagnostic` label because it is not necessarily a startup error.
+  runtimeFailed: {
+    title: "The runtime isn't running.",
+    body: "Isagi can't continue without its runtime. Restart Isagi to bring it back.",
+    rows: { message: 'diagnostic', exitCode: 'exit code', signal: 'signal' },
+    unavailable: 'No diagnostic details were available.',
+    restart: 'Restart Isagi',
+    quit: 'Quit Isagi',
+  },
 } as const;
 
 // Onboarding renders as "the boot manifest": mono config-file lines under the

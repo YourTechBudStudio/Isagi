@@ -1,10 +1,11 @@
-import { AnimatePresence, motion } from 'motion/react';
-import type { ReactNode } from 'react';
+import { AnimatePresence, MotionConfig, motion } from 'motion/react';
+import { Fragment, type ReactNode } from 'react';
 
 import { Button } from '../../components/Button.js';
 import { startupCopy } from '../../copy/index.js';
 import { canQuit, requestQuit } from '../../lib/desktop-bridge.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
+import { runtimeFailureRows, type RuntimeFailureDiagnostic } from './runtime-failure.js';
 
 // The startup gate is one continuous boot surface, not a family of screens: the
 // mark, a progress track, and one line of status share a single centered column,
@@ -19,6 +20,18 @@ export type BootView =
   | { kind: 'environment_pending' }
   | { kind: 'opening' }
   | { kind: 'runtime_unreachable'; error: string; retrying: boolean; onRetry: () => void }
+  // The runtime is terminally gone — it never started, or it died after readiness.
+  // Unlike the retryable `runtime_unreachable`, the only way forward is to restart
+  // or quit the whole app; the surface never implies process or session survival.
+  // `diagnostic` carries the facts to display; `onRestart`/`onQuit` are
+  // host-supplied (mocked by the dev fixture in Phase 03, real bridge callbacks
+  // in Phase 04, which also owns how the diagnostic is framed and kept safe).
+  | {
+      kind: 'runtime_failed';
+      diagnostic: RuntimeFailureDiagnostic;
+      onRestart: () => void;
+      onQuit: () => void;
+    }
   | { kind: 'config_invalid'; diagnostic: string | null }
   // First-run setup, mounted as the third boot beat. The owner (OnboardingFlow)
   // supplies the unfolded content and drives `live` (a save or retry is running),
@@ -39,11 +52,24 @@ const FILL: Record<BootKind, number> = {
   setup: 75,
   opening: 100,
   runtime_unreachable: 25,
+  // The runtime is boot beat one; when it is terminally gone the track freezes at
+  // the foundation, same position as the retryable state but held in error tone.
+  runtime_failed: 25,
   config_invalid: 50,
 };
 
 // Views that compact the mark and unfold content below the track.
-const COMPACT_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid', 'setup'];
+const COMPACT_KINDS: readonly BootKind[] = [
+  'runtime_unreachable',
+  'runtime_failed',
+  'config_invalid',
+  'setup',
+];
+
+// The diagnostic-bearing blocker states get a wider column so multi-line
+// diagnostics have room to read. Loading states and onboarding (`setup`) keep the
+// calm narrow column.
+const WIDE_KINDS: readonly BootKind[] = ['runtime_unreachable', 'runtime_failed', 'config_invalid'];
 
 function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
   switch (view.kind) {
@@ -58,6 +84,10 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
       return { tone: 'running', live: view.live };
     case 'runtime_unreachable':
       return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
+    // Terminal: a genuine runtime error, and nothing is retrying, so the track is
+    // still — error tone, no live shimmer.
+    case 'runtime_failed':
+      return { tone: 'error', live: false };
     case 'config_invalid':
       return { tone: 'blocked', live: false };
   }
@@ -172,7 +202,7 @@ export function BootTitle({ children }: { children: ReactNode }) {
 }
 
 export function BootBody({ children }: { children: ReactNode }) {
-  return <p className="mt-2 max-w-[42ch] text-[13px] leading-[1.55] text-fg-muted">{children}</p>;
+  return <p className="mt-2 max-w-[52ch] text-[13px] leading-[1.55] text-fg-muted">{children}</p>;
 }
 
 function DiagnosticChip({
@@ -188,7 +218,8 @@ function DiagnosticChip({
       : 'border-line/40 bg-white/4 text-fg-muted';
   return (
     <p
-      className={`mt-3.5 max-w-[42ch] overflow-x-auto rounded-sm border px-3 py-2 text-left font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap ${styles}`}
+      data-slot="diagnostic-chip"
+      className={`mt-3.5 max-w-[72ch] overflow-x-auto rounded-sm border px-3 py-2 text-left font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap ${styles}`}
     >
       {children}
     </p>
@@ -239,6 +270,39 @@ function BootDetail({ view }: { view: BootView }) {
       </>
     );
   }
+  if (view.kind === 'runtime_failed') {
+    const rows = runtimeFailureRows(view.diagnostic);
+    return (
+      <>
+        <BootTitle>{startupCopy.runtimeFailed.title}</BootTitle>
+        <BootBody>{startupCopy.runtimeFailed.body}</BootBody>
+        {rows.length > 0 ? (
+          // One error chip; each present fact on its own line via pre-wrap. Labels
+          // are dimmed so the red stays on the values, not the whole block. Only
+          // inline nodes live inside the chip's <p>.
+          <DiagnosticChip>
+            {rows.map((row, index) => (
+              <Fragment key={row.key}>
+                {index > 0 ? '\n' : null}
+                <span className="text-error/55">{startupCopy.runtimeFailed.rows[row.key]} · </span>
+                {row.value}
+              </Fragment>
+            ))}
+          </DiagnosticChip>
+        ) : (
+          <DiagnosticChip tone="muted">{startupCopy.runtimeFailed.unavailable}</DiagnosticChip>
+        )}
+        <BootActions>
+          <Button variant="primary" size="sm" onClick={view.onRestart}>
+            {startupCopy.runtimeFailed.restart}
+          </Button>
+          <Button variant="secondary" size="sm" onClick={view.onQuit}>
+            {startupCopy.runtimeFailed.quit}
+          </Button>
+        </BootActions>
+      </>
+    );
+  }
   return null;
 }
 
@@ -248,49 +312,58 @@ function BootDetail({ view }: { view: BootView }) {
  */
 export function BootSurface({ view }: { view: BootView }) {
   const compact = COMPACT_KINDS.includes(view.kind);
+  const wide = WIDE_KINDS.includes(view.kind);
   const { tone, live } = trackTone(view);
   const status = statusText(view);
   const whisper = whisperText(view);
   const detailKey = view.kind === 'setup' ? `setup-${view.stepKey}` : view.kind;
 
   return (
-    <div className="canvas-atmosphere relative grid h-screen place-items-center overflow-hidden p-6">
-      <div className="flex w-full max-w-100 flex-col items-center text-center">
-        <BootMark compact={compact} />
-        <BootTrack percent={FILL[view.kind]} tone={tone} live={live} compact={compact} />
+    // Honor prefers-reduced-motion for the boot-detail/track/status transforms —
+    // Framer defaults to ignoring it, so the detail unfold would otherwise still
+    // translate. Scoped to BootSurface so StartupGate's opening-overlay motion,
+    // which wraps this, is deliberately left alone.
+    <MotionConfig reducedMotion="user">
+      <div className="canvas-atmosphere relative grid h-screen place-items-center overflow-hidden p-6">
+        <div
+          className={`flex w-full flex-col items-center text-center ${wide ? 'max-w-2xl' : 'max-w-100'}`}
+        >
+          <BootMark compact={compact} />
+          <BootTrack percent={FILL[view.kind]} tone={tone} live={live} compact={compact} />
+          <AnimatePresence mode="wait" initial={false}>
+            {status ? (
+              <motion.div key="status" exit={{ opacity: 0, y: -4 }} transition={uiTransition}>
+                <BootStatus text={status} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={detailKey}
+                className="flex flex-col items-center"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={surfaceTransition}
+              >
+                <BootDetail view={view} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
         <AnimatePresence mode="wait" initial={false}>
-          {status ? (
-            <motion.div key="status" exit={{ opacity: 0, y: -4 }} transition={uiTransition}>
-              <BootStatus text={status} />
-            </motion.div>
-          ) : (
-            <motion.div
-              key={detailKey}
-              className="flex flex-col items-center"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={surfaceTransition}
+          {whisper ? (
+            <motion.p
+              key={whisper}
+              className="absolute right-0 bottom-5 left-0 text-center font-mono text-[11.5px] text-fg-subtle"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.55 }}
+              exit={{ opacity: 0 }}
+              transition={uiTransition}
             >
-              <BootDetail view={view} />
-            </motion.div>
-          )}
+              {whisper}
+            </motion.p>
+          ) : null}
         </AnimatePresence>
       </div>
-      <AnimatePresence mode="wait" initial={false}>
-        {whisper ? (
-          <motion.p
-            key={whisper}
-            className="absolute right-0 bottom-5 left-0 text-center font-mono text-[11.5px] text-fg-subtle"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.55 }}
-            exit={{ opacity: 0 }}
-            transition={uiTransition}
-          >
-            {whisper}
-          </motion.p>
-        ) : null}
-      </AnimatePresence>
-    </div>
+    </MotionConfig>
   );
 }
