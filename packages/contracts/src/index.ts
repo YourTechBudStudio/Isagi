@@ -55,6 +55,14 @@ export type {
   ApiMethod,
 } from './api/types.js';
 
+export { HOST_RUNTIME_STATUS_PROTOCOL_VERSION } from './host-runtime/types.js';
+export type {
+  HostRuntimeDiagnostic,
+  HostRuntimeFailureReason,
+  HostRuntimeOwnership,
+  HostRuntimeStatusSnapshot,
+} from './host-runtime/types.js';
+
 export {
   gitCommandFailedErrorSchema,
   projectApiErrorSchema,

@@ -47,6 +47,28 @@ test('PTY websocket API uses durable session-level contract routes', () => {
   );
 });
 
+test('PTY websocket API rejects a different loopback origin before resolving a session', async () => {
+  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
+  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
+  const fastify = Fastify({ logger: false });
+  try {
+    await fastify.register(websocket);
+    registerPtyApi(fastify, {
+      runPromise: () => Promise.reject(new Error('must not run')),
+    } as never);
+    await fastify.ready();
+    await assert.rejects(
+      fastify.injectWS('/api/v1/agent-sessions/10/attach', {
+        headers: { origin: 'http://127.0.0.1:43130' },
+      }),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
+    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
+    await fastify.close();
+  }
+});
+
 test('PTY websocket API reports unsupported harness adapter failures with stable protocol code', async () => {
   const fastify = Fastify({ logger: false });
   const runtime = ManagedRuntime.make(

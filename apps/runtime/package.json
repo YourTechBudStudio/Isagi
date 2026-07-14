@@ -10,7 +10,7 @@
     "build": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && vite build && node scripts/sync-runtime-assets.mjs --dist",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 tsx src/index.ts",
-    "dev:fixed": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 PORT=17373 tsx src/index.ts",
+    "dev:fixed": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && cross-env ISAGI_DATA_DIR=../../data/.isagi ISAGI_RUNTIME_DEBUG=1 ISAGI_ALLOWED_ORIGINS=http://127.0.0.1:5173 PORT=17373 tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "pnpm -C ../../packages/workflow-sdk build && node scripts/sync-runtime-assets.mjs && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"

@@ -38,12 +38,47 @@ test('runtime server registers PTY routes after the websocket plugin is ready', 
   }
 });
 
+test('runtime HTTP CORS emits an allow origin only for the exact configured origin', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-runtime-server-origin-'));
+  const previousDataDirectory = process.env.ISAGI_DATA_DIR;
+  const previousAllowedOrigins = process.env.ISAGI_ALLOWED_ORIGINS;
+  process.env.ISAGI_DATA_DIR = dataRoot;
+  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
+  let server: FastifyInstance | undefined;
+
+  try {
+    const started = await Effect.runPromise(startRuntimeServer());
+    server = started.server;
+    const allowed = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { origin: 'http://127.0.0.1:43129' },
+    });
+    const rejected = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { origin: 'http://127.0.0.1:43130' },
+    });
+    assert.equal(allowed.headers['access-control-allow-origin'], 'http://127.0.0.1:43129');
+    assert.equal(rejected.headers['access-control-allow-origin'], undefined);
+  } finally {
+    restoreEnvironment('ISAGI_ALLOWED_ORIGINS', previousAllowedOrigins);
+    restoreDataDirectory(previousDataDirectory);
+    await server?.close();
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 function restoreDataDirectory(value: string | undefined) {
+  restoreEnvironment('ISAGI_DATA_DIR', value);
+}
+
+function restoreEnvironment(name: string, value: string | undefined) {
   if (value === undefined) {
-    delete process.env.ISAGI_DATA_DIR;
+    delete process.env[name];
     return;
   }
-  process.env.ISAGI_DATA_DIR = value;
+  process.env[name] = value;
 }
 
 function agentSessionPtyWebSocketUrl(runtimeUrl: string, agentSessionId: number) {

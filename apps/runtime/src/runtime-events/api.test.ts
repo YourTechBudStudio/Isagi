@@ -102,6 +102,8 @@ test('runtime events websocket answers explicit attention snapshot requests', as
 });
 
 test('runtime events websocket rejects disallowed origins before upgrade', async () => {
+  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
+  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
   const fastify = Fastify({ logger: false });
   const runtime = ManagedRuntime.make(Layer.succeed(RuntimeEventBus, fakeEventBus()));
 
@@ -112,10 +114,12 @@ test('runtime events websocket rejects disallowed origins before upgrade', async
 
     await assert.rejects(
       fastify.injectWS('/api/v1/events', {
-        headers: { origin: 'https://not-isagi.example' },
+        headers: { origin: 'http://127.0.0.1:43130' },
       }),
     );
   } finally {
+    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
+    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
     await fastify.close();
     await runtime.dispose();
   }

@@ -18,6 +18,28 @@ import type {
 } from './workflow-engine.service.js';
 import { WorkflowRunProjection } from './workflow-run-projection.service.js';
 
+test('workflow websocket rejects a different loopback origin before resolving a run', async () => {
+  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
+  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
+  const fastify = Fastify({ logger: false });
+  try {
+    await fastify.register(websocket);
+    registerWorkflowApi(fastify, {
+      runPromise: () => Promise.reject(new Error('must not run')),
+    } as never);
+    await fastify.ready();
+    await assert.rejects(
+      fastify.injectWS('/api/v1/workflows/runs/42/events-stream', {
+        headers: { origin: 'http://127.0.0.1:43130' },
+      }),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
+    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
+    await fastify.close();
+  }
+});
+
 test('list route returns workflow descriptors from the engine', async () => {
   const fastify = Fastify({ logger: false });
   let listContext: WorkflowStartContextInput | null = null;

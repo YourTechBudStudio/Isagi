@@ -14,25 +14,25 @@ import { validateStage } from './stage.mjs';
 
 const readyPrefix = 'ISAGI_RUNTIME_READY ';
 
-export function smokeRuntimeStage() {
+export function smokeRuntimeStage(root = stageRoot) {
   return Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(resolve(tmpdir(), 'isagi-runtime-stage-smoke-'))),
     (temporaryRoot) =>
       Effect.gen(function* () {
-        const metadata = yield* tryOperation('metadata read', stageRoot, () =>
-          readJson(resolve(stageRoot, 'runtime-stage.json')),
+        const metadata = yield* tryOperation('metadata read', root, () =>
+          readJson(resolve(root, 'runtime-stage.json')),
         );
-        yield* tryOperation('canonical stage validation', stageRoot, () =>
-          validateStage(stageRoot, metadata.dependencyVersions),
+        yield* tryOperation('runtime stage validation', root, () =>
+          validateStage(root, metadata.dependencyVersions),
         );
 
         const electron = yield* inspectElectron();
         assertElectronMatchesStage(electron, metadata.electron);
-        yield* smokeOneStage(stageRoot, temporaryRoot, electron);
+        yield* smokeOneStage(root, temporaryRoot, electron);
 
         const relocatedRoot = resolve(temporaryRoot, 'relocated-runtime');
         yield* tryOperation('relocation copy', relocatedRoot, () =>
-          cpSync(stageRoot, relocatedRoot, { recursive: true, verbatimSymlinks: true }),
+          cpSync(root, relocatedRoot, { recursive: true, verbatimSymlinks: true }),
         );
         yield* tryOperation('relocated stage validation', relocatedRoot, () =>
           validateStage(relocatedRoot, metadata.dependencyVersions),
@@ -40,7 +40,7 @@ export function smokeRuntimeStage() {
         yield* smokeOneStage(relocatedRoot, temporaryRoot, electron);
 
         console.log(
-          `[desktop] Runtime stage smoke passed for canonical and relocated stages under Electron ${electron.version} (Node ${electron.node}, ABI ${electron.abi})`,
+          `[desktop] Runtime stage smoke passed for ${root} and a relocated copy under Electron ${electron.version} (Node ${electron.node}, ABI ${electron.abi})`,
         );
       }),
     (temporaryRoot) =>

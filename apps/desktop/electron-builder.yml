@@ -1,8 +1,6 @@
 appId: studio.yourtechbud.isagi
 productName: Isagi
 asar: true
-asarUnpack:
-  - node_modules/better-sqlite3/**/*
 
 directories:
   buildResources: assets
@@ -19,15 +17,18 @@ files:
     to: static
     filter:
       - '**/*'
-  - from: ../runtime/dist
-    to: runtime
-  - from: ../runtime/drizzle
-    to: runtime/drizzle
   - package.json
 
 extraResources:
   - from: ../web/dist
     to: web
+  - from: .generated/runtime
+    to: runtime
+  # electron-builder intentionally excludes a matcher root named node_modules;
+  # copy the stage's isolated closure through its own matcher so .pnpm targets,
+  # native bindings, and executable helpers remain physically self-contained.
+  - from: .generated/runtime/node_modules
+    to: runtime/node_modules
 
 mac:
   category: public.app-category.developer-tools

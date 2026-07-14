@@ -13,7 +13,7 @@ import {
 } from '@isagi/contracts';
 
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
-import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
+import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
 import { DatabaseError } from '../persistence/index.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
@@ -189,14 +189,7 @@ function registerWorkflowEventsStreamRoute(
     `${apiBasePath}${workflowEventsStreamWebSocketEndpoint.path}`,
     {
       websocket: true,
-      preValidation: (request, reply, done) => {
-        const origin = request.headers.origin;
-        if (!isAllowedRuntimeOrigin(Array.isArray(origin) ? origin[0] : origin)) {
-          reply.code(403).send('Forbidden');
-          return;
-        }
-        done();
-      },
+      preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket, request) => {
       const runId = decodeRunId(request.params);

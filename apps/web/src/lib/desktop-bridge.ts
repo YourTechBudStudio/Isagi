@@ -1,7 +1,35 @@
-// The Electron host exposes a tiny renderer bridge on `window.isagi`. A renderer
-// cannot reliably close its own window, so the terminal startup surfaces ask the
-// host to quit. In a plain browser there is no host bridge: `canQuit()` is false
-// and those surfaces omit the Quit action rather than shipping a dead button.
+import {
+  HOST_RUNTIME_STATUS_PROTOCOL_VERSION,
+  type HostRuntimeStatusSnapshot,
+} from '@isagi/contracts';
+
+export { HOST_RUNTIME_STATUS_PROTOCOL_VERSION } from '@isagi/contracts';
+export type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
+
+export function hasRuntimeHost(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.isagi?.getRuntimeStatus === 'function' &&
+    typeof window.isagi.subscribeRuntimeStatus === 'function'
+  );
+}
+
+export function subscribeRuntimeStatus(
+  listener: (snapshot: HostRuntimeStatusSnapshot) => void,
+): () => void {
+  return (
+    window.isagi?.subscribeRuntimeStatus?.((snapshot) => {
+      if (snapshot.protocolVersion === HOST_RUNTIME_STATUS_PROTOCOL_VERSION) listener(snapshot);
+    }) ?? (() => {})
+  );
+}
+
+export function reconcileRuntimeStatus(
+  current: HostRuntimeStatusSnapshot | null,
+  next: HostRuntimeStatusSnapshot,
+) {
+  return !current || next.revision > current.revision ? next : current;
+}
 
 export function canQuit(): boolean {
   return typeof window !== 'undefined' && typeof window.isagi?.quitApp === 'function';
@@ -9,4 +37,8 @@ export function canQuit(): boolean {
 
 export function requestQuit(): void {
   void window.isagi?.quitApp?.();
+}
+
+export function requestRelaunch(): void {
+  void window.isagi?.relaunchApp?.();
 }

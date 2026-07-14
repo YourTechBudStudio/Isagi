@@ -9,18 +9,17 @@
   "scripts": {
     "build": "vite build",
     "check": "pnpm typecheck && pnpm test && pnpm build",
-    "dev": "pnpm build && electron .",
-    "dev:connected": "cross-env ISAGI_RUNTIME_URL=http://127.0.0.1:17373 ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm dev",
+    "dev": "pnpm stage:runtime && pnpm build && electron .",
+    "dev:connected": "pnpm build && cross-env ISAGI_RUNTIME_URL=http://127.0.0.1:17373 ISAGI_WEB_URL=http://127.0.0.1:5173 electron .",
     "dist": "node scripts/run-electron-builder.mjs",
     "pack:dir": "node scripts/run-electron-builder.mjs --dir",
     "smoke:runtime-stage": "node scripts/smoke-runtime-stage.mjs",
     "stage:runtime": "node scripts/stage-runtime.mjs",
-    "test": "node --test \"scripts/runtime-stage/*.test.mjs\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/runtime-stage/*.test.mjs\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@isagi/contracts": "workspace:*",
-    "better-sqlite3": "^12.11.1",
     "effect": "^3.21.2"
   },
   "devDependencies": {
@@ -28,6 +27,7 @@
     "@types/node": "^24.10.1",
     "electron": "^43.1.0",
     "electron-builder": "^26.8.1",
+    "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.14"
   }

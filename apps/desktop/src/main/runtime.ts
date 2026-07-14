@@ -1,242 +1,99 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import process from 'node:process';
-import type { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 
-import { Duration, Effect, Fiber } from 'effect';
+import { Effect } from 'effect';
 import { app } from 'electron';
 
-const readyPrefix = 'ISAGI_RUNTIME_READY ';
+import { waitForRuntimeHealth } from './boot.js';
+import {
+  createRuntimeLogSink,
+  nodeRuntimeProcessAdapter,
+  RuntimeLifecycle,
+  RuntimeLifecycleFailure,
+  validateRuntimeStage,
+} from './runtime-process/index.js';
 
-let runtimeProcess: ChildProcessByStdio<null, Readable, Readable> | undefined;
-let runtimeUrlFiber: Fiber.RuntimeFiber<string, Error> | undefined;
+const currentDirectory = dirname(fileURLToPath(import.meta.url));
+const desktopRoot = resolve(currentDirectory, '../..');
+const repositoryRoot = resolve(desktopRoot, '../..');
 
-export function getRuntimeUrl() {
-  if (process.env.ISAGI_RUNTIME_URL) {
-    return Effect.succeed(process.env.ISAGI_RUNTIME_URL);
-  }
+export function createRuntimeLifecycle() {
+  const externalUrl = process.env.ISAGI_RUNTIME_URL;
+  const target = externalUrl
+    ? ({ ownership: 'external', url: externalUrl } as const)
+    : ({ ownership: 'managed', prepare: prepareManagedRuntime } as const);
 
-  runtimeUrlFiber ??= Effect.runFork(spawnRuntimeAndWaitForUrl());
-
-  return Fiber.join(runtimeUrlFiber).pipe(
-    Effect.tapError(() =>
-      Effect.sync(() => {
-        runtimeUrlFiber = undefined;
-      }),
-    ),
-  );
-}
-
-export function stopRuntime() {
-  if (runtimeUrlFiber) {
-    Effect.runFork(Fiber.interrupt(runtimeUrlFiber));
-    runtimeUrlFiber = undefined;
-  }
-
-  if (runtimeProcess) {
-    killRuntimeProcess(runtimeProcess);
-    runtimeProcess = undefined;
-  }
-}
-
-function spawnRuntimeAndWaitForUrl() {
-  return Effect.async<string, Error>((resume) => {
-    const childProcess = spawnRuntimeProcess();
-    runtimeProcess = childProcess;
-    let stdoutBuffer = '';
-    let settled = false;
-
-    const cleanup = () => {
-      childProcess.stdout.off('data', onStdout);
-      childProcess.stderr.off('data', onStderr);
-      childProcess.off('error', onError);
-      childProcess.off('exit', onExit);
-    };
-
-    const resetSpawnState = () => {
-      if (runtimeProcess !== childProcess) {
-        return;
-      }
-
-      runtimeProcess = undefined;
-      runtimeUrlFiber = undefined;
-    };
-
-    const fail = (error: Error) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanup();
-      killRuntimeProcess(childProcess);
-      resetSpawnState();
-      resume(Effect.fail(error));
-    };
-
-    const succeed = (url: string) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      resume(Effect.succeed(url));
-    };
-
-    const abortSpawn = () => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanup();
-      resetSpawnState();
-
-      killRuntimeProcess(childProcess);
-    };
-
-    const resolveReadyLine = (line: string) => {
-      if (!line.startsWith(readyPrefix)) {
-        return;
-      }
-
-      const payload = JSON.parse(line.slice(readyPrefix.length)) as { url?: unknown };
-
-      if (typeof payload.url !== 'string') {
-        throw new Error('Runtime readiness payload did not include a URL');
-      }
-
-      succeed(payload.url);
-    };
-
-    const onStdout = (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString('utf8');
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        try {
-          resolveReadyLine(line.trim());
-        } catch (error) {
-          fail(toError(error));
-        }
-      }
-    };
-
-    const onStderr = (chunk: Buffer) => {
-      console.error(`[runtime] ${chunk.toString('utf8').trim()}`);
-    };
-
-    const onError = (error: Error) => {
-      if (!settled) {
-        fail(error);
-        return;
-      }
-
-      if (runtimeProcess === childProcess) {
-        console.error(`[runtime] Runtime process error after readiness: ${error.message}`);
-      }
-      resetSpawnState();
-      cleanup();
-    };
-
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      if (!settled) {
-        fail(
-          new Error(
-            `Runtime exited before readiness: code=${code ?? 'null'} signal=${signal ?? 'null'}`,
-          ),
-        );
-        return;
-      }
-
-      if (runtimeProcess === childProcess) {
-        console.error(
-          `[runtime] Runtime exited after readiness: code=${code ?? 'null'} signal=${
-            signal ?? 'null'
-          }`,
-        );
-      }
-      resetSpawnState();
-      cleanup();
-    };
-
-    childProcess.stdout.on('data', onStdout);
-    childProcess.stderr.on('data', onStderr);
-    childProcess.once('error', onError);
-    childProcess.once('exit', onExit);
-
-    return Effect.sync(abortSpawn);
-  }).pipe(
-    Effect.timeoutFail({
-      duration: Duration.seconds(15),
-      onTimeout: () => new Error('Runtime did not report readiness within 15 seconds'),
-    }),
-  );
-}
-
-function spawnRuntimeProcess() {
-  if (process.env.ISAGI_RUNTIME_COMMAND) {
-    return spawn(process.env.ISAGI_RUNTIME_COMMAND, {
-      detached: useDetachedRuntimeProcess(),
-      env: process.env,
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  }
-
-  if (app.isPackaged) {
-    return spawn(process.execPath, [join(process.resourcesPath, 'app.asar/runtime/index.js')], {
-      detached: useDetachedRuntimeProcess(),
-      env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  }
-
-  return spawn(pnpmCommand(), ['--filter', '@isagi/runtime', 'dev'], {
-    detached: useDetachedRuntimeProcess(),
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+  return new RuntimeLifecycle(target, {
+    processAdapter: nodeRuntimeProcessAdapter,
+    checkHealth: (url) => Effect.runPromise(waitForRuntimeHealth(url)),
+    log: createRuntimeLogSink(),
   });
 }
 
-function killRuntimeProcess(childProcess: ChildProcessByStdio<null, Readable, Readable>) {
-  if (!childProcess.pid) {
-    childProcess.kill();
-    return;
+function prepareManagedRuntime() {
+  const webOrigin = app.isPackaged ? undefined : requiredDevelopmentWebOrigin();
+  const stageRoot = app.isPackaged
+    ? resolve(process.resourcesPath, 'runtime')
+    : resolve(desktopRoot, '.generated/runtime');
+  let stage;
+  try {
+    stage = validateRuntimeStage(stageRoot);
+  } catch (error) {
+    throw new RuntimeLifecycleFailure({
+      reason: 'stage_invalid',
+      diagnostic: { message: errorMessage(error) },
+    });
   }
 
-  if (useDetachedRuntimeProcess()) {
-    try {
-      process.kill(-childProcess.pid, 'SIGTERM');
-      return;
-    } catch (error) {
-      if (!isMissingProcessError(error)) {
-        console.error(`[runtime] Failed to kill runtime process group: ${toError(error).message}`);
-      }
+  return {
+    command: process.execPath,
+    args: [stage.entrypoint],
+    cwd: stage.root,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      HOST: '127.0.0.1',
+      PORT: '0',
+      ...(webOrigin ? { ISAGI_ALLOWED_ORIGINS: mergeAllowedOrigins(webOrigin) } : {}),
+      ...(!app.isPackaged && !process.env.ISAGI_DATA_DIR
+        ? { ISAGI_DATA_DIR: resolve(repositoryRoot, 'data/.isagi') }
+        : {}),
+    },
+  };
+}
+
+function requiredDevelopmentWebOrigin() {
+  const configured = process.env.ISAGI_WEB_URL;
+  if (!configured) {
+    throw new RuntimeLifecycleFailure({
+      reason: 'launch_configuration_invalid',
+      diagnostic: {
+        message: 'Managed desktop development requires ISAGI_WEB_URL with an exact web origin.',
+      },
+    });
+  }
+  try {
+    const url = new URL(configured);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+      throw new Error('unsupported or credential-bearing URL');
     }
+    return url.origin;
+  } catch {
+    throw new RuntimeLifecycleFailure({
+      reason: 'launch_configuration_invalid',
+      diagnostic: { message: 'ISAGI_WEB_URL must be an absolute HTTP(S) URL without credentials.' },
+    });
   }
-
-  if (!childProcess.killed) {
-    childProcess.kill();
-  }
 }
 
-function useDetachedRuntimeProcess() {
-  return process.platform !== 'win32';
+function mergeAllowedOrigins(webOrigin: string) {
+  const configured = process.env.ISAGI_ALLOWED_ORIGINS?.split(',') ?? [];
+  return [
+    ...new Set([webOrigin, ...configured.map((origin) => origin.trim()).filter(Boolean)]),
+  ].join(',');
 }
 
-function isMissingProcessError(error: unknown) {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH';
-}
-
-function pnpmCommand() {
-  return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-}
-
-function toError(error: unknown) {
-  return error instanceof Error ? error : new Error(String(error));
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

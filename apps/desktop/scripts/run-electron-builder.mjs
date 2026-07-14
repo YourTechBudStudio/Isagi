@@ -1,11 +1,16 @@
 import { spawn } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Data, Effect, Exit } from 'effect';
 
+import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
+import { prepareRuntimeStage } from './runtime-stage/stage.mjs';
+
 class CommandStartError extends Data.TaggedError('CommandStartError') {}
+class PackagedRuntimeMissingError extends Data.TaggedError('PackagedRuntimeMissingError') {}
 
 const executableSuffix = process.platform === 'win32' ? '.cmd' : '';
 const desktopDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -17,20 +22,17 @@ const electronBuilderCommand = join(
 );
 
 const program = Effect.gen(function* () {
+  yield* prepareRuntimeStage();
   const packageResult = yield* runCommand(electronBuilderCommand, process.argv.slice(2));
-
-  console.log('[desktop] Restoring better-sqlite3 for the standalone Node runtime');
-  const restoreResult = yield* runCommand(`pnpm${executableSuffix}`, [
-    '--filter',
-    '@isagi/runtime',
-    'rebuild',
-    'better-sqlite3',
-  ]);
-
   const packageExitCode = commandExitCode(packageResult);
-  const restoreExitCode = commandExitCode(restoreResult);
+  if (packageExitCode !== 0) return packageExitCode;
 
-  return packageExitCode !== 0 ? packageExitCode : restoreExitCode;
+  const packagedRuntimeRoot = yield* Effect.try({
+    try: findPackagedRuntimeRoot,
+    catch: (cause) => new PackagedRuntimeMissingError({ cause }),
+  });
+  yield* smokeRuntimeStage(packagedRuntimeRoot);
+  return 0;
 });
 
 const exit = await Effect.runPromiseExit(program);
@@ -112,4 +114,30 @@ function commandExitCode(result) {
   }
 
   return 1;
+}
+
+function findPackagedRuntimeRoot() {
+  const releaseRoot = resolve(desktopDirectory, 'release');
+  if (!existsSync(releaseRoot)) throw new Error(`Package output is missing at ${releaseRoot}`);
+  const matches = [];
+  const visit = (directory, depth) => {
+    if (depth > 8) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = resolve(directory, entry.name);
+      if (entry.name === 'runtime' && existsSync(resolve(path, 'runtime-stage.json'))) {
+        matches.push(path);
+        continue;
+      }
+      visit(path, depth + 1);
+    }
+  };
+  visit(releaseRoot, 0);
+  matches.sort(
+    (left, right) =>
+      statSync(resolve(right, 'runtime-stage.json')).mtimeMs -
+      statSync(resolve(left, 'runtime-stage.json')).mtimeMs,
+  );
+  if (!matches[0]) throw new Error(`No packaged runtime stage was found under ${releaseRoot}`);
+  return matches[0];
 }

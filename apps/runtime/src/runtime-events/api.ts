@@ -11,7 +11,7 @@ import {
 } from '@isagi/contracts';
 
 import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
-import { isAllowedRuntimeOrigin } from '../lib/security/origin.js';
+import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
 import type { RuntimeServices } from '../runtime.layer.js';
 import { WorkflowRunProjection } from '../workflows/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEventBus } from './event-bus.js';
@@ -31,14 +31,7 @@ export function registerRuntimeEventsApi(
     `${apiBasePath}${runtimeEventsWebSocketEndpoint.path}`,
     {
       websocket: true,
-      preValidation: (request, reply, done) => {
-        const origin = request.headers.origin;
-        if (!isAllowedRuntimeOrigin(Array.isArray(origin) ? origin[0] : origin)) {
-          reply.code(403).send('Forbidden');
-          return;
-        }
-        done();
-      },
+      preValidation: enforceRuntimeWebSocketOrigin,
     },
     (socket) => {
       let closed = false;
