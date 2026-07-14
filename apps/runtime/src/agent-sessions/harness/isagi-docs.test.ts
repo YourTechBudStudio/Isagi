@@ -231,6 +231,60 @@ test('the router names every top-level config key the schemas define', () => {
   }
 });
 
+/**
+ * The top-level-key test above passes for `workflows` only incidentally - the word appears inside the
+ * default `.../workflows/<key>/` path span. This guard is the one that actually holds the routing row:
+ * additional-directory requests must reach the global config reference, or the configurable surface
+ * silently regresses into the "Isagi does not configure it today" boundary.
+ */
+test('the router routes additional workflow directories to the global config reference', () => {
+  const router = files.get('SKILL.md') ?? '';
+  const routed = router
+    .split('\n')
+    .some(
+      (line) =>
+        line.includes('workflows.additionalDirectories') &&
+        line.includes('references/config-global.md'),
+    );
+  assert.ok(
+    routed,
+    'SKILL.md must route workflows.additionalDirectories to references/config-global.md',
+  );
+});
+
+/**
+ * Other sections and the embedded schema also mention `~` or restart behavior. Isolate this section so
+ * its handwritten explanation must carry each user-facing fact on its own.
+ */
+test('the global config prose documents additional workflow directories without leaning on the schema', () => {
+  const emitted = files.get('references/config-global.md') ?? '';
+  const heading = '\n## Additional workflow directories\n';
+  const sectionIndex = emitted.indexOf(heading);
+  assert.notEqual(
+    sectionIndex,
+    -1,
+    'config-global.md lost its ## Additional workflow directories section',
+  );
+  const sectionStart = sectionIndex + heading.length;
+  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
+  assert.notEqual(
+    nextHeadingIndex,
+    -1,
+    'additional workflow directories must precede another section',
+  );
+  const prose = emitted.slice(sectionStart, nextHeadingIndex);
+
+  assert.match(prose, /additionalDirectories/, 'prose never names additionalDirectories');
+  assert.match(prose, /workflows:/, 'prose never shows the workflows nesting');
+  assert.match(prose, /absolute/i, 'prose never states paths must be absolute');
+  assert.match(prose, /~/, 'prose never mentions current-user ~ expansion');
+  assert.match(prose, /current user/i, 'prose never limits ~ expansion to the current user');
+  assert.match(prose, /priority|order/i, 'prose never states array-order precedence');
+  assert.match(prose, /data[-\s]?root/i, 'prose never names the lower data-root source');
+  assert.match(prose, /\.isagi\/workflows/, 'prose never names the higher project source');
+  assert.match(prose, /restart/i, 'prose never states a restart is required');
+});
+
 test('skill references do not carry generated contents sections', () => {
   for (const [path, source] of handwritten) {
     if (path === 'SKILL.md') continue;
