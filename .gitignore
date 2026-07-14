@@ -4,6 +4,7 @@ dist/
 dist-electron/
 build/
 apps/runtime/.generated/
+apps/desktop/.generated/
 release/
 .turbo/
 coverage/

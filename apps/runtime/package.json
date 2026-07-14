@@ -21,7 +21,7 @@
     "@isagi/contracts": "workspace:*",
     "@yourtechbudstudio/isagi-workflow-sdk": "workspace:*",
     "@yourtechbudstudio/isagi-workflow-verifier": "workspace:*",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.21.2",
     "fastify": "^5.8.5",

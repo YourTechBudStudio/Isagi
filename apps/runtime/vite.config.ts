@@ -2,9 +2,11 @@ import { builtinModules } from 'node:module';
 
 import { defineConfig } from 'vite';
 
+import { runtimePackageExternals } from './runtime-externals.mjs';
+
 export default defineConfig({
   ssr: {
-    external: ['better-sqlite3', 'node-pty', '@fastify/websocket'],
+    external: [...runtimePackageExternals],
     noExternal: true,
   },
   build: {
@@ -17,9 +19,7 @@ export default defineConfig({
       external: [
         ...builtinModules,
         ...builtinModules.map((moduleName) => `node:${moduleName}`),
-        'better-sqlite3',
-        'node-pty',
-        '@fastify/websocket',
+        ...runtimePackageExternals,
       ],
     },
     ssr: true,
