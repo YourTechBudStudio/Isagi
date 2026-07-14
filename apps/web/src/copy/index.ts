@@ -7,7 +7,13 @@ export {
   workAreaCopy,
   workspaceBootCopy,
 } from './workspace.js';
-export { ptySocketErrorCopy, runtimeErrorCopy, type PtySocketErrorReason } from './errors.js';
+export {
+  apiErrorDiagnostic,
+  endpointDiagnostic,
+  ptySocketErrorCopy,
+  runtimeErrorCopy,
+  type PtySocketErrorReason,
+} from './errors.js';
 export {
   paletteCopy,
   surfaceActionsCopy,

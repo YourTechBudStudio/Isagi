@@ -41,6 +41,10 @@ import {
 } from '../../lib/palette/model.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type { ArgSpec, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
+import {
+  workflowFailurePresentation,
+  workflowStartFailureContent,
+} from '../../lib/palette/workflow-failure.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -49,7 +53,6 @@ import {
   useSurfaceDetailQuery,
   useWorkflowDescriptorsQuery,
 } from '../../lib/workspace/queries.js';
-import { formatRuntimeError, formatRuntimeErrorSummary } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
 import {
@@ -120,6 +123,17 @@ export function CommandPalette() {
     [activeSurfaceDetail.data, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
   );
   const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchContext, { enabled: open });
+  // A whole-list discovery failure is derived only from the current enabled query
+  // state: no launch context or a merely-pending query yields no failure row; a
+  // terminal error (including a failed refetch over stale data) overrides the
+  // cached descriptors via `assembleEntries` suppression.
+  const workflowFailure = useMemo(
+    () =>
+      workflowLaunchContext !== null && workflowDescriptors.isError
+        ? workflowFailurePresentation(workflowDescriptors.error)
+        : undefined,
+    [workflowLaunchContext, workflowDescriptors.isError, workflowDescriptors.error],
+  );
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
@@ -128,6 +142,7 @@ export function CommandPalette() {
         activePaneBySurfaceId,
         workflowDescriptors: workflowDescriptors.data?.workflows,
         activeSurfaceWorkflowSummary,
+        workflowFailure,
       }),
     [
       projects,
@@ -137,6 +152,7 @@ export function CommandPalette() {
       activePaneBySurfaceId,
       workflowDescriptors.data?.workflows,
       activeSurfaceWorkflowSummary,
+      workflowFailure,
     ],
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
@@ -364,15 +380,6 @@ export function CommandPalette() {
     panelRef.current?.focus();
   }, [open, running, acceptsInput, view, viewKey]);
 
-  const workflowStartErrorContent = (error: unknown) => ({
-    title: paletteCopy.workflows.startFailed.title,
-    body: formatRuntimeErrorSummary(error),
-    diagnostic: {
-      label: paletteCopy.workflows.startFailed.diagnosticLabel,
-      detail: formatRuntimeError(error),
-    },
-  });
-
   const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowInputAnswers) => {
     if (!entry.workflow || !workflowLaunchContext) {
       send({
@@ -402,7 +409,7 @@ export function CommandPalette() {
           send({
             type: 'flow-failed',
             entryId: entry.id,
-            content: workflowStartErrorContent(error),
+            content: workflowStartFailureContent(error),
           });
         },
       },

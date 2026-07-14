@@ -49,13 +49,8 @@ import type {
 } from '@isagi/contracts';
 
 import { runtimeErrorCopy } from '../../copy/index.js';
-import {
-  createRuntimeClient,
-  RuntimeApiError,
-  RuntimeDecodeError,
-  RuntimeTransportError,
-  type RuntimeClient,
-} from '../runtime/client.js';
+import { classifyRuntimeFailure } from '../runtime/classify.js';
+import { createRuntimeClient, type RuntimeClient } from '../runtime/client.js';
 import { resolveRuntimeUrl } from '../runtime/resolve.js';
 import { unwrapRuntimeFailure } from '../runtime/run.js';
 
@@ -377,23 +372,27 @@ function getClient() {
 }
 
 function runtimeErrorCopyFor(error: unknown, options: { readonly diagnostic: boolean }) {
+  // `UserVisibleError` is a workspace-local validation failure (e.g. surface
+  // rename), not a runtime-client failure, so it is checked before classifying.
   const failure = unwrapRuntimeFailure(error);
   if (failure instanceof UserVisibleError) {
     return failure.userMessage;
   }
-  if (failure instanceof RuntimeApiError) {
-    const summary = runtimeErrorCopy.fromApiError(failure.apiError);
-    return options.diagnostic
-      ? `${summary} (${runtimeErrorCopy.diagnostic(failure.apiError)})`
-      : summary;
+  const classified = classifyRuntimeFailure(failure);
+  switch (classified.kind) {
+    case 'api': {
+      const summary = runtimeErrorCopy.fromApiError(classified.apiError);
+      return options.diagnostic
+        ? `${summary} (${runtimeErrorCopy.diagnostic(classified.apiError)})`
+        : summary;
+    }
+    case 'transport':
+      return runtimeErrorCopy.transport;
+    case 'decode':
+      return runtimeErrorCopy.decode;
+    case 'unknown':
+      return runtimeErrorCopy.unknown;
   }
-  if (failure instanceof RuntimeTransportError) {
-    return runtimeErrorCopy.transport;
-  }
-  if (failure instanceof RuntimeDecodeError) {
-    return runtimeErrorCopy.decode;
-  }
-  return runtimeErrorCopy.unknown;
 }
 
 export function formatRuntimeError(error: unknown) {

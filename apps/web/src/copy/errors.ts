@@ -136,6 +136,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     summary: "Isagi couldn't complete that workflow action.",
     byReason: {
       unknown_workflow_key: "Isagi doesn't recognize that workflow.",
+      workflow_discovery_failed: "Couldn't read a workflow source path.",
       workflow_load_failed: "Couldn't load that workflow's code.",
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
@@ -235,6 +236,37 @@ export const runtimeErrorCopy = {
   decode: decodeError,
   unknown: unknownError,
 } as const;
+
+/**
+ * Structured diagnostic detail for a workflow rejection: framed absolute source
+ * and package paths above the stable `code · request` line. Paths are diagnostic
+ * facts, never primary copy. Sections are omitted (not left as empty labels) when
+ * their optional contract fields are absent, and shadowed-package order is
+ * preserved. A non-`workflow_rejected` error (or one carrying no path fields)
+ * degrades to the plain `code · request` line. Rendered in a `whitespace-pre-wrap`
+ * mono panel, so newlines are meaningful.
+ */
+export function apiErrorDiagnostic(apiError: ApiError): string {
+  const lines: string[] = [];
+  if (Schema.is(workflowRejectedErrorSchema)(apiError)) {
+    const { data } = apiError;
+    if (data.workflowSourceDirectory) {
+      lines.push(`Source directory: ${data.workflowSourceDirectory}`);
+    }
+    if (data.workflowPackageDirectory) {
+      lines.push(`Workflow package: ${data.workflowPackageDirectory}`);
+    }
+    for (const shadowed of data.shadowedWorkflowPackageDirectories ?? []) {
+      lines.push(`Shadowed package: ${shadowed}`);
+    }
+  }
+  const trailing = runtimeErrorCopy.diagnostic(apiError);
+  return lines.length > 0 ? `${lines.join('\n')}\n\n${trailing}` : trailing;
+}
+
+export function endpointDiagnostic(endpointId: string): string {
+  return `Endpoint: ${endpointId}`;
+}
 
 // Local pseudo-codes for socket conditions the client detects itself (the runtime
 // never reports them), folded into the same registry so PTY copy reads as one set.
