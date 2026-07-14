@@ -177,10 +177,36 @@ export const WorkflowEngineLive = Layer.scoped(
           input.context.worktreeId,
           workspaceRepository,
         );
+        const discovery = yield* diagnosticPhase(
+          'workflow.start.discover',
+          diagnosticContext,
+          registry.discover(registryContext).pipe(Effect.either),
+        );
+        if (Either.isLeft(discovery)) {
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_load_failed',
+              message: discovery.left.message,
+              workflowKey: input.workflowKey,
+            }),
+          );
+        }
+        const discoveredEntry = discovery.right.find(input.workflowKey);
+        if (!discoveredEntry) {
+          const knownWorkflowKeys = discovery.right.entries.map((entry) => entry.workflowKey);
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'unknown_workflow_key',
+              message: unknownWorkflowMessage(input.workflowKey, knownWorkflowKeys),
+              workflowKey: input.workflowKey,
+              knownWorkflowKeys,
+            }),
+          );
+        }
         const definition = yield* diagnosticPhase(
           'workflow.start.load_definition',
           diagnosticContext,
-          registry.resolveLatest(input.workflowKey, registryContext).pipe(Effect.either),
+          registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
         );
         if (Either.isLeft(definition)) {
           return yield* Effect.fail(
@@ -192,26 +218,6 @@ export const WorkflowEngineLive = Layer.scoped(
                 definition.left instanceof WorkflowLoadError
                   ? definition.left.reason
                   : 'artifact_load_failed',
-            }),
-          );
-        }
-        if (!definition.right) {
-          const knownWorkflowKeys = yield* registry.knownKeys(registryContext).pipe(
-            Effect.mapError(
-              (cause) =>
-                new WorkflowEngineError({
-                  code: 'workflow_load_failed',
-                  message: cause.message,
-                  workflowKey: input.workflowKey,
-                }),
-            ),
-          );
-          return yield* Effect.fail(
-            new WorkflowEngineError({
-              code: 'unknown_workflow_key',
-              message: unknownWorkflowMessage(input.workflowKey, knownWorkflowKeys),
-              workflowKey: input.workflowKey,
-              knownWorkflowKeys,
             }),
           );
         }
@@ -612,7 +618,7 @@ export const WorkflowEngineLive = Layer.scoped(
             launchCtx.worktreeId,
             workspaceRepository,
           );
-          const keys = yield* registry.knownKeys(registryContext).pipe(
+          const discovery = yield* registry.discover(registryContext).pipe(
             Effect.mapError(
               (cause) =>
                 new WorkflowEngineError({
@@ -622,10 +628,9 @@ export const WorkflowEngineLive = Layer.scoped(
             ),
           );
           const results: WorkflowDescriptorResult[] = [];
-          for (const workflowKey of keys) {
-            const definition = yield* registry
-              .resolveLatest(workflowKey, registryContext)
-              .pipe(Effect.either);
+          for (const discoveredEntry of discovery.entries) {
+            const workflowKey = discoveredEntry.workflowKey;
+            const definition = yield* registry.loadDiscovered(discoveredEntry).pipe(Effect.either);
             if (Either.isLeft(definition)) {
               results.push({
                 ok: false,
@@ -635,15 +640,6 @@ export const WorkflowEngineLive = Layer.scoped(
                     ? definition.left.reason
                     : 'artifact_load_failed',
                 diagnostic: definition.left.message,
-              });
-              continue;
-            }
-            if (!definition.right) {
-              results.push({
-                ok: false,
-                workflowKey,
-                reason: 'missing_build',
-                diagnostic: unknownWorkflowMessage(workflowKey, keys),
               });
               continue;
             }

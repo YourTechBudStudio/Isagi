@@ -66,6 +66,7 @@ import {
   createFilesystemWorkflowRegistry,
   createWorkflowRegistry,
   WorkflowRegistry,
+  type WorkflowRegistryService,
 } from './registry.js';
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
 import type { WorkflowRepositoryService } from './repository.js';
@@ -73,6 +74,23 @@ import { resolveTurnEdge } from './resolver.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
 import { deriveWorkflowRunSummary } from './workflow-run-projection.service.js';
+
+function countingRegistry(base: WorkflowRegistryService): {
+  readonly registry: WorkflowRegistryService;
+  readonly discoveryCount: () => number;
+} {
+  let discoveryCount = 0;
+  return {
+    registry: {
+      ...base,
+      discover: (...args) => {
+        discoveryCount += 1;
+        return base.discover(...args);
+      },
+    },
+    discoveryCount: () => discoveryCount,
+  };
+}
 
 test('drainOnce runs an agentless cont workflow to done', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-cont-'));
@@ -153,6 +171,79 @@ test('startWorkflow persists the real hash resolved by the filesystem registry',
 
     assert.equal(run.workflowArtifactHash, artifactHash);
     assert.equal(existsSync(join(dataRoot, 'workflow-artifacts', artifactHash, 'index.mjs')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('descriptor listing uses one discovery and a subsequent start discovers afresh', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-fresh-start-discovery-'));
+  try {
+    writeVerifiedWorkflowPackage(join(dataRoot, 'workflows', 'listed'));
+    const filesystemRegistry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+    const countedRegistry = countingRegistry(filesystemRegistry);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const descriptors = yield* engine.listWorkflowDescriptors({
+          context: { worktreeId: 1, surfaceId: 1 },
+        });
+        yield* Effect.sync(() => {
+          writeVerifiedWorkflowPackage(join(dataRoot, 'workflows', 'added-after-list'));
+        });
+        const run = yield* engine.startWorkflow({
+          workflowKey: 'added-after-list',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1 },
+        });
+        return { descriptors, run };
+      }).pipe(
+        Effect.provide(
+          workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, countedRegistry.registry)),
+        ),
+      ),
+    );
+
+    assert.deepEqual(
+      result.descriptors.map((descriptor) => descriptor.workflowKey),
+      ['listed'],
+    );
+    assert.equal(result.run.workflowKey, 'added-after-list');
+    assert.equal(countedRegistry.discoveryCount(), 2);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('descriptor listing exposes a lone malformed child as an isolated load failure', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-malformed-descriptor-'));
+  try {
+    mkdirSync(join(dataRoot, 'workflows'), { recursive: true });
+    writeFileSync(join(dataRoot, 'workflows', 'malformed'), 'not a package directory\n');
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+
+    const descriptors = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        return yield* engine.listWorkflowDescriptors({
+          context: { worktreeId: 1, surfaceId: 1 },
+        });
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.equal(descriptors.length, 1);
+    const malformed = descriptors[0];
+    assert.ok(malformed && !malformed.ok);
+    assert.equal(malformed.workflowKey, 'malformed');
+    assert.equal(malformed.reason, 'invalid_package');
+    assert.match(malformed.diagnostic ?? '', /regular directory/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -818,6 +909,8 @@ test('root workflow summary reflects root state and tree prompts', () => {
 test('startWorkflow rejects unknown workflow keys before insert', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-unknown-start-'));
   try {
+    const inMemoryRegistry = createWorkflowRegistry();
+    const countedRegistry = countingRegistry(inMemoryRegistry);
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const engine = yield* WorkflowEngine;
@@ -830,11 +923,16 @@ test('startWorkflow rejects unknown workflow keys before insert', async () => {
           .pipe(Effect.either);
         const rows = yield* listWorkflowRuns;
         return { started, rows };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(
+        Effect.provide(
+          workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, countedRegistry.registry)),
+        ),
+      ),
     );
 
     assert.ok(Either.isLeft(result.started));
     assert.ok(result.started.left instanceof WorkflowEngineError);
+    assert.equal(countedRegistry.discoveryCount(), 1);
     assert.deepEqual(result.rows, []);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
