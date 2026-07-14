@@ -423,6 +423,37 @@ test('entry-list flows can fail locally before entering a command step', () => {
   assert.equal(state.content.body, "Those answers didn't pass the workflow's checks.");
 });
 
+test('an error-detail entry opens an error outcome and closes on action or back', () => {
+  const content = { title: 'Scan failed', body: 'unreadable path' };
+  const entry: PaletteEntry = {
+    id: 'workflow-failure',
+    label: "Workflows couldn't be scanned.",
+    icon: Plus,
+    group: 'workflows',
+    tone: 'error',
+    run: () => ({ kind: 'error', content }),
+  };
+
+  let state = paletteReducer(initialPaletteState, { type: 'opened' });
+  state = paletteReducer(state, { type: 'activate-entry', entry, ctx });
+
+  // A command-less entry enqueues a run effect that will invoke entry.run().
+  const runEffect = state.effects.at(-1);
+  assert.equal(runEffect?.kind, 'run');
+  const attemptId = runEffect?.kind === 'run' ? runEffect.attemptId : -1;
+
+  state = paletteReducer(state, {
+    type: 'run-succeeded',
+    attemptId,
+    outcome: { kind: 'error', content },
+  });
+  assert.equal(state.kind, 'error');
+  assert.equal(state.kind === 'error' && state.content.title, 'Scan failed');
+
+  assert.equal(paletteReducer(state, { type: 'outcome-action', value: 'close' }).kind, 'closed');
+  assert.equal(paletteReducer(state, { type: 'back', ctx }).kind, 'closed');
+});
+
 function fakeCommand(overrides: Partial<PaletteCommand> = {}): PaletteCommand {
   return {
     id: 'fake-command',

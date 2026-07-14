@@ -1,4 +1,4 @@
-import { ArrowRight, Workflow } from 'lucide-react';
+import { ArrowRight, TriangleAlert, Workflow } from 'lucide-react';
 
 import { paletteCopy, workflowLoadFailureReasonCopy } from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
@@ -8,7 +8,31 @@ import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
 import { GLOBAL_COMMANDS } from './registry.js';
-import type { PaletteContext, PaletteEntry } from './types.js';
+import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
+
+/**
+ * Builds a selectable error-detail row from already-formed error content. The row
+ * reads as a diagnostic (error-toned `TriangleAlert`, no launch affordance) and
+ * its `run()` returns an error outcome that opens the palette's `OutcomePanel`;
+ * it has no workflow launch descriptor, so it can never reach workflow start.
+ * Shared by broken winning packages and whole-list discovery failures.
+ */
+export function workflowFailureEntry(input: {
+  readonly id: string;
+  readonly label: string;
+  readonly sub: string;
+  readonly content: CommandErrorContent;
+}): PaletteEntry {
+  return {
+    id: input.id,
+    label: input.label,
+    icon: TriangleAlert,
+    group: 'workflows',
+    sub: input.sub,
+    tone: 'error',
+    run: () => ({ kind: 'error', content: input.content }),
+  };
+}
 
 export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
@@ -29,33 +53,59 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
 
   const worktree = ctx.activeWorktree;
   if (worktree) {
-    for (const descriptor of ctx.workflowDescriptors ?? []) {
-      if (descriptor.ok) {
-        const occupied = ctx.activeSurfaceWorkflowSummary !== undefined;
-        entries.push({
-          id: `workflow:${descriptor.workflowKey}`,
-          label: descriptor.manifest.title,
-          icon: Workflow,
-          group: 'workflows',
-          sub: occupied
-            ? paletteCopy.workflows.disabled.occupied
-            : (descriptor.manifest.description ?? descriptor.workflowKey),
-          workflow: descriptor,
-          ...(occupied ? { disabled: { reason: paletteCopy.workflows.disabled.occupied } } : {}),
-          run: () => {},
-        });
-        continue;
-      }
+    // A whole-list discovery failure replaces the per-key descriptor rows with
+    // one synthetic detail row, but never suppresses the unrelated groups below.
+    if (ctx.workflowFailure) {
+      entries.push(
+        workflowFailureEntry({
+          id: 'workflow-failure',
+          label: ctx.workflowFailure.label,
+          sub: ctx.workflowFailure.sub,
+          content: ctx.workflowFailure.content,
+        }),
+      );
+    } else {
+      for (const descriptor of ctx.workflowDescriptors ?? []) {
+        if (descriptor.ok) {
+          const occupied = ctx.activeSurfaceWorkflowSummary !== undefined;
+          entries.push({
+            id: `workflow:${descriptor.workflowKey}`,
+            label: descriptor.manifest.title,
+            icon: Workflow,
+            group: 'workflows',
+            sub: occupied
+              ? paletteCopy.workflows.disabled.occupied
+              : (descriptor.manifest.description ?? descriptor.workflowKey),
+            workflow: descriptor,
+            ...(occupied ? { disabled: { reason: paletteCopy.workflows.disabled.occupied } } : {}),
+            run: () => {},
+          });
+          continue;
+        }
 
-      entries.push({
-        id: `workflow:${descriptor.workflowKey}`,
-        label: descriptor.workflowKey,
-        icon: Workflow,
-        group: 'workflows',
-        sub: paletteCopy.workflows.disabled.broken,
-        disabled: { reason: workflowLoadFailureReasonCopy(descriptor.reason) },
-        run: () => {},
-      });
+        // A broken winning package: visible, selectable, and reason-specific, but
+        // never runnable. Its `diagnostic` (winner + shadowed paths) is framed in
+        // the outcome panel only when the runtime supplied one.
+        entries.push(
+          workflowFailureEntry({
+            id: `workflow:${descriptor.workflowKey}`,
+            label: descriptor.workflowKey,
+            sub: paletteCopy.workflows.failure.broken.sub,
+            content: {
+              title: paletteCopy.workflows.failure.broken.title,
+              body: workflowLoadFailureReasonCopy(descriptor.reason),
+              ...(descriptor.diagnostic
+                ? {
+                    diagnostic: {
+                      label: paletteCopy.workflows.failure.diagnosticLabel,
+                      detail: descriptor.diagnostic,
+                    },
+                  }
+                : {}),
+            },
+          }),
+        );
+      }
     }
 
     const activeSurfaceTitle = ctx.activeSurface?.title;

@@ -35,6 +35,12 @@ export interface PaletteContext {
   readonly launchableHarnesses: readonly AgentHarness[];
   readonly workflowDescriptors?: readonly WorkflowDescriptorResult[] | undefined;
   readonly activeSurfaceWorkflowSummary?: WorkflowRunSummary | undefined;
+  /**
+   * A whole-list workflow discovery failure (source scan or generic query
+   * failure). When present, it replaces the per-key descriptor rows with one
+   * synthetic detail row and never touches unrelated palette groups.
+   */
+  readonly workflowFailure?: WorkflowFailurePresentation | undefined;
 }
 
 export interface Option<Payload = unknown> {
@@ -79,6 +85,19 @@ export interface CommandErrorContent {
   readonly body?: string | undefined;
   readonly diagnostic?: CommandOutcomeDiagnostic | undefined;
   readonly actions?: readonly CommandOutcomeAction[] | undefined;
+}
+
+/**
+ * Already-formed presentation for a whole-list workflow discovery failure: the
+ * synthetic row's `label`/`sub` plus the error `content` shown when it is
+ * selected. The palette layer only renders this; it never decodes an API error
+ * to produce it. The web query layer forms it (source-scan vs generic transport)
+ * and hands it in, so precedence and copy stay web-owned.
+ */
+export interface WorkflowFailurePresentation {
+  readonly label: string;
+  readonly sub: string;
+  readonly content: CommandErrorContent;
 }
 
 export type CommandOutcome =
@@ -246,6 +265,14 @@ export interface PaletteEntry {
   readonly group: PaletteGroup;
   readonly sub?: string;
   readonly accent?: boolean;
+  /**
+   * Presentation-only marker for an error-detail row (a broken workflow package
+   * or a discovery failure). It tints the row as a genuine error and reads as a
+   * detail action, not a runnable command; behavior stays defined by `run()`,
+   * which returns an error `CommandOutcome`. Deliberately not a `warning`/
+   * `success` union until a real entry needs one.
+   */
+  readonly tone?: 'error';
   /** Values captured when the entry was assembled, before async command effects run. */
   readonly values?: ArgValues;
   readonly disabled?: { readonly reason: string } | undefined;

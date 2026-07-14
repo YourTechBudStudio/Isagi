@@ -25,7 +25,29 @@ export const paletteCopy = {
     start: 'Start workflow',
     disabled: {
       occupied: 'Dismiss the current workflow first.',
-      broken: 'Manifest did not load.',
+    },
+    // Error-detail rows: a broken winning package (per key), or a whole-list
+    // discovery failure (source scan vs. generic). Row labels/subtitles are
+    // concise state; the reason-specific explanation and framed diagnostic live
+    // in the outcome panel. Absolute paths and request ids stay in `diagnostic`.
+    failure: {
+      diagnosticLabel: 'Diagnostic',
+      broken: {
+        sub: "Couldn't load. Select for details.",
+        title: "Couldn't load this workflow.",
+      },
+      discovery: {
+        label: "Workflows couldn't be scanned.",
+        sub: 'Select for details.',
+        title: "Workflows couldn't be scanned.",
+        body: "Isagi couldn't read one of the workflow source paths.",
+      },
+      generic: {
+        label: "Couldn't load workflows.",
+        sub: 'Select for details.',
+        title: "Couldn't load workflows.",
+        body: "Isagi couldn't load the workflow list.",
+      },
     },
     startFailed: {
       title: 'Workflow did not start.',
