@@ -29,15 +29,8 @@
     "oxlint": "^1.67.0",
     "oxlint-tailwindcss": "^1.0.0"
   },
-  "devEngines": {
-    "runtime": {
-      "name": "node",
-      "version": "22.22.3",
-      "onFail": "download"
-    }
-  },
   "engines": {
-    "node": "22.22.3"
+    "node": ">=24 <25"
   },
-  "packageManager": "pnpm@11.4.0"
+  "packageManager": "pnpm@11.13.0"
 }

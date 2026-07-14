@@ -23,6 +23,6 @@ export default defineConfig({
       ],
     },
     ssr: true,
-    target: 'node22',
+    target: 'node24',
   },
 });

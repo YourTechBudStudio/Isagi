@@ -23,6 +23,6 @@ export default defineConfig({
         entryFileNames: '[name]/index.js',
       },
     },
-    target: 'node22',
+    target: 'node24',
   },
 });
