@@ -179,7 +179,9 @@ const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(WorkflowRepositoryLayer),
   Layer.provide(WorkflowEventLedgerLayer),
-  Layer.provide(WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive))),
+  Layer.provide(
+    WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive), Layer.provide(RuntimeConfigLayer)),
+  ),
   Layer.provide(RepositoryLive),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),

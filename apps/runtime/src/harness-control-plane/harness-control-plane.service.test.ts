@@ -135,6 +135,7 @@ test('start does not complete until initial host inventory is ready', async () =
           get: Effect.succeed({
             pty: { backend: 'node-pty' },
             harnesses: policyState('valid', enabledPolicy()),
+            workflows: { additionalDirectories: [] },
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
         } satisfies RuntimeConfigService),
@@ -275,6 +276,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
     get: Effect.succeed({
       pty: { backend: 'node-pty' },
       harnesses: policyState('missing', disabledPolicy),
+      workflows: { additionalDirectories: [] },
     }),
     acceptHarnessPolicy: () => {
       committed = true;
@@ -334,7 +336,11 @@ function controlPlaneLayer(
   root: string,
 ) {
   const config: RuntimeConfigService = {
-    get: Effect.succeed({ pty: { backend: 'node-pty' }, harnesses: state }),
+    get: Effect.succeed({
+      pty: { backend: 'node-pty' },
+      harnesses: state,
+      workflows: { additionalDirectories: [] },
+    }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
   };
   const inventory = Layer.effect(

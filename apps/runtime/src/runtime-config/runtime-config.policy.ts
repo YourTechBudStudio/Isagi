@@ -5,9 +5,11 @@ import { Schema } from 'effect';
 import type { AgentHarness } from '@isagi/contracts';
 
 import { boundedDiagnostic } from '../lib/diagnostic.js';
+import { normalizeAbsoluteHomePath } from '../paths/path.utils.js';
 import {
   runtimeConfigPtyBackendSchema,
   runtimeHarnessPolicySchema,
+  runtimeWorkflowSettingsSchema,
   type RuntimeConfigPtyBackend,
 } from './runtime-config.schema.js';
 
@@ -26,6 +28,7 @@ export interface RuntimeHarnessPolicyState {
 export interface RuntimeConfigShape {
   readonly pty: { readonly backend: RuntimeConfigPtyBackend };
   readonly harnesses: RuntimeHarnessPolicyState;
+  readonly workflows: { readonly additionalDirectories: readonly string[] };
 }
 
 export const disabledHarnessPolicy: RuntimeHarnessPolicy = {
@@ -37,12 +40,14 @@ export const disabledHarnessPolicy: RuntimeHarnessPolicy = {
 export const defaultRuntimeConfig: RuntimeConfigShape = {
   pty: { backend: 'node-pty' },
   harnesses: policyState('missing', disabledHarnessPolicy),
+  workflows: { additionalDirectories: [] },
 };
 
 export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
   const pty = parsePty(value);
+  const workflows = parseWorkflows(value);
   if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'harnesses'))
-    return { pty, harnesses: policyState('missing', disabledHarnessPolicy) };
+    return { pty, harnesses: policyState('missing', disabledHarnessPolicy), workflows };
   try {
     const decoded = Schema.decodeUnknownSync(runtimeHarnessPolicySchema)(value.harnesses);
     const policy = Object.fromEntries(
@@ -52,7 +57,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
         return [id, { enabled, installIsagiDocs: enabled && entry?.installIsagiDocs === true }];
       }),
     ) as unknown as RuntimeHarnessPolicy;
-    return { pty, harnesses: policyState('valid', policy) };
+    return { pty, harnesses: policyState('valid', policy), workflows };
   } catch (error) {
     return {
       pty,
@@ -60,8 +65,19 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
         ...policyState('invalid', disabledHarnessPolicy),
         diagnostic: boundedDiagnostic(error),
       },
+      workflows,
     };
   }
+}
+
+function parseWorkflows(value: unknown): RuntimeConfigShape['workflows'] {
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'workflows')) {
+    return { additionalDirectories: [] };
+  }
+  const decoded = Schema.decodeUnknownSync(runtimeWorkflowSettingsSchema)(value.workflows);
+  return {
+    additionalDirectories: (decoded.additionalDirectories ?? []).map(normalizeAbsoluteHomePath),
+  };
 }
 
 export function harnessPolicyRevision(

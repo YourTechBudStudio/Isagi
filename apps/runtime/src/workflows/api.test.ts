@@ -207,6 +207,134 @@ test('workflow API preserves the contracted load reason for web-owned copy', asy
   });
 });
 
+test('workflow API maps discovery failures to HTTP 500 with source-only provenance', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(fastify, {
+    runPromise: async () =>
+      Either.left(
+        new WorkflowEngineError({
+          code: 'workflow_discovery_failed',
+          message: 'Could not scan workflow directory.',
+          workflowSourceDirectory: '/configured/workflows',
+        }),
+      ),
+  } as never);
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/descriptors',
+    payload: { context: { worktreeId: 7, surfaceId: 42 } },
+  });
+
+  assert.equal(response.statusCode, 500);
+  const body = JSON.parse(response.body) as {
+    readonly error: { readonly requestId: string };
+  };
+  assert.deepEqual(body, {
+    error: {
+      code: 'workflow_rejected',
+      status: 500,
+      message: 'Could not scan workflow directory.',
+      requestId: body.error.requestId,
+      data: {
+        reason: 'workflow_discovery_failed',
+        workflowSourceDirectory: '/configured/workflows',
+      },
+    },
+  });
+});
+
+test('workflow API includes factual discovered-package provenance and omits empty shadow arrays', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(fastify, {
+    runPromise: async () =>
+      Either.left(
+        new WorkflowEngineError({
+          code: 'workflow_load_failed',
+          message: 'A verified workflow build is required.',
+          workflowKey: 'broken',
+          workflowLoadFailureReason: 'missing_build',
+          workflowPackageDirectory: '/additional/broken',
+          shadowedWorkflowPackageDirectories: [],
+        }),
+      ),
+  } as never);
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs',
+    payload: {
+      workflowKey: 'broken',
+      context: { worktreeId: 7, surfaceId: 42 },
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  const body = JSON.parse(response.body) as {
+    readonly error: { readonly requestId: string };
+  };
+  assert.deepEqual(body, {
+    error: {
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'A verified workflow build is required.',
+      requestId: body.error.requestId,
+      data: {
+        reason: 'workflow_load_failed',
+        workflowKey: 'broken',
+        workflowLoadFailureReason: 'missing_build',
+        workflowPackageDirectory: '/additional/broken',
+      },
+    },
+  });
+});
+
+test('workflow API includes shadowed package directories when they exist', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(fastify, {
+    runPromise: async () =>
+      Either.left(
+        new WorkflowEngineError({
+          code: 'workflow_load_failed',
+          message: 'Workflow package is invalid.',
+          workflowKey: 'broken',
+          workflowLoadFailureReason: 'invalid_package',
+          workflowPackageDirectory: '/project/broken',
+          shadowedWorkflowPackageDirectories: ['/core/broken', '/additional/broken'],
+        }),
+      ),
+  } as never);
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs',
+    payload: {
+      workflowKey: 'broken',
+      context: { worktreeId: 7, surfaceId: 42 },
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  const body = JSON.parse(response.body) as {
+    readonly error: { readonly requestId: string };
+  };
+  assert.deepEqual(body, {
+    error: {
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'Workflow package is invalid.',
+      requestId: body.error.requestId,
+      data: {
+        reason: 'workflow_load_failed',
+        workflowKey: 'broken',
+        workflowLoadFailureReason: 'invalid_package',
+        workflowPackageDirectory: '/project/broken',
+        shadowedWorkflowPackageDirectories: ['/core/broken', '/additional/broken'],
+      },
+    },
+  });
+});
+
 test('retry route returns the run-scoped control response', async () => {
   const fastify = Fastify({ logger: false });
   let retryRunId: number | null = null;

@@ -17,7 +17,11 @@ import {
 } from './event-ledger.service.js';
 import { WorkflowHeadless } from './headless.js';
 import { WorkflowLoadError } from './loader.js';
-import { WorkflowRegistry, type WorkflowRegistryContext } from './registry.js';
+import {
+  WorkflowRegistry,
+  type WorkflowPackageProvenance,
+  type WorkflowRegistryContext,
+} from './registry.js';
 import {
   WorkflowRepository,
   type WorkflowRepositoryService,
@@ -185,9 +189,10 @@ export const WorkflowEngineLive = Layer.scoped(
         if (Either.isLeft(discovery)) {
           return yield* Effect.fail(
             new WorkflowEngineError({
-              code: 'workflow_load_failed',
+              code: 'workflow_discovery_failed',
               message: discovery.left.message,
               workflowKey: input.workflowKey,
+              workflowSourceDirectory: discovery.left.workflowSourceDirectory,
             }),
           );
         }
@@ -209,15 +214,18 @@ export const WorkflowEngineLive = Layer.scoped(
           registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
         );
         if (Either.isLeft(definition)) {
+          const provenance = discoveredEntry.provenance;
           return yield* Effect.fail(
             new WorkflowEngineError({
               code: 'workflow_load_failed',
-              message: definition.left.message,
+              message: packageFailureDiagnostic(definition.left.message, provenance),
               workflowKey: input.workflowKey,
               workflowLoadFailureReason:
                 definition.left instanceof WorkflowLoadError
                   ? definition.left.reason
                   : 'artifact_load_failed',
+              workflowPackageDirectory: provenance?.workflowPackageDirectory,
+              shadowedWorkflowPackageDirectories: provenance?.shadowedWorkflowPackageDirectories,
             }),
           );
         }
@@ -622,8 +630,9 @@ export const WorkflowEngineLive = Layer.scoped(
             Effect.mapError(
               (cause) =>
                 new WorkflowEngineError({
-                  code: 'workflow_load_failed',
+                  code: 'workflow_discovery_failed',
                   message: cause.message,
+                  workflowSourceDirectory: cause.workflowSourceDirectory,
                 }),
             ),
           );
@@ -632,6 +641,7 @@ export const WorkflowEngineLive = Layer.scoped(
             const workflowKey = discoveredEntry.workflowKey;
             const definition = yield* registry.loadDiscovered(discoveredEntry).pipe(Effect.either);
             if (Either.isLeft(definition)) {
+              const provenance = discoveredEntry.provenance;
               results.push({
                 ok: false,
                 workflowKey,
@@ -639,7 +649,7 @@ export const WorkflowEngineLive = Layer.scoped(
                   definition.left instanceof WorkflowLoadError
                     ? definition.left.reason
                     : 'artifact_load_failed',
-                diagnostic: definition.left.message,
+                diagnostic: packageFailureDiagnostic(definition.left.message, provenance),
               });
               continue;
             }
@@ -925,6 +935,20 @@ function buildLaunchContext(
       agentSessionId: pane?.session?.kind === 'agent_session' ? pane.session.agentSession.id : null,
     } satisfies WorkflowLaunchContext;
   });
+}
+
+function packageFailureDiagnostic(
+  message: string,
+  provenance: WorkflowPackageProvenance | undefined,
+) {
+  if (!provenance) return message;
+  const details = [`Workflow package directory: ${provenance.workflowPackageDirectory}`];
+  if (provenance.shadowedWorkflowPackageDirectories.length > 0) {
+    details.push(
+      `Shadowed workflow package directories: ${provenance.shadowedWorkflowPackageDirectories.join(', ')}`,
+    );
+  }
+  return `${message}\n${details.join('\n')}`;
 }
 
 function workflowRegistryContextForWorktreeId(

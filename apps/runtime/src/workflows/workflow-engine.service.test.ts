@@ -244,6 +244,96 @@ test('descriptor listing exposes a lone malformed child as an isolated load fail
     assert.equal(malformed.workflowKey, 'malformed');
     assert.equal(malformed.reason, 'invalid_package');
     assert.match(malformed.diagnostic ?? '', /regular directory/);
+    assert.match(malformed.diagnostic ?? '', new RegExp(join(dataRoot, 'workflows', 'malformed')));
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('start failure carries winning and shadowed package provenance without creating a run', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-start-provenance-'));
+  try {
+    const core = join(dataRoot, 'core');
+    const additional = join(dataRoot, 'additional');
+    writeVerifiedWorkflowPackage(join(core, 'blocked'));
+    mkdirSync(additional, { recursive: true });
+    writeFileSync(join(additional, 'blocked'), 'malformed override\n');
+    const registry = createFilesystemWorkflowRegistry(core, join(dataRoot, 'workflow-artifacts'), {
+      additionalDirectories: [additional],
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const started = yield* engine
+          .startWorkflow({
+            workflowKey: 'blocked',
+            variables: {},
+            context: { worktreeId: 1, surfaceId: 1 },
+          })
+          .pipe(Effect.either);
+        return { started, runs: yield* repository.listRuns({}) };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.ok(Either.isLeft(result.started));
+    assert.ok(result.started.left instanceof WorkflowEngineError);
+    assert.equal(result.started.left.code, 'workflow_load_failed');
+    assert.equal(result.started.left.workflowPackageDirectory, join(additional, 'blocked'));
+    assert.deepEqual(result.started.left.shadowedWorkflowPackageDirectories, [
+      join(core, 'blocked'),
+    ]);
+    assert.deepEqual(result.runs, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('descriptor and direct-start discovery map scan failures without creating a run', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-engine-scan-failure-'));
+  try {
+    const configured = join(dataRoot, 'configured');
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'core'),
+      join(dataRoot, 'cache'),
+      {
+        additionalDirectories: [configured],
+        scanSource: (source) => {
+          if (source.kind === 'additional')
+            throw Object.assign(new Error('denied'), { code: 'EACCES' });
+          return [];
+        },
+      },
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const listed = yield* engine
+          .listWorkflowDescriptors({ context: { worktreeId: 1, surfaceId: 1 } })
+          .pipe(Effect.either);
+        const started = yield* engine
+          .startWorkflow({
+            workflowKey: 'unreachable',
+            variables: {},
+            context: { worktreeId: 1, surfaceId: 1 },
+          })
+          .pipe(Effect.either);
+        return { listed, started, runs: yield* repository.listRuns({}) };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.ok(Either.isLeft(result.listed));
+    assert.ok(result.listed.left instanceof WorkflowEngineError);
+    assert.equal(result.listed.left.code, 'workflow_discovery_failed');
+    assert.equal(result.listed.left.workflowSourceDirectory, configured);
+    assert.ok(Either.isLeft(result.started));
+    assert.ok(result.started.left instanceof WorkflowEngineError);
+    assert.equal(result.started.left.code, 'workflow_discovery_failed');
+    assert.equal(result.started.left.workflowSourceDirectory, configured);
+    assert.deepEqual(result.runs, []);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

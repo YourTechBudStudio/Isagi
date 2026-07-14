@@ -11,6 +11,7 @@ import { disabledHarnessPolicy } from './runtime-config.policy.js';
 import {
   RuntimeConfig,
   RuntimeConfigConflict,
+  RuntimeConfigError,
   RuntimeConfigLive,
 } from './runtime-config.service.js';
 function paths(root: string): IsagiDataDirectory {
@@ -36,7 +37,7 @@ test('policy mutation preserves comments and unrelated fields while updating liv
   try {
     writeFileSync(
       join(root, 'config.yaml'),
-      '# keep this\nother: value\npty:\n  backend: node-pty\n',
+      `# keep this\nother: value\npty:\n  backend: node-pty\nworkflows:\n  additionalDirectories:\n    - ${join(root, 'extra workflows')}\n`,
       'utf8',
     );
     await Effect.runPromise(
@@ -54,12 +55,85 @@ test('policy mutation preserves comments and unrelated fields while updating liv
           });
           assert.deepEqual(accepted.harnesses.policy.codex, next.codex);
           assert.deepEqual((yield* service.get).harnesses.policy.codex, next.codex);
+          assert.deepEqual(accepted.workflows.additionalDirectories, [
+            join(root, 'extra workflows'),
+          ]);
         }),
       ),
     );
     const bytes = readFileSync(join(root, 'config.yaml'), 'utf8');
     assert.match(bytes, /# keep this/);
     assert.match(bytes, /other: value/);
+    assert.match(bytes, /additionalDirectories/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('policy mutation rejects malformed workflow config without writing or changing live state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-config-invalid-workflows-'));
+  const path = join(root, 'config.yaml');
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* program(root);
+          const before = yield* service.get;
+          const malformed = 'workflows:\n  additionalDirectories:\n    - relative/path\n';
+          yield* Effect.sync(() => writeFileSync(path, malformed, 'utf8'));
+          const result = yield* service
+            .acceptHarnessPolicy({
+              expectedPolicyRevision: before.harnesses.revision,
+              policy: disabledHarnessPolicy,
+            })
+            .pipe(Effect.either);
+          assert.ok(Either.isLeft(result));
+          assert.ok(result.left instanceof RuntimeConfigError);
+          assert.deepEqual(yield* service.get, before);
+          assert.equal(readFileSync(path, 'utf8'), malformed);
+        }),
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('policy mutation maps a malformed source-race reread to RuntimeConfigError', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-config-race-invalid-workflows-'));
+  const path = join(root, 'config.yaml');
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* program(root);
+          const before = yield* service.get;
+          const malformed = 'workflows:\n  additionalDirectories:\n    - relative/path\n';
+          let changed = false;
+          const racingPolicy = new Proxy(disabledHarnessPolicy, {
+            ownKeys(target) {
+              if (!changed) {
+                changed = true;
+                writeFileSync(path, malformed, 'utf8');
+              }
+              return Reflect.ownKeys(target);
+            },
+          });
+
+          const result = yield* service
+            .acceptHarnessPolicy({
+              expectedPolicyRevision: before.harnesses.revision,
+              policy: racingPolicy,
+            })
+            .pipe(Effect.either);
+
+          assert.ok(Either.isLeft(result));
+          assert.ok(result.left instanceof RuntimeConfigError);
+          assert.deepEqual(yield* service.get, before);
+          assert.equal(readFileSync(path, 'utf8'), malformed);
+        }),
+      ),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

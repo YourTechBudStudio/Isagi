@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 
 import { cont, done, suspend, wait } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Context, Data, Effect, Layer } from 'effect';
@@ -6,9 +6,13 @@ import { Context, Data, Effect, Layer } from 'effect';
 import type { AgentHarness } from '@isagi/contracts';
 
 import { DataDirectory } from '../persistence/index.js';
+import { RuntimeConfig } from '../runtime-config/index.js';
 import {
+  dedupeWorkflowSources,
   discoverOrderedWorkflowSources,
+  scanWorkflowSource,
   type DiscoveredFilesystemWorkflow,
+  type ScanWorkflowSource,
   type WorkflowDiscoverySource,
 } from './discovery.js';
 import {
@@ -23,28 +27,31 @@ import type { WorkflowDefinition } from './types.js';
 export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryError')<{
   readonly code: 'scan_failed' | 'in_memory_mutation_unsupported';
   readonly message: string;
+  readonly workflowSourceDirectory?: string | undefined;
+  readonly sourceKind?: WorkflowDiscoverySource['kind'] | undefined;
   readonly cause?: unknown;
 }> {}
+
+export interface WorkflowPackageProvenance {
+  readonly workflowPackageDirectory: string;
+  readonly shadowedWorkflowPackageDirectories: readonly string[];
+}
 
 const discoveredWorkflowLocator = Symbol('isagi/DiscoveredWorkflowLocator');
 
 type DiscoveredWorkflowLocator =
   | {
       readonly kind: 'filesystem';
-      readonly packageRoot: string;
-      readonly shadowedPackageRoots: readonly string[];
-      readonly source: WorkflowDiscoverySource;
-      readonly shadowedSources: readonly WorkflowDiscoverySource[];
       readonly load: () => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
     }
   | {
       readonly kind: 'in_memory';
-      readonly definition: WorkflowDefinition<unknown>;
       readonly load: () => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
     };
 
 export interface DiscoveredWorkflowEntry {
   readonly workflowKey: string;
+  readonly provenance?: WorkflowPackageProvenance | undefined;
   readonly [discoveredWorkflowLocator]: DiscoveredWorkflowLocator;
 }
 
@@ -77,26 +84,39 @@ export const WorkflowRegistryLive = Layer.effect(
   WorkflowRegistry,
   Effect.gen(function* () {
     const directory = yield* DataDirectory;
+    const config = yield* RuntimeConfig;
+    const startupConfig = yield* config.get;
     return createFilesystemWorkflowRegistry(
       directory.paths.workflowsPath,
       join(directory.paths.root, 'workflow-artifacts'),
+      { additionalDirectories: startupConfig.workflows.additionalDirectories },
     );
   }),
 );
 
+export interface FilesystemWorkflowRegistryOptions {
+  readonly additionalDirectories?: readonly string[] | undefined;
+  readonly scanSource?: ScanWorkflowSource | undefined;
+}
+
 export function createFilesystemWorkflowRegistry(
   workflowsPath: string,
   cacheRoot: string,
+  options: FilesystemWorkflowRegistryOptions = {},
 ): WorkflowRegistryService {
   const shadowLogKeys = new Set<string>();
+  const missingWarningPaths = new Set<string>();
   const definitionCache: WorkflowDefinitionCache = new Map();
+  const scanSource = options.scanSource ?? scanWorkflowSource;
+  const additionalDirectories = [...(options.additionalDirectories ?? [])];
 
   return {
     discover: (context) =>
       Effect.try({
         try: () => {
           const discovered = discoverOrderedWorkflowSources(
-            workflowDiscoverySources(workflowsPath, context),
+            workflowDiscoverySources(workflowsPath, additionalDirectories, context),
+            (source) => scanSourceWithPolicy(source, scanSource, missingWarningPaths),
           );
           for (const workflow of discovered) logWorkflowShadows(workflow, shadowLogKeys);
           return createDiscoverySnapshot(
@@ -106,11 +126,13 @@ export function createFilesystemWorkflowRegistry(
           );
         },
         catch: (cause) =>
-          new WorkflowRegistryError({
-            code: 'scan_failed',
-            message: `Could not scan workflow directory: ${scanFailurePath(cause) ?? 'unknown path'}.`,
-            cause,
-          }),
+          cause instanceof WorkflowRegistryError
+            ? cause
+            : new WorkflowRegistryError({
+                code: 'scan_failed',
+                message: 'Could not scan workflow sources.',
+                cause,
+              }),
       }),
     loadDiscovered: (entry) => entry[discoveredWorkflowLocator].load(),
     loadPinned: (artifactHash, workflowKey) =>
@@ -125,9 +147,41 @@ export function createFilesystemWorkflowRegistry(
   };
 }
 
-function scanFailurePath(cause: unknown): string | undefined {
-  if (typeof cause !== 'object' || cause === null || !('path' in cause)) return undefined;
-  return typeof cause.path === 'string' ? cause.path : undefined;
+function scanSourceWithPolicy(
+  source: WorkflowDiscoverySource,
+  scanSource: ScanWorkflowSource,
+  missingWarningPaths: Set<string>,
+) {
+  try {
+    return scanSource(source);
+  } catch (cause) {
+    if (isErrno(cause, 'ENOENT')) {
+      if (source.explicitlyConfigured && !missingWarningPaths.has(source.rootPath)) {
+        missingWarningPaths.add(source.rootPath);
+        console.warn('[runtime] Configured workflow directory is missing', {
+          operation: 'workflow.discover.scan_source',
+          workflowSourceDirectory: source.rootPath,
+        });
+      }
+      return [];
+    }
+    throw new WorkflowRegistryError({
+      code: 'scan_failed',
+      message: `Could not scan workflow directory: ${source.rootPath}.`,
+      workflowSourceDirectory: source.rootPath,
+      sourceKind: source.kind,
+      cause,
+    });
+  }
+}
+
+function isErrno(cause: unknown, code: string) {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    'code' in cause &&
+    (cause as NodeJS.ErrnoException).code === code
+  );
 }
 
 export function createWorkflowRegistry(
@@ -144,7 +198,6 @@ export function createWorkflowRegistry(
             .map(([workflowKey, definition]) =>
               createDiscoveredWorkflowEntry(workflowKey, {
                 kind: 'in_memory',
-                definition,
                 load: () => Effect.succeed({ artifactHash: hash, definition }),
               }),
             ),
@@ -307,19 +360,31 @@ function projectWorkflowsPath(context: WorkflowRegistryContext | undefined) {
 
 function workflowDiscoverySources(
   workflowsPath: string,
+  additionalDirectories: readonly string[],
   context: WorkflowRegistryContext | undefined,
 ): readonly WorkflowDiscoverySource[] {
-  const sources: WorkflowDiscoverySource[] = [{ kind: 'global', rootPath: workflowsPath }];
+  const sources: WorkflowDiscoverySource[] = [
+    { kind: 'core', rootPath: normalize(workflowsPath), explicitlyConfigured: false },
+    ...additionalDirectories.map(
+      (rootPath, configuredIndex): WorkflowDiscoverySource => ({
+        kind: 'additional',
+        rootPath: normalize(rootPath),
+        configuredIndex,
+        explicitlyConfigured: true,
+      }),
+    ),
+  ];
   const projectRoot = projectWorkflowsPath(context);
   if (projectRoot) {
     sources.push({
       kind: 'project',
       projectId: context?.projectId ?? null,
       projectRoot: context?.projectRoot ?? projectRoot,
-      rootPath: projectRoot,
+      rootPath: normalize(projectRoot),
+      explicitlyConfigured: false,
     });
   }
-  return sources;
+  return dedupeWorkflowSources(sources);
 }
 
 function filesystemDiscoveryEntry(
@@ -327,27 +392,36 @@ function filesystemDiscoveryEntry(
   cacheRoot: string,
   definitionCache: WorkflowDefinitionCache,
 ): DiscoveredWorkflowEntry {
-  return createDiscoveredWorkflowEntry(workflow.workflowKey, {
-    kind: 'filesystem',
-    packageRoot: workflow.winner.packageRoot,
-    shadowedPackageRoots: workflow.shadowed.map((candidate) => candidate.packageRoot),
-    source: workflow.winner.source,
-    shadowedSources: workflow.shadowed.map((candidate) => candidate.source),
-    load: () =>
-      validateAndPublishWorkflowPackage({
-        workflowKey: workflow.workflowKey,
-        packageRoot: workflow.winner.packageRoot,
-        cacheRoot,
-        definitionCache,
-      }),
-  });
+  const provenance = {
+    workflowPackageDirectory: workflow.winner.packageRoot,
+    shadowedWorkflowPackageDirectories: workflow.shadowed.map((candidate) => candidate.packageRoot),
+  } satisfies WorkflowPackageProvenance;
+  return createDiscoveredWorkflowEntry(
+    workflow.workflowKey,
+    {
+      kind: 'filesystem',
+      load: () =>
+        validateAndPublishWorkflowPackage({
+          workflowKey: workflow.workflowKey,
+          packageRoot: workflow.winner.packageRoot,
+          cacheRoot,
+          definitionCache,
+        }),
+    },
+    provenance,
+  );
 }
 
 function createDiscoveredWorkflowEntry(
   workflowKey: string,
   locator: DiscoveredWorkflowLocator,
+  provenance?: WorkflowPackageProvenance,
 ): DiscoveredWorkflowEntry {
-  return { workflowKey, [discoveredWorkflowLocator]: locator };
+  return {
+    workflowKey,
+    ...(provenance ? { provenance } : {}),
+    [discoveredWorkflowLocator]: locator,
+  };
 }
 
 function createDiscoverySnapshot(
@@ -358,16 +432,17 @@ function createDiscoverySnapshot(
 }
 
 function logWorkflowShadows(workflow: DiscoveredFilesystemWorkflow, shadowLogKeys: Set<string>) {
-  if (workflow.shadowed.length === 0 || workflow.winner.source.kind !== 'project') return;
-  const projectSource = workflow.winner.source;
-  const key = `${projectSource.projectId ?? 'unknown'}:${projectSource.projectRoot}:${workflow.workflowKey}`;
+  if (workflow.shadowed.length === 0) return;
+  const key = `${workflow.workflowKey}:${workflow.winner.packageRoot}:${workflow.shadowed
+    .map((candidate) => candidate.packageRoot)
+    .join(':')}`;
   if (shadowLogKeys.has(key)) return;
   shadowLogKeys.add(key);
-  console.info('[runtime] Project workflow shadows global workflow', {
+  console.info('[runtime] Workflow source collision resolved by precedence', {
     workflowKey: workflow.workflowKey,
-    projectId: projectSource.projectId,
-    projectWorkflowsPath: projectSource.rootPath,
-    globalWorkflowsPath: workflow.shadowed[0]?.source.rootPath,
+    winningSourceKind: workflow.winner.source.kind,
+    workflowPackageDirectory: workflow.winner.packageRoot,
+    shadowedWorkflowPackageDirectories: workflow.shadowed.map((candidate) => candidate.packageRoot),
   });
 }
 

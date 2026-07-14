@@ -80,6 +80,24 @@ test('runtime config rejects unsupported PTY backends', async () => {
   }
 });
 
+test('runtime config rejects malformed workflow settings with RuntimeConfigError', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-runtime-config-'));
+  try {
+    writeFileSync(
+      join(root, 'config.yaml'),
+      'workflows:\n  additionalDirectories:\n    - relative/path\n',
+      'utf8',
+    );
+
+    const result = await Effect.runPromise(readConfig(root).pipe(Effect.either));
+
+    assert.ok(Either.isLeft(result));
+    assert.ok(result.left instanceof RuntimeConfigError);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function readConfig(root: string) {
   return Effect.gen(function* () {
     const config = yield* RuntimeConfig;

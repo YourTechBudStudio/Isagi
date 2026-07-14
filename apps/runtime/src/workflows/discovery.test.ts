@@ -5,17 +5,49 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  dedupeWorkflowSources,
   discoverOrderedWorkflowSources,
   scanWorkflowSource,
   type WorkflowDiscoverySource,
   type WorkflowFilesystemCandidate,
 } from './discovery.js';
 
+test('source deduplication preserves the highest-priority source and explicit declaration fact', () => {
+  const sources: readonly WorkflowDiscoverySource[] = [
+    { kind: 'core', rootPath: '/shared', explicitlyConfigured: false },
+    { kind: 'additional', rootPath: '/middle', configuredIndex: 0, explicitlyConfigured: true },
+    { kind: 'additional', rootPath: '/shared', configuredIndex: 1, explicitlyConfigured: true },
+    {
+      kind: 'project',
+      projectId: 1,
+      projectRoot: '/project',
+      rootPath: '/middle',
+      explicitlyConfigured: false,
+    },
+  ];
+
+  assert.deepEqual(dedupeWorkflowSources(sources), [
+    {
+      kind: 'additional',
+      rootPath: '/shared',
+      configuredIndex: 1,
+      explicitlyConfigured: true,
+    },
+    {
+      kind: 'project',
+      projectId: 1,
+      projectRoot: '/project',
+      rootPath: '/middle',
+      explicitlyConfigured: true,
+    },
+  ]);
+});
+
 test('ordered discovery scans each source once and preserves precedence separately from key order', () => {
   const sources: readonly WorkflowDiscoverySource[] = [
-    { kind: 'global', rootPath: '/low' },
-    { kind: 'global', rootPath: '/middle' },
-    { kind: 'global', rootPath: '/high' },
+    { kind: 'core', rootPath: '/low', explicitlyConfigured: false },
+    { kind: 'additional', rootPath: '/middle', configuredIndex: 0, explicitlyConfigured: true },
+    { kind: 'additional', rootPath: '/high', configuredIndex: 1, explicitlyConfigured: true },
   ];
   const calls: string[] = [];
   const candidates = new Map([
@@ -47,16 +79,18 @@ test('source scanning treats ENOENT as absent but rejects a non-directory root',
   const root = mkdtempSync(join(tmpdir(), 'isagi-workflow-source-scan-'));
   try {
     const missing: WorkflowDiscoverySource = {
-      kind: 'global',
+      kind: 'core',
       rootPath: join(root, 'missing'),
+      explicitlyConfigured: false,
     };
-    assert.deepEqual(scanWorkflowSource(missing), []);
+    assert.throws(() => scanWorkflowSource(missing), { code: 'ENOENT' });
 
     const fileRoot = join(root, 'not-a-directory');
     writeFileSync(fileRoot, 'not a workflow collection\n');
-    assert.throws(() => scanWorkflowSource({ kind: 'global', rootPath: fileRoot }), {
-      code: 'ENOTDIR',
-    });
+    assert.throws(
+      () => scanWorkflowSource({ kind: 'core', rootPath: fileRoot, explicitlyConfigured: false }),
+      { code: 'ENOTDIR' },
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
