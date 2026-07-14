@@ -10,6 +10,7 @@ import { getRuntimeUrl, stopRuntime } from './runtime.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'studio.yourtechbud.isagi';
+const DEVELOPMENT_ICON_PATH = join(currentDirectory, '../../assets/app-icon.png');
 const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
 const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
 const isMac = process.platform === 'darwin';
@@ -35,6 +36,7 @@ function createWindowEffect() {
       minWidth: 900,
       show: false,
       title: isDev ? 'Isagi · dev' : 'Isagi',
+      ...(isDev && !isMac ? { icon: DEVELOPMENT_ICON_PATH } : {}),
       // Frameless: Isagi paints the whole window. On macOS the traffic lights
       // stay (inset), positioned to land inside the Rail's reserved top inset.
       ...(isMac
@@ -128,7 +130,13 @@ app.once('before-quit', () => {
 
 app
   .whenReady()
-  .then(createWindow)
+  .then(() => {
+    if (isDev && app.dock) {
+      app.dock.setIcon(DEVELOPMENT_ICON_PATH);
+    }
+
+    return createWindow();
+  })
   .catch((error: unknown) => {
     console.error(error);
     app.quit();

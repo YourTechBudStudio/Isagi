@@ -5,7 +5,10 @@ asarUnpack:
   - node_modules/better-sqlite3/**/*
 
 directories:
+  buildResources: assets
   output: release
+
+icon: app-icon.png
 
 files:
   - from: dist-electron

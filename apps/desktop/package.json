@@ -11,8 +11,8 @@
     "check": "pnpm typecheck && pnpm build",
     "dev": "pnpm build && electron .",
     "dev:connected": "cross-env ISAGI_RUNTIME_URL=http://127.0.0.1:17373 ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm dev",
-    "dist": "electron-builder",
-    "pack:dir": "electron-builder --dir",
+    "dist": "node scripts/run-electron-builder.mjs",
+    "pack:dir": "node scripts/run-electron-builder.mjs --dir",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
