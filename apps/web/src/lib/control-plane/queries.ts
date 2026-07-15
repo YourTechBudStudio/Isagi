@@ -12,8 +12,9 @@ import { deriveStartupGate, launchableHarnesses } from './launchability.js';
 
 export const controlPlaneQueryKey = ['control-plane'] as const;
 
-export function useControlPlaneQuery() {
+export function useControlPlaneQuery({ enabled = true }: { readonly enabled?: boolean } = {}) {
   return useQuery({
+    enabled,
     queryKey: controlPlaneQueryKey,
     queryFn: ({ signal }) => runRuntimeEffect(fetchControlPlane(), { signal }),
     // Poll only while the host inventory is still probing at startup; every other

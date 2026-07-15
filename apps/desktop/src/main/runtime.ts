@@ -5,12 +5,19 @@ import { fileURLToPath } from 'node:url';
 import { Effect } from 'effect';
 import { app } from 'electron';
 
+import {
+  developmentEnvironmentKeys,
+  developmentPaths,
+} from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForRuntimeHealth } from './boot.js';
+import { sanitizeManagedRuntimeEnvironment } from './development-environment.js';
+import { resolveDevelopmentRoot } from './development.js';
 import {
   createRuntimeLogSink,
   nodeRuntimeProcessAdapter,
   RuntimeLifecycle,
   RuntimeLifecycleFailure,
+  type RuntimeSpawnSpecification,
   validateRuntimeStage,
 } from './runtime-process/index.js';
 
@@ -31,11 +38,26 @@ export function createRuntimeLifecycle() {
   });
 }
 
-function prepareManagedRuntime() {
+function prepareManagedRuntime(): RuntimeSpawnSpecification {
   const webOrigin = app.isPackaged ? undefined : requiredDevelopmentWebOrigin();
-  const stageRoot = app.isPackaged
-    ? resolve(process.resourcesPath, 'runtime')
-    : resolve(desktopRoot, '.generated/runtime');
+  const configuredDataDirectory = process.env.ISAGI_DATA_DIR;
+  const configuredAllowedOrigins = process.env.ISAGI_ALLOWED_ORIGINS;
+  const locations = app.isPackaged
+    ? {
+        stageRoot: resolve(process.resourcesPath, 'runtime'),
+        dataDirectory: configuredDataDirectory,
+      }
+    : developmentLocations(resolveDevelopmentRoot(repositoryRoot));
+  const { stageRoot, dataDirectory } = locations;
+  if (!app.isPackaged) {
+    console.info(`[desktop] runtime stage ${stageRoot}`);
+    console.info(`[desktop] runtime data ${dataDirectory}`);
+    if (configuredDataDirectory && configuredDataDirectory !== dataDirectory) {
+      console.info(
+        `[desktop] ignoring ISAGI_DATA_DIR=${configuredDataDirectory}; managed development uses ${dataDirectory}`,
+      );
+    }
+  }
   let stage;
   try {
     stage = validateRuntimeStage(stageRoot);
@@ -50,21 +72,35 @@ function prepareManagedRuntime() {
     command: process.execPath,
     args: [stage.entrypoint],
     cwd: stage.root,
+    processGroupOwnership:
+      !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
+        ? 'external'
+        : 'self',
     env: {
-      ...process.env,
+      ...sanitizeManagedRuntimeEnvironment(process.env),
       ELECTRON_RUN_AS_NODE: '1',
       HOST: '127.0.0.1',
       PORT: '0',
-      ...(webOrigin ? { ISAGI_ALLOWED_ORIGINS: mergeAllowedOrigins(webOrigin) } : {}),
-      ...(!app.isPackaged && !process.env.ISAGI_DATA_DIR
-        ? { ISAGI_DATA_DIR: resolve(repositoryRoot, 'data/.isagi') }
-        : {}),
+      ...(webOrigin
+        ? { ISAGI_ALLOWED_ORIGINS: mergeAllowedOrigins(webOrigin) }
+        : configuredAllowedOrigins
+          ? { ISAGI_ALLOWED_ORIGINS: configuredAllowedOrigins }
+          : {}),
+      ...(dataDirectory ? { ISAGI_DATA_DIR: dataDirectory } : {}),
     },
   };
 }
 
+function developmentLocations(developmentRoot: string) {
+  const paths = developmentPaths(developmentRoot);
+  return {
+    stageRoot: paths.runtimeStage,
+    dataDirectory: paths.dataRoot,
+  };
+}
+
 function requiredDevelopmentWebOrigin() {
-  const configured = process.env.ISAGI_WEB_URL;
+  const configured = process.env[developmentEnvironmentKeys.webUrl];
   if (!configured) {
     throw new RuntimeLifecycleFailure({
       reason: 'launch_configuration_invalid',

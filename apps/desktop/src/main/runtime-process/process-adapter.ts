@@ -9,6 +9,7 @@ export interface RuntimeSpawnSpecification {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly processGroupOwnership: 'self' | 'external';
 }
 
 export interface RuntimeProcessAdapter {
@@ -16,16 +17,21 @@ export interface RuntimeProcessAdapter {
   readonly signal: (child: RuntimeChildProcess, signal: NodeJS.Signals) => void;
 }
 
+const processGroupOwnership = new WeakMap<RuntimeChildProcess, 'self' | 'external'>();
+
 export const nodeRuntimeProcessAdapter: RuntimeProcessAdapter = {
-  spawn: (specification) =>
-    spawn(specification.command, [...specification.args], {
+  spawn: (specification) => {
+    const child = spawn(specification.command, [...specification.args], {
       cwd: specification.cwd,
-      detached: process.platform !== 'win32',
+      detached: process.platform !== 'win32' && specification.processGroupOwnership === 'self',
       env: specification.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-    }),
+    });
+    processGroupOwnership.set(child, specification.processGroupOwnership);
+    return child;
+  },
   signal: (child, signal) => {
-    if (process.platform !== 'win32' && child.pid) {
+    if (process.platform !== 'win32' && processGroupOwnership.get(child) === 'self' && child.pid) {
       try {
         process.kill(-child.pid, signal);
         return;

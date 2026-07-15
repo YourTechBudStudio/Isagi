@@ -35,7 +35,13 @@ class FakeChild extends EventEmitter {
 function managedTarget(): RuntimeTarget {
   return {
     ownership: 'managed',
-    prepare: () => ({ command: 'electron', args: ['index.js'], cwd: '/stage', env: {} }),
+    prepare: () => ({
+      command: 'electron',
+      args: ['index.js'],
+      cwd: '/stage',
+      env: {},
+      processGroupOwnership: 'self',
+    }),
   };
 }
 

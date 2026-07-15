@@ -11,7 +11,7 @@
     "build": "pnpm -r --if-present build",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
     "db:migrate": "pnpm -C apps/runtime exec drizzle-kit generate",
-    "dev": "concurrently -k -n runtime,web,desktop -c cyan,magenta,blue \"pnpm --filter @isagi/runtime dev:fixed\" \"pnpm --filter @isagi/web dev:desktop\" \"pnpm --filter @isagi/desktop dev:connected\"",
+    "dev": "node scripts/dev-supervisor/index.mjs",
     "fix": "pnpm lint:fix && pnpm format",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -19,12 +19,12 @@
     "lint:fix": "oxlint . --threads=8 --fix --no-error-on-unmatched-pattern",
     "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
     "package:desktop": "pnpm build && pnpm --filter @isagi/desktop dist",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm test:dev-supervisor && pnpm -r --if-present test",
+    "test:dev-supervisor": "node --test \"scripts/dev-supervisor/*.test.mjs\"",
     "typecheck": "pnpm -r --if-present typecheck"
   },
   "devDependencies": {
-    "concurrently": "^10.0.0",
-    "cross-env": "^10.1.0",
+    "effect": "^3.21.2",
     "oxfmt": "^0.52.0",
     "oxlint": "^1.67.0",
     "oxlint-tailwindcss": "^1.0.0"

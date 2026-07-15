@@ -1,18 +1,31 @@
 import { Effect } from 'effect';
 
-export function resolveRuntimeUrl(): Effect.Effect<string, Error> {
-  const viteRuntimeUrl = import.meta.env?.VITE_ISAGI_RUNTIME_URL;
+type RuntimeUrlHost = {
+  readonly getRuntimeUrl: () => Promise<string>;
+};
 
-  if (viteRuntimeUrl) {
-    return Effect.succeed(viteRuntimeUrl);
-  }
+type RuntimeUrlSources = {
+  readonly host: RuntimeUrlHost | undefined;
+  readonly viteRuntimeUrl: string | undefined;
+};
 
-  if (window.isagi) {
+export function resolveRuntimeUrl(
+  sources: RuntimeUrlSources = {
+    host: window.isagi,
+    viteRuntimeUrl: import.meta.env?.VITE_ISAGI_RUNTIME_URL,
+  },
+): Effect.Effect<string, Error> {
+  // Electron owns runtime lifecycle and its bridge is authoritative. The Vite
+  // value exists only for the plain-browser development surface.
+  const host = sources.host;
+  if (host) {
     return Effect.tryPromise({
-      try: () => window.isagi!.getRuntimeUrl(),
+      try: () => host.getRuntimeUrl(),
       catch: toError,
     });
   }
+
+  if (sources.viteRuntimeUrl) return Effect.succeed(sources.viteRuntimeUrl);
 
   return Effect.fail(
     new Error(

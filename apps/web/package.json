@@ -6,9 +6,8 @@
   "scripts": {
     "build": "vite build",
     "check": "pnpm typecheck && pnpm build",
-    "dev": "vite --host 127.0.0.1",
-    "dev:desktop": "vite --host 127.0.0.1",
-    "preview": "vite preview --host 127.0.0.1",
+    "dev": "node scripts/vite-launcher.mjs dev",
+    "preview": "pnpm build && node scripts/vite-launcher.mjs preview",
     "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

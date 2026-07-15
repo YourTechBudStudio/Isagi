@@ -1,11 +1,15 @@
 import { dirname, join } from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit } from 'effect';
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
 
+import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
+import { isRuntimeStageReadyControl } from './development-control.js';
+import { configureDevelopmentUserData } from './development.js';
 import { createRuntimeLifecycle } from './runtime.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -16,12 +20,17 @@ const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
 const RUNTIME_STATUS_CHANNEL = 'isagi:runtime-status-changed';
 const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
+const desktopRoot = join(currentDirectory, '../..');
+const repositoryRoot = join(desktopRoot, '../..');
 
 app.setAppUserModelId(APP_ID);
+if (isDev) configureDevelopmentUserData(repositoryRoot);
 
 const runtimeLifecycle = createRuntimeLifecycle();
 let mainWindow: BrowserWindow | undefined;
 let exitPromise: Promise<void> | undefined;
+let runtimeStartPromise: Promise<void> | undefined;
+let runtimeStageGateAttached = false;
 let pendingExitOptions: { code: number; relaunch: boolean } | undefined;
 
 runtimeLifecycle.subscribe((snapshot) => {
@@ -78,19 +87,43 @@ function createWindowEffect() {
     });
     window.once('ready-to-show', () => window.show());
 
-    const startExit = yield* Effect.exit(runtimeLifecycle.start());
-    if (Exit.isFailure(startExit)) {
-      if (isDev) return yield* Effect.failCause(startExit.cause);
-      console.error(Cause.pretty(startExit.cause, { renderErrorCause: true }));
-    }
-
+    beginRuntimeStartup();
     yield* loadRenderer(window);
   });
 }
 
+function beginRuntimeStartup() {
+  if (runtimeStartPromise || runtimeStageGateAttached) return;
+  if (!isDev || process.env[developmentEnvironmentKeys.runtimeStageGate] !== 'supervisor') {
+    startRuntime();
+    return;
+  }
+  runtimeStageGateAttached = true;
+  const input = createInterface({ input: process.stdin });
+  input.on('line', (line) => {
+    try {
+      if (!isRuntimeStageReadyControl(line)) return;
+      input.close();
+      startRuntime();
+    } catch (error) {
+      console.error('[desktop] invalid development control record', error);
+      void requestExit({ code: 1 });
+    }
+  });
+}
+
+function startRuntime() {
+  runtimeStartPromise ??= Effect.runPromiseExit(runtimeLifecycle.start()).then((exit) => {
+    if (Exit.isFailure(exit)) {
+      console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
+    }
+  });
+  return runtimeStartPromise;
+}
+
 function loadRenderer(window: BrowserWindow) {
   if (app.isPackaged) return loadFile(window, join(process.resourcesPath, 'web/index.html'));
-  const webUrl = process.env.ISAGI_WEB_URL;
+  const webUrl = process.env[developmentEnvironmentKeys.webUrl];
   if (!webUrl) return Effect.fail(new Error('Desktop development requires ISAGI_WEB_URL.'));
   return Effect.gen(function* () {
     yield* waitForWebServer(webUrl);

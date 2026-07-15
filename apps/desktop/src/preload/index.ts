@@ -1,4 +1,7 @@
-import { contextBridge, ipcRenderer } from 'electron';
+// Sandboxed Electron preloads run in a restricted CommonJS environment. Keep
+// this dependency as a runtime require so Vite does not emit an ESM import that
+// Chromium cannot evaluate before exposing the bridge.
+const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron');
 
 import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
 

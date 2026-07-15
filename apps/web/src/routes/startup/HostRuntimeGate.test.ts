@@ -5,7 +5,7 @@ import {
   reconcileRuntimeStatus,
   type HostRuntimeStatusSnapshot,
 } from '../../lib/desktop-bridge.js';
-import { hostRuntimeGateDecision } from './HostRuntimeGate.js';
+import { hostRuntimeAllowsQueries, hostRuntimeGateDecision } from './HostRuntimeGate.js';
 
 const managedFailure = {
   protocolVersion: 1,
@@ -42,4 +42,10 @@ test('snapshot reconciliation retains the greatest lifecycle revision', () => {
   } as const satisfies HostRuntimeStatusSnapshot;
   assert.equal(reconcileRuntimeStatus(managedFailure, ready), managedFailure);
   assert.equal(reconcileRuntimeStatus(ready, managedFailure), managedFailure);
+});
+
+test('runtime-backed queries remain disabled until the host gate passes', () => {
+  assert.equal(hostRuntimeAllowsQueries('connecting'), false);
+  assert.equal(hostRuntimeAllowsQueries('managed_failed'), false);
+  assert.equal(hostRuntimeAllowsQueries('pass'), true);
 });

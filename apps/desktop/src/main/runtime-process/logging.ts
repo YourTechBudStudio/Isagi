@@ -1,5 +1,11 @@
 import process from 'node:process';
 
+import {
+  developmentEnvironmentKeys,
+  formatRuntimeLogRecord,
+  runtimeLogPrefix as supervisorRecordPrefix,
+} from '../../../../../scripts/dev-supervisor/dev-protocol.mjs';
+
 export type RuntimeLogStream = 'stdout' | 'stderr';
 
 export interface RuntimeLogRecord {
@@ -9,10 +15,9 @@ export interface RuntimeLogRecord {
 
 export type RuntimeLogSink = (record: RuntimeLogRecord) => void;
 
-const supervisorRecordPrefix = 'ISAGI_DEV_LOG ';
-
 export function createRuntimeLogSink(
-  mode: 'human' | 'supervisor' = process.env.ISAGI_DESKTOP_LOG_MODE === 'supervisor'
+  mode: 'human' | 'supervisor' = process.env[developmentEnvironmentKeys.desktopLogMode] ===
+  'supervisor'
     ? 'supervisor'
     : 'human',
 ): RuntimeLogSink {
@@ -29,13 +34,7 @@ export function createRuntimeLogSink(
 }
 
 export function formatSupervisorLogRecord({ stream, payload }: RuntimeLogRecord) {
-  return `${supervisorRecordPrefix}${JSON.stringify({
-    protocolVersion: 1,
-    source: 'runtime',
-    stream,
-    encoding: 'base64',
-    payload: Buffer.from(payload, 'utf8').toString('base64'),
-  })}`;
+  return formatRuntimeLogRecord({ stream, payload });
 }
 
 export { supervisorRecordPrefix };

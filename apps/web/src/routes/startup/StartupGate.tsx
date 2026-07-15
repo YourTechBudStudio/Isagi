@@ -3,9 +3,11 @@ import { useState } from 'react';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { useControlPlaneQuery } from '../../lib/control-plane/queries.js';
+import { requestQuit, requestRelaunch } from '../../lib/desktop-bridge.js';
 import { DURATION, EASE_EXPO } from '../../lib/motion.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { WorkspacePage } from '../workspace/WorkspacePage.js';
+import { hostRuntimeAllowsQueries, useHostRuntimeGate } from './HostRuntimeGate.js';
 import { OnboardingFlow } from './OnboardingFlow.js';
 import { BootSurface, type BootView } from './StartupSurfaces.js';
 
@@ -25,12 +27,32 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
  * to complete; only the explicit Continue (`onComplete`) releases it.
  */
 export function StartupGate() {
-  const query = useControlPlaneQuery();
+  const host = useHostRuntimeGate();
+  const query = useControlPlaneQuery({ enabled: hostRuntimeAllowsQueries(host.decision) });
   const [onboardingHeld, setOnboardingHeld] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
   const snapshot = query.data;
   const gate = snapshot ? deriveStartupGate(snapshot) : null;
+  const hostView: BootView | null =
+    host.decision === 'connecting'
+      ? { kind: 'connecting' }
+      : host.decision === 'managed_failed' &&
+          host.snapshot?.ownership === 'managed' &&
+          host.snapshot.state === 'failed'
+        ? {
+            kind: 'runtime_failed',
+            diagnostic: host.snapshot.diagnostic ?? {},
+            onRestart: requestRelaunch,
+            onQuit: requestQuit,
+          }
+        : null;
+
+  // Host lifecycle facts outrank stale control-plane data. A managed runtime
+  // failure must unmount onboarding and workspace work immediately.
+  if (hostView) {
+    return <BootSurface view={hostView} />;
+  }
 
   if (snapshot && (gate?.kind === 'onboarding' || onboardingHeld)) {
     return (
