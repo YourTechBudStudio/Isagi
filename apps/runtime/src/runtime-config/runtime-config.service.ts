@@ -52,7 +52,7 @@ export const RuntimeConfigLive = Layer.effect(
             const bytes = yield* readBytes(path);
             const sourceIdentity = identity(bytes);
             const document = yield* parseYamlDocument(path, bytes);
-            const current = parseRuntimeConfig(document.toJS());
+            const current = yield* decodeRuntimeConfig(path, document.toJS());
             if (current.harnesses.status === 'invalid')
               return yield* Effect.fail(
                 new RuntimeHarnessConfigInvalid({
@@ -73,15 +73,16 @@ export const RuntimeConfigLive = Layer.effect(
             const latest = yield* readBytes(path);
             if (identity(latest) !== sourceIdentity) {
               const latestDoc = yield* parseYamlDocument(path, latest);
+              const latestConfig = yield* decodeRuntimeConfig(path, latestDoc.toJS());
               return yield* Effect.fail(
                 new RuntimeConfigConflict({
                   expectedRevision: input.expectedPolicyRevision,
-                  actualRevision: parseRuntimeConfig(latestDoc.toJS()).harnesses.revision,
+                  actualRevision: latestConfig.harnesses.revision,
                 }),
               );
             }
+            const next = yield* decodeRuntimeConfig(path, document.toJS());
             yield* atomicWrite(path, nextBytes);
-            const next = parseRuntimeConfig(document.toJS());
             yield* Ref.set(state, next);
             return next;
           }),
@@ -96,14 +97,27 @@ function readOrCreateRuntimeConfig(path: string) {
         const bytes = readFileSync(path, 'utf8');
         const doc = parseDocument(bytes);
         if (doc.errors.length) throw doc.errors[0];
-        return parseRuntimeConfig(doc.toJS());
+        return { kind: 'document' as const, value: doc.toJS() };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         const document = new Document({ pty: { backend: defaultRuntimeConfig.pty.backend } });
         writeFileSync(path, document.toString(), 'utf8');
-        return defaultRuntimeConfig;
+        return { kind: 'default' as const };
       }
     },
+    catch: (cause) => new RuntimeConfigError({ path, cause }),
+  }).pipe(
+    Effect.flatMap((result) =>
+      result.kind === 'default'
+        ? Effect.succeed(defaultRuntimeConfig)
+        : decodeRuntimeConfig(path, result.value),
+    ),
+  );
+}
+
+function decodeRuntimeConfig(path: string, value: unknown) {
+  return Effect.try({
+    try: () => parseRuntimeConfig(value),
     catch: (cause) => new RuntimeConfigError({ path, cause }),
   });
 }

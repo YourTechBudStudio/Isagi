@@ -60,6 +60,30 @@ pty:
 Omitting `pty`, omitting `backend`, or setting `backend: null` all mean `node-pty`. A `backend` value
 that is present but is neither `node-pty` nor `tmux` is rejected, and Isagi will not start with it.
 
+## Additional workflow directories
+
+Isagi discovers workflow packages under the global data root (`{{DATA_ROOT}}/workflows/<key>/`) and under each project (`.isagi/workflows/<key>/`). The `workflows.additionalDirectories` setting adds machine-global collection roots to that discovery without replacing either built-in root.
+
+```yaml
+workflows:
+  additionalDirectories:
+    - ~/isagi-workflows
+    - /opt/team/isagi-workflows
+```
+
+Each entry is a collection root that contains `<key>/` package directories — the same layout as `{{DATA_ROOT}}/workflows/` — not a path to a single workflow package.
+
+Rules for each entry:
+
+- It must be a native absolute path, or `~` / `~/...` for the current user's home directory. Quote the exact home-directory entry as `"~"` because an unquoted `~` is YAML null. Isagi expands `~` and normalizes the result.
+- Relative paths, paths resolved against the config file or the current directory, environment variables, and another user's `~otheruser` are not supported. A malformed entry prevents Isagi from starting.
+
+Precedence follows the source order, from lowest to highest priority: the global data-root workflows first, then each configured directory in the order listed so a later entry outranks an earlier one, then the project's `.isagi/workflows`. When more than one source defines the same workflow key, the highest-priority source owns it; a broken winning package makes that key fail rather than falling back to a lower-priority copy.
+
+A configured directory that does not exist is skipped, and Isagi warns once for it. A configured directory that exists but cannot be read — a file where a directory was expected, or an unreadable path — is a discovery error, not an empty source.
+
+Isagi validates this setting's shape and path rules when it starts, and validates each winning workflow package later — when workflow descriptors are listed and again immediately before a run starts, never at startup. Changes to `workflows.additionalDirectories` take effect only after Isagi restarts.
+
 ## Schema
 
 This is the schema Isagi validates the file against. The field descriptions are authoritative.

@@ -139,11 +139,13 @@ export function EntryList({
               <Icon
                 size={16}
                 className={
-                  entry.accent && !disabled
-                    ? 'text-violet'
-                    : index === sel && !disabled
-                      ? 'text-fg'
-                      : 'text-fg-subtle'
+                  entry.tone === 'error'
+                    ? 'text-error/80'
+                    : entry.accent && !disabled
+                      ? 'text-violet'
+                      : index === sel && !disabled
+                        ? 'text-fg'
+                        : 'text-fg-subtle'
                 }
               />
               <span className="min-w-0 flex-1">

@@ -57,6 +57,7 @@ export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError;
 export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')<{
   readonly code:
     | 'unknown_workflow_key'
+    | 'workflow_discovery_failed'
     | 'workflow_load_failed'
     | 'no_active_worktree'
     | 'worktree_not_found'
@@ -79,6 +80,9 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly workflowLoadFailureReason?:
     | import('@isagi/contracts').WorkflowLoadFailureReason
     | undefined;
+  readonly workflowSourceDirectory?: string | undefined;
+  readonly workflowPackageDirectory?: string | undefined;
+  readonly shadowedWorkflowPackageDirectories?: readonly string[] | undefined;
   readonly knownWorkflowKeys?: readonly string[] | undefined;
   readonly workflowRunId?: number | undefined;
   readonly activeWorkflowRunId?: number | undefined;

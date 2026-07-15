@@ -326,7 +326,7 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
   if (error instanceof WorkflowEngineError) {
     return {
       code: 'workflow_rejected',
-      status: error.code === 'workflow_surface_busy' ? 409 : 400,
+      status: statusForWorkflowEngineCode(error.code),
       message: error.message,
       requestId: context.requestId,
       data: {
@@ -334,6 +334,18 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
         ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
         ...(error.workflowLoadFailureReason
           ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
+          : {}),
+        ...(error.workflowSourceDirectory
+          ? { workflowSourceDirectory: error.workflowSourceDirectory }
+          : {}),
+        ...(error.workflowPackageDirectory
+          ? { workflowPackageDirectory: error.workflowPackageDirectory }
+          : {}),
+        ...(error.shadowedWorkflowPackageDirectories &&
+        error.shadowedWorkflowPackageDirectories.length > 0
+          ? {
+              shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories],
+            }
           : {}),
         ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
         ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
@@ -382,6 +394,12 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
     requestId: context.requestId,
     data: { endpointId: context.endpointId },
   };
+}
+
+function statusForWorkflowEngineCode(code: WorkflowEngineError['code']): 400 | 409 | 500 {
+  if (code === 'workflow_discovery_failed') return 500;
+  if (code === 'workflow_surface_busy') return 409;
+  return 400;
 }
 
 function workflowRunNotFound(runId: number) {

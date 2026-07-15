@@ -184,17 +184,17 @@ run/phase/seq) are the deferred lever.
 
 ## Loading and invocation
 
-Workflows load from two roots:
+Workflows load from an ordered chain of discovery sources, evaluated from lowest to highest priority:
 
-- **global workflows** under the runtime data root:
-  `<dataRoot>/workflows/<workflowKey>/`;
-- **project workflows** under the project repository root:
-  `<projectRoot>/.isagi/workflows/<workflowKey>/`.
+- the **core data-root source** under the runtime data root, `<dataRoot>/workflows/<workflowKey>/`;
+- any **configured additional sources** listed in `workflows.additionalDirectories` (in `<dataRoot>/config.yaml`), in array order, each a machine-global collection root holding `<workflowKey>/` package directories;
+- the **project source** under the project repository root, `<projectRoot>/.isagi/workflows/<workflowKey>/`, when the run has a project context.
 
-When both roots define the same `workflowKey`, the project workflow wins for runs launched from that
-project. Descriptor listing returns the key once, using the winning definition; the public contract
-does not expose which root supplied it. The runtime logs a diagnostic when a project workflow shadows
-a global workflow so "why did my global edit not apply?" has a support trail.
+A discovery pass scans each source once and builds a single request-scoped snapshot keyed by `workflowKey`: the last source that declares a key owns it, and any lower-priority packages for that key are retained only as shadowed provenance. The snapshot is never cached across requests — descriptor listing and every start recompute it — so a filesystem change between listing and start is always seen. Ownership never falls back because the owner is broken: if the winning package is a file, symlink, stale, corrupt, unverified, or otherwise invalid, that key fails and the shadowed lower-priority packages are never loaded in its place. The runtime logs a diagnostic naming the winning and shadowed package directories when a higher-priority source shadows a lower one, so "why did my global edit not apply?" has a support trail.
+
+Package validity is never checked at runtime startup. It is checked when descriptors are listed and again immediately before a run starts; a failed start creates no run. A source that cannot be scanned — a path that is a regular file, is unreadable, or otherwise cannot be listed — fails the entire discovery pass instead of returning a partial overlay, because a requested key's true owner cannot be known from an incompletely observed chain. A missing configured directory is not a scan failure: it is skipped and warned once per normalized path, while missing built-in data-root and project roots are ordinary empty states and never warn.
+
+Descriptor listing returns one result per discovered key and evaluates only the winning candidate. A successful descriptor does not expose which source supplied it. A failed package descriptor may still be returned in an otherwise successful listing, carrying the winning and shadowed package directories as framed diagnostics, so one broken key never hides the rest. A source that cannot be scanned is different: the descriptor request fails as a whole, and its API diagnostic may identify the failing collection root. The command palette presents the former as a per-key failure and the latter as a workflow-inventory failure.
 
 Every workflow directory is an independent package with authored code under `src/`, tests under `tests/`, exact SDK/verifier/esbuild pins, and a verified `dist/index.js` plus `dist/isagi-workflow-build.json`. The package owns compilation and quality through its canonical scripts. After the author builds it, the verifier owns isolated import, export/`command()` validation, source and artifact fingerprinting, and build-receipt creation. The runtime validates and imports that verified artifact; authoring tooling is outside the runtime contract.
 
@@ -648,9 +648,7 @@ Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant 
 
 ## Current scope and deferrals
 
-Shipped: the engine spine and SDK/loading foundation; the run-centric API and controls; the three
-event surfaces; `WorkflowRunProjection`; and the web surface — the run store, the workflow bar and
-surface glow, attention aggregation, and command-palette workflow entries with the input flow.
+Shipped: the engine spine and SDK/loading foundation, including ordered workflow discovery across the data-root, configured additional, and project sources; the run-centric API and controls; the three event surfaces; `WorkflowRunProjection`; and the web surface — the run store, the workflow bar and surface glow, attention aggregation, and command-palette workflow entries with the input flow.
 
 Deferred (tracked in the `agent-workflows` milestone):
 

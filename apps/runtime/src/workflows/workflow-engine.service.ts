@@ -17,7 +17,11 @@ import {
 } from './event-ledger.service.js';
 import { WorkflowHeadless } from './headless.js';
 import { WorkflowLoadError } from './loader.js';
-import { WorkflowRegistry, type WorkflowRegistryContext } from './registry.js';
+import {
+  WorkflowRegistry,
+  type WorkflowPackageProvenance,
+  type WorkflowRegistryContext,
+} from './registry.js';
 import {
   WorkflowRepository,
   type WorkflowRepositoryService,
@@ -177,41 +181,51 @@ export const WorkflowEngineLive = Layer.scoped(
           input.context.worktreeId,
           workspaceRepository,
         );
-        const definition = yield* diagnosticPhase(
-          'workflow.start.load_definition',
+        const discovery = yield* diagnosticPhase(
+          'workflow.start.discover',
           diagnosticContext,
-          registry.resolveLatest(input.workflowKey, registryContext).pipe(Effect.either),
+          registry.discover(registryContext).pipe(Effect.either),
         );
-        if (Either.isLeft(definition)) {
+        if (Either.isLeft(discovery)) {
           return yield* Effect.fail(
             new WorkflowEngineError({
-              code: 'workflow_load_failed',
-              message: definition.left.message,
+              code: 'workflow_discovery_failed',
+              message: discovery.left.message,
               workflowKey: input.workflowKey,
-              workflowLoadFailureReason:
-                definition.left instanceof WorkflowLoadError
-                  ? definition.left.reason
-                  : 'artifact_load_failed',
+              workflowSourceDirectory: discovery.left.workflowSourceDirectory,
             }),
           );
         }
-        if (!definition.right) {
-          const knownWorkflowKeys = yield* registry.knownKeys(registryContext).pipe(
-            Effect.mapError(
-              (cause) =>
-                new WorkflowEngineError({
-                  code: 'workflow_load_failed',
-                  message: cause.message,
-                  workflowKey: input.workflowKey,
-                }),
-            ),
-          );
+        const discoveredEntry = discovery.right.find(input.workflowKey);
+        if (!discoveredEntry) {
+          const knownWorkflowKeys = discovery.right.entries.map((entry) => entry.workflowKey);
           return yield* Effect.fail(
             new WorkflowEngineError({
               code: 'unknown_workflow_key',
               message: unknownWorkflowMessage(input.workflowKey, knownWorkflowKeys),
               workflowKey: input.workflowKey,
               knownWorkflowKeys,
+            }),
+          );
+        }
+        const definition = yield* diagnosticPhase(
+          'workflow.start.load_definition',
+          diagnosticContext,
+          registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
+        );
+        if (Either.isLeft(definition)) {
+          const provenance = discoveredEntry.provenance;
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_load_failed',
+              message: packageFailureDiagnostic(definition.left.message, provenance),
+              workflowKey: input.workflowKey,
+              workflowLoadFailureReason:
+                definition.left instanceof WorkflowLoadError
+                  ? definition.left.reason
+                  : 'artifact_load_failed',
+              workflowPackageDirectory: provenance?.workflowPackageDirectory,
+              shadowedWorkflowPackageDirectories: provenance?.shadowedWorkflowPackageDirectories,
             }),
           );
         }
@@ -612,21 +626,22 @@ export const WorkflowEngineLive = Layer.scoped(
             launchCtx.worktreeId,
             workspaceRepository,
           );
-          const keys = yield* registry.knownKeys(registryContext).pipe(
+          const discovery = yield* registry.discover(registryContext).pipe(
             Effect.mapError(
               (cause) =>
                 new WorkflowEngineError({
-                  code: 'workflow_load_failed',
+                  code: 'workflow_discovery_failed',
                   message: cause.message,
+                  workflowSourceDirectory: cause.workflowSourceDirectory,
                 }),
             ),
           );
           const results: WorkflowDescriptorResult[] = [];
-          for (const workflowKey of keys) {
-            const definition = yield* registry
-              .resolveLatest(workflowKey, registryContext)
-              .pipe(Effect.either);
+          for (const discoveredEntry of discovery.entries) {
+            const workflowKey = discoveredEntry.workflowKey;
+            const definition = yield* registry.loadDiscovered(discoveredEntry).pipe(Effect.either);
             if (Either.isLeft(definition)) {
+              const provenance = discoveredEntry.provenance;
               results.push({
                 ok: false,
                 workflowKey,
@@ -634,16 +649,7 @@ export const WorkflowEngineLive = Layer.scoped(
                   definition.left instanceof WorkflowLoadError
                     ? definition.left.reason
                     : 'artifact_load_failed',
-                diagnostic: definition.left.message,
-              });
-              continue;
-            }
-            if (!definition.right) {
-              results.push({
-                ok: false,
-                workflowKey,
-                reason: 'missing_build',
-                diagnostic: unknownWorkflowMessage(workflowKey, keys),
+                diagnostic: packageFailureDiagnostic(definition.left.message, provenance),
               });
               continue;
             }
@@ -929,6 +935,20 @@ function buildLaunchContext(
       agentSessionId: pane?.session?.kind === 'agent_session' ? pane.session.agentSession.id : null,
     } satisfies WorkflowLaunchContext;
   });
+}
+
+function packageFailureDiagnostic(
+  message: string,
+  provenance: WorkflowPackageProvenance | undefined,
+) {
+  if (!provenance) return message;
+  const details = [`Workflow package directory: ${provenance.workflowPackageDirectory}`];
+  if (provenance.shadowedWorkflowPackageDirectories.length > 0) {
+    details.push(
+      `Shadowed workflow package directories: ${provenance.shadowedWorkflowPackageDirectories.join(', ')}`,
+    );
+  }
+  return `${message}\n${details.join('\n')}`;
 }
 
 function workflowRegistryContextForWorktreeId(

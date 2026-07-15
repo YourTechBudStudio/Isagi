@@ -79,6 +79,7 @@ export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
 
 export const workflowRejectionReasonSchema = Schema.Literal(
   'unknown_workflow_key',
+  'workflow_discovery_failed',
   'workflow_load_failed',
   'worktree_not_found',
   'surface_not_found',
@@ -299,6 +300,9 @@ export const workflowRejectedErrorSchema = Schema.Struct({
     paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
+    workflowSourceDirectory: Schema.optional(Schema.String),
+    workflowPackageDirectory: Schema.optional(Schema.String),
+    shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
   }),
 });
 
