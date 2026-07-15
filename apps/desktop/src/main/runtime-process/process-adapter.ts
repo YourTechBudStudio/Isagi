@@ -23,7 +23,7 @@ export const nodeRuntimeProcessAdapter: RuntimeProcessAdapter = {
   spawn: (specification) => {
     const child = spawn(specification.command, [...specification.args], {
       cwd: specification.cwd,
-      detached: process.platform !== 'win32' && specification.processGroupOwnership === 'self',
+      detached: ownsRuntimeProcessGroup(process.platform, specification.processGroupOwnership),
       env: specification.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -31,7 +31,7 @@ export const nodeRuntimeProcessAdapter: RuntimeProcessAdapter = {
     return child;
   },
   signal: (child, signal) => {
-    if (process.platform !== 'win32' && processGroupOwnership.get(child) === 'self' && child.pid) {
+    if (ownsRuntimeProcessGroup(process.platform, processGroupOwnership.get(child)) && child.pid) {
       try {
         process.kill(-child.pid, signal);
         return;
@@ -40,9 +40,21 @@ export const nodeRuntimeProcessAdapter: RuntimeProcessAdapter = {
         return;
       }
     }
-    if (!child.killed) child.kill(signal);
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      child.kill(signal);
+    } catch (error) {
+      if (!isMissingProcessError(error)) throw error;
+    }
   },
 };
+
+export function ownsRuntimeProcessGroup(
+  platform: NodeJS.Platform,
+  ownership: 'self' | 'external' | undefined,
+) {
+  return platform !== 'win32' && ownership === 'self';
+}
 
 function isMissingProcessError(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH';

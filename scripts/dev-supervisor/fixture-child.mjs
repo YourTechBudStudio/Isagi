@@ -36,6 +36,20 @@ if (mode === 'web-ready') {
 } else if (mode === 'desktop-success') {
   process.stdout.write('desktop partial');
   setTimeout(() => process.exit(0), 20);
+} else if (mode === 'desktop-late-output') {
+  const { spawn } = await import('node:child_process');
+  spawn(
+    process.execPath,
+    ['-e', "setTimeout(() => process.stdout.write('desktop final\\n'), 50)"],
+    { stdio: ['ignore', process.stdout, process.stderr] },
+  );
+  process.exit(0);
+} else if (mode === 'desktop-held-output') {
+  const { spawn } = await import('node:child_process');
+  spawn(process.execPath, ['-e', 'setTimeout(() => {}, 200)'], {
+    stdio: ['ignore', process.stdout, process.stderr],
+  });
+  process.exit(0);
 } else if (mode === 'desktop-runtime-failure') {
   const payload = Buffer.from('runtime failed\n').toString('base64');
   process.stdout.write(

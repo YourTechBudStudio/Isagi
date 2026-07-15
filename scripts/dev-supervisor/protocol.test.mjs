@@ -40,8 +40,8 @@ test('web readiness requires the versioned shape and rejects malformed JSON', ()
   );
 });
 
-test('runtime framing round-trips ANSI payloads and stream identity', () => {
-  const payload = '\u001b[36mhello\u001b[0m\r\n';
+test('runtime framing round-trips multiline ANSI payloads and stream identity', () => {
+  const payload = '\u001b[36mhello\u001b[0m\r\n\nsecond line\rfinal';
   const line = `ISAGI_DEV_LOG ${JSON.stringify({
     protocolVersion: 1,
     source: 'runtime',
@@ -52,6 +52,13 @@ test('runtime framing round-trips ANSI payloads and stream identity', () => {
   assert.deepEqual(parseRuntimeLog(line), { stream: 'stderr', payload });
   assert.throws(() => parseRuntimeLog('ISAGI_DEV_LOG {}'), /protocol version 1/);
   assert.throws(() => parseRuntimeLog('ISAGI_DEV_LOG{}'), /malformed framing/);
+  assert.throws(
+    () =>
+      parseRuntimeLog(
+        'ISAGI_DEV_LOG {"protocolVersion":1,"source":"runtime","stream":"stdout","encoding":"base64","payload":"%%%="}',
+      ),
+    /malformed base64/,
+  );
 });
 
 test('color-disabled presentation strips ANSI without trimming payload', () => {

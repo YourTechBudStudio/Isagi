@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { build } from 'vite';
 
-test('desktop development bundle does not contain a Vite runtime URL', async () => {
+test('desktop development bundle retains the Vite runtime URL key only for sanitization', async () => {
   const outDir = mkdtempSync(resolve(tmpdir(), 'isagi-desktop-bundle-'));
   try {
     await build({
@@ -17,7 +17,7 @@ test('desktop development bundle does not contain a Vite runtime URL', async () 
     const bundle = globSync('**/*.js', { cwd: outDir })
       .map((path) => readFileSync(resolve(outDir, path), 'utf8'))
       .join('\n');
-    assert.doesNotMatch(bundle, /VITE_ISAGI_RUNTIME_URL/);
+    assert.equal(bundle.match(/VITE_ISAGI_RUNTIME_URL/g)?.length, 1);
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }

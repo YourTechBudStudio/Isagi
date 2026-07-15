@@ -51,7 +51,22 @@ export function parseRuntimeLog(line) {
   ) {
     throw new Error('Runtime log framing did not match protocol version 1.');
   }
-  return { stream: record.stream, payload: Buffer.from(record.payload, 'base64').toString('utf8') };
+  const bytes = decodeBase64(record.payload);
+  return { stream: record.stream, payload: bytes.toString('utf8') };
+}
+
+function decodeBase64(value) {
+  if (
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
+    throw new Error('Runtime log framing contained malformed base64.');
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.toString('base64') !== value) {
+    throw new Error('Runtime log framing contained malformed base64.');
+  }
+  return bytes;
 }
 
 export function createRecordDecoder(emit) {

@@ -16,8 +16,8 @@ const managedFailure = {
   diagnostic: { exitCode: 7 },
 } as const satisfies HostRuntimeStatusSnapshot;
 
-test('managed terminal failure blocks stale runtime-backed workspace state', () => {
-  assert.equal(hostRuntimeGateDecision(managedFailure), 'managed_failed');
+test('managed terminal failure blocks stale runtime-backed state until Electron exits', () => {
+  assert.equal(hostRuntimeGateDecision(managedFailure), 'failed');
 });
 
 test('external unreachable does not block the query-driven retry path', () => {
@@ -46,6 +46,6 @@ test('snapshot reconciliation retains the greatest lifecycle revision', () => {
 
 test('runtime-backed queries remain disabled until the host gate passes', () => {
   assert.equal(hostRuntimeAllowsQueries('connecting'), false);
-  assert.equal(hostRuntimeAllowsQueries('managed_failed'), false);
+  assert.equal(hostRuntimeAllowsQueries('failed'), false);
   assert.equal(hostRuntimeAllowsQueries('pass'), true);
 });

@@ -1,15 +1,18 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit } from 'effect';
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
 import { isRuntimeStageReadyControl } from './development-control.js';
 import { configureDevelopmentUserData } from './development.js';
+import { assertAuthorizedIpcSender } from './ipc-security.js';
+import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { createRuntimeLifecycle } from './runtime.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -31,7 +34,8 @@ let mainWindow: BrowserWindow | undefined;
 let exitPromise: Promise<void> | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
 let runtimeStageGateAttached = false;
-let pendingExitOptions: { code: number; relaunch: boolean } | undefined;
+let pendingExitCode: number | undefined;
+let exitRequested = false;
 
 runtimeLifecycle.subscribe((snapshot) => {
   if (snapshot.state === 'failed') {
@@ -39,13 +43,33 @@ runtimeLifecycle.subscribe((snapshot) => {
       reason: snapshot.reason,
       diagnostic: snapshot.diagnostic,
     });
-    if (isDev) {
-      void requestExit({ code: 1 });
-      return;
-    }
+    void preservePackagedRuntimeFailure(snapshot).finally(() => requestExit({ code: 1 }));
+    return;
   }
   publishRuntimeStatus(snapshot);
 });
+
+async function preservePackagedRuntimeFailure(
+  snapshot: Extract<typeof runtimeLifecycle.snapshot, { readonly state: 'failed' }>,
+) {
+  if (!app.isPackaged) return;
+  const logDirectory = join(app.getPath('userData'), 'logs');
+  const logPath = join(logDirectory, 'managed-runtime-failure.json');
+  try {
+    await mkdir(logDirectory, { recursive: true });
+    await writeFile(
+      logPath,
+      `${JSON.stringify({ recordedAt: new Date().toISOString(), ...snapshot }, null, 2)}\n`,
+      'utf8',
+    );
+    console.error(`[desktop] Managed runtime failure record written to ${logPath}`);
+  } catch (error) {
+    console.error(
+      `[desktop] Failed to preserve managed runtime failure record at ${logPath}`,
+      error,
+    );
+  }
+}
 
 function createWindow() {
   return Effect.runPromise(createWindowEffect());
@@ -145,24 +169,21 @@ function publishRuntimeStatus(snapshot: typeof runtimeLifecycle.snapshot) {
   webContents.send(RUNTIME_STATUS_CHANNEL, snapshot);
 }
 
-function assertAuthorizedSender(event: IpcMainInvokeEvent) {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
-    throw new Error('IPC request did not originate from the active Isagi window.');
-  }
-}
-
 ipcMain.handle('isagi:runtime-url', (event) => {
-  assertAuthorizedSender(event);
-  return Effect.runPromise(runtimeLifecycle.getUrl());
+  assertAuthorizedIpcSender(mainWindow, event);
+  return resolveRuntimeUrlForIpc(
+    () => Effect.runPromise(runtimeLifecycle.getUrl()),
+    () => exitRequested,
+  );
 });
 
 ipcMain.handle('isagi:runtime-status', (event) => {
-  assertAuthorizedSender(event);
+  assertAuthorizedIpcSender(mainWindow, event);
   return runtimeLifecycle.snapshot;
 });
 
 ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
-  assertAuthorizedSender(event);
+  assertAuthorizedIpcSender(mainWindow, event);
   console.info(`[desktop] host-chrome visible=${String(visible)} (mac=${String(isMac)})`);
   if (!isMac) return;
   const shouldShow = visible === true;
@@ -172,28 +193,19 @@ ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
   );
 });
 
-ipcMain.handle('isagi:relaunch-app', async (event) => {
-  assertAuthorizedSender(event);
-  console.info('[desktop] full app relaunch requested by renderer');
-  await requestExit({ code: 0, relaunch: true });
-});
-
 ipcMain.handle('isagi:quit-app', async (event) => {
-  assertAuthorizedSender(event);
+  assertAuthorizedIpcSender(mainWindow, event);
   console.info('[desktop] quit requested by renderer');
   await requestExit({ code: 0 });
 });
 
-function requestExit(options: { readonly code: number; readonly relaunch?: boolean }) {
-  pendingExitOptions = {
-    code:
-      pendingExitOptions && pendingExitOptions.code !== 0 ? pendingExitOptions.code : options.code,
-    relaunch: (pendingExitOptions?.relaunch ?? false) || options.relaunch === true,
-  };
+function requestExit(options: { readonly code: number }) {
+  exitRequested = true;
+  destroyRendererForExit(mainWindow);
+  pendingExitCode = pendingExitCode && pendingExitCode !== 0 ? pendingExitCode : options.code;
   exitPromise ??= Effect.runPromise(runtimeLifecycle.stop()).then(() => {
-    if (!pendingExitOptions) return;
-    if (pendingExitOptions.relaunch) app.relaunch();
-    app.exit(pendingExitOptions.code);
+    if (pendingExitCode === undefined) return;
+    app.exit(pendingExitCode);
   });
   return exitPromise;
 }

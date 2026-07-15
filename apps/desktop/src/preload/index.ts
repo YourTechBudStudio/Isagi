@@ -38,6 +38,5 @@ contextBridge.exposeInMainWorld('isagi', {
   },
   setHostChromeVisible: (visible: boolean) =>
     ipcRenderer.invoke('isagi:host-chrome-visible', visible) as Promise<void>,
-  relaunchApp: () => ipcRenderer.invoke('isagi:relaunch-app') as Promise<void>,
   quitApp: () => ipcRenderer.invoke('isagi:quit-app') as Promise<void>,
 });

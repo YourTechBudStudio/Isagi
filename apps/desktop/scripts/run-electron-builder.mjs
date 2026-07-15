@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url';
 
 import { Cause, Data, Effect, Exit } from 'effect';
 
+import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
+import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 import { prepareRuntimeStage } from './runtime-stage/stage.mjs';
 
 class CommandStartError extends Data.TaggedError('CommandStartError') {}
 class PackagedRuntimeMissingError extends Data.TaggedError('PackagedRuntimeMissingError') {}
+class PackagedRuntimeParityError extends Data.TaggedError('PackagedRuntimeParityError') {}
 
 const executableSuffix = process.platform === 'win32' ? '.cmd' : '';
 const desktopDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -31,6 +34,13 @@ const program = Effect.gen(function* () {
     try: findPackagedRuntimeRoot,
     catch: (cause) => new PackagedRuntimeMissingError({ cause }),
   });
+  const parity = yield* Effect.try({
+    try: () => verifyRuntimeStageParity(stageRoot, packagedRuntimeRoot),
+    catch: (cause) => new PackagedRuntimeParityError({ cause }),
+  });
+  console.log(
+    `[desktop] Runtime stage parity passed (${parity.byteFileCount} byte-matched files, ${parity.executableFileCount} executable helpers, ${Object.keys(parity.dependencyVersions).length} exact external dependencies)`,
+  );
   yield* smokeRuntimeStage(packagedRuntimeRoot);
   return 0;
 });

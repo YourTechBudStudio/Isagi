@@ -15,4 +15,9 @@ test('development control accepts only the versioned runtime-stage readiness rec
     /Unsupported development control record/,
   );
   assert.throws(() => isRuntimeStageReadyControl('ISAGI_DEV_CONTROL nope'), SyntaxError);
+  assert.throws(
+    () =>
+      isRuntimeStageReadyControl('ISAGI_DEV_CONTROL{"protocolVersion":1,"runtimeStage":"ready"}'),
+    /malformed framing/,
+  );
 });

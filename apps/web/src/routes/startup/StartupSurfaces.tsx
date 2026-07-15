@@ -1,11 +1,10 @@
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
-import { Fragment, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import { Button } from '../../components/Button.js';
 import { startupCopy } from '../../copy/index.js';
 import { canQuit, requestQuit } from '../../lib/desktop-bridge.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
-import { runtimeFailureRows, type RuntimeFailureDiagnostic } from './runtime-failure.js';
 
 // The startup gate is one continuous boot surface, not a family of screens: the
 // mark, a progress track, and one line of status share a single centered column,
@@ -17,21 +16,10 @@ import { runtimeFailureRows, type RuntimeFailureDiagnostic } from './runtime-fai
 
 export type BootView =
   | { kind: 'connecting' }
+  | { kind: 'host_failed' }
   | { kind: 'environment_pending' }
   | { kind: 'opening' }
   | { kind: 'runtime_unreachable'; error: string; retrying: boolean; onRetry: () => void }
-  // The runtime is terminally gone — it never started, or it died after readiness.
-  // Unlike the retryable `runtime_unreachable`, the only way forward is to restart
-  // or quit the whole app; the surface never implies process or session survival.
-  // `diagnostic` carries the facts to display; `onRestart`/`onQuit` are
-  // host-supplied (mocked by the dev fixture in Phase 03, real bridge callbacks
-  // in Phase 04, which also owns how the diagnostic is framed and kept safe).
-  | {
-      kind: 'runtime_failed';
-      diagnostic: RuntimeFailureDiagnostic;
-      onRestart: () => void;
-      onQuit: () => void;
-    }
   | { kind: 'config_invalid'; diagnostic: string | null }
   // First-run setup, mounted as the third boot beat. The owner (OnboardingFlow)
   // supplies the unfolded content and drives `live` (a save or retry is running),
@@ -48,28 +36,21 @@ type TrackTone = 'running' | 'blocked' | 'error';
 // setup beat — the fill runs 50→100 straight through.
 const FILL: Record<BootKind, number> = {
   connecting: 17,
+  host_failed: 17,
   environment_pending: 42,
   setup: 75,
   opening: 100,
   runtime_unreachable: 25,
-  // The runtime is boot beat one; when it is terminally gone the track freezes at
-  // the foundation, same position as the retryable state but held in error tone.
-  runtime_failed: 25,
   config_invalid: 50,
 };
 
 // Views that compact the mark and unfold content below the track.
-const COMPACT_KINDS: readonly BootKind[] = [
-  'runtime_unreachable',
-  'runtime_failed',
-  'config_invalid',
-  'setup',
-];
+const COMPACT_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid', 'setup'];
 
 // The diagnostic-bearing blocker states get a wider column so multi-line
 // diagnostics have room to read. Loading states and onboarding (`setup`) keep the
 // calm narrow column.
-const WIDE_KINDS: readonly BootKind[] = ['runtime_unreachable', 'runtime_failed', 'config_invalid'];
+const WIDE_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid'];
 
 function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
   switch (view.kind) {
@@ -78,16 +59,14 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
       return { tone: 'running', live: true };
     case 'opening':
       return { tone: 'running', live: false };
+    case 'host_failed':
+      return { tone: 'error', live: false };
     // Setup waits on the user: the track holds completely still until a save or
     // retry is actually running.
     case 'setup':
       return { tone: 'running', live: view.live };
     case 'runtime_unreachable':
       return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
-    // Terminal: a genuine runtime error, and nothing is retrying, so the track is
-    // still — error tone, no live shimmer.
-    case 'runtime_failed':
-      return { tone: 'error', live: false };
     case 'config_invalid':
       return { tone: 'blocked', live: false };
   }
@@ -265,39 +244,6 @@ function BootDetail({ view }: { view: BootView }) {
             {view.retrying
               ? startupCopy.runtimeUnreachable.retrying
               : startupCopy.runtimeUnreachable.retry}
-          </Button>
-        </BootActions>
-      </>
-    );
-  }
-  if (view.kind === 'runtime_failed') {
-    const rows = runtimeFailureRows(view.diagnostic);
-    return (
-      <>
-        <BootTitle>{startupCopy.runtimeFailed.title}</BootTitle>
-        <BootBody>{startupCopy.runtimeFailed.body}</BootBody>
-        {rows.length > 0 ? (
-          // One error chip; each present fact on its own line via pre-wrap. Labels
-          // are dimmed so the red stays on the values, not the whole block. Only
-          // inline nodes live inside the chip's <p>.
-          <DiagnosticChip>
-            {rows.map((row, index) => (
-              <Fragment key={row.key}>
-                {index > 0 ? '\n' : null}
-                <span className="text-error/55">{startupCopy.runtimeFailed.rows[row.key]} · </span>
-                {row.value}
-              </Fragment>
-            ))}
-          </DiagnosticChip>
-        ) : (
-          <DiagnosticChip tone="muted">{startupCopy.runtimeFailed.unavailable}</DiagnosticChip>
-        )}
-        <BootActions>
-          <Button variant="primary" size="sm" onClick={view.onRestart}>
-            {startupCopy.runtimeFailed.restart}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={view.onQuit}>
-            {startupCopy.runtimeFailed.quit}
           </Button>
         </BootActions>
       </>

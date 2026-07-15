@@ -89,6 +89,7 @@ function superviseChildren({
   presenter,
   signals,
   readinessTimeoutMs = 30_000,
+  outputDrainGraceMs = 5_000,
   spawnChild = spawn,
   spawnPreparation = spawn,
   preparationCommands = [],
@@ -101,6 +102,7 @@ function superviseChildren({
     let runtimeStageReleased = false;
     let unsubscribeSignal = () => {};
     const runtimeDecoders = new Map();
+    const outputDrains = new Set();
     const preparationChildren = new Set();
     const preparations = preparationCommands;
     let desktopBuildReady = !preparations.some(({ kind }) => kind === 'desktop-build');
@@ -151,10 +153,8 @@ function superviseChildren({
       presenter({ source: 'web', stream: 'stdout', payload: `ready at ${readiness.url}\n` });
       maybeStartDesktop();
     });
-    web.stdout.setEncoding('utf8');
-    web.stdout.on('data', (chunk) => webStdout.write(chunk));
-    web.stdout.once('end', () => webStdout.end());
-    pipeStream(web.stderr, 'web', 'stderr', presenter);
+    outputDrains.add(pipeDecodedStream(web.stdout, webStdout));
+    outputDrains.add(pipeStream(web.stderr, 'web', 'stderr', presenter));
     web.once('error', (cause) =>
       terminal({ exitCode: 1, message: `Web failed to start: ${errorMessage(cause)}` }),
     );
@@ -176,6 +176,7 @@ function superviseChildren({
       if (result.message)
         presenter({ source: 'dev', stream: 'stderr', payload: `${result.message}\n` });
       await safeShutdownChildren(desktop, web, preparationChildren, presenter);
+      await drainOutput(outputDrains, presenter, outputDrainGraceMs);
       for (const decoder of runtimeDecoders.values()) decoder.end();
       resume(Effect.succeed(result.exitCode));
     }
@@ -186,6 +187,7 @@ function superviseChildren({
       unsubscribeSignal();
       clearTimeout(timeout);
       await safeShutdownChildren(desktop, web, preparationChildren, presenter);
+      await drainOutput(outputDrains, presenter, outputDrainGraceMs);
       for (const decoder of runtimeDecoders.values()) decoder.end();
     });
 
@@ -201,7 +203,7 @@ function superviseChildren({
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       preparationChildren.add(child);
-      pipePlainLogs(child, 'dev', presenter);
+      for (const drain of pipePlainLogs(child, 'dev', presenter)) outputDrains.add(drain);
       child.once('error', (cause) =>
         terminal({
           exitCode: 1,
@@ -232,7 +234,9 @@ function superviseChildren({
         env: { ...environment, [developmentEnvironmentKeys.webUrl]: webUrl },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      pipeDesktopLogs(desktop, presenter, runtimeDecoders, terminal);
+      for (const drain of pipeDesktopLogs(desktop, presenter, runtimeDecoders, terminal)) {
+        outputDrains.add(drain);
+      }
       desktop.once('error', (cause) =>
         terminal({ exitCode: 1, message: `Electron failed to start: ${errorMessage(cause)}` }),
       );
@@ -318,21 +322,38 @@ function sendOwnerMessage(message) {
 }
 
 function pipePlainLogs(child, source, presenter) {
-  pipeStream(child.stdout, source, 'stdout', presenter);
-  pipeStream(child.stderr, source, 'stderr', presenter);
+  return [
+    pipeStream(child.stdout, source, 'stdout', presenter),
+    pipeStream(child.stderr, source, 'stderr', presenter),
+  ];
 }
 
 function pipeStream(stream, source, streamName, presenter) {
-  stream.setEncoding('utf8');
   const decoder = createRecordDecoder((payload) =>
     presenter({ source, stream: streamName, payload }),
   );
-  stream.on('data', (chunk) => decoder.write(chunk));
-  stream.once('end', () => decoder.end());
+  return pipeDecodedStream(stream, decoder);
+}
+
+function pipeDecodedStream(stream, decoder) {
+  stream.setEncoding('utf8');
+  return new Promise((resolvePromise) => {
+    let complete = false;
+    const finish = () => {
+      if (complete) return;
+      complete = true;
+      decoder.end();
+      resolvePromise();
+    };
+    stream.on('data', (chunk) => decoder.write(chunk));
+    stream.once('end', finish);
+    stream.once('close', finish);
+    stream.once('error', finish);
+    if (stream.readableEnded || stream.destroyed) queueMicrotask(finish);
+  });
 }
 
 function pipeDesktopLogs(child, presenter, runtimeDecoders, onFailure) {
-  child.stdout.setEncoding('utf8');
   const desktopDecoder = createRecordDecoder((record, ending) => {
     const line = withoutEnding(record, ending);
     let runtimeRecord;
@@ -355,9 +376,27 @@ function pipeDesktopLogs(child, presenter, runtimeDecoders, onFailure) {
     }
     decoder.write(runtimeRecord.payload);
   });
-  child.stdout.on('data', (chunk) => desktopDecoder.write(chunk));
-  child.stdout.once('end', () => desktopDecoder.end());
-  pipeStream(child.stderr, 'desktop', 'stderr', presenter);
+  return [
+    pipeDecodedStream(child.stdout, desktopDecoder),
+    pipeStream(child.stderr, 'desktop', 'stderr', presenter),
+  ];
+}
+
+async function drainOutput(outputDrains, presenter, graceMs) {
+  let timeout;
+  const drained = await Promise.race([
+    Promise.all(outputDrains).then(() => true),
+    new Promise((resolvePromise) => {
+      timeout = setTimeout(() => resolvePromise(false), graceMs);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  if (drained) return;
+  presenter({
+    source: 'dev',
+    stream: 'stderr',
+    payload: 'Timed out draining child output; escalating residual cleanup to the stack owner.\n',
+  });
 }
 
 async function shutdownChildren(desktop, web, preparationChildren = []) {

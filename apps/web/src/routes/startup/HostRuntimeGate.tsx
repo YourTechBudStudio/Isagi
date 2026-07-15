@@ -26,9 +26,9 @@ export function useHostRuntimeGate() {
 
 export function hostRuntimeGateDecision(
   snapshot: HostRuntimeStatusSnapshot | null,
-): 'connecting' | 'managed_failed' | 'pass' {
+): 'connecting' | 'failed' | 'pass' {
   if (!snapshot || snapshot.state === 'connecting') return 'connecting';
-  if (snapshot.ownership === 'managed' && snapshot.state === 'failed') return 'managed_failed';
+  if (snapshot.ownership === 'managed' && snapshot.state === 'failed') return 'failed';
   return 'pass';
 }
 

@@ -137,6 +137,49 @@ test('fixture stack waits for split readiness and returns normal desktop exit', 
   );
 });
 
+test('supervisor drains inherited child output before reporting completion', async () => {
+  const events = [];
+  let acquisition = 0;
+  const code = await Effect.runPromise(
+    superviseChildren({
+      root: process.cwd(),
+      readinessTimeoutMs: 500,
+      presenter: (event) => events.push(event),
+      spawnChild: (_command, _args, options) =>
+        spawn(
+          process.execPath,
+          [fixture, acquisition++ === 0 ? 'web-ready' : 'desktop-late-output'],
+          options,
+        ),
+    }),
+  );
+
+  assert.equal(code, 0);
+  assert.ok(events.some((event) => event.payload === 'desktop final\n'));
+});
+
+test('supervisor bounds output drain so the outer owner can remove a residual tree', async () => {
+  const events = [];
+  let acquisition = 0;
+  const code = await Effect.runPromise(
+    superviseChildren({
+      root: process.cwd(),
+      readinessTimeoutMs: 500,
+      outputDrainGraceMs: 20,
+      presenter: (event) => events.push(event),
+      spawnChild: (_command, _args, options) =>
+        spawn(
+          process.execPath,
+          [fixture, acquisition++ === 0 ? 'web-ready' : 'desktop-held-output'],
+          options,
+        ),
+    }),
+  );
+
+  assert.equal(code, 0);
+  assert.ok(events.some((event) => event.payload.includes('escalating residual cleanup')));
+});
+
 test('desktop opens after its build and receives runtime-stage readiness later', async () => {
   const events = [];
   let acquisition = 0;

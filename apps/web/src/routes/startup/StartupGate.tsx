@@ -3,7 +3,6 @@ import { useState } from 'react';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { useControlPlaneQuery } from '../../lib/control-plane/queries.js';
-import { requestQuit, requestRelaunch } from '../../lib/desktop-bridge.js';
 import { DURATION, EASE_EXPO } from '../../lib/motion.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { WorkspacePage } from '../workspace/WorkspacePage.js';
@@ -37,19 +36,13 @@ export function StartupGate() {
   const hostView: BootView | null =
     host.decision === 'connecting'
       ? { kind: 'connecting' }
-      : host.decision === 'managed_failed' &&
-          host.snapshot?.ownership === 'managed' &&
-          host.snapshot.state === 'failed'
-        ? {
-            kind: 'runtime_failed',
-            diagnostic: host.snapshot.diagnostic ?? {},
-            onRestart: requestRelaunch,
-            onQuit: requestQuit,
-          }
+      : host.decision === 'failed'
+        ? { kind: 'host_failed' }
         : null;
 
   // Host lifecycle facts outrank stale control-plane data. A managed runtime
-  // failure must unmount onboarding and workspace work immediately.
+  // failure remains blocked here only for the brief interval before Electron's
+  // fatal-exit path closes the renderer.
   if (hostView) {
     return <BootSurface view={hostView} />;
   }

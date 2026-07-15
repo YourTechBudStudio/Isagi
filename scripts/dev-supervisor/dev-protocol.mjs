@@ -29,11 +29,16 @@ export function developmentPaths(root) {
 }
 
 export function formatDevelopmentControl(record) {
-  return `${developmentControlPrefix}${JSON.stringify({ protocolVersion: developmentProtocolVersion, ...record })}`;
+  return `${developmentControlPrefix}${JSON.stringify({ ...record, protocolVersion: developmentProtocolVersion })}`;
 }
 
 export function parseDevelopmentControl(line) {
-  if (!line.startsWith(developmentControlPrefix)) return undefined;
+  if (!line.startsWith(developmentControlPrefix)) {
+    if (line.startsWith(developmentControlPrefix.trimEnd())) {
+      throw new Error('Development control record used malformed framing.');
+    }
+    return undefined;
+  }
   return JSON.parse(line.slice(developmentControlPrefix.length));
 }
 

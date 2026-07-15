@@ -13,6 +13,7 @@ import { runCommand } from './process.mjs';
 import { takeCompleteLines } from './smoke.mjs';
 import {
   createFingerprint,
+  createFingerprintInputs,
   isValidNativeCache,
   recoverGeneratedState,
   validateDependencyTree,
@@ -31,6 +32,52 @@ test('fingerprint is stable for object key order and invalidates on an input cha
 
   assert.equal(first, reordered);
   assert.notEqual(first, changed);
+});
+
+test('native cache fingerprint covers the lockfile, Electron context, dependencies, rebuild recipe, and host', () => {
+  const inputs = createFingerprintInputs({
+    electron: {
+      abi: '148',
+      arch: 'arm64',
+      node: 'v24.18.0',
+      platform: 'darwin',
+      version: '43.1.0',
+    },
+    dependencyVersions: { 'better-sqlite3': '12.11.1', 'node-pty': '1.1.0' },
+    rebuildVersion: '4.2.0',
+  });
+  const expectedKeys = [
+    'dependencyVersions',
+    'electron',
+    'libc',
+    'lockfileSha256',
+    'rebuildVersion',
+    'runtimeNativeExternals',
+    'runtimePackageExternals',
+    'stagingRecipeVersion',
+  ];
+  assert.deepEqual(Object.keys(inputs), expectedKeys);
+
+  const baseline = createFingerprint(inputs);
+  const mutations = [
+    (value) => (value.dependencyVersions['node-pty'] = '2.0.0'),
+    (value) => (value.electron.version = '44.0.0'),
+    (value) => (value.electron.node = 'v25.0.0'),
+    (value) => (value.electron.abi = '149'),
+    (value) => (value.electron.platform = 'linux'),
+    (value) => (value.electron.arch = 'x64'),
+    (value) => (value.libc = 'glibc-test'),
+    (value) => (value.lockfileSha256 = 'changed'),
+    (value) => (value.rebuildVersion = '5.0.0'),
+    (value) => value.runtimeNativeExternals.push('native-test'),
+    (value) => value.runtimePackageExternals.push('external-test'),
+    (value) => (value.stagingRecipeVersion += 1),
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(inputs);
+    mutate(changed);
+    assert.notEqual(createFingerprint(changed), baseline);
+  }
 });
 
 test('an incomplete cache directory is never a cache hit', () => {

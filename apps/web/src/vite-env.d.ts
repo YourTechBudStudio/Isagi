@@ -11,7 +11,6 @@ declare global {
         listener: (snapshot: HostRuntimeStatusSnapshot) => void,
       ) => () => void;
       setHostChromeVisible?: (visible: boolean) => Promise<void>;
-      relaunchApp?: () => Promise<void>;
       quitApp?: () => Promise<void>;
     };
   }

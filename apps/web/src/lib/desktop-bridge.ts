@@ -38,7 +38,3 @@ export function canQuit(): boolean {
 export function requestQuit(): void {
   void window.isagi?.quitApp?.();
 }
-
-export function requestRelaunch(): void {
-  void window.isagi?.relaunchApp?.();
-}
