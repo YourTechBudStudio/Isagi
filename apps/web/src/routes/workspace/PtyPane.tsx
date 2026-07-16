@@ -29,9 +29,10 @@ import {
 } from '../../lib/palette/dispatcher.js';
 import { activatePane, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
+import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
-import { BlockedPanePrompt, paneHasSharedActions } from './BlockedPanePrompt.js';
+import { BlockedPanePrompt } from './BlockedPanePrompt.js';
 import { PaneTerminal } from './PaneTerminal.js';
 import { usePaneSession } from './usePaneSession.js';
 

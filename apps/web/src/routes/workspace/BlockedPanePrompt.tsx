@@ -5,11 +5,6 @@ import type { AgentHarness, HarnessLaunchBlockReason } from '@isagi/contracts';
 import { Button } from '../../components/Button.js';
 import { agentSessionCopy } from '../../copy/index.js';
 import { harnessLabel } from '../../lib/harness-labels.js';
-import type { PaneView } from '../../lib/workspace/pane-session/view.js';
-
-export function paneHasSharedActions(viewKind: PaneView['kind']): boolean {
-  return viewKind !== 'blocked';
-}
 
 // A durable agent pane whose harness policy forbids a new process. This prompt
 // owns its sole close action; the parent omits its context menu and action cluster.

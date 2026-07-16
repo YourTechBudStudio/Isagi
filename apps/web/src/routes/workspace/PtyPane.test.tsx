@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { BlockedPanePrompt, paneHasSharedActions } from './BlockedPanePrompt.js';
+import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
+import { BlockedPanePrompt } from './BlockedPanePrompt.js';
 
 describe('BlockedPanePrompt', () => {
   it('identifies the harness and renders exactly one close action', () => {

@@ -5,6 +5,7 @@ import type { PathSuggestion } from '@isagi/contracts';
 import { Overline } from '../../components/Overline.js';
 import { paletteCopy } from '../../copy/index.js';
 import { GROUP_LABELS } from '../../lib/palette/groups.js';
+import { outcomeActions } from '../../lib/palette/outcome.js';
 import type {
   CommandErrorContent,
   CommandOutcomeAction,
@@ -16,12 +17,6 @@ import type {
   ReviewContent,
 } from '../../lib/palette/types.js';
 import { modKey } from '../../lib/platform.js';
-
-export function outcomeActions(content: CommandResultContent | CommandErrorContent) {
-  return content.actions?.length
-    ? content.actions
-    : [{ value: 'close', label: paletteCopy.outcome.close } satisfies CommandOutcomeAction];
-}
 
 export function OutcomePanel({
   content,

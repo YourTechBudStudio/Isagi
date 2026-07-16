@@ -49,6 +49,7 @@
         "es2024": true
       },
       "rules": {
+        "react/only-export-components": "error",
         "react/react-in-jsx-scope": "off"
       }
     },

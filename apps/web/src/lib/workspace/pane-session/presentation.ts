@@ -10,6 +10,10 @@ import { isPtyWebSocketErrorCode, type PaneView, type PtyPaneSession } from './v
 export type ExitInfo = { readonly exitCode: number | null; readonly signal: string | null };
 export const NO_EXIT: ExitInfo = { exitCode: null, signal: null };
 
+export function paneHasSharedActions(viewKind: PaneView['kind']): boolean {
+  return viewKind !== 'blocked';
+}
+
 /**
  * Attention dot for a pane. The runtime is the single source of truth for session
  * attention (the `fallback`), and the rail dot aggregates those same runtime sources,

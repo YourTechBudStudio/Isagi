@@ -39,6 +39,7 @@ import {
   filterEntries,
   recencyView,
 } from '../../lib/palette/model.js';
+import { outcomeActions } from '../../lib/palette/outcome.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import type { ArgSpec, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
 import {
@@ -55,13 +56,7 @@ import {
 } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
-import {
-  EntryList,
-  OutcomePanel,
-  RunningPanel,
-  Tip,
-  outcomeActions,
-} from './CommandPaletteViews.js';
+import { EntryList, OutcomePanel, RunningPanel, Tip } from './CommandPaletteViews.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
