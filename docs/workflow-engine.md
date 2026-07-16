@@ -609,12 +609,7 @@ Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant 
   `workflow_run_changed` (upsert) and `workflow_run_cleared` (delete, preserving unrelated surface
   indexes). The denormalized surface index is intentional — active-surface lookup is hot and
   product-critical.
-- **Presentation derivation** (`workflow-derive.ts`): `paused → 'paused'`; else
-  `blockingWait.kind ∈ { user_continue, user_input } → 'waiting_user'`; else `failed` / `done` /
-  `driving`. `paused` takes precedence. Production web code reads `blockingWait`, **not** the
-  summary's `waitKind`: cross-tree gate aggregation lives only in `blockingWait`, while `waitKind`
-  stays the summarized physical run's own wait and is never aggregated. Surface attention prefers the
-  root run's derived state over aggregated pane/source attention.
+- **Presentation derivation** (`workflow-derive.ts`): `paused → 'paused'`; else `blockingWait.kind ∈ { user_continue, user_input } → 'waiting_user'`; else `failed` / `done` / `driving`. `paused` takes precedence. Production web code reads `blockingWait`, **not** the summary's `waitKind`: cross-tree gate aggregation lives only in `blockingWait`, while `waitKind` stays the summarized physical run's own wait and is never aggregated. Surface attention aggregates the root run's derived state with pane/source attention using the shared `error > working > waiting > idle` hierarchy, while the workflow-specific surface glow continues to present the root run's workflow state directly.
 - **Action targeting** (`WorkflowBarContainer` / `WorkflowBar`): the bar renders the **root** summary
   of the active surface. `pause`/`resume`/`clear`/`retry` target `summary.rootRunId`; `advance`
   targets `prompt.runId`, which may be a **child** run. The root log stream is opened with

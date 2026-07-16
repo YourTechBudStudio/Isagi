@@ -98,15 +98,15 @@ function applyAttentionToSurface(
   const workflowAttention = workflowRunAttention(
     rootRunId === undefined ? undefined : workflowRunsById[rootRunId],
   );
+  const paneAttention = aggregateAttention(
+    sources.filter((source) => source.surfaceId === surface.id).map((source) => source.attention),
+  );
   return {
     ...surface,
     attention:
-      workflowAttention ??
-      aggregateAttention(
-        sources
-          .filter((source) => source.surfaceId === surface.id)
-          .map((source) => source.attention),
-      ),
+      workflowAttention === null
+        ? paneAttention
+        : aggregateAttention([paneAttention, workflowAttention]),
   };
 }
 

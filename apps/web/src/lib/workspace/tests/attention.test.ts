@@ -42,7 +42,28 @@ test('attention snapshots replace source state and derive surface and worktree r
   assert.equal(worktree?.surfaces[1]?.attention, 'working');
 });
 
-test('workflow surface attention overrides pane attention without changing pane aggregation', () => {
+test('a working pane wins over a waiting pane within the same surface', () => {
+  const [project] = applyAttentionToProjects([projectFixture()], {
+    'agent_session:1': {
+      worktreeId: 10,
+      surfaceId: 101,
+      paneId: 1001,
+      source: { kind: 'agent_session', id: 1 },
+      attention: 'waiting',
+    },
+    'agent_session:2': {
+      worktreeId: 10,
+      surfaceId: 101,
+      paneId: 1002,
+      source: { kind: 'agent_session', id: 2 },
+      attention: 'working',
+    },
+  });
+
+  assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'working');
+});
+
+test('surface attention aggregates workflow and pane signals through the shared hierarchy', () => {
   const [project] = applyAttentionToProjects(
     [projectFixture()],
     {
@@ -51,16 +72,49 @@ test('workflow surface attention overrides pane attention without changing pane 
         surfaceId: 101,
         paneId: 1001,
         source: { kind: 'agent_session', id: 1 },
-        attention: 'waiting',
+        attention: 'working',
       },
     },
     {
-      77: workflowSummaryFixture({ runId: 77, rootRunId: 77, surfaceId: 101 }),
+      77: workflowSummaryFixture({
+        runId: 77,
+        rootRunId: 77,
+        surfaceId: 101,
+        status: 'waiting',
+        waitKind: 'workflow',
+        blockingWait: { kind: 'user_input', runId: 77 },
+      }),
     },
     { 101: 77 },
   );
 
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'working');
+});
+
+test('workflow errors remain higher priority than working panes', () => {
+  const [project] = applyAttentionToProjects(
+    [projectFixture()],
+    {
+      'agent_session:1': {
+        worktreeId: 10,
+        surfaceId: 101,
+        paneId: 1001,
+        source: { kind: 'agent_session', id: 1 },
+        attention: 'working',
+      },
+    },
+    {
+      77: workflowSummaryFixture({
+        runId: 77,
+        rootRunId: 77,
+        surfaceId: 101,
+        status: 'failed',
+      }),
+    },
+    { 101: 77 },
+  );
+
+  assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'error');
 });
 
 test('workflow derivations map status to attention signals', () => {
