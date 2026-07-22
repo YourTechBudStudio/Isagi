@@ -6,7 +6,8 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 
 | Command                                                        | Behavior                                                                                                              |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `pnpm dev`                                                     | Starts the complete worktree-local development stack. This is the normal development command.                         |
+| `pnpm dev`                                                     | Prepares and starts the complete worktree-local development stack. This is the normal development command.            |
+| `pnpm dev:prepare`                                             | Builds the workspace in dependency order and assembles the canonical Electron-targeted runtime stage.                 |
 | `pnpm --filter @isagi/web dev`                                 | Starts only Vite, prints its resolved URL, and keeps HMR available. It does not start or proxy the runtime.           |
 | `pnpm --filter @isagi/runtime dev`                             | Builds required workflow assets and starts one non-watching runtime on an ephemeral loopback port.                    |
 | `pnpm --filter @isagi/desktop stage:runtime`                   | Builds the runtime and assembles the canonical Electron-targeted runtime stage.                                       |
@@ -21,11 +22,12 @@ Direct package commands are composable primitives, not replacements for root sup
 
 ```text
 pnpm dev
+  ├─ deterministic preparation
+  │    ├─ workspace build
+  │    └─ runtime stage assembly
   └─ outer stack owner
        └─ controller and inherited development process group
             ├─ Vite
-            ├─ desktop build
-            ├─ runtime stage preparation
             └─ Electron
                  ├─ renderer
                  └─ managed staged runtime in Electron Node mode
@@ -35,11 +37,11 @@ The outer stack owner is the crash fallback. On POSIX, the controller leads one 
 
 The first Ctrl-C requests structured shutdown. During the graceful path, the root command remains alive until the children have exited, their output streams have closed, final labelled output has been presented, and the outer owner has confirmed the owned tree is gone. If output cannot drain within its bound, the controller reports that fact and yields residual cleanup to the outer owner. A repeated Ctrl-C or expiry of the grace period bypasses graceful cleanup and kills the remaining tree, but still waits for disappearance before returning. A runtime failure in development exits Electron nonzero, preserves runtime output under the `runtime` log label, and brings down the complete stack. Nothing automatically restarts or replaces the runtime.
 
-## Progressive startup
+## Startup ordering
 
-After acquiring the worktree lock, the controller starts Vite, the desktop build, and runtime staging concurrently. Vite prefers `127.0.0.1:5173` and uses Vite's normal fallback when that port is occupied. Consumers never assume the selected port; the web launcher's versioned readiness record is authoritative.
+Preparation completes before the long-lived supervisor starts. The recursive workspace build follows the declared package dependency graph, so packages whose exports point at generated `dist` files are built before their consumers. Runtime staging then assembles the already-built runtime without rebuilding it. This makes a fresh worktree deterministic and keeps finite build work out of the process supervisor.
 
-Electron starts after Vite and the desktop build are ready. It creates the window and loads the existing renderer startup surface without waiting for runtime staging. When staging finishes, the controller sends one versioned stage-ready control record to Electron. Electron then starts exactly one managed runtime, which binds `127.0.0.1` on port `0`, publishes its selected URL through readiness, and must pass health before the preload bridge releases that URL.
+After preparation, the controller starts Vite and waits for its versioned readiness record. Vite prefers `127.0.0.1:5173` and uses Vite's normal fallback when that port is occupied, so consumers never assume the selected port. The controller then starts Electron with the resolved URL. Electron starts exactly one managed staged runtime, which binds `127.0.0.1` on port `0`, publishes its selected URL through readiness, and must pass health before the preload bridge releases that URL.
 
 The renderer's host lifecycle gate disables runtime-backed queries until the managed lifecycle is ready. A managed host failure keeps stale control-plane or workspace state unmounted and freezes the boot track in its error tone during the brief interval before Electron exits. The persistent boot surface spans host connection, control-plane discovery, and workspace opening; there is no native splash, managed-runtime recovery UI, or second runtime discovery path. In both development and packaged execution, an unexpected managed-runtime failure is fatal to Electron and exits nonzero after diagnostics are preserved. External runtime endpoints remain externally owned and retain their query-driven retry behavior.
 
@@ -50,11 +52,10 @@ The renderer's host lifecycle gate disables runtime-backed queries until the man
 The protocol carries:
 
 - `ISAGI_WEB_READY` records from the Vite launcher with the resolved URL.
-- `ISAGI_DEV_CONTROL` records from the controller to Electron when the runtime stage is ready.
 - `ISAGI_DEV_LOG` records from Electron to the controller with base64-framed runtime output and explicit stdout/stderr identity.
 - private environment values used only to connect the owner, controller, Electron, and worktree-local paths.
 
-Malformed, duplicate, missing, or version-mismatched control records are terminal development failures. Runtime log framing preserves ANSI data, blank lines, carriage returns, multiline output, stderr, and final unterminated data. Private development values and stale `VITE_ISAGI_RUNTIME_URL` values are removed before managed runtime launch, so runtime commands and agent harnesses cannot inherit supervisor paths or control values.
+Malformed, duplicate, missing, or version-mismatched readiness and log records are terminal development failures. Runtime log framing preserves ANSI data, blank lines, carriage returns, multiline output, stderr, and final unterminated data. Private development values and stale `VITE_ISAGI_RUNTIME_URL` values are removed before managed runtime launch, so runtime commands and agent harnesses cannot inherit supervisor paths or protocol values.
 
 These records and environment keys are internal implementation details, not supported user configuration.
 
@@ -93,7 +94,7 @@ The controller labels output as `web`, `desktop`, `runtime`, or `dev`. TTY outpu
 When startup fails, read the first terminal cause and the immediately preceding source-labelled output. Common checks are:
 
 1. If Vite does not become ready, inspect the `web` output; an occupied `5173` is normal only when Vite reports its fallback URL.
-2. If staging fails, rerun `pnpm --filter @isagi/desktop stage:runtime`; if the native cache is suspect, add `-- --force-native`.
+2. If preparation fails, rerun `pnpm dev:prepare`; if the native cache is suspect, rerun `pnpm --filter @isagi/desktop stage:runtime -- --force-native`.
 3. If Electron reports an invalid stage, inspect `apps/desktop/.generated/runtime/runtime-stage.json` and rerun staging rather than editing generated files.
 4. If the same-worktree lock blocks startup, use its PID to verify whether the owner is alive before removing anything.
 5. If the managed runtime exits, preserve the `runtime` and `desktop` output. Development intentionally requires a complete `pnpm dev` rerun after runtime or desktop source changes.

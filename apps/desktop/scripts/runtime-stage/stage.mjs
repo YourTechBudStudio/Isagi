@@ -41,10 +41,12 @@ export const stagingRecipeVersion = 1;
 const completionFileName = 'runtime-native-cache.json';
 const stageMetadataFileName = 'runtime-stage.json';
 
-export function prepareRuntimeStage({ forceNative = false } = {}) {
+export function prepareRuntimeStage({ buildRuntime = true, forceNative = false } = {}) {
   return Effect.gen(function* () {
     yield* tryOperation('recovery', generatedRoot, () => recoverGeneratedState());
-    yield* runCommand('pnpm', ['--filter', '@isagi/runtime', 'build'], { cwd: repoRoot });
+    if (buildRuntime) {
+      yield* runCommand('pnpm', ['--filter', '@isagi/runtime', 'build'], { cwd: repoRoot });
+    }
 
     const electron = yield* readElectronRuntime();
     const dependencyVersions = yield* tryOperation('dependency resolution', runtimeRoot, () =>

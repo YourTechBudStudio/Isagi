@@ -59,21 +59,6 @@ if (mode === 'web-ready') {
 } else if (mode === 'desktop-wait') {
   process.once('SIGTERM', () => process.exit(143));
   setInterval(() => {}, 1_000);
-} else if (mode === 'desktop-stage-gate') {
-  process.stdout.write('desktop started\n');
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => {
-    if (!chunk.includes('"runtimeStage":"ready"')) return;
-    process.stdout.write('runtime stage released\n');
-    process.exit(0);
-  });
-} else if (mode === 'preparation-success') {
-  const delay = Number(process.argv[3] ?? 0);
-  const label = process.argv[4] ?? 'preparation';
-  setTimeout(() => {
-    process.stdout.write(`${label} ready\n`);
-    process.exit(0);
-  }, delay);
 } else if (mode === 'resist-term') {
   process.once('SIGTERM', () => {});
   setInterval(() => {}, 1_000);

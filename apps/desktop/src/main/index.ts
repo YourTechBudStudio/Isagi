@@ -1,7 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit } from 'effect';
@@ -9,7 +8,6 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
-import { isRuntimeStageReadyControl } from './development-control.js';
 import { configureDevelopmentUserData } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
@@ -33,7 +31,6 @@ const runtimeLifecycle = createRuntimeLifecycle();
 let mainWindow: BrowserWindow | undefined;
 let exitPromise: Promise<void> | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
-let runtimeStageGateAttached = false;
 let pendingExitCode: number | undefined;
 let exitRequested = false;
 
@@ -111,28 +108,8 @@ function createWindowEffect() {
     });
     window.once('ready-to-show', () => window.show());
 
-    beginRuntimeStartup();
-    yield* loadRenderer(window);
-  });
-}
-
-function beginRuntimeStartup() {
-  if (runtimeStartPromise || runtimeStageGateAttached) return;
-  if (!isDev || process.env[developmentEnvironmentKeys.runtimeStageGate] !== 'supervisor') {
     startRuntime();
-    return;
-  }
-  runtimeStageGateAttached = true;
-  const input = createInterface({ input: process.stdin });
-  input.on('line', (line) => {
-    try {
-      if (!isRuntimeStageReadyControl(line)) return;
-      input.close();
-      startRuntime();
-    } catch (error) {
-      console.error('[desktop] invalid development control record', error);
-      void requestExit({ code: 1 });
-    }
+    yield* loadRenderer(window);
   });
 }
 

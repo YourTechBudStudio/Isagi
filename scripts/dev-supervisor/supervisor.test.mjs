@@ -40,7 +40,6 @@ test('root supervision forces managed desktop ownership without dropping host to
       ISAGI_DEV_WORKTREE_ROOT: '/checkout',
       ISAGI_DEV_PROCESS_OWNER: '1',
       ISAGI_DESKTOP_LOG_MODE: 'supervisor',
-      ISAGI_RUNTIME_STAGE_GATE: 'supervisor',
       ISAGI_RUNTIME_DEBUG: '1',
     },
   );
@@ -53,8 +52,8 @@ test('root supervision removes a stale renderer runtime URL from Vite', () => {
   );
 });
 
-test('root supervision prepares Electron once before starting concurrent children', async () => {
-  const root = mkdtempSync(resolve(tmpdir(), 'isagi-supervisor-electron-'));
+test('root supervision owns the prepared stack and releases its worktree lock', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'isagi-supervisor-root-'));
   for (const path of [
     'package.json',
     'pnpm-workspace.yaml',
@@ -64,71 +63,23 @@ test('root supervision prepares Electron once before starting concurrent childre
     mkdirSync(resolve(root, path, '..'), { recursive: true });
     writeFileSync(resolve(root, path), '{}');
   }
-  let prepared = false;
-  let preparationCount = 0;
   let acquisition = 0;
   try {
     const code = await Effect.runPromise(
       runDevelopmentSupervisor({
         root,
-        prepareElectron: () =>
-          Effect.sync(() => {
-            preparationCount += 1;
-            prepared = true;
-            return process.execPath;
-          }),
-        preparationCommands: [],
+        electronExecutable: process.execPath,
         presenter: () => {},
-        spawnChild: (_command, _args, options) => {
-          assert.equal(prepared, true);
-          return spawn(
+        spawnChild: (_command, _args, options) =>
+          spawn(
             process.execPath,
             [fixture, acquisition++ === 0 ? 'web-ready' : 'desktop-success'],
             options,
-          );
-        },
+          ),
       }),
     );
 
     assert.equal(code, 0);
-    assert.equal(preparationCount, 1);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('preparation failure is diagnostic and releases the worktree lock', async () => {
-  const root = mkdtempSync(resolve(tmpdir(), 'isagi-supervisor-preparation-'));
-  for (const path of [
-    'package.json',
-    'pnpm-workspace.yaml',
-    'apps/desktop/package.json',
-    'apps/web/package.json',
-  ]) {
-    mkdirSync(resolve(root, path, '..'), { recursive: true });
-    writeFileSync(resolve(root, path), '{}');
-  }
-  const events = [];
-  try {
-    const code = await Effect.runPromise(
-      runDevelopmentSupervisor({
-        root,
-        electronExecutable: process.execPath,
-        presenter: (event) => events.push(event),
-        preparationCommands: [
-          {
-            kind: 'desktop-build',
-            command: process.execPath,
-            args: [fixture, 'web-failure'],
-          },
-        ],
-        spawnChild: (_command, _args, options) =>
-          spawn(process.execPath, [fixture, 'web-silent'], options),
-      }),
-    );
-    assert.equal(code, 4);
-    assert.ok(events.some((event) => event.payload.includes('Preparation command failed')));
-    assert.ok(events.some((event) => event.payload.includes(process.execPath)));
     assert.equal(existsSync(resolve(root, 'data/.isagi/dev-supervisor.lock')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -160,7 +111,7 @@ test('supervisor signal source latches the first cause across phase subscription
   assert.equal(signalProcess.listenerCount('SIGTERM'), 0);
 });
 
-test('fixture stack waits for split readiness and returns normal desktop exit', async () => {
+test('fixture stack waits for web readiness and returns normal desktop exit', async () => {
   const events = [];
   let acquisition = 0;
   const code = await Effect.runPromise(
@@ -227,49 +178,6 @@ test('supervisor bounds output drain so the outer owner can remove a residual tr
 
   assert.equal(code, 0);
   assert.ok(events.some((event) => event.payload.includes('escalating residual cleanup')));
-});
-
-test('desktop opens after its build and receives runtime-stage readiness later', async () => {
-  const events = [];
-  let acquisition = 0;
-  let preparation = 0;
-  const code = await Effect.runPromise(
-    superviseChildren({
-      root: process.cwd(),
-      electronExecutable: process.execPath,
-      readinessTimeoutMs: 500,
-      presenter: (event) => events.push(event),
-      preparationCommands: [
-        {
-          kind: 'runtime-stage',
-          command: process.execPath,
-          args: [fixture, 'preparation-success', '100', 'runtime stage'],
-        },
-        {
-          kind: 'desktop-build',
-          command: process.execPath,
-          args: [fixture, 'preparation-success', '20', 'desktop build'],
-        },
-      ],
-      spawnChild: (_command, _args, options) =>
-        spawn(
-          process.execPath,
-          [fixture, acquisition++ === 0 ? 'web-ready' : 'desktop-stage-gate'],
-          options,
-        ),
-      spawnPreparation: (_command, args, options) => {
-        preparation += 1;
-        return spawn(process.execPath, args, options);
-      },
-    }),
-  );
-  assert.equal(preparation, 2);
-  assert.equal(code, 0);
-  const payloads = events.map(({ payload }) => payload);
-  assert.ok(payloads.indexOf('desktop started\n') < payloads.indexOf('runtime stage ready\n'));
-  assert.ok(
-    payloads.indexOf('runtime stage ready\n') < payloads.indexOf('runtime stage released\n'),
-  );
 });
 
 test('fixture stack preserves managed runtime failure and nested runtime stream', async () => {

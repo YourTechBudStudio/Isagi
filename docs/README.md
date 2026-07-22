@@ -27,7 +27,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 4. [`configuration-model.md`](./configuration-model.md) — how configuration is conceptually organized
 5. [`workflow-engine.md`](./workflow-engine.md) — the durable workflow subsystem: engine, run-centric API, event surfaces, and client boundary
 6. [`engineering-guidance/README.md`](./engineering-guidance/README.md) — coding and review guidance for keeping the repo maintainable
-7. [`development-runtime.md`](./development-runtime.md) — maintainer commands, ownership topology, progressive startup, staging, and troubleshooting
+7. [`development-runtime.md`](./development-runtime.md) — maintainer commands, ownership topology, deterministic preparation, staging, and troubleshooting
 
 ## Docs map
 
@@ -37,4 +37,4 @@ These docs should explain the shape of Isagi without becoming a running transcri
 - **Configuration Model**: global/project/worktree configuration layers, command persistence, templates, presets, and agent-assisted configuration direction.
 - **Workflow Subsystem**: the durable, in-process engine that runs user-authored reducer callbacks as restart-surviving state machines, plus the surrounding run-centric surface — run identity and the status/`paused` lifecycle, the resolver/dispatcher/recoverer loops, the `ctx` SDK and `wait`/`event` helpers, the run API and controls, the three event surfaces, and the web client boundary.
 - **Engineering Guidance**: principles and review lenses for boundaries, module shape, drift prevention, runtime diagnostics, product behavior, and verification.
-- **Development Runtime**: the command-accurate supervisor, progressive startup, worktree isolation, runtime staging, packaging parity, and troubleshooting model used by maintainers.
+- **Development Runtime**: the command-accurate preparation and supervision flow, worktree isolation, runtime staging, packaging parity, and troubleshooting model used by maintainers.

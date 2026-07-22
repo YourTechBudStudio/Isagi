@@ -1,7 +1,6 @@
 import { resolve } from 'node:path';
 
 export const developmentProtocolVersion = 1;
-export const developmentControlPrefix = 'ISAGI_DEV_CONTROL ';
 export const runtimeLogPrefix = 'ISAGI_DEV_LOG ';
 export const webReadinessPrefix = 'ISAGI_WEB_READY ';
 
@@ -9,7 +8,6 @@ export const developmentEnvironmentKeys = Object.freeze({
   worktreeRoot: 'ISAGI_DEV_WORKTREE_ROOT',
   processOwner: 'ISAGI_DEV_PROCESS_OWNER',
   desktopLogMode: 'ISAGI_DESKTOP_LOG_MODE',
-  runtimeStageGate: 'ISAGI_RUNTIME_STAGE_GATE',
   webUrl: 'ISAGI_WEB_URL',
 });
 export const privateRuntimeEnvironmentKeys = Object.freeze(
@@ -26,20 +24,6 @@ export function developmentPaths(root) {
     desktopRoot: resolve(root, 'apps/desktop'),
     runtimeStage: resolve(root, 'apps/desktop/.generated/runtime'),
   };
-}
-
-export function formatDevelopmentControl(record) {
-  return `${developmentControlPrefix}${JSON.stringify({ ...record, protocolVersion: developmentProtocolVersion })}`;
-}
-
-export function parseDevelopmentControl(line) {
-  if (!line.startsWith(developmentControlPrefix)) {
-    if (line.startsWith(developmentControlPrefix.trimEnd())) {
-      throw new Error('Development control record used malformed framing.');
-    }
-    return undefined;
-  }
-  return JSON.parse(line.slice(developmentControlPrefix.length));
 }
 
 export function formatRuntimeLogRecord({ stream, payload }) {

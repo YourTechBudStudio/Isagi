@@ -13,7 +13,6 @@ test('managed runtime environment retains host tooling and removes private orche
     ISAGI_DEV_PROCESS_OWNER: '1',
     ISAGI_DEV_WORKTREE_ROOT: '/checkout',
     ISAGI_DESKTOP_LOG_MODE: 'supervisor',
-    ISAGI_RUNTIME_STAGE_GATE: 'supervisor',
     ISAGI_WEB_URL: 'http://127.0.0.1:4173',
     VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
     ISAGI_ALLOWED_ORIGINS: 'http://stale.invalid',

@@ -3,6 +3,8 @@ worktrees:
     postCreate:
       - type: command
         run: pnpm install
+      - type: command
+        run: pnpm build
 
 commands:
   - name: pnpm fix

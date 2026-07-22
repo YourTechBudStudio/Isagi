@@ -1,16 +1,12 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
 import { Data, Effect } from 'effect';
 
-import { prepareElectronExecutable } from '../../apps/desktop/scripts/electron-runtime.mjs';
-import {
-  developmentEnvironmentKeys,
-  developmentProtocolVersion,
-  formatDevelopmentControl,
-} from './dev-protocol.mjs';
+import { developmentEnvironmentKeys, developmentProtocolVersion } from './dev-protocol.mjs';
 import { acquireWorktreeLock, releaseWorktreeLock } from './lock.mjs';
 import {
   developmentPaths,
@@ -50,20 +46,8 @@ export function runDevelopmentSupervisor(options = {}) {
         }),
         (owner) => Effect.promise(() => releaseWorktreeLock(owner)),
       );
-      const prepareElectron = options.prepareElectron ?? prepareElectronExecutable;
       const electronExecutable =
-        options.electronExecutable ??
-        (yield* prepareElectron({
-          desktopRoot: paths.desktopRoot,
-          onPrepare: () =>
-            presenter({
-              source: 'dev',
-              stream: 'stdout',
-              payload: 'Preparing Electron binary...\n',
-            }),
-        }).pipe(Effect.mapError((cause) => failure(cause.message))));
-      // Keep default signal handling during the potentially long download so the outer owner can
-      // terminate this controller and its installer process tree immediately.
+        options.electronExecutable ?? resolveElectronExecutable(paths.desktopRoot);
       const signals = yield* Effect.acquireRelease(
         Effect.sync(() => createSupervisorSignalSource()),
         (source) => Effect.sync(() => source.dispose()),
@@ -73,24 +57,11 @@ export function runDevelopmentSupervisor(options = {}) {
       presenter({ source: 'dev', stream: 'stdout', payload: `lock ${lock.path}\n` });
 
       if (signals.selected) return signals.selected.exitCode;
-      const preparationCommands = options.preparationCommands ?? [
-        {
-          kind: 'runtime-stage',
-          command: 'pnpm',
-          args: ['--filter', '@isagi/desktop', 'stage:runtime'],
-        },
-        {
-          kind: 'desktop-build',
-          command: 'pnpm',
-          args: ['--filter', '@isagi/desktop', 'build'],
-        },
-      ];
       return yield* superviseChildren({
         root,
         paths,
         presenter,
         signals,
-        preparationCommands,
         ...options,
         electronExecutable,
       });
@@ -107,22 +78,15 @@ function superviseChildren({
   readinessTimeoutMs = 30_000,
   outputDrainGraceMs = 5_000,
   spawnChild = spawn,
-  spawnPreparation = spawn,
-  preparationCommands = [],
 }) {
   return Effect.async((resume) => {
     let settled = false;
     let webReady = false;
     let webUrl;
     let desktop;
-    let runtimeStageReleased = false;
     let unsubscribeSignal = () => {};
     const runtimeDecoders = new Map();
     const outputDrains = new Set();
-    const preparationChildren = new Set();
-    const preparations = preparationCommands;
-    let desktopBuildReady = !preparations.some(({ kind }) => kind === 'desktop-build');
-    let runtimeStageReady = !preparations.some(({ kind }) => kind === 'runtime-stage');
     const environment = createDesktopEnvironment(process.env, root);
     const webEnvironment = createWebEnvironment(process.env);
     const web = spawnManaged(spawnChild, process.execPath, ['scripts/vite-launcher.mjs', 'dev'], {
@@ -130,8 +94,6 @@ function superviseChildren({
       env: webEnvironment,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-
-    for (const preparation of preparations) startPreparation(preparation);
 
     const timeout = setTimeout(
       () => terminal({ exitCode: 1, message: 'Timed out waiting for ISAGI_WEB_READY.' }),
@@ -191,7 +153,7 @@ function superviseChildren({
       clearTimeout(timeout);
       if (result.message)
         presenter({ source: 'dev', stream: 'stderr', payload: `${result.message}\n` });
-      await safeShutdownChildren(desktop, web, preparationChildren, presenter);
+      await safeShutdownChildren(desktop, web, presenter);
       await drainOutput(outputDrains, presenter, outputDrainGraceMs);
       for (const decoder of runtimeDecoders.values()) decoder.end();
       resume(Effect.succeed(result.exitCode));
@@ -202,53 +164,17 @@ function superviseChildren({
       settled = true;
       unsubscribeSignal();
       clearTimeout(timeout);
-      await safeShutdownChildren(desktop, web, preparationChildren, presenter);
+      await safeShutdownChildren(desktop, web, presenter);
       await drainOutput(outputDrains, presenter, outputDrainGraceMs);
       for (const decoder of runtimeDecoders.values()) decoder.end();
     });
 
-    function startPreparation(preparation) {
-      presenter({
-        source: 'dev',
-        stream: 'stdout',
-        payload: `${preparation.command} ${preparation.args.join(' ')}\n`,
-      });
-      const child = spawnManaged(spawnPreparation, preparation.command, preparation.args, {
-        cwd: root,
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      preparationChildren.add(child);
-      for (const drain of pipePlainLogs(child, 'dev', presenter)) outputDrains.add(drain);
-      child.once('error', (cause) =>
-        terminal({
-          exitCode: 1,
-          message: `Preparation command failed to start: ${errorMessage(cause)}`,
-        }),
-      );
-      child.once('exit', (code, signal) => {
-        preparationChildren.delete(child);
-        const exitCode = exitCodeForResult({ code, signal });
-        if (exitCode !== 0) {
-          terminal({
-            exitCode,
-            message: `Preparation command failed: ${preparation.command} ${preparation.args.join(' ')} (${describeExit(code, signal)}).`,
-          });
-          return;
-        }
-        if (preparation.kind === 'desktop-build') desktopBuildReady = true;
-        if (preparation.kind === 'runtime-stage') runtimeStageReady = true;
-        maybeStartDesktop();
-        releaseRuntimeStage();
-      });
-    }
-
     function maybeStartDesktop() {
-      if (settled || desktop || !webReady || !desktopBuildReady || !webUrl) return;
+      if (settled || desktop || !webReady || !webUrl) return;
       desktop = spawnManaged(spawnChild, electronExecutable, ['.'], {
         cwd: paths.desktopRoot,
         env: { ...environment, [developmentEnvironmentKeys.webUrl]: webUrl },
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       for (const drain of pipeDesktopLogs(desktop, presenter, runtimeDecoders, terminal)) {
         outputDrains.add(drain);
@@ -266,13 +192,6 @@ function superviseChildren({
               : `Electron exited unexpectedly (${describeExit(code, signal)}).`,
         });
       });
-      releaseRuntimeStage();
-    }
-
-    function releaseRuntimeStage() {
-      if (!desktop || !runtimeStageReady || runtimeStageReleased) return;
-      runtimeStageReleased = true;
-      desktop.stdin.write(`${formatDevelopmentControl({ runtimeStage: 'ready' })}\n`);
     }
   });
 }
@@ -335,13 +254,6 @@ function registerOwnedProcess(child) {
 function sendOwnerMessage(message) {
   if (!process.connected || typeof process.send !== 'function') return;
   process.send(message, () => {});
-}
-
-function pipePlainLogs(child, source, presenter) {
-  return [
-    pipeStream(child.stdout, source, 'stdout', presenter),
-    pipeStream(child.stderr, source, 'stderr', presenter),
-  ];
 }
 
 function pipeStream(stream, source, streamName, presenter) {
@@ -415,15 +327,14 @@ async function drainOutput(outputDrains, presenter, graceMs) {
   });
 }
 
-async function shutdownChildren(desktop, web, preparationChildren = []) {
+async function shutdownChildren(desktop, web) {
   if (desktop) await terminateChild(desktop);
   if (web) await terminateChild(web);
-  await Promise.all([...preparationChildren].map((child) => terminateChild(child)));
 }
 
-async function safeShutdownChildren(desktop, web, preparationChildren, presenter) {
+async function safeShutdownChildren(desktop, web, presenter) {
   try {
-    await shutdownChildren(desktop, web, preparationChildren);
+    await shutdownChildren(desktop, web);
   } catch (cause) {
     presenter({
       source: 'dev',
@@ -499,7 +410,6 @@ function createDesktopEnvironment(environment, root) {
   inherited[developmentEnvironmentKeys.worktreeRoot] = root;
   inherited[developmentEnvironmentKeys.desktopLogMode] = 'supervisor';
   inherited[developmentEnvironmentKeys.processOwner] = '1';
-  inherited[developmentEnvironmentKeys.runtimeStageGate] = 'supervisor';
   inherited.ISAGI_RUNTIME_DEBUG ??= '1';
   return inherited;
 }
@@ -508,6 +418,15 @@ function createWebEnvironment(environment) {
   const inherited = { ...environment };
   delete inherited.VITE_ISAGI_RUNTIME_URL;
   return inherited;
+}
+
+function resolveElectronExecutable(desktopRoot) {
+  const require = createRequire(resolve(desktopRoot, 'package.json'));
+  const executable = require('electron');
+  if (typeof executable !== 'string') {
+    throw failure(`Could not resolve the Electron executable from ${desktopRoot}.`);
+  }
+  return executable;
 }
 
 export {
