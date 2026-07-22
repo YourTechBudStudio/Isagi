@@ -30,8 +30,16 @@ extraResources:
   - from: .generated/runtime/node_modules
     to: runtime/node_modules
 
+linux:
+  artifactName: Isagi-${version}-${arch}.${ext}
+  category: Development
+  executableName: isagi
+  icon: app-icon-linux.png
+  syncDesktopName: true
+
 mac:
   category: public.app-category.developer-tools
+  icon: app-icon.png
   identity: null
   target:
     - dmg

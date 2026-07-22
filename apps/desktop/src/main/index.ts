@@ -15,7 +15,10 @@ import { createRuntimeLifecycle } from './runtime.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'studio.yourtechbud.isagi';
-const DEVELOPMENT_ICON_PATH = join(currentDirectory, '../../assets/app-icon.png');
+const DEVELOPMENT_ICON_PATH = join(
+  currentDirectory,
+  `../../assets/${process.platform === 'darwin' ? 'app-icon.png' : 'app-icon-linux.png'}`,
+);
 const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
 const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
 const RUNTIME_STATUS_CHANNEL = 'isagi:runtime-status-changed';

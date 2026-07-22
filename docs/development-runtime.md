@@ -7,7 +7,9 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 | Command                                                        | Behavior                                                                                                              |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                                                     | Prepares and starts the complete worktree-local development stack. This is the normal development command.            |
+| `pnpm dev:install-launcher`                                    | Installs or updates this worktree's user-level Linux launcher so GNOME can resolve the development icon and name.     |
 | `pnpm dev:prepare`                                             | Builds the workspace in dependency order and assembles the canonical Electron-targeted runtime stage.                 |
+| `pnpm dev:uninstall-launcher`                                  | Removes the user-level Linux launcher only when it is owned by Isagi development integration.                         |
 | `pnpm --filter @isagi/web dev`                                 | Starts only Vite, prints its resolved URL, and keeps HMR available. It does not start or proxy the runtime.           |
 | `pnpm --filter @isagi/runtime dev`                             | Builds required workflow assets and starts one non-watching runtime on an ephemeral loopback port.                    |
 | `pnpm --filter @isagi/desktop stage:runtime`                   | Builds the runtime and assembles the canonical Electron-targeted runtime stage.                                       |
@@ -17,6 +19,14 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 | `pnpm package:desktop`                                         | Builds the workspace, creates configured desktop distributions, checks stage parity, and smokes the packaged runtime. |
 
 Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development needs an explicit `VITE_ISAGI_RUNTIME_URL`; Electron never uses that value for runtime discovery.
+
+## Desktop application identity
+
+Isagi uses `studio.yourtechbud.isagi` as its stable application identity across desktop platforms. Electron Builder's `appId` becomes the macOS bundle identifier, while the Linux-only package field `desktopName` is `studio.yourtechbud.isagi.desktop`; Linux packaging synchronizes that filename with the Wayland application ID and X11 `WM_CLASS` so the shell can associate a running window with its launcher and icon.
+
+`pnpm dev` reads the same `desktopName`, but it deliberately does not install a launcher into the user applications directory. On Linux, run `pnpm dev:install-launcher` once and restart `pnpm dev` so GNOME can resolve the application name and icon; run `pnpm dev:uninstall-launcher` to remove it. The explicit commands make the host mutation visible, refuse to overwrite a launcher they do not own, and make the last installed worktree the development launch target. Remove the development launcher before integrating a production AppImage at the same user-level path.
+
+Installer-style Linux distributions should install their generated desktop entry and icon as part of installation. An AppImage carries its generated desktop metadata and icon, but running the portable file directly is not installation; complete dock and launcher integration still requires an AppImage integration mechanism or a separate installer script. The synchronized identity keeps either integration path aligned with the running window.
 
 ## Ownership topology
 
@@ -82,7 +92,7 @@ Packaged verification reports separate evidence:
 
 - byte parity for the runtime entry, generated assets, migrations, manifests, native modules, and selected native helpers
 - layout parity for that selected payload
-- permission parity for executable `node-pty` helpers on POSIX
+- permission parity for executable `node-pty` helpers where the target platform ships them
 - behavioral smoke for runtime readiness, health, native SQLite loading, PTY creation, clean shutdown, and relocation
 
 The unpacked unsigned application is expected to preserve those selected bytes and permission modes. Release-container metadata, timestamps, caches, and signatures are outside the parity comparison.

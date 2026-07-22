@@ -10,7 +10,9 @@
     "build": "vite build",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "dev": "pnpm stage:runtime && pnpm build && electron .",
+    "dev:install-launcher": "node scripts/development-desktop-entry.mjs install",
     "dev:prepared": "electron .",
+    "dev:uninstall-launcher": "node scripts/development-desktop-entry.mjs uninstall",
     "dist": "node scripts/run-electron-builder.mjs",
     "pack:dir": "node scripts/run-electron-builder.mjs --dir",
     "smoke:runtime-stage": "node scripts/smoke-runtime-stage.mjs",
@@ -26,9 +28,10 @@
     "@electron/rebuild": "^4.2.0",
     "@types/node": "^24.10.1",
     "electron": "^43.1.0",
-    "electron-builder": "^26.8.1",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.14"
-  }
+  },
+  "desktopName": "studio.yourtechbud.isagi.desktop"
 }

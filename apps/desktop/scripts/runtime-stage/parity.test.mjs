@@ -39,7 +39,33 @@ test('runtime stage parity distinguishes bytes, layout, metadata, and executable
   }
 });
 
-function createFixture(root) {
+test('Linux source-built node-pty parity does not require the macOS spawn helper', () => {
+  const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'isagi-runtime-parity-linux-'));
+  const source = resolve(temporaryRoot, 'source');
+  const packaged = resolve(temporaryRoot, 'packaged');
+  try {
+    createFixture(source, 'linux', 'x64');
+    rmSync(resolve(source, 'node_modules/node-pty/spawn-helper'));
+    rmSync(resolve(source, 'node_modules/node-pty/prebuilds'), { recursive: true });
+    cpSync(source, packaged, { recursive: true });
+    assert.deepEqual(verifyRuntimeStageParity(source, packaged, 'linux'), {
+      byteFileCount: 6,
+      dependencyVersions: { 'node-pty': '1.1.0' },
+      electron: {
+        abi: '148',
+        arch: 'x64',
+        node: 'v24.18.0',
+        platform: 'linux',
+        version: '43.1.0',
+      },
+      executableFileCount: 0,
+    });
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+function createFixture(root, platform = 'darwin', arch = 'arm64') {
   for (const directory of ['assets', 'drizzle/meta', 'node_modules/node-pty']) {
     mkdirSync(resolve(root, directory), { recursive: true });
   }
@@ -47,9 +73,9 @@ function createFixture(root) {
     dependencyVersions: { 'node-pty': '1.1.0' },
     electron: {
       abi: '148',
-      arch: 'arm64',
+      arch,
       node: 'v24.18.0',
-      platform: 'darwin',
+      platform,
       version: '43.1.0',
     },
     entrypoint: 'index.js',

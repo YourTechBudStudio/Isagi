@@ -56,8 +56,8 @@ export function verifyRuntimeStageParity(sourceRoot, packagedRoot, platform = pr
   if (!sourceFiles.some((path) => path.endsWith('.node'))) {
     fail(sourceRoot, 'selected parity payload contains no native modules');
   }
-  if (platform !== 'win32' && executableFileCount === 0) {
-    fail(sourceRoot, 'selected parity payload contains no executable node-pty helper');
+  if (platform === 'darwin' && executableFileCount === 0) {
+    fail(sourceRoot, 'selected parity payload contains no executable macOS node-pty helper');
   }
 
   return {
