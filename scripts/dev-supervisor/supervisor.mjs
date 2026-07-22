@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import process from 'node:process';
 
 import { Data, Effect } from 'effect';
 
+import { prepareElectronExecutable } from '../../apps/desktop/scripts/electron-runtime.mjs';
 import {
   developmentEnvironmentKeys,
   developmentProtocolVersion,
@@ -43,16 +43,30 @@ export function runDevelopmentSupervisor(options = {}) {
             process.stdout.isTTY && process.stderr.isTTY && !('NO_COLOR' in process.env),
           ),
         });
-      const signals = yield* Effect.acquireRelease(
-        Effect.sync(() => createSupervisorSignalSource()),
-        (source) => Effect.sync(() => source.dispose()),
-      );
       const lock = yield* Effect.acquireRelease(
         Effect.tryPromise({
           try: () => acquireWorktreeLock({ lockPath: paths.lock, root }),
           catch: (cause) => failure(errorMessage(cause)),
         }),
         (owner) => Effect.promise(() => releaseWorktreeLock(owner)),
+      );
+      const prepareElectron = options.prepareElectron ?? prepareElectronExecutable;
+      const electronExecutable =
+        options.electronExecutable ??
+        (yield* prepareElectron({
+          desktopRoot: paths.desktopRoot,
+          onPrepare: () =>
+            presenter({
+              source: 'dev',
+              stream: 'stdout',
+              payload: 'Preparing Electron binary...\n',
+            }),
+        }).pipe(Effect.mapError((cause) => failure(cause.message))));
+      // Keep default signal handling during the potentially long download so the outer owner can
+      // terminate this controller and its installer process tree immediately.
+      const signals = yield* Effect.acquireRelease(
+        Effect.sync(() => createSupervisorSignalSource()),
+        (source) => Effect.sync(() => source.dispose()),
       );
 
       presenter({ source: 'dev', stream: 'stdout', payload: `worktree ${root}\n` });
@@ -78,6 +92,7 @@ export function runDevelopmentSupervisor(options = {}) {
         signals,
         preparationCommands,
         ...options,
+        electronExecutable,
       });
     }),
   );
@@ -88,6 +103,7 @@ function superviseChildren({
   paths = developmentPaths(root),
   presenter,
   signals,
+  electronExecutable,
   readinessTimeoutMs = 30_000,
   outputDrainGraceMs = 5_000,
   spawnChild = spawn,
@@ -229,7 +245,7 @@ function superviseChildren({
 
     function maybeStartDesktop() {
       if (settled || desktop || !webReady || !desktopBuildReady || !webUrl) return;
-      desktop = spawnManaged(spawnChild, resolveElectronExecutable(paths.desktopRoot), ['.'], {
+      desktop = spawnManaged(spawnChild, electronExecutable, ['.'], {
         cwd: paths.desktopRoot,
         env: { ...environment, [developmentEnvironmentKeys.webUrl]: webUrl },
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -476,6 +492,7 @@ function describeExit(code, signal) {
 
 function createDesktopEnvironment(environment, root) {
   const inherited = { ...environment };
+  delete inherited.ELECTRON_RUN_AS_NODE;
   delete inherited.ISAGI_RUNTIME_URL;
   delete inherited.VITE_ISAGI_RUNTIME_URL;
   delete inherited[developmentEnvironmentKeys.webUrl];
@@ -491,15 +508,6 @@ function createWebEnvironment(environment) {
   const inherited = { ...environment };
   delete inherited.VITE_ISAGI_RUNTIME_URL;
   return inherited;
-}
-
-function resolveElectronExecutable(desktopRoot) {
-  const require = createRequire(resolve(desktopRoot, 'package.json'));
-  const executable = require('electron');
-  if (typeof executable !== 'string') {
-    throw failure(`Could not resolve the Electron executable from ${desktopRoot}.`);
-  }
-  return executable;
 }
 
 export {

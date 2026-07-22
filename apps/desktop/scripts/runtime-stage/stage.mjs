@@ -22,6 +22,7 @@ import {
   runtimeNativeExternals,
   runtimePackageExternals,
 } from '../../../runtime/runtime-externals.mjs';
+import { prepareElectronExecutable } from '../electron-runtime.mjs';
 import { StageOperationError, StageValidationError } from './errors.mjs';
 import {
   electronBuildCacheRoot,
@@ -243,8 +244,10 @@ function prepareNativeCache({
 function readElectronRuntime() {
   return Effect.gen(function* () {
     const desktopManifest = resolve(repoRoot, 'apps/desktop/package.json');
-    const require = createRequire(desktopManifest);
-    const executable = require('electron');
+    const executable = yield* prepareElectronExecutable({
+      desktopRoot: dirname(desktopManifest),
+      onPrepare: () => console.log('[desktop] Preparing Electron binary...'),
+    });
     const version = resolvePackageVersion('electron', desktopManifest);
     const source =
       'console.log(JSON.stringify({version:process.versions.electron,node:process.version,abi:process.versions.modules,platform:process.platform,arch:process.arch}))';

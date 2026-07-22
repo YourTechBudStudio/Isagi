@@ -20,6 +20,7 @@ const signals = createSupervisorSignalSource();
 const result = await Effect.runPromise(
   superviseChildren({
     root: process.cwd(),
+    electronExecutable: process.execPath,
     readinessTimeoutMs: 500,
     presenter,
     signals,

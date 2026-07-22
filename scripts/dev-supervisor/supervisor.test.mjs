@@ -27,6 +27,7 @@ test('root supervision forces managed desktop ownership without dropping host to
       {
         PATH: '/usr/bin',
         SSH_AUTH_SOCK: '/tmp/agent',
+        ELECTRON_RUN_AS_NODE: '1',
         ISAGI_RUNTIME_URL: 'http://remote.invalid',
         VITE_ISAGI_RUNTIME_URL: 'http://stale.invalid',
         ISAGI_WEB_URL: 'http://stale.invalid',
@@ -52,6 +53,50 @@ test('root supervision removes a stale renderer runtime URL from Vite', () => {
   );
 });
 
+test('root supervision prepares Electron once before starting concurrent children', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'isagi-supervisor-electron-'));
+  for (const path of [
+    'package.json',
+    'pnpm-workspace.yaml',
+    'apps/desktop/package.json',
+    'apps/web/package.json',
+  ]) {
+    mkdirSync(resolve(root, path, '..'), { recursive: true });
+    writeFileSync(resolve(root, path), '{}');
+  }
+  let prepared = false;
+  let preparationCount = 0;
+  let acquisition = 0;
+  try {
+    const code = await Effect.runPromise(
+      runDevelopmentSupervisor({
+        root,
+        prepareElectron: () =>
+          Effect.sync(() => {
+            preparationCount += 1;
+            prepared = true;
+            return process.execPath;
+          }),
+        preparationCommands: [],
+        presenter: () => {},
+        spawnChild: (_command, _args, options) => {
+          assert.equal(prepared, true);
+          return spawn(
+            process.execPath,
+            [fixture, acquisition++ === 0 ? 'web-ready' : 'desktop-success'],
+            options,
+          );
+        },
+      }),
+    );
+
+    assert.equal(code, 0);
+    assert.equal(preparationCount, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('preparation failure is diagnostic and releases the worktree lock', async () => {
   const root = mkdtempSync(resolve(tmpdir(), 'isagi-supervisor-preparation-'));
   for (const path of [
@@ -68,6 +113,7 @@ test('preparation failure is diagnostic and releases the worktree lock', async (
     const code = await Effect.runPromise(
       runDevelopmentSupervisor({
         root,
+        electronExecutable: process.execPath,
         presenter: (event) => events.push(event),
         preparationCommands: [
           {
@@ -120,6 +166,7 @@ test('fixture stack waits for split readiness and returns normal desktop exit', 
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       presenter: (event) => events.push(event),
       spawnChild: (_command, _args, options) =>
@@ -143,6 +190,7 @@ test('supervisor drains inherited child output before reporting completion', asy
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       presenter: (event) => events.push(event),
       spawnChild: (_command, _args, options) =>
@@ -164,6 +212,7 @@ test('supervisor bounds output drain so the outer owner can remove a residual tr
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       outputDrainGraceMs: 20,
       presenter: (event) => events.push(event),
@@ -187,6 +236,7 @@ test('desktop opens after its build and receives runtime-stage readiness later',
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       presenter: (event) => events.push(event),
       preparationCommands: [
@@ -228,6 +278,7 @@ test('fixture stack preserves managed runtime failure and nested runtime stream'
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       presenter: (event) => events.push(event),
       spawnChild: (_command, _args, options) =>
@@ -254,6 +305,7 @@ test('fixture stack rejects malformed readiness and cleans up web', async () => 
   const code = await Effect.runPromise(
     superviseChildren({
       root: process.cwd(),
+      electronExecutable: process.execPath,
       readinessTimeoutMs: 500,
       presenter: (event) => events.push(event),
       spawnChild: (_command, _args, options) =>
@@ -277,6 +329,7 @@ for (const [mode, expectedCode, expectedMessage] of [
     const code = await Effect.runPromise(
       superviseChildren({
         root: process.cwd(),
+        electronExecutable: process.execPath,
         readinessTimeoutMs: 50,
         presenter: (event) => events.push(event),
         spawnChild: (_command, _args, options) =>
