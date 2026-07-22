@@ -28,7 +28,6 @@ import {
   electronBuildCacheRoot,
   generatedRoot,
   nativeCacheRoot,
-  pnpmfilePath,
   rebuildWorkerPath,
   repoRoot,
   runtimeRoot,
@@ -37,7 +36,7 @@ import {
 } from './paths.mjs';
 import { runCommand } from './process.mjs';
 
-export const stagingRecipeVersion = 1;
+export const stagingRecipeVersion = 2;
 const completionFileName = 'runtime-native-cache.json';
 const stageMetadataFileName = 'runtime-stage.json';
 
@@ -163,17 +162,15 @@ function prepareNativeCache({
     const nextCache = resolve(nativeCacheRoot, `.next-${fingerprint}-${randomUUID()}`);
     const deployArgs = [
       '--filter',
-      '@isagi/runtime',
+      '@isagi/runtime-stage-dependencies',
       'deploy',
       nextCache,
-      '--legacy',
       '--prod',
       '--offline',
+      '--config.inject-workspace-packages=true',
       '--config.minimum-release-age=0',
       '--config.minimum-release-age-strict=false',
       '--config.package-import-method=copy',
-      '--pnpmfile',
-      pnpmfilePath,
     ];
 
     yield* runCommand('pnpm', deployArgs, { cwd: repoRoot }).pipe(

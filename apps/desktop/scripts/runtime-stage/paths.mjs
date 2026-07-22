@@ -11,5 +11,4 @@ export const stageRoot = resolve(generatedRoot, 'runtime');
 export const stageBackupRoot = resolve(generatedRoot, 'runtime.previous');
 export const nativeCacheRoot = resolve(generatedRoot, 'runtime-native-cache');
 export const electronBuildCacheRoot = resolve(generatedRoot, 'electron-build-cache');
-export const pnpmfilePath = resolve(moduleDirectory, 'runtime-externals.pnpmfile.mjs');
 export const rebuildWorkerPath = resolve(moduleDirectory, 'rebuild-native.mjs');

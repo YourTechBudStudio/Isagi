@@ -8,7 +8,7 @@ import test from 'node:test';
 import { Effect, Exit } from 'effect';
 
 import { runtimePackageExternals } from '../../../runtime/runtime-externals.mjs';
-import { runtimeRoot } from './paths.mjs';
+import { repoRoot, runtimeRoot } from './paths.mjs';
 import { runCommand } from './process.mjs';
 import { takeCompleteLines } from './smoke.mjs';
 import {
@@ -90,10 +90,21 @@ test('an incomplete cache directory is never a cache hit', () => {
   }
 });
 
-test('every declared runtime external is a direct runtime dependency', () => {
-  const manifest = JSON.parse(readFileSync(resolve(runtimeRoot, 'package.json'), 'utf8'));
+test('the staging importer owns exactly the declared runtime externals', () => {
+  const runtimeManifest = JSON.parse(readFileSync(resolve(runtimeRoot, 'package.json'), 'utf8'));
+  const stagingManifest = JSON.parse(
+    readFileSync(resolve(repoRoot, 'packages/runtime-stage-dependencies/package.json'), 'utf8'),
+  );
+  assert.deepEqual(
+    Object.keys(stagingManifest.dependencies).sort(),
+    [...runtimePackageExternals].sort(),
+  );
   for (const name of runtimePackageExternals) {
-    assert.equal(typeof manifest.dependencies[name], 'string', `${name} must be a dependency`);
+    assert.equal(
+      stagingManifest.dependencies[name],
+      runtimeManifest.dependencies[name],
+      `${name} must use the runtime dependency specifier`,
+    );
   }
 });
 

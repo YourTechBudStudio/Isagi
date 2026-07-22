@@ -72,7 +72,7 @@ Different worktrees can run concurrently. A second `pnpm dev` in the same worktr
 
 ## Runtime staging and native isolation
 
-The canonical stage is `apps/desktop/.generated/runtime`. It contains the runtime entry, generated assets, migrations, a minimal package manifest, the complete external dependency closure, Electron-targeted native modules, and `runtime-stage.json`. Development launches this stage in Electron Node mode. Packaging copies the same layout to `process.resourcesPath/runtime` and launches it through the same lifecycle manager.
+The canonical stage is `apps/desktop/.generated/runtime`. It contains the runtime entry, generated assets, migrations, a minimal package manifest, the complete external dependency closure, Electron-targeted native modules, and `runtime-stage.json`. Development launches this stage in Electron Node mode. Packaging copies the same layout to `process.resourcesPath/runtime` and launches it through the same lifecycle manager. The private `@isagi/runtime-stage-dependencies` workspace package is the explicit materialization boundary for that external closure; staging deploys it directly instead of traversing and pruning the runtime's bundled workspace dependency graph.
 
 The Electron-native cache fingerprint covers the complete lockfile, exact external dependency versions, Electron version, embedded Node version, ABI, platform, architecture, Linux libc identity where applicable, `@electron/rebuild`, native/external declarations, and the staging recipe version. Runtime JavaScript, assets, and migrations are rebuilt and reassembled on every stage command, so they do not belong in the native rebuild fingerprint.
 
