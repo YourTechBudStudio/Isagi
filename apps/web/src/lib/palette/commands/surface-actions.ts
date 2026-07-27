@@ -1,11 +1,6 @@
 import { PanelBottom, PanelRight, Pencil, Trash2 } from 'lucide-react';
 
-import type {
-  SessionStatus,
-  SplitPaneDirection,
-  SurfaceDetail,
-  SurfacePane,
-} from '@isagi/contracts';
+import type { SplitPaneDirection, SurfaceDetail, SurfacePane } from '@isagi/contracts';
 
 import { surfaceActionsCopy } from '../../../copy/index.js';
 import { parseAgentHarness } from '../../harness-labels.js';
@@ -20,11 +15,10 @@ import {
 } from '../../workspace/queries.js';
 import { surfaceDetailQueryKey } from '../../workspace/query-keys.js';
 import { getSurfaceDetail, UserVisibleError } from '../../workspace/runtime-data.js';
-import type { ArgValues, PaletteCommand, PaletteContext, ReviewContent } from '../types.js';
+import type { ArgValues, PaletteCommand, PaletteContext } from '../types.js';
 import { harnessSelectArg } from './session-actions.js';
 
 const TITLE_MAX_LENGTH = 80;
-const CONFIRM_DELETE = 'delete';
 
 export const renameActiveSurfaceCommand: PaletteCommand = {
   id: 'rename-active-surface',
@@ -81,40 +75,19 @@ export const deleteActiveSurfaceCommand: PaletteCommand = {
   icon: Trash2,
   group: 'worktree-actions',
   available: (ctx) => Boolean(ctx.activeSurface),
-  preflight: async (ctx, values) => {
+  preflight: (ctx, values) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
     if (!target) {
       return { mode: 'unavailable' };
     }
-    const detail = await fetchSurfaceDetail(target.surfaceId);
-    const liveCount = countLiveSessions(detail.panes);
-    const nextValues = {
-      surfaceId: String(target.surfaceId),
-      worktreeId: String(target.worktreeId),
-    };
-    return liveCount > 0
-      ? { mode: 'palette', values: nextValues }
-      : { mode: 'run', values: nextValues };
-  },
-  args: [
-    {
-      kind: 'review',
-      key: 'confirm',
-      label: 'Confirm delete',
-      load: async (_ctx, values) => {
-        const surfaceId = Number(values.surfaceId);
-        if (!Number.isInteger(surfaceId)) {
-          return null;
-        }
-        const detail = await fetchSurfaceDetail(surfaceId);
-        const liveCount = countLiveSessions(detail.panes);
-        if (liveCount === 0) {
-          return null;
-        }
-        return deleteSurfaceReview(detail.panes.length, liveCount);
+    return {
+      mode: 'run',
+      values: {
+        surfaceId: String(target.surfaceId),
+        worktreeId: String(target.worktreeId),
       },
-    },
-  ],
+    };
+  },
   run: async (values, ctx) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
     if (!target) {
@@ -148,27 +121,8 @@ export const deleteActivePaneCommand: PaletteCommand = {
       worktreeId: String(target.worktreeId),
       paneId: String(pane.id),
     };
-    return isLiveStatus(sessionStatus(pane))
-      ? { mode: 'palette', values: nextValues }
-      : { mode: 'run', values: nextValues };
+    return { mode: 'run', values: nextValues };
   },
-  args: [
-    {
-      kind: 'review',
-      key: 'confirm',
-      label: 'Confirm delete',
-      load: async (_ctx, values) => {
-        const surfaceId = Number(values.surfaceId);
-        const paneId = Number(values.paneId);
-        if (!Number.isInteger(surfaceId) || !Number.isInteger(paneId)) {
-          return null;
-        }
-        const detail = await fetchSurfaceDetail(surfaceId);
-        const pane = detail.panes.find((candidate) => candidate.id === paneId);
-        return isLiveStatus(pane ? sessionStatus(pane) : null) ? deletePaneReview() : null;
-      },
-    },
-  ],
   run: async (values, ctx) => {
     const target = activeSurfaceTargetFromValues(values, ctx);
     const paneId = Number(values.paneId);
@@ -316,61 +270,4 @@ function resolveCommandPane(
 ): SurfacePane | null {
   const paneId = resolveActivePaneId(detail.panes, activePaneId, detail.activePaneId);
   return detail.panes.find((pane) => pane.id === paneId) ?? null;
-}
-
-function isLiveStatus(status: SessionStatus | null) {
-  return status === 'starting' || status === 'running';
-}
-
-function countLiveSessions(panes: readonly SurfacePane[]) {
-  return panes.filter((pane) => isLiveStatus(sessionStatus(pane))).length;
-}
-
-function sessionStatus(pane: SurfacePane): SessionStatus | null {
-  if (!pane.session) {
-    return null;
-  }
-  return pane.session.kind === 'agent_session'
-    ? pane.session.agentSession.status
-    : pane.session.terminalSession.status;
-}
-
-function deletePaneReview(): ReviewContent {
-  return {
-    title: surfaceActionsCopy.deletePane.title,
-    body: surfaceActionsCopy.deletePane.body,
-    items: [],
-    choices: [
-      {
-        value: CONFIRM_DELETE,
-        label: surfaceActionsCopy.deletePane.confirm,
-        intent: 'danger',
-      },
-      {
-        value: 'cancel',
-        label: surfaceActionsCopy.deletePane.cancel,
-        intent: 'cancel',
-      },
-    ],
-  };
-}
-
-function deleteSurfaceReview(paneCount: number, liveCount: number): ReviewContent {
-  return {
-    title: surfaceActionsCopy.deleteSurface.title,
-    body: surfaceActionsCopy.deleteSurface.body(paneCount, liveCount),
-    items: [],
-    choices: [
-      {
-        value: CONFIRM_DELETE,
-        label: surfaceActionsCopy.deleteSurface.confirm,
-        intent: 'danger',
-      },
-      {
-        value: 'cancel',
-        label: surfaceActionsCopy.deleteSurface.cancel,
-        intent: 'cancel',
-      },
-    ],
-  };
 }

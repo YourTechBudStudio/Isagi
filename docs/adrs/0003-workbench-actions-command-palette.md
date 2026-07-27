@@ -40,7 +40,7 @@ Centralizing these actions through commands gives each product intent one fronte
 For the PTY pane/surface close-delete slice, this means:
 
 - `Rename active surface` owns the rename text argument and title mutation.
-- `Delete active surface` owns live-session confirmation, surface deletion, cleanup warnings, and cache refresh.
-- `Delete active pane` owns live-session confirmation, pane deletion, last-pane surface deletion behavior, cleanup warnings, and cache refresh.
+- `Delete active surface` runs immediately, including for live sessions, and owns surface deletion, cleanup warnings, and cache refresh.
+- `Delete active pane` runs immediately, including for live sessions, and owns pane deletion, last-pane surface deletion behavior, cleanup warnings, and cache refresh.
 - Rail surface context-menu items invoke the active-surface commands after selecting the clicked surface.
 - Pane trash controls and `Cmd+W` invoke the active-pane command after focusing the intended pane.

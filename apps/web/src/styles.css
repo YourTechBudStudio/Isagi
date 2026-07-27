@@ -122,8 +122,11 @@
   }
 }
 
-/* The command palette's running state: an indeterminate bar under the header.
-   A slim blue→violet segment sweeps across — a calm activity hint, not a spinner.
+/* The running state for a dispatched command: an indeterminate bar pinned to the
+   edge of whichever surface owns the action — under the palette header, along the
+   bottom of a pane's action cluster, under a context-menu item. A slim segment
+   sweeps across; a calm activity hint, not a spinner. One element everywhere, so
+   "a command is running here" always looks the same.
    Linear timing is a deliberate exception to the expo curve: the sweep is a
    continuous loop whose reset happens off-screen, so constant speed reads best. */
 @keyframes progress-sweep {
@@ -135,13 +138,15 @@
   }
 }
 
-.palette-progress {
+.command-sweep {
+  --command-sweep-from: var(--color-blue);
+  --command-sweep-to: var(--color-violet);
   position: relative;
   height: 2px;
   overflow: hidden;
   background: color-mix(in srgb, var(--color-line) 16%, transparent);
 }
-.palette-progress::after {
+.command-sweep::after {
   content: '';
   position: absolute;
   top: 0;
@@ -152,11 +157,37 @@
   background: linear-gradient(
     90deg,
     transparent,
-    var(--color-blue),
-    var(--color-violet),
+    var(--command-sweep-from),
+    var(--command-sweep-to),
     transparent
   );
   animation: progress-sweep 1.5s linear infinite;
+}
+
+/* Destruction in progress. Red is reserved for genuine deletion, so a delete
+   sweep is the one place this bar leaves the blue→violet command tone. */
+.command-sweep-danger {
+  --command-sweep-from: var(--color-error);
+  --command-sweep-to: var(--color-error);
+}
+
+/* Pinned to the bottom edge of the surface that owns the action, rather than
+   sitting in its flow. This positioning lives here rather than in Tailwind
+   utilities on the element: these rules are unlayered, so `position: relative`
+   above would win over a layered `absolute` utility and quietly un-pin the bar. */
+.command-sweep-pinned {
+  position: absolute;
+  inset: auto 0 0 0;
+}
+
+/* The bar still has to read as busy when it cannot move: hold the segment in
+   place rather than leaving a bare track that looks like an empty progress bar. */
+@media (prefers-reduced-motion: reduce) {
+  .command-sweep::after {
+    width: 100%;
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 :root {

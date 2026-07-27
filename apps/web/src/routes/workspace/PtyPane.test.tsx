@@ -17,5 +17,20 @@ describe('BlockedPanePrompt', () => {
     assert.equal(markup.match(/<button\b/g)?.length, 1);
     assert.doesNotMatch(markup, /Split pane|Delete pane|Check again|Retry|Resume|Start a fresh/);
     assert.equal(paneHasSharedActions('blocked'), false);
+    assert.doesNotMatch(markup, /command-sweep/);
+  });
+
+  it('carries the running sweep itself, having no action cluster to fall back on', () => {
+    const markup = renderToStaticMarkup(
+      <BlockedPanePrompt
+        harness="codex"
+        reason="harness_disabled"
+        onClose={() => undefined}
+        deletePending
+      />,
+    );
+
+    assert.match(markup, /command-sweep command-sweep-danger/);
+    assert.match(markup, /disabled=""/);
   });
 });

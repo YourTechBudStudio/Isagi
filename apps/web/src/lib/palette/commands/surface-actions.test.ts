@@ -5,7 +5,11 @@ import type { SessionStatus, SurfaceDetail } from '@isagi/contracts';
 
 import { queryClient } from '../../query/client.js';
 import { formatRuntimeError } from '../../workspace/runtime-data.js';
-import { deleteActivePaneCommand, renameActiveSurfaceCommand } from './surface-actions.js';
+import {
+  deleteActivePaneCommand,
+  deleteActiveSurfaceCommand,
+  renameActiveSurfaceCommand,
+} from './surface-actions.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -89,7 +93,7 @@ test('rename-active-surface validation surfaces inline copy', async () => {
   assert.equal(formatRuntimeError(error), 'Surface title cannot be empty.');
 });
 
-test('delete-active-pane preflight opens review for a running fallback pane', async () => {
+test('delete-active-pane preflight runs directly for a running fallback pane', async () => {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
@@ -134,8 +138,50 @@ test('delete-active-pane preflight opens review for a running fallback pane', as
   );
 
   assert.deepEqual(preflight, {
-    mode: 'palette',
+    mode: 'run',
     values: { worktreeId: '10', surfaceId: '501', paneId: '602' },
+  });
+});
+
+test('delete-active-surface preflight runs directly without loading session status', async () => {
+  globalThis.fetch = (() => {
+    throw new Error('delete-active-surface preflight should not fetch surface detail');
+  }) as typeof fetch;
+
+  const preflight = await deleteActiveSurfaceCommand.preflight?.(
+    {
+      projects: [],
+      launchableHarnesses: [],
+      activeProject: null,
+      activeWorktree: {
+        id: 10,
+        projectId: 1,
+        title: 'main',
+        path: '/repo/isagi',
+        branch: 'main',
+        head: 'abcdef0',
+        isRoot: true,
+        attention: 'idle',
+        parked: false,
+        surfaces: [
+          { id: 501, title: 'Terminal', paneKinds: ['terminal_session'], attention: 'idle' },
+        ],
+        activeSurfaceId: 501,
+      },
+      activeSurface: {
+        id: 501,
+        title: 'Terminal',
+        paneKinds: ['terminal_session'],
+        attention: 'idle',
+      },
+      activePaneId: 601,
+    },
+    {},
+  );
+
+  assert.deepEqual(preflight, {
+    mode: 'run',
+    values: { worktreeId: '10', surfaceId: '501' },
   });
 });
 

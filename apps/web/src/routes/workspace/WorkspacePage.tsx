@@ -16,6 +16,7 @@ import {
   usePersistActiveContextSelection,
   useWorkspaceSelectionSync,
 } from '../../lib/workspace/hooks.js';
+import { paneDeleteKey, useRunDelete } from '../../lib/workspace/pending-deletes.js';
 import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
 import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -72,8 +73,10 @@ export function WorkspacePage() {
   const zen = useWorkspaceStore((state) => state.zen);
   const setZen = useWorkspaceStore((state) => state.setZen);
   const workspace = useWorkspaceQuery();
-  const { activeSurface } = useWorkspace();
+  const { activeSurface, activeWorktreeId } = useWorkspace();
   const dispatchCommand = useCommandDispatcher();
+  const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
+  const runDelete = useRunDelete();
   const workspaceErrorIsFatal = Boolean(workspace.error && !workspace.data);
   const hasConfiguredProjects =
     !workspaceErrorIsFatal && (workspace.data?.projects.length ?? 0) > 0;
@@ -120,12 +123,39 @@ export function WorkspacePage() {
       }
 
       event.preventDefault();
-      void dispatchCommand('delete-active-pane').catch(handleDispatchedCommandError);
+
+      // The shortcut has no affordance of its own, so it reports through the
+      // target pane's action cluster, which pins visible while a delete runs.
+      // That needs the pane id up front; when nothing is stored the command
+      // still resolves its own target, it just runs without the local indicator.
+      const activePaneId = activePaneBySurfaceId[activeSurface.id];
+      if (activePaneId === undefined || activeWorktreeId === null) {
+        void dispatchCommand('delete-active-pane').catch(handleDispatchedCommandError);
+        return;
+      }
+      runDelete({
+        key: paneDeleteKey(activePaneId),
+        origin: 'pane',
+        commandId: 'delete-active-pane',
+        surfaceId: activeSurface.id,
+        values: {
+          worktreeId: String(activeWorktreeId),
+          surfaceId: String(activeSurface.id),
+          paneId: String(activePaneId),
+        },
+      });
     };
 
     window.addEventListener('keydown', onKey, { capture: true });
     return () => window.removeEventListener('keydown', onKey, { capture: true });
-  }, [activeSurface, dispatchCommand, paletteOpen]);
+  }, [
+    activePaneBySurfaceId,
+    activeSurface,
+    activeWorktreeId,
+    dispatchCommand,
+    paletteOpen,
+    runDelete,
+  ]);
 
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: DURATION.ui, ease: EASE_EXPO }}>

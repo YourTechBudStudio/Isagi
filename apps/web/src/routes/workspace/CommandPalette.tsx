@@ -695,7 +695,7 @@ export function CommandPalette() {
               </p>
             )}
 
-            {running && <div aria-hidden className="palette-progress" />}
+            {running && <div aria-hidden className="command-sweep" />}
 
             <motion.div
               key={panelKey}

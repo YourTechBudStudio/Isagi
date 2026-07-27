@@ -94,39 +94,13 @@ export const paletteCopy = {
   },
 } as const;
 
-/**
- * Copy for the rename/delete surface + pane actions. Menu and button labels are
- * plain working chrome. The destructive confirmations lean on the danger styling
- * to carry weight, so the words stay flat and factual. Process cleanup is owned
- * by runtime GC, so confirmation copy does not promise an immediate stop.
- */
+/** Copy for surface and pane actions. Menu and button labels are plain working chrome. */
 export const surfaceActionsCopy = {
   menu: {
     rename: 'Rename surface',
-    delete: 'Delete surface…',
+    delete: 'Delete surface',
   },
   chooseHarness: 'Choose a harness before splitting this pane.',
-  deletePane: {
-    title: 'Delete this pane?',
-    body: 'This session is still running. Isagi will delete the pane; cleanup runs in the background.',
-    confirm: 'Delete pane',
-    cancel: 'Cancel',
-  },
-  deleteSurface: {
-    title: 'Delete this surface?',
-    confirm: 'Delete surface',
-    cancel: 'Cancel',
-    /**
-     * Shown only when at least one of the surface's sessions is live. Leads with
-     * the running count (the real stake), then reassures what survives. Handles
-     * the single-pane, all-live, and some-live shapes grammatically.
-     */
-    body: (paneCount: number, liveCount: number): string => {
-      const panes = paneCount === 1 ? '1 pane' : `${paneCount} panes`;
-      const sessions = liveCount === 1 ? '1 session is' : `${liveCount} sessions are`;
-      return `This will delete ${panes}. ${sessions} still running; cleanup runs in the background.`;
-    },
-  },
   renameSurface: {
     placeholder: 'Type a surface title…',
     emptyTitle: 'Surface title cannot be empty.',

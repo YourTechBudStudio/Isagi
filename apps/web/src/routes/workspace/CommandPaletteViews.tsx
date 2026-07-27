@@ -431,7 +431,7 @@ export function WizardOptions({
 
 /**
  * The body shown while a command's async run is in flight, paired with the
- * `palette-progress` bar rendered under the header. The bar carries the "this
+ * `command-sweep` bar rendered under the header. The bar carries the "this
  * surface is working" signal (conventional, never a spinner); the body stays a
  * calm, dry status with a softly breathing accent so the palette never looks
  * frozen. `role="status"` / `aria-live` announces the work to assistive tech.

@@ -137,12 +137,25 @@ export function useCommandDispatcher() {
   );
 }
 
-export function handleDispatchedCommandError(error: unknown) {
+/**
+ * Refreshes workspace state after a failed dispatch and reports the failure.
+ *
+ * Pass `toast: false` when the action surface that started the command is still
+ * on screen and is showing the failure itself — the refresh and the log line are
+ * still wanted, a second copy of the message in unrelated chrome is not (ADR
+ * 0004).
+ */
+export function handleDispatchedCommandError(
+  error: unknown,
+  options: { readonly toast?: boolean } = {},
+) {
   void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-  showToast({
-    kind: 'warning',
-    title: toastCopy.workbenchCommandFailed.title,
-    subtitle: formatRuntimeError(error),
-  });
+  if (options.toast ?? true) {
+    showToast({
+      kind: 'warning',
+      title: toastCopy.workbenchCommandFailed.title,
+      subtitle: formatRuntimeError(error),
+    });
+  }
   console.error('[palette] dispatched command failed', error);
 }

@@ -31,6 +31,15 @@ import { activatePane, usePaneFocusTarget } from '../../lib/workspace/activation
 import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
 import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
+import {
+  isDeletePending,
+  paneDeleteKey,
+  showsDeleteSweep,
+  surfaceDeleteKey,
+  useDeleteEntry,
+  usePendingDeleteStore,
+  useRunDelete,
+} from '../../lib/workspace/pending-deletes.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { BlockedPanePrompt } from './BlockedPanePrompt.js';
 import { PaneTerminal } from './PaneTerminal.js';
@@ -92,16 +101,42 @@ export function PtyPane({
     paneAttention,
     autoAttach: focused,
   });
+  // A delete already running against this pane — or against the surface that
+  // owns it — locks every action here. The sweep is drawn once, at whichever
+  // affordance started it; everything else just goes inert.
+  const paneKey = paneDeleteKey(pane.id);
+  const paneDelete = useDeleteEntry(paneKey);
+  const surfaceDelete = useDeleteEntry(surfaceDeleteKey(surface.id));
+  const actionsLocked = isDeletePending(paneDelete) || isDeletePending(surfaceDelete);
+  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
+  const runDelete = useRunDelete();
+  const paneValues = useMemo(
+    () => ({
+      worktreeId: String(surface.worktreeId),
+      surfaceId: String(surface.id),
+      paneId: String(pane.id),
+    }),
+    [pane.id, surface.id, surface.worktreeId],
+  );
   const dispatchPaneCommand = useCallback(
-    (commandId: 'split-pane-right' | 'split-pane-down' | 'delete-active-pane') => {
+    (commandId: 'split-pane-right' | 'split-pane-down') => {
       focusPane();
-      void dispatchCommand(commandId, {
-        worktreeId: String(surface.worktreeId),
-        surfaceId: String(surface.id),
-        paneId: String(pane.id),
-      }).catch(handleDispatchedCommandError);
+      void dispatchCommand(commandId, paneValues).catch(handleDispatchedCommandError);
     },
-    [dispatchCommand, focusPane, pane.id, surface.id, surface.worktreeId],
+    [dispatchCommand, focusPane, paneValues],
+  );
+  const deletePane = useCallback(
+    (origin: 'pane' | 'menu') => {
+      focusPane();
+      runDelete({
+        key: paneKey,
+        origin,
+        commandId: 'delete-active-pane',
+        surfaceId: surface.id,
+        values: paneValues,
+      });
+    },
+    [focusPane, paneKey, paneValues, runDelete, surface.id],
   );
   const onSplitRight = useCallback(() => {
     dispatchPaneCommand('split-pane-right');
@@ -110,25 +145,42 @@ export function PtyPane({
     dispatchPaneCommand('split-pane-down');
   }, [dispatchPaneCommand]);
   const onDelete = useCallback(() => {
-    dispatchPaneCommand('delete-active-pane');
-  }, [dispatchPaneCommand]);
+    deletePane('pane');
+  }, [deletePane]);
   const paneMenuItems = useMemo(
     () => [
-      { label: 'Split Right', icon: PanelRight, onSelect: onSplitRight },
-      { label: 'Split Down', icon: PanelBottom, onSelect: onSplitDown },
-      { label: 'Delete pane', icon: Trash2, danger: true, onSelect: onDelete },
+      { label: 'Split Right', icon: PanelRight, disabled: actionsLocked, onSelect: onSplitRight },
+      { label: 'Split Down', icon: PanelBottom, disabled: actionsLocked, onSelect: onSplitDown },
+      {
+        label: 'Delete pane',
+        icon: Trash2,
+        danger: true,
+        keepsMenuOpen: true,
+        pending: showsDeleteSweep(paneDelete, 'menu'),
+        disabled: actionsLocked,
+        onSelect: () => deletePane('menu'),
+      },
     ],
-    [onDelete, onSplitDown, onSplitRight],
+    [actionsLocked, deletePane, onSplitDown, onSplitRight, paneDelete],
   );
   const sharedPaneActions = paneHasSharedActions(view.kind);
+  const onDeleteResultDismissed = useCallback(() => {
+    if (paneDelete?.error) clearDelete(paneKey);
+  }, [clearDelete, paneDelete, paneKey]);
   const withPaneMenu = useCallback(
     (children: ReactElement) =>
       sharedPaneActions && paneMenuItems.length > 0 ? (
-        <ContextMenu items={paneMenuItems}>{children}</ContextMenu>
+        <ContextMenu
+          items={paneMenuItems}
+          error={paneDelete?.error ?? null}
+          onResultDismissed={onDeleteResultDismissed}
+        >
+          {children}
+        </ContextMenu>
       ) : (
         children
       ),
-    [paneMenuItems, sharedPaneActions],
+    [onDeleteResultDismissed, paneDelete, paneMenuItems, sharedPaneActions],
   );
 
   return (
@@ -136,7 +188,9 @@ export function PtyPane({
       ref={shellRef}
       aria-label={pane.title}
       tabIndex={-1}
-      onPointerDown={onFocus}
+      // Promoting a pane that is being deleted would retarget Cmd+W and the
+      // active-pane commands at it. The terminal keeps its own focus either way.
+      onPointerDown={actionsLocked ? undefined : onFocus}
       className={`group relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-elevated/50 backdrop-blur-sm transition-colors duration-ui ease-expo ${
         errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'
       } ${dimmed ? 'bg-elevated/38' : ''}`}
@@ -159,7 +213,7 @@ export function PtyPane({
       {view.kind === 'unsupported' ? (
         withPaneMenu(
           <div className="flex min-h-0 flex-1">
-            <UnsupportedPrompt onDelete={onDelete} />
+            <UnsupportedPrompt onDelete={onDelete} disabled={actionsLocked} />
           </div>,
         )
       ) : view.kind === 'moved' ? (
@@ -207,6 +261,7 @@ export function PtyPane({
             harness={session?.kind === 'agent_session' ? session.harness : null}
             reason={view.reason}
             onClose={onDelete}
+            deletePending={actionsLocked}
           />
         </div>
       ) : view.kind === 'unavailable' ? (
@@ -237,6 +292,8 @@ export function PtyPane({
           onSplitRight={onSplitRight}
           onSplitDown={onSplitDown}
           onDelete={onDelete}
+          disabled={actionsLocked}
+          deletePending={showsDeleteSweep(paneDelete, 'pane')}
         />
       ) : null}
     </section>
@@ -303,7 +360,13 @@ function RestorePrompt({
   );
 }
 
-function UnsupportedPrompt({ onDelete }: { readonly onDelete: () => void }) {
+function UnsupportedPrompt({
+  onDelete,
+  disabled,
+}: {
+  readonly onDelete: () => void;
+  readonly disabled: boolean;
+}) {
   return (
     <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
       <div className="flex max-w-sm flex-col items-center gap-3 text-center">
@@ -314,7 +377,8 @@ function UnsupportedPrompt({ onDelete }: { readonly onDelete: () => void }) {
             {ptyCopy.unsupportedHarness.body}
           </p>
         </div>
-        <Button variant="danger" size="sm" onClick={onDelete}>
+        {/* The pinned action cluster carries the running indicator for this pane. */}
+        <Button variant="danger" size="sm" disabled={disabled} onClick={onDelete}>
           {ptyCopy.unsupportedHarness.action}
         </Button>
       </div>

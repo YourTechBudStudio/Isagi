@@ -10,6 +10,14 @@ import {
   handleDispatchedCommandError,
   useCommandDispatcher,
 } from '../../lib/palette/dispatcher.js';
+import {
+  isDeletePending,
+  showsDeleteSweep,
+  surfaceDeleteKey,
+  useDeleteEntry,
+  usePendingDeleteStore,
+  useRunDelete,
+} from '../../lib/workspace/pending-deletes.js';
 import { worktreeSubtitle } from '../../lib/workspace/selectors.js';
 import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js';
 import type { Worktree, Surface } from '../../lib/workspace/types.js';
@@ -154,34 +162,58 @@ function SurfaceRow({
 }) {
   const Icon = surfaceSummaryIcon(surface.paneKinds);
   const dispatchCommand = useCommandDispatcher();
+  // The right-click menu is the only way to delete a surface, so it is always the
+  // site that owns the running indicator. The row itself stays visually untouched
+  // and only goes unselectable — see ADR 0004.
+  const surfaceKey = surfaceDeleteKey(surface.id);
+  const surfaceDelete = useDeleteEntry(surfaceKey);
+  const deleting = isDeletePending(surfaceDelete);
+  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
+  const runDelete = useRunDelete();
 
-  const dispatchSurfaceCommand = (commandId: 'rename-active-surface' | 'delete-active-surface') => {
-    void dispatchCommand(commandId, {
-      worktreeId: String(worktreeId),
-      surfaceId: String(surface.id),
-      title: surface.title,
-    }).catch(handleDispatchedCommandError);
+  const surfaceValues = {
+    worktreeId: String(worktreeId),
+    surfaceId: String(surface.id),
+    title: surface.title,
   };
 
   return (
     <ContextMenu
+      error={surfaceDelete?.error ?? null}
+      onResultDismissed={() => {
+        if (surfaceDelete?.error) clearDelete(surfaceKey);
+      }}
       items={[
         {
           label: surfaceActionsCopy.menu.rename,
           icon: Pencil,
-          onSelect: () => dispatchSurfaceCommand('rename-active-surface'),
+          disabled: deleting,
+          onSelect: () => {
+            void dispatchCommand('rename-active-surface', surfaceValues).catch(
+              handleDispatchedCommandError,
+            );
+          },
         },
         {
           label: surfaceActionsCopy.menu.delete,
           icon: Trash2,
           danger: true,
-          onSelect: () => dispatchSurfaceCommand('delete-active-surface'),
+          keepsMenuOpen: true,
+          pending: showsDeleteSweep(surfaceDelete, 'menu'),
+          disabled: deleting,
+          onSelect: () =>
+            runDelete({
+              key: surfaceKey,
+              origin: 'menu',
+              commandId: 'delete-active-surface',
+              values: surfaceValues,
+            }),
         },
       ]}
     >
       <button
         type="button"
-        onClick={onSelect}
+        onClick={deleting ? undefined : onSelect}
         aria-current={active ? 'true' : undefined}
         className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors duration-micro ease-expo ${
           active ? 'text-fg' : 'text-fg-muted hover:bg-white/5 hover:text-fg'
