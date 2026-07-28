@@ -1,3 +1,5 @@
+import type { TerminalCacheSettings } from '@isagi/contracts';
+
 import {
   estimateTerminalPresentationBytes,
   normalizeEstimatedBytes,
@@ -11,7 +13,6 @@ import {
   type TerminalPlacement,
   type TerminalSessionIdentity,
 } from './identity.js';
-import { normalizeTerminalCachePolicy, type TerminalCachePolicy } from './policy.js';
 import { normalizeViewportMemory, type TerminalViewportMemory } from './viewport.js';
 
 export type TerminalPresentationLifecycle = 'cold' | 'preparing' | 'hot' | 'sealed';
@@ -109,7 +110,7 @@ export type TerminalCacheDiagnostic =
     };
 
 export interface TerminalCacheDependencies {
-  readonly policy: TerminalCachePolicy;
+  readonly settings: TerminalCacheSettings;
   readonly now?: (() => number) | undefined;
   readonly scheduleMicrotask?: ((callback: () => void) => () => void) | undefined;
   readonly estimateBytes?: TerminalAccountingEstimator | undefined;
@@ -117,7 +118,7 @@ export interface TerminalCacheDependencies {
 }
 
 export interface TerminalPresentationCache {
-  readonly policy: TerminalCachePolicy;
+  readonly settings: TerminalCacheSettings;
   readonly ensureSession: (
     identity: TerminalSessionIdentity,
     initialPlacement: TerminalPlacement,
@@ -181,7 +182,7 @@ const emptySnapshot: TerminalCacheSnapshot = Object.freeze({
 export function createTerminalPresentationCache(
   dependencies: TerminalCacheDependencies,
 ): TerminalPresentationCache {
-  const policy = normalizeTerminalCachePolicy(dependencies.policy);
+  const settings = Object.freeze({ ...dependencies.settings });
   const now = dependencies.now ?? Date.now;
   const scheduleMicrotask = dependencies.scheduleMicrotask ?? defaultMicrotaskScheduler;
   const estimateBytes = dependencies.estimateBytes ?? estimateTerminalPresentationBytes;
@@ -644,7 +645,7 @@ export function createTerminalPresentationCache(
   };
 
   return {
-    policy,
+    settings,
     ensureSession(identity, initialPlacement) {
       if (disposed) {
         throw new Error('Cannot ensure a session on a disposed terminal presentation cache.');

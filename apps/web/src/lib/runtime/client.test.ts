@@ -11,6 +11,7 @@ import type {
   Project,
   RenameSurfaceOutput,
   WorkspaceSnapshot,
+  ClientSettingsOutput,
 } from '@isagi/contracts';
 
 import {
@@ -68,6 +69,16 @@ const createSurfaceOutput = {
 } satisfies CreateSurfaceOutput;
 
 const originalFetch = globalThis.fetch;
+const clientSettings = {
+  terminal: {
+    scrollbackLines: 5_000,
+    cache: {
+      idleTtlMinutes: 180,
+      maxHiddenSessions: 4,
+      maxEstimatedBufferMiB: 64,
+    },
+  },
+} satisfies ClientSettingsOutput;
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -85,6 +96,43 @@ test('runtime client decodes success envelopes', async () => {
   );
 
   assert.deepEqual(snapshot, workspace);
+});
+
+test('runtime client requests and decodes client settings without applying defaults', async () => {
+  let requestedUrl = '';
+  globalThis.fetch = ((input) => {
+    requestedUrl = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({ data: clientSettings, meta: { requestId: 'req-settings' } }), {
+        status: 200,
+      }),
+    );
+  }) as typeof fetch;
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').fetchClientSettings(),
+  );
+
+  assert.equal(requestedUrl, 'http://runtime.test/api/v1/client-settings');
+  assert.deepEqual(output, clientSettings);
+});
+
+test('runtime client rejects malformed client settings instead of applying defaults', async () => {
+  globalThis.fetch = mockFetch(
+    new Response(
+      JSON.stringify({
+        data: { terminal: { cache: clientSettings.terminal.cache } },
+        meta: { requestId: 'req-settings-invalid' },
+      }),
+      { status: 200 },
+    ),
+  );
+
+  const error = await Effect.runPromise(
+    Effect.flip(createRuntimeClient('http://runtime.test').fetchClientSettings()),
+  );
+
+  assert.ok(error instanceof RuntimeDecodeError);
 });
 
 test('runtime client decodes minimal mutation success envelopes', async () => {

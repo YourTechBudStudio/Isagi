@@ -1,3 +1,4 @@
+import { clientSettingsEndpoint } from './client-settings/api.js';
 import { commandsEndpoints } from './commands/api.js';
 import { controlPlaneEndpoints } from './control-plane/api.js';
 import { healthEndpoint } from './health/api.js';
@@ -11,6 +12,7 @@ import { worktreesEndpoints } from './worktrees/api.js';
 
 export const apiEndpoints = {
   commands: commandsEndpoints,
+  clientSettings: clientSettingsEndpoint,
   controlPlane: controlPlaneEndpoints,
   health: healthEndpoint,
   workspace: workspaceEndpoints,
@@ -21,6 +23,20 @@ export const apiEndpoints = {
   workflows: workflowsEndpoints,
   paths: pathsEndpoints,
 } as const;
+
+export { clientSettingsEndpoint } from './client-settings/api.js';
+export {
+  clientSettingsOutputSchema,
+  terminalCacheSettingsSchema,
+  terminalSettingsBounds,
+  terminalSettingsDefaults,
+  terminalSettingsSchema,
+} from './client-settings/types.js';
+export type {
+  ClientSettingsOutput,
+  TerminalCacheSettings,
+  TerminalSettings,
+} from './client-settings/types.js';
 
 export { controlPlaneEndpoints, controlPlaneErrorSchema } from './control-plane/api.js';
 export * from './control-plane/types.js';

@@ -31,12 +31,7 @@ export {
   type TerminalPlacement,
   type TerminalSessionIdentity,
 } from './identity.js';
-export {
-  defaultTerminalCachePolicy,
-  normalizeTerminalCachePolicy,
-  terminalRetentionCandidates,
-  type TerminalCachePolicy,
-} from './policy.js';
+export { terminalRetentionCandidates } from './policy.js';
 export {
   normalizeViewportMemory,
   type TerminalViewportMemory,

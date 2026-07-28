@@ -54,6 +54,7 @@ import {
   type WorktreeCommandsOutput,
   type CommandActionOutput,
   type CommandLogMetadataOutput,
+  type ClientSettingsOutput,
   type AdvanceWorkflowInput,
   type ListWorkflowDescriptorsInput,
   type ListWorkflowDescriptorsOutput,
@@ -71,6 +72,10 @@ type RuntimeEndpointError<Endpoint> =
   | RuntimeTransportError;
 
 export interface RuntimeClient {
+  readonly fetchClientSettings: () => Effect.Effect<
+    ClientSettingsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.clientSettings>
+  >;
   readonly fetchWorkspace: () => Effect.Effect<
     WorkspaceSnapshot,
     RuntimeEndpointError<typeof apiEndpoints.workspace.get>
@@ -322,6 +327,7 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
   const request = createEndpointRequester(runtimeUrl);
 
   return {
+    fetchClientSettings: () => request(apiEndpoints.clientSettings),
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
     fetchWorktreeCommands: (worktreeId) =>
       request(apiEndpoints.commands.listForWorktree, { worktreeId }),

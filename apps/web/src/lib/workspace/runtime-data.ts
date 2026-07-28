@@ -36,6 +36,7 @@ import type {
   WorktreeCommandsOutput,
   CommandActionOutput,
   CommandLogMetadataOutput,
+  ClientSettingsOutput,
   ReconcileWorkspaceOutput,
   RefreshInventoryOutput,
   RelocateProjectOutput,
@@ -62,6 +63,10 @@ export class UserVisibleError extends Error {
     super(userMessage);
     this.name = 'UserVisibleError';
   }
+}
+
+export function fetchClientSettings(): Effect.Effect<ClientSettingsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.fetchClientSettings()));
 }
 
 export function fetchWorkspace() {

@@ -1,7 +1,7 @@
 ---
 name: isagi-docs
 disable-model-invocation: true
-description: Configure Isagi project and global settings, or create, modify, review, and verify Isagi workflows. Use when the user mentions Isagi configuration, worktree hooks, commands, pty backends, harness policy, or workflows. Not for ordinary development work that does not change Isagi itself.
+description: Configure Isagi project and global settings, or create, modify, review, and verify Isagi workflows. Use when the user mentions Isagi configuration, worktree hooks, commands, pty backends, terminal history, scrollback, cache retention, harness policy, or workflows. Not for ordinary development work that does not change Isagi itself.
 metadata:
   version: "{{VERSION}}"
 ---
@@ -17,6 +17,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 | Copying or linking files into new worktrees; running setup after worktree creation | [Project config](references/config-project.md) for `worktrees` |
 | Defining commands and their worktree lifecycle | [Project config](references/config-project.md) for `commands` |
 | Selecting the terminal backend | [Global config](references/config-global.md) for `pty` |
+| Configuring terminal history, scrollback, or cache retention | [Global config](references/config-global.md) for `terminal` |
 | Enabling harnesses or their Docs integration | [Global config](references/config-global.md) for `harnesses` |
 | Adding machine-global directories Isagi discovers workflows in | [Global config](references/config-global.md) for `workflows.additionalDirectories` |
 | Creating, modifying, or reviewing a workflow | [Workflows](references/workflows.md) |

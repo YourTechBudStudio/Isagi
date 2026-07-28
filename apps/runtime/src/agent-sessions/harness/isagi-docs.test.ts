@@ -253,6 +253,50 @@ test('the router routes additional workflow directories to the global config ref
   );
 });
 
+test('the router selects global config for terminal history and cache retention', () => {
+  const router = files.get('SKILL.md') ?? '';
+  const frontmatter = router.slice(0, router.indexOf('---', 4));
+  assert.match(frontmatter, /terminal history/i);
+  assert.match(frontmatter, /scrollback/i);
+  assert.match(frontmatter, /cache retention/i);
+  const routed = router
+    .split('\n')
+    .some(
+      (line) =>
+        line.includes('terminal history') &&
+        line.includes('`terminal`') &&
+        line.includes('references/config-global.md'),
+    );
+  assert.ok(routed, 'SKILL.md must route terminal history to references/config-global.md');
+});
+
+test('the global config reference documents terminal settings durable facts', () => {
+  const emitted = files.get('references/config-global.md') ?? '';
+  const heading = '\n## Terminal history and cache retention\n';
+  const sectionIndex = emitted.indexOf(heading);
+  assert.notEqual(sectionIndex, -1, 'config-global.md lost its terminal settings section');
+  const sectionStart = sectionIndex + heading.length;
+  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
+  assert.notEqual(nextHeadingIndex, -1, 'terminal settings must precede another section');
+  const prose = emitted.slice(sectionStart, nextHeadingIndex);
+
+  for (const key of [
+    'scrollbackLines',
+    'idleTtlMinutes',
+    'maxHiddenSessions',
+    'maxEstimatedBufferMiB',
+  ]) {
+    assert.match(prose, new RegExp(`\\b${key}\\b`), `terminal prose never names ${key}`);
+  }
+  for (const value of ['5000', '100000', '180', '10080', '4', '32', '64', '2048']) {
+    assert.match(prose, new RegExp(`\\b${value}\\b`), `terminal prose never names ${value}`);
+  }
+  assert.match(prose, /zero/i);
+  assert.match(prose, /restart/i);
+  assert.match(prose, new RegExp(`${dataRoot.replaceAll('/', '\\/')}\\/config\\.yaml`));
+  assert.match(prose, /\.isagi\/config\.yaml.*does not own/);
+});
+
 /**
  * Other sections and the embedded schema also mention `~` or restart behavior. Isolate this section so
  * its handwritten explanation must carry each user-facing fact on its own.

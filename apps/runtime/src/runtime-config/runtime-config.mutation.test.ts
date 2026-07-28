@@ -37,7 +37,7 @@ test('policy mutation preserves comments and unrelated fields while updating liv
   try {
     writeFileSync(
       join(root, 'config.yaml'),
-      `# keep this\nother: value\npty:\n  backend: node-pty\nworkflows:\n  additionalDirectories:\n    - ${join(root, 'extra workflows')}\n`,
+      `# keep this\nother: value\npty:\n  backend: node-pty\nterminal:\n  scrollbackLines: 12000\n  cache:\n    idleTtlMinutes: 45\n    maxHiddenSessions: 8\n    maxEstimatedBufferMiB: 256\nworkflows:\n  additionalDirectories:\n    - ${join(root, 'extra workflows')}\n`,
       'utf8',
     );
     await Effect.runPromise(
@@ -58,6 +58,14 @@ test('policy mutation preserves comments and unrelated fields while updating liv
           assert.deepEqual(accepted.workflows.additionalDirectories, [
             join(root, 'extra workflows'),
           ]);
+          assert.deepEqual(accepted.terminal, {
+            scrollbackLines: 12_000,
+            cache: {
+              idleTtlMinutes: 45,
+              maxHiddenSessions: 8,
+              maxEstimatedBufferMiB: 256,
+            },
+          });
         }),
       ),
     );
@@ -65,6 +73,10 @@ test('policy mutation preserves comments and unrelated fields while updating liv
     assert.match(bytes, /# keep this/);
     assert.match(bytes, /other: value/);
     assert.match(bytes, /additionalDirectories/);
+    assert.match(
+      bytes,
+      /terminal:\n  scrollbackLines: 12000\n  cache:\n    idleTtlMinutes: 45\n    maxHiddenSessions: 8\n    maxEstimatedBufferMiB: 256\n/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

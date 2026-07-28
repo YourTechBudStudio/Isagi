@@ -2,13 +2,18 @@ import { createHash } from 'node:crypto';
 
 import { Schema } from 'effect';
 
-import type { AgentHarness } from '@isagi/contracts';
+import {
+  terminalSettingsDefaults,
+  type AgentHarness,
+  type TerminalSettings,
+} from '@isagi/contracts';
 
 import { boundedDiagnostic } from '../lib/diagnostic.js';
 import { normalizeAbsoluteHomePath } from '../paths/path.utils.js';
 import {
   runtimeConfigPtyBackendSchema,
   runtimeHarnessPolicySchema,
+  runtimeTerminalSettingsSchema,
   runtimeWorkflowSettingsSchema,
   type RuntimeConfigPtyBackend,
 } from './runtime-config.schema.js';
@@ -29,6 +34,7 @@ export interface RuntimeConfigShape {
   readonly pty: { readonly backend: RuntimeConfigPtyBackend };
   readonly harnesses: RuntimeHarnessPolicyState;
   readonly workflows: { readonly additionalDirectories: readonly string[] };
+  readonly terminal: TerminalSettings;
 }
 
 export const disabledHarnessPolicy: RuntimeHarnessPolicy = {
@@ -41,13 +47,15 @@ export const defaultRuntimeConfig: RuntimeConfigShape = {
   pty: { backend: 'node-pty' },
   harnesses: policyState('missing', disabledHarnessPolicy),
   workflows: { additionalDirectories: [] },
+  terminal: terminalSettingsDefaults,
 };
 
 export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
   const pty = parsePty(value);
   const workflows = parseWorkflows(value);
+  const terminal = parseTerminal(value);
   if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'harnesses'))
-    return { pty, harnesses: policyState('missing', disabledHarnessPolicy), workflows };
+    return { pty, harnesses: policyState('missing', disabledHarnessPolicy), workflows, terminal };
   try {
     const decoded = Schema.decodeUnknownSync(runtimeHarnessPolicySchema)(value.harnesses);
     const policy = Object.fromEntries(
@@ -57,7 +65,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
         return [id, { enabled, installIsagiDocs: enabled && entry?.installIsagiDocs === true }];
       }),
     ) as unknown as RuntimeHarnessPolicy;
-    return { pty, harnesses: policyState('valid', policy), workflows };
+    return { pty, harnesses: policyState('valid', policy), workflows, terminal };
   } catch (error) {
     return {
       pty,
@@ -66,8 +74,28 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigShape {
         diagnostic: boundedDiagnostic(error),
       },
       workflows,
+      terminal,
     };
   }
+}
+
+function parseTerminal(value: unknown): TerminalSettings {
+  if (!isRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'terminal')) {
+    return terminalSettingsDefaults;
+  }
+  const decoded = Schema.decodeUnknownSync(runtimeTerminalSettingsSchema)(value.terminal);
+  return {
+    scrollbackLines: decoded.scrollbackLines ?? terminalSettingsDefaults.scrollbackLines,
+    cache: {
+      idleTtlMinutes:
+        decoded.cache?.idleTtlMinutes ?? terminalSettingsDefaults.cache.idleTtlMinutes,
+      maxHiddenSessions:
+        decoded.cache?.maxHiddenSessions ?? terminalSettingsDefaults.cache.maxHiddenSessions,
+      maxEstimatedBufferMiB:
+        decoded.cache?.maxEstimatedBufferMiB ??
+        terminalSettingsDefaults.cache.maxEstimatedBufferMiB,
+    },
+  };
 }
 
 function parseWorkflows(value: unknown): RuntimeConfigShape['workflows'] {

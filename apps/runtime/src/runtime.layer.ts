@@ -40,7 +40,7 @@ import {
   TmuxBackendLive,
   type PtyServiceShape,
 } from './pty-processes/index.js';
-import { RuntimeConfigLive } from './runtime-config/index.js';
+import { RuntimeConfigLive, type RuntimeConfigService } from './runtime-config/index.js';
 import {
   InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
@@ -264,7 +264,8 @@ export type RuntimeServices =
   | WorkflowEventLedgerService
   | WorkflowRunProjectionService
   | HostInventoryService
-  | HarnessControlPlaneService;
+  | HarnessControlPlaneService
+  | RuntimeConfigService;
 
 const ServicesLayer = Layer.mergeAll(
   WorkspaceServiceLayer,
@@ -274,6 +275,7 @@ const ServicesLayer = Layer.mergeAll(
   EventLoopWatchdogLive,
   HostInventoryLayer,
   HarnessControlPlaneLayer,
+  RuntimeConfigLayer,
   ApiServicesLayer,
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 

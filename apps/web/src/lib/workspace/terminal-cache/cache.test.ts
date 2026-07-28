@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { terminalSettingsDefaults, type TerminalCacheSettings } from '@isagi/contracts';
+
 import {
   createTerminalPresentationCache,
-  defaultTerminalCachePolicy,
   emptyTerminalBufferMeasurement,
   estimateTerminalPresentationBytes,
   terminalCellCostBytes,
@@ -14,7 +15,6 @@ import {
   type TerminalAttachmentHandle,
   type TerminalBufferMeasurement,
   type TerminalCacheDiagnostic,
-  type TerminalCachePolicy,
   type TerminalPlacement,
   type TerminalPresentationResource,
   type TerminalSessionHandle,
@@ -22,13 +22,14 @@ import {
 
 const identity = { kind: 'agent_session', sessionId: 7 } as const;
 const placement = { worktreeId: 1, surfaceId: 2, paneId: 3 } as const;
+const defaultTerminalCacheSettings = terminalSettingsDefaults.cache;
 
 function cells(normalCells: number, alternateCells = 0): TerminalBufferMeasurement {
   return { normalCells, alternateCells };
 }
 
 function createHarness(
-  policy: TerminalCachePolicy = defaultTerminalCachePolicy,
+  settings: TerminalCacheSettings = defaultTerminalCacheSettings,
   estimateBytes?: (measurement: TerminalBufferMeasurement) => number,
   observe?: { readonly onDiagnostic: (diagnostic: TerminalCacheDiagnostic) => void },
 ) {
@@ -37,7 +38,7 @@ function createHarness(
   const microtasks: Array<{ canceled: boolean; callback: () => void }> = [];
   const diagnostics: TerminalCacheDiagnostic[] = [];
   const cache = createTerminalPresentationCache({
-    policy,
+    settings,
     now: () => time,
     scheduleMicrotask: (callback) => {
       const task = { canceled: false, callback };
@@ -247,7 +248,7 @@ describe('terminal presentation cache identity and snapshots', () => {
 describe('terminal presentation cache diagnostics boundary', () => {
   it('keeps one owner per pane slot when a displacement diagnostic re-enters the cache', () => {
     let reenter: (() => void) | null = null;
-    const harness = createHarness(defaultTerminalCachePolicy, undefined, {
+    const harness = createHarness(defaultTerminalCacheSettings, undefined, {
       onDiagnostic: (diagnostic) => {
         if (diagnostic.kind !== 'placement_displaced') return;
         const run = reenter;
@@ -272,7 +273,7 @@ describe('terminal presentation cache diagnostics boundary', () => {
   });
 
   it('contains a throwing diagnostic sink instead of interrupting the mutation', () => {
-    const harness = createHarness(defaultTerminalCachePolicy, undefined, {
+    const harness = createHarness(defaultTerminalCacheSettings, undefined, {
       onDiagnostic: () => {
         throw new Error('sink exploded');
       },
@@ -322,7 +323,7 @@ describe('terminal presentation accounting', () => {
 
   it('routes attachment accounting through the injected estimator', () => {
     const measurements: TerminalBufferMeasurement[] = [];
-    const harness = createHarness(defaultTerminalCachePolicy, (measurement) => {
+    const harness = createHarness(defaultTerminalCacheSettings, (measurement) => {
       measurements.push(measurement);
       return measurement.normalCells;
     });
@@ -338,7 +339,7 @@ describe('terminal presentation accounting', () => {
   });
 
   it('rejects an invalid estimate before taking ownership of the resource', () => {
-    const harness = createHarness(defaultTerminalCachePolicy, () => -1);
+    const harness = createHarness(defaultTerminalCacheSettings, () => -1);
     const session = harness.cache.ensureSession(identity, placement);
     const attachment = startAttachment(session);
     const installed = disposable();
@@ -787,7 +788,7 @@ describe('terminal presentation visibility and placement', () => {
 describe('terminal retention evaluation and disposal', () => {
   it('calculates eligibility from snapshot, policy, and now with deterministic ties', () => {
     const harness = createHarness({
-      ...defaultTerminalCachePolicy,
+      ...defaultTerminalCacheSettings,
       idleTtlMinutes: 1,
       maxHiddenSessions: 1,
       maxEstimatedBufferMiB: 64,
@@ -804,11 +805,15 @@ describe('terminal retention evaluation and disposal', () => {
     const snapshot = harness.cache.getSnapshot();
 
     assert.deepEqual(
-      terminalRetentionCandidates(snapshot, harness.cache.policy, 1_000).map((entry) => entry.key),
+      terminalRetentionCandidates(snapshot, harness.cache.settings, 1_000).map(
+        (entry) => entry.key,
+      ),
       ['terminal_session:1', 'terminal_session:2'],
     );
     assert.deepEqual(
-      terminalRetentionCandidates(snapshot, harness.cache.policy, 61_000).map((entry) => entry.key),
+      terminalRetentionCandidates(snapshot, harness.cache.settings, 61_000).map(
+        (entry) => entry.key,
+      ),
       ['terminal_session:1', 'terminal_session:2', 'terminal_session:3'],
     );
     assert.strictEqual(harness.cache.getSnapshot(), snapshot);
@@ -816,7 +821,7 @@ describe('terminal retention evaluation and disposal', () => {
 
   it('excludes visible entries and treats zero retention as immediately evictable', () => {
     const harness = createHarness({
-      ...defaultTerminalCachePolicy,
+      ...defaultTerminalCacheSettings,
       idleTtlMinutes: 0,
       maxHiddenSessions: 0,
       maxEstimatedBufferMiB: 0,
@@ -836,7 +841,7 @@ describe('terminal retention evaluation and disposal', () => {
     acquire(visible, visiblePlacement);
 
     assert.deepEqual(
-      terminalRetentionCandidates(harness.cache.getSnapshot(), harness.cache.policy, 1_000).map(
+      terminalRetentionCandidates(harness.cache.getSnapshot(), harness.cache.settings, 1_000).map(
         (entry) => entry.key,
       ),
       ['agent_session:7'],

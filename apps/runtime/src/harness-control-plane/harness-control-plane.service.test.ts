@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect';
 
+import { terminalSettingsDefaults } from '@isagi/contracts';
+
 import { HostInventory, type HostInventoryService } from '../host-inventory/index.js';
 import type { ExecutableProbeResult, HostInventoryState } from '../host-inventory/types.js';
 import { DataDirectory, type IsagiDataDirectory } from '../persistence/index.js';
@@ -136,6 +138,7 @@ test('start does not complete until initial host inventory is ready', async () =
             pty: { backend: 'node-pty' },
             harnesses: policyState('valid', enabledPolicy()),
             workflows: { additionalDirectories: [] },
+            terminal: terminalSettingsDefaults,
           }),
           acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
         } satisfies RuntimeConfigService),
@@ -277,6 +280,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
       pty: { backend: 'node-pty' },
       harnesses: policyState('missing', disabledPolicy),
       workflows: { additionalDirectories: [] },
+      terminal: terminalSettingsDefaults,
     }),
     acceptHarnessPolicy: () => {
       committed = true;
@@ -340,6 +344,7 @@ function controlPlaneLayer(
       pty: { backend: 'node-pty' },
       harnesses: state,
       workflows: { additionalDirectories: [] },
+      terminal: terminalSettingsDefaults,
     }),
     acceptHarnessPolicy: () => Effect.die('policy mutation is not used'),
   };

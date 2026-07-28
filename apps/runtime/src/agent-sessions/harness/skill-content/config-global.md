@@ -84,6 +84,27 @@ A configured directory that does not exist is skipped, and Isagi warns once for 
 
 Isagi validates this setting's shape and path rules when it starts, and validates each winning workflow package later — when workflow descriptors are listed and again immediately before a run starts, never at startup. Changes to `workflows.additionalDirectories` take effect only after Isagi restarts.
 
+## Terminal history and cache retention
+
+The top-level `terminal` section controls terminal presentation history and the process-local cache used to keep hidden terminal sessions warm. These settings are global to every project and manual changes take effect after Isagi restarts.
+
+```yaml
+terminal:
+  scrollbackLines: 5000
+  cache:
+    idleTtlMinutes: 180
+    maxHiddenSessions: 4
+    maxEstimatedBufferMiB: 64
+```
+
+`scrollbackLines` defaults to `5000` and accepts integers from `0` through `100000`. Zero retains only the active terminal screen.
+
+`idleTtlMinutes` defaults to `180` and accepts integers from `0` through `10080`. `maxHiddenSessions` defaults to `4` and accepts integers from `0` through `32`. `maxEstimatedBufferMiB` defaults to `64` and accepts integers from `0` through `2048`.
+
+Zero for any cache limit makes hidden heavy terminal entries immediately ineligible for retention. It does not delete the small viewport metadata Isagi keeps for the current app process. Visible terminals are never evicted and may temporarily exceed the configured estimated-buffer budget.
+
+Omitting `terminal`, `cache`, or any nested field applies the documented default. A malformed value prevents Isagi from starting. Configure these settings only in `{{DATA_ROOT}}/config.yaml`; `.isagi/config.yaml` is project configuration and does not own terminal history or cache retention.
+
 ## Schema
 
 This is the schema Isagi validates the file against. The field descriptions are authoritative.
