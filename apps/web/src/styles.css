@@ -122,11 +122,13 @@
   }
 }
 
-/* The running state for a dispatched command: an indeterminate bar pinned to the
-   edge of whichever surface owns the action — under the palette header, along the
-   bottom of a pane's action cluster, under a context-menu item. A slim segment
-   sweeps across; a calm activity hint, not a spinner. One element everywhere, so
-   "a command is running here" always looks the same.
+/* Work of unknown length is in flight on this surface: an indeterminate bar
+   pinned to the edge of whichever surface owns it — under the palette header,
+   along the bottom of a pane's action cluster, under a context-menu item, along
+   the top of a terminal rebuilding itself from replay. A slim segment sweeps
+   across; a calm activity hint, not a spinner. It never fills, so it claims
+   activity and never progress. One element everywhere, so "something is
+   happening here" always looks the same.
    Linear timing is a deliberate exception to the expo curve: the sweep is a
    continuous loop whose reset happens off-screen, so constant speed reads best. */
 @keyframes progress-sweep {
@@ -178,6 +180,16 @@
 .command-sweep-pinned {
   position: absolute;
   inset: auto 0 0 0;
+}
+
+/* Same pin, opposite edge. A terminal rebuilding itself carries the bar along
+   the top of the terminal region, directly under the pane header, which leaves
+   the bottom edge to the action cluster's delete sweep — the two never collide
+   and never have to be told apart by colour alone. Unlayered for the same
+   reason as the rule above. */
+.command-sweep-pinned-top {
+  position: absolute;
+  inset: 0 0 auto 0;
 }
 
 /* The bar still has to read as busy when it cannot move: hold the segment in

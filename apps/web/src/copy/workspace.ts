@@ -54,6 +54,12 @@ export const ptyCopy = {
   noSession: 'No session',
   attaching: 'Attaching',
   emptyPane: "This pane's empty \u2014 nothing's claimed it yet.",
+  /**
+   * The cold-reconstruction cover. Working chrome the user sees on every cold
+   * revisit, so it stays dry status copy \u2014 no humour, no reassurance, no
+   * progress claim Isagi cannot actually make.
+   */
+  reconstructing: 'Loading history\u2026',
   movedAttachment: {
     status: 'Moved',
     title: 'This session moved elsewhere.',
