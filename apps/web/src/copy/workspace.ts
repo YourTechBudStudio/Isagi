@@ -94,6 +94,19 @@ export const ptyCopy = {
     body: "Nothing happened to the session — Isagi just couldn't put a terminal in front of it.",
     action: 'Try again',
   },
+  /**
+   * A terminal that was being rebuilt from replay when the stream ended, or
+   * whose replay outgrew what the reveal could hold. The buffer holds part of a
+   * session, so it is never shown: a half-restored terminal reads as a real one
+   * and would be trusted like a real one. Same shape and same recovery as a
+   * build failure — try again, never "start fresh" — and, likewise, no humour.
+   */
+  restoreIncomplete: {
+    status: 'Restore incomplete',
+    title: "This terminal didn't finish restoring.",
+    body: "The stream ended before the session was whole. Isagi is showing nothing rather than part of a session you'd have no reason to trust.",
+    action: 'Try again',
+  },
   sessionStatus: (
     status: SessionStatus | null,
     statusReason: AgentSessionStatusReason | TerminalSessionStatusReason | null,

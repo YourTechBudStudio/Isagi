@@ -22,6 +22,7 @@ const idleSnapshot: TerminalAttachmentSnapshot = Object.freeze({
   interactive: false,
   rendererWarning: null,
   sealReason: null,
+  readiness: Object.freeze({ phase: 'covered' }),
 });
 
 export function useTerminalAttachmentResource(input: {
@@ -104,6 +105,15 @@ export function useTerminalAttachmentResource(input: {
       initiallyInteractive: input.initiallyInteractive,
       resolveUrl: input.resolveUrl,
       onEvent: (event) => workspace.onAttachmentEvent(identity, event),
+      initialViewport:
+        workspace.cache
+          .getSnapshot()
+          .entries.find(
+            (candidate) =>
+              candidate.identity.kind === identity.kind &&
+              candidate.identity.sessionId === identity.sessionId,
+          )?.viewport ?? null,
+      onViewport: (viewport) => session.updateViewport(viewport),
       onCustomKey: input.onCustomKey,
       parkingRoot: workspace.parkingRoot,
       environment: browserTerminalEnvironment,

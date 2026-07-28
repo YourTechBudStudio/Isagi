@@ -86,6 +86,7 @@ export function PtyPane({
     dimmed,
     presentation,
     presentationFailure,
+    restoreFailure,
     attach,
     startFresh,
     startFreshPending,
@@ -269,6 +270,26 @@ export function PtyPane({
             <UnavailablePrompt reason={view.reason} onCheckAgain={checkAgain} checking={checking} />
           </div>,
         )
+      ) : presentationFailure ? (
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <TerminalRecoveryPrompt
+              copy={ptyCopy.presentationFailed}
+              detail={presentationFailure.detail}
+              onRetry={attach}
+            />
+          </div>,
+        )
+      ) : restoreFailure ? (
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <TerminalRecoveryPrompt
+              copy={ptyCopy.restoreIncomplete}
+              detail={restoreFailure.detail}
+              onRetry={attach}
+            />
+          </div>,
+        )
       ) : view.kind === 'live' && session && presentation ? (
         <PaneTerminal
           surfaceId={surface.id}
@@ -276,12 +297,6 @@ export function PtyPane({
           focused={focused}
           presentation={presentation}
         />
-      ) : presentationFailure ? (
-        withPaneMenu(
-          <div className="flex min-h-0 flex-1">
-            <PresentationFailedPrompt detail={presentationFailure.detail} onRetry={attach} />
-          </div>,
-        )
       ) : (
         withPaneMenu(
           <div className="grid min-h-0 flex-1 place-items-center px-4">
@@ -362,13 +377,16 @@ function RestorePrompt({
   );
 }
 
-// The session is alive but its terminal never got built. Retry rebuilds the
-// presentation against the same session; "start fresh" is deliberately absent,
-// since throwing away a live session over a renderer failure is not a recovery.
-function PresentationFailedPrompt({
+// The session is alive but its terminal never got built, or never finished
+// restoring. Retry rebuilds the presentation against the same session; "start
+// fresh" is deliberately absent, since throwing away a live session over a
+// renderer or replay failure is not a recovery.
+function TerminalRecoveryPrompt({
+  copy,
   detail,
   onRetry,
 }: {
+  readonly copy: { readonly title: string; readonly body: string; readonly action: string };
   readonly detail: string | null;
   readonly onRetry: () => void;
 }) {
@@ -377,10 +395,8 @@ function PresentationFailedPrompt({
       <div className="flex max-w-sm flex-col items-center gap-3 text-center">
         <TriangleAlert size={18} aria-hidden className="text-error" />
         <div className="space-y-1">
-          <p className="font-mono text-[12px] text-fg-muted">{ptyCopy.presentationFailed.title}</p>
-          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
-            {ptyCopy.presentationFailed.body}
-          </p>
+          <p className="font-mono text-[12px] text-fg-muted">{copy.title}</p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">{copy.body}</p>
         </div>
         {detail ? (
           <p className="font-mono text-[10.5px] leading-relaxed break-all text-fg-subtle">
@@ -388,7 +404,7 @@ function PresentationFailedPrompt({
           </p>
         ) : null}
         <Button variant="secondary" size="sm" icon={RotateCw} onClick={onRetry}>
-          {ptyCopy.presentationFailed.action}
+          {copy.action}
         </Button>
       </div>
     </div>

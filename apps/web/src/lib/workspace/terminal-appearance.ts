@@ -50,6 +50,14 @@ function requestTerminalFonts(): Promise<void> {
 export function terminalInitOptions(options: {
   readonly disableStdin: boolean;
   readonly scrollback?: number | undefined;
+  /**
+   * Whether xterm jumps the viewport to the bottom by itself whenever it emits
+   * user input. xterm counts mouse reports as user input and scrolls *before*
+   * `onData` fires, so a surface that wants faithful mouse reporting while the
+   * user is scrolled back has to turn this off and own the policy itself.
+   * Defaults to xterm's own `true`.
+   */
+  readonly scrollOnUserInput?: boolean | undefined;
 }): ITerminalOptions & ITerminalInitOnlyOptions {
   return {
     allowProposedApi: true,
@@ -62,6 +70,9 @@ export function terminalInitOptions(options: {
     macOptionClickForcesSelection: true,
     rightClickSelectsWord: true,
     ...(options.scrollback === undefined ? {} : { scrollback: options.scrollback }),
+    ...(options.scrollOnUserInput === undefined
+      ? {}
+      : { scrollOnUserInput: options.scrollOnUserInput }),
     theme: terminalThemeFromTokens(),
   };
 }

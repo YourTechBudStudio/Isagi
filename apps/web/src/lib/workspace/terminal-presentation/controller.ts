@@ -17,10 +17,17 @@ import {
   type TerminalAttachmentHandle,
   type TerminalPresentationResource,
   type TerminalSealReason,
+  type TerminalViewportMemory,
 } from '../terminal-cache/index.js';
 import { createScopedLifecycle } from '../terminal-cache/scoped-lifecycle.js';
 import { createTerminalSlotArbiter } from '../terminal-cache/slot-arbiter.js';
 import type { TerminalPresentationEnvironment } from './environment.js';
+import { createTerminalReplayGate, type TerminalReplayGateFailure } from './replay-gate.js';
+import {
+  captureTerminalViewport,
+  createTerminalViewportCausality,
+  selectTerminalViewportRestoration,
+} from './viewport.js';
 
 const SOCKET_OPEN = 1;
 const ACTIVATION_RETRY_FRAMES = 12;
@@ -36,6 +43,10 @@ export interface TerminalAttachmentSnapshot {
   readonly interactive: boolean;
   readonly rendererWarning: string | null;
   readonly sealReason: TerminalSealReason | null;
+  readonly readiness:
+    | { readonly phase: 'covered' }
+    | { readonly phase: 'revealed' }
+    | { readonly phase: 'failed'; readonly detail: string };
 }
 
 export type TerminalAttachmentEvent =
@@ -62,6 +73,8 @@ export interface CreateTerminalPresentationControllerInput {
   readonly initiallyInteractive: boolean;
   readonly resolveUrl: () => Effect.Effect<string, Error>;
   readonly onEvent: (event: TerminalAttachmentEvent) => void;
+  readonly initialViewport: TerminalViewportMemory | null;
+  readonly onViewport: (viewport: TerminalViewportMemory) => void;
   readonly parkingRoot: HTMLElement;
   readonly onCustomKey?:
     | ((event: KeyboardEvent, sendInput: (data: string) => void) => boolean)
@@ -86,6 +99,11 @@ export function createTerminalPresentationController(
   const terminal = env.createTerminal({
     disableStdin: !input.initiallyInteractive,
     scrollback: input.scrollbackLines,
+    // Return-to-latest is a product decision here, not an xterm default: xterm
+    // counts mouse reports as user input and scrolls before `onData` fires,
+    // which would yank a scrolled-back viewport to the bottom on every click in
+    // a mouse-reporting program.
+    scrollOnUserInput: false,
   });
   lifecycle.addFinalizer(() => terminal.dispose());
   try {
@@ -102,6 +120,7 @@ export function createTerminalPresentationController(
     interactive: input.initiallyInteractive,
     rendererWarning: null,
     sealReason: null,
+    readiness: Object.freeze({ phase: 'covered' }),
   });
   const listeners = new Set<() => void>();
   const transport = createPtyStreamTransport();
@@ -114,6 +133,24 @@ export function createTerminalPresentationController(
   let webglLostThisActivation = false;
   let focused = false;
   let lastGeometry: { readonly cols: number; readonly rows: number } | null = null;
+  /**
+   * The cold viewport this terminal is being rebuilt towards. It stays exactly
+   * as the cache remembered it until programmatic restoration lands: replay
+   * parsing walks the fresh terminal's own viewport down the buffer, and
+   * persisting those observations would erase the very position we are trying
+   * to reach — including on a reconstruction that never completes.
+   */
+  let viewportMemory = input.initialViewport;
+  let coldRestorationPending = true;
+  const viewportCausality = createTerminalViewportCausality();
+  const replayOutputToken = viewportCausality.begin('output');
+  let replayOutputScopeOpen = true;
+  let renderBarrier: { readonly id: symbol; readonly dispose: () => void } | null = null;
+  /** Cold reconstruction, deferred to the activation frame that settles final geometry. */
+  let pendingActivationWork: (() => void) | null = null;
+  let pendingInsertion = false;
+  let insertionResetTask: number | null = null;
+  const pendingKeyboardData: string[] = [];
 
   const current = () => !disposed && input.attachment.isCurrentMutable();
   const publish = (patch: Partial<TerminalAttachmentSnapshot>) => {
@@ -131,6 +168,11 @@ export function createTerminalPresentationController(
     if (snapshot.sealReason !== null || !current()) return;
     terminal.options.disableStdin = true;
     transport.freeze();
+    const readiness = concludeReadinessOnSeal(reason, notice);
+    replayGate.cancel();
+    closeReplayOutputScope();
+    cancelRenderBarrier();
+    pendingActivationWork = null;
     input.attachment.seal(reason);
     snapshot = Object.freeze({
       ...snapshot,
@@ -138,11 +180,12 @@ export function createTerminalPresentationController(
       interactive: false,
       notice,
       sealReason: reason,
+      readiness,
     });
     for (const listener of listeners) listener();
     input.onEvent({ type: 'sealed', reason, ...(notice?.code ? { code: notice.code } : {}) });
   };
-  const sendInput = (data: string) => {
+  const submitInput = (data: string, returnToLatest: boolean) => {
     if (
       !current() ||
       snapshot.sealReason ||
@@ -150,9 +193,10 @@ export function createTerminalPresentationController(
       socket?.readyState !== SOCKET_OPEN
     )
       return;
-    terminal.scrollToBottom();
+    if (returnToLatest) terminal.scrollToBottom();
     transport.sendInput(data);
   };
+  const sendKeyboardInput = (data: string) => submitInput(data, true);
 
   const disposeWebgl = () => {
     const owned = webgl;
@@ -187,8 +231,13 @@ export function createTerminalPresentationController(
     const size = env.measureFit(terminal, host);
     if (!size) return false;
     if (terminal.cols !== size.cols || terminal.rows !== size.rows) {
-      env.clearRenderCache(terminal);
-      terminal.resize(size.cols, size.rows);
+      const resizeToken = viewportCausality.begin('resize');
+      try {
+        env.clearRenderCache(terminal);
+        terminal.resize(size.cols, size.rows);
+      } finally {
+        viewportCausality.end(resizeToken);
+      }
     }
     lastGeometry = size;
     transport.sendResize(size.cols, size.rows);
@@ -200,11 +249,25 @@ export function createTerminalPresentationController(
     activationFrame = env.requestFrame(() => {
       activationFrame = null;
       if (!current() || !host.isConnected || arbiter.size === 0) return;
-      if (!fit() && attempt < ACTIVATION_RETRY_FRAMES) {
+      const fitted = fit();
+      if (!fitted && attempt < ACTIVATION_RETRY_FRAMES) {
         scheduleActivation(attempt + 1);
         return;
       }
       installWebgl();
+      // Cold reconstruction belongs exactly here: after the fit that settles
+      // final visible geometry and the renderer that will draw it, and before
+      // the refresh whose resulting paint is the reveal signal.
+      //
+      // A host that never measured has no final geometry to restore against, so
+      // the work stays queued rather than running against xterm's construction
+      // defaults. Retries stop after a bounded number of frames — spinning on an
+      // unmeasurable host buys nothing — but the slot's resize observer restarts
+      // activation the moment it has a size, which is the only event that can
+      // make the fit succeed.
+      const activationWork = fitted ? pendingActivationWork : null;
+      if (fitted) pendingActivationWork = null;
+      activationWork?.();
       terminal.refresh(0, Math.max(0, terminal.rows - 1));
       if (focused) terminal.focus();
     });
@@ -224,7 +287,26 @@ export function createTerminalPresentationController(
   };
   const arbiter = createTerminalSlotArbiter(() => queueMicrotask(park));
 
-  const inputDisposable = terminal.onData(sendInput);
+  // Typing and pasting deliberately return a scrolled-back viewport to the
+  // latest output; a mouse report does not, because the program asked for the
+  // click, not for a scroll. xterm's own `scrollOnUserInput` cannot tell the two
+  // apart, so it is off (see `createTerminal` above) and the origin is
+  // reconstructed here: `onKey` names the bytes a keypress produced, and the
+  // capture-phase DOM listeners below name the bytes an insertion produced.
+  const inputDisposable = terminal.onData((data) => {
+    const keyboardIndex = pendingKeyboardData.indexOf(data);
+    const causedByKeyboard = keyboardIndex >= 0;
+    if (causedByKeyboard) pendingKeyboardData.splice(keyboardIndex, 1);
+    const causedByInsertion = pendingInsertion;
+    if (causedByInsertion) {
+      pendingInsertion = false;
+      if (insertionResetTask !== null) env.cancelTask(insertionResetTask);
+      insertionResetTask = null;
+    }
+    submitInput(data, causedByKeyboard || causedByInsertion);
+  });
+  const binaryDisposable = terminal.onBinary((data) => submitInput(data, false));
+  const keyDisposable = terminal.onKey(({ key }) => pendingKeyboardData.push(key));
   const handleKeyDown = (event: KeyboardEvent) => {
     if (isCopyShortcut(event) && terminal.getSelection()) {
       event.preventDefault();
@@ -232,7 +314,7 @@ export function createTerminalPresentationController(
       void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => undefined);
       return;
     }
-    input.onCustomKey?.(event, sendInput);
+    input.onCustomKey?.(event, sendKeyboardInput);
   };
   const handleCopy = (event: ClipboardEvent) => {
     const selection = terminal.getSelection();
@@ -240,10 +322,35 @@ export function createTerminalPresentationController(
     event.clipboardData?.setData('text/plain', selection);
     event.preventDefault();
   };
+  const handleInsertion = () => {
+    pendingInsertion = true;
+    if (insertionResetTask !== null) env.cancelTask(insertionResetTask);
+    insertionResetTask = env.scheduleTask(() => {
+      pendingInsertion = false;
+      insertionResetTask = null;
+    });
+  };
   host.addEventListener('keydown', handleKeyDown, true);
   host.addEventListener('copy', handleCopy);
+  // Capture, not bubble: xterm's own paste handler calls `stopPropagation()` on
+  // the way down, so a bubbling listener never sees a paste at all. `beforeinput`
+  // covers the insertions that never produce a key event — IME commits and
+  // autocorrect — which xterm turns into input through the textarea instead.
+  host.addEventListener('paste', handleInsertion, true);
+  host.addEventListener('beforeinput', handleInsertion, true);
+  // Scrolls and buffer switches happen *inside* the parse, so whatever scope the
+  // write opened is still current and the cause is classified correctly. There
+  // is deliberately no `onWriteParsed` capture: it fires after the write
+  // callbacks, outside every scope, and would report the session's own output as
+  // a user scroll. Each write owns its own post-parse capture instead.
+  const scrollDisposable = terminal.onScroll(() => captureViewport());
+  const bufferDisposable = terminal.buffer.onBufferChange(() => captureViewport());
+  const replayGate = createTerminalReplayGate({ write: writeOutput });
   const disconnectTransport = transport.connect({
-    write: (data) => terminal.write(data),
+    write: (data) => {
+      const failure = replayGate.pushOutput(data);
+      if (failure) failReplay(failure);
+    },
     setInteractive: (interactive) => {
       terminal.options.disableStdin = !interactive;
     },
@@ -317,6 +424,7 @@ export function createTerminalPresentationController(
         return;
       case 'replay_end':
         publish({ phase: 'attached' });
+        beginReplayBarrier();
         return;
       case 'exit':
         publish({ exit: Object.freeze({ exitCode: message.exitCode, signal: message.signal }) });
@@ -347,6 +455,167 @@ export function createTerminalPresentationController(
           socket?.close();
         }
     }
+  }
+
+  function writeOutput(data: string) {
+    if (!current() || snapshot.sealReason) return;
+    const token = replayOutputScopeOpen ? null : viewportCausality.begin('output');
+    terminal.write(data, () => {
+      // The capture is part of the write, not something that follows it. Ending
+      // the scope first would classify the session's own output as a user
+      // scroll, and a `followLatest: false` terminal would silently become a
+      // following one the first time a program cleared the screen.
+      try {
+        if (current()) captureViewport();
+      } finally {
+        if (token) viewportCausality.end(token);
+      }
+    });
+  }
+
+  function captureViewport() {
+    if (!current()) return;
+    input.attachment.updateMeasurement({
+      normalCells: terminal.buffer.normal.length * terminal.cols,
+      alternateCells: terminal.buffer.alternate.length * terminal.cols,
+    });
+    // Everything a cold terminal observes before it reaches its remembered
+    // viewport is an artefact of the rebuild, not a place the user chose to be.
+    if (coldRestorationPending) return;
+    const next = captureTerminalViewport({
+      buffer: terminal.buffer.active,
+      columns: terminal.cols,
+      cause: viewportCausality.current(),
+      previous: viewportMemory,
+    });
+    if (!viewportMemoriesEqual(viewportMemory, next)) {
+      viewportMemory = next;
+      input.onViewport(next);
+    }
+  }
+
+  /**
+   * Move the rebuilt terminal to the viewport the cache remembered, at final
+   * geometry, and hand ownership of the memory back to live observation.
+   * Idempotent: a reconstruction happens once per attachment.
+   */
+  function restoreColdViewport() {
+    if (!current() || !coldRestorationPending) return;
+    const restoreToken = viewportCausality.begin('restore');
+    try {
+      const restoration = selectTerminalViewportRestoration({
+        memory: viewportMemory,
+        activeBuffer: terminal.buffer.active,
+        columns: terminal.cols,
+      });
+      if (restoration.type === 'bottom') terminal.scrollToBottom();
+      if (restoration.type === 'row') terminal.scrollToLine(restoration.row);
+      // Inside the scope: a restoration that lands on the base row looks exactly
+      // like a user scrolling to the latest line, and reading it as one would
+      // turn a deliberately held viewport into a following one.
+      coldRestorationPending = false;
+      captureViewport();
+    } finally {
+      viewportCausality.end(restoreToken);
+    }
+  }
+
+  /**
+   * What a still-covered terminal shows once its stream is gone.
+   *
+   * Sealing tears down the barriers, so a terminal that has not already revealed
+   * can never finish reconstructing: the cover would come off a buffer that was
+   * never fully parsed, never restored to the remembered viewport, and never
+   * fitted to visible geometry. `replay_end` is no evidence to the contrary — it
+   * says the last replay bytes were handed to xterm, not that any of them
+   * reached the buffer. So a covered terminal stays covered and offers a
+   * recovery instead of a fraction of a session.
+   */
+  function concludeReadinessOnSeal(
+    reason: TerminalSealReason,
+    notice: TerminalAttachmentSnapshot['notice'],
+  ): TerminalAttachmentSnapshot['readiness'] {
+    if (snapshot.readiness.phase !== 'covered') return snapshot.readiness;
+    return Object.freeze({
+      phase: 'failed' as const,
+      detail: notice?.code ? `${reason} · ${notice.code}` : reason,
+    });
+  }
+
+  function closeReplayOutputScope() {
+    if (!replayOutputScopeOpen) return;
+    replayOutputScopeOpen = false;
+    viewportCausality.end(replayOutputToken);
+  }
+
+  function cancelRenderBarrier() {
+    renderBarrier?.dispose();
+    renderBarrier = null;
+  }
+
+  /**
+   * Two barriers stand between the last replay byte and a visible terminal, and
+   * both have to be passed in order.
+   *
+   * The parse barrier is an empty write whose callback runs once every byte
+   * ahead of it has reached the buffer. The activation barrier is the frame that
+   * fits to final visible geometry, installs the renderer, restores the
+   * remembered viewport, and asks for a refresh. Only a paint that arrives after
+   * all of that is evidence the user would see the rebuilt session rather than a
+   * half-parsed one at the wrong size.
+   */
+  function beginReplayBarrier() {
+    if (!current() || !replayGate.beginSettling()) return;
+    const barrierId = Symbol('terminal-render-barrier');
+    let activationBarrierPassed = false;
+    // Subscribe before either barrier: installing a renderer can paint
+    // synchronously, and that paint is exactly the one that must not reveal.
+    const renderDisposable = terminal.onRender(() => {
+      if (
+        !activationBarrierPassed ||
+        !current() ||
+        renderBarrier?.id !== barrierId ||
+        snapshot.sealReason
+      )
+        return;
+      cancelRenderBarrier();
+      if (!replayGate.reveal()) return;
+      publish({ readiness: Object.freeze({ phase: 'revealed' }) });
+      if (!current() || snapshot.sealReason) return;
+      replayGate.drain();
+    });
+    renderBarrier = { id: barrierId, dispose: () => renderDisposable.dispose() };
+    terminal.write('', () => {
+      closeReplayOutputScope();
+      if (!current() || renderBarrier?.id !== barrierId || snapshot.sealReason) return;
+      pendingActivationWork = () => {
+        restoreColdViewport();
+        activationBarrierPassed = true;
+      };
+      scheduleActivation();
+    });
+  }
+
+  function failReplay(failure: TerminalReplayGateFailure) {
+    if (!current() || snapshot.sealReason) return;
+    const detail = `${failure.type}: held ${failure.heldBytes} bytes; incoming ${failure.incomingBytes} bytes; limit ${failure.limitBytes} bytes`;
+    replayGate.cancel();
+    closeReplayOutputScope();
+    cancelRenderBarrier();
+    pendingActivationWork = null;
+    terminal.options.disableStdin = true;
+    transport.freeze();
+    input.attachment.seal('errored');
+    snapshot = Object.freeze({
+      ...snapshot,
+      phase: 'sealed',
+      interactive: false,
+      sealReason: 'errored',
+      readiness: Object.freeze({ phase: 'failed', detail }),
+    });
+    for (const listener of listeners) listener();
+    input.onEvent({ type: 'sealed', reason: 'errored' });
+    socket?.close();
   }
 
   const controller: TerminalPresentationController = {
@@ -381,6 +650,7 @@ export function createTerminalPresentationController(
   lifecycle.addFinalizer(() => {
     disposed = true;
     env.cancelTask(startTimer);
+    if (insertionResetTask !== null) env.cancelTask(insertionResetTask);
     claim.abort();
     if (activationFrame !== null) env.cancelFrame(activationFrame);
     stopResizeObserver?.();
@@ -390,9 +660,19 @@ export function createTerminalPresentationController(
     transport.closeSocket();
     disconnectTransport();
     disposeWebgl();
+    replayGate.cancel();
+    closeReplayOutputScope();
+    cancelRenderBarrier();
+    pendingActivationWork = null;
     inputDisposable.dispose();
+    binaryDisposable.dispose();
+    keyDisposable.dispose();
+    scrollDisposable.dispose();
+    bufferDisposable.dispose();
     host.removeEventListener('keydown', handleKeyDown, true);
     host.removeEventListener('copy', handleCopy);
+    host.removeEventListener('paste', handleInsertion, true);
+    host.removeEventListener('beforeinput', handleInsertion, true);
     listeners.clear();
     host.remove();
   });
@@ -419,4 +699,19 @@ function isCopyShortcut(event: KeyboardEvent) {
   return /mac/i.test(navigator.platform)
     ? event.metaKey && !event.altKey
     : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+}
+
+function viewportMemoriesEqual(left: TerminalViewportMemory | null, right: TerminalViewportMemory) {
+  if (!left || left.buffer !== right.buffer || left.columns !== right.columns) return false;
+  if (left.buffer === 'alternate' || right.buffer === 'alternate') return true;
+  return (
+    left.followLatest === right.followLatest &&
+    left.viewportY === right.viewportY &&
+    left.baseY === right.baseY &&
+    left.rows.length === right.rows.length &&
+    left.rows.every(
+      (row, index) =>
+        row.text === right.rows[index]?.text && row.wrapped === right.rows[index]?.wrapped,
+    )
+  );
 }

@@ -82,6 +82,8 @@ function begin() {
       initiallyInteractive: true,
       parkingRoot: env.parkingRoot,
       environment: env,
+      initialViewport: null,
+      onViewport: () => undefined,
       onEvent: () => undefined,
       resolveUrl: () => Effect.succeed('ws://runtime.test/pty/7'),
       isCancelled,

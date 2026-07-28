@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
 import { restoreActivePaneFocus, usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import type { TerminalPresentationController } from '../../lib/workspace/terminal-presentation/controller.js';
@@ -18,6 +18,11 @@ export function PaneTerminal({
 }) {
   const destinationRef = useRef<HTMLDivElement | null>(null);
   const focusTerminal = useCallback(() => presentation.focus(), [presentation]);
+  const snapshot = useSyncExternalStore(
+    presentation.subscribe,
+    presentation.getSnapshot,
+    presentation.getSnapshot,
+  );
 
   usePaneFocusTarget({
     surfaceId,
@@ -38,5 +43,10 @@ export function PaneTerminal({
     if (focused) restoreActivePaneFocus();
   }, [focused, presentation]);
 
-  return <TerminalRevealSlot revealed hostRef={destinationRef} />;
+  return (
+    <TerminalRevealSlot
+      revealed={snapshot.readiness.phase === 'revealed'}
+      hostRef={destinationRef}
+    />
+  );
 }

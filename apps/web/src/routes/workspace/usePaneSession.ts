@@ -66,6 +66,13 @@ export interface UsePaneSessionResult {
    * `attach` as the retry; it must never render as an empty pane.
    */
   readonly presentationFailure: TerminalPresentationFailure | null;
+  /**
+   * The terminal was built, but its cold reconstruction never completed — the
+   * stream ended mid-replay, or the held-live buffer overflowed. It stays
+   * concealed: the pane shows web-owned copy plus this diagnostic detail rather
+   * than the fraction of a session that happened to parse.
+   */
+  readonly restoreFailure: TerminalPresentationFailure | null;
   /** Resume / retry / reclaim — claim the current session and reopen the socket. */
   readonly attach: () => void;
   /** Replace the bound session with a fresh one (the only valid move when claim+attach would fail). */
@@ -263,11 +270,21 @@ export function usePaneSession({
     [session, connection, launch],
   );
 
-  // A terminal that failed to build is a presentation-level fact the runtime's
-  // projection cannot see, so — like `unsupported` and `moved` — the pane
-  // overlays it on top of the derived view rather than pretending to attach.
+  // A terminal that failed to build, and a terminal whose cold restore never
+  // completed, are both presentation-level facts the runtime's projection cannot
+  // see — so, like `unsupported` and `moved`, the pane overlays them on top of
+  // the derived view rather than pretending to attach. They stay separate
+  // because they say different true things: one never got a terminal, the other
+  // has one holding part of a session it refuses to show.
   const presentationFailure = attachment.failure;
-  const attention = presentationFailure ? 'error' : paneViewAttention(view, paneAttention, session);
+  const restoreFailure =
+    attachment.snapshot.readiness.phase === 'failed'
+      ? { detail: attachment.snapshot.readiness.detail }
+      : null;
+  const buildOrRestoreFailed = presentationFailure !== null || restoreFailure !== null;
+  const attention = buildOrRestoreFailed
+    ? 'error'
+    : paneViewAttention(view, paneAttention, session);
   const dimmed =
     view.kind === 'attachable' ||
     view.kind === 'needs_fresh' ||
@@ -276,13 +293,15 @@ export function usePaneSession({
     view.kind === 'blocked' ||
     view.kind === 'unavailable';
   const errored =
-    presentationFailure !== null ||
+    buildOrRestoreFailed ||
     view.kind === 'unsupported' ||
     view.kind === 'blocked' ||
     (view.kind === 'attachable' && view.resumeFailed);
   const statusLabel = presentationFailure
     ? ptyCopy.presentationFailed.status
-    : paneStatusLabel(view, session, connection.phase, exit);
+    : restoreFailure
+      ? ptyCopy.restoreIncomplete.status
+      : paneStatusLabel(view, session, connection.phase, exit);
   const notice = paneNotice(view, session, connection, rendererWarning);
 
   return {
@@ -294,6 +313,7 @@ export function usePaneSession({
     dimmed,
     presentation: attachment.resource,
     presentationFailure,
+    restoreFailure,
     attach,
     startFresh,
     startFreshPending: creating,

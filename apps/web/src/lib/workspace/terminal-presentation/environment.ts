@@ -25,6 +25,8 @@ export interface TerminalPresentationEnvironment {
   readonly createTerminal: (options: {
     readonly disableStdin: boolean;
     readonly scrollback: number;
+    /** The controller passes `false` and owns return-to-latest itself; see its `onData` handling. */
+    readonly scrollOnUserInput: boolean;
   }) => Terminal;
   readonly createWebglAddon: () => WebglAddon;
   readonly openSocket: (url: string) => WebSocket;

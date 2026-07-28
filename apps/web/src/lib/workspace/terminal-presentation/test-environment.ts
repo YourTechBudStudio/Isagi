@@ -1,5 +1,5 @@
 import type { WebglAddon } from '@xterm/addon-webgl';
-import type { Terminal } from '@xterm/xterm';
+import type { IBuffer, IBufferNamespace, Terminal } from '@xterm/xterm';
 
 import type { TerminalFitSize } from '../terminal-geometry.js';
 import type { TerminalPresentationEnvironment } from './environment.js';
@@ -16,6 +16,12 @@ export interface FakeTerminalEnvironment extends TerminalPresentationEnvironment
   claims: number;
   /** What `measureFit` reports next. */
   fitSize: TerminalFitSize;
+  /**
+   * Whether `measureFit` can measure at all. A slot with no laid-out size — a
+   * pane behind a collapsed split, a host mid-mount — reports nothing, and
+   * geometry-dependent work has to wait rather than assume defaults.
+   */
+  measurable: boolean;
   /** When set, `createTerminal` throws with this message instead of building one. */
   terminalCreationFailure: string | null;
   /** Release the font barrier `fontsReady()` is holding. */
@@ -47,7 +53,7 @@ export interface FakeSlot {
 }
 
 export interface FakeTerminal {
-  readonly options: { disableStdin: boolean };
+  readonly options: { disableStdin: boolean; scrollOnUserInput: boolean };
   readonly written: string[];
   readonly cols: number;
   readonly rows: number;
@@ -56,6 +62,24 @@ export interface FakeTerminal {
   readonly focusCount: number;
   readonly blurCount: number;
   readonly refreshCount: number;
+  readonly scrollToBottomCount: number;
+  readonly scrollLines: readonly number[];
+  readonly viewportY: number;
+  /**
+   * Emit bytes as xterm would. `wasUserInput` is xterm's own classification —
+   * true for keys, pastes, and mouse reports alike — and, when
+   * `scrollOnUserInput` is on, xterm scrolls to the bottom *before* `onData`
+   * fires. Modelling that ordering is the only way a test can tell an owned
+   * return-to-latest policy from xterm's indiscriminate one.
+   */
+  readonly emitData: (data: string, wasUserInput?: boolean) => void;
+  readonly emitBinary: (data: string) => void;
+  readonly emitKey: (key: string) => void;
+  readonly emitRender: () => void;
+  /** Parse everything written so far, then paint — as xterm's parser schedules. */
+  readonly flushWrites: () => void;
+  /** Replace the normal buffer's contents, as replay output would. */
+  readonly setBufferLines: (lines: readonly string[], viewportY?: number) => void;
 }
 
 export interface FakeSocket {
@@ -98,6 +122,7 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
   const env: FakeTerminalEnvironment = {
     claims: 0,
     fitSize: { cols: 80, rows: 24 },
+    measurable: true,
     parkingRoot: parkingRoot.asElement(),
     terminals,
     get terminal() {
@@ -129,9 +154,9 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
     resolveFonts: () => releaseFonts(),
 
     createHost: () => new FakeElement('host').asElement() as HTMLDivElement,
-    createTerminal: () => {
+    createTerminal: (options) => {
       if (env.terminalCreationFailure) throw new Error(env.terminalCreationFailure);
-      const terminal = new FakeTerminalImpl();
+      const terminal = new FakeTerminalImpl(options.scrollOnUserInput);
       terminals.push(terminal);
       return terminal.asTerminal();
     },
@@ -176,7 +201,7 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
       return () => observer.stop();
     },
     fontsReady: () => fonts,
-    measureFit: () => env.fitSize,
+    measureFit: () => (env.measurable ? env.fitSize : null),
     clearRenderCache: () => undefined,
 
     createSlot: () => {
@@ -265,7 +290,7 @@ class FakeElement {
 }
 
 class FakeTerminalImpl {
-  readonly options = { disableStdin: false };
+  readonly options: { disableStdin: boolean; scrollOnUserInput: boolean };
   readonly written: string[] = [];
   readonly element = {};
   cols = 80;
@@ -275,6 +300,26 @@ class FakeTerminalImpl {
   focusCount = 0;
   blurCount = 0;
   refreshCount = 0;
+  scrollToBottomCount = 0;
+  readonly scrollLines: number[] = [];
+  private readonly events = new Map<string, Set<(value: never) => void>>();
+  private readonly writeCallbacks: Array<() => void> = [];
+  private readonly activeBuffer = new FakeBuffer();
+  readonly buffer = {
+    active: this.activeBuffer.asBuffer(),
+    normal: this.activeBuffer.asBuffer(),
+    alternate: new FakeBuffer('alternate').asBuffer(),
+    onBufferChange: (listener: (buffer: IBuffer) => void) =>
+      this.listen('buffer', listener as (value: never) => void),
+  } as IBufferNamespace;
+
+  constructor(scrollOnUserInput: boolean) {
+    this.options = { disableStdin: false, scrollOnUserInput };
+  }
+
+  get viewportY() {
+    return this.activeBuffer.viewportY;
+  }
 
   open() {
     this.openCount += 1;
@@ -284,16 +329,37 @@ class FakeTerminalImpl {
     this.disposeCount += 1;
   }
 
-  onData() {
-    return { dispose: () => undefined };
+  onData(listener: (data: string) => void) {
+    return this.listen('data', listener as (value: never) => void);
+  }
+
+  onBinary(listener: (data: string) => void) {
+    return this.listen('binary', listener as (value: never) => void);
+  }
+
+  onKey(listener: (event: { key: string; domEvent: KeyboardEvent }) => void) {
+    return this.listen('key', listener as (value: never) => void);
+  }
+
+  onRender(listener: (event: { start: number; end: number }) => void) {
+    return this.listen('render', listener as (value: never) => void);
+  }
+
+  onScroll(listener: (viewportY: number) => void) {
+    return this.listen('scroll', listener as (value: never) => void);
+  }
+
+  onWriteParsed(listener: () => void) {
+    return this.listen('parsed', listener as (value: never) => void);
   }
 
   loadAddon() {
     return undefined;
   }
 
-  write(data: string) {
+  write(data: string, callback?: () => void) {
     this.written.push(data);
+    if (callback) this.writeCallbacks.push(callback);
   }
 
   resize(cols: number, rows: number) {
@@ -314,15 +380,96 @@ class FakeTerminalImpl {
   }
 
   scrollToBottom() {
-    return undefined;
+    this.scrollToBottomCount += 1;
+    this.activeBuffer.viewportY = this.activeBuffer.baseY;
+    this.emit('scroll', this.activeBuffer.baseY as never);
+  }
+
+  scrollToLine(line: number) {
+    this.scrollLines.push(line);
+    this.activeBuffer.viewportY = line;
+    this.emit('scroll', line as never);
   }
 
   getSelection() {
     return '';
   }
 
+  emitData(data: string, wasUserInput = false) {
+    if (wasUserInput && this.options.scrollOnUserInput) this.scrollToBottom();
+    this.emit('data', data as never);
+  }
+
+  setBufferLines(lines: readonly string[], viewportY = 0) {
+    this.activeBuffer.lines = [...lines];
+    this.activeBuffer.baseY = Math.max(0, this.activeBuffer.length - this.rows);
+    this.activeBuffer.viewportY = viewportY;
+  }
+
+  emitBinary(data: string) {
+    this.emit('binary', data as never);
+  }
+
+  emitKey(key: string) {
+    this.emit('key', { key, domEvent: {} as KeyboardEvent } as never);
+  }
+
+  emitRender() {
+    this.emit('render', { start: 0, end: this.rows - 1 } as never);
+  }
+
+  flushWrites() {
+    const callbacks = this.writeCallbacks.splice(0);
+    for (const callback of callbacks) callback();
+    this.emit('parsed', undefined as never);
+    // Parsing dirties rows, and xterm's renderer paints them. A reveal barrier
+    // that only ever saw hand-driven paints would never meet the one replay
+    // itself produces, which is the paint most likely to arrive too early.
+    this.emitRender();
+  }
+
   asTerminal(): Terminal {
     return this as unknown as Terminal;
+  }
+
+  private listen(type: string, listener: (value: never) => void) {
+    const listeners = this.events.get(type) ?? new Set();
+    listeners.add(listener);
+    this.events.set(type, listeners);
+    return { dispose: () => listeners.delete(listener) };
+  }
+
+  private emit(type: string, value: never) {
+    for (const listener of this.events.get(type) ?? []) listener(value);
+  }
+}
+
+class FakeBuffer {
+  readonly cursorX = 0;
+  readonly cursorY = 0;
+  viewportY = 0;
+  baseY = 0;
+  lines: string[] = [];
+
+  constructor(readonly type: 'normal' | 'alternate' = 'normal') {}
+
+  get length() {
+    return Math.max(24, this.lines.length);
+  }
+
+  getLine(row: number) {
+    if (row < 0 || row >= this.length) return undefined;
+    const text = this.lines[row] ?? '';
+    return {
+      isWrapped: false,
+      length: text.length,
+      getCell: () => undefined,
+      translateToString: () => text,
+    };
+  }
+
+  asBuffer(): IBuffer {
+    return this as unknown as IBuffer;
   }
 }
 
