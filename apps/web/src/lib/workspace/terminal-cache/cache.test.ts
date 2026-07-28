@@ -76,7 +76,9 @@ function createHarness(
   };
 }
 
-function startAttachment(session: TerminalSessionHandle): TerminalAttachmentHandle {
+function startAttachment<Resource extends TerminalPresentationResource>(
+  session: TerminalSessionHandle<Resource>,
+): TerminalAttachmentHandle<Resource> {
   const result = session.beginAttachment();
   assert.equal(result.status, 'started');
   if (result.status !== 'started') throw new Error('Expected attachment to start.');
@@ -353,6 +355,40 @@ describe('terminal presentation accounting', () => {
 });
 
 describe('terminal presentation attachment lifecycle', () => {
+  it('returns the one installed typed resource through visibility acquisition without exposing it in snapshots', () => {
+    interface NamedResource extends TerminalPresentationResource {
+      readonly name: string;
+    }
+    const cache = createTerminalPresentationCache<NamedResource>({
+      settings: defaultTerminalCacheSettings,
+    });
+    const session = cache.ensureSession(identity, placement);
+    const attachment = startAttachment(session);
+    const resource: NamedResource = { name: 'stable-host-controller', dispose() {} };
+    assert.equal(attachment.installResource(resource, emptyTerminalBufferMeasurement), 'applied');
+    assert.equal(attachment.markReady(), 'applied');
+
+    const acquisition = session.acquireVisibility(placement);
+    assert.equal(acquisition.status, 'acquired');
+    if (acquisition.status !== 'acquired') throw new Error('Expected acquisition.');
+    assert.equal(acquisition.resource, resource);
+    assert.equal('resource' in harnessSnapshot(cache), false);
+    acquisition.lease.release();
+    cache.dispose();
+  });
+
+  it('keeps the first seal reason when later transport outcomes race with process exit', () => {
+    const harness = createHarness();
+    const session = harness.cache.ensureSession(identity, placement);
+    const attachment = startAttachment(session);
+    attachment.installResource(disposable().resource, emptyTerminalBufferMeasurement);
+    attachment.markReady();
+
+    assert.equal(attachment.seal('exited'), 'applied');
+    assert.equal(attachment.seal('disconnected'), 'sealed');
+    assert.equal(harness.entry()?.sealReason, 'exited');
+  });
+
   it('moves from cold through preparing and hot, then keeps a sealed resource displayable', () => {
     const harness = createHarness();
     const session = harness.cache.ensureSession(identity, placement);
@@ -455,6 +491,12 @@ describe('terminal presentation attachment lifecycle', () => {
     });
   });
 });
+
+function harnessSnapshot<Resource extends TerminalPresentationResource>(
+  cache: ReturnType<typeof createTerminalPresentationCache<Resource>>,
+) {
+  return cache.getSnapshot().entries[0] ?? {};
+}
 
 describe('terminal presentation resource disposal failures', () => {
   it('completes a lifecycle transition and reports a throwing disposal as a diagnostic', () => {

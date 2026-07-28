@@ -79,6 +79,21 @@ export const ptyCopy = {
     webglFallback: 'WebGL renderer fell back to canvas.',
     webglUnavailable: 'WebGL renderer unavailable; using canvas.',
   },
+  /**
+   * The terminal that was supposed to show a session never got built. This
+   * happens before the claim, so it promises only what is always true — nothing
+   * was replaced or discarded — and never that a process is running: the same
+   * failure can land while resuming a stopped session, where none is. The
+   * honest recovery is "try again", not "start fresh", which would throw a
+   * durable session away over a renderer failure. No humour: nothing about a
+   * pane that will not open is funny to the person waiting on it.
+   */
+  presentationFailed: {
+    status: 'Terminal failed',
+    title: "Couldn't build this terminal.",
+    body: "Nothing happened to the session — Isagi just couldn't put a terminal in front of it.",
+    action: 'Try again',
+  },
   sessionStatus: (
     status: SessionStatus | null,
     statusReason: AgentSessionStatusReason | TerminalSessionStatusReason | null,

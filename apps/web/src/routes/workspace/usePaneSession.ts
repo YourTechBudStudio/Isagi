@@ -1,21 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import {
-  ptyWebSocketOutputMessageSchema,
-  type ControlPlaneSnapshot,
-  type HarnessLaunchProjection,
-  type PtyWebSocketOutputMessage,
-} from '@isagi/contracts';
+import type { ControlPlaneSnapshot, HarnessLaunchProjection } from '@isagi/contracts';
 
-import { ptySocketErrorCopy } from '../../copy/index.js';
+import { ptyCopy } from '../../copy/index.js';
 import { harnessLaunch } from '../../lib/control-plane/launchability.js';
 import { controlPlaneQueryKey, useControlPlaneQuery } from '../../lib/control-plane/queries.js';
-import { RuntimeApiError } from '../../lib/runtime/client.js';
-import { runRuntimeEffect, unwrapRuntimeFailure } from '../../lib/runtime/run.js';
+import { runRuntimeEffect } from '../../lib/runtime/run.js';
 import {
-  NO_EXIT,
   paneNotice,
   paneStatusLabel,
   paneViewAttention,
@@ -35,9 +28,6 @@ import {
 import {
   ptyStreamConnectionActive,
   type PtyStreamConnectionState,
-  type PtyStreamTransport,
-  type PtyStreamTransportController,
-  usePtyStream,
 } from '../../lib/workspace/pty-stream/index.js';
 import { surfaceDetailQueryKey, workspaceQueryKey } from '../../lib/workspace/query-keys.js';
 import {
@@ -48,6 +38,9 @@ import {
   resolveAgentSessionPtyWebSocketUrl,
   resolveTerminalSessionPtyWebSocketUrl,
 } from '../../lib/workspace/runtime-data.js';
+import { useTerminalAttachmentResource } from '../../lib/workspace/terminal-presentation/context.js';
+import type { TerminalPresentationController } from '../../lib/workspace/terminal-presentation/controller.js';
+import type { TerminalPresentationFailure } from '../../lib/workspace/terminal-presentation/start-presentation.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
 
 export interface UsePaneSessionInput {
@@ -66,10 +59,13 @@ export interface UsePaneSessionResult {
   readonly notice: string | null;
   readonly errored: boolean;
   readonly dimmed: boolean;
-  readonly transport: PtyStreamTransport;
-  /** Remounts the terminal per attach so each attach starts from a clean buffer. */
-  readonly terminalKey: string;
-  readonly onRendererWarning: (message: string | null) => void;
+  readonly presentation: TerminalPresentationController | null;
+  /**
+   * The terminal itself failed to build for a session that is otherwise fine.
+   * The pane shows web-owned copy plus this diagnostic detail and offers
+   * `attach` as the retry; it must never render as an empty pane.
+   */
+  readonly presentationFailure: TerminalPresentationFailure | null;
   /** Resume / retry / reclaim — claim the current session and reopen the socket. */
   readonly attach: () => void;
   /** Replace the bound session with a fresh one (the only valid move when claim+attach would fail). */
@@ -100,8 +96,6 @@ export function usePaneSession({
   const controlPlane = useControlPlaneQuery();
   const autoAttachSessionKeyRef = useRef<string | null>(null);
 
-  const [exit, setExit] = useState<ExitInfo>(NO_EXIT);
-  const [rendererWarning, setRendererWarning] = useState<string | null>(null);
   const [userAttach, setUserAttach] = useState(false);
   const [attachEpoch, setAttachEpoch] = useState(0);
   const [creating, setCreating] = useState(false);
@@ -123,8 +117,6 @@ export function usePaneSession({
   const running =
     session !== null && (session.status === 'starting' || session.status === 'running');
   const shouldConnect = session !== null && (running || userAttach);
-  const resetKey = `${sessionKind ?? 'none'}:${sessionId ?? 'none'}`;
-  const connectKey = `${resetKey}:${shouldConnect ? 'on' : 'off'}:${attachEpoch}:${worktreeId}:${paneId}`;
   const initialInteractive = session?.status === 'running';
 
   const resolveUrl = useCallback(() => {
@@ -134,68 +126,42 @@ export function usePaneSession({
     return resolveSessionPtyWebSocketUrl(worktreeId, paneId, session);
   }, [paneId, session, worktreeId]);
 
-  const handleDomainMessage = useCallback(
-    (message: PtyWebSocketOutputMessage, transport: PtyStreamTransportController) => {
-      if (message.type !== 'session') {
-        return;
-      }
-      transport.setInteractive(message.status === 'running');
-      setExit({ exitCode: message.exitCode ?? null, signal: message.signal ?? null });
+  const handleCustomKey = useCallback(
+    (event: KeyboardEvent, sendInput: (data: string) => void) => {
+      if (session?.kind !== 'agent_session' || event.key !== 'Enter' || !event.shiftKey)
+        return false;
+      event.preventDefault();
+      event.stopPropagation();
+      sendInput('\x1b[200~\n\x1b[201~');
+      return true;
     },
-    [],
+    [session?.kind],
   );
-
-  const handleExit = useCallback((nextExit: ExitInfo, transport: PtyStreamTransportController) => {
-    transport.setInteractive(false);
-    setExit(nextExit);
-  }, []);
-
-  const handleResolveError = useCallback(
-    (error: unknown) => {
-      const detail = formatRuntimeError(error);
-      // A claim can be rejected by launch policy before any socket exists. Treat
-      // that as a sign our snapshot is stale: refetch the control plane so the pane
-      // reprojects from the authoritative launch fact. The message stays as history.
-      const failure = unwrapRuntimeFailure(error);
-      if (
-        failure instanceof RuntimeApiError &&
-        failure.apiError.code === 'session_launch_rejected' &&
-        isLaunchBlockCode(readErrorReason(failure.apiError.data))
-      ) {
-        void queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
-      }
-      return {
-        message: detail,
-        output: ptySocketErrorCopy.connectFailed(detail),
-      };
-    },
-    [queryClient],
-  );
-
-  const handleSocketError = useCallback(
-    () => ({ message: ptySocketErrorCopy.byReason('socket_unavailable') }),
-    [],
-  );
-
-  const { transport, connection } = usePtyStream({
-    enabled: shouldConnect,
-    resetKey,
-    connectKey,
-    initialInteractive,
+  const attachment = useTerminalAttachmentResource({
+    identity: session ? { kind: session.kind, sessionId: session.id } : null,
+    placement: { worktreeId, surfaceId, paneId },
+    enabled: session !== null && shouldConnect,
+    attachmentRequest: attachEpoch,
+    initiallyInteractive: initialInteractive,
     resolveUrl,
-    decodeMessage: decodeSessionPtyStreamMessage,
-    onDomainMessage: handleDomainMessage,
-    onExit: handleExit,
-    onResolveError: handleResolveError,
-    onSocketError: handleSocketError,
+    onCustomKey: handleCustomKey,
   });
+  const connection: PtyStreamConnectionState = {
+    phase:
+      attachment.snapshot.phase === 'sealed'
+        ? attachment.snapshot.sealReason === 'errored'
+          ? 'errored'
+          : 'disconnected'
+        : attachment.snapshot.phase,
+    notice: attachment.snapshot.notice,
+  };
+  const exit: ExitInfo = attachment.snapshot.exit;
+  const rendererWarning = attachment.snapshot.rendererWarning;
 
   // Reset connection-local state whenever the bound session identity changes.
   // Backend status / recovery updates flow through `derivePaneView` and must not
   // tear down a live connection, so they are deliberately not dependencies.
   useEffect(() => {
-    setExit(NO_EXIT);
-    setRendererWarning(null);
     setUserAttach(false);
     setAttachEpoch(0);
     autoAttachSessionKeyRef.current = null;
@@ -297,7 +263,11 @@ export function usePaneSession({
     [session, connection, launch],
   );
 
-  const attention = paneViewAttention(view, paneAttention, session);
+  // A terminal that failed to build is a presentation-level fact the runtime's
+  // projection cannot see, so — like `unsupported` and `moved` — the pane
+  // overlays it on top of the derived view rather than pretending to attach.
+  const presentationFailure = attachment.failure;
+  const attention = presentationFailure ? 'error' : paneViewAttention(view, paneAttention, session);
   const dimmed =
     view.kind === 'attachable' ||
     view.kind === 'needs_fresh' ||
@@ -306,10 +276,13 @@ export function usePaneSession({
     view.kind === 'blocked' ||
     view.kind === 'unavailable';
   const errored =
+    presentationFailure !== null ||
     view.kind === 'unsupported' ||
     view.kind === 'blocked' ||
     (view.kind === 'attachable' && view.resumeFailed);
-  const statusLabel = paneStatusLabel(view, session, connection.phase, exit);
+  const statusLabel = presentationFailure
+    ? ptyCopy.presentationFailed.status
+    : paneStatusLabel(view, session, connection.phase, exit);
   const notice = paneNotice(view, session, connection, rendererWarning);
 
   return {
@@ -319,9 +292,8 @@ export function usePaneSession({
     notice,
     errored,
     dimmed,
-    transport,
-    terminalKey: `${sessionId ?? 'none'}:${attachEpoch}`,
-    onRendererWarning: setRendererWarning,
+    presentation: attachment.resource,
+    presentationFailure,
     attach,
     startFresh,
     startFreshPending: creating,
@@ -365,14 +337,6 @@ function isAutoAttachableSession(
   return !(recoveryRequiresProcessCreation(session.recoveryAction) && launch.status === 'blocked');
 }
 
-function readErrorReason(data: unknown): string | null {
-  if (data && typeof data === 'object' && 'reason' in data) {
-    const reason = (data as { readonly reason?: unknown }).reason;
-    return typeof reason === 'string' ? reason : null;
-  }
-  return null;
-}
-
 function paneConnectionSnapshot(connection: PtyStreamConnectionState): PaneConnectionSnapshot {
   return {
     code:
@@ -381,12 +345,4 @@ function paneConnectionSnapshot(connection: PtyStreamConnectionState): PaneConne
         : null,
     attachRequested: ptyStreamConnectionActive(connection),
   };
-}
-
-function decodeSessionPtyStreamMessage(data: unknown): PtyWebSocketOutputMessage | null {
-  try {
-    return Schema.decodeUnknownSync(ptyWebSocketOutputMessageSchema)(JSON.parse(String(data)));
-  } catch {
-    return null;
-  }
 }

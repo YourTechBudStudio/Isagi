@@ -84,9 +84,8 @@ export function PtyPane({
     notice,
     errored,
     dimmed,
-    transport,
-    terminalKey,
-    onRendererWarning,
+    presentation,
+    presentationFailure,
     attach,
     startFresh,
     startFreshPending,
@@ -270,16 +269,19 @@ export function PtyPane({
             <UnavailablePrompt reason={view.reason} onCheckAgain={checkAgain} checking={checking} />
           </div>,
         )
-      ) : view.kind === 'live' && session ? (
+      ) : view.kind === 'live' && session && presentation ? (
         <PaneTerminal
-          key={terminalKey}
-          session={session}
           surfaceId={surface.id}
           paneId={pane.id}
           focused={focused}
-          transport={transport}
-          onRendererWarning={onRendererWarning}
+          presentation={presentation}
         />
+      ) : presentationFailure ? (
+        withPaneMenu(
+          <div className="flex min-h-0 flex-1">
+            <PresentationFailedPrompt detail={presentationFailure.detail} onRetry={attach} />
+          </div>,
+        )
       ) : (
         withPaneMenu(
           <div className="grid min-h-0 flex-1 place-items-center px-4">
@@ -355,6 +357,39 @@ function RestorePrompt({
             {agentSessionCopy.action.startFresh}
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// The session is alive but its terminal never got built. Retry rebuilds the
+// presentation against the same session; "start fresh" is deliberately absent,
+// since throwing away a live session over a renderer failure is not a recovery.
+function PresentationFailedPrompt({
+  detail,
+  onRetry,
+}: {
+  readonly detail: string | null;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <div className="grid min-h-0 flex-1 place-items-center px-6 py-5">
+      <div className="flex max-w-sm flex-col items-center gap-3 text-center">
+        <TriangleAlert size={18} aria-hidden className="text-error" />
+        <div className="space-y-1">
+          <p className="font-mono text-[12px] text-fg-muted">{ptyCopy.presentationFailed.title}</p>
+          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
+            {ptyCopy.presentationFailed.body}
+          </p>
+        </div>
+        {detail ? (
+          <p className="font-mono text-[10.5px] leading-relaxed break-all text-fg-subtle">
+            {detail}
+          </p>
+        ) : null}
+        <Button variant="secondary" size="sm" icon={RotateCw} onClick={onRetry}>
+          {ptyCopy.presentationFailed.action}
+        </Button>
       </div>
     </div>
   );

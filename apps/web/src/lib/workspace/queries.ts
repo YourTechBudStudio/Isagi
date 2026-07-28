@@ -252,6 +252,7 @@ export function useSurfaceDetailQuery(
 ) {
   return useQuery({
     queryKey: surfaceDetailQueryKey(surfaceId),
+    gcTime: Infinity,
     enabled: (options.enabled ?? true) && surfaceId !== null,
     queryFn: ({ signal }) => {
       if (surfaceId === null) {

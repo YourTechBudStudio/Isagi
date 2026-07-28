@@ -58,14 +58,22 @@ export interface TerminalVisibilityLease {
   readonly release: () => void;
 }
 
-export type TerminalVisibilityAcquisition =
-  | { readonly status: 'acquired'; readonly lease: TerminalVisibilityLease }
+export type TerminalVisibilityAcquisition<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+> =
+  | {
+      readonly status: 'acquired';
+      readonly lease: TerminalVisibilityLease;
+      readonly resource: Resource | null;
+    }
   | { readonly status: 'placement_mismatch' | 'stale' };
 
-export interface TerminalAttachmentHandle {
+export interface TerminalAttachmentHandle<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+> {
   readonly epoch: number;
   readonly installResource: (
-    resource: TerminalPresentationResource,
+    resource: Resource,
     measurement: TerminalBufferMeasurement,
   ) => TerminalMutationResult;
   readonly updateMeasurement: (measurement: TerminalBufferMeasurement) => TerminalMutationResult;
@@ -75,15 +83,21 @@ export interface TerminalAttachmentHandle {
   readonly isCurrentMutable: () => boolean;
 }
 
-export type TerminalAttachmentStart =
-  | { readonly status: 'started'; readonly attachment: TerminalAttachmentHandle }
+export type TerminalAttachmentStart<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+> =
+  | { readonly status: 'started'; readonly attachment: TerminalAttachmentHandle<Resource> }
   | { readonly status: 'stale' };
 
-export interface TerminalSessionHandle {
+export interface TerminalSessionHandle<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+> {
   readonly identity: TerminalSessionIdentity;
-  readonly acquireVisibility: (placement: TerminalPlacement) => TerminalVisibilityAcquisition;
+  readonly acquireVisibility: (
+    placement: TerminalPlacement,
+  ) => TerminalVisibilityAcquisition<Resource>;
   readonly movePlacement: (placement: TerminalPlacement) => TerminalMutationResult;
-  readonly beginAttachment: () => TerminalAttachmentStart;
+  readonly beginAttachment: () => TerminalAttachmentStart<Resource>;
   readonly updateViewport: (viewport: TerminalViewportMemory) => TerminalMutationResult;
   readonly evictPresentation: () => TerminalMutationResult;
   readonly invalidate: () => TerminalMutationResult;
@@ -117,21 +131,25 @@ export interface TerminalCacheDependencies {
   readonly onDiagnostic?: ((diagnostic: TerminalCacheDiagnostic) => void) | undefined;
 }
 
-export interface TerminalPresentationCache {
+export interface TerminalPresentationCache<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+> {
   readonly settings: TerminalCacheSettings;
   readonly ensureSession: (
     identity: TerminalSessionIdentity,
     initialPlacement: TerminalPlacement,
-  ) => TerminalSessionHandle;
-  readonly getSessionAtPlacement: (placement: TerminalPlacement) => TerminalSessionHandle | null;
+  ) => TerminalSessionHandle<Resource>;
+  readonly getSessionAtPlacement: (
+    placement: TerminalPlacement,
+  ) => TerminalSessionHandle<Resource> | null;
   readonly sweepLiveSessions: (identities: readonly TerminalSessionIdentity[]) => void;
   readonly getSnapshot: () => TerminalCacheSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly dispose: () => void;
 }
 
-interface InstalledResource {
-  readonly value: TerminalPresentationResource;
+interface InstalledResource<Resource extends TerminalPresentationResource> {
+  readonly value: Resource;
   disposed: boolean;
 }
 
@@ -152,7 +170,7 @@ interface PresenceState {
   leaseCount: number;
 }
 
-interface EntryState {
+interface EntryState<Resource extends TerminalPresentationResource> {
   readonly key: string;
   readonly identity: TerminalSessionIdentity;
   placement: TerminalPlacement | null;
@@ -162,7 +180,7 @@ interface EntryState {
   sealReason: TerminalSealReason | null;
   attachmentEpoch: number;
   attachment: AttachmentState | null;
-  resource: InstalledResource | null;
+  resource: InstalledResource<Resource> | null;
   leases: Set<LeaseState>;
   owningLeaseCount: number;
   presence: PresenceState;
@@ -179,15 +197,15 @@ const emptySnapshot: TerminalCacheSnapshot = Object.freeze({
   totalEstimatedBytes: 0,
 });
 
-export function createTerminalPresentationCache(
-  dependencies: TerminalCacheDependencies,
-): TerminalPresentationCache {
+export function createTerminalPresentationCache<
+  Resource extends TerminalPresentationResource = TerminalPresentationResource,
+>(dependencies: TerminalCacheDependencies): TerminalPresentationCache<Resource> {
   const settings = Object.freeze({ ...dependencies.settings });
   const now = dependencies.now ?? Date.now;
   const scheduleMicrotask = dependencies.scheduleMicrotask ?? defaultMicrotaskScheduler;
   const estimateBytes = dependencies.estimateBytes ?? estimateTerminalPresentationBytes;
-  const entries = new Map<string, EntryState>();
-  const placements = new Map<string, EntryState>();
+  const entries = new Map<string, EntryState<Resource>>();
+  const placements = new Map<string, EntryState<Resource>>();
   const listeners = new Set<() => void>();
   let snapshot = emptySnapshot;
   let disposed = false;
@@ -256,7 +274,7 @@ export function createTerminalPresentationCache(
   };
 
   const reject = (
-    entry: Pick<EntryState, 'key'>,
+    entry: Pick<EntryState<Resource>, 'key'>,
     operation: string,
     result: Exclude<TerminalMutationResult, 'applied'>,
   ): Exclude<TerminalMutationResult, 'applied'> => {
@@ -264,7 +282,7 @@ export function createTerminalPresentationCache(
     return result;
   };
 
-  const invalidateAttachment = (entry: EntryState) => {
+  const invalidateAttachment = (entry: EntryState<Resource>) => {
     if (entry.attachment) {
       entry.attachment.active = false;
       entry.attachment = null;
@@ -279,7 +297,7 @@ export function createTerminalPresentationCache(
    * disposer cannot abort the surrounding transition. Releasing a visibility lease is cleanup
    * rather than mutation and stays accounted; only its publication waits for the transition.
    */
-  const releasePresentation = (entry: EntryState, operation: string) => {
+  const releasePresentation = (entry: EntryState<Resource>, operation: string) => {
     invalidateAttachment(entry);
     const installed = entry.resource;
     entry.resource = null;
@@ -300,7 +318,7 @@ export function createTerminalPresentationCache(
     });
   };
 
-  const cancelPendingHidden = (entry: EntryState) => {
+  const cancelPendingHidden = (entry: EntryState<Resource>) => {
     entry.pendingHidden?.cancel();
     entry.pendingHidden = null;
   };
@@ -310,7 +328,7 @@ export function createTerminalPresentationCache(
    * changed. Presence is frozen while a pending-hidden handoff is in flight so relocation and
    * StrictMode probes never publish a hidden state that consumers would act on.
    */
-  const syncPresence = (entry: EntryState): boolean => {
+  const syncPresence = (entry: EntryState<Resource>): boolean => {
     if (entry.pendingHidden) {
       return false;
     }
@@ -326,7 +344,7 @@ export function createTerminalPresentationCache(
     return true;
   };
 
-  const scheduleHidden = (entry: EntryState, releasedAt: number) => {
+  const scheduleHidden = (entry: EntryState<Resource>, releasedAt: number) => {
     cancelPendingHidden(entry);
     let canceled = false;
     const cancelScheduled = scheduleMicrotask(() => {
@@ -350,14 +368,15 @@ export function createTerminalPresentationCache(
   };
 
   /** Cleanup authority: the entry still exists, even if a transition is rejecting mutations. */
-  const entryIsLive = (entry: EntryState) =>
+  const entryIsLive = (entry: EntryState<Resource>) =>
     !disposed && entry.alive && entries.get(entry.key) === entry;
 
   /** Mutation authority: additionally requires that no caller-owned disposal is in flight. */
-  const entryIsCurrent = (entry: EntryState) => entryIsLive(entry) && !entry.transitioning;
+  const entryIsCurrent = (entry: EntryState<Resource>) =>
+    entryIsLive(entry) && !entry.transitioning;
 
   /** Drops real lease ownership while leaving published presence to the pending-hidden handoff. */
-  const releaseVisibilityOwnership = (entry: EntryState) => {
+  const releaseVisibilityOwnership = (entry: EntryState<Resource>) => {
     const wasOwned = entry.owningLeaseCount > 0;
     for (const lease of entry.leases) lease.owning = false;
     entry.owningLeaseCount = 0;
@@ -373,7 +392,11 @@ export function createTerminalPresentationCache(
    * previous holder rather than leaving two entries claiming the same slot: it loses the placement,
    * can no longer acquire visibility there, and hands its published presence off to the new holder.
    */
-  const claimPlacement = (entry: EntryState, placement: TerminalPlacement, operation: string) => {
+  const claimPlacement = (
+    entry: EntryState<Resource>,
+    placement: TerminalPlacement,
+    operation: string,
+  ) => {
     const key = terminalPlacementKey(placement);
     const holder = placements.get(key);
     if (holder && holder !== entry) {
@@ -393,7 +416,7 @@ export function createTerminalPresentationCache(
     }
   };
 
-  const releasePlacement = (entry: EntryState) => {
+  const releasePlacement = (entry: EntryState<Resource>) => {
     if (!entry.placement) return;
     const key = terminalPlacementKey(entry.placement);
     if (placements.get(key) === entry) {
@@ -402,7 +425,7 @@ export function createTerminalPresentationCache(
   };
 
   const attachmentResult = (
-    entry: EntryState,
+    entry: EntryState<Resource>,
     attachment: AttachmentState,
     operation: string,
   ): Exclude<TerminalMutationResult, 'applied'> | null => {
@@ -419,9 +442,9 @@ export function createTerminalPresentationCache(
   };
 
   const createAttachmentHandle = (
-    entry: EntryState,
+    entry: EntryState<Resource>,
     attachment: AttachmentState,
-  ): TerminalAttachmentHandle => ({
+  ): TerminalAttachmentHandle<Resource> => ({
     epoch: attachment.epoch,
     installResource(resource, measurement) {
       const rejected = attachmentResult(entry, attachment, 'install_resource');
@@ -485,11 +508,16 @@ export function createTerminalPresentationCache(
       });
     },
     isCurrentMutable() {
-      return attachmentResult(entry, attachment, 'is_current_mutable') === null;
+      return (
+        entryIsCurrent(entry) &&
+        entry.attachment?.token === attachment.token &&
+        attachment.active &&
+        entry.lifecycle !== 'sealed'
+      );
     },
   });
 
-  const createSessionHandle = (entry: EntryState): TerminalSessionHandle => ({
+  const createSessionHandle = (entry: EntryState<Resource>): TerminalSessionHandle<Resource> => ({
     identity: entry.identity,
     acquireVisibility(placement) {
       if (!entryIsCurrent(entry)) {
@@ -510,6 +538,7 @@ export function createTerminalPresentationCache(
       if (syncPresence(entry)) publish();
       return {
         status: 'acquired',
+        resource: entry.resource?.value ?? null,
         lease: {
           release() {
             if (lease.released) return;
@@ -548,7 +577,7 @@ export function createTerminalPresentationCache(
         reject(entry, 'begin_attachment', 'stale');
         return { status: 'stale' };
       }
-      return inTransaction<TerminalAttachmentStart>(() => {
+      return inTransaction<TerminalAttachmentStart<Resource>>(() => {
         releasePresentation(entry, 'begin_attachment');
         entry.attachmentEpoch += 1;
         const attachment: AttachmentState = {
@@ -593,7 +622,7 @@ export function createTerminalPresentationCache(
     },
   });
 
-  const invalidateEntry = (entry: EntryState, operation: string) => {
+  const invalidateEntry = (entry: EntryState<Resource>, operation: string) => {
     cancelPendingHidden(entry);
     // Kill the entry before caller-owned disposal so a re-entrant disposer cannot revive it.
     entry.alive = false;
@@ -606,7 +635,7 @@ export function createTerminalPresentationCache(
     entry.viewport = null;
   };
 
-  const removeEntry = (entry: EntryState, operation: string) => {
+  const removeEntry = (entry: EntryState<Resource>, operation: string) => {
     invalidateEntry(entry, operation);
     releasePlacement(entry);
     entries.delete(entry.key);
@@ -616,9 +645,9 @@ export function createTerminalPresentationCache(
     key: string,
     identity: TerminalSessionIdentity,
     initialPlacement: TerminalPlacement,
-  ): TerminalSessionHandle => {
+  ): TerminalSessionHandle<Resource> => {
     const createdAt = now();
-    const entry: EntryState = {
+    const entry: EntryState<Resource> = {
       key,
       identity: Object.freeze({ ...identity }),
       placement: null,
@@ -704,7 +733,9 @@ export function createTerminalPresentationCache(
   };
 }
 
-function buildSnapshot(entries: ReadonlyMap<string, EntryState>): TerminalCacheSnapshot {
+function buildSnapshot<Resource extends TerminalPresentationResource>(
+  entries: ReadonlyMap<string, EntryState<Resource>>,
+): TerminalCacheSnapshot {
   const snapshots = [...entries.values()]
     .sort((left, right) => left.key.localeCompare(right.key))
     .map<TerminalEntrySnapshot>((entry) =>

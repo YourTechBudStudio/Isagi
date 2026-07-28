@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { calculateTerminalFit } from './ptyFit.js';
+import { calculateTerminalFit } from './terminal-geometry.js';
 
 test('terminal fit uses host size minus terminal padding', () => {
   assert.deepEqual(

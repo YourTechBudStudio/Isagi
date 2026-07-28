@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { EmptyState } from '../../components/EmptyState.js';
 import { TooltipDelayProvider } from '../../components/Tooltip.js';
 import { workspaceBootCopy } from '../../copy/index.js';
+import { useClientSettingsQuery } from '../../lib/client-settings/queries.js';
 import { EASE_EXPO, DURATION } from '../../lib/motion.js';
 import {
   handleDispatchedCommandError,
@@ -20,6 +21,7 @@ import { paneDeleteKey, useRunDelete } from '../../lib/workspace/pending-deletes
 import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queries.js';
 import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { TerminalPresentationProvider } from '../../lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
 import { WorkArea } from './WorkArea.js';
@@ -73,11 +75,13 @@ export function WorkspacePage() {
   const zen = useWorkspaceStore((state) => state.zen);
   const setZen = useWorkspaceStore((state) => state.setZen);
   const workspace = useWorkspaceQuery();
+  const clientSettings = useClientSettingsQuery();
   const { activeSurface, activeWorktreeId } = useWorkspace();
   const dispatchCommand = useCommandDispatcher();
   const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
   const runDelete = useRunDelete();
   const workspaceErrorIsFatal = Boolean(workspace.error && !workspace.data);
+  const settingsErrorIsFatal = Boolean(clientSettings.error && !clientSettings.data);
   const hasConfiguredProjects =
     !workspaceErrorIsFatal && (workspace.data?.projects.length ?? 0) > 0;
   const paletteOpen = usePaletteStore((state) => state.open);
@@ -167,15 +171,20 @@ export function WorkspacePage() {
             }`}
           >
             {!hasConfiguredProjects && <FirstRunDragRegion />}
-            {workspace.isPending && !workspace.data ? (
+            {(workspace.isPending && !workspace.data) ||
+            (clientSettings.isPending && !clientSettings.data) ? (
               <WorkspaceBootSurface />
-            ) : workspaceErrorIsFatal ? (
-              <WorkspaceRuntimeError error={formatRuntimeError(workspace.error)} />
+            ) : workspaceErrorIsFatal || settingsErrorIsFatal ? (
+              <WorkspaceRuntimeError
+                error={formatRuntimeError(workspace.error ?? clientSettings.error)}
+              />
+            ) : !clientSettings.data ? (
+              <WorkspaceBootSurface />
             ) : (
-              <>
+              <TerminalPresentationProvider settings={clientSettings.data.terminal}>
                 {hasConfiguredProjects && <Rail />}
                 <WorkArea />
-              </>
+              </TerminalPresentationProvider>
             )}
           </div>
           <CommandPalette />

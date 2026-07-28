@@ -307,5 +307,10 @@ const ptySocketErrorByReason: Readonly<Record<PtySocketErrorReason, string>> = {
 
 export const ptySocketErrorCopy = {
   byReason: (reason: PtySocketErrorReason): string => ptySocketErrorByReason[reason],
-  connectFailed: (detail: string) => `Couldn't connect to this session: ${detail}\r\n`,
+  /**
+   * The line a terminal shows in its own buffer when the attach never happened.
+   * `detail` is the already-formatted, web-owned failure line (summary plus its
+   * diagnostic `code · request` suffix) — never a runtime-authored message.
+   */
+  connectFailed: (detail: string) => `\r\n${detail}\r\n`,
 } as const;

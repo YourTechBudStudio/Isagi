@@ -312,7 +312,7 @@ body::after {
 
 /* xterm v6 draws its own overlay scrollbar — a DOM slider, not a native one —
    so the global ::-webkit-scrollbar rules can't reach it. Its color is themed
-   in PtySurface (scrollbarSlider* keys); here we only match the app's
+   in terminal-appearance.ts (scrollbarSlider* keys); here we only match the app's
    floating-pill shape. A transparent inset clips the themed background into a
    slim rounded sliver. Specificity must beat xterm's injected
    `.xterm .xterm-scrollable-element > .scrollbar > .slider` rule, hence the
