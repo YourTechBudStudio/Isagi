@@ -107,6 +107,15 @@ export const ptyCopy = {
     body: "The stream ended before the session was whole. Isagi is showing nothing rather than part of a session you'd have no reason to trust.",
     action: 'Try again',
   },
+  sealed: {
+    exited: 'Process exited. Final output is retained.',
+    moved: 'Attachment moved. Final output is retained.',
+    disconnected: 'Connection ended. Final output is retained.',
+    errored: 'Connection failed. Final output is retained.',
+    superseded: 'Attachment was replaced. Final output is retained.',
+    reconnect: 'Reconnect',
+    startFresh: 'Start fresh',
+  },
   sessionStatus: (
     status: SessionStatus | null,
     statusReason: AgentSessionStatusReason | TerminalSessionStatusReason | null,

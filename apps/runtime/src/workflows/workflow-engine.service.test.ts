@@ -4227,6 +4227,7 @@ const seedDefaultWorkspace = Effect.gen(function* () {
 
 function fakeWorkspaceRepository(): WorkspaceRepositoryService {
   return {
+    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: (projectId) =>
       Effect.succeed(
         projectId === 1

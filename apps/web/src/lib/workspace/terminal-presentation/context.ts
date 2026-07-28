@@ -28,7 +28,18 @@ const idleSnapshot: TerminalAttachmentSnapshot = Object.freeze({
 export function useTerminalAttachmentResource(input: {
   readonly identity: TerminalSessionIdentity | null;
   readonly placement: TerminalPlacement;
-  readonly enabled: boolean;
+  /**
+   * Transport intent: open (or reopen) this session's socket. It collapses the moment a
+   * session exits or drops, which is why it must not decide retention.
+   */
+  readonly connect: boolean;
+  /**
+   * Rendering presence: this pane is on screen and will mount whatever terminal the cache
+   * holds for this session — a live one, or the sealed final output left behind by an exit.
+   * Retention keys off this, so a terminal a user can still see is never an eviction
+   * candidate.
+   */
+  readonly mounted: boolean;
   readonly attachmentRequest: number;
   readonly initiallyInteractive: boolean;
   readonly resolveUrl: () => Effect.Effect<string, Error>;
@@ -40,10 +51,11 @@ export function useTerminalAttachmentResource(input: {
   const identityKey = input.identity
     ? `${input.identity.kind}:${input.identity.sessionId}`
     : 'none';
-  const session = useMemo(
-    () => (input.identity ? workspace.cache.ensureSession(input.identity, input.placement) : null),
-    [workspace.cache, input.identity?.kind, input.identity?.sessionId],
-  );
+  const session = useMemo(() => {
+    if (!input.identity) return null;
+    const ensured = workspace.cache.ensureSession(input.identity, input.placement);
+    return ensured.status === 'ensured' ? ensured : null;
+  }, [workspace.cache, input.identity?.kind, input.identity?.sessionId]);
   // React state, not a ref: preparation resolves outside React's knowledge, and
   // the cache publication that accompanies installation may be rendered before
   // this value is written. A ref write would schedule no render and could strand
@@ -81,7 +93,7 @@ export function useTerminalAttachmentResource(input: {
   ]);
 
   useEffect(() => {
-    if (!input.enabled || !input.identity || !session) return;
+    if (!input.connect || !input.identity || !session) return;
     if (startedRequestRef.current === requestKey) return;
     startedRequestRef.current = requestKey;
     const existing = session.acquireVisibility(input.placement);
@@ -105,6 +117,16 @@ export function useTerminalAttachmentResource(input: {
       initiallyInteractive: input.initiallyInteractive,
       resolveUrl: input.resolveUrl,
       onEvent: (event) => workspace.onAttachmentEvent(identity, event),
+      onDiagnostic: (event) =>
+        workspace.diagnostics.record({
+          kind: event.kind,
+          reason: event.kind,
+          sessionKind: identity.kind,
+          sessionId: identity.sessionId,
+          worktreeId: input.placement.worktreeId,
+          value: event.value,
+        }),
+      onGauges: (gauges) => workspace.diagnostics.setGauges(gauges),
       initialViewport:
         workspace.cache
           .getSnapshot()
@@ -130,7 +152,7 @@ export function useTerminalAttachmentResource(input: {
       if (result.status === 'failed') setFailure({ identityKey, value: result.failure });
     });
   }, [
-    input.enabled,
+    input.connect,
     input.attachmentRequest,
     input.identity?.kind,
     input.identity?.sessionId,
@@ -154,8 +176,11 @@ export function useTerminalAttachmentResource(input: {
     readonly identityKey: string;
     readonly acquisition: TerminalVisibilityAcquisition<TerminalPresentationController>;
   } | null>(null);
+  // Held for as long as the pane is mounted, not for as long as it is connected. An exited
+  // session clears its connect intent while `PtyPane` keeps rendering the sealed terminal as
+  // final output; releasing here would hand retention a resource that is still on screen.
   useEffect(() => {
-    if (!session || !input.enabled) {
+    if (!session || !input.mounted) {
       setAcquiredResource(null);
       return;
     }
@@ -168,7 +193,7 @@ export function useTerminalAttachmentResource(input: {
     return () => acquisition.lease.release();
   }, [
     session,
-    input.enabled,
+    input.mounted,
     input.placement.worktreeId,
     input.placement.surfaceId,
     input.placement.paneId,

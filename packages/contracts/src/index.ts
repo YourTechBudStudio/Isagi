@@ -327,6 +327,7 @@ export {
   attentionSourceSchema,
   attentionStateSchema,
   commandChangedEventSchema,
+  durableSessionDeletedEventSchema,
   workflowRunChangedEventSchema,
   workflowRunClearedEventSchema,
   workflowRunSnapshotEventSchema,
@@ -349,6 +350,7 @@ export type {
   AttentionSourceIdentity,
   AttentionSourceRemovedEvent,
   AttentionState,
+  DurableSessionDeletedEvent,
   TerminalAttentionState,
   RuntimeEvent,
   RuntimeEventBase,
@@ -466,6 +468,8 @@ export {
   setActiveContextInputSchema,
   surfaceSchema,
   workspaceSnapshotSchema,
+  durableSessionIdentitySchema,
+  durableSessionInventorySchema,
   worktreeSchema,
 } from './workspace/types.js';
 export type {
@@ -481,6 +485,8 @@ export type {
   SetActiveContextOutput,
   WorkspaceSurfaceMetadata,
   WorkspaceSnapshot,
+  DurableSessionIdentity,
+  DurableSessionInventory,
   Worktree,
 } from './workspace/types.js';
 

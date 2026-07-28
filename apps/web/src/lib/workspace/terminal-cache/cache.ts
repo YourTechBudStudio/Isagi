@@ -13,6 +13,7 @@ import {
   type TerminalPlacement,
   type TerminalSessionIdentity,
 } from './identity.js';
+import { terminalRetentionCandidates } from './policy.js';
 import { normalizeViewportMemory, type TerminalViewportMemory } from './viewport.js';
 
 export type TerminalPresentationLifecycle = 'cold' | 'preparing' | 'hot' | 'sealed';
@@ -25,6 +26,7 @@ export interface TerminalPresentationResource {
 export interface TerminalEntrySnapshot {
   readonly key: string;
   readonly identity: TerminalSessionIdentity;
+  readonly worktreeId: number;
   /** `null` once another session claims this entry's pane slot; a move re-places it. */
   readonly placement: TerminalPlacement | null;
   readonly lifecycle: TerminalPresentationLifecycle;
@@ -53,6 +55,19 @@ export type TerminalMutationResult =
   | 'sealed'
   | 'invalid_state'
   | 'placement_mismatch';
+
+export interface TerminalSessionEnsureResult<
+  Resource extends TerminalPresentationResource,
+> extends TerminalSessionHandle<Resource> {
+  readonly status: 'ensured' | 'scope_mismatch';
+}
+
+/** Opaque authority for conditionally invalidating only the incarnation observed by a caller. */
+export interface TerminalEntryIncarnation {
+  readonly identity: TerminalSessionIdentity;
+  readonly worktreeId: number;
+  readonly invalidateIfCurrent: () => TerminalMutationResult;
+}
 
 export interface TerminalVisibilityLease {
   readonly release: () => void;
@@ -93,10 +108,12 @@ export interface TerminalSessionHandle<
   Resource extends TerminalPresentationResource = TerminalPresentationResource,
 > {
   readonly identity: TerminalSessionIdentity;
+  readonly worktreeId: number;
   readonly acquireVisibility: (
     placement: TerminalPlacement,
   ) => TerminalVisibilityAcquisition<Resource>;
   readonly movePlacement: (placement: TerminalPlacement) => TerminalMutationResult;
+  readonly unplace: () => TerminalMutationResult;
   readonly beginAttachment: () => TerminalAttachmentStart<Resource>;
   readonly updateViewport: (viewport: TerminalViewportMemory) => TerminalMutationResult;
   readonly evictPresentation: () => TerminalMutationResult;
@@ -114,19 +131,38 @@ export type TerminalCacheDiagnostic =
       readonly kind: 'resource_dispose_failed';
       readonly operation: string;
       readonly identityKey: string;
-      readonly error: unknown;
+      readonly reason: 'resource_dispose_threw';
     }
   | {
       readonly kind: 'placement_displaced';
       readonly operation: string;
       readonly identityKey: string;
       readonly placement: TerminalPlacement;
+    }
+  | {
+      readonly kind: 'scope_mismatch';
+      readonly operation: 'ensure_session' | 'move_placement' | 'delete_event';
+      readonly identityKey: string;
+      readonly expectedWorktreeId: number;
+      readonly receivedWorktreeId: number;
+    }
+  | {
+      readonly kind: 'presentation_evicted';
+      readonly identityKey: string;
+      readonly reason: 'ttl' | 'hidden_count' | 'memory_budget';
+      readonly estimatedBytes: number;
+    }
+  | {
+      readonly kind: 'visible_only_overage';
+      readonly estimatedBytes: number;
+      readonly budgetBytes: number;
     };
 
 export interface TerminalCacheDependencies {
   readonly settings: TerminalCacheSettings;
   readonly now?: (() => number) | undefined;
   readonly scheduleMicrotask?: ((callback: () => void) => () => void) | undefined;
+  readonly scheduleTimer?: ((delayMs: number, callback: () => void) => () => void) | undefined;
   readonly estimateBytes?: TerminalAccountingEstimator | undefined;
   readonly onDiagnostic?: ((diagnostic: TerminalCacheDiagnostic) => void) | undefined;
 }
@@ -138,13 +174,18 @@ export interface TerminalPresentationCache<
   readonly ensureSession: (
     identity: TerminalSessionIdentity,
     initialPlacement: TerminalPlacement,
-  ) => TerminalSessionHandle<Resource>;
+  ) => TerminalSessionEnsureResult<Resource>;
   readonly getSessionAtPlacement: (
     placement: TerminalPlacement,
   ) => TerminalSessionHandle<Resource> | null;
-  readonly sweepLiveSessions: (identities: readonly TerminalSessionIdentity[]) => void;
+  readonly getSession: (
+    identity: TerminalSessionIdentity,
+  ) => TerminalSessionHandle<Resource> | null;
+  readonly captureIncarnations: () => readonly TerminalEntryIncarnation[];
+  readonly invalidateWorktree: (worktreeId: number) => void;
   readonly getSnapshot: () => TerminalCacheSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly subscribeMembership: (listener: () => void) => () => void;
   readonly dispose: () => void;
 }
 
@@ -173,6 +214,8 @@ interface PresenceState {
 interface EntryState<Resource extends TerminalPresentationResource> {
   readonly key: string;
   readonly identity: TerminalSessionIdentity;
+  readonly worktreeId: number;
+  readonly incarnation: symbol;
   placement: TerminalPlacement | null;
   /** True only while caller-owned disposal runs; closes the entry to re-entrant mutation. */
   transitioning: boolean;
@@ -203,14 +246,19 @@ export function createTerminalPresentationCache<
   const settings = Object.freeze({ ...dependencies.settings });
   const now = dependencies.now ?? Date.now;
   const scheduleMicrotask = dependencies.scheduleMicrotask ?? defaultMicrotaskScheduler;
+  const scheduleTimer = dependencies.scheduleTimer ?? defaultTimerScheduler;
   const estimateBytes = dependencies.estimateBytes ?? estimateTerminalPresentationBytes;
   const entries = new Map<string, EntryState<Resource>>();
   const placements = new Map<string, EntryState<Resource>>();
   const listeners = new Set<() => void>();
+  const membershipListeners = new Set<() => void>();
   let snapshot = emptySnapshot;
   let disposed = false;
   let transactionDepth = 0;
   let publishPending = false;
+  let retentionCancel: (() => void) | null = null;
+  let retentionGeneration = 0;
+  let enforcementQueued = false;
   const pendingDiagnostics: TerminalCacheDiagnostic[] = [];
 
   /** A diagnostic sink is an observer: its failures never reach cache state or the caller. */
@@ -240,6 +288,9 @@ export function createTerminalPresentationCache<
     for (const listener of listeners) {
       listener();
     }
+  };
+  const emitMembership = () => {
+    for (const listener of membershipListeners) listener();
   };
 
   /**
@@ -310,8 +361,13 @@ export function createTerminalPresentationCache<
     inTransaction(() => {
       try {
         installed.value.dispose();
-      } catch (error) {
-        diagnose({ kind: 'resource_dispose_failed', operation, identityKey: entry.key, error });
+      } catch {
+        diagnose({
+          kind: 'resource_dispose_failed',
+          operation,
+          identityKey: entry.key,
+          reason: 'resource_dispose_threw',
+        });
       } finally {
         entry.transitioning = false;
       }
@@ -356,6 +412,7 @@ export function createTerminalPresentationCache<
       entry.lastHiddenAt = releasedAt;
       syncPresence(entry);
       publish();
+      queueRetentionEnforcement();
     });
     const cancel = () => {
       if (canceled) {
@@ -457,6 +514,7 @@ export function createTerminalPresentationCache<
       entry.resource = { value: resource, disposed: false };
       entry.estimatedBytes = estimatedBytes;
       publish();
+      queueRetentionEnforcement();
       return 'applied';
     },
     updateMeasurement(measurement) {
@@ -469,6 +527,7 @@ export function createTerminalPresentationCache<
       if (entry.estimatedBytes === estimatedBytes) return 'applied';
       entry.estimatedBytes = estimatedBytes;
       publish();
+      queueRetentionEnforcement();
       return 'applied';
     },
     markReady() {
@@ -519,6 +578,7 @@ export function createTerminalPresentationCache<
 
   const createSessionHandle = (entry: EntryState<Resource>): TerminalSessionHandle<Resource> => ({
     identity: entry.identity,
+    worktreeId: entry.worktreeId,
     acquireVisibility(placement) {
       if (!entryIsCurrent(entry)) {
         reject(entry, 'acquire_visibility', 'stale');
@@ -562,12 +622,33 @@ export function createTerminalPresentationCache<
     },
     movePlacement(placement) {
       if (!entryIsCurrent(entry)) return reject(entry, 'move_placement', 'stale');
+      if (placement.worktreeId !== entry.worktreeId) {
+        diagnose({
+          kind: 'scope_mismatch',
+          operation: 'move_placement',
+          identityKey: entry.key,
+          expectedWorktreeId: entry.worktreeId,
+          receivedWorktreeId: placement.worktreeId,
+        });
+        return 'placement_mismatch';
+      }
       if (entry.placement && terminalPlacementsEqual(entry.placement, placement)) return 'applied';
       return inTransaction(() => {
         releasePlacement(entry);
         // Relocation is a visibility transfer: presence stays published until the handoff commits.
         releaseVisibilityOwnership(entry);
         claimPlacement(entry, placement, 'move_placement');
+        publish();
+        return 'applied';
+      });
+    },
+    unplace() {
+      if (!entryIsCurrent(entry)) return reject(entry, 'unplace', 'stale');
+      if (!entry.placement) return 'applied';
+      return inTransaction(() => {
+        releasePlacement(entry);
+        entry.placement = null;
+        releaseVisibilityOwnership(entry);
         publish();
         return 'applied';
       });
@@ -639,17 +720,20 @@ export function createTerminalPresentationCache<
     invalidateEntry(entry, operation);
     releasePlacement(entry);
     entries.delete(entry.key);
+    emitMembership();
   };
 
   const createEntry = (
     key: string,
     identity: TerminalSessionIdentity,
     initialPlacement: TerminalPlacement,
-  ): TerminalSessionHandle<Resource> => {
+  ): TerminalSessionEnsureResult<Resource> => {
     const createdAt = now();
     const entry: EntryState<Resource> = {
       key,
       identity: Object.freeze({ ...identity }),
+      worktreeId: initialPlacement.worktreeId,
+      incarnation: Symbol(key),
       placement: null,
       transitioning: false,
       lifecycle: 'cold',
@@ -668,10 +752,89 @@ export function createTerminalPresentationCache<
       alive: true,
     };
     entries.set(key, entry);
+    emitMembership();
     claimPlacement(entry, initialPlacement, 'ensure_session');
     publish();
-    return createSessionHandle(entry);
+    return { status: 'ensured', ...createSessionHandle(entry) };
   };
+
+  const scopeMismatchHandle = (
+    identity: TerminalSessionIdentity,
+    worktreeId: number,
+  ): TerminalSessionEnsureResult<Resource> => ({
+    status: 'scope_mismatch',
+    identity: Object.freeze({ ...identity }),
+    worktreeId,
+    acquireVisibility: () => ({ status: 'stale' }),
+    movePlacement: () => 'stale',
+    unplace: () => 'stale',
+    beginAttachment: () => ({ status: 'stale' }),
+    updateViewport: () => 'stale',
+    evictPresentation: () => 'stale',
+    invalidate: () => 'stale',
+  });
+
+  const enforceRetention = () => {
+    if (disposed) return;
+    retentionCancel?.();
+    retentionCancel = null;
+    const generation = ++retentionGeneration;
+    inTransaction(() => {
+      const candidates = terminalRetentionCandidates(buildSnapshot(entries), settings, now());
+      for (const candidate of candidates) {
+        const entry = entries.get(candidate.key);
+        if (!entry || entry.presence.visible || !entry.resource) continue;
+        const ttlMs = settings.idleTtlMinutes * 60_000;
+        const reason =
+          ttlMs === 0 || now() - (entry.hiddenSince ?? now()) >= ttlMs
+            ? 'ttl'
+            : buildSnapshot(entries).totalEstimatedBytes >
+                settings.maxEstimatedBufferMiB * 1024 * 1024
+              ? 'memory_budget'
+              : 'hidden_count';
+        diagnose({
+          kind: 'presentation_evicted',
+          identityKey: entry.key,
+          reason,
+          estimatedBytes: entry.estimatedBytes,
+        });
+        releasePresentation(entry, 'retention');
+        entry.lifecycle = 'cold';
+        entry.sealReason = null;
+      }
+      if (candidates.length > 0) publish();
+      const current = buildSnapshot(entries);
+      const budgetBytes = settings.maxEstimatedBufferMiB * 1024 * 1024;
+      const visibleBytes = current.entries
+        .filter((entry) => entry.visible)
+        .reduce((total, entry) => total + entry.estimatedBytes, 0);
+      if (visibleBytes > budgetBytes) {
+        diagnose({ kind: 'visible_only_overage', estimatedBytes: visibleBytes, budgetBytes });
+      }
+    });
+    const ttlMs = settings.idleTtlMinutes * 60_000;
+    if (ttlMs === 0) return;
+    const next = [...entries.values()]
+      .filter((entry) => !entry.presence.visible && entry.resource && entry.hiddenSince !== null)
+      .reduce<number | null>((minimum, entry) => {
+        const expiry = (entry.hiddenSince ?? now()) + ttlMs;
+        return minimum === null ? expiry : Math.min(minimum, expiry);
+      }, null);
+    if (next === null) return;
+    retentionCancel = scheduleTimer(Math.max(0, next - now()), () => {
+      if (disposed || generation !== retentionGeneration) return;
+      enforceRetention();
+    });
+  };
+
+  function queueRetentionEnforcement() {
+    if (disposed || enforcementQueued) return;
+    enforcementQueued = true;
+    scheduleMicrotask(() => {
+      enforcementQueued = false;
+      enforceRetention();
+    });
+  }
 
   return {
     settings,
@@ -681,7 +844,19 @@ export function createTerminalPresentationCache<
       }
       const key = terminalSessionKey(identity);
       const existing = entries.get(key);
-      if (existing) return createSessionHandle(existing);
+      if (existing) {
+        if (existing.worktreeId !== initialPlacement.worktreeId) {
+          diagnose({
+            kind: 'scope_mismatch',
+            operation: 'ensure_session',
+            identityKey: key,
+            expectedWorktreeId: existing.worktreeId,
+            receivedWorktreeId: initialPlacement.worktreeId,
+          });
+          return scopeMismatchHandle(identity, initialPlacement.worktreeId);
+        }
+        return { status: 'ensured', ...createSessionHandle(existing) };
+      }
       return inTransaction(() => createEntry(key, identity, initialPlacement));
     },
     getSessionAtPlacement(placement) {
@@ -690,14 +865,35 @@ export function createTerminalPresentationCache<
       if (!entry || !entryIsCurrent(entry)) return null;
       return createSessionHandle(entry);
     },
-    sweepLiveSessions(identities) {
+    getSession(identity) {
+      if (disposed) return null;
+      const entry = entries.get(terminalSessionKey(identity));
+      return entry && entryIsCurrent(entry) ? createSessionHandle(entry) : null;
+    },
+    captureIncarnations() {
+      if (disposed) return [];
+      return [...entries.values()].map((entry) => ({
+        identity: entry.identity,
+        worktreeId: entry.worktreeId,
+        invalidateIfCurrent: () => {
+          if (!entryIsCurrent(entry) || entries.get(entry.key)?.incarnation !== entry.incarnation) {
+            return 'stale';
+          }
+          return inTransaction(() => {
+            removeEntry(entry, 'conditional_invalidate');
+            publish();
+            return 'applied';
+          });
+        },
+      }));
+    },
+    invalidateWorktree(worktreeId) {
       if (disposed) return;
-      const liveKeys = new Set(identities.map(terminalSessionKey));
       inTransaction(() => {
         let changed = false;
         for (const entry of [...entries.values()]) {
-          if (!liveKeys.has(entry.key)) {
-            removeEntry(entry, 'sweep_live_sessions');
+          if (entry.worktreeId === worktreeId) {
+            removeEntry(entry, 'invalidate_worktree');
             changed = true;
           }
         }
@@ -715,9 +911,17 @@ export function createTerminalPresentationCache<
         listeners.delete(listener);
       };
     },
+    subscribeMembership(listener) {
+      if (disposed) return () => {};
+      membershipListeners.add(listener);
+      return () => membershipListeners.delete(listener);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
+      retentionCancel?.();
+      retentionCancel = null;
+      retentionGeneration += 1;
       inTransaction(() => {
         // Every entry is cleaned up even if an individual resource disposal reports a failure.
         for (const entry of entries.values()) invalidateEntry(entry, 'dispose');
@@ -728,6 +932,7 @@ export function createTerminalPresentationCache<
         snapshot = emptySnapshot;
         for (const listener of listeners) listener();
         listeners.clear();
+        membershipListeners.clear();
       });
     },
   };
@@ -742,6 +947,7 @@ function buildSnapshot<Resource extends TerminalPresentationResource>(
       Object.freeze({
         key: entry.key,
         identity: entry.identity,
+        worktreeId: entry.worktreeId,
         placement: entry.placement,
         lifecycle: entry.lifecycle,
         sealReason: entry.sealReason,
@@ -758,6 +964,11 @@ function buildSnapshot<Resource extends TerminalPresentationResource>(
     entries: Object.freeze(snapshots),
     totalEstimatedBytes: snapshots.reduce((total, entry) => total + entry.estimatedBytes, 0),
   });
+}
+
+function defaultTimerScheduler(delayMs: number, callback: () => void): () => void {
+  const timer = setTimeout(callback, delayMs);
+  return () => clearTimeout(timer);
 }
 
 function defaultMicrotaskScheduler(callback: () => void): () => void {

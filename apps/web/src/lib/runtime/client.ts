@@ -62,6 +62,7 @@ import {
   type StartWorkflowOutput,
   type WorkflowRunControlOutput,
   type WorkspaceSnapshot,
+  type DurableSessionInventory,
 } from '@isagi/contracts';
 
 import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
@@ -79,6 +80,10 @@ export interface RuntimeClient {
   readonly fetchWorkspace: () => Effect.Effect<
     WorkspaceSnapshot,
     RuntimeEndpointError<typeof apiEndpoints.workspace.get>
+  >;
+  readonly fetchDurableSessions: () => Effect.Effect<
+    DurableSessionInventory,
+    RuntimeEndpointError<typeof apiEndpoints.workspace.durableSessions>
   >;
   readonly fetchWorktreeCommands: (
     worktreeId: number,
@@ -329,6 +334,7 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
   return {
     fetchClientSettings: () => request(apiEndpoints.clientSettings),
     fetchWorkspace: () => request(apiEndpoints.workspace.get),
+    fetchDurableSessions: () => request(apiEndpoints.workspace.durableSessions),
     fetchWorktreeCommands: (worktreeId) =>
       request(apiEndpoints.commands.listForWorktree, { worktreeId }),
     fetchCommandLogMetadata: (worktreeId, commandName) =>

@@ -11,7 +11,12 @@ import type {
   TerminalSessionMetadata,
 } from '@isagi/contracts';
 
-import { derivePaneView, type PaneConnectionSnapshot, type PtyPaneSession } from './view.js';
+import {
+  derivePaneAttachmentIntent,
+  derivePaneView,
+  type PaneConnectionSnapshot,
+  type PtyPaneSession,
+} from './view.js';
 
 const NO_CONNECTION: PaneConnectionSnapshot = { code: null, attachRequested: false };
 const LAUNCHABLE: HarnessLaunchProjection = { status: 'launchable' };
@@ -301,5 +306,29 @@ describe('derivePaneView', () => {
         },
       );
     });
+  });
+});
+
+describe('derivePaneAttachmentIntent', () => {
+  it('keeps rendering presence after an exit drops connect intent', () => {
+    const exited = agentSession({ status: 'exited', recoveryAction: 'resume_existing' });
+
+    // A sealed session: `usePaneSession` has cleared `userAttach` and the runtime no longer
+    // reports it running, so nothing wants the transport — but `PtyPane` still mounts the
+    // sealed terminal as final output, so the pane must keep its visibility lease.
+    assert.deepEqual(derivePaneAttachmentIntent(exited, false), {
+      connect: false,
+      mounted: true,
+    });
+  });
+
+  it('asks for transport only while something actually wants to be connected', () => {
+    const running = agentSession({ status: 'running', recoveryAction: 'connect_existing' });
+
+    assert.deepEqual(derivePaneAttachmentIntent(running, true), { connect: true, mounted: true });
+  });
+
+  it('claims neither for an unbound pane', () => {
+    assert.deepEqual(derivePaneAttachmentIntent(null, true), { connect: false, mounted: false });
   });
 });

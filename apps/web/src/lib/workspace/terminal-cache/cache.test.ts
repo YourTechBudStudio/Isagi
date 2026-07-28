@@ -36,6 +36,7 @@ function createHarness(
   let time = 1_000;
   let notifications = 0;
   const microtasks: Array<{ canceled: boolean; callback: () => void }> = [];
+  const timers: Array<{ canceled: boolean; delayMs: number; callback: () => void }> = [];
   const diagnostics: TerminalCacheDiagnostic[] = [];
   const cache = createTerminalPresentationCache({
     settings,
@@ -45,6 +46,13 @@ function createHarness(
       microtasks.push(task);
       return () => {
         task.canceled = true;
+      };
+    },
+    scheduleTimer: (delayMs, callback) => {
+      const timer = { canceled: false, delayMs, callback };
+      timers.push(timer);
+      return () => {
+        timer.canceled = true;
       };
     },
     estimateBytes,
@@ -72,6 +80,14 @@ function createHarness(
       for (const task of microtasks.splice(0)) {
         if (!task.canceled) task.callback();
       }
+    },
+    runNextTimer() {
+      const timer = timers.find((candidate) => !candidate.canceled);
+      if (timer) {
+        timer.canceled = true;
+        timer.callback();
+      }
+      return timer?.delayMs ?? null;
     },
   };
 }
@@ -209,6 +225,28 @@ describe('terminal presentation cache identity and snapshots', () => {
     // An unplaced session recovers by being explicitly placed again.
     assert.equal(holder.movePlacement(otherPlacement), 'applied');
     assert.equal(harness.cache.getSessionAtPlacement(otherPlacement)?.identity.sessionId, 7);
+  });
+
+  it('retains immutable durable scope across unplacement and rejects cross-worktree reuse', () => {
+    const harness = createHarness();
+    const session = harness.cache.ensureSession(identity, placement);
+    assert.equal(session.unplace(), 'applied');
+    assert.equal(harness.entry()?.placement, null);
+    assert.equal(harness.entry()?.worktreeId, 1);
+    assert.equal(session.movePlacement({ ...placement, worktreeId: 2 }), 'placement_mismatch');
+    const mismatch = harness.cache.ensureSession(identity, { ...placement, worktreeId: 2 });
+    assert.equal(mismatch.status, 'scope_mismatch');
+    assert.equal(harness.cache.getSnapshot().entries.length, 1);
+  });
+
+  it('conditionally invalidates only the captured opaque incarnation', () => {
+    const harness = createHarness();
+    const first = harness.cache.ensureSession(identity, placement);
+    const captured = harness.cache.captureIncarnations()[0];
+    first.invalidate();
+    harness.cache.ensureSession(identity, placement);
+    assert.equal(captured?.invalidateIfCurrent(), 'stale');
+    assert.equal(harness.cache.getSnapshot().entries.length, 1);
   });
 
   it('keeps immutable snapshot identity stable across reads and rejected operations', () => {
@@ -523,7 +561,7 @@ describe('terminal presentation resource disposal failures', () => {
           kind: 'resource_dispose_failed',
           operation: 'begin_attachment',
           identityKey: 'agent_session:7',
-          error: failure,
+          reason: 'resource_dispose_threw',
         },
       ],
     );
@@ -828,6 +866,77 @@ describe('terminal presentation visibility and placement', () => {
 });
 
 describe('terminal retention evaluation and disposal', () => {
+  it('enforces zero hidden retention only after the pending-hidden handoff', () => {
+    const harness = createHarness({
+      idleTtlMinutes: 0,
+      maxHiddenSessions: 0,
+      maxEstimatedBufferMiB: 0,
+    });
+    const session = harness.cache.ensureSession(identity, placement);
+    const attachment = startAttachment(session);
+    const resource = disposable();
+    attachment.installResource(resource.resource, cells(1));
+    attachment.markReady();
+    const lease = acquire(session);
+    harness.flushMicrotasks();
+    assert.equal(resource.calls, 0);
+    lease.release();
+    assert.equal(resource.calls, 0);
+    harness.flushMicrotasks();
+    harness.flushMicrotasks();
+    assert.equal(resource.calls, 1);
+    assert.equal(harness.entry()?.lifecycle, 'cold');
+  });
+
+  it('never evicts a sealed terminal a pane is still holding on screen', () => {
+    // The harshest retention policy there is: zero hidden slots, zero budget, zero TTL.
+    const harness = createHarness({
+      idleTtlMinutes: 0,
+      maxHiddenSessions: 0,
+      maxEstimatedBufferMiB: 0,
+    });
+    const session = harness.cache.ensureSession(identity, placement);
+    const attachment = startAttachment(session);
+    const resource = disposable();
+    attachment.installResource(resource.resource, cells(1));
+    attachment.markReady();
+    const lease = acquire(session);
+
+    // The process exits. Transport intent is gone, but the pane keeps its lease because it
+    // keeps rendering the sealed output as the session's final word.
+    assert.equal(attachment.seal('exited'), 'applied');
+    harness.flushMicrotasks();
+    harness.flushMicrotasks();
+    harness.setTime(1_000 + 10 * 60_000);
+    harness.flushMicrotasks();
+
+    assert.equal(resource.calls, 0, 'a visible sealed terminal is not an eviction candidate');
+    assert.equal(harness.entry()?.lifecycle, 'sealed');
+    assert.equal(harness.entry()?.visible, true);
+
+    // Unmounting the pane is what makes it collectable.
+    lease.release();
+    harness.flushMicrotasks();
+    harness.flushMicrotasks();
+    assert.equal(resource.calls, 1);
+    assert.equal(harness.entry()?.lifecycle, 'cold');
+  });
+
+  it('schedules the exact TTL and recomputes after suspension', () => {
+    const harness = createHarness({
+      ...defaultTerminalCacheSettings,
+      idleTtlMinutes: 180,
+    });
+    const session = harness.cache.ensureSession(identity, placement);
+    const attachment = startAttachment(session);
+    const resource = disposable();
+    attachment.installResource(resource.resource, cells(1));
+    attachment.markReady();
+    harness.flushMicrotasks();
+    harness.setTime(1_000 + 180 * 60_000);
+    assert.equal(harness.runNextTimer(), 180 * 60_000);
+    assert.equal(resource.calls, 1);
+  });
   it('calculates eligibility from snapshot, policy, and now with deterministic ties', () => {
     const harness = createHarness({
       ...defaultTerminalCacheSettings,
@@ -900,7 +1009,8 @@ describe('terminal retention evaluation and disposal', () => {
     );
     removed.updateViewport({ buffer: 'alternate', followLatest: true, columns: 80 });
 
-    harness.cache.sweepLiveSessions([identity]);
+    const captured = harness.cache.captureIncarnations();
+    captured.find((entry) => entry.identity.kind === 'terminal_session')?.invalidateIfCurrent();
     assert.deepEqual(
       harness.cache.getSnapshot().entries.map((entry) => entry.key),
       [terminalSessionKey(identity)],

@@ -14,6 +14,7 @@ import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspa
 import { WorkspaceError, WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
 import {
   deleteFixtures,
+  recordingInternalEvents,
   repositoryWithWorktrees,
   stateFileWithWriteCounter,
   testCommandService,
@@ -182,6 +183,83 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     'pty:22:1000',
     `git:-C ${fixtures.project.rootPath} worktree remove --force ${fixtures.targetWorktree.path}`,
     `db:${fixtures.targetWorktree.id}`,
+  ]);
+  fixtures.cleanup();
+});
+
+test('delete worktree announces every durable session it cascaded away', async () => {
+  const fixtures = deleteFixtures();
+  const order: string[] = [];
+  const bus = recordingInternalEvents();
+  const doomed = [
+    { kind: 'agent_session' as const, sessionId: 41, worktreeId: fixtures.targetWorktree.id },
+    { kind: 'terminal_session' as const, sessionId: 42, worktreeId: fixtures.targetWorktree.id },
+  ];
+  const repository = {
+    ...repositoryWithWorktrees({
+      project: fixtures.project,
+      worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+      durableSessions: [
+        ...doomed,
+        // A session in a worktree that survives must never be announced as deleted.
+        { kind: 'agent_session' as const, sessionId: 43, worktreeId: fixtures.rootWorktree.id },
+      ],
+    }),
+    deleteWorktree: () =>
+      Effect.sync(() => {
+        order.push('db_delete');
+        return true;
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const deleteGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() =>
+        args.includes('status') ? { stdout: '', stderr: '' } : { stdout: '', stderr: '' },
+      ),
+  } satisfies GitService;
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const workspace = yield* WorkspaceService;
+      return yield* workspace.deleteWorktree({
+        projectId: fixtures.project.id,
+        worktreeId: fixtures.targetWorktree.id,
+        request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
+      });
+    }).pipe(
+      Effect.provide(WorkspaceServiceLive),
+      Effect.provideService(CommandService, testCommandService),
+      Effect.provideService(PtyService, testPtyService),
+      Effect.provideService(InternalRuntimeEventBus, {
+        ...bus.service,
+        publish: (event) =>
+          Effect.sync(() => {
+            order.push(`publish:${event.type}`);
+          }).pipe(Effect.zipRight(bus.service.publish(event))),
+      }),
+      Effect.provideService(WorkspaceRepository, repository),
+      Effect.provideService(SurfaceRepository, testSurfaceRepository),
+      Effect.provideService(SurfaceService, testSurfaceService),
+      Effect.provideService(
+        StateFile,
+        stateFileWithWriteCounter(() => {}),
+      ),
+      Effect.provideService(Git, deleteGit),
+      Effect.provideService(DataDirectory, testDataDirectory),
+      Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+      Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+    ),
+  );
+
+  assert.deepEqual(
+    bus.published,
+    doomed.map((identity) => ({ type: 'durable_session_deleted', identity })),
+  );
+  // Announced only after the cascade committed, so no client can re-fetch the rows back.
+  assert.deepEqual(order, [
+    'db_delete',
+    'publish:durable_session_deleted',
+    'publish:durable_session_deleted',
   ]);
   fixtures.cleanup();
 });

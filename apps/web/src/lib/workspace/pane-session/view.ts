@@ -171,6 +171,27 @@ export function derivePaneView(
   };
 }
 
+/**
+ * What a mounted pane asks of the terminal cache. The two answers are deliberately
+ * independent:
+ *
+ *  - `connect` is transport intent. It collapses the moment a session exits or its socket
+ *    drops, because holding a dead socket open would be a lie.
+ *  - `mounted` is rendering presence. A pane bound to a session occupies its placement for
+ *    as long as it is on screen, and it keeps showing the sealed final output of a session
+ *    that already exited. Retention keys off this, so a terminal the user can still read is
+ *    never an eviction candidate.
+ *
+ * Collapsing the two — letting a lost connection also drop rendering presence — makes a
+ * visible sealed terminal look hidden, and retention will dispose it out from under the pane.
+ */
+export function derivePaneAttachmentIntent(
+  session: PtyPaneSession | null,
+  connectRequested: boolean,
+): { readonly connect: boolean; readonly mounted: boolean } {
+  return { connect: session !== null && connectRequested, mounted: session !== null };
+}
+
 // `connect_existing` attaches to an already-running process; the other recovery
 // actions relaunch/replace and therefore need a fresh process the launch policy
 // governs.

@@ -9,6 +9,24 @@ import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
 import { registerWorkspaceApi } from '../api.js';
 import { WorkspaceError, WorkspaceService, type WorkspaceServiceShape } from '../index.js';
 
+test('durable session inventory route returns the complete identity set', async () => {
+  const sessions = [
+    { kind: 'agent_session' as const, sessionId: 7, worktreeId: 2 },
+    { kind: 'terminal_session' as const, sessionId: 9, worktreeId: 3 },
+  ];
+  await withWorkspaceApi(
+    fakeWorkspaceService({ durableSessions: Effect.succeed({ sessions }) }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'GET',
+        url: '/api/v1/workspace/durable-sessions',
+      });
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.json().data, { sessions });
+    },
+  );
+});
+
 test('worktree delete route decodes params and body through the contract path', async () => {
   let input: {
     readonly projectId: number;
@@ -151,6 +169,7 @@ function fakeWorkspaceService(
 ): WorkspaceServiceShape {
   return {
     get: Effect.succeed(workspaceSnapshot),
+    durableSessions: Effect.succeed({ sessions: [] }),
     deleteProject: () => Effect.die('deleteProject is not used by workspace API tests'),
     getActiveContext: Effect.succeed({ activeContext: { projectId: null, worktreeId: null } }),
     listProjectBranches: () => Effect.succeed({ branches: [] }),

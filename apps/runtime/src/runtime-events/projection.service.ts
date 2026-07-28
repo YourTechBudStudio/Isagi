@@ -28,6 +28,7 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
     const attention = yield* AgentSessionAttentionProjection;
     const subscription = yield* internalBus.subscribe({
       types: [
+        'durable_session_deleted',
         'agent_session_changed',
         'terminal_session_changed',
         'surface_changed',
@@ -45,6 +46,14 @@ export const RuntimeEventProjectionLive = Layer.scopedDiscard(
       Effect.forever(
         Effect.gen(function* () {
           const event = yield* subscription.take;
+          if (event.type === 'durable_session_deleted') {
+            yield* publicBus.publish({
+              ...nextRuntimeEventEnvelope(),
+              type: 'durable_session_deleted',
+              payload: event.identity,
+            });
+            return;
+          }
           if (event.type === 'agent_session_changed') {
             const agent = yield* agents
               .find(event.agentSessionId)

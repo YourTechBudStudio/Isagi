@@ -8,6 +8,7 @@ import {
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
 import { workflowRunSummarySchema } from '../workflows/types.js';
+import { durableSessionIdentitySchema } from '../workspace/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
@@ -59,6 +60,7 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'workflow_run_snapshot',
   'workflow_run_changed',
   'workflow_run_cleared',
+  'durable_session_deleted',
 );
 
 export const runtimeEventInputTypeSchema = Schema.Literal(
@@ -166,6 +168,13 @@ export const attentionSourceRemovedEventSchema = Schema.Struct({
   }),
 });
 
+export const durableSessionDeletedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('durable_session_deleted'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: durableSessionIdentitySchema,
+});
+
 export const workflowRunSnapshotEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('workflow_run_snapshot'),
@@ -204,6 +213,7 @@ export const runtimeEventSchema = Schema.Union(
   workflowRunSnapshotEventSchema,
   workflowRunChangedEventSchema,
   workflowRunClearedEventSchema,
+  durableSessionDeletedEventSchema,
 );
 
 export type AttentionState = Schema.Schema.Type<typeof attentionStateSchema>;
@@ -231,3 +241,6 @@ export type WorkflowRunSnapshotEvent = Schema.Schema.Type<typeof workflowRunSnap
 export type WorkflowRunChangedEvent = Schema.Schema.Type<typeof workflowRunChangedEventSchema>;
 export type WorkflowRunClearedEvent = Schema.Schema.Type<typeof workflowRunClearedEventSchema>;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;
+export type DurableSessionDeletedEvent = Schema.Schema.Type<
+  typeof durableSessionDeletedEventSchema
+>;

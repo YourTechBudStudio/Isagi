@@ -16,6 +16,7 @@ import {
 } from '../../lib/workspace/pane-session/presentation.js';
 import {
   claimInputForSession,
+  derivePaneAttachmentIntent,
   derivePaneView,
   isLaunchBlockCode,
   isPtyWebSocketErrorCode,
@@ -60,6 +61,7 @@ export interface UsePaneSessionResult {
   readonly errored: boolean;
   readonly dimmed: boolean;
   readonly presentation: TerminalPresentationController | null;
+  readonly sealed: boolean;
   /**
    * The terminal itself failed to build for a session that is otherwise fine.
    * The pane shows web-owned copy plus this diagnostic detail and offers
@@ -123,7 +125,7 @@ export function usePaneSession({
   const sessionKind = session?.kind ?? null;
   const running =
     session !== null && (session.status === 'starting' || session.status === 'running');
-  const shouldConnect = session !== null && (running || userAttach);
+  const intent = derivePaneAttachmentIntent(session, running || userAttach);
   const initialInteractive = session?.status === 'running';
 
   const resolveUrl = useCallback(() => {
@@ -147,7 +149,8 @@ export function usePaneSession({
   const attachment = useTerminalAttachmentResource({
     identity: session ? { kind: session.kind, sessionId: session.id } : null,
     placement: { worktreeId, surfaceId, paneId },
-    enabled: session !== null && shouldConnect,
+    connect: intent.connect,
+    mounted: intent.mounted,
     attachmentRequest: attachEpoch,
     initiallyInteractive: initialInteractive,
     resolveUrl,
@@ -164,6 +167,7 @@ export function usePaneSession({
   };
   const exit: ExitInfo = attachment.snapshot.exit;
   const rendererWarning = attachment.snapshot.rendererWarning;
+  const sealed = attachment.snapshot.phase === 'sealed';
 
   // Reset connection-local state whenever the bound session identity changes.
   // Backend status / recovery updates flow through `derivePaneView` and must not
@@ -286,12 +290,13 @@ export function usePaneSession({
     ? 'error'
     : paneViewAttention(view, paneAttention, session);
   const dimmed =
-    view.kind === 'attachable' ||
-    view.kind === 'needs_fresh' ||
-    view.kind === 'moved' ||
-    view.kind === 'unsupported' ||
-    view.kind === 'blocked' ||
-    view.kind === 'unavailable';
+    !sealed &&
+    (view.kind === 'attachable' ||
+      view.kind === 'needs_fresh' ||
+      view.kind === 'moved' ||
+      view.kind === 'unsupported' ||
+      view.kind === 'blocked' ||
+      view.kind === 'unavailable');
   const errored =
     buildOrRestoreFailed ||
     view.kind === 'unsupported' ||
@@ -301,8 +306,15 @@ export function usePaneSession({
     ? ptyCopy.presentationFailed.status
     : restoreFailure
       ? ptyCopy.restoreIncomplete.status
-      : paneStatusLabel(view, session, connection.phase, exit);
-  const notice = paneNotice(view, session, connection, rendererWarning);
+      : sealed
+        ? attachment.snapshot.sealReason === 'exited'
+          ? 'Exited'
+          : 'Disconnected'
+        : paneStatusLabel(view, session, connection.phase, exit);
+  const notice =
+    sealed && !restoreFailure
+      ? ptyCopy.sealed[attachment.snapshot.sealReason ?? 'disconnected']
+      : paneNotice(view, session, connection, rendererWarning);
 
   return {
     view,
@@ -312,6 +324,7 @@ export function usePaneSession({
     errored,
     dimmed,
     presentation: attachment.resource,
+    sealed,
     presentationFailure,
     restoreFailure,
     attach,

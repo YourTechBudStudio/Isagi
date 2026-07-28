@@ -23,6 +23,7 @@ import {
 } from './query-keys.js';
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 import { useWorkspaceStore } from './store.js';
+import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
 import { useWorkflowRunStore } from './workflow-runs.js';
 
 const initialReconnectDelayMs = 500;
@@ -68,6 +69,7 @@ export function useRuntimeEventSubscription() {
           socket = nextSocket;
           nextSocket.addEventListener('open', () => {
             reconnectDelayMs = initialReconnectDelayMs;
+            publishTerminalWorkspaceFact({ type: 'runtime_connected' });
             sendRuntimeEventInput(nextSocket, { type: 'attention_snapshot_requested' });
             sendRuntimeEventInput(nextSocket, { type: 'workflow_run_snapshot_requested' });
           });
@@ -112,6 +114,7 @@ function decodeRuntimeEvent(data: unknown): RuntimeEvent | null {
 }
 
 export function handleRuntimeEvent(event: RuntimeEvent) {
+  publishTerminalWorkspaceFact({ type: 'runtime_event', event });
   switch (event.type) {
     case 'attention_snapshot':
       useAttentionStore.getState().replaceSources(event.payload.sources);
@@ -130,6 +133,8 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
       break;
     case 'workflow_run_cleared':
       useWorkflowRunStore.getState().clear(event.payload);
+      break;
+    case 'durable_session_deleted':
       break;
     case 'agent_session_changed':
     case 'terminal_session_changed':

@@ -6,12 +6,15 @@ import type { TerminalPresentationCache } from '../terminal-cache/index.js';
 import type { TerminalSessionIdentity } from '../terminal-cache/index.js';
 import type { TerminalPresentationController } from './controller.js';
 import type { TerminalAttachmentEvent } from './controller.js';
+import type { TerminalDiagnosticsCollector } from './diagnostics.js';
 
 export interface TerminalPresentationWorkspace {
   readonly cache: TerminalPresentationCache<TerminalPresentationController>;
   readonly parkingRoot: HTMLDivElement;
   readonly settings: TerminalSettings;
+  readonly diagnostics: TerminalDiagnosticsCollector;
   readonly dispose: () => void;
+  readonly start: () => void;
   readonly onAttachmentEvent: (
     identity: TerminalSessionIdentity,
     event: TerminalAttachmentEvent,

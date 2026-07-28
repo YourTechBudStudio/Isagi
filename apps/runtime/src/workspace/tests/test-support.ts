@@ -4,12 +4,17 @@ import { join } from 'node:path';
 
 import { Effect } from 'effect';
 
+import type { DurableSessionIdentity } from '@isagi/contracts';
+
 import type { CommandServiceShape } from '../../commands/index.js';
 import type { GitService } from '../../git/index.js';
 import { stateFromActiveContext, type StateFileService } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import type { PtyServiceShape } from '../../pty-processes/index.js';
-import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
+import type {
+  InternalRuntimeEvent,
+  InternalRuntimeEventBusService,
+} from '../../runtime-events/index.js';
 import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfaces/index.js';
 import type {
   WorktreeSetupRepositoryService,
@@ -149,11 +154,31 @@ export const testInternalEvents = {
     }),
 } satisfies InternalRuntimeEventBusService;
 
+/** An event bus that keeps what was published, so ordering against the DB cascade is assertable. */
+export function recordingInternalEvents() {
+  const published: InternalRuntimeEvent[] = [];
+  return {
+    published,
+    service: {
+      publish: (event: InternalRuntimeEvent) =>
+        Effect.sync(() => {
+          published.push(event);
+        }),
+      subscribe: () =>
+        Effect.succeed({
+          take: Effect.never,
+          unsubscribe: Effect.void,
+        }),
+    } satisfies InternalRuntimeEventBusService,
+  };
+}
+
 export function repositoryWith(input: {
   readonly project: ProjectRow | null;
   readonly worktree: WorktreeRow | null;
 }): WorkspaceRepositoryService {
   return {
+    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: (projectId) =>
       Effect.succeed(input.project && input.project.id === projectId ? input.project : null),
     findProjectByRootPath: () => Effect.succeed(input.project),
@@ -210,8 +235,10 @@ export function repositoryWith(input: {
 export function repositoryWithWorktrees(input: {
   readonly project: ProjectRow;
   readonly worktrees: readonly WorktreeRow[];
+  readonly durableSessions?: readonly DurableSessionIdentity[] | undefined;
 }): WorkspaceRepositoryService {
   return {
+    listDurableSessions: Effect.succeed({ sessions: input.durableSessions ?? [] }),
     findProject: (projectId) =>
       Effect.succeed(input.project.id === projectId ? input.project : null),
     findProjectByRootPath: (rootPath) =>

@@ -10,6 +10,7 @@ import {
   reconcileWorkspaceInputSchema,
   reconcileWorkspaceOutputSchema,
   workspaceSnapshotSchema,
+  durableSessionInventorySchema,
 } from './types.js';
 
 export const workspaceEndpoints = {
@@ -26,6 +27,13 @@ export const workspaceEndpoints = {
     path: '/workspace/active-context',
     output: activeContextOutputSchema,
     errors: workspaceActiveContextApiErrorSchema,
+  },
+  durableSessions: {
+    id: 'workspace.durableSessions',
+    method: 'GET',
+    path: '/workspace/durable-sessions',
+    output: durableSessionInventorySchema,
+    errors: workspaceGetApiErrorSchema,
   },
   setActiveContext: {
     id: 'workspace.setActiveContext',
@@ -53,6 +61,11 @@ export const workspaceEndpoints = {
     undefined,
     typeof activeContextOutputSchema,
     typeof workspaceActiveContextApiErrorSchema
+  >;
+  readonly durableSessions: ApiEndpoint<
+    undefined,
+    typeof durableSessionInventorySchema,
+    typeof workspaceGetApiErrorSchema
   >;
   readonly setActiveContext: ApiEndpoint<
     typeof activeContextPersistenceInputSchema,

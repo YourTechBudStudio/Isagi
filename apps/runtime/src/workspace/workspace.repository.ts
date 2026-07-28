@@ -1,6 +1,8 @@
 import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
+import type { DurableSessionInventory } from '@isagi/contracts';
+
 import {
   DatabaseError,
   RuntimeDatabase,
@@ -42,6 +44,12 @@ export interface WorktreeDeleteDiagnostics {
 }
 
 export interface WorkspaceRepositoryService {
+  /**
+   * Every durable session the runtime still owns, with its worktree scope. This is the
+   * authoritative set clients reconcile their cached terminals against, so it is required:
+   * an absent implementation would otherwise read as "all durable sessions are gone".
+   */
+  readonly listDurableSessions: Effect.Effect<DurableSessionInventory, DatabaseError>;
   readonly findProject: (projectId: number) => Effect.Effect<ProjectRow | null, DatabaseError>;
   readonly findProjectByRootPath: (
     rootPath: string,
@@ -96,6 +104,29 @@ export const WorkspaceRepositoryLive = Layer.effect(
     const database = yield* RuntimeDatabase;
 
     return {
+      listDurableSessions: Effect.all([
+        database.use('list_agent_session_identities', (db) =>
+          db
+            .select({ sessionId: agentSessions.id, worktreeId: agentSessions.worktreeId })
+            .from(agentSessions)
+            .orderBy(agentSessions.id)
+            .all(),
+        ),
+        database.use('list_terminal_session_identities', (db) =>
+          db
+            .select({ sessionId: terminalSessions.id, worktreeId: terminalSessions.worktreeId })
+            .from(terminalSessions)
+            .orderBy(terminalSessions.id)
+            .all(),
+        ),
+      ]).pipe(
+        Effect.map(([agents, terminals]) => ({
+          sessions: [
+            ...agents.map((identity) => ({ kind: 'agent_session' as const, ...identity })),
+            ...terminals.map((identity) => ({ kind: 'terminal_session' as const, ...identity })),
+          ],
+        })),
+      ),
       findProject: (projectId) =>
         database.use<ProjectRow | null>('find_project', (db) => {
           const row = db.select().from(projects).where(eq(projects.id, projectId)).get();

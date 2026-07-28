@@ -68,6 +68,16 @@ export const workspaceSnapshotSchema = Schema.Struct({
   projects: Schema.Array(projectSchema),
 });
 
+export const durableSessionIdentitySchema = Schema.Struct({
+  kind: paneSessionKindSchema,
+  sessionId: positiveIntegerSchema,
+  worktreeId: positiveIntegerSchema,
+});
+
+export const durableSessionInventorySchema = Schema.Struct({
+  sessions: Schema.Array(durableSessionIdentitySchema),
+});
+
 export const setActiveContextInputSchema = Schema.Union(
   activeSelectionSchema,
   emptyActiveContextSchema,
@@ -119,6 +129,8 @@ export const reconcileWorkspaceOutputSchema = Schema.Struct({
 
 export type ProjectStatus = Schema.Schema.Type<typeof projectStatusSchema>;
 export type WorkspaceSnapshot = Schema.Schema.Type<typeof workspaceSnapshotSchema>;
+export type DurableSessionIdentity = Schema.Schema.Type<typeof durableSessionIdentitySchema>;
+export type DurableSessionInventory = Schema.Schema.Type<typeof durableSessionInventorySchema>;
 export type SetActiveContextInput = Schema.Schema.Type<typeof setActiveContextInputSchema>;
 export type ActiveContextPersistenceInput = Schema.Schema.Type<
   typeof activeContextPersistenceInputSchema

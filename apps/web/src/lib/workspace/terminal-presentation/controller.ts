@@ -21,6 +21,7 @@ import {
 } from '../terminal-cache/index.js';
 import { createScopedLifecycle } from '../terminal-cache/scoped-lifecycle.js';
 import { createTerminalSlotArbiter } from '../terminal-cache/slot-arbiter.js';
+import type { TerminalDiagnosticGauges } from './diagnostics.js';
 import type { TerminalPresentationEnvironment } from './environment.js';
 import { createTerminalReplayGate, type TerminalReplayGateFailure } from './replay-gate.js';
 import {
@@ -75,6 +76,18 @@ export interface CreateTerminalPresentationControllerInput {
   readonly onEvent: (event: TerminalAttachmentEvent) => void;
   readonly initialViewport: TerminalViewportMemory | null;
   readonly onViewport: (viewport: TerminalViewportMemory) => void;
+  readonly onDiagnostic?:
+    | ((event: {
+        readonly kind:
+          | 'replay_duration'
+          | 'reveal_duration'
+          | 'webgl_context_loss'
+          | 'socket_opened'
+          | 'socket_closed';
+        readonly value: number;
+      }) => void)
+    | undefined;
+  readonly onGauges?: ((gauges: TerminalDiagnosticGauges) => void) | undefined;
   readonly parkingRoot: HTMLElement;
   readonly onCustomKey?:
     | ((event: KeyboardEvent, sendInput: (data: string) => void) => boolean)
@@ -123,6 +136,8 @@ export function createTerminalPresentationController(
     readiness: Object.freeze({ phase: 'covered' }),
   });
   const listeners = new Set<() => void>();
+  let replayStartedAt: number | null = null;
+  let revealStartedAt: number | null = null;
   const transport = createPtyStreamTransport();
   transport.beginAttach(input.initiallyInteractive);
   let disposed = false;
@@ -214,6 +229,7 @@ export function createTerminalPresentationController(
       const owned = { id: Symbol('terminal-webgl'), addon };
       webgl = owned;
       addon.onContextLoss(() => {
+        input.onDiagnostic?.({ kind: 'webgl_context_loss', value: 1 });
         if (!current() || webgl?.id !== owned.id) return;
         webglLostThisActivation = true;
         disposeWebgl();
@@ -374,6 +390,7 @@ export function createTerminalPresentationController(
           if (!current() || socket !== opened) return;
           publish({ phase: 'attached' });
           transport.handleOpen();
+          input.onDiagnostic?.({ kind: 'socket_opened', value: 1 });
           if (lastGeometry) transport.sendResize(lastGeometry.cols, lastGeometry.rows);
         });
         opened.addEventListener('message', (event) => {
@@ -398,6 +415,7 @@ export function createTerminalPresentationController(
           opened.close();
         });
         opened.addEventListener('close', () => {
+          input.onDiagnostic?.({ kind: 'socket_closed', value: 1 });
           if (!current() || socket !== opened || snapshot.sealReason) return;
           seal('disconnected');
         });
@@ -420,9 +438,18 @@ export function createTerminalPresentationController(
         transport.pushOutput(message.data);
         return;
       case 'replay_start':
+        replayStartedAt = env.monotonicNow();
         publish({ phase: 'replaying' });
         return;
       case 'replay_end':
+        if (replayStartedAt !== null) {
+          input.onDiagnostic?.({
+            kind: 'replay_duration',
+            value: Math.max(0, env.monotonicNow() - replayStartedAt),
+          });
+          replayStartedAt = null;
+        }
+        revealStartedAt = env.monotonicNow();
         publish({ phase: 'attached' });
         beginReplayBarrier();
         return;
@@ -478,6 +505,14 @@ export function createTerminalPresentationController(
     input.attachment.updateMeasurement({
       normalCells: terminal.buffer.normal.length * terminal.cols,
       alternateCells: terminal.buffer.alternate.length * terminal.cols,
+    });
+    input.onGauges?.({
+      bufferType: terminal.buffer.active.type === 'alternate' ? 1 : 0,
+      normalBufferRows: terminal.buffer.normal.length,
+      alternateBufferRows: terminal.buffer.alternate.length,
+      terminalColumns: terminal.cols,
+      viewportRow: terminal.buffer.active.viewportY,
+      baseRow: terminal.buffer.active.baseY,
     });
     // Everything a cold terminal observes before it reaches its remembered
     // viewport is an artefact of the rebuild, not a place the user chose to be.
@@ -580,6 +615,13 @@ export function createTerminalPresentationController(
         return;
       cancelRenderBarrier();
       if (!replayGate.reveal()) return;
+      if (revealStartedAt !== null) {
+        input.onDiagnostic?.({
+          kind: 'reveal_duration',
+          value: Math.max(0, env.monotonicNow() - revealStartedAt),
+        });
+        revealStartedAt = null;
+      }
       publish({ readiness: Object.freeze({ phase: 'revealed' }) });
       if (!current() || snapshot.sealReason) return;
       replayGate.drain();

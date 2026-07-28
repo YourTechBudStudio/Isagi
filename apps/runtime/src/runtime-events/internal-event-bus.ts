@@ -1,10 +1,15 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
 import type { SessionStatus, SurfaceChangedEvent, WorkflowEvent } from '@isagi/contracts';
+import type { DurableSessionIdentity } from '@isagi/contracts';
 
 type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
 
 export type InternalRuntimeEvent =
+  | {
+      readonly type: 'durable_session_deleted';
+      readonly identity: DurableSessionIdentity;
+    }
   | {
       readonly type: 'agent_session_changed';
       readonly agentSessionId: number;

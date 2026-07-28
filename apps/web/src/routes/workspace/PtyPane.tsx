@@ -85,6 +85,7 @@ export function PtyPane({
     errored,
     dimmed,
     presentation,
+    sealed,
     presentationFailure,
     restoreFailure,
     attach,
@@ -210,7 +211,27 @@ export function PtyPane({
           {notice}
         </div>
       ) : null}
-      {view.kind === 'unsupported' ? (
+      {sealed && presentation && !restoreFailure ? (
+        <div className="relative flex min-h-0 flex-1">
+          <PaneTerminal
+            surfaceId={surface.id}
+            paneId={pane.id}
+            focused={focused}
+            presentation={presentation}
+          />
+          <div className="absolute right-3 bottom-3 rounded-md border border-line/20 bg-elevated/90 p-1 shadow-soft backdrop-blur-sm">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={view.kind === 'needs_fresh' ? startFresh : attach}
+              disabled={startFreshPending}
+            >
+              <RotateCw size={13} />
+              {view.kind === 'needs_fresh' ? ptyCopy.sealed.startFresh : ptyCopy.sealed.reconnect}
+            </Button>
+          </div>
+        </div>
+      ) : view.kind === 'unsupported' ? (
         withPaneMenu(
           <div className="flex min-h-0 flex-1">
             <UnsupportedPrompt onDelete={onDelete} disabled={actionsLocked} />

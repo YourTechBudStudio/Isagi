@@ -432,6 +432,7 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
 
 export function repository(rootPath: string): WorkspaceRepositoryService {
   return {
+    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: () => Effect.succeed(null),
     findProjectByRootPath: () => Effect.succeed(null),
     findWorktree: (worktreeId) =>

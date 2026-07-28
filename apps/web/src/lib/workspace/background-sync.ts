@@ -13,6 +13,7 @@ import { runRuntimeEffect } from '../runtime/run.js';
 import { showToast } from '../toast/index.js';
 import { activeContextQueryKey, workspaceQueryKey } from './query-keys.js';
 import { reconcileWorkspace, updateActiveContext } from './runtime-data.js';
+import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
 
 let scheduledActiveContext: ActiveContextPersistenceInput | null = null;
 let activeContextInFlight: ActiveContextPersistenceInput | null = null;
@@ -109,6 +110,7 @@ export function scheduleWorkspaceReconcile(
       async (output) => {
         handleReconciliationFindings(output.findings);
         await client.invalidateQueries({ queryKey: workspaceQueryKey });
+        publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
       },
       (error: unknown) => {
         console.error('[workspace] reconciliation failed', error);

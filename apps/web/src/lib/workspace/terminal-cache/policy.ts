@@ -13,32 +13,33 @@ export function terminalRetentionCandidates(
   const ordered = [...hidden].sort(compareRetentionOrder);
   const ttlMilliseconds = settings.idleTtlMinutes * 60_000;
   const byteLimit = settings.maxEstimatedBufferMiB * 1024 * 1024;
-  const retained = new Set(ordered);
+  const evicted = new Set<TerminalEntrySnapshot>();
 
   for (const entry of ordered) {
     if (ttlMilliseconds === 0 || now - (entry.hiddenSince ?? now) >= ttlMilliseconds) {
-      retained.delete(entry);
+      evicted.add(entry);
     }
   }
 
-  const newestFirst = [...retained].reverse();
-  for (const entry of newestFirst.slice(settings.maxHiddenSessions)) {
-    retained.delete(entry);
+  const retainedNewestFirst = ordered.filter((entry) => !evicted.has(entry)).reverse();
+  for (const entry of retainedNewestFirst.slice(settings.maxHiddenSessions)) {
+    evicted.add(entry);
   }
 
-  let retainedBytes = newestFirst
-    .filter((entry) => retained.has(entry))
-    .reduce((total, entry) => total + entry.estimatedBytes, 0);
+  let retainedBytes =
+    snapshot.totalEstimatedBytes -
+    [...evicted].reduce((total, entry) => total + entry.estimatedBytes, 0);
   for (const entry of ordered) {
     if (retainedBytes <= byteLimit) {
       break;
     }
-    if (retained.delete(entry)) {
+    if (!evicted.has(entry)) {
+      evicted.add(entry);
       retainedBytes -= entry.estimatedBytes;
     }
   }
 
-  return Object.freeze(ordered.filter((entry) => !retained.has(entry)));
+  return Object.freeze(ordered.filter((entry) => evicted.has(entry)));
 }
 
 function compareRetentionOrder(left: TerminalEntrySnapshot, right: TerminalEntrySnapshot): number {

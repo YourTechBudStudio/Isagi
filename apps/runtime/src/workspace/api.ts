@@ -45,6 +45,16 @@ export function registerWorkspaceApi(
     run,
   });
 
+  registerApiEndpoint(fastify, apiEndpoints.workspace.durableSessions, {
+    handle: () =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.durableSessions;
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
   registerApiEndpoint(fastify, apiEndpoints.workspace.setActiveContext, {
     handle: (input) =>
       Effect.gen(function* () {

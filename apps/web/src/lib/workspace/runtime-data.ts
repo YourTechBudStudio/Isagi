@@ -47,6 +47,7 @@ import type {
   StartWorkflowInput,
   StartWorkflowOutput,
   WorkflowRunControlOutput,
+  DurableSessionInventory,
 } from '@isagi/contracts';
 
 import { runtimeErrorCopy } from '../../copy/index.js';
@@ -71,6 +72,10 @@ export function fetchClientSettings(): Effect.Effect<ClientSettingsOutput, Error
 
 export function fetchWorkspace() {
   return getClient().pipe(Effect.flatMap((client) => client.fetchWorkspace()));
+}
+
+export function fetchDurableSessions(): Effect.Effect<DurableSessionInventory, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.fetchDurableSessions()));
 }
 
 export function fetchWorktreeCommands(

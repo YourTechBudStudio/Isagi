@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 
 import { Effect } from 'effect';
 
@@ -17,8 +17,8 @@ const PLACEMENT = { worktreeId: 1, surfaceId: 2, paneId: 3 } as const;
 const IDENTITY = { kind: 'agent_session', sessionId: 7 } as const;
 
 describe('terminal presentation preparation', () => {
-  it('builds no terminal until the terminal font is ready', async () => {
-    const { env, attachment, start } = begin();
+  it('builds no terminal until the terminal font is ready', async (t) => {
+    const { env, attachment, start } = begin(t);
     const pending = start();
     await settle();
 
@@ -34,8 +34,8 @@ describe('terminal presentation preparation', () => {
     if (result.status === 'started') result.controller.dispose();
   });
 
-  it('releases the reserved entry when a newer request supersedes the wait', async () => {
-    const { env, attachment, start } = begin();
+  it('releases the reserved entry when a newer request supersedes the wait', async (t) => {
+    const { env, attachment, start } = begin(t);
     const pending = start(() => true);
     env.resolveFonts();
     const result = await pending;
@@ -49,8 +49,8 @@ describe('terminal presentation preparation', () => {
     );
   });
 
-  it('reports construction failure with diagnostic detail instead of swallowing it', async () => {
-    const { env, attachment, start } = begin();
+  it('reports construction failure with diagnostic detail instead of swallowing it', async (t) => {
+    const { env, attachment, start } = begin(t);
     env.terminalCreationFailure = 'WebGL2RenderingContext is not available';
     const pending = start();
     env.resolveFonts();
@@ -65,11 +65,15 @@ describe('terminal presentation preparation', () => {
   });
 });
 
-function begin() {
+// A cache that installs a hidden resource arms its idle-TTL timer — three hours by default.
+// Whoever owns the cache owns disposing it; leaving it alive keeps the timer referenced and
+// the test process never exits.
+function begin(t: TestContext) {
   const env = createFakeTerminalEnvironment();
   const cache = createTerminalPresentationCache<TerminalPresentationController>({
     settings: terminalSettingsDefaults.cache,
   });
+  t.after(() => cache.dispose());
   const session = cache.ensureSession(IDENTITY, PLACEMENT);
   const started = session.beginAttachment();
   if (started.status !== 'started') throw new Error('Expected attachment.');

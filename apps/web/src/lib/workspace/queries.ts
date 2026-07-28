@@ -68,6 +68,7 @@ import {
   stopCommand,
 } from './runtime-data.js';
 import { useWorkspaceStore } from './store.js';
+import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
 
 export function useWorkspaceQuery() {
   return useQuery({
@@ -284,7 +285,17 @@ export function useDeleteProjectMutation() {
       });
       console.error('[workspace] project deletion failed', error);
     },
-    onSuccess: () => commitDeleteProjectSuccess(client),
+    onSuccess: (_output, projectId) => {
+      const worktreeIds =
+        client
+          .getQueryData<WorkspaceData>(workspaceQueryKey)
+          ?.projects.find((project) => project.id === projectId)
+          ?.worktrees.map((worktree) => worktree.id) ?? [];
+      for (const worktreeId of worktreeIds) {
+        publishTerminalWorkspaceFact({ type: 'durable_worktree_deleted', worktreeId });
+      }
+      return commitDeleteProjectSuccess(client);
+    },
   });
 }
 
@@ -521,6 +532,12 @@ export async function commitDeleteSurfaceSuccess(
   });
 
   const store = useWorkspaceStore.getState();
+  publishTerminalWorkspaceFact({
+    type: 'placement_removed',
+    worktreeId: input.worktreeId,
+    surfaceId: input.surfaceId,
+    ...(input.output.deletedSurfaceId === input.surfaceId ? {} : { paneId: input.paneId }),
+  });
   if (input.output.deletedSurfaceId === input.surfaceId) {
     cancelWorkbenchFocusPersistence(input.worktreeId);
     client.removeQueries({ queryKey: surfaceDetailQueryKey(input.surfaceId), exact: true });
@@ -538,6 +555,10 @@ export async function commitDeleteWorktreeSuccess(
   fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
     runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
 ) {
+  publishTerminalWorkspaceFact({
+    type: 'durable_worktree_deleted',
+    worktreeId: output.deletedWorktreeId,
+  });
   const data = await client.fetchQuery({
     queryKey: workspaceQueryKey,
     queryFn: ({ signal }) => fetchWorkspaceData(signal),
@@ -585,6 +606,7 @@ export async function commitRelocateProjectSuccess(
 
 export async function commitDeleteProjectSuccess(client: QueryClient) {
   await client.invalidateQueries({ queryKey: workspaceQueryKey });
+  publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
 }
 
 export { formatRuntimeError };

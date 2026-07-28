@@ -154,6 +154,7 @@ export function createFakeTerminalEnvironment(): FakeTerminalEnvironment {
     resolveFonts: () => releaseFonts(),
 
     createHost: () => new FakeElement('host').asElement() as HTMLDivElement,
+    monotonicNow: () => 0,
     createTerminal: (options) => {
       if (env.terminalCreationFailure) throw new Error(env.terminalCreationFailure);
       const terminal = new FakeTerminalImpl(options.scrollOnUserInput);

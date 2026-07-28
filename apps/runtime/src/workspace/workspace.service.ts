@@ -24,6 +24,8 @@ import type {
   RelocateProjectOutput,
   WorkspaceSnapshot,
   WorktreeBaseRef,
+  DurableSessionIdentity,
+  DurableSessionInventory,
 } from '@isagi/contracts';
 
 import { CommandService } from '../commands/index.js';
@@ -110,6 +112,7 @@ export type WorkspaceServiceError =
 
 export interface WorkspaceService {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
+  readonly durableSessions: Effect.Effect<DurableSessionInventory, WorkspaceServiceError>;
   readonly deleteProject: (
     projectId: number,
   ) => Effect.Effect<DeleteProjectOutput, WorkspaceServiceError>;
@@ -179,8 +182,32 @@ export const WorkspaceServiceLive = Layer.effect(
       Effect.map((state) => ({ activeContext: activeContextFromState(state) })),
     );
 
+    const durableSessions = repository.listDurableSessions;
+
+    /**
+     * The durable identities a worktree owns, read before its row is deleted. The DB
+     * cascade removes those rows silently, so any client that is not the one issuing the
+     * delete would otherwise never learn its cached terminals are gone.
+     */
+    const durableSessionsInWorktrees = (worktreeIds: ReadonlySet<number>) =>
+      repository.listDurableSessions.pipe(
+        Effect.map((inventory) =>
+          inventory.sessions.filter((session) => worktreeIds.has(session.worktreeId)),
+        ),
+      );
+
+    const publishDurableSessionDeletions = (
+      identities: readonly DurableSessionIdentity[],
+    ): Effect.Effect<void> =>
+      Effect.forEach(
+        identities,
+        (identity) => internalEvents.publish({ type: 'durable_session_deleted', identity }),
+        { discard: true },
+      );
+
     return {
       get,
+      durableSessions,
       deleteProject: (projectId) =>
         Effect.gen(function* () {
           // Do not clear persisted active context here. Active context is
@@ -197,7 +224,11 @@ export const WorkspaceServiceLive = Layer.effect(
               projectId,
             );
           }
+          const doomed = yield* durableSessionsInWorktrees(
+            new Set(worktrees.map((worktree) => worktree.id)),
+          );
           const deleted = yield* repository.deleteProject(projectId);
+          if (deleted) yield* publishDurableSessionDeletions(doomed);
           return { projectId, deleted };
         }),
       getActiveContext,
@@ -483,6 +514,7 @@ export const WorkspaceServiceLive = Layer.effect(
             // state cascades, then optionally safe-delete the branch.
             // `checkoutRemovalMode: "force"` does not force branch deletion.
             const diagnostics = yield* repository.readWorktreeDeleteDiagnostics(worktree.id);
+            const doomedSessions = yield* durableSessionsInWorktrees(new Set([worktree.id]));
             logDiagnosticEvent('workspace.delete_worktree.delete_diagnostics', {
               ...context,
               agentSessionCount: diagnostics.agentSessionCount,
@@ -527,6 +559,9 @@ export const WorkspaceServiceLive = Layer.effect(
               context,
               repository.deleteWorktree(worktree.id),
             );
+            // Announced only after the cascade commits: every connected client — not just
+            // the one that asked — drops the terminals these identities backed.
+            yield* publishDurableSessionDeletions(doomedSessions);
             const branchRemoval = yield* diagnosticPhase(
               'workspace.delete_worktree.branch_delete',
               context,

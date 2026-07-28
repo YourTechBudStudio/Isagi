@@ -231,6 +231,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
   ];
 
   const repository = {
+    listDurableSessions: Effect.succeed({ sessions: [] }),
     findProject: (projectId) =>
       Effect.succeed(projectId === currentProject.id ? currentProject : null),
     findProjectByRootPath: () => Effect.succeed(currentProject),

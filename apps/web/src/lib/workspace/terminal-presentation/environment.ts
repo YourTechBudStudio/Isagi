@@ -39,6 +39,7 @@ export interface TerminalPresentationEnvironment {
   readonly fontsReady: () => Promise<void>;
   readonly measureFit: (terminal: Terminal, host: HTMLElement) => TerminalFitSize | null;
   readonly clearRenderCache: (terminal: Terminal) => void;
+  readonly monotonicNow: () => number;
 }
 
 export const browserTerminalEnvironment: TerminalPresentationEnvironment = {
@@ -58,4 +59,5 @@ export const browserTerminalEnvironment: TerminalPresentationEnvironment = {
   fontsReady: loadTerminalFonts,
   measureFit: measureTerminalFit,
   clearRenderCache: clearTerminalRenderCache,
+  monotonicNow: () => performance.now(),
 };
