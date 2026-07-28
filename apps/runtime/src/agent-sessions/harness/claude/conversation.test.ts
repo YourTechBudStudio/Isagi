@@ -127,6 +127,122 @@ test('Claude transcript parser follows the active leaf parent chain', () => {
   ]);
 });
 
+test('Claude transcript parser includes the assistant tail appended after a last-prompt marker', () => {
+  const raw = [
+    entry({
+      uuid: 'root',
+      type: 'system',
+      parentUuid: null,
+    }),
+    entry({
+      uuid: 'user-1',
+      parentUuid: 'root',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'fix the bug' },
+    }),
+    entry({
+      uuid: 'prompt-attachment',
+      parentUuid: 'user-1',
+      type: 'attachment',
+    }),
+    entry({
+      type: 'last-prompt',
+      leafUuid: 'prompt-attachment',
+      sessionId: 'claude-session-1',
+    }),
+    entry({
+      uuid: 'assistant-progress',
+      parentUuid: 'prompt-attachment',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] },
+    }),
+    entry({
+      uuid: 'tool-result',
+      parentUuid: 'assistant-progress',
+      type: 'user',
+      promptSource: null,
+      message: { role: 'user', content: [{ type: 'tool_result', content: 'done' }] },
+    }),
+    entry({
+      uuid: 'assistant-final',
+      parentUuid: 'tool-result',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'fixed' }] },
+    }),
+    entry({
+      uuid: 'stop-summary',
+      parentUuid: 'assistant-final',
+      type: 'system',
+      subtype: 'stop_hook_summary',
+    }),
+    entry({
+      uuid: 'turn-duration',
+      parentUuid: 'stop-summary',
+      type: 'system',
+      subtype: 'turn_duration',
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeTranscript(raw), [
+    { role: 'user', parts: [{ type: 'text', text: 'fix the bug' }] },
+    {
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'working' },
+        { type: 'text', text: 'fixed' },
+      ],
+    },
+  ]);
+});
+
+test('Claude transcript parser ignores an unrelated untyped fork after a last-prompt marker', () => {
+  const raw = [
+    entry({
+      uuid: 'root',
+      type: 'system',
+      parentUuid: null,
+    }),
+    entry({
+      uuid: 'active-user',
+      parentUuid: 'root',
+      type: 'user',
+      promptSource: 'typed',
+      message: { role: 'user', content: 'active prompt' },
+    }),
+    entry({
+      uuid: 'active-assistant',
+      parentUuid: 'active-user',
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'active answer' }] },
+    }),
+    entry({
+      type: 'last-prompt',
+      leafUuid: 'active-assistant',
+      sessionId: 'claude-session-1',
+    }),
+    entry({
+      uuid: 'local-command',
+      parentUuid: 'root',
+      type: 'user',
+      promptSource: null,
+      message: { role: 'user', content: '<command-name>/copy</command-name>' },
+    }),
+    entry({
+      uuid: 'local-command-output',
+      parentUuid: 'local-command',
+      type: 'user',
+      promptSource: null,
+      message: { role: 'user', content: '<local-command-stdout>Copied</local-command-stdout>' },
+    }),
+  ].join('\n');
+
+  assert.deepEqual(parseClaudeTranscript(raw), [
+    { role: 'user', parts: [{ type: 'text', text: 'active prompt' }] },
+    { role: 'assistant', parts: [{ type: 'text', text: 'active answer' }] },
+  ]);
+});
+
 test('Claude transcript parser follows a typed branch appended after a stale last-prompt marker', () => {
   const raw = [
     entry({

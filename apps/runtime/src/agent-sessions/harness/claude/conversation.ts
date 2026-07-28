@@ -216,10 +216,10 @@ function parseClaudeTranscriptEntries(raw: string): readonly ClaudeTranscriptEnt
 function activeClaudeTranscriptEntries(
   entries: readonly ClaudeTranscriptEntry[],
 ): readonly ClaudeTranscriptEntry[] {
-  const leafUuid = activeLeafUuid(entries);
+  const byUuid = entriesByUuid(entries);
+  const leafUuid = activeLeafUuid(entries, byUuid);
   if (!leafUuid) return entries;
 
-  const byUuid = entriesByUuid(entries);
   const leaf = byUuid.get(leafUuid);
   if (!leaf) return entries;
 
@@ -238,10 +238,13 @@ function activeClaudeTranscriptEntries(
   return activeEntries;
 }
 
-function activeLeafUuid(entries: readonly ClaudeTranscriptEntry[]) {
+function activeLeafUuid(
+  entries: readonly ClaudeTranscriptEntry[],
+  byUuid: ReadonlyMap<string, ClaudeTranscriptEntry>,
+) {
   const marker = latestLastPromptMarker(entries);
   if (!marker) return null;
-  return postMarkerBranchLeafUuid(entries, marker.index) ?? marker.leafUuid;
+  return postMarkerBranchLeafUuid(entries, marker, byUuid) ?? marker.leafUuid;
 }
 
 function latestLastPromptMarker(entries: readonly ClaudeTranscriptEntry[]) {
@@ -254,17 +257,42 @@ function latestLastPromptMarker(entries: readonly ClaudeTranscriptEntry[]) {
   return null;
 }
 
-function postMarkerBranchLeafUuid(entries: readonly ClaudeTranscriptEntry[], markerIndex: number) {
+function postMarkerBranchLeafUuid(
+  entries: readonly ClaudeTranscriptEntry[],
+  marker: { readonly index: number; readonly leafUuid: string },
+  byUuid: ReadonlyMap<string, ClaudeTranscriptEntry>,
+) {
   let sawTypedUser = false;
-  let latestUuid: string | null = null;
-  for (let index = markerIndex + 1; index < entries.length; index += 1) {
+  let latestTypedBranchUuid: string | null = null;
+  let latestDescendantUuid: string | null = null;
+  for (let index = marker.index + 1; index < entries.length; index += 1) {
     const entry = entries[index];
     if (!entry) continue;
     if (isTypedUserEntry(entry)) sawTypedUser = true;
     const uuid = stableUuid(entry);
-    if (sawTypedUser && uuid) latestUuid = uuid;
+    if (!uuid) continue;
+    if (sawTypedUser) latestTypedBranchUuid = uuid;
+    if (descendsFrom(uuid, marker.leafUuid, byUuid)) latestDescendantUuid = uuid;
   }
-  return latestUuid;
+  return latestTypedBranchUuid ?? latestDescendantUuid;
+}
+
+function descendsFrom(
+  uuid: string,
+  ancestorUuid: string,
+  byUuid: ReadonlyMap<string, ClaudeTranscriptEntry>,
+) {
+  const visited = new Set<string>();
+  let current = byUuid.get(uuid);
+  while (current) {
+    const currentUuid = stableUuid(current);
+    if (!currentUuid || visited.has(currentUuid)) return false;
+    if (currentUuid === ancestorUuid) return true;
+    visited.add(currentUuid);
+    const parentUuid = stringField(current, 'parentUuid');
+    current = parentUuid ? byUuid.get(parentUuid) : undefined;
+  }
+  return false;
 }
 
 function entriesByUuid(entries: readonly ClaudeTranscriptEntry[]) {
