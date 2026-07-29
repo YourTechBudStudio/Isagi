@@ -100,6 +100,29 @@ test('resize changes fitted geometry and reflows real xterm cells', async ({ pag
   expect(after[0]!.visibleText).toContain('shell');
 });
 
+test('bottom rail insertion refits vertical geometry after layout projection settles', async ({
+  page,
+}, testInfo) => {
+  await openFixture(page, testInfo.project.name, 'recipe=shell');
+  await revealed(page);
+  const before = await inspect(page);
+
+  await page.locator('[data-action="toggle-bottom-rail"]').click();
+  await expect(page.locator('[data-bottom-rail]')).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator('[data-fixture-canvas]')
+        .evaluate((element) => window.getComputedStyle(element).transform),
+    )
+    .toBe('none');
+  await expect.poll(async () => (await inspect(page))[0]?.rows).toBeLessThan(before[0]!.rows);
+
+  await page.locator('[data-action="toggle-bottom-rail"]').click();
+  await expect(page.locator('[data-bottom-rail]')).toHaveCount(0);
+  await expect.poll(async () => (await inspect(page))[0]?.rows).toBe(before[0]!.rows);
+});
+
 test('paste crosses the production DOM input path exactly once and preserves ordering', async ({
   page,
 }, testInfo) => {

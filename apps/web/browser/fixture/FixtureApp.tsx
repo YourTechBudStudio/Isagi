@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Effect } from 'effect';
+import { motion } from 'motion/react';
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 
+import { zenTransition } from '../../src/lib/motion.js';
 import { useTerminalAttachmentResource } from '../../src/lib/workspace/terminal-presentation/context.js';
 import { TerminalPresentationProvider } from '../../src/lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
 import { sendAgentComposerNewline } from '../../src/routes/workspace/agentComposerKeys.js';
@@ -180,6 +182,7 @@ function FixtureWorkspace() {
   const [destinationVisible, setDestinationVisible] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [width, setWidth] = useState<'wide' | 'narrow'>('wide');
+  const [bottomRailVisible, setBottomRailVisible] = useState(false);
   const [attachmentRequest, setAttachmentRequest] = useState(0);
   const surfaceNavigate = useCallback(() => {
     if (sourceVisible) {
@@ -241,33 +244,49 @@ function FixtureWorkspace() {
         </button>
         <button
           type="button"
+          onClick={() => setBottomRailVisible((value) => !value)}
+          data-action="toggle-bottom-rail"
+        >
+          Toggle bottom rail
+        </button>
+        <button
+          type="button"
           onClick={() => setAttachmentRequest((value) => value + 1)}
           data-action="reattach"
         >
           Reattach
         </button>
       </div>
-      <section
-        className="grid grid-cols-2 gap-2"
-        style={{
-          height: 'calc(100vh - 10rem)',
-          gridTemplateRows: `repeat(${Math.ceil(sessionCount / 2)}, minmax(0, 1fr))`,
-        }}
-        data-workspace
-      >
-        {Array.from({ length: sessionCount }, (_, index) => (
-          <FixtureTerminal
-            key={index}
-            index={index}
-            visible={visible}
-            sourceVisible={index === 0 ? sourceVisible : true}
-            destinationVisible={index === 0 ? destinationVisible : false}
-            focused={topology === 'focus' ? focusedIndex === index : index === 0}
-            width={width}
-            attachmentRequest={attachmentRequest}
-          />
-        ))}
-      </section>
+      <div className="flex flex-col" style={{ height: 'calc(100vh - 10rem)' }}>
+        <motion.div
+          layoutId="fixture-canvas"
+          transition={zenTransition}
+          className="min-h-0 min-w-0 flex-1"
+          data-fixture-canvas
+        >
+          <section
+            className="grid h-full min-h-0 min-w-0 grid-cols-2 gap-2"
+            style={{
+              gridTemplateRows: `repeat(${Math.ceil(sessionCount / 2)}, minmax(0, 1fr))`,
+            }}
+            data-workspace
+          >
+            {Array.from({ length: sessionCount }, (_, index) => (
+              <FixtureTerminal
+                key={index}
+                index={index}
+                visible={visible}
+                sourceVisible={index === 0 ? sourceVisible : true}
+                destinationVisible={index === 0 ? destinationVisible : false}
+                focused={topology === 'focus' ? focusedIndex === index : index === 0}
+                width={width}
+                attachmentRequest={attachmentRequest}
+              />
+            ))}
+          </section>
+        </motion.div>
+        {bottomRailVisible ? <div className="h-16 flex-none" data-bottom-rail /> : null}
+      </div>
     </>
   );
 }
@@ -303,13 +322,13 @@ function FixtureTerminal(input: {
   });
   return (
     <article
-      className={`min-h-0 border border-line ${input.width === 'narrow' ? 'w-64' : 'w-full'}`}
+      className={`flex min-h-0 min-w-0 flex-col border border-line ${input.width === 'narrow' ? 'w-64' : 'w-full'}`}
       data-session={input.index + 1}
       data-phase={attachment.snapshot.readiness.phase}
       data-renderer-warning={attachment.snapshot.rendererWarning ?? ''}
     >
       {input.visible && attachment.resource && input.sourceVisible ? (
-        <div data-destination="source">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-destination="source">
           <PaneTerminal
             surfaceId={placement.surfaceId}
             paneId={placement.paneId}
@@ -319,7 +338,7 @@ function FixtureTerminal(input: {
         </div>
       ) : null}
       {input.visible && attachment.resource && input.destinationVisible ? (
-        <div data-destination="target">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-destination="target">
           <PaneTerminal
             surfaceId={placement.surfaceId}
             paneId={placement.paneId}
