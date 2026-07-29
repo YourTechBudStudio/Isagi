@@ -49,10 +49,10 @@ test('Docs integrations resolve documented native targets without manufacturing 
   const home = '/Users/dev person';
   assert.deepEqual(harnessDefinition('pi').docs.resolveTarget({ HOME: home }), {
     _tag: 'Resolved',
-    path: '/Users/dev person/.pi/agent/prompts/isagi-docs.md',
+    path: '/Users/dev person/.pi/agent/skills/isagi-docs',
   });
   assert.deepEqual(harnessDefinition('pi').docs.resolveLegacyTargets({ HOME: home }), [
-    { _tag: 'Resolved', path: '/Users/dev person/.pi/agent/skills/isagi-docs' },
+    { _tag: 'Resolved', path: '/Users/dev person/.pi/agent/prompts/isagi-docs.md' },
   ]);
   assert.deepEqual(
     harnessDefinition('claude').docs.resolveTarget({
@@ -63,7 +63,11 @@ test('Docs integrations resolve documented native targets without manufacturing 
   );
   assert.deepEqual(
     harnessDefinition('opencode').docs.resolveTarget({ XDG_CONFIG_HOME: '/xdg config' }),
-    { _tag: 'Resolved', path: '/xdg config/opencode/commands/isagi-docs.md' },
+    { _tag: 'Resolved', path: '/xdg config/opencode/skills/isagi-docs' },
+  );
+  assert.deepEqual(
+    harnessDefinition('opencode').docs.resolveLegacyTargets({ XDG_CONFIG_HOME: '/xdg config' }),
+    [{ _tag: 'Resolved', path: '/xdg config/opencode/commands/isagi-docs.md' }],
   );
   assert.deepEqual(harnessDefinition('codex').docs.resolveTarget({}), {
     _tag: 'MissingEnvironmentRoot',

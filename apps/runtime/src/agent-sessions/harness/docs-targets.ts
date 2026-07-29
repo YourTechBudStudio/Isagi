@@ -26,24 +26,33 @@ export function resolveDocsTarget(input: {
   };
 }
 
-export function resolveOpenCodeDocsTarget(
+function resolveOpenCodeDocsPath(
   environment: ApprovedHostEnvironment,
+  targetSegments: readonly string[],
 ): HarnessDocsTargetResolution {
   const configuredRoot = environment.OPENCODE_CONFIG_DIR;
   if (configuredRoot) {
-    return { _tag: 'Resolved', path: join(configuredRoot, 'commands', 'isagi-docs.md') };
+    return { _tag: 'Resolved', path: join(configuredRoot, ...targetSegments) };
   }
   const configRoot = environment.XDG_CONFIG_HOME;
   if (configRoot) {
     return {
       _tag: 'Resolved',
-      path: join(configRoot, 'opencode', 'commands', 'isagi-docs.md'),
+      path: join(configRoot, 'opencode', ...targetSegments),
     };
   }
   const home = environment.HOME;
   if (!home) return { _tag: 'MissingEnvironmentRoot', harness: 'opencode', required: 'HOME' };
   return {
     _tag: 'Resolved',
-    path: join(home, '.config', 'opencode', 'commands', 'isagi-docs.md'),
+    path: join(home, '.config', 'opencode', ...targetSegments),
   };
+}
+
+export function resolveOpenCodeDocsTarget(environment: ApprovedHostEnvironment) {
+  return resolveOpenCodeDocsPath(environment, ['skills', 'isagi-docs']);
+}
+
+export function resolveOpenCodeDocsLegacyTarget(environment: ApprovedHostEnvironment) {
+  return resolveOpenCodeDocsPath(environment, ['commands', 'isagi-docs.md']);
 }

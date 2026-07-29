@@ -2,10 +2,7 @@
 
 ## Harness policy
 
-The top-level `harnesses` section controls whether Isagi may create new processes for each supported
-harness and whether it maintains the reserved, explicit-only global `isagi-docs` integration.
-Missing entries and booleans default to `false`. A missing `harnesses` section means onboarding is
-incomplete; `harnesses: {}` is a completed policy with no enabled harnesses.
+The top-level `harnesses` section controls whether Isagi may create new processes for each supported harness and whether it maintains the reserved global `isagi-docs` skill for that harness. The skill may be selected automatically for Isagi-specific requests according to its description. Missing entries and booleans default to `false`. A missing `harnesses` section means onboarding is incomplete; `harnesses: {}` is a completed policy with no enabled harnesses.
 
 ```yaml
 harnesses:
@@ -14,9 +11,7 @@ harnesses:
     installIsagiDocs: true
 ```
 
-Disabling a harness or Docs installation does not remove content installed earlier. Isagi replaces
-the exact `isagi-docs` target when installation is enabled; edits to that reserved target are not
-preserved on reconciliation.
+Disabling a harness or Docs installation does not remove content installed earlier. Isagi replaces the exact `isagi-docs` skill folder when installation is enabled; edits to that reserved target are not preserved on reconciliation. Each harness receives a complete copy in its own global skill directory, including every bundled reference file.
 
 Runtime configuration. One file, shared by every project on this machine.
 

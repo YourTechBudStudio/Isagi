@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -14,16 +11,10 @@ import { projectConfigSchema } from '../../project-config/project-config.schema.
 import {
   configSchemaReferenceSources,
   isagiDocsContentSources,
-  runtimePackageVersion,
   workflowScaffoldSources,
 } from '../../runtime-assets.js';
 import { runtimeConfigSchema } from '../../runtime-config/runtime-config.schema.js';
-import {
-  isagiDocsArtifactPaths,
-  isagiDocsName,
-  isagiDocsPackageFiles,
-  writeIsagiDocsArtifacts,
-} from './isagi-docs.js';
+import { isagiDocsName, isagiDocsPackageFiles } from './isagi-docs.js';
 
 const dataRoot = '/Users/example/.isagi';
 const files = isagiDocsPackageFiles(dataRoot);
@@ -34,7 +25,6 @@ const trimTrailingNewline = (source: string) => source.replace(/\n+$/, '');
 
 /** Every placeholder the generator substitutes, and the text it must expand to. */
 const substitutions = {
-  VERSION: runtimePackageVersion,
   DATA_ROOT: dataRoot,
   SDK_VERSION: workflowSdkVersion,
   VERIFIER_VERSION: workflowVerifierVersion,
@@ -49,7 +39,7 @@ const substitutions = {
 
 /** Which template carries which placeholder, and where it is emitted. */
 const templates = {
-  'SKILL.md': { emittedAs: 'SKILL.md', tokens: ['VERSION', 'DATA_ROOT'] },
+  'SKILL.md': { emittedAs: 'SKILL.md', tokens: ['DATA_ROOT'] },
   'config-global.md': {
     emittedAs: 'references/config-global.md',
     tokens: ['DATA_ROOT', 'RUNTIME_CONFIG_SCHEMA'],
@@ -138,18 +128,13 @@ test('the skill package holds exactly the indexed references', () => {
   );
 });
 
-test('the skill name matches its frontmatter and its directory', () => {
+test('the skill name matches its frontmatter', () => {
   const router = files.get('SKILL.md') ?? '';
   assert.match(router, new RegExp(`^name: ${isagiDocsName}$`, 'm'));
-
-  const artifacts = isagiDocsArtifactPaths(dataRoot);
-  assert.equal(basename(artifacts.skillDirectory), isagiDocsName);
-  assert.equal(dirname(artifacts.skillDirectory), resolve(dataRoot, 'skills', 'shared'));
 });
 
-test('the router reads as a versioned skill package', () => {
+test('the router reads as a focused skill package', () => {
   const router = files.get('SKILL.md') ?? '';
-  assert.match(router, new RegExp(`^  version: "${runtimePackageVersion}"$`, 'm'));
   assert.equal(router.includes(`${dataRoot}/config.yaml`), true);
   assert.equal(router.includes(`${dataRoot}/workflows/<key>/`), true);
   assert.match(router, /Read only the reference that matches the request/);
@@ -362,29 +347,6 @@ test('skill prose is portable and self-contained', () => {
 });
 
 /**
- * OpenCode scans the shared parent recursively for any `SKILL.md`. A skill directory left behind by
- * an older build - the pre-rename `isagi-configure`, for one - would be discovered next to the
- * current one under a stale name, which is precisely the duplicate-skill state the layout exists to
- * prevent. Regeneration must wipe the scan root, not just its own subdirectory.
- */
-test('regeneration removes a skill directory left behind under an older name', () => {
-  const root = mkdtempSync(join(tmpdir(), 'isagi-skill-rename-'));
-  try {
-    const artifacts = isagiDocsArtifactPaths(root);
-    const staleSkill = resolve(root, 'skills', 'shared', 'isagi-configure');
-    mkdirSync(staleSkill, { recursive: true });
-    writeFileSync(resolve(staleSkill, 'SKILL.md'), '---\nname: isagi-configure\n---\n', 'utf8');
-
-    writeIsagiDocsArtifacts(root);
-
-    assert.equal(existsSync(staleSkill), false, 'stale skill survived under the shared scan root');
-    assert.equal(existsSync(resolve(artifacts.skillDirectory, 'SKILL.md')), true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-/**
  * The scaffold is shipped as reference files copied verbatim from the verifier fixture. Emitting it
  * raw (never through placeholder substitution) is what keeps the installed bytes identical to the
  * canonical fixture an author copies. This holds that line, and the exact-set assertion catches a
@@ -436,7 +398,10 @@ test('the rendered workflow reference and shipped scaffold name the recommended 
   );
 });
 
-test('the canonical skill is manual-only', () => {
+test('the canonical skill allows precise description-driven invocation', () => {
   const router = files.get('SKILL.md') ?? '';
-  assert.match(router, /^disable-model-invocation: true$/m);
+  assert.doesNotMatch(router, /^disable-model-invocation:/m);
+  assert.doesNotMatch(router, /^metadata:/m);
+  assert.match(router, /Use only when the user asks to configure Isagi/);
+  assert.match(router, /Do not use for ordinary development work/);
 });

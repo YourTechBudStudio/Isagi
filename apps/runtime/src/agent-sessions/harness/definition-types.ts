@@ -37,21 +37,10 @@ export type HarnessDocsTargetResolution =
     };
 
 export interface HarnessDocsIntegration {
-  readonly explicitInvocationSupported: boolean;
-  readonly nativePolicy:
-    | 'skill_frontmatter'
-    | 'codex_agent_policy'
-    | 'prompt_template'
-    | 'explicit_command';
-  readonly implicitInvocationPolicy: 'disabled';
   readonly resolveTarget: (environment: ApprovedHostEnvironment) => HarnessDocsTargetResolution;
   readonly resolveLegacyTargets: (
     environment: ApprovedHostEnvironment,
   ) => readonly HarnessDocsTargetResolution[];
-  readonly project: (input: {
-    readonly dataRoot: string;
-    readonly canonicalFiles: ReadonlyMap<string, string>;
-  }) => ReadonlyMap<string, string>;
 }
 
 export interface HarnessProbeDefinition {

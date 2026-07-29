@@ -135,9 +135,6 @@ function reconciliation(actions: readonly DocsReconciliationAction[]): DocsRecon
 
 test('docsResultRetryable is true only when at least one harness failed', () => {
   assert.equal(docsResultRetryable(reconciliation(['failed', 'installed'])), true);
-  assert.equal(
-    docsResultRetryable(reconciliation(['unsupported', 'untouched', 'unchanged'])),
-    false,
-  );
+  assert.equal(docsResultRetryable(reconciliation(['untouched', 'unchanged'])), false);
   assert.equal(docsResultRetryable(reconciliation(['installed', 'replaced'])), false);
 });

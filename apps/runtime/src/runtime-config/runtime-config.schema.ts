@@ -20,7 +20,7 @@ export const runtimeHarnessPolicyEntrySchema = Schema.Struct({
   }),
   installIsagiDocs: Schema.optional(Schema.Boolean).annotations({
     description:
-      'Whether Isagi maintains the reserved explicit-only global isagi-docs integration. Missing defaults to false and the value is ignored unless enabled is true. Disabling does not uninstall prior content.',
+      'Whether Isagi maintains the reserved global isagi-docs skill in this harness native skill directory. Missing defaults to false and the value is ignored unless enabled is true. Disabling does not uninstall prior content.',
   }),
 });
 

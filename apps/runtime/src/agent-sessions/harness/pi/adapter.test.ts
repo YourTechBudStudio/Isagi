@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -112,7 +112,10 @@ test('Pi adapter resumes using the latest observed harness session id', async ()
 test('harness integration artifacts are prepared once under the runtime data root', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-harness-artifacts-'));
   try {
-    const artifacts = await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
+    const retiredSharedSkill = resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md');
+    mkdirSync(resolve(retiredSharedSkill, '..'), { recursive: true });
+    writeFileSync(retiredSharedSkill, 'obsolete shared skill', 'utf8');
+    await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
     const piExtensionPath = resolve(dataRoot, 'harness-integrations', 'pi', 'isagi-session.ts');
     const opencodePluginPath = resolve(
       dataRoot,
@@ -150,11 +153,7 @@ test('harness integration artifacts are prepared once under the runtime data roo
       codexHookPath,
       resolve(dataRoot, 'harness-integrations', 'codex', 'isagi-codex-hook.mjs'),
     );
-    assert.equal(
-      artifacts.isagiDocs.skillDirectory,
-      resolve(dataRoot, 'skills', 'shared', 'isagi-docs'),
-    );
-
+    assert.equal(existsSync(resolve(dataRoot, 'skills', 'shared')), false);
     const opencodeSource = readFileSync(opencodePluginPath, 'utf8');
     assert.match(opencodeSource, /session\.created/);
     assert.match(opencodeSource, /session\.status/);
@@ -197,44 +196,6 @@ test('harness integration artifacts are prepared once under the runtime data roo
     assert.equal(claudeSettings.hooks.SessionStart, undefined);
     assert.equal(claudeSettings.hooks.SessionEnd, undefined);
     assert.equal(claudeSettings.permissions, undefined);
-
-    const skillRouter = readFileSync(
-      resolve(artifacts.isagiDocs.skillDirectory, 'SKILL.md'),
-      'utf8',
-    );
-    assert.match(skillRouter, /name: isagi-docs/);
-    assert.match(skillRouter, /metadata:\n  version: "0\.0\.1"/);
-    assert.match(skillRouter, /references\/config-global\.md/);
-    assert.match(skillRouter, /references\/workflows\.md/);
-    assert.doesNotMatch(skillRouter, /workflow-style\.md/);
-    assert.doesNotMatch(skillRouter, /compatibility:/);
-    assert.doesNotMatch(skillRouter, /allowed-tools:/);
-
-    const globalConfigReference = readFileSync(
-      resolve(artifacts.isagiDocs.skillDirectory, 'references', 'config-global.md'),
-      'utf8',
-    );
-    assert.match(globalConfigReference, /runtimeConfigSchema/);
-    assert.match(
-      globalConfigReference,
-      new RegExp(dataRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-    );
-
-    const projectConfigReference = readFileSync(
-      resolve(artifacts.isagiDocs.skillDirectory, 'references', 'config-project.md'),
-      'utf8',
-    );
-    assert.match(projectConfigReference, /projectConfigSchema/);
-
-    const workflowReference = readFileSync(
-      resolve(artifacts.isagiDocs.skillDirectory, 'references', 'workflows.md'),
-      'utf8',
-    );
-    assert.doesNotMatch(workflowReference, /ISAGI_RUNTIME_URL/);
-    assert.match(workflowReference, /`build` script and its `verify` script/);
-    assert.match(workflowReference, /discriminated union/);
-    assert.match(workflowReference, /node_modules\/@yourtechbudstudio\/isagi-workflow-sdk/);
-    assert.doesNotMatch(workflowReference, /^## Contents$/m);
 
     const claudeHook = readFileSync(claudeHookPath, 'utf8');
     assert.match(claudeHook, /session_id/);
@@ -280,38 +241,6 @@ test('harness artifact preparation fails when the runtime data root cannot host 
     );
   } finally {
     rmSync(dataRoot, { force: true });
-  }
-});
-
-test('isagi configure skill regeneration removes stale files', async () => {
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-skill-clean-'));
-  try {
-    const staleCanonical = resolve(
-      dataRoot,
-      'skills',
-      'shared',
-      'isagi-docs',
-      'references',
-      'old.md',
-    );
-    mkdirSync(resolve(staleCanonical, '..'), { recursive: true });
-    writeFileSync(staleCanonical, 'stale', 'utf8');
-
-    await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
-    const firstRouter = readFileSync(
-      resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md'),
-      'utf8',
-    );
-    await Effect.runPromise(prepareHarnessIntegrationArtifacts(dataRoot));
-    const secondRouter = readFileSync(
-      resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md'),
-      'utf8',
-    );
-
-    assert.equal(firstRouter, secondRouter);
-    assert.throws(() => readFileSync(staleCanonical, 'utf8'), /ENOENT/);
-  } finally {
-    rmSync(dataRoot, { recursive: true, force: true });
   }
 });
 

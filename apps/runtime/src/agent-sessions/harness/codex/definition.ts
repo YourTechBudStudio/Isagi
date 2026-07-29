@@ -17,9 +17,6 @@ export const codexHarnessDefinition = {
   executable: 'codex',
   probe: { command: 'codex', args: ['--version'] },
   docs: {
-    explicitInvocationSupported: true,
-    nativePolicy: 'codex_agent_policy',
-    implicitInvocationPolicy: 'disabled',
     resolveTarget: (environment) =>
       resolveDocsTarget({
         harness: 'codex',
@@ -29,11 +26,6 @@ export const codexHarnessDefinition = {
         targetSegments: ['skills', 'isagi-docs'],
       }),
     resolveLegacyTargets: () => [],
-    project: ({ canonicalFiles }) => {
-      const projected = new Map(canonicalFiles);
-      projected.set('agents/openai.yaml', 'policy:\n  allow_implicit_invocation: false\n');
-      return projected;
-    },
   },
   prompt: {
     renderSkillToken: (name) => `$${name}`,

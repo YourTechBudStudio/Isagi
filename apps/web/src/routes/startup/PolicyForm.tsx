@@ -62,7 +62,7 @@ function Leader() {
 }
 
 function stampClass(action: DocsHarnessResult['action']): string {
-  if (action === 'failed' || action === 'unsupported') return 'text-error';
+  if (action === 'failed') return 'text-error';
   if (action === 'untouched') return 'text-fg-subtle';
   return 'text-green/78';
 }
@@ -164,13 +164,7 @@ export function PolicyForm({
                 )}
               </button>
               {outcome?.reason ? (
-                <ManifestComment
-                  tone={
-                    outcome.action === 'failed' || outcome.action === 'unsupported'
-                      ? 'error'
-                      : 'subtle'
-                  }
-                >
+                <ManifestComment tone={outcome.action === 'failed' ? 'error' : 'subtle'}>
                   {docsResultCopy.reason[outcome.reason]}
                 </ManifestComment>
               ) : null}

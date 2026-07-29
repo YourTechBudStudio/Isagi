@@ -57,9 +57,8 @@ export function buildHarnessPolicy(draft: PolicyDraft): HarnessPolicy {
   return Object.fromEntries(entries) as HarnessPolicy;
 }
 
-// Retry is offered only when at least one harness genuinely failed. `unsupported`
-// (a capability limit) and `untouched` (not requested) can never be repaired by
-// repeating the reconciliation.
+// Retry is offered only when at least one harness genuinely failed. `untouched`
+// (not requested) cannot be repaired by repeating the reconciliation.
 export function docsResultRetryable(result: DocsReconciliationResult): boolean {
   return result.results.some((entry) => entry.action === 'failed');
 }

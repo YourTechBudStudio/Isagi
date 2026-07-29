@@ -17,7 +17,7 @@ Configuration shared across projects.
 Examples:
 
 - known agent harnesses
-- per-harness process-creation and explicit-only `isagi-docs` installation policy
+- per-harness process-creation and global `isagi-docs` skill installation policy
 - global agent presets
 - default shell/runtime launch preferences
 - default launch commands and flags for agent harnesses

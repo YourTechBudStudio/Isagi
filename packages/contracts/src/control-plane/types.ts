@@ -24,13 +24,11 @@ export const docsReconciliationActionSchema = Schema.Literal(
   'unchanged',
   'untouched',
   'failed',
-  'unsupported',
 );
 export const docsReconciliationReasonSchema = Schema.Literal(
   'not_requested',
   'environment_capture_failed',
   'target_resolution_failed',
-  'explicit_invocation_unsupported',
   'transaction_evidence',
   'publication_failed',
   'rollback_failed',

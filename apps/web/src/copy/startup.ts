@@ -52,7 +52,7 @@ export const onboardingCopy = {
     label: 'install isagi-docs skill',
     comments: [
       'teaches your agents to configure isagi and author workflows.',
-      "manual-only — it won't speak unless spoken to.",
+      'loads itself only for isagi-specific work.',
     ],
   },
   save: 'Save and continue',
@@ -81,13 +81,11 @@ export const docsResultCopy = {
     unchanged: 'up to date',
     untouched: 'not installed',
     failed: 'failed',
-    unsupported: 'not supported',
   } satisfies Record<DocsReconciliationAction, string>,
   reason: {
     not_requested: 'docs were not requested for this agent.',
     environment_capture_failed: "isagi couldn't read your shell environment.",
     target_resolution_failed: "isagi couldn't resolve where this agent keeps skills.",
-    explicit_invocation_unsupported: "this agent can't host a manual-only reference.",
     transaction_evidence: 'a previous install left files behind — remove them and retry.',
     publication_failed: "isagi couldn't write the docs files.",
     rollback_failed: 'a failed install could not be rolled back cleanly.',

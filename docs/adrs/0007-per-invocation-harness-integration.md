@@ -2,7 +2,7 @@
 
 status: accepted
 date: 2026-06-15
-updated: 2026-07-10
+updated: 2026-07-29
 
 ## Decision
 
@@ -10,7 +10,7 @@ Isagi harness integrations must not mutate global, user, or project harness conf
 
 Harness adapters may inject hooks, extensions, plugins, environment variables, runtime-owned config files, and command-line flags only through the process invocation envelope for the harness process Isagi launches. Any generated integration artifacts must live under Isagi runtime-owned data paths or other explicit temporary/runtime-owned locations.
 
-The sole global exception is the reserved, exact-name `isagi-docs` integration. When the user enables its installation for a harness, Isagi may safely replace that global target with an explicit-only native integration. Publication stages and backs up beside the destination and restores the prior target on caught failure. No other global, user, or project harness mutation is permitted.
+The sole global exception is the reserved, exact-name `isagi-docs` skill. When the user enables its installation for a harness, Isagi may safely replace that harness's global native skill folder with a complete copy of the skill package. Each harness installation is self-contained and may be selected automatically from its precise description. Publication stages and backs up beside the destination and restores the prior target on caught failure. No other global, user, or project harness mutation is permitted.
 
 Isagi observes a launched session — its attention state, turn lifecycle, and conversation history — entirely from the durable artifacts those launches produce, interpreted at read time. The per-session harness event ledger stores the raw, unmodified native harness event inside Isagi's envelope; Isagi performs all normalization in per-harness parsers at read time and never reshapes the native event at write time.
 
@@ -30,7 +30,8 @@ Storing only raw native events keeps the ledger debuggable and reviewable, conce
 
 - Runtime adapters own harness-specific launch and resume envelopes: executable, args, cwd, env, generated config paths, and hook/plugin/extension injection.
 - Runtime integration code must not write to global user config such as harness home directories for persistent setup unless a future explicit user-approved feature changes this ADR.
-- The configured `isagi-docs` exception owns only its reserved target name; disabling installation leaves the last published target untouched.
+- The configured `isagi-docs` exception owns only its reserved native skill folder in each harness; disabling installation leaves the last published target untouched.
+- Every installed harness copy contains the complete skill package and bundled references; no installed skill routes through a shared runtime-owned folder.
 - Runtime integration code must not write project-local harness config as an implicit side effect of launching or restoring an agent session.
 - Generated hook, plugin, extension, or config files must be traceable to Isagi runtime-owned state and safe to clean up.
 - Adapter behavior should be explicit about what metadata it can capture, which resume command it can build, and which degraded states are possible.

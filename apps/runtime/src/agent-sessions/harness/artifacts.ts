@@ -1,19 +1,16 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 import { Effect } from 'effect';
 
 import { supportedHarnesses, harnessDefinition } from './definitions.js';
-import { type IsagiDocsArtifacts, writeIsagiDocsArtifacts } from './isagi-docs.js';
 import { HarnessAdapterError } from './types.js';
-
-export interface HarnessIntegrationArtifacts {
-  readonly isagiDocs: IsagiDocsArtifacts;
-}
 
 export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
   return Effect.try({
     try: () => {
+      const retiredSharedSkillRoot = resolve(dataRoot, 'skills', 'shared');
+      rmSync(retiredSharedSkillRoot, { recursive: true, force: true });
       const artifactPaths: string[] = [];
       for (const harness of supportedHarnesses) {
         for (const artifact of harnessDefinition(harness).observation.runtimeArtifacts(dataRoot)) {
@@ -21,12 +18,10 @@ export function prepareHarnessIntegrationArtifacts(dataRoot: string) {
           artifactPaths.push(artifact.path);
         }
       }
-      const isagiDocs = writeIsagiDocsArtifacts(dataRoot);
       console.info('[runtime] Harness integration artifacts prepared', {
         artifactPaths,
-        isagiDocsDirectory: isagiDocs.skillDirectory,
+        retiredSharedSkillRoot,
       });
-      return { isagiDocs } satisfies HarnessIntegrationArtifacts;
     },
     catch: (cause) =>
       new HarnessAdapterError(

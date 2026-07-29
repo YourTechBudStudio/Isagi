@@ -1,9 +1,6 @@
 ---
 name: isagi-docs
-disable-model-invocation: true
-description: Configure Isagi project and global settings, or create, modify, review, and verify Isagi workflows. Use when the user mentions Isagi configuration, worktree hooks, commands, pty backends, terminal history, scrollback, cache retention, harness policy, or workflows. Not for ordinary development work that does not change Isagi itself.
-metadata:
-  version: "{{VERSION}}"
+description: Use only when the user asks to configure Isagi, create, modify, review, or verify an Isagi workflow, or understand or use an Isagi-specific feature such as worktree hooks, commands, PTY backends, terminal history, scrollback, cache retention, harness policy, or workflow discovery. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
 # Configure Isagi

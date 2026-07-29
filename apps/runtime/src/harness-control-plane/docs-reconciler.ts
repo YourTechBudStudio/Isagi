@@ -66,17 +66,11 @@ export function docsReconciliationFingerprint(input: DocsReconciliationInput) {
   const projection = supportedHarnesses.map((harness) => ({
     harness,
     intent: input.policy[harness],
-    nativePolicy: harnessDefinition(harness).docs.nativePolicy,
     target: harnessDefinition(harness).docs.resolveTarget(input.inventory.environment.values),
     legacyTargets: harnessDefinition(harness).docs.resolveLegacyTargets(
       input.inventory.environment.values,
     ),
-    files: [
-      ...harnessDefinition(harness).docs.project({
-        dataRoot: input.dataRoot,
-        canonicalFiles: canonical,
-      }),
-    ],
+    files: [...canonical],
   }));
   return createHash('sha256').update(JSON.stringify(projection)).digest('hex');
 }
@@ -127,15 +121,6 @@ function reconcileHarness(
       diagnostic: boundedDiagnostic(input.inventory.environment.diagnostic),
     });
   const docs = harnessDefinition(harness).docs;
-  if (!docs.explicitInvocationSupported)
-    return Effect.succeed({
-      harness,
-      availability,
-      action: 'unsupported',
-      reason: 'explicit_invocation_unsupported',
-      destination: null,
-      diagnostic: 'This harness cannot guarantee explicit-only invocation.',
-    });
   const target = docs.resolveTarget(input.inventory.environment.values);
   if (target._tag !== 'Resolved')
     return Effect.succeed({
@@ -164,7 +149,7 @@ function reconcileHarness(
   return publishDocsTargets({
     destination: target.path,
     legacyDestinations: resolvedLegacyTargets,
-    files: docs.project({ dataRoot: input.dataRoot, canonicalFiles: canonical }),
+    files: canonical,
   }).pipe(
     Effect.as({
       harness,
@@ -357,8 +342,6 @@ function writeStage(
 
 function aggregateOutcome(results: readonly HarnessResult[]) {
   const requested = results.filter((result) => result.reason !== 'not_requested');
-  const failed = requested.filter(
-    (result) => result.action === 'failed' || result.action === 'unsupported',
-  ).length;
+  const failed = requested.filter((result) => result.action === 'failed').length;
   return failed === 0 ? 'succeeded' : failed === requested.length ? 'failed' : 'partially_failed';
 }

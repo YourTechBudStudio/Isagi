@@ -1,6 +1,3 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-
 import {
   workflowBuilderVersion,
   workflowSdkVersion,
@@ -10,44 +7,18 @@ import {
 import {
   configSchemaReferenceSources,
   isagiDocsContentSources,
-  runtimePackageVersion,
   workflowScaffoldSources,
 } from '../../runtime-assets.js';
 
 /** The skill's directory name and its `name:` frontmatter field. Must match `skill-content/SKILL.md`. */
 export const isagiDocsName = 'isagi-docs';
 
-export interface IsagiDocsArtifacts {
-  readonly skillDirectory: string;
-}
-
-export function isagiDocsArtifactPaths(dataRoot: string): IsagiDocsArtifacts {
-  return {
-    skillDirectory: resolve(dataRoot, 'skills', 'shared', isagiDocsName),
-  };
-}
-
 /**
- * The shared skill root is runtime-owned. Rebuilding it removes stale content from older versions
- * before publishing the canonical package used by native renderers and the OpenCode command.
- */
-export function writeIsagiDocsArtifacts(dataRoot: string) {
-  const artifacts = isagiDocsArtifactPaths(dataRoot);
-  const packageFiles = isagiDocsPackageFiles(dataRoot);
-  rmSync(resolve(dataRoot, 'skills', 'shared'), { recursive: true, force: true });
-  writeSkillDirectory(artifacts.skillDirectory, packageFiles);
-
-  return artifacts;
-}
-
-/**
- * The generated skill package. Handwritten prose lives in `skill-content/*.md` and reaches this map
- * through the build-time source manifest; the placeholders below are the only points where generated
- * values meet that prose.
+ * The generated skill package. Reconciliation writes a complete copy into each selected harness's
+ * native global skill directory; no installed copy depends on a shared runtime-owned folder.
  */
 export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, string> {
   const substitutions = new Map([
-    ['VERSION', runtimePackageVersion],
     ['DATA_ROOT', dataRoot],
     ['SDK_VERSION', workflowSdkVersion],
     ['VERIFIER_VERSION', workflowVerifierVersion],
@@ -77,15 +48,6 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   return files;
 }
 
-export function isagiDocsCommandRouter(dataRoot: string): ReadonlyMap<string, string> {
-  return new Map([
-    [
-      '',
-      `# Isagi Docs\n\nRead ${resolve(dataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md')} and follow its references for the user's request.\n\n$ARGUMENTS\n`,
-    ],
-  ]);
-}
-
 function render(
   name: keyof typeof isagiDocsContentSources,
   substitutions: ReadonlyMap<string, string>,
@@ -103,15 +65,4 @@ function render(
 
 function trimTrailingNewline(source: string) {
   return source.replace(/\n+$/, '');
-}
-
-function writeSkillDirectory(skillDirectory: string, files: ReadonlyMap<string, string>) {
-  for (const [relativePath, source] of files) {
-    writeFile(resolve(skillDirectory, relativePath), source);
-  }
-}
-
-function writeFile(path: string, source: string) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, source, 'utf8');
 }

@@ -1,9 +1,8 @@
 import { resolve } from 'node:path';
 
 import type { HarnessDefinition } from '../definition-types.js';
-import { resolveOpenCodeDocsTarget } from '../docs-targets.js';
+import { resolveOpenCodeDocsLegacyTarget, resolveOpenCodeDocsTarget } from '../docs-targets.js';
 import { extractOpenCodeHeadlessOutput } from '../headless-output.js';
-import { isagiDocsCommandRouter } from '../isagi-docs.js';
 import { buildOpenCodeHeadlessLaunch, buildOpenCodeLaunch } from './adapter.js';
 import { opencodePluginSource } from './artifacts.js';
 import { readOpenCodeConversation } from './conversation.js';
@@ -15,12 +14,8 @@ export const openCodeHarnessDefinition = {
   executable: 'opencode',
   probe: { command: 'opencode', args: ['--version'] },
   docs: {
-    explicitInvocationSupported: true,
-    nativePolicy: 'explicit_command',
-    implicitInvocationPolicy: 'disabled',
     resolveTarget: resolveOpenCodeDocsTarget,
-    resolveLegacyTargets: () => [],
-    project: ({ dataRoot }) => isagiDocsCommandRouter(dataRoot),
+    resolveLegacyTargets: (environment) => [resolveOpenCodeDocsLegacyTarget(environment)],
   },
   prompt: {
     renderSkillToken: (name) => `/${name}`,

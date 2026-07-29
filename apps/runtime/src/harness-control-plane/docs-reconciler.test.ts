@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { harnessDefinition } from '../agent-sessions/harness/definitions.js';
 import { isagiDocsPackageFiles } from '../agent-sessions/harness/isagi-docs.js';
 import { disabledHarnessPolicy } from '../runtime-config/index.js';
 import {
@@ -64,33 +63,101 @@ test('Docs installation follows intent despite missing executables and replaces 
     result = await Effect.runPromise(reconcileDocs(input));
     assert.equal(result.results.find((r) => r.harness === 'codex')?.action, 'replaced');
     assert.match(readFileSync(skill, 'utf8'), /name: isagi-docs/);
-    assert.match(
-      readFileSync(join(home, '.codex', 'skills', 'isagi-docs', 'agents', 'openai.yaml'), 'utf8'),
-      /allow_implicit_invocation: false/,
-    );
+    assert.match(readFileSync(skill, 'utf8'), /Use only when the user asks to configure Isagi/);
+    assert.equal(existsSync(join(home, '.codex', 'skills', 'isagi-docs', 'agents')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('Pi installs and replaces one prompt router while retiring the reserved legacy skill', async () => {
+test('every selected harness receives an independent complete skill package', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-docs-all-harnesses-'));
+  try {
+    const home = join(root, 'home');
+    const enabled = { enabled: true, installIsagiDocs: true };
+    const result = await Effect.runPromise(
+      reconcileDocs({
+        dataRoot: root,
+        policy: { pi: enabled, opencode: enabled, claude: enabled, codex: enabled },
+        policyRevision: 'r1',
+        inventoryGeneration: 1,
+        inventory: {
+          environment: { _tag: 'Available', values: { HOME: home } },
+          harnesses: probes,
+        },
+      }),
+    );
+    assert.equal(result.outcome, 'succeeded');
+
+    const destinations = [
+      join(home, '.pi', 'agent', 'skills', 'isagi-docs'),
+      join(home, '.config', 'opencode', 'skills', 'isagi-docs'),
+      join(home, '.claude', 'skills', 'isagi-docs'),
+      join(home, '.codex', 'skills', 'isagi-docs'),
+    ];
+    const canonical = isagiDocsPackageFiles(root);
+    for (const destination of destinations) {
+      for (const [relativePath, content] of canonical) {
+        assert.equal(readFileSync(join(destination, relativePath), 'utf8'), content);
+      }
+    }
+    assert.equal(existsSync(join(root, 'skills', 'shared')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Pi installs and replaces a complete native skill while retiring the reserved legacy prompt', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-docs-pi-migration-'));
   try {
     const input = piInput(root, true);
-    const current = join(root, 'home', '.pi', 'agent', 'prompts', 'isagi-docs.md');
-    const legacy = join(root, 'home', '.pi', 'agent', 'skills', 'isagi-docs');
-    mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, 'SKILL.md'), 'legacy skill');
+    const current = join(root, 'home', '.pi', 'agent', 'skills', 'isagi-docs');
+    const legacy = join(root, 'home', '.pi', 'agent', 'prompts', 'isagi-docs.md');
+    mkdirSync(join(legacy, '..'), { recursive: true });
+    writeFileSync(legacy, 'legacy prompt');
 
     let result = await Effect.runPromise(reconcileDocs(input));
     assert.equal(result.results.find((entry) => entry.harness === 'pi')?.action, 'installed');
     assert.equal(existsSync(legacy), false);
-    assert.equal(readFileSync(current, 'utf8').match(/\$ARGUMENTS/g)?.length, 1);
+    assert.match(readFileSync(join(current, 'SKILL.md'), 'utf8'), /name: isagi-docs/);
+    assert.equal(existsSync(join(current, 'references', 'config-global.md')), true);
 
-    writeFileSync(current, 'previous router');
+    writeFileSync(join(current, 'SKILL.md'), 'previous skill');
     result = await Effect.runPromise(reconcileDocs(input));
     assert.equal(result.results.find((entry) => entry.harness === 'pi')?.action, 'replaced');
-    assert.equal(readFileSync(current, 'utf8').match(/\$ARGUMENTS/g)?.length, 1);
+    assert.match(readFileSync(join(current, 'SKILL.md'), 'utf8'), /name: isagi-docs/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('OpenCode installs a complete native skill while retiring the reserved legacy command', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-docs-opencode-migration-'));
+  try {
+    const home = join(root, 'home');
+    const legacy = join(home, '.config', 'opencode', 'commands', 'isagi-docs.md');
+    mkdirSync(join(legacy, '..'), { recursive: true });
+    writeFileSync(legacy, 'legacy command');
+    const result = await Effect.runPromise(
+      reconcileDocs({
+        dataRoot: root,
+        policy: {
+          ...disabledHarnessPolicy,
+          opencode: { enabled: true, installIsagiDocs: true },
+        },
+        policyRevision: 'r1',
+        inventoryGeneration: 1,
+        inventory: {
+          environment: { _tag: 'Available', values: { HOME: home } },
+          harnesses: probes,
+        },
+      }),
+    );
+    const current = join(home, '.config', 'opencode', 'skills', 'isagi-docs');
+    assert.equal(result.results.find((entry) => entry.harness === 'opencode')?.action, 'installed');
+    assert.equal(existsSync(legacy), false);
+    assert.match(readFileSync(join(current, 'SKILL.md'), 'utf8'), /name: isagi-docs/);
+    assert.equal(existsSync(join(current, 'references', 'workflows.md')), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -100,15 +167,15 @@ test('disabled Pi docs installation performs no install or legacy migration', as
   const root = mkdtempSync(join(tmpdir(), 'isagi-docs-pi-disabled-'));
   try {
     const input = piInput(root, false);
-    const current = join(root, 'home', '.pi', 'agent', 'prompts', 'isagi-docs.md');
-    const legacy = join(root, 'home', '.pi', 'agent', 'skills', 'isagi-docs');
-    mkdirSync(legacy, { recursive: true });
-    writeFileSync(join(legacy, 'SKILL.md'), 'legacy skill');
+    const current = join(root, 'home', '.pi', 'agent', 'skills', 'isagi-docs');
+    const legacy = join(root, 'home', '.pi', 'agent', 'prompts', 'isagi-docs.md');
+    mkdirSync(join(legacy, '..'), { recursive: true });
+    writeFileSync(legacy, 'legacy prompt');
 
     const result = await Effect.runPromise(reconcileDocs(input));
     assert.equal(result.results.find((entry) => entry.harness === 'pi')?.action, 'untouched');
     assert.equal(existsSync(current), false);
-    assert.equal(readFileSync(join(legacy, 'SKILL.md'), 'utf8'), 'legacy skill');
+    assert.equal(readFileSync(legacy, 'utf8'), 'legacy prompt');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -280,46 +347,18 @@ test('failed legacy cleanup rolls back both the new publication and legacy retir
   );
 });
 
-// Definitions own the projection from the canonical package to each native publication format.
 const renderDataRoot = '/tmp/isagi-render';
 const canonicalDocs = isagiDocsPackageFiles(renderDataRoot);
 
-test('Pi and OpenCode definitions render explicit routers with one argument placeholder', () => {
-  for (const harness of ['pi', 'opencode'] as const) {
-    const rendered = harnessDefinition(harness).docs.project({
-      dataRoot: renderDataRoot,
-      canonicalFiles: canonicalDocs,
-    });
-    assert.equal(rendered.size, 1);
-    const router = rendered.get('') ?? '';
-    assert.ok(
-      router.includes(resolve(renderDataRoot, 'skills', 'shared', 'isagi-docs', 'SKILL.md')),
-      `${harness} router must reference the canonical SKILL.md path`,
-    );
-    assert.match(router, /follow its references/);
-    assert.equal(router.match(/\$ARGUMENTS/g)?.length, 1);
-  }
-});
-
-test('Claude receives the canonical package verbatim and manual-only', () => {
-  const rendered = harnessDefinition('claude').docs.project({
-    dataRoot: renderDataRoot,
-    canonicalFiles: canonicalDocs,
-  });
-  for (const [path, content] of canonicalDocs)
-    assert.equal(rendered.get(path), content, `claude dropped or altered ${path}`);
-  assert.match(rendered.get('SKILL.md') ?? '', /^disable-model-invocation: true$/m);
-});
-
-test('Codex receives the canonical package plus a manual-only policy file', () => {
-  const rendered = harnessDefinition('codex').docs.project({
-    dataRoot: renderDataRoot,
-    canonicalFiles: canonicalDocs,
-  });
-  for (const [path, content] of canonicalDocs)
-    assert.equal(rendered.get(path), content, `codex dropped or altered ${path}`);
-  assert.match(rendered.get('SKILL.md') ?? '', /^disable-model-invocation: true$/m);
-  assert.match(rendered.get('agents/openai.yaml') ?? '', /allow_implicit_invocation: false/);
+test('the canonical publication is a self-contained, implicitly invokable skill package', () => {
+  assert.ok(canonicalDocs.has('SKILL.md'));
+  assert.ok(canonicalDocs.has('references/config-global.md'));
+  assert.ok(canonicalDocs.has('references/config-project.md'));
+  assert.ok(canonicalDocs.has('references/workflows.md'));
+  const skill = canonicalDocs.get('SKILL.md') ?? '';
+  assert.doesNotMatch(skill, /^disable-model-invocation:/m);
+  assert.doesNotMatch(skill, /allow_implicit_invocation/);
+  assert.match(skill, /Do not use for ordinary development work/);
 });
 
 function memoryPublicationFileSystem(
