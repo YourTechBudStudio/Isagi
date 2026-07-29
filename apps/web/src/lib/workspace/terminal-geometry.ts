@@ -69,10 +69,13 @@ export function measureTerminalFit(terminal: Terminal, host: HTMLElement): Termi
   }
 
   const style = window.getComputedStyle(element);
-  const rect = host.getBoundingClientRect();
   return calculateTerminalFit({
-    hostWidth: rect.width,
-    hostHeight: rect.height,
+    // xterm is sized for the host's settled layout box. A Motion layout projection
+    // temporarily transforms that box while surrounding chrome enters or leaves;
+    // getBoundingClientRect() includes the projection and can therefore preserve
+    // stale terminal geometry after the transform ends without another resize event.
+    hostWidth: host.clientWidth,
+    hostHeight: host.clientHeight,
     paddingLeft: cssPixelValue(style.paddingLeft),
     paddingRight: cssPixelValue(style.paddingRight),
     paddingTop: cssPixelValue(style.paddingTop),
