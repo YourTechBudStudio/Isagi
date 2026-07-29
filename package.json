@@ -22,10 +22,12 @@
     "lint:fix": "oxlint . --threads=8 --fix --no-error-on-unmatched-pattern",
     "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
     "package:desktop": "pnpm build && pnpm --filter @isagi/desktop dist",
-    "test": "pnpm test:dev-supervisor && pnpm -r --if-present test",
+    "test": "pnpm test:dev-supervisor && pnpm test:versions-sync && pnpm -r --if-present test",
     "test:browser": "pnpm --filter @isagi/web test:browser",
     "test:dev-supervisor": "node --test \"scripts/dev-supervisor/*.test.mjs\"",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "test:versions-sync": "node --test scripts/sync-package-versions.test.mjs",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "versions:sync": "node scripts/sync-package-versions.mjs"
   },
   "devDependencies": {
     "effect": "^3.21.2",
