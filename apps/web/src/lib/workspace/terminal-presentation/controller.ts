@@ -59,6 +59,14 @@ export type TerminalAttachmentEvent =
   | { readonly type: 'interactive'; readonly interactive: boolean }
   | { readonly type: 'resolve_failed'; readonly error: unknown };
 
+export type TerminalAttachmentMilestone =
+  | { readonly type: 'parse_barrier_completed'; readonly at: number }
+  | { readonly type: 'render_observed'; readonly at: number }
+  | { readonly type: 'activation_render_qualified'; readonly at: number }
+  | { readonly type: 'reveal_published'; readonly at: number };
+
+export type TerminalAttachmentMilestoneObserver = (event: TerminalAttachmentMilestone) => void;
+
 export interface TerminalPresentationController extends TerminalPresentationResource {
   readonly host: HTMLDivElement;
   readonly getSnapshot: () => TerminalAttachmentSnapshot;
@@ -88,6 +96,8 @@ export interface CreateTerminalPresentationControllerInput {
       }) => void)
     | undefined;
   readonly onGauges?: ((gauges: TerminalDiagnosticGauges) => void) | undefined;
+  /** Attachment-local causal observations for finite browser verification. */
+  readonly onMilestone?: TerminalAttachmentMilestoneObserver | undefined;
   readonly parkingRoot: HTMLElement;
   readonly onCustomKey?:
     | ((event: KeyboardEvent, sendInput: (data: string) => void) => boolean)
@@ -168,6 +178,14 @@ export function createTerminalPresentationController(
   const pendingKeyboardData: string[] = [];
 
   const current = () => !disposed && input.attachment.isCurrentMutable();
+  const observeMilestone = (event: TerminalAttachmentMilestone) => {
+    if (!current()) return;
+    try {
+      input.onMilestone?.(event);
+    } catch {
+      // Observation is deliberately unable to participate in readiness.
+    }
+  };
   const publish = (patch: Partial<TerminalAttachmentSnapshot>) => {
     if (!current()) return;
     snapshot = Object.freeze({ ...snapshot, ...patch });
@@ -606,6 +624,7 @@ export function createTerminalPresentationController(
     // Subscribe before either barrier: installing a renderer can paint
     // synchronously, and that paint is exactly the one that must not reveal.
     const renderDisposable = terminal.onRender(() => {
+      observeMilestone({ type: 'render_observed', at: env.monotonicNow() });
       if (
         !activationBarrierPassed ||
         !current() ||
@@ -613,6 +632,7 @@ export function createTerminalPresentationController(
         snapshot.sealReason
       )
         return;
+      observeMilestone({ type: 'activation_render_qualified', at: env.monotonicNow() });
       cancelRenderBarrier();
       if (!replayGate.reveal()) return;
       if (revealStartedAt !== null) {
@@ -623,11 +643,13 @@ export function createTerminalPresentationController(
         revealStartedAt = null;
       }
       publish({ readiness: Object.freeze({ phase: 'revealed' }) });
+      observeMilestone({ type: 'reveal_published', at: env.monotonicNow() });
       if (!current() || snapshot.sealReason) return;
       replayGate.drain();
     });
     renderBarrier = { id: barrierId, dispose: () => renderDisposable.dispose() };
     terminal.write('', () => {
+      observeMilestone({ type: 'parse_barrier_completed', at: env.monotonicNow() });
       closeReplayOutputScope();
       if (!current() || renderBarrier?.id !== barrierId || snapshot.sealReason) return;
       pendingActivationWork = () => {

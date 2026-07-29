@@ -23,6 +23,7 @@
     "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
     "package:desktop": "pnpm build && pnpm --filter @isagi/desktop dist",
     "test": "pnpm test:dev-supervisor && pnpm -r --if-present test",
+    "test:browser": "pnpm --filter @isagi/web test:browser",
     "test:dev-supervisor": "node --test \"scripts/dev-supervisor/*.test.mjs\"",
     "typecheck": "pnpm -r --if-present typecheck"
   },

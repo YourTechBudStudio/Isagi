@@ -6,7 +6,11 @@ import {
   type TerminalSessionIdentity,
   type TerminalVisibilityAcquisition,
 } from '../terminal-cache/index.js';
-import type { TerminalAttachmentSnapshot, TerminalPresentationController } from './controller.js';
+import type {
+  TerminalAttachmentMilestoneObserver,
+  TerminalAttachmentSnapshot,
+  TerminalPresentationController,
+} from './controller.js';
 import { browserTerminalEnvironment } from './environment.js';
 import { selectPresentationResource } from './resource-selection.js';
 import {
@@ -46,6 +50,7 @@ export function useTerminalAttachmentResource(input: {
   readonly onCustomKey?:
     | ((event: KeyboardEvent, sendInput: (data: string) => void) => boolean)
     | undefined;
+  readonly onMilestone?: TerminalAttachmentMilestoneObserver | undefined;
 }) {
   const workspace = useTerminalPresentationWorkspace();
   const identityKey = input.identity
@@ -127,6 +132,7 @@ export function useTerminalAttachmentResource(input: {
           value: event.value,
         }),
       onGauges: (gauges) => workspace.diagnostics.setGauges(gauges),
+      onMilestone: input.onMilestone,
       initialViewport:
         workspace.cache
           .getSnapshot()
@@ -138,7 +144,7 @@ export function useTerminalAttachmentResource(input: {
       onViewport: (viewport) => session.updateViewport(viewport),
       onCustomKey: input.onCustomKey,
       parkingRoot: workspace.parkingRoot,
-      environment: browserTerminalEnvironment,
+      environment: workspace.environment ?? browserTerminalEnvironment,
       // Superseded by a newer request, not by an effect teardown: a StrictMode
       // probe re-runs this effect with the same request key and must not cancel
       // the preparation it is about to reuse.
@@ -159,6 +165,7 @@ export function useTerminalAttachmentResource(input: {
     input.initiallyInteractive,
     input.resolveUrl,
     input.onCustomKey,
+    input.onMilestone,
     session,
     workspace.settings.scrollbackLines,
   ]);

@@ -43,6 +43,7 @@ import { useTerminalAttachmentResource } from '../../lib/workspace/terminal-pres
 import type { TerminalPresentationController } from '../../lib/workspace/terminal-presentation/controller.js';
 import type { TerminalPresentationFailure } from '../../lib/workspace/terminal-presentation/start-presentation.js';
 import type { AttentionState } from '../../lib/workspace/types.js';
+import { sendAgentComposerNewline } from './agentComposerKeys.js';
 
 export interface UsePaneSessionInput {
   readonly session: PtyPaneSession | null;
@@ -136,14 +137,8 @@ export function usePaneSession({
   }, [paneId, session, worktreeId]);
 
   const handleCustomKey = useCallback(
-    (event: KeyboardEvent, sendInput: (data: string) => void) => {
-      if (session?.kind !== 'agent_session' || event.key !== 'Enter' || !event.shiftKey)
-        return false;
-      event.preventDefault();
-      event.stopPropagation();
-      sendInput('\x1b[200~\n\x1b[201~');
-      return true;
-    },
+    (event: KeyboardEvent, sendInput: (data: string) => void) =>
+      session?.kind === 'agent_session' && sendAgentComposerNewline(event, sendInput),
     [session?.kind],
   );
   const attachment = useTerminalAttachmentResource({

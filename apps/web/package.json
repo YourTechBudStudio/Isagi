@@ -9,6 +9,7 @@
     "dev": "node scripts/vite-launcher.mjs dev",
     "preview": "pnpm build && node scripts/vite-launcher.mjs preview",
     "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "test:browser": "node browser/check-chromium.mjs && pnpm build && playwright test -c browser/playwright.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import type { ReactNode, Ref } from 'react';
+import type { Ref } from 'react';
 
 import { ptyCopy } from '../../../copy/index.js';
 import { terminalRevealTransition } from './revealMotion.js';
@@ -25,24 +25,13 @@ import { TerminalLoadingCover } from './TerminalLoadingCover.js';
 export function TerminalRevealSlot({
   revealed,
   hostRef,
-  hostContent,
-  reducedMotion,
   className = 'min-h-0 flex-1',
 }: {
   readonly revealed: boolean;
   readonly hostRef?: Ref<HTMLDivElement> | undefined;
-  /**
-   * Development/gallery only. Production leaves the host empty and lets the
-   * cache append its xterm node through `hostRef`; React must not also be
-   * reconciling children inside a node it does not own.
-   */
-  readonly hostContent?: ReactNode | undefined;
-  /** Development/gallery override. Production omits it and follows the user's setting. */
-  readonly reducedMotion?: boolean | undefined;
   readonly className?: string | undefined;
 }) {
-  const prefersReducedMotion = useReducedMotion();
-  const reduced = reducedMotion ?? prefersReducedMotion ?? false;
+  const reduced = useReducedMotion() ?? false;
 
   return (
     <div className={`relative isolate overflow-hidden bg-terminal-surface ${className}`}>
@@ -60,9 +49,7 @@ export function TerminalRevealSlot({
         data-terminal-host
         inert={!revealed}
         className={`isagi-xterm isagi-xterm-edge h-full w-full ${revealed ? '' : 'opacity-0'}`}
-      >
-        {hostContent}
-      </div>
+      />
       <AnimatePresence initial={false}>
         {revealed ? null : (
           <motion.div

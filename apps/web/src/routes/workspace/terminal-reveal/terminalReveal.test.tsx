@@ -8,21 +8,9 @@ import { DURATION } from '../../../lib/motion.js';
 import { terminalRevealTransition } from './revealMotion.js';
 import { TerminalRevealSlot } from './TerminalRevealSlot.js';
 
-const HOST_CONTENT = <span>secret-history-marker</span>;
+const covered = () => renderToStaticMarkup(<TerminalRevealSlot revealed={false} />);
 
-const covered = (reducedMotion = false) =>
-  renderToStaticMarkup(
-    <TerminalRevealSlot
-      revealed={false}
-      hostContent={HOST_CONTENT}
-      reducedMotion={reducedMotion}
-    />,
-  );
-
-const revealed = () =>
-  renderToStaticMarkup(
-    <TerminalRevealSlot revealed hostContent={HOST_CONTENT} reducedMotion={false} />,
-  );
+const revealed = () => renderToStaticMarkup(<TerminalRevealSlot revealed />);
 
 describe('TerminalRevealSlot', () => {
   it('covers the terminal opaquely and holds the host inert while unrevealed', () => {
@@ -33,7 +21,6 @@ describe('TerminalRevealSlot', () => {
     assert.match(markup, /class="[^"]*bg-terminal-surface[^"]*"/);
     assert.match(markup, /data-terminal-host[^>]*inert/);
     assert.match(markup, /opacity-0/);
-    assert.doesNotMatch(markup, /secret-history-marker[^]*data-terminal-cover[^]*opacity-0/);
   });
 
   it('wears the shell running state rather than a terminal-only invention', () => {
@@ -66,7 +53,6 @@ describe('TerminalRevealSlot', () => {
 
     assert.doesNotMatch(markup, /data-terminal-cover|command-sweep/);
     assert.doesNotMatch(markup, /inert/);
-    assert.match(markup, /secret-history-marker/);
   });
 
   it('is not focusable and blocks pointer input while covered', () => {
@@ -78,20 +64,12 @@ describe('TerminalRevealSlot', () => {
     assert.doesNotMatch(markup, /data-terminal-cover[^>]*pointer-events-none/);
   });
 
-  it('cuts straight to revealed under reduced motion, and fades otherwise', () => {
+  it('exposes the settled reduced-motion transition contract', () => {
     assert.deepEqual(terminalRevealTransition(true), { duration: 0 });
     assert.equal(terminalRevealTransition(false).duration, DURATION.ui);
   });
 
-  it('stills the dot under reduced motion without losing the status line', () => {
-    const still = covered(true);
-
-    assert.doesNotMatch(still, /animate-breathe/);
-    assert.match(still, new RegExp(ptyCopy.reconstructing));
-    // The dot stays visible; only its motion goes.
-    assert.match(still, /bg-working/);
-    // The moving case also carries the CSS escape hatch, so motion is off
-    // before React gets a chance to decide anything.
+  it('carries the CSS reduced-motion escape hatch', () => {
     assert.match(covered(), /motion-reduce:animate-none/);
   });
 });

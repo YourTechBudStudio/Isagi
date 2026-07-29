@@ -8,6 +8,9 @@ apps/desktop/.generated/
 release/
 .turbo/
 coverage/
+apps/web/.browser-dist/
+apps/web/playwright-report/
+apps/web/test-results/
 *.tsbuildinfo
 .DS_Store
 .env

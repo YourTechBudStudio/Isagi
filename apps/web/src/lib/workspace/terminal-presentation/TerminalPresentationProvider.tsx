@@ -13,6 +13,7 @@ import { createScopedLifecycle } from '../terminal-cache/scoped-lifecycle.js';
 import type { TerminalPresentationController } from './controller.js';
 import { createTerminalWorkspaceCoordinator } from './coordinator.js';
 import { createTerminalDiagnosticsCollector } from './diagnostics.js';
+import { browserTerminalEnvironment, type TerminalPresentationEnvironment } from './environment.js';
 import {
   TerminalPresentationContext,
   type TerminalPresentationWorkspace,
@@ -21,9 +22,12 @@ import {
 /** Owns one in-memory terminal presentation cache for the current workspace boundary. */
 export function TerminalPresentationProvider({
   settings,
+  environment = browserTerminalEnvironment,
   children,
 }: {
   readonly settings: TerminalSettings;
+  /** Capability boundary used by finite browser fixtures and unit tests. */
+  readonly environment?: TerminalPresentationEnvironment | undefined;
   readonly children: ReactNode;
 }) {
   const queryClient = useQueryClient();
@@ -78,6 +82,7 @@ export function TerminalPresentationProvider({
       parkingRoot,
       settings,
       diagnostics,
+      environment,
       start: () => start(),
       dispose: lifecycle.dispose,
       onAttachmentEvent(identity, event) {
@@ -120,6 +125,7 @@ export function TerminalPresentationProvider({
     settings.cache.idleTtlMinutes,
     settings.cache.maxHiddenSessions,
     settings.cache.maxEstimatedBufferMiB,
+    environment,
   ]);
   const mountedWorkspacesRef = useRef(new Set<TerminalPresentationWorkspace>());
 
