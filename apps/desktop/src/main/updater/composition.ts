@@ -3,6 +3,7 @@ import { access, stat } from 'node:fs/promises';
 import { isAbsolute, dirname } from 'node:path';
 import process from 'node:process';
 
+import { Effect } from 'effect';
 import type { App } from 'electron';
 
 import {
@@ -13,6 +14,7 @@ import {
 } from './coordinator.js';
 import { createUpdaterDiagnosticSink, type UpdaterDiagnosticSink } from './diagnostics.js';
 import { loadElectronUpdater } from './load-electron-updater.js';
+import { createRestartReadinessReader } from './restart-readiness.js';
 
 export async function composeDesktopUpdater(
   application: Pick<App, 'getPath' | 'getVersion' | 'isPackaged'>,
@@ -21,6 +23,9 @@ export async function composeDesktopUpdater(
     readonly environment?: NodeJS.ProcessEnv;
     readonly diagnostics?: UpdaterDiagnosticSink;
     readonly loadUpdater?: typeof loadElectronUpdater;
+    readonly getRuntimeUrl?: () => Effect.Effect<string, unknown>;
+    readonly isExitCommitted?: () => boolean;
+    readonly requestInstall?: () => void;
   } = {},
 ): Promise<DesktopUpdaterService> {
   const installedVersion = application.getVersion();
@@ -47,12 +52,29 @@ export async function composeDesktopUpdater(
     }
   }
 
+  const readRestartReadiness = createRestartReadinessReader({
+    getRuntimeUrl:
+      options.getRuntimeUrl ??
+      (() => Effect.fail(new Error('Runtime access is not configured for update readiness.'))),
+    diagnose: (category) => {
+      void diagnostics.write({
+        operation: 'readiness',
+        platform,
+        installedVersion,
+        code: `restart_readiness_${category}`,
+        summary: `Restart readiness failed during ${category}.`,
+      });
+    },
+  });
   return new UpdaterCoordinator({
     updater: (options.loadUpdater ?? loadElectronUpdater)(),
     timers: systemUpdaterTimers,
     diagnostics,
     platform,
     installedVersion,
+    readRestartReadiness,
+    isExitCommitted: options.isExitCommitted ?? (() => false),
+    requestInstall: options.requestInstall ?? (() => undefined),
   });
 }
 

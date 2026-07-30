@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
+import { registerAgentSessionsApi } from './agent-sessions/index.js';
 import { registerClientSettingsApi } from './client-settings/api.js';
 import { registerCommandsApi } from './commands/index.js';
 import { registerControlPlaneApi } from './harness-control-plane/api.js';
@@ -57,6 +58,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       yield* tryPromise(() => fastify.register(websocket));
 
       registerHealthApi(fastify);
+      registerAgentSessionsApi(fastify, runtime);
       registerClientSettingsApi(fastify, runtime);
       registerControlPlaneApi(fastify, runtime);
       registerCommandsApi(fastify, runtime);

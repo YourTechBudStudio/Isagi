@@ -12,7 +12,7 @@ import { configureDevelopmentUserData } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { createRuntimeLifecycle } from './runtime.js';
-import { stopDesktopServices } from './shutdown.js';
+import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
 import { composeDesktopUpdater, type DesktopUpdaterService } from './updater/index.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -34,11 +34,19 @@ if (isDev) configureDevelopmentUserData(repositoryRoot);
 
 const runtimeLifecycle = createRuntimeLifecycle();
 let mainWindow: BrowserWindow | undefined;
-let exitPromise: Promise<void> | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
-let pendingExitCode: number | undefined;
 let exitRequested = false;
 let desktopUpdater: DesktopUpdaterService | undefined;
+const shutdown = new DesktopShutdownCoordinator({
+  desktopUpdater: () => desktopUpdater,
+  runtimeLifecycle,
+  destroyRenderer: () => {
+    exitRequested = true;
+    destroyRendererForExit(mainWindow);
+  },
+  exit: (code) => app.exit(code),
+  diagnoseInstallRejection: () => desktopUpdater?.recordInstallRejection(),
+});
 
 runtimeLifecycle.subscribe((snapshot) => {
   if (snapshot.state === 'failed') {
@@ -183,24 +191,16 @@ ipcMain.handle('isagi:quit-app', async (event) => {
 });
 
 function requestExit(options: { readonly code: number }) {
-  exitRequested = true;
-  destroyRendererForExit(mainWindow);
-  pendingExitCode = pendingExitCode && pendingExitCode !== 0 ? pendingExitCode : options.code;
-  exitPromise ??= (async () => {
-    await Effect.runPromise(stopDesktopServices(desktopUpdater, runtimeLifecycle));
-    if (pendingExitCode !== undefined) app.exit(pendingExitCode);
-  })();
-  return exitPromise;
+  return shutdown.request({ kind: 'ordinary', code: options.code });
 }
 
 app.on('window-all-closed', () => {
   if (isDev || process.platform !== 'darwin') void requestExit({ code: 0 });
 });
 
-app.on('before-quit', (event) => {
-  event.preventDefault();
-  if (!exitPromise) void requestExit({ code: 0 });
-});
+app.on('before-quit', (event) =>
+  handleBeforeQuit(event, shutdown, () => void requestExit({ code: 0 })),
+);
 
 process.once('SIGINT', () => void requestExit({ code: 130 }));
 process.once('SIGTERM', () => void requestExit({ code: 143 }));
@@ -209,7 +209,15 @@ app
   .whenReady()
   .then(async () => {
     if (isDev && app.dock) app.dock.setIcon(DEVELOPMENT_ICON_PATH);
-    desktopUpdater = await composeDesktopUpdater(app);
+    desktopUpdater = await composeDesktopUpdater(app, {
+      getRuntimeUrl: () => runtimeLifecycle.getUrl(),
+      isExitCommitted: () => shutdown.committed,
+      requestInstall: () => {
+        const updater = desktopUpdater;
+        if (!updater) return;
+        void shutdown.request({ kind: 'install_update', install: () => updater.quitAndInstall() });
+      },
+    });
     await Effect.runPromise(desktopUpdater.start());
     return createWindow();
   })

@@ -25,7 +25,9 @@ export interface UpdaterAdapter {
   allowPrerelease: boolean;
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
+  autoRunAppAfterInstall: boolean;
   checkForUpdates(): Promise<unknown>;
+  quitAndInstall(): void;
   on(event: UpdaterEvent, listener: UpdaterListener): unknown;
   off(event: UpdaterEvent, listener: UpdaterListener): unknown;
 }
@@ -43,7 +45,14 @@ export interface DesktopUpdaterService {
   start(): Effect.Effect<void>;
   stop(): Effect.Effect<void>;
   checkForUpdates(): Effect.Effect<void>;
+  requestRestart(): Effect.Effect<void>;
+  confirmRestart(): Effect.Effect<void>;
+  cancelRestart(): Effect.Effect<void>;
+  quitAndInstall(): void;
+  recordInstallRejection(): Promise<void>;
 }
+
+export type RestartReadiness = import('./restart-readiness.js').RestartReadiness;
 
 type SnapshotFacts = DesktopUpdateSnapshot extends infer Snapshot
   ? Snapshot extends DesktopUpdateSnapshot
@@ -62,6 +71,9 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   readonly #diagnostics: UpdaterDiagnosticSink;
   readonly #platform: string;
   readonly #installedVersion: string;
+  readonly #readRestartReadiness: () => Effect.Effect<RestartReadiness>;
+  readonly #isExitCommitted: () => boolean;
+  readonly #requestInstall: () => void;
   readonly #listeners = new Set<(snapshot: DesktopUpdateSnapshot) => void>();
   #snapshot: DesktopUpdateSnapshot;
   #revision = 0;
@@ -72,6 +84,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   #firstCheckTimer: unknown;
   #repeatCheckTimer: unknown;
   #transientTimer: unknown;
+  #readinessGeneration: number | undefined;
 
   constructor(dependencies: {
     readonly updater: UpdaterAdapter;
@@ -79,12 +92,18 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     readonly diagnostics: UpdaterDiagnosticSink;
     readonly platform: string;
     readonly installedVersion: string;
+    readonly readRestartReadiness: () => Effect.Effect<RestartReadiness>;
+    readonly isExitCommitted: () => boolean;
+    readonly requestInstall: () => void;
   }) {
     this.#updater = dependencies.updater;
     this.#timers = dependencies.timers;
     this.#diagnostics = dependencies.diagnostics;
     this.#platform = dependencies.platform;
     this.#installedVersion = dependencies.installedVersion;
+    this.#readRestartReadiness = dependencies.readRestartReadiness;
+    this.#isExitCommitted = dependencies.isExitCommitted;
+    this.#requestInstall = dependencies.requestInstall;
     this.#snapshot = {
       protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
       revision: 0,
@@ -109,6 +128,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       this.#updater.allowPrerelease = false;
       this.#updater.autoDownload = true;
       this.#updater.autoInstallOnAppQuit = false;
+      this.#updater.autoRunAppAfterInstall = true;
       for (const [event, listener] of this.#eventListeners) this.#updater.on(event, listener);
       this.#firstCheckTimer = this.#timers.setTimeout(() => {
         this.#firstCheckTimer = undefined;
@@ -127,6 +147,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       this.#stopped = true;
       this.#generation += 1;
       this.#active = undefined;
+      this.#readinessGeneration = undefined;
       this.#clearTimer('first');
       this.#clearTimer('repeat');
       this.#clearTimer('transient');
@@ -140,6 +161,83 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
 
   checkForUpdates(): Effect.Effect<void> {
     return Effect.sync(() => this.#beginCheck(true));
+  }
+
+  requestRestart(): Effect.Effect<void> {
+    return Effect.gen(this, function* () {
+      if (
+        this.#stopped ||
+        this.#snapshot.state !== 'ready' ||
+        this.#readinessGeneration !== undefined ||
+        this.#isExitCommitted()
+      )
+        return;
+      const generation = this.#generation;
+      this.#readinessGeneration = generation;
+      // The marker is single-flight state, not a result. Clearing it in a
+      // finalizer keeps a defect or an interrupted read from latching restart
+      // off for the rest of the session.
+      const readiness = yield* this.#readRestartReadiness().pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (this.#readinessGeneration === generation) this.#readinessGeneration = undefined;
+          }),
+        ),
+      );
+      if (
+        !this.#ownsGeneration(generation) ||
+        this.#snapshot.state !== 'ready' ||
+        this.#isExitCommitted()
+      )
+        return;
+      if (readiness.kind === 'clear') {
+        this.#beginInstallation();
+        return;
+      }
+      const targetVersion = this.#snapshot.targetVersion;
+      this.#transition({
+        state: 'restart_confirmation',
+        installedVersion: this.#installedVersion,
+        targetVersion,
+        activity:
+          readiness.kind === 'working_agents'
+            ? { kind: 'working', workingAgentCount: readiness.workingAgentCount }
+            : { kind: 'unknown' },
+      });
+    });
+  }
+
+  confirmRestart(): Effect.Effect<void> {
+    return Effect.sync(() => {
+      if (this.#snapshot.state !== 'restart_confirmation') return;
+      this.#beginInstallation();
+    });
+  }
+
+  cancelRestart(): Effect.Effect<void> {
+    return Effect.sync(() => {
+      if (this.#snapshot.state !== 'restart_confirmation' || this.#isExitCommitted()) return;
+      this.#transition({
+        state: 'ready',
+        installedVersion: this.#installedVersion,
+        targetVersion: this.#snapshot.targetVersion,
+      });
+    });
+  }
+
+  quitAndInstall(): void {
+    this.#updater.quitAndInstall();
+  }
+
+  recordInstallRejection(): Promise<void> {
+    return this.#diagnostics.write({
+      operation: 'lifecycle',
+      platform: this.#platform,
+      installedVersion: this.#installedVersion,
+      ...(this.#targetVersion() ? { targetVersion: this.#targetVersion() } : {}),
+      code: 'exit_rejection',
+      summary: 'The update installer rejected after desktop shutdown.',
+    });
   }
 
   readonly #onUpdateAvailable: UpdaterListener = (value) => {
@@ -211,12 +309,12 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   #runScheduledCheck() {
-    if (this.#snapshot.state === 'ready') return;
+    if (isRestartLocked(this.#snapshot)) return;
     this.#beginCheck(false);
   }
 
   #beginCheck(manual: boolean) {
-    if (!this.#started || this.#stopped || this.#active || this.#snapshot.state === 'ready') return;
+    if (!this.#started || this.#stopped || this.#active || isRestartLocked(this.#snapshot)) return;
     this.#clearTimer('transient');
     const generation = this.#generation;
     this.#active = { generation, phase: 'check', manual };
@@ -264,6 +362,22 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
 
   #targetVersion() {
     return 'targetVersion' in this.#snapshot ? (this.#snapshot.targetVersion ?? '') : '';
+  }
+
+  #beginInstallation() {
+    if (
+      this.#stopped ||
+      (this.#snapshot.state !== 'ready' && this.#snapshot.state !== 'restart_confirmation') ||
+      this.#isExitCommitted()
+    )
+      return;
+    const targetVersion = this.#snapshot.targetVersion;
+    this.#transition({
+      state: 'installing',
+      installedVersion: this.#installedVersion,
+      targetVersion,
+    });
+    this.#requestInstall();
   }
 
   #ownsActiveGeneration() {
@@ -320,7 +434,20 @@ export function createStaticUpdaterService(
     start: () => Effect.void,
     stop: () => Effect.void,
     checkForUpdates: () => Effect.void,
+    requestRestart: () => Effect.void,
+    confirmRestart: () => Effect.void,
+    cancelRestart: () => Effect.void,
+    quitAndInstall: () => undefined,
+    recordInstallRejection: () => Promise.resolve(),
   };
+}
+
+function isRestartLocked(snapshot: DesktopUpdateSnapshot) {
+  return (
+    snapshot.state === 'ready' ||
+    snapshot.state === 'restart_confirmation' ||
+    snapshot.state === 'installing'
+  );
 }
 
 export const systemUpdaterTimers: UpdaterTimers = {

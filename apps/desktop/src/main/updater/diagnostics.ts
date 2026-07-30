@@ -5,7 +5,7 @@ const maximumFileBytes = 256 * 1024;
 const maximumSummaryBytes = 4 * 1024;
 
 export interface UpdaterDiagnosticRecord {
-  readonly operation: 'composition' | 'check' | 'download' | 'lifecycle';
+  readonly operation: 'composition' | 'check' | 'download' | 'lifecycle' | 'readiness';
   readonly platform: string;
   readonly installedVersion: string;
   readonly targetVersion?: string | undefined;

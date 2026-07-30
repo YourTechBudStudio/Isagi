@@ -52,6 +52,7 @@ test('runtime events websocket answers explicit attention snapshot requests', as
       Layer.succeed(AgentSessionAttentionProjection, {
         agentSessionAttention: () => Effect.succeed('idle' as const),
         terminalSessionAttention: () => 'idle' as const,
+        workingAgentCount: Effect.succeed(0),
         listAttentionSources: Effect.succeed([
           {
             worktreeId: 2,

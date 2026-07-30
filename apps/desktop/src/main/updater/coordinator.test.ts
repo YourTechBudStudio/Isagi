@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { Effect } from 'effect';
+import { Effect, Exit, Fiber } from 'effect';
 
 import {
   UpdaterCoordinator,
@@ -16,12 +16,18 @@ class FakeUpdater extends EventEmitter implements UpdaterAdapter {
   allowPrerelease = true;
   autoDownload = false;
   autoInstallOnAppQuit = true;
+  autoRunAppAfterInstall = false;
   checks = 0;
+  installs = 0;
   rejection: Error | undefined;
 
   checkForUpdates() {
     this.checks += 1;
     return this.rejection ? Promise.reject(this.rejection) : Promise.resolve(null);
+  }
+
+  quitAndInstall() {
+    this.installs += 1;
   }
 
   override on(event: Parameters<UpdaterAdapter['on']>[0], listener: (...args: unknown[]) => void) {
@@ -75,7 +81,14 @@ class FakeTimers implements UpdaterTimers {
   }
 }
 
-function harness() {
+function harness(
+  options: {
+    readiness?: import('./restart-readiness.js').RestartReadiness;
+    readRestartReadiness?: () => Effect.Effect<import('./restart-readiness.js').RestartReadiness>;
+    exitCommitted?: () => boolean;
+    requestInstall?: () => void;
+  } = {},
+) {
   const updater = new FakeUpdater();
   const timers = new FakeTimers();
   const diagnostics: UpdaterDiagnosticRecord[] = [];
@@ -96,6 +109,11 @@ function harness() {
     diagnostics: sink,
     platform: 'darwin',
     installedVersion: '1.2.3',
+    readRestartReadiness:
+      options.readRestartReadiness ??
+      (() => Effect.succeed(options.readiness ?? { kind: 'clear' })),
+    isExitCommitted: options.exitCommitted ?? (() => false),
+    requestInstall: options.requestInstall ?? (() => undefined),
   });
   return { coordinator, diagnostics, flushes: () => flushes, timers, updater };
 }
@@ -107,6 +125,7 @@ test('start is idempotent, configures stable automatic downloads, and owns fixed
   assert.equal(subject.updater.allowPrerelease, false);
   assert.equal(subject.updater.autoDownload, true);
   assert.equal(subject.updater.autoInstallOnAppQuit, false);
+  assert.equal(subject.updater.autoRunAppAfterInstall, true);
   assert.equal(subject.updater.listenerCount('error'), 1);
   assert.deepEqual(
     [...subject.timers.timeouts.values()].map((timer) => timer.milliseconds),
@@ -244,4 +263,147 @@ test('revisions change only with visible facts and stop suppresses late events a
   assert.equal(subject.timers.intervals.size, 0);
   assert.equal(subject.updater.listenerCount('error'), 0);
   assert.equal(subject.flushes(), 1);
+});
+
+async function reachReady(subject: ReturnType<typeof harness>) {
+  await Effect.runPromise(subject.coordinator.start());
+  await Effect.runPromise(subject.coordinator.checkForUpdates());
+  subject.updater.emit('update-available', { version: '2.0.0' });
+  subject.updater.emit('update-downloaded', { version: '2.0.0' });
+}
+
+test('clear restart readiness installs while working and unknown readiness require confirmation', async () => {
+  let clearInstalls = 0;
+  const clear = harness({ requestInstall: () => (clearInstalls += 1) });
+  await reachReady(clear);
+  await Effect.runPromise(clear.coordinator.requestRestart());
+  assert.equal(clear.coordinator.snapshot.state, 'installing');
+  assert.equal(clearInstalls, 1);
+
+  const working = harness({
+    readiness: { kind: 'working_agents', workingAgentCount: 2 },
+  });
+  await reachReady(working);
+  await Effect.runPromise(working.coordinator.requestRestart());
+  assert.deepEqual(working.coordinator.snapshot, {
+    protocolVersion: 1,
+    revision: 4,
+    state: 'restart_confirmation',
+    installedVersion: '1.2.3',
+    targetVersion: '2.0.0',
+    activity: { kind: 'working', workingAgentCount: 2 },
+  });
+
+  const unknown = harness({ readiness: { kind: 'unknown' } });
+  await reachReady(unknown);
+  await Effect.runPromise(unknown.coordinator.requestRestart());
+  assert.equal(
+    unknown.coordinator.snapshot.state === 'restart_confirmation'
+      ? unknown.coordinator.snapshot.activity.kind
+      : '',
+    'unknown',
+  );
+});
+
+test('restart cancellation preserves the target and confirmation installs without rechecking', async () => {
+  let reads = 0;
+  let installs = 0;
+  const subject = harness({
+    readRestartReadiness: () =>
+      Effect.sync(() => {
+        reads += 1;
+        return { kind: 'working_agents', workingAgentCount: 1 } as const;
+      }),
+    requestInstall: () => (installs += 1),
+  });
+  await reachReady(subject);
+  await Effect.runPromise(subject.coordinator.requestRestart());
+  await Effect.runPromise(subject.coordinator.cancelRestart());
+  assert.deepEqual(subject.coordinator.snapshot, {
+    protocolVersion: 1,
+    revision: 5,
+    state: 'ready',
+    installedVersion: '1.2.3',
+    targetVersion: '2.0.0',
+  });
+  await Effect.runPromise(subject.coordinator.requestRestart());
+  await Effect.runPromise(subject.coordinator.confirmRestart());
+  await Effect.runPromise(subject.coordinator.confirmRestart());
+  assert.equal(subject.coordinator.snapshot.state, 'installing');
+  assert.equal(reads, 2);
+  assert.equal(installs, 1);
+});
+
+test('committed exit and stop suppress restart work and checks in terminal restart states', async () => {
+  let committed = false;
+  let installs = 0;
+  const subject = harness({
+    exitCommitted: () => committed,
+    requestInstall: () => (installs += 1),
+  });
+  await reachReady(subject);
+  committed = true;
+  await Effect.runPromise(subject.coordinator.requestRestart());
+  assert.equal(subject.coordinator.snapshot.state, 'ready');
+  assert.equal(installs, 0);
+
+  committed = false;
+  await Effect.runPromise(subject.coordinator.requestRestart());
+  await Effect.runPromise(subject.coordinator.checkForUpdates());
+  assert.equal(subject.updater.checks, 1);
+});
+
+test('a readiness read that dies or is interrupted leaves restart requestable', async () => {
+  let mode: 'die' | 'hang' | 'clear' = 'die';
+  let installs = 0;
+  const subject = harness({
+    readRestartReadiness: () =>
+      mode === 'die'
+        ? Effect.die(new Error('readiness defect'))
+        : mode === 'hang'
+          ? Effect.never
+          : Effect.succeed({ kind: 'clear' } as const),
+    requestInstall: () => (installs += 1),
+  });
+  await reachReady(subject);
+
+  assert.equal(
+    Exit.isFailure(await Effect.runPromiseExit(subject.coordinator.requestRestart())),
+    true,
+  );
+  assert.equal(subject.coordinator.snapshot.state, 'ready');
+
+  mode = 'hang';
+  await Effect.runPromise(Fiber.interrupt(Effect.runFork(subject.coordinator.requestRestart())));
+  assert.equal(subject.coordinator.snapshot.state, 'ready');
+
+  // Neither outcome may keep the single-flight marker set: the next request
+  // still has to reach a decision.
+  mode = 'clear';
+  await Effect.runPromise(subject.coordinator.requestRestart());
+  assert.equal(subject.coordinator.snapshot.state, 'installing');
+  assert.equal(installs, 1);
+});
+
+test('restart readiness is single-flight and a result arriving after stop is ignored', async () => {
+  let reads = 0;
+  let resolveRead!: (value: import('./restart-readiness.js').RestartReadiness) => void;
+  const pending = new Promise<import('./restart-readiness.js').RestartReadiness>((resolve) => {
+    resolveRead = resolve;
+  });
+  const subject = harness({
+    readRestartReadiness: () => {
+      reads += 1;
+      return Effect.promise(() => pending);
+    },
+  });
+  await reachReady(subject);
+  const first = Effect.runPromise(subject.coordinator.requestRestart());
+  const duplicate = Effect.runPromise(subject.coordinator.requestRestart());
+  await Promise.resolve();
+  assert.equal(reads, 1);
+  await Effect.runPromise(subject.coordinator.stop());
+  resolveRead({ kind: 'clear' });
+  await Promise.all([first, duplicate]);
+  assert.equal(subject.coordinator.snapshot.state, 'ready');
 });
