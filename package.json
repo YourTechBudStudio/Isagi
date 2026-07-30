@@ -22,6 +22,7 @@
     "lint:fix": "oxlint . --threads=8 --fix --no-error-on-unmatched-pattern",
     "pack:desktop": "pnpm build && pnpm --filter @isagi/desktop pack:dir",
     "package:desktop": "pnpm build && pnpm --filter @isagi/desktop dist",
+    "package:desktop:linux": "pnpm build && pnpm --filter @isagi/desktop dist:linux",
     "test": "pnpm test:dev-supervisor && pnpm test:versions-sync && pnpm -r --if-present test",
     "test:browser": "pnpm --filter @isagi/web test:browser",
     "test:dev-supervisor": "node --test \"scripts/dev-supervisor/*.test.mjs\"",

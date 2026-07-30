@@ -1,20 +1,32 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { chmodSync, copyFileSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Data, Effect, Exit } from 'effect';
 
+import {
+  classifyPackagingRequest,
+  resolveApplicationRoot,
+  unsupportedPackagingMessage,
+} from './electron-builder-target.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
 import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 import { prepareRuntimeStage } from './runtime-stage/stage.mjs';
+import { linuxReleaseContract, verifyLinuxRelease } from './verify-linux-release.mjs';
 import { verifyUpdaterPackage } from './verify-updater-package.mjs';
 
 class CommandStartError extends Data.TaggedError('CommandStartError') {}
 class PackagedRuntimeMissingError extends Data.TaggedError('PackagedRuntimeMissingError') {}
 class PackagedRuntimeParityError extends Data.TaggedError('PackagedRuntimeParityError') {}
+class UpdaterPackageVerificationError extends Data.TaggedError('UpdaterPackageVerificationError') {}
+class LinuxReleaseStagingError extends Data.TaggedError('LinuxReleaseStagingError') {}
+class LinuxReleaseVerificationError extends Data.TaggedError('LinuxReleaseVerificationError') {}
+class UnsupportedPackagingRequestError extends Data.TaggedError(
+  'UnsupportedPackagingRequestError',
+) {}
 
 const executableSuffix = process.platform === 'win32' ? '.cmd' : '';
 const desktopDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -26,13 +38,22 @@ const electronBuilderCommand = join(
 );
 
 const program = Effect.gen(function* () {
+  // Reject an unshippable or unrecognized packaging request before anything is
+  // built, so it can never leave a stable-named artifact behind unverified.
+  const request = classifyPackagingRequest(process.argv.slice(2));
+  if (request.kind === 'unsupported') {
+    return yield* new UnsupportedPackagingRequestError({
+      message: unsupportedPackagingMessage(request.reason),
+    });
+  }
   yield* prepareRuntimeStage();
   const packageResult = yield* runCommand(electronBuilderCommand, process.argv.slice(2));
   const packageExitCode = commandExitCode(packageResult);
   if (packageExitCode !== 0) return packageExitCode;
 
+  const releaseRoot = resolve(desktopDirectory, 'release');
   const applicationRoot = yield* Effect.try({
-    try: () => resolveCurrentApplicationRoot(process.argv.slice(2)),
+    try: () => resolveApplicationRoot(process.argv.slice(2), releaseRoot),
     catch: (cause) => new PackagedRuntimeMissingError({ cause }),
   });
   const packagedRuntimeRoot = join(packagedResourcesRoot(applicationRoot), 'runtime');
@@ -50,11 +71,33 @@ const program = Effect.gen(function* () {
         asarPath: join(packagedResourcesRoot(applicationRoot), 'app.asar'),
         sourceRoot: join(desktopDirectory, 'src'),
       }),
-    catch: (cause) => new PackagedRuntimeParityError({ cause }),
+    catch: (cause) => new UpdaterPackageVerificationError({ cause }),
   });
   console.log(
     `[desktop] Updater package verification passed (${updaterVerification.loadSiteCount} load site, ${updaterVerification.dependencyCount} production dependencies, ${updaterVerification.archiveEntryCount} archive entries)`,
   );
+  if (request.kind === 'linux-release') {
+    const installerPath = join(releaseRoot, linuxReleaseContract.installerName);
+    yield* Effect.try({
+      try: () => {
+        copyFileSync(join(desktopDirectory, 'scripts/install-isagi-linux.sh'), installerPath);
+        chmodSync(installerPath, 0o755);
+      },
+      catch: (cause) => new LinuxReleaseStagingError({ cause }),
+    });
+    const manifest = JSON.parse(readFileSync(join(desktopDirectory, 'package.json'), 'utf8'));
+    const linuxVerification = yield* Effect.tryPromise({
+      try: () =>
+        verifyLinuxRelease({
+          expectedVersion: manifest.version,
+          releaseDirectory: releaseRoot,
+        }),
+      catch: (cause) => new LinuxReleaseVerificationError({ cause }),
+    });
+    console.log(
+      `[desktop] Linux release verification passed (${linuxVerification.appImageSize} bytes, ${linuxVerification.iconSizes.length} icon frames, ${linuxVerification.elfPayloadCount} x86-64 ELF payloads, blockmap ${linuxVerification.blockMapSize} bytes)`,
+    );
+  }
   return 0;
 });
 
@@ -137,36 +180,6 @@ function commandExitCode(result) {
   }
 
   return 1;
-}
-
-export function resolveCurrentApplicationRoot(
-  args,
-  platform = process.platform,
-  architecture = process.arch,
-) {
-  const requestedPlatform = args.includes('--mac')
-    ? 'darwin'
-    : args.includes('--linux')
-      ? 'linux'
-      : platform;
-  const requestedArchitecture = args.includes('--x64')
-    ? 'x64'
-    : args.includes('--arm64')
-      ? 'arm64'
-      : architecture;
-  const releaseRoot = resolve(desktopDirectory, 'release');
-  const root =
-    requestedPlatform === 'darwin'
-      ? join(releaseRoot, requestedArchitecture === 'arm64' ? 'mac-arm64' : 'mac', 'Isagi.app')
-      : requestedPlatform === 'linux'
-        ? join(
-            releaseRoot,
-            requestedArchitecture === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked',
-          )
-        : '';
-  if (!root || !existsSync(root))
-    throw new Error(`Current packaged application output is missing at ${root || releaseRoot}`);
-  return root;
 }
 
 function packagedResourcesRoot(applicationRoot) {

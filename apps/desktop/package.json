@@ -13,12 +13,14 @@
     "dev:install-launcher": "node scripts/development-desktop-entry.mjs install",
     "dev:prepared": "electron .",
     "dev:uninstall-launcher": "node scripts/development-desktop-entry.mjs uninstall",
-    "dist": "node scripts/run-electron-builder.mjs",
-    "pack:dir": "node scripts/run-electron-builder.mjs --dir",
+    "dist": "node scripts/run-electron-builder.mjs --publish never",
+    "dist:linux": "node scripts/run-electron-builder.mjs --linux AppImage --x64 --publish never",
+    "pack:dir": "node scripts/run-electron-builder.mjs --dir --publish never",
     "smoke:runtime-stage": "node scripts/smoke-runtime-stage.mjs",
     "stage:runtime": "node scripts/stage-runtime.mjs",
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\" \"scripts/runtime-stage/*.test.mjs\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify:linux-release": "node scripts/verify-linux-release.mjs"
   },
   "dependencies": {
     "@isagi/contracts": "workspace:*",

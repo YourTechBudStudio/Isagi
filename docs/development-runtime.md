@@ -17,6 +17,13 @@ This document describes how Isagi starts, owns, and diagnoses its development ru
 | `pnpm --filter @isagi/desktop smoke:runtime-stage`             | Validates and smokes the canonical stage and a relocated copy under Electron Node mode.                               |
 | `pnpm pack:desktop`                                            | Builds the workspace, creates an unpacked desktop application, checks stage parity, and smokes the packaged runtime.  |
 | `pnpm package:desktop`                                         | Builds the workspace, creates configured desktop distributions, checks stage parity, and smokes the packaged runtime. |
+| `pnpm package:desktop:linux`                                   | On Linux x64, builds the stable AppImage release set and runs the complete Linux artifact verifier.                   |
+
+Whenever packaging resolves to the configured linux/x64 AppImage, the wrapper stages the installer and runs the complete Linux artifact verifier, so `pnpm package:desktop` on Linux x64 produces exactly the same verified release set as `pnpm package:desktop:linux`. The explicit command stays the release entry point because it names the target regardless of the host it runs on. Isagi ships exactly one Linux artifact, so any other Linux distribution request — another target such as `deb` or `snap`, a multi-target selection, a non-x64 architecture, or Linux packaged alongside another platform — is rejected before the build starts rather than built without verification. `--dir` remains a separate unpacked-packaging operation.
+
+Every packaging invocation must pass `--publish never` exactly once, and the wrapper refuses the build otherwise. Isagi verifies artifacts only after Electron Builder returns, while Electron Builder schedules uploads as each artifact is created, so any other policy would publish before verification and no later failure could retract the upload. Omitting the flag is refused for the same reason: Electron Builder publishes implicitly on a git tag, on CI, or under an npm `release` lifecycle event. Publishing is Phase 8's job, from artifacts this wrapper has already verified.
+
+The wrapper recognizes one exact long-form spelling per flag — `--linux`, `--mac`, `--win`, `--x64`, `--arm64`, `--ia32`, `--armv7l`, `--universal`, `--dir`, and `--publish` — and refuses anything else. Alternative Electron Builder syntax such as `--linux=AppImage`, `-l=AppImage`, `--x64=true`, a combined `-mwl`, or short aliases such as `-l` and `-p` is rejected rather than guessed at. Pass the documented commands above; if you need a one-off Electron Builder invocation, use those long-form flags.
 
 Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development needs an explicit `VITE_ISAGI_RUNTIME_URL`; Electron never uses that value for runtime discovery.
 
@@ -27,6 +34,27 @@ Isagi uses `studio.yourtechbud.isagi` as its stable application identity across 
 `pnpm dev` reads the same `desktopName`, but it deliberately does not install a launcher into the user applications directory. On Linux, run `pnpm dev:install-launcher` once and restart `pnpm dev` so GNOME can resolve the application name and icon; run `pnpm dev:uninstall-launcher` to remove it. The explicit commands make the host mutation visible, refuse to overwrite a launcher they do not own, and make the last installed worktree the development launch target. Remove the development launcher before integrating a production AppImage at the same user-level path.
 
 Installer-style Linux distributions should install their generated desktop entry and icon as part of installation. An AppImage carries its generated desktop metadata and icon, but running the portable file directly is not installation; complete dock and launcher integration still requires an AppImage integration mechanism or a separate installer script. The synchronized identity keeps either integration path aligned with the running window.
+
+## Linux AppImage installation
+
+Download `Isagi-linux-x86_64.AppImage` and `install-isagi-linux.sh` from Isagi's official GitHub release. An AppImage is executable code, and the installer extracts it while validating its embedded desktop assets; do not use files obtained from another source.
+
+To run the portable AppImage directly without registering it in the application menu:
+
+```sh
+chmod +x Isagi-linux-x86_64.AppImage
+./Isagi-linux-x86_64.AppImage
+```
+
+To install Isagi for the current user and register it in the application menu, keep both files beside each other and run:
+
+```sh
+sh ./install-isagi-linux.sh
+```
+
+The installer also accepts an explicit AppImage path: `sh ./install-isagi-linux.sh /absolute/or/relative/path/Isagi-linux-x86_64.AppImage`. It installs the executable at `${XDG_DATA_HOME:-$HOME/.local/share}/isagi/Isagi.AppImage`, the desktop entry under the adjacent `applications` directory, and nine application icon sizes under `icons/hicolor`. It does not require root, change `PATH`, edit shell profiles, install `hicolor/index.theme`, or depend on AppImageLauncher. Reinstalling from a newer official release safely replaces only user-owned regular files at Isagi's fixed installation paths.
+
+There is no uninstall command in the MVP. To remove the default-path installation, delete `$HOME/.local/share/isagi/Isagi.AppImage`, `$HOME/.local/share/applications/studio.yourtechbud.isagi.desktop`, and each `$HOME/.local/share/icons/hicolor/{size}x{size}/apps/isagi.png` where `{size}` is `16`, `24`, `32`, `48`, `64`, `96`, `128`, `256`, or `512`. If `XDG_DATA_HOME` was set during installation, use that directory instead of `$HOME/.local/share`. Run `update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications"` afterward when that command is available.
 
 ## Ownership topology
 
