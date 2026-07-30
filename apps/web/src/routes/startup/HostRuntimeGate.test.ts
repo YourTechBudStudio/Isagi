@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  reconcileRuntimeStatus,
-  type HostRuntimeStatusSnapshot,
-} from '../../lib/desktop-bridge.js';
+import { reconcileRevision, type HostRuntimeStatusSnapshot } from '../../lib/desktop-bridge.js';
 import { hostRuntimeAllowsQueries, hostRuntimeGateDecision } from './HostRuntimeGate.js';
 
 const managedFailure = {
@@ -40,8 +37,8 @@ test('snapshot reconciliation retains the greatest lifecycle revision', () => {
     ownership: 'managed',
     state: 'ready',
   } as const satisfies HostRuntimeStatusSnapshot;
-  assert.equal(reconcileRuntimeStatus(managedFailure, ready), managedFailure);
-  assert.equal(reconcileRuntimeStatus(ready, managedFailure), managedFailure);
+  assert.equal(reconcileRevision<HostRuntimeStatusSnapshot>(managedFailure, ready), managedFailure);
+  assert.equal(reconcileRevision<HostRuntimeStatusSnapshot>(ready, managedFailure), managedFailure);
 });
 
 test('runtime-backed queries remain disabled until the host gate passes', () => {

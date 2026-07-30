@@ -3,7 +3,11 @@
 // Chromium cannot evaluate before exposing the bridge.
 const { contextBridge, ipcRenderer } = require('electron') as typeof import('electron');
 
-import type { HostRuntimeStatusSnapshot } from '@isagi/contracts';
+import type {
+  DesktopUpdateIntent,
+  DesktopUpdateSnapshot,
+  HostRuntimeStatusSnapshot,
+} from '@isagi/contracts';
 
 const RAIL_TOP_INSET = process.platform === 'darwin' ? '3rem' : '1rem';
 
@@ -39,4 +43,36 @@ contextBridge.exposeInMainWorld('isagi', {
   setHostChromeVisible: (visible: boolean) =>
     ipcRenderer.invoke('isagi:host-chrome-visible', visible) as Promise<void>,
   quitApp: () => ipcRenderer.invoke('isagi:quit-app') as Promise<void>,
+
+  getDesktopUpdate: () =>
+    ipcRenderer.invoke('isagi:desktop-update') as Promise<DesktopUpdateSnapshot>,
+  subscribeDesktopUpdate: (listener: (snapshot: DesktopUpdateSnapshot) => void) => {
+    const receive = (_event: Electron.IpcRendererEvent, snapshot: DesktopUpdateSnapshot) =>
+      listener(snapshot);
+    ipcRenderer.on('isagi:desktop-update-changed', receive);
+    // Subscribe first, then reconcile, exactly as the runtime status does: an
+    // update published between the two cannot be lost, because the renderer
+    // keeps the greatest revision it has observed.
+    void ipcRenderer
+      .invoke('isagi:desktop-update')
+      .then((snapshot: DesktopUpdateSnapshot | undefined) => {
+        if (snapshot) listener(snapshot);
+      })
+      .catch(() => {
+        // The renderer may be destroyed between subscription and reconciliation.
+      });
+    return () => ipcRenderer.off('isagi:desktop-update-changed', receive);
+  },
+
+  // Each action is zero-argument and builds its own intent here. The renderer
+  // never supplies an intent value, a version, a URL, or a channel name.
+  checkForUpdates: () => sendUpdateIntent({ type: 'check_for_updates' }),
+  requestUpdateRestart: () => sendUpdateIntent({ type: 'request_restart' }),
+  confirmUpdateRestart: () => sendUpdateIntent({ type: 'confirm_restart' }),
+  cancelUpdateRestart: () => sendUpdateIntent({ type: 'cancel_restart' }),
+  openUpdateDownloadPage: () => sendUpdateIntent({ type: 'open_download_page' }),
 });
+
+function sendUpdateIntent(intent: DesktopUpdateIntent): Promise<void> {
+  return ipcRenderer.invoke('isagi:desktop-update-intent', intent) as Promise<void>;
+}

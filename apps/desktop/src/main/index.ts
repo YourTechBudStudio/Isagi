@@ -4,7 +4,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { Cause, Effect, Exit } from 'effect';
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 
 import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForWebServer } from './boot.js';
@@ -13,7 +13,12 @@ import { assertAuthorizedIpcSender } from './ipc-security.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { createRuntimeLifecycle } from './runtime.js';
 import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
-import { composeDesktopUpdater, type DesktopUpdaterService } from './updater/index.js';
+import {
+  composeDesktopUpdater,
+  decodeDesktopUpdateIntent,
+  dispatchDesktopUpdateIntent,
+  type DesktopUpdaterService,
+} from './updater/index.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'studio.yourtechbud.isagi';
@@ -24,6 +29,7 @@ const DEVELOPMENT_ICON_PATH = join(
 const TRAFFIC_LIGHT_POSITION = { x: 18, y: 18 };
 const HIDDEN_TRAFFIC_LIGHT_POSITION = { x: -100, y: -100 };
 const RUNTIME_STATUS_CHANNEL = 'isagi:runtime-status-changed';
+const DESKTOP_UPDATE_CHANNEL = 'isagi:desktop-update-changed';
 const isMac = process.platform === 'darwin';
 const isDev = !app.isPackaged;
 const desktopRoot = join(currentDirectory, '../..');
@@ -37,11 +43,16 @@ let mainWindow: BrowserWindow | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
 let exitRequested = false;
 let desktopUpdater: DesktopUpdaterService | undefined;
+let unsubscribeDesktopUpdate: (() => void) | undefined;
 const shutdown = new DesktopShutdownCoordinator({
   desktopUpdater: () => desktopUpdater,
   runtimeLifecycle,
   destroyRenderer: () => {
     exitRequested = true;
+    // Nothing can receive a snapshot past this point, and the installing state
+    // the renderer last saw is the honest final one.
+    unsubscribeDesktopUpdate?.();
+    unsubscribeDesktopUpdate = undefined;
     destroyRendererForExit(mainWindow);
   },
   exit: (code) => app.exit(code),
@@ -155,9 +166,13 @@ function tryPromise<T>(run: () => Promise<T>) {
 }
 
 function publishRuntimeStatus(snapshot: typeof runtimeLifecycle.snapshot) {
+  send(RUNTIME_STATUS_CHANNEL, snapshot);
+}
+
+function send(channel: string, payload: unknown) {
   const webContents = mainWindow?.webContents;
   if (!webContents || webContents.isDestroyed()) return;
-  webContents.send(RUNTIME_STATUS_CHANNEL, snapshot);
+  webContents.send(channel, payload);
 }
 
 ipcMain.handle('isagi:runtime-url', (event) => {
@@ -171,6 +186,21 @@ ipcMain.handle('isagi:runtime-url', (event) => {
 ipcMain.handle('isagi:runtime-status', (event) => {
   assertAuthorizedIpcSender(mainWindow, event);
   return runtimeLifecycle.snapshot;
+});
+
+ipcMain.handle('isagi:desktop-update', (event) => {
+  assertAuthorizedIpcSender(mainWindow, event);
+  return desktopUpdater?.snapshot;
+});
+
+ipcMain.handle('isagi:desktop-update-intent', async (event, payload: unknown) => {
+  assertAuthorizedIpcSender(mainWindow, event);
+  const updater = desktopUpdater;
+  if (!updater) return;
+  await dispatchDesktopUpdateIntent(decodeDesktopUpdateIntent(payload), {
+    service: updater,
+    openExternal: (url) => shell.openExternal(url),
+  });
 });
 
 ipcMain.handle('isagi:host-chrome-visible', (event, visible: unknown) => {
@@ -218,6 +248,12 @@ app
         void shutdown.request({ kind: 'install_update', install: () => updater.quitAndInstall() });
       },
     });
+    // One subscription for the process, established before the window exists.
+    // A snapshot published before the renderer can listen is not lost: the
+    // renderer reconciles the current snapshot when it subscribes.
+    unsubscribeDesktopUpdate = desktopUpdater.subscribe((snapshot) =>
+      send(DESKTOP_UPDATE_CHANNEL, snapshot),
+    );
     await Effect.runPromise(desktopUpdater.start());
     return createWindow();
   })

@@ -1,12 +1,14 @@
 import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '../../../src/components/Button.js';
 import { Overline } from '../../../src/components/Overline.js';
 import { RailUpdateFooter } from '../../../src/routes/workspace/RailUpdateFooter.js';
+import type { RestartActivity } from '../../../src/routes/workspace/RestartConfirmation.js';
 import {
   ACTIVITY_OPTIONS,
   INSTALLED_VERSION,
+  RESTART_LATENCY_MS,
   STATE_OPTIONS,
   type FixtureStateOption,
 } from './state.js';
@@ -30,6 +32,7 @@ export function UpdateGalleryApp() {
     ACTIVITY_OPTIONS.find((option) => option.id === activityId) ?? ACTIVITY_OPTIONS[0]!;
   const railWidth = narrow ? 200 : 236;
   const record = (action: string) => setActions((previous) => [...previous, action]);
+  const restart = useSimulatedRestart(activity.activity, record);
 
   return (
     <div className="relative z-1 h-screen overflow-y-auto px-8 py-7 text-fg">
@@ -83,9 +86,12 @@ export function UpdateGalleryApp() {
           <RailUpdateFooter
             state={selected.state}
             installedVersion={INSTALLED_VERSION}
-            confirmRestart={activity.activity}
+            confirmRestart={restart.confirmRestart}
+            restartPending={restart.restartPending}
             onCheck={() => record('check')}
-            onRestart={() => record('restart')}
+            onRestart={restart.onRestart}
+            onCancelRestart={restart.onCancelRestart}
+            onConfirmRestart={restart.onConfirmRestart}
             onRetryDownload={() => record('retry-download')}
             onOpenDownloadPage={() => record('open-download-page')}
           />
@@ -131,6 +137,43 @@ export function UpdateGalleryApp() {
   );
 }
 
+/**
+ * Stands in for the desktop coordinator, and reproduces its causality rather
+ * than its result: pressing the control asks, the answer arrives later, and only
+ * then does the confirmation appear. A fixture that handed the component an
+ * activity up front would exercise a sequence production never performs.
+ */
+function useSimulatedRestart(activity: RestartActivity | null, record: (action: string) => void) {
+  const [restartPending, setRestartPending] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState<RestartActivity | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  return {
+    restartPending,
+    confirmRestart,
+    onRestart: () => {
+      record('request-restart');
+      setRestartPending(true);
+      timer.current = setTimeout(() => {
+        setRestartPending(false);
+        // Nothing working restarts outright; anything else raises the question.
+        if (activity) setConfirmRestart(activity);
+        else record('restarting');
+      }, RESTART_LATENCY_MS);
+    },
+    onCancelRestart: () => {
+      record('cancel-restart');
+      setConfirmRestart(null);
+    },
+    onConfirmRestart: () => {
+      record('confirm-restart');
+      setConfirmRestart(null);
+    },
+  };
+}
+
 function ContactSheetEntry({
   option,
   width,
@@ -147,7 +190,9 @@ function ContactSheetEntry({
           state={option.state}
           installedVersion={INSTALLED_VERSION}
           onCheck={() => record('check')}
-          onRestart={() => record('restart')}
+          onRestart={() => record('request-restart')}
+          onCancelRestart={() => record('cancel-restart')}
+          onConfirmRestart={() => record('confirm-restart')}
           onRetryDownload={() => record('retry-download')}
           onOpenDownloadPage={() => record('open-download-page')}
         />

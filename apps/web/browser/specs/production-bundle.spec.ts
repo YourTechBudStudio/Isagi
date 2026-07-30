@@ -11,6 +11,11 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('/__dev/terminal-cache-states');
   expect(bundle).not.toContain('fixture-forced-dom-renderer');
   expect(bundle).not.toContain('ANSI_FIXTURE_SEED');
+  // The update surface's fixture drives the component directly and simulates
+  // the host. None of that may reach a shipped build.
+  expect(bundle).not.toContain('data-state-option');
+  expect(bundle).not.toContain('data-activity-option');
+  expect(bundle).not.toContain('useSimulatedRestart');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {

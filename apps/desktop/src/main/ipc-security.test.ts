@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 
@@ -28,4 +31,47 @@ test('IPC authorization accepts only the active non-destroyed Isagi window', () 
     () => assertAuthorizedIpcSender(undefined, { sender: activeContents } as never),
     /active Isagi window/,
   );
+});
+
+/**
+ * The handlers themselves live in the Electron entry module, which cannot be
+ * imported without an Electron app. Authorization is not optional on any of
+ * them, so it is verified structurally: a new channel that forgets the check
+ * fails here rather than shipping an unauthorized one.
+ */
+test('every renderer-invokable channel authorizes its sender first', async () => {
+  const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+
+  const handlers = [...source.matchAll(/ipcMain\.handle\(\s*'([^']+)'[\s\S]*?\n\}\);/gu)];
+  assert.ok(handlers.length >= 6, `expected the known channels, found ${handlers.length}`);
+
+  const channels = handlers.map(([, channel]) => channel ?? '');
+  assert.deepEqual(
+    channels.filter((channel) => channel.startsWith('isagi:desktop-update')).sort(),
+    ['isagi:desktop-update', 'isagi:desktop-update-intent'],
+  );
+
+  for (const [body, channel] of handlers)
+    assert.match(body, /assertAuthorizedIpcSender\(mainWindow, event\)/u, channel);
+});
+
+test('the renderer is never handed a general invoke, a channel name, or a destination', async () => {
+  const source = await readFile(
+    join(dirname(fileURLToPath(import.meta.url)), '../preload/index.ts'),
+    'utf8',
+  );
+
+  const exposed = source.slice(source.indexOf('exposeInMainWorld'));
+  // Every intent method is zero-argument; only the two capabilities that must
+  // carry data — a status listener and the chrome flag — take a parameter.
+  for (const method of [
+    'checkForUpdates',
+    'requestUpdateRestart',
+    'confirmUpdateRestart',
+    'cancelUpdateRestart',
+    'openUpdateDownloadPage',
+  ])
+    assert.match(exposed, new RegExp(`${method}: \\(\\) =>`, 'u'), method);
+
+  assert.doesNotMatch(exposed, /invoke: |https?:\/\//u);
 });

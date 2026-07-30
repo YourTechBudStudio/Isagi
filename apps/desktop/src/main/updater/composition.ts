@@ -29,13 +29,14 @@ export async function composeDesktopUpdater(
   } = {},
 ): Promise<DesktopUpdaterService> {
   const installedVersion = application.getVersion();
-  if (!application.isPackaged) return createStaticUpdaterService(installedVersion, 'disabled');
+  if (!application.isPackaged)
+    return createStaticUpdaterService(installedVersion, { state: 'disabled' });
 
   const platform = options.platform ?? process.platform;
   const diagnostics =
     options.diagnostics ?? createUpdaterDiagnosticSink(application.getPath('logs'));
   if (platform !== 'darwin' && platform !== 'linux') {
-    return createStaticUpdaterService(installedVersion, 'disabled');
+    return createStaticUpdaterService(installedVersion, { state: 'disabled' });
   }
 
   if (platform === 'linux') {
@@ -48,7 +49,13 @@ export async function composeDesktopUpdater(
         code: eligibility.code,
         summary: eligibility.summary,
       });
-      return createStaticUpdaterService(installedVersion, 'manual_update_required');
+      // This is the one composition where the download page is reachable, so it
+      // receives the real sink and can persist a rejected launch.
+      return createStaticUpdaterService(installedVersion, {
+        state: 'manual_update_required',
+        diagnostics,
+        platform,
+      });
     }
   }
 

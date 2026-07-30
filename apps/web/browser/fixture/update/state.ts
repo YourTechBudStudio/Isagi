@@ -2,9 +2,10 @@ import type { DesktopUpdateState } from '../../../src/routes/workspace/RailUpdat
 import type { RestartActivity } from '../../../src/routes/workspace/RestartConfirmation.js';
 
 /**
- * Fixture state for the update surface. This is the only data source the footer
- * has until Phase 05 wires the host snapshot — it lives here, outside the
- * production bundle, rather than behind a flag inside the app.
+ * Fixture state for the update surface. Production now takes these facts from
+ * the host snapshot; this harness drives the same component directly, outside
+ * the production bundle, so the surface stays reviewable and keyboard-testable
+ * without Electron.
  */
 export const INSTALLED_VERSION = '0.4.2';
 export const NEXT_VERSION = '0.4.3';
@@ -47,9 +48,21 @@ export const STATE_OPTIONS: readonly FixtureStateOption[] = [
   {
     id: 'manual-required',
     label: 'Manual update (Linux)',
-    state: { kind: 'manual-required', version: NEXT_VERSION },
+    state: { kind: 'manual-required', openFailed: false },
+  },
+  {
+    id: 'manual-required-open-failed',
+    label: 'Manual update, browser failed',
+    state: { kind: 'manual-required', openFailed: true },
   },
 ];
+
+/**
+ * How long the simulated host takes to answer a restart request. The real one
+ * reads agent activity over HTTP with a two-second ceiling, so the disabled
+ * `Restart to update` state is genuinely observable and worth pinning.
+ */
+export const RESTART_LATENCY_MS = 400;
 
 export interface FixtureActivityOption {
   readonly id: string;
@@ -57,9 +70,18 @@ export interface FixtureActivityOption {
   readonly activity: RestartActivity | null;
 }
 
+/** What the simulated host will answer with once a restart request resolves. */
 export const ACTIVITY_OPTIONS: readonly FixtureActivityOption[] = [
   { id: 'none', label: 'Nothing working', activity: null },
-  { id: 'working-1', label: '1 agent working', activity: { kind: 'working', count: 1 } },
-  { id: 'working-3', label: '3 agents working', activity: { kind: 'working', count: 3 } },
+  {
+    id: 'working-1',
+    label: '1 agent working',
+    activity: { kind: 'working', workingAgentCount: 1 },
+  },
+  {
+    id: 'working-3',
+    label: '3 agents working',
+    activity: { kind: 'working', workingAgentCount: 3 },
+  },
   { id: 'unknown', label: 'Activity unknown', activity: { kind: 'unknown' } },
 ];

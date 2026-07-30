@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 import { DESKTOP_UPDATE_PROTOCOL_VERSION, type DesktopUpdateSnapshot } from '@isagi/contracts';
 
 import type { UpdaterDiagnosticSink } from './diagnostics.js';
+import type { DownloadPageOutcome } from './download-page.js';
 
 export const updaterSchedule = {
   firstCheckMs: 30_000,
@@ -50,7 +51,28 @@ export interface DesktopUpdaterService {
   cancelRestart(): Effect.Effect<void>;
   quitAndInstall(): void;
   recordInstallRejection(): Promise<void>;
+  /**
+   * Claims the next download-page attempt and returns the only way to report it.
+   * Opening the page is main's own operation, not the updater's, so the service
+   * never navigates — but the outcome is updater state, and it lands on the same
+   * snapshot the renderer already watches and the same diagnostic trail as every
+   * other updater failure.
+   *
+   * Ownership is claimed here, when the user presses, rather than when the launch
+   * settles. Two overlapping presses finish in whatever order the OS decides, and
+   * `openFailure` means *the last attempt*, so an older completion must not be
+   * able to overwrite a newer one's answer. The claim is what makes that order
+   * knowable.
+   *
+   * Both outcomes are reported, not just the failure: a launch that succeeds is
+   * what clears a previously published failure, so the user who retries and gets
+   * a browser stops being told the action failed.
+   */
+  beginDownloadPageAttempt(): ReportDownloadPageOutcome;
 }
+
+/** Reports one claimed attempt. Calling it twice reports the same attempt twice. */
+export type ReportDownloadPageOutcome = (outcome: DownloadPageOutcome) => Promise<void>;
 
 export type RestartReadiness = import('./restart-readiness.js').RestartReadiness;
 
@@ -65,6 +87,54 @@ type ActiveOperation = {
   manual: boolean;
 };
 
+/**
+ * The published snapshot and its subscribers. Every service that can change what
+ * the renderer sees owns one of these, because the revision rule is the whole
+ * basis of the client's subscribe-then-reconcile: a revision that fails to
+ * advance, or advances without a listener being told, is a renderer stuck on a
+ * stale fact. One implementation, so the manual-install service cannot drift
+ * from the coordinator on it.
+ */
+class SnapshotStore {
+  readonly #listeners = new Set<(snapshot: DesktopUpdateSnapshot) => void>();
+  #snapshot: DesktopUpdateSnapshot;
+  #revision = 0;
+
+  constructor(facts: SnapshotFacts) {
+    this.#snapshot = {
+      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
+      revision: 0,
+      ...facts,
+    } as DesktopUpdateSnapshot;
+  }
+
+  get snapshot() {
+    return this.#snapshot;
+  }
+
+  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  clearListeners() {
+    this.#listeners.clear();
+  }
+
+  /** A publish that would change nothing is not a revision, so it is not a push. */
+  publish(facts: SnapshotFacts) {
+    const next = {
+      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
+      revision: this.#revision + 1,
+      ...facts,
+    } as DesktopUpdateSnapshot;
+    if (sameFacts(this.#snapshot, next)) return;
+    this.#revision += 1;
+    this.#snapshot = next;
+    for (const listener of this.#listeners) listener(next);
+  }
+}
+
 export class UpdaterCoordinator implements DesktopUpdaterService {
   readonly #updater: UpdaterAdapter;
   readonly #timers: UpdaterTimers;
@@ -74,9 +144,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   readonly #readRestartReadiness: () => Effect.Effect<RestartReadiness>;
   readonly #isExitCommitted: () => boolean;
   readonly #requestInstall: () => void;
-  readonly #listeners = new Set<(snapshot: DesktopUpdateSnapshot) => void>();
-  #snapshot: DesktopUpdateSnapshot;
-  #revision = 0;
+  readonly #store: SnapshotStore;
   #generation = 0;
   #started = false;
   #stopped = false;
@@ -104,21 +172,15 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     this.#readRestartReadiness = dependencies.readRestartReadiness;
     this.#isExitCommitted = dependencies.isExitCommitted;
     this.#requestInstall = dependencies.requestInstall;
-    this.#snapshot = {
-      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-      revision: 0,
-      state: 'idle',
-      installedVersion: this.#installedVersion,
-    };
+    this.#store = new SnapshotStore({ state: 'idle', installedVersion: this.#installedVersion });
   }
 
   get snapshot() {
-    return this.#snapshot;
+    return this.#store.snapshot;
   }
 
   subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return this.#store.subscribe(listener);
   }
 
   start(): Effect.Effect<void> {
@@ -154,7 +216,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       if (this.#started) {
         for (const [event, listener] of this.#eventListeners) this.#updater.off(event, listener);
       }
-      this.#listeners.clear();
+      this.#store.clearListeners();
       await this.#diagnostics.flush();
     });
   }
@@ -167,7 +229,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     return Effect.gen(this, function* () {
       if (
         this.#stopped ||
-        this.#snapshot.state !== 'ready' ||
+        this.#store.snapshot.state !== 'ready' ||
         this.#readinessGeneration !== undefined ||
         this.#isExitCommitted()
       )
@@ -186,7 +248,7 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       );
       if (
         !this.#ownsGeneration(generation) ||
-        this.#snapshot.state !== 'ready' ||
+        this.#store.snapshot.state !== 'ready' ||
         this.#isExitCommitted()
       )
         return;
@@ -194,8 +256,8 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
         this.#beginInstallation();
         return;
       }
-      const targetVersion = this.#snapshot.targetVersion;
-      this.#transition({
+      const targetVersion = this.#store.snapshot.targetVersion;
+      this.#store.publish({
         state: 'restart_confirmation',
         installedVersion: this.#installedVersion,
         targetVersion,
@@ -209,18 +271,18 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
 
   confirmRestart(): Effect.Effect<void> {
     return Effect.sync(() => {
-      if (this.#snapshot.state !== 'restart_confirmation') return;
+      if (this.#store.snapshot.state !== 'restart_confirmation') return;
       this.#beginInstallation();
     });
   }
 
   cancelRestart(): Effect.Effect<void> {
     return Effect.sync(() => {
-      if (this.#snapshot.state !== 'restart_confirmation' || this.#isExitCommitted()) return;
-      this.#transition({
+      if (this.#store.snapshot.state !== 'restart_confirmation' || this.#isExitCommitted()) return;
+      this.#store.publish({
         state: 'ready',
         installedVersion: this.#installedVersion,
-        targetVersion: this.#snapshot.targetVersion,
+        targetVersion: this.#store.snapshot.targetVersion,
       });
     });
   }
@@ -230,21 +292,30 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   recordInstallRejection(): Promise<void> {
-    return this.#diagnostics.write({
-      operation: 'lifecycle',
-      platform: this.#platform,
-      installedVersion: this.#installedVersion,
-      ...(this.#targetVersion() ? { targetVersion: this.#targetVersion() } : {}),
-      code: 'exit_rejection',
-      summary: 'The update installer rejected after desktop shutdown.',
-    });
+    return this.#writeLifecycle(
+      'exit_rejection',
+      'The update installer rejected after desktop shutdown.',
+    );
+  }
+
+  /**
+   * A composition that runs the real updater never publishes
+   * `manual_update_required`, so there is no snapshot here for an outcome to land
+   * on and nothing for attempts to race over. The diagnostic is still written: an
+   * intent that reached a self-updating build at all is worth a line in the trail.
+   */
+  beginDownloadPageAttempt(): ReportDownloadPageOutcome {
+    return (outcome) =>
+      outcome === 'opened'
+        ? Promise.resolve()
+        : this.#writeLifecycle(DOWNLOAD_PAGE_FAILURE.code, DOWNLOAD_PAGE_FAILURE.summary);
   }
 
   readonly #onUpdateAvailable: UpdaterListener = (value) => {
     if (!this.#ownsActiveGeneration()) return;
     const targetVersion = updateVersion(value);
     this.#active = { ...this.#active!, phase: 'download' };
-    this.#transition({
+    this.#store.publish({
       state: 'downloading',
       installedVersion: this.#installedVersion,
       targetVersion,
@@ -257,22 +328,22 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     if (!active || !this.#ownsGeneration(active.generation)) return;
     this.#active = undefined;
     if (active.manual) {
-      this.#transition({ state: 'up_to_date', installedVersion: this.#installedVersion });
+      this.#store.publish({ state: 'up_to_date', installedVersion: this.#installedVersion });
       this.#transientTimer = this.#timers.setTimeout(() => {
         this.#transientTimer = undefined;
-        if (!this.#active && this.#snapshot.state === 'up_to_date') {
-          this.#transition({ state: 'idle', installedVersion: this.#installedVersion });
+        if (!this.#active && this.#store.snapshot.state === 'up_to_date') {
+          this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
         }
       }, updaterSchedule.upToDateMs);
     } else {
-      this.#transition({ state: 'idle', installedVersion: this.#installedVersion });
+      this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
     }
   };
 
   readonly #onDownloadProgress: UpdaterListener = (value) => {
     if (!this.#active || this.#active.phase !== 'download' || !this.#ownsActiveGeneration()) return;
     const targetVersion = this.#targetVersion();
-    this.#transition({
+    this.#store.publish({
       state: 'downloading',
       installedVersion: this.#installedVersion,
       targetVersion,
@@ -284,7 +355,11 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     if (!this.#active || this.#active.phase !== 'download' || !this.#ownsActiveGeneration()) return;
     const targetVersion = updateVersion(value) || this.#targetVersion();
     this.#active = undefined;
-    this.#transition({ state: 'ready', installedVersion: this.#installedVersion, targetVersion });
+    this.#store.publish({
+      state: 'ready',
+      installedVersion: this.#installedVersion,
+      targetVersion,
+    });
   };
 
   readonly #onUpdateCancelled: UpdaterListener = () =>
@@ -309,16 +384,18 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   #runScheduledCheck() {
-    if (isRestartLocked(this.#snapshot)) return;
+    if (isRestartLocked(this.#store.snapshot)) return;
     this.#beginCheck(false);
   }
 
   #beginCheck(manual: boolean) {
-    if (!this.#started || this.#stopped || this.#active || isRestartLocked(this.#snapshot)) return;
+    if (!this.#started || this.#stopped || this.#active || isRestartLocked(this.#store.snapshot))
+      return;
     this.#clearTimer('transient');
     const generation = this.#generation;
     this.#active = { generation, phase: 'check', manual };
-    if (manual) this.#transition({ state: 'checking', installedVersion: this.#installedVersion });
+    if (manual)
+      this.#store.publish({ state: 'checking', installedVersion: this.#installedVersion });
     void this.#updater.checkForUpdates().catch((error: unknown) => {
       if (!this.#active || this.#active.phase !== 'check' || !this.#ownsGeneration(generation))
         return;
@@ -330,9 +407,12 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     const active = this.#active;
     if (!active || !this.#ownsGeneration(active.generation)) return;
     this.#active = undefined;
+    // Read before the transition: the failure snapshot replaces the downloading
+    // one, and the target version is only still available on the outgoing state.
+    const targetVersion = this.#targetVersion();
     void this.#writeDiagnostic(operation, code, error);
     if (operation === 'check' && !active.manual) return;
-    this.#transition(
+    this.#store.publish(
       operation === 'check'
         ? {
             state: 'failed',
@@ -345,34 +425,46 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
             installedVersion: this.#installedVersion,
             operation: 'download',
             code: 'download_failed',
+            targetVersion,
           },
     );
   }
 
   #writeDiagnostic(operation: 'check' | 'download' | 'lifecycle', code: string, error: unknown) {
+    return this.#write(operation, code, errorMessage(error));
+  }
+
+  #writeLifecycle(code: string, summary: string) {
+    return this.#write('lifecycle', code, summary);
+  }
+
+  #write(operation: 'check' | 'download' | 'lifecycle', code: string, summary: string) {
     return this.#diagnostics.write({
       operation,
       platform: this.#platform,
       installedVersion: this.#installedVersion,
       ...(this.#targetVersion() ? { targetVersion: this.#targetVersion() } : {}),
       code,
-      summary: errorMessage(error),
+      summary,
     });
   }
 
   #targetVersion() {
-    return 'targetVersion' in this.#snapshot ? (this.#snapshot.targetVersion ?? '') : '';
+    return 'targetVersion' in this.#store.snapshot
+      ? (this.#store.snapshot.targetVersion ?? '')
+      : '';
   }
 
   #beginInstallation() {
     if (
       this.#stopped ||
-      (this.#snapshot.state !== 'ready' && this.#snapshot.state !== 'restart_confirmation') ||
+      (this.#store.snapshot.state !== 'ready' &&
+        this.#store.snapshot.state !== 'restart_confirmation') ||
       this.#isExitCommitted()
     )
       return;
-    const targetVersion = this.#snapshot.targetVersion;
-    this.#transition({
+    const targetVersion = this.#store.snapshot.targetVersion;
+    this.#store.publish({
       state: 'installing',
       installedVersion: this.#installedVersion,
       targetVersion,
@@ -400,46 +492,146 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       this.#transientTimer = undefined;
     }
   }
-
-  #transition(facts: SnapshotFacts) {
-    const next = {
-      protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-      revision: this.#revision + 1,
-      ...facts,
-    } as DesktopUpdateSnapshot;
-    if (sameFacts(this.#snapshot, next)) return;
-    this.#revision += 1;
-    this.#snapshot = next;
-    for (const listener of this.#listeners) listener(next);
-  }
 }
+
+/**
+ * The compositions that never load Electron Updater. The descriptor is a union
+ * rather than a state string plus optional dependencies because the two states
+ * differ in what they can be asked to do: `manual_update_required` is the only
+ * composition where opening the download page is reachable, so it must be able
+ * to persist that failure, and requiring the sink here makes a silent no-op
+ * regression impossible rather than merely discouraged.
+ */
+export type StaticUpdaterDescriptor =
+  | { readonly state: 'disabled' }
+  | {
+      readonly state: 'manual_update_required';
+      readonly diagnostics: UpdaterDiagnosticSink;
+      readonly platform: string;
+    };
 
 export function createStaticUpdaterService(
   installedVersion: string,
-  state: 'disabled' | 'manual_update_required',
+  descriptor: StaticUpdaterDescriptor,
 ): DesktopUpdaterService {
-  const snapshot: DesktopUpdateSnapshot =
-    state === 'disabled'
-      ? { protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION, revision: 0, installedVersion, state }
-      : {
-          protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
-          revision: 0,
-          installedVersion,
-          state,
-          reason: 'unsupported_installation',
-        };
-  return {
-    snapshot,
-    subscribe: () => () => undefined,
-    start: () => Effect.void,
-    stop: () => Effect.void,
-    checkForUpdates: () => Effect.void,
-    requestRestart: () => Effect.void,
-    confirmRestart: () => Effect.void,
-    cancelRestart: () => Effect.void,
-    quitAndInstall: () => undefined,
-    recordInstallRejection: () => Promise.resolve(),
-  };
+  if (descriptor.state === 'disabled') {
+    return {
+      ...inertUpdaterService,
+      snapshot: {
+        protocolVersion: DESKTOP_UPDATE_PROTOCOL_VERSION,
+        revision: 0,
+        installedVersion,
+        state: 'disabled',
+      },
+    };
+  }
+  return new ManualUpdateService(installedVersion, descriptor.diagnostics, descriptor.platform);
+}
+
+/**
+ * Everything a build with no updater can be asked to do, which is nothing. The
+ * snapshot is supplied by the caller because that is the only fact these
+ * compositions differ on.
+ */
+const inertUpdaterService: Omit<DesktopUpdaterService, 'snapshot'> = {
+  subscribe: () => () => undefined,
+  start: () => Effect.void,
+  stop: () => Effect.void,
+  checkForUpdates: () => Effect.void,
+  requestRestart: () => Effect.void,
+  confirmRestart: () => Effect.void,
+  cancelRestart: () => Effect.void,
+  quitAndInstall: () => undefined,
+  recordInstallRejection: () => Promise.resolve(),
+  beginDownloadPageAttempt: () => () => Promise.resolve(),
+};
+
+const DOWNLOAD_PAGE_FAILURE = {
+  code: 'download_page_rejected',
+  summary: 'The release download page could not be opened.',
+} as const;
+
+/**
+ * The build that cannot replace itself. It runs no updater and reaches no
+ * provider, so its state never changes on its own — but it is not inert: opening
+ * the release page is a real operation the user owns, and whether it opened is
+ * the one fact this composition can still learn and has to report.
+ *
+ * It publishes that outcome onto the same snapshot every other update state
+ * arrives on, rather than answering the intent directly, so the renderer keeps a
+ * single source of update truth and the failure survives a reload or a second
+ * window instead of living in one promise's resolution.
+ */
+class ManualUpdateService implements DesktopUpdaterService {
+  readonly #store: SnapshotStore;
+  /** The most recently claimed attempt. Only it may speak for the snapshot. */
+  #attempts = 0;
+
+  constructor(
+    private readonly installedVersion: string,
+    private readonly diagnostics: UpdaterDiagnosticSink,
+    private readonly platform: string,
+  ) {
+    this.#store = new SnapshotStore({
+      installedVersion,
+      state: 'manual_update_required',
+      reason: 'unsupported_installation',
+      openFailure: null,
+    });
+  }
+
+  get snapshot() {
+    return this.#store.snapshot;
+  }
+
+  subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void) {
+    return this.#store.subscribe(listener);
+  }
+
+  start = () => Effect.void;
+  checkForUpdates = () => Effect.void;
+  requestRestart = () => Effect.void;
+  confirmRestart = () => Effect.void;
+  cancelRestart = () => Effect.void;
+  quitAndInstall = () => undefined;
+  recordInstallRejection = () => Promise.resolve();
+
+  stop(): Effect.Effect<void> {
+    return Effect.promise(async () => {
+      this.#store.clearListeners();
+      await this.diagnostics.flush();
+    });
+  }
+
+  beginDownloadPageAttempt(): ReportDownloadPageOutcome {
+    this.#attempts += 1;
+    const attempt = this.#attempts;
+    return (outcome) => this.#report(attempt, outcome);
+  }
+
+  async #report(attempt: number, outcome: DownloadPageOutcome): Promise<void> {
+    // Latest press wins. A launch the user has already superseded may not speak
+    // for the rail, whichever way it went — but it is still a real thing that
+    // happened, so a superseded failure keeps its line in the diagnostic trail.
+    if (attempt === this.#attempts) {
+      // Published before the diagnostic is awaited: the user is waiting on the
+      // rail, and a slow or broken log must not delay or suppress the answer.
+      this.#store.publish({
+        installedVersion: this.installedVersion,
+        state: 'manual_update_required',
+        reason: 'unsupported_installation',
+        openFailure: outcome === 'failed' ? 'download_page_open_failed' : null,
+      });
+    }
+    if (outcome === 'opened') return;
+    await this.diagnostics.write({
+      operation: 'lifecycle',
+      platform: this.platform,
+      installedVersion: this.installedVersion,
+      code: DOWNLOAD_PAGE_FAILURE.code,
+      summary: DOWNLOAD_PAGE_FAILURE.summary,
+    });
+  }
 }
 
 function isRestartLocked(snapshot: DesktopUpdateSnapshot) {

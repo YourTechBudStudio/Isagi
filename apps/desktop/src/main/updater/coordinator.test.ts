@@ -224,11 +224,57 @@ test('download errors remain visible even when a scheduled check found the updat
   subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
   subject.updater.emit('update-available', { version: '2.0.0' });
   subject.updater.emit('error', new Error('download failed'));
-  assert.equal(subject.coordinator.snapshot.state, 'failed');
+  const snapshot = subject.coordinator.snapshot;
+  assert.equal(snapshot.state, 'failed');
+  assert.equal(snapshot.state === 'failed' ? snapshot.operation : '', 'download');
+  // The version survives the transition off `downloading`, so the failure can
+  // name what it failed to fetch.
   assert.equal(
-    subject.coordinator.snapshot.state === 'failed' ? subject.coordinator.snapshot.operation : '',
-    'download',
+    snapshot.state === 'failed' && snapshot.operation === 'download' ? snapshot.targetVersion : '',
+    '2.0.0',
   );
+});
+
+test('a download failure without a usable provider version still produces a snapshot', async () => {
+  // A malformed provider event should degrade the sentence the user reads, not
+  // leave the coordinator unable to report the failure at all.
+  const subject = harness();
+  await Effect.runPromise(subject.coordinator.start());
+  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
+  subject.updater.emit('update-available', {});
+  subject.updater.emit('error', new Error('download failed'));
+  const snapshot = subject.coordinator.snapshot;
+
+  assert.equal(
+    snapshot.state === 'failed' && snapshot.operation === 'download' ? snapshot.targetVersion : 'x',
+    '',
+  );
+});
+
+test('the download page failure is recorded on the same diagnostic trail as every other failure', async () => {
+  const subject = harness();
+  await subject.coordinator.beginDownloadPageAttempt()('failed');
+
+  assert.deepEqual(subject.diagnostics, [
+    {
+      operation: 'lifecycle',
+      platform: 'darwin',
+      installedVersion: '1.2.3',
+      code: 'download_page_rejected',
+      summary: 'The release download page could not be opened.',
+    },
+  ]);
+});
+
+test('a self-updating build has no manual state for a launch outcome to land on', async () => {
+  // This composition never publishes `manual_update_required`, so there is
+  // nothing for a success to retract and nothing for a failure to overlay. The
+  // failure is still worth a line in the trail; the success is not.
+  const subject = harness();
+  await subject.coordinator.beginDownloadPageAttempt()('opened');
+
+  assert.deepEqual(subject.diagnostics, []);
+  assert.equal(subject.coordinator.snapshot.state, 'idle');
 });
 
 test('promise rejection and idle error events are diagnosed without duplicate visible transitions', async () => {

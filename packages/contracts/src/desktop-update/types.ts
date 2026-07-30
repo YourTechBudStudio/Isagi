@@ -8,7 +8,11 @@ const snapshotBase = {
   installedVersion: Schema.String,
 };
 
-export const desktopUpdateFailureCodeSchema = Schema.Literal('check_failed', 'download_failed');
+export const desktopUpdateFailureCodeSchema = Schema.Literal(
+  'check_failed',
+  'download_failed',
+  'download_page_open_failed',
+);
 
 /** Download progress is always normalized to a percentage of the target artifact. */
 const progressPercentSchema = Schema.Number.pipe(Schema.between(0, 100));
@@ -49,11 +53,23 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
     state: Schema.Literal('installing'),
     targetVersion: Schema.String,
   }),
+  /**
+   * A build that cannot replace itself. It carries no target version: this state
+   * is decided during composition, before any provider is contacted, so no
+   * available version is known and claiming one would be a guess.
+   *
+   * `openFailure` reports the last attempt to open the release download page.
+   * The remedy stays the same state either way — the installation is still
+   * manual and the action is still worth pressing again — so the failure is an
+   * overlay on it rather than a state of its own. It is carried here because
+   * this is the only place the client can learn that a user-owned action did
+   * nothing: the browser launch produces no updater event.
+   */
   Schema.Struct({
     ...snapshotBase,
     state: Schema.Literal('manual_update_required'),
     reason: Schema.Literal('unsupported_installation'),
-    targetVersion: Schema.optional(Schema.String),
+    openFailure: Schema.NullOr(Schema.Literal('download_page_open_failed')),
   }),
   Schema.Struct({
     ...snapshotBase,
@@ -61,11 +77,18 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
     operation: Schema.Literal('check'),
     code: Schema.Literal('check_failed'),
   }),
+  /**
+   * A download only fails after an update was found, so the target version is
+   * known and is carried. It stays a plain string rather than a nonempty one: a
+   * provider event that omits the version should degrade the sentence shown to
+   * the user, not make the snapshot undecodable.
+   */
   Schema.Struct({
     ...snapshotBase,
     state: Schema.Literal('failed'),
     operation: Schema.Literal('download'),
     code: Schema.Literal('download_failed'),
+    targetVersion: Schema.String,
   }),
 );
 

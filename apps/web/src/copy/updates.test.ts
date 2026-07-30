@@ -41,14 +41,37 @@ describe('updateCopy', () => {
   });
 });
 
+/**
+ * Copy functions take a count, a version, or a version and a percentage, in
+ * varying orders. Every shape is tried against every function and the ones that
+ * do not fit are discarded — including the empty version, so the versionless
+ * fallbacks are scanned for banned phrasing too.
+ */
+const argumentShapes: readonly unknown[][] = [
+  [1],
+  [2],
+  ['0.4.3'],
+  [''],
+  [1, '0.4.3'],
+  [2, '0.4.3'],
+  [1, ''],
+  ['0.4.3', 38],
+  ['', 38],
+];
+
 function collectStrings(value: unknown): string[] {
   if (typeof value === 'string') return [value];
-  // Copy functions are sampled with representative arguments; every one of them
-  // takes a count and/or a version.
   if (typeof value === 'function') {
-    const sample = value as (...args: never[]) => unknown;
-    return [1, 2]
-      .flatMap((count) => [sample(count as never, '0.4.3' as never), sample('0.4.3' as never)])
+    const sample = value as (...args: unknown[]) => unknown;
+    return argumentShapes
+      .map((shape) => {
+        try {
+          return sample(...shape);
+        } catch {
+          // A shape this function does not accept, not a defect in the copy.
+          return undefined;
+        }
+      })
       .filter((result): result is string => typeof result === 'string');
   }
   if (value && typeof value === 'object') return Object.values(value).flatMap(collectStrings);

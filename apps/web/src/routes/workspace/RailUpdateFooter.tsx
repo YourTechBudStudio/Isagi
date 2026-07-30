@@ -5,9 +5,10 @@ import { RestartConfirmation, type RestartActivity } from './RestartConfirmation
 
 /**
  * What the rail footer knows about the desktop update. This is the component's
- * own view shape, not a shared contract: Phase 05 replaces the fixture that
- * produces it with a host snapshot, and the production union lives in
- * `packages/contracts` when it exists. Nothing outside this surface imports it.
+ * own view shape rather than the wire contract: the host's `restart_confirmation`
+ * snapshot arrives here as `ready` plus a `confirmRestart` activity, because the
+ * footer's restart control is the same control either way. The mapping from the
+ * contract union lives in {@link ./useDesktopUpdate}.
  */
 export type DesktopUpdateState =
   /** No desktop host (a hosted web build): the footer renders nothing at all. */
@@ -22,20 +23,36 @@ export type DesktopUpdateState =
   | { readonly kind: 'installing'; readonly version: string }
   | { readonly kind: 'check-failed' }
   | { readonly kind: 'download-failed'; readonly version: string }
-  /** A build that cannot replace itself (the Linux AppImage): the user fetches it. */
-  | { readonly kind: 'manual-required'; readonly version: string };
+  /**
+   * A build that cannot replace itself (an unwritable Linux AppImage): the user
+   * fetches it. It carries no version — this state is decided during composition,
+   * before any provider is contacted, so no available version is known.
+   *
+   * `openFailed` is the host's report that the last press did not reach a
+   * browser. It stays the same state and the same control, because the remedy is
+   * unchanged and pressing again is exactly the right thing to do.
+   */
+  | { readonly kind: 'manual-required'; readonly openFailed: boolean };
 
 export interface RailUpdateFooterProps {
   readonly state: DesktopUpdateState;
   readonly installedVersion: string;
   /**
-   * Agent activity as of the moment the user asked to restart. `null` means
-   * nothing is working and restarting needs no confirmation; an activity opens
-   * the anchored warning instead of restarting directly.
+   * Agent activity as of the moment the user asked to restart. `null` means the
+   * host is not asking for confirmation; an activity opens the anchored warning.
+   * The host owns this fact — the component never decides to ask.
    */
   readonly confirmRestart?: RestartActivity | null;
+  /**
+   * A restart request is in flight. Purely an in-flight interaction fact, not
+   * updater truth: the host is reading agent activity and has not yet said
+   * whether it will restart or ask first.
+   */
+  readonly restartPending?: boolean;
   readonly onCheck: () => void;
   readonly onRestart: () => void;
+  readonly onCancelRestart: () => void;
+  readonly onConfirmRestart: () => void;
   readonly onRetryDownload: () => void;
   readonly onOpenDownloadPage: () => void;
 }
@@ -59,14 +76,15 @@ export interface RailUpdateFooterProps {
  * reaches this component (it stays `idle`); what surfaces here is a failure the
  * user asked for, which is why it is allowed to spend the reserved red.
  */
-const noop = () => undefined;
-
 export function RailUpdateFooter({
   state,
   installedVersion,
   confirmRestart = null,
+  restartPending = false,
   onCheck,
   onRestart,
+  onCancelRestart,
+  onConfirmRestart,
   onRetryDownload,
   onOpenDownloadPage,
 }: RailUpdateFooterProps) {
@@ -106,8 +124,11 @@ export function RailUpdateFooter({
           <Trailing
             state={state}
             confirmRestart={confirmRestart}
+            restartPending={restartPending}
             onCheck={onCheck}
             onRestart={onRestart}
+            onCancelRestart={onCancelRestart}
+            onConfirmRestart={onConfirmRestart}
             onRetryDownload={onRetryDownload}
             onOpenDownloadPage={onOpenDownloadPage}
           />
@@ -122,15 +143,21 @@ export function RailUpdateFooter({
 function Trailing({
   state,
   confirmRestart,
+  restartPending,
   onCheck,
   onRestart,
+  onCancelRestart,
+  onConfirmRestart,
   onRetryDownload,
   onOpenDownloadPage,
 }: {
   state: DesktopUpdateState;
   confirmRestart: RestartActivity | null;
+  restartPending: boolean;
   onCheck: () => void;
   onRestart: () => void;
+  onCancelRestart: () => void;
+  onConfirmRestart: () => void;
   onRetryDownload: () => void;
   onOpenDownloadPage: () => void;
 }) {
@@ -161,31 +188,35 @@ function Trailing({
           {updateCopy.status.installing}
         </Token>
       );
-    case 'ready': {
-      const trigger = (
-        <Control
-          // When a confirmation is required the control only opens it. Restarting
-          // from here as well would install the update behind the warning that
-          // was supposed to stop it.
-          onClick={confirmRestart ? noop : onRestart}
-          tone="waiting"
-          label={updateCopy.described.restart(state.version)}
-          data-restart-control
-        >
-          {updateCopy.actions.restart}
-        </Control>
-      );
-      return confirmRestart ? (
+    case 'ready':
+      // The confirmation stays mounted around the trigger for the whole ready
+      // state, closed until the host asks. It is not mounted on demand: the
+      // activity result arrives after the click, so a popover mounted at that
+      // moment would open without a transition, and the one mounted for the
+      // cancel would unmount before it could close or restore focus.
+      return (
         <RestartConfirmation
-          trigger={trigger}
           activity={confirmRestart}
           version={state.version}
-          onProceed={onRestart}
+          onCancel={onCancelRestart}
+          onProceed={onConfirmRestart}
+          trigger={
+            <Control
+              onClick={onRestart}
+              // Only while the request is in flight. It must be enabled again by
+              // the time the confirmation closes, or Base UI cannot return focus
+              // to it — and while the confirmation is open the modal popover
+              // already makes it unreachable.
+              disabled={restartPending}
+              tone="waiting"
+              label={updateCopy.described.restart(state.version)}
+              data-restart-control
+            >
+              {updateCopy.actions.restart}
+            </Control>
+          }
         />
-      ) : (
-        trigger
       );
-    }
     case 'check-failed':
       return (
         <Control
@@ -209,14 +240,24 @@ function Trailing({
         </Control>
       );
     case 'manual-required':
+      // One control, two readings. A launch that failed spends the reserved red
+      // and says so, but it is the same target doing the same thing: the user
+      // asked for this, so the failure belongs at the press.
       return (
         <Control
-          tone="amber"
+          tone={state.openFailed ? 'error' : 'amber'}
           onClick={onOpenDownloadPage}
-          label={updateCopy.described.manualRequired(state.version)}
+          label={
+            state.openFailed
+              ? updateCopy.described.downloadPageFailed
+              : updateCopy.described.manualRequired
+          }
           data-manual-control
+          data-open-failed={state.openFailed || undefined}
         >
-          {updateCopy.status.manualRequired}
+          {state.openFailed
+            ? updateCopy.status.downloadPageFailed
+            : updateCopy.status.manualRequired}
         </Control>
       );
   }
@@ -247,7 +288,12 @@ function Hairline({ state }: { state: DesktopUpdateState }) {
     );
   }
 
-  const fill = HAIRLINE_FILL[state.kind];
+  // A failed launch reads as a failure on the edge too, matching the control it
+  // sits under — the state is still `manual-required`, only its last attempt is not.
+  const fill =
+    state.kind === 'manual-required' && state.openFailed
+      ? HAIRLINE_FILL['check-failed']
+      : HAIRLINE_FILL[state.kind];
   return (
     <div
       aria-hidden
@@ -304,20 +350,25 @@ function Control({
   tone,
   onClick,
   label,
+  disabled = false,
   ...rest
 }: {
   children: ReactNode;
   tone: keyof typeof CONTROL_TONE;
   onClick: () => void;
   label: string;
+  disabled?: boolean;
 } & Record<`data-${string}`, string | boolean | undefined>) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       {...rest}
-      className={`-mx-1.5 -my-1 rounded-sm px-1.5 py-1 text-[11.5px] transition-opacity duration-micro ease-expo hover:opacity-75 focus-visible:outline-1 focus-visible:outline-offset-2 ${CONTROL_TONE[tone]}`}
+      // Dimmed, not restyled: the control is briefly unavailable, not a
+      // different control, and the line must not change metrics.
+      className={`-mx-1.5 -my-1 rounded-sm px-1.5 py-1 text-[11.5px] transition-opacity duration-micro ease-expo not-disabled:hover:opacity-75 disabled:opacity-45 focus-visible:outline-1 focus-visible:outline-offset-2 ${CONTROL_TONE[tone]}`}
     >
       {children}
     </button>

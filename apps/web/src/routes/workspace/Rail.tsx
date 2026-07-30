@@ -10,9 +10,8 @@ import { useWorkspace } from '../../lib/workspace/hooks.js';
 import type { MissingProject, PresentProject } from '../../lib/workspace/types.js';
 import { DisconnectedProjectRow } from './DisconnectedProjectRow.js';
 import { ProjectGroup } from './ProjectGroup.js';
-import { RailUpdateFooter, type DesktopUpdateState } from './RailUpdateFooter.js';
-
-const APP_VERSION = '0.0.1';
+import { RailUpdateFooter } from './RailUpdateFooter.js';
+import { useDesktopUpdate } from './useDesktopUpdate.js';
 
 /**
  * The Rail — Isagi's navigation spine. Brand at the top, the add-project
@@ -120,25 +119,33 @@ export function Rail() {
         </LayoutGroup>
       </div>
 
-      {/* The desktop host is not wired up yet, so the footer is told the literal
-          truth: there is no updater here. That is a real state, not a mock — an
-          unpackaged build shows its version and offers nothing else. Phase 05
-          replaces this constant and `APP_VERSION` with the host snapshot; the
-          handlers become the host intents. */}
-      <RailUpdateFooter
-        state={NO_UPDATER}
-        installedVersion={APP_VERSION}
-        onCheck={noop}
-        onRestart={noop}
-        onRetryDownload={noop}
-        onOpenDownloadPage={noop}
-      />
+      <UpdateFooter />
     </aside>
   );
 }
 
-const NO_UPDATER = { kind: 'disabled' } as const satisfies DesktopUpdateState;
-const noop = () => undefined;
+/**
+ * The footer, or the space it will occupy. A desktop host that has not yet
+ * answered still gets its geometry reserved: the whole point of this treatment
+ * is that the rail never moves, and a footer that appears one IPC round trip
+ * after mount would shove the project list up on the way in. A hosted web build
+ * has no host and reserves nothing.
+ */
+export function UpdateFooter() {
+  const update = useDesktopUpdate();
+  if (update.presence === 'unsupported') return null;
+  if (update.presence === 'unresolved') {
+    // The same metrics as the populated footer, and nothing invented to fill
+    // them: no version, no token, no skeleton.
+    return (
+      <div data-update-footer data-update-state="unresolved" aria-hidden>
+        <div className="h-9" />
+        <div className="h-0.5 w-full" />
+      </div>
+    );
+  }
+  return <RailUpdateFooter {...update} />;
+}
 
 function AddProjectButton({ onOpen }: { onOpen: () => void }) {
   return (

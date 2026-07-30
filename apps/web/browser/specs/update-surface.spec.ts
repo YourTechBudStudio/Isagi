@@ -82,7 +82,7 @@ test('download progress is a bounded fill that tracks the reported percentage', 
   expect((await track.locator('> div').boundingBox())!.width).toBeLessThan(trackBox.width);
 });
 
-test('the restart control is keyboard reachable and dispatches without confirmation when nothing is working', async ({
+test('the restart control is keyboard reachable and restarts outright when nothing is working', async ({
   page,
 }) => {
   await selectState(page, 'ready');
@@ -91,8 +91,29 @@ test('the restart control is keyboard reachable and dispatches without confirmat
   await page.locator(`${footer} [data-restart-control]`).focus();
   await page.keyboard.press('Enter');
 
-  await expect(page.locator('[data-actions]')).toHaveText('restart');
+  // The request goes first; the host answers a moment later, and only then does
+  // anything actually restart.
+  await expect(page.locator('[data-actions]')).toHaveText('request-restart, restarting');
   await expect(page.locator('[data-restart-confirmation]')).toHaveCount(0);
+});
+
+test('the restart control is unavailable while the host is deciding', async ({ page }) => {
+  await selectState(page, 'ready');
+  await selectActivity(page, 'working-3');
+
+  const control = page.locator(`${footer} [data-restart-control]`);
+  await control.click();
+
+  // Pressing again cannot help: the request is already in flight, and the host
+  // ignores a duplicate. No spinner, no new state — the control just waits.
+  await expect(control).toBeDisabled();
+  await expect(page.locator('[data-restart-confirmation]')).toHaveCount(0);
+
+  // ...and it must be enabled again by the time the confirmation opens, or focus
+  // cannot be returned to it on close.
+  await expect(page.locator('[data-restart-confirmation]')).toBeVisible();
+  await expect(control).toBeEnabled();
+  await expect(page.locator('[data-actions]')).toHaveText('request-restart');
 });
 
 for (const { id, expected } of [
@@ -105,11 +126,12 @@ for (const { id, expected } of [
     await selectActivity(page, id);
     await page.click(`${footer} [data-restart-control]`);
 
+    // Opened by the host's answer, not by the click that asked for it.
     const popup = page.locator('[data-restart-confirmation]');
     await expect(popup).toContainText(expected);
     // Advisory, not a promise about what happens to the work.
     await expect(popup).not.toContainText(/lost|resume/i);
-    await expect(page.locator('[data-actions]')).toHaveText('—');
+    await expect(page.locator('[data-actions]')).toHaveText('request-restart');
   });
 }
 
@@ -127,7 +149,7 @@ test('keeping working cancels, returns focus to the restart control, and restart
   await page.keyboard.press('Enter');
   await expect(popup).toHaveCount(0);
   await expect(page.locator(`${footer} [data-restart-control]`)).toBeFocused();
-  await expect(page.locator('[data-actions]')).toHaveText('—');
+  await expect(page.locator('[data-actions]')).toHaveText('request-restart, cancel-restart');
 });
 
 test('escape cancels the confirmation and returns focus to the restart control', async ({
@@ -136,22 +158,41 @@ test('escape cancels the confirmation and returns focus to the restart control',
   await selectState(page, 'ready');
   await selectActivity(page, 'unknown');
   await page.click(`${footer} [data-restart-control]`);
+  await expect(page.locator('[data-restart-confirmation]')).toBeVisible();
 
   await page.keyboard.press('Escape');
 
   await expect(page.locator('[data-restart-confirmation]')).toHaveCount(0);
   await expect(page.locator(`${footer} [data-restart-control]`)).toBeFocused();
-  await expect(page.locator('[data-actions]')).toHaveText('—');
+  await expect(page.locator('[data-actions]')).toHaveText('request-restart, cancel-restart');
 });
 
-test('confirming proceeds to the restart exactly once', async ({ page }) => {
+test('confirming dispatches the confirmation and never also cancels it', async ({ page }) => {
   await selectState(page, 'ready');
   await selectActivity(page, 'working-1');
   await page.click(`${footer} [data-restart-control]`);
   await page.click('[data-confirm-proceed]');
 
-  await expect(page.locator('[data-actions]')).toHaveText('restart');
+  // Proceed is deliberately not a dismissal: closing means cancel, so a proceed
+  // that also closed would send the confirmation and its own cancellation.
+  await expect(page.locator('[data-actions]')).toHaveText('request-restart, confirm-restart');
   await expect(page.locator('[data-restart-confirmation]')).toHaveCount(0);
+});
+
+test('a second confirmation can be raised after a cancellation', async ({ page }) => {
+  // The popover is mounted for the whole ready state rather than per question,
+  // so asking twice has to work.
+  await selectState(page, 'ready');
+  await selectActivity(page, 'unknown');
+
+  await page.click(`${footer} [data-restart-control]`);
+  await expect(page.locator('[data-restart-confirmation]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-restart-confirmation]')).toHaveCount(0);
+
+  await page.click(`${footer} [data-restart-control]`);
+  await expect(page.locator('[data-restart-confirmation]')).toBeVisible();
+  await expect(page.locator('[data-confirm-cancel]')).toBeFocused();
 });
 
 test('failures stay at the control that owns them and retry in place', async ({ page }) => {
@@ -169,6 +210,18 @@ test('a build that cannot replace itself opens the download page instead', async
   await selectState(page, 'manual-required');
   await page.click(`${footer} [data-manual-control]`);
 
+  await expect(page.locator('[data-actions]')).toHaveText('open-download-page');
+});
+
+test('a launch that never reached a browser says so and stays pressable', async ({ page }) => {
+  await selectState(page, 'manual-required-open-failed');
+  const control = page.locator(`${footer} [data-manual-control]`);
+
+  await expect(control).toHaveText("couldn't open");
+  await expect(control).toBeEnabled();
+  await control.click();
+  // Same control, same intent: the remedy did not change, only the report of
+  // the last attempt at it.
   await expect(page.locator('[data-actions]')).toHaveText('open-download-page');
 });
 
@@ -198,7 +251,7 @@ test('reduced motion drops the progress transition without hiding progress', asy
 });
 
 test('the contact sheet renders every state including the absent one', async ({ page }) => {
-  await expect(page.locator('[data-sheet-state]')).toHaveCount(13);
+  await expect(page.locator('[data-sheet-state]')).toHaveCount(14);
   // No desktop host means no footer at all, not an empty one.
   await expect(page.locator('[data-sheet-state="unsupported"] [data-update-footer]')).toHaveCount(
     0,
