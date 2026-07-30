@@ -21,8 +21,24 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 30_000,
   },
+  // The fixture bundle is multi-entry, so each project points at the page its
+  // specs belong to. Without the `testMatch` filters every spec would run under
+  // every project — the terminal specs twice over on the update page, and back.
   projects: [
-    { name: 'dom-fallback', use: { baseURL: `http://127.0.0.1:${fixturePort}/?renderer=dom` } },
-    { name: 'webgl-attempt', use: { baseURL: `http://127.0.0.1:${fixturePort}/?renderer=webgl` } },
+    {
+      name: 'dom-fallback',
+      testMatch: /(terminal-.*|production-bundle)\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/?renderer=dom` },
+    },
+    {
+      name: 'webgl-attempt',
+      testMatch: /terminal-.*\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/?renderer=webgl` },
+    },
+    {
+      name: 'update-surface',
+      testMatch: /update-surface\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/update/` },
+    },
   ],
 });

@@ -23,6 +23,7 @@ export {
 } from './palette.js';
 export { docsResultCopy, onboardingCopy, startupCopy } from './startup.js';
 export { toastCopy } from './toasts.js';
+export { updateCopy } from './updates.js';
 export { workbenchCopy } from './workbench.js';
 export {
   workflowCopy,

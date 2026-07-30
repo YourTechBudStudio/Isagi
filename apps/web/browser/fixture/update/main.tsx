@@ -1,11 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import './fixture.css';
-import { FixtureApp } from './FixtureApp.js';
+import '../fixture.css';
+import { UpdateGalleryApp } from './UpdateGalleryApp.js';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <FixtureApp />
+    <UpdateGalleryApp />
   </StrictMode>,
 );

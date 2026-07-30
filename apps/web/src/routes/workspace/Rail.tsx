@@ -10,6 +10,7 @@ import { useWorkspace } from '../../lib/workspace/hooks.js';
 import type { MissingProject, PresentProject } from '../../lib/workspace/types.js';
 import { DisconnectedProjectRow } from './DisconnectedProjectRow.js';
 import { ProjectGroup } from './ProjectGroup.js';
+import { RailUpdateFooter, type DesktopUpdateState } from './RailUpdateFooter.js';
 
 const APP_VERSION = '0.0.1';
 
@@ -17,9 +18,10 @@ const APP_VERSION = '0.0.1';
  * The Rail — Isagi's navigation spine. Brand at the top, the add-project
  * affordance, then projects split into two sections: `Active` (present projects,
  * each an expandable worktree group) and `Disconnected` (projects the runtime
- * can't reach right now), pinned at the foot of the list. A version whisper sits
- * at the very bottom. The host shell may provide a larger top inset; the whole
- * top is the drag region in desktop builds.
+ * can't reach right now), pinned at the foot of the list. The update footer sits
+ * at the very bottom — the installed version and whatever the desktop update has
+ * to say (see {@link ./RailUpdateFooter}). The host shell may provide a larger
+ * top inset; the whole top is the drag region in desktop builds.
  *
  * The two sections share one `LayoutGroup`, and each project carries a stable
  * `layoutId`. Because a project is mounted in exactly one section at a time, a
@@ -118,12 +120,25 @@ export function Rail() {
         </LayoutGroup>
       </div>
 
-      <div className="px-4 pt-2.5 pb-3.5">
-        <span className="font-mono text-[11px] text-fg-subtle opacity-50">v{APP_VERSION}</span>
-      </div>
+      {/* The desktop host is not wired up yet, so the footer is told the literal
+          truth: there is no updater here. That is a real state, not a mock — an
+          unpackaged build shows its version and offers nothing else. Phase 05
+          replaces this constant and `APP_VERSION` with the host snapshot; the
+          handlers become the host intents. */}
+      <RailUpdateFooter
+        state={NO_UPDATER}
+        installedVersion={APP_VERSION}
+        onCheck={noop}
+        onRestart={noop}
+        onRetryDownload={noop}
+        onOpenDownloadPage={noop}
+      />
     </aside>
   );
 }
+
+const NO_UPDATER = { kind: 'disabled' } as const satisfies DesktopUpdateState;
+const noop = () => undefined;
 
 function AddProjectButton({ onOpen }: { onOpen: () => void }) {
   return (

@@ -1,0 +1,9 @@
+@import '../../src/styles.css';
+
+/* The fixture bundle's Vite root is this directory, so Tailwind's automatic
+   content detection never sees the production components the fixtures import —
+   any utility used only in `src/` (`uppercase` and `tracking-widest` on the
+   Overline, for one) would silently fail to generate and the fixture would
+   render a quietly wrong version of the real component. Name the source tree
+   explicitly so fixtures are styled exactly like the app. */
+@source '../../src';
