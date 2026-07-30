@@ -66,9 +66,12 @@ describe('RailUpdateFooter', () => {
   it('keeps the footer the same height in every state', () => {
     // The hairline track is rendered even when it carries nothing; that is what
     // stops a download starting from nudging the project list above it.
-    const heights = STATES.map((state) => render(state).match(/h-\[2px\]/g)?.length ?? 0);
+    const heights = STATES.map((state) => render(state).match(/h-0\.5/g)?.length ?? 0);
 
-    assert.deepEqual(heights, STATES.map(() => 1));
+    assert.deepEqual(
+      heights,
+      STATES.map(() => 1),
+    );
   });
 
   it('offers the restart action with the target version in assistive text', () => {

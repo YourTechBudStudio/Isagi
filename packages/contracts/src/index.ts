@@ -51,6 +51,18 @@ export {
   apiSuccessResponseSchema,
   responseMetaSchema,
 } from './api/responses.js';
+
+export {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  desktopUpdateFailureCodeSchema,
+  desktopUpdateIntentSchema,
+  desktopUpdateSnapshotSchema,
+} from './desktop-update/types.js';
+export type {
+  DesktopUpdateFailureCode,
+  DesktopUpdateIntent,
+  DesktopUpdateSnapshot,
+} from './desktop-update/types.js';
 export type {
   ApiError,
   ApiErrorResponse,

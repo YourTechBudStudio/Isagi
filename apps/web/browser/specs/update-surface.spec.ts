@@ -200,6 +200,8 @@ test('reduced motion drops the progress transition without hiding progress', asy
 test('the contact sheet renders every state including the absent one', async ({ page }) => {
   await expect(page.locator('[data-sheet-state]')).toHaveCount(13);
   // No desktop host means no footer at all, not an empty one.
-  await expect(page.locator('[data-sheet-state="unsupported"] [data-update-footer]')).toHaveCount(0);
+  await expect(page.locator('[data-sheet-state="unsupported"] [data-update-footer]')).toHaveCount(
+    0,
+  );
   await expect(page.locator('[data-sheet-state="idle"] [data-update-footer]')).toHaveCount(1);
 });

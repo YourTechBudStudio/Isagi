@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
 import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 import { prepareRuntimeStage } from './runtime-stage/stage.mjs';
+import { verifyUpdaterPackage } from './verify-updater-package.mjs';
 
 class CommandStartError extends Data.TaggedError('CommandStartError') {}
 class PackagedRuntimeMissingError extends Data.TaggedError('PackagedRuntimeMissingError') {}
@@ -30,10 +31,11 @@ const program = Effect.gen(function* () {
   const packageExitCode = commandExitCode(packageResult);
   if (packageExitCode !== 0) return packageExitCode;
 
-  const packagedRuntimeRoot = yield* Effect.try({
-    try: findPackagedRuntimeRoot,
+  const applicationRoot = yield* Effect.try({
+    try: () => resolveCurrentApplicationRoot(process.argv.slice(2)),
     catch: (cause) => new PackagedRuntimeMissingError({ cause }),
   });
+  const packagedRuntimeRoot = join(packagedResourcesRoot(applicationRoot), 'runtime');
   const parity = yield* Effect.try({
     try: () => verifyRuntimeStageParity(stageRoot, packagedRuntimeRoot),
     catch: (cause) => new PackagedRuntimeParityError({ cause }),
@@ -42,6 +44,17 @@ const program = Effect.gen(function* () {
     `[desktop] Runtime stage parity passed (${parity.byteFileCount} byte-matched files, ${parity.executableFileCount} executable helpers, ${Object.keys(parity.dependencyVersions).length} exact external dependencies)`,
   );
   yield* smokeRuntimeStage(packagedRuntimeRoot);
+  const updaterVerification = yield* Effect.tryPromise({
+    try: () =>
+      verifyUpdaterPackage({
+        asarPath: join(packagedResourcesRoot(applicationRoot), 'app.asar'),
+        sourceRoot: join(desktopDirectory, 'src'),
+      }),
+    catch: (cause) => new PackagedRuntimeParityError({ cause }),
+  });
+  console.log(
+    `[desktop] Updater package verification passed (${updaterVerification.loadSiteCount} load site, ${updaterVerification.dependencyCount} production dependencies, ${updaterVerification.archiveEntryCount} archive entries)`,
+  );
   return 0;
 });
 
@@ -126,28 +139,38 @@ function commandExitCode(result) {
   return 1;
 }
 
-function findPackagedRuntimeRoot() {
+export function resolveCurrentApplicationRoot(
+  args,
+  platform = process.platform,
+  architecture = process.arch,
+) {
+  const requestedPlatform = args.includes('--mac')
+    ? 'darwin'
+    : args.includes('--linux')
+      ? 'linux'
+      : platform;
+  const requestedArchitecture = args.includes('--x64')
+    ? 'x64'
+    : args.includes('--arm64')
+      ? 'arm64'
+      : architecture;
   const releaseRoot = resolve(desktopDirectory, 'release');
-  if (!existsSync(releaseRoot)) throw new Error(`Package output is missing at ${releaseRoot}`);
-  const matches = [];
-  const visit = (directory, depth) => {
-    if (depth > 8) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const path = resolve(directory, entry.name);
-      if (entry.name === 'runtime' && existsSync(resolve(path, 'runtime-stage.json'))) {
-        matches.push(path);
-        continue;
-      }
-      visit(path, depth + 1);
-    }
-  };
-  visit(releaseRoot, 0);
-  matches.sort(
-    (left, right) =>
-      statSync(resolve(right, 'runtime-stage.json')).mtimeMs -
-      statSync(resolve(left, 'runtime-stage.json')).mtimeMs,
-  );
-  if (!matches[0]) throw new Error(`No packaged runtime stage was found under ${releaseRoot}`);
-  return matches[0];
+  const root =
+    requestedPlatform === 'darwin'
+      ? join(releaseRoot, requestedArchitecture === 'arm64' ? 'mac-arm64' : 'mac', 'Isagi.app')
+      : requestedPlatform === 'linux'
+        ? join(
+            releaseRoot,
+            requestedArchitecture === 'arm64' ? 'linux-arm64-unpacked' : 'linux-unpacked',
+          )
+        : '';
+  if (!root || !existsSync(root))
+    throw new Error(`Current packaged application output is missing at ${root || releaseRoot}`);
+  return root;
+}
+
+function packagedResourcesRoot(applicationRoot) {
+  return process.platform === 'darwin' || applicationRoot.endsWith('.app')
+    ? join(applicationRoot, 'Contents', 'Resources')
+    : join(applicationRoot, 'resources');
 }

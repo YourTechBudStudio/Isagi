@@ -12,6 +12,8 @@ import { configureDevelopmentUserData } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { createRuntimeLifecycle } from './runtime.js';
+import { stopDesktopServices } from './shutdown.js';
+import { composeDesktopUpdater, type DesktopUpdaterService } from './updater/index.js';
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'studio.yourtechbud.isagi';
@@ -36,6 +38,7 @@ let exitPromise: Promise<void> | undefined;
 let runtimeStartPromise: Promise<void> | undefined;
 let pendingExitCode: number | undefined;
 let exitRequested = false;
+let desktopUpdater: DesktopUpdaterService | undefined;
 
 runtimeLifecycle.subscribe((snapshot) => {
   if (snapshot.state === 'failed') {
@@ -53,7 +56,7 @@ async function preservePackagedRuntimeFailure(
   snapshot: Extract<typeof runtimeLifecycle.snapshot, { readonly state: 'failed' }>,
 ) {
   if (!app.isPackaged) return;
-  const logDirectory = join(app.getPath('userData'), 'logs');
+  const logDirectory = app.getPath('logs');
   const logPath = join(logDirectory, 'managed-runtime-failure.json');
   try {
     await mkdir(logDirectory, { recursive: true });
@@ -183,10 +186,10 @@ function requestExit(options: { readonly code: number }) {
   exitRequested = true;
   destroyRendererForExit(mainWindow);
   pendingExitCode = pendingExitCode && pendingExitCode !== 0 ? pendingExitCode : options.code;
-  exitPromise ??= Effect.runPromise(runtimeLifecycle.stop()).then(() => {
-    if (pendingExitCode === undefined) return;
-    app.exit(pendingExitCode);
-  });
+  exitPromise ??= (async () => {
+    await Effect.runPromise(stopDesktopServices(desktopUpdater, runtimeLifecycle));
+    if (pendingExitCode !== undefined) app.exit(pendingExitCode);
+  })();
   return exitPromise;
 }
 
@@ -204,8 +207,10 @@ process.once('SIGTERM', () => void requestExit({ code: 143 }));
 
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
     if (isDev && app.dock) app.dock.setIcon(DEVELOPMENT_ICON_PATH);
+    desktopUpdater = await composeDesktopUpdater(app);
+    await Effect.runPromise(desktopUpdater.start());
     return createWindow();
   })
   .catch((error: unknown) => {

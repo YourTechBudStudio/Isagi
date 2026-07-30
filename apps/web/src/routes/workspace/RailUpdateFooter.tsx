@@ -156,9 +156,11 @@ function Trailing({
     case 'installing':
       // No control at all while the app is closing: the action is already
       // committed, and a second press has nothing left to do.
-      return <Token label={updateCopy.described.installing(state.version)}>
-        {updateCopy.status.installing}
-      </Token>;
+      return (
+        <Token label={updateCopy.described.installing(state.version)}>
+          {updateCopy.status.installing}
+        </Token>
+      );
     case 'ready': {
       const trigger = (
         <Control
@@ -235,7 +237,7 @@ function Hairline({ state }: { state: DesktopUpdateState }) {
         aria-valuemin={0}
         aria-valuemax={100}
         data-update-hairline="downloading"
-        className="h-[2px] w-full overflow-hidden bg-line/16"
+        className="h-0.5 w-full overflow-hidden bg-line/16"
       >
         <div
           className="h-full bg-linear-to-r from-blue to-violet transition-[width] duration-surface ease-expo motion-reduce:transition-none"
@@ -250,7 +252,7 @@ function Hairline({ state }: { state: DesktopUpdateState }) {
     <div
       aria-hidden
       data-update-hairline={fill ? state.kind : 'none'}
-      className={`h-[2px] w-full ${fill ?? ''}`}
+      className={`h-0.5 w-full ${fill ?? ''}`}
     />
   );
 }
