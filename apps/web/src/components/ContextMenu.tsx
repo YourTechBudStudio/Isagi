@@ -1,7 +1,8 @@
 import { ContextMenu as BaseContextMenu } from '@base-ui/react/context-menu';
-import { useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 
 import type { IconType } from '../lib/icon.js';
+import { didPendingActionSettleSuccessfully } from './context-menu-state.js';
 
 export interface ContextMenuItem {
   readonly label: string;
@@ -9,9 +10,10 @@ export interface ContextMenuItem {
   /** Destructive items read red and carry the only accent in the menu. */
   readonly danger?: boolean;
   /**
-   * This item's result lands in the menu, so clicking it does not dismiss the
-   * popup. Declared statically rather than inferred from `pending`, because the
-   * click that starts the work is handled before the pending state can arrive.
+   * This item's pending and failure states land in the menu, so clicking it does
+   * not dismiss the popup immediately. Declared statically rather than inferred
+   * from `pending`, because the click that starts the work is handled before the
+   * pending state can arrive. A successful settlement closes the menu.
    */
   readonly keepsMenuOpen?: boolean;
   /**
@@ -33,8 +35,10 @@ export interface ContextMenuItem {
  * When an item is `pending` the popup becomes the action surface: it holds open
  * through the operation (Escape and outside-press are ignored), every row goes
  * inert, and the running item draws the same sweep the command palette uses. It
- * stays open for the result too, which is why `error` is rendered here rather
- * than displaced into a toast — see ADR 0004.
+ * stays open for a failure too, which is why `error` is rendered here rather
+ * than displaced into a toast. A successful settlement explicitly starts the
+ * popup's shorter exit while the deleted target begins its surface-scale exit —
+ * see ADR 0004.
  */
 export function ContextMenu({
   children,
@@ -51,6 +55,17 @@ export function ContextMenu({
 }) {
   const [open, setOpen] = useState(false);
   const pending = items.some((item) => item.pending);
+  const previouslyPending = useRef(pending);
+
+  useEffect(() => {
+    const settledSuccessfully = didPendingActionSettleSuccessfully({
+      previouslyPending: previouslyPending.current,
+      pending,
+      error,
+    });
+    previouslyPending.current = pending;
+    if (settledSuccessfully) setOpen(false);
+  }, [error, pending]);
 
   return (
     <BaseContextMenu.Root
