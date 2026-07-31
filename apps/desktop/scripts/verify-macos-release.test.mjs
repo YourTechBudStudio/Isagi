@@ -21,10 +21,24 @@ import {
   parseCodesignDetails,
   parseEntitlements,
   verifyBundleVersions,
+  verifyMachOArchitecture,
   verifyMacIconAsset,
   verifyMacRelease,
   withMountedDmg,
 } from './verify-macos-release.mjs';
+
+test('Mach-O architecture verification maps Electron x64 to lipo x86_64', () => {
+  assert.doesNotThrow(() => verifyMachOArchitecture('x86_64\n', 'x64', 'test executable'));
+  assert.doesNotThrow(() => verifyMachOArchitecture('arm64\n', 'arm64', 'test executable'));
+  assert.throws(
+    () => verifyMachOArchitecture('arm64\n', 'x64', 'test executable'),
+    /architectures arm64 do not equal x86_64 for x64/u,
+  );
+  assert.throws(
+    () => verifyMachOArchitecture('x86_64 arm64\n', 'x64', 'test executable'),
+    /architectures x86_64, arm64 do not equal x86_64 for x64/u,
+  );
+});
 
 test('codesign details distinguish Developer ID authority and actual TeamIdentifier', () => {
   assert.deepEqual(

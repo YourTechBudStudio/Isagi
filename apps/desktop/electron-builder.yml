@@ -64,7 +64,9 @@ linux:
   artifactName: Isagi-linux-x86_64.${ext}
   category: Development
   executableName: isagi
-  icon: app-icon-linux.png
+  # The packaging wrapper stages the canonical PNG here as icon.png so
+  # electron-builder generates the complete Linux hicolor icon set.
+  icon: .generated/linux-icons
   syncDesktopName: true
   desktop:
     entry:

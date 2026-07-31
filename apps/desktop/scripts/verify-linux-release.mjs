@@ -22,6 +22,7 @@ import { inflateRawSync, inflateSync } from 'node:zlib';
 import { Effect } from 'effect';
 
 import { verifyDesktopLicenseBundle } from './desktop-license-bundle.mjs';
+import { linuxIconSizes } from './linux-icon-set.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
 import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
@@ -33,7 +34,7 @@ export const linuxReleaseContract = Object.freeze({
   appImageName: 'Isagi-linux-x86_64.AppImage',
   compression: 'zstd',
   desktopName: 'studio.yourtechbud.isagi.desktop',
-  iconSizes: Object.freeze([16, 24, 32, 48, 64, 96, 128, 256, 512]),
+  iconSizes: linuxIconSizes,
   installerName: 'install-isagi-linux.sh',
   metadataName: 'latest-linux.yml',
   provider: Object.freeze({ owner: 'YourTechBudStudio', provider: 'github', repo: 'Isagi' }),

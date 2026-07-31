@@ -447,11 +447,11 @@ test('release workflow pins actions, scopes signing secrets, binds production, a
   assert.equal(workflow.match(/^    environment: Production$/gmu)?.length, 3);
   assert.match(
     workflow,
-    /mac_arm64:\n    name: macOS arm64\n    needs: \[classify, quality\]\n    if: .+\n    environment: Production\n    runs-on: macos-15\n/u,
+    /mac_arm64:\n    name: macOS arm64\n    needs: \[classify\]\n    if: .+\n    environment: Production\n    runs-on: macos-15\n/u,
   );
   assert.match(
     workflow,
-    /mac_x64:\n    name: macOS x64\n    needs: \[classify, quality\]\n    if: .+\n    environment: Production\n    runs-on: macos-15-intel\n/u,
+    /mac_x64:\n    name: macOS x64\n    needs: \[classify\]\n    if: .+\n    environment: Production\n    runs-on: macos-15-intel\n/u,
   );
   assert.equal(workflow.match(/secrets\.APPLE_ID/gu)?.length, 2);
   assert.equal(workflow.match(/secrets\./gu)?.length, 12);

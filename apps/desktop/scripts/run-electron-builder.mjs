@@ -12,6 +12,7 @@ import {
   resolveApplicationRoot,
   unsupportedPackagingMessage,
 } from './electron-builder-target.mjs';
+import { prepareLinuxIconInput } from './linux-icon-set.mjs';
 import { preflightMacRelease } from './macos-release-contract.mjs';
 import { classifyProgramExit, signalExitCode } from './program-exit.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
@@ -66,6 +67,12 @@ const program = Effect.gen(function* () {
           catch: (cause) => new MacReleasePreflightError({ cause }),
         })
       : undefined;
+  if (request.kind === 'linux-release') {
+    yield* Effect.try({
+      try: () => prepareLinuxIconInput(),
+      catch: (cause) => new LinuxReleaseStagingError({ cause }),
+    });
+  }
   yield* prepareRuntimeStage();
   const packageResult = yield* runCommand(electronBuilderCommand, [
     ...packagingArguments,

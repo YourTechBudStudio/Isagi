@@ -22,7 +22,7 @@ test('Linux release contract pins stable assets, zstd, and the complete document
     appImageName: 'Isagi-linux-x86_64.AppImage',
     compression: 'zstd',
     desktopName: 'studio.yourtechbud.isagi.desktop',
-    iconSizes: [16, 24, 32, 48, 64, 96, 128, 256, 512],
+    iconSizes: [16, 24, 32, 48, 64, 128, 256, 512],
     installerName: 'install-isagi-linux.sh',
     metadataName: 'latest-linux.yml',
     provider: { owner: 'YourTechBudStudio', provider: 'github', repo: 'Isagi' },
@@ -43,6 +43,7 @@ test('electron-builder configuration pins the AppImage distribution boundary', a
     'owner: YourTechBudStudio',
     'repo: Isagi',
     'StartupWMClass: studio.yourtechbud.isagi',
+    'icon: .generated/linux-icons',
   ]) {
     assert.equal(configuration.includes(expected), true, `missing ${expected}`);
   }

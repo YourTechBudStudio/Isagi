@@ -323,16 +323,19 @@ function verifySigningIdentity(signature, expectedTeamId, label) {
 function verifyArchitecture(path, architecture, run) {
   return run('lipo', ['-archs', path]).pipe(
     Effect.flatMap((result) =>
-      attempt(() => {
-        const architectures = result.stdout.trim().split(/\s+/u).filter(Boolean);
-        if (architectures.length !== 1 || architectures[0] !== architecture) {
-          fail(
-            `${path} architectures ${architectures.join(', ') || '(none)'} do not equal ${architecture}.`,
-          );
-        }
-      }),
+      attempt(() => verifyMachOArchitecture(result.stdout, architecture, path)),
     ),
   );
+}
+
+export function verifyMachOArchitecture(output, architecture, label) {
+  const expected = architecture === 'x64' ? 'x86_64' : architecture;
+  const architectures = output.trim().split(/\s+/u).filter(Boolean);
+  if (architectures.length !== 1 || architectures[0] !== expected) {
+    fail(
+      `${label} architectures ${architectures.join(', ') || '(none)'} do not equal ${expected} for ${architecture}.`,
+    );
+  }
 }
 
 function inspectIconSizes(iconPath, run) {

@@ -6,9 +6,12 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 
+import { linuxIconSizes } from './linux-icon-set.mjs';
+
 const installer = resolve(import.meta.dirname, 'install-isagi-linux.sh');
 const iconSource = resolve(import.meta.dirname, '../assets/app-icon-linux.png');
-const sizes = [16, 24, 32, 48, 64, 96, 128, 256, 512];
+const invalidIconSize = 64;
+const sizes = linuxIconSizes;
 
 test('Linux installer installs and idempotently replaces the managed application under paths with reserved characters', async () => {
   const fixture = await createFixture('isagi installer $`%" ');
@@ -151,13 +154,16 @@ test('Linux installer validates the AppImage before creating the XDG root', asyn
 
 test('Linux installer validates every embedded icon before creating the XDG root', async (t) => {
   for (const [name, options] of [
-    ['missing icon', { missingIcon: 96 }],
-    ['symlink icon', { symlinkIcon: 96 }],
+    ['missing icon', { missingIcon: invalidIconSize }],
+    ['symlink icon', { symlinkIcon: invalidIconSize }],
   ]) {
     await t.test(name, async () => {
       const fixture = await createFixture(`isagi-invalid-icon-${name.replace(' ', '-')}-`, options);
       try {
-        await assert.rejects(() => runInstaller(fixture), /missing the 96x96 Isagi icon/u);
+        await assert.rejects(
+          () => runInstaller(fixture),
+          new RegExp(`missing the ${invalidIconSize}x${invalidIconSize} Isagi icon`, 'u'),
+        );
         await assert.rejects(() => lstat(fixture.dataHome), { code: 'ENOENT' });
       } finally {
         await fixture.cleanup();

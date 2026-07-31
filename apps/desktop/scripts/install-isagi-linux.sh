@@ -5,7 +5,7 @@ set -eu
 APPIMAGE_NAME='Isagi-linux-x86_64.AppImage'
 DESKTOP_NAME='studio.yourtechbud.isagi.desktop'
 MANAGED_MARKER='X-Isagi-Managed=true'
-ICON_SIZES='16 24 32 48 64 96 128 256 512'
+ICON_SIZES='16 24 32 48 64 128 256 512'
 
 usage() {
   printf '%s\n' "Usage: install-isagi-linux.sh [APPIMAGE]" "" \
