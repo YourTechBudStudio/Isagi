@@ -12,7 +12,7 @@ import {
   resolveApplicationRoot,
   unsupportedPackagingMessage,
 } from './electron-builder-target.mjs';
-import { prepareLinuxIconInput } from './linux-icon-set.mjs';
+import { cleanupLinuxIconPackaging, prepareLinuxIconPackaging } from './linux-icon-set.mjs';
 import { preflightMacRelease } from './macos-release-contract.mjs';
 import { classifyProgramExit, signalExitCode } from './program-exit.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
@@ -67,18 +67,27 @@ const program = Effect.gen(function* () {
           catch: (cause) => new MacReleasePreflightError({ cause }),
         })
       : undefined;
-  if (request.kind === 'linux-release') {
-    yield* Effect.try({
-      try: () => prepareLinuxIconInput(),
-      catch: (cause) => new LinuxReleaseStagingError({ cause }),
-    });
-  }
   yield* prepareRuntimeStage();
-  const packageResult = yield* runCommand(electronBuilderCommand, [
+  const packageEffect = runCommand(electronBuilderCommand, [
     ...packagingArguments,
     '--config',
     builderConfiguration(request),
   ]);
+  const packageResult =
+    request.kind === 'linux-release'
+      ? yield* Effect.acquireUseRelease(
+          Effect.try({
+            try: () => prepareLinuxIconPackaging(),
+            catch: (cause) => new LinuxReleaseStagingError({ cause }),
+          }),
+          () => packageEffect,
+          (packaging) =>
+            Effect.try({
+              try: () => cleanupLinuxIconPackaging(packaging),
+              catch: (cause) => new LinuxReleaseStagingError({ cause }),
+            }),
+        )
+      : yield* packageEffect;
   const packageExitCode = commandExitCode(packageResult);
   if (packageExitCode !== 0) return packageExitCode;
 
