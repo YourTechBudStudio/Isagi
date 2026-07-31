@@ -297,7 +297,12 @@ export function syncHelpText() {
     'Usage: pnpm versions:sync [-- MAJOR.MINOR.PATCH]',
     '',
     'Synchronize the root and all private workspace package versions.',
-    'Review and commit the resulting manifest changes, then create the release tag separately.',
+    'Review and commit the resulting manifest changes, then push them to origin/main.',
+    '',
+    'This does not tag or release anything. Pushing a tag runs nothing: the release pipeline',
+    'starts when a GitHub release is published as a prerelease, and promotes it to stable once',
+    'the complete verified asset set is attached. See the release process section of',
+    'docs/development-runtime.md for the full sequence.',
   ].join('\n');
 }
 

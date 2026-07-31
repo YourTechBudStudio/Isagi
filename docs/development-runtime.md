@@ -28,6 +28,30 @@ The wrapper recognizes one exact long-form spelling per flag — `--linux`, `--m
 
 Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development needs an explicit `VITE_ISAGI_RUNTIME_URL`; Electron never uses that value for runtime discovery.
 
+## Release process
+
+Releasing is one sequence with exactly one manual trigger. Nothing runs when a tag is pushed; the release pipeline starts when a GitHub release is **published as a prerelease**, and it promotes that release to stable itself.
+
+1. Run `pnpm versions:sync -- MAJOR.MINOR.PATCH` on `main`, review the manifest changes, and commit them. The pipeline refuses any tag that disagrees with the synchronized application version.
+2. Push the commit to `origin/main`. The pipeline refuses a tagged commit that is not reachable from `origin/main`.
+3. Draft the release notes with the `create-github-release` agent skill. It creates a **draft prerelease** for `v<version>` targeted at the exact commit SHA, and never creates a tag or publishes anything itself.
+4. Publish that draft on GitHub, leaving the prerelease flag set. Publishing creates the tag at the targeted commit and fires the `release.published` event that starts the workflow.
+5. Wait for the workflow. It classifies and validates the release, builds and verifies Linux x64, macOS arm64, and macOS x64, aggregates the closed asset set, attaches it to the release, and only then clears the prerelease flag and marks the release latest.
+
+A stable release is therefore the pipeline's output, never its input. Publishing a stable release directly is refused during classification, because it would announce a version that has no downloads and no later failure could retract it. While the pipeline runs, the release is visible but marked as a prerelease: it is not the repository's latest release, and the update clients do not offer it.
+
+The release is closed in both directions. The aggregate refuses unexpected build outputs, and the release must hold exactly the assets the manifest describes before it is promoted, so an unverified file attached by hand or left over from an abandoned attempt blocks promotion instead of shipping under the same implied guarantee. The failure names the offending assets; remove them and rerun.
+
+Rerunning the workflow is the recovery path for every failure, and what a rerun does depends on the state classification finds. Always use GitHub's **Re-run all jobs**, never **Re-run failed jobs**. Only the former runs classification again; the latter reuses the previous run's classification, which is the one thing a rerun must not do when the release state has changed underneath it.
+
+While the release is still a prerelease, a rerun rebuilds and reconciles it: it uploads only the assets that are missing or that do not match, so assets that are already correct are never deleted and a rerun after a complete upload uploads nothing. All of that is safe because the release is not yet public.
+
+Once the release is stable it is never written to again, which covers the one ambiguous outcome the pipeline has: promotion is applied but the run fails before it can confirm it. **Re-run all jobs** then takes a different path — classification sees the promoted release, so the rerun skips every build job and runs a read-only verification instead. This is the case where **Re-run failed jobs** actively misleads: it would reuse the stale classification, retry the writing job against a release that is now stable, and fail again without ever reaching verification. The failure says so if it happens. That distinction matters because builds are not byte-reproducible: macOS artifacts are signed and notarized, and the merged update metadata carries a generated `releaseDate`, so a rebuild would disagree with the assets already published and replacing them would delete working public downloads. The verification job holds no write permission at all and proves the release against the `release-manifest.json` the original run attached, using the sizes and SHA-256 digests GitHub reports for each asset. Either the release already holds exactly what its manifest describes and the rerun goes green, or the failure names precisely what diverged and a human decides.
+
+Classification re-admits an already-stable release only when it carries the pipeline's own `release-manifest.json`, because that is the difference between a run to verify and a release someone published by hand.
+
+If a release must be abandoned, delete both the release and its tag. The same version may then be retried, as long as it is still greater than the latest published stable release.
+
 ## Desktop application identity
 
 Isagi uses `studio.yourtechbud.isagi` as its stable application identity across desktop platforms. Electron Builder's `appId` becomes the macOS bundle identifier, while the Linux-only package field `desktopName` is `studio.yourtechbud.isagi.desktop`; Linux packaging synchronizes that filename with the Wayland application ID and X11 `WM_CLASS` so the shell can associate a running window with its launcher and icon.

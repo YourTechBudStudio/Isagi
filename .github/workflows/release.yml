@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 concurrency:
   group: release-${{ github.ref_name }}
@@ -19,6 +18,7 @@ jobs:
     outputs:
       commitSha: ${{ steps.release.outputs.commitSha }}
       kind: ${{ steps.release.outputs.kind }}
+      releaseState: ${{ steps.release.outputs.releaseState }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
@@ -38,6 +38,8 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: node scripts/release-pipeline/preflight.mjs
 
   # quality:
@@ -64,7 +66,7 @@ jobs:
   linux:
     name: Linux x64
     needs: [classify]
-    if: needs.classify.outputs.kind == 'stable_release'
+    if: needs.classify.outputs.kind == 'stable_release' && needs.classify.outputs.releaseState == 'staged'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the classified commit
@@ -97,7 +99,7 @@ jobs:
   mac_arm64:
     name: macOS arm64
     needs: [classify]
-    if: needs.classify.outputs.kind == 'stable_release'
+    if: needs.classify.outputs.kind == 'stable_release' && needs.classify.outputs.releaseState == 'staged'
     environment: Production
     runs-on: macos-15
     steps:
@@ -138,7 +140,7 @@ jobs:
   mac_x64:
     name: macOS x64
     needs: [classify]
-    if: needs.classify.outputs.kind == 'stable_release'
+    if: needs.classify.outputs.kind == 'stable_release' && needs.classify.outputs.releaseState == 'staged'
     environment: Production
     runs-on: macos-15-intel
     steps:
@@ -176,10 +178,14 @@ jobs:
             apps/desktop/release/mac-x64/Isagi-mac-x64.zip.blockmap
             apps/desktop/release/mac-x64/latest-mac.yml
 
-  aggregate:
-    name: Aggregate release
+  finalize:
+    name: Attach assets and promote release
     needs: [classify, linux, mac_arm64, mac_x64]
+    if: needs.classify.outputs.releaseState == 'staged'
+    environment: Production
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Check out the classified commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -218,26 +224,34 @@ jobs:
           --version '${{ needs.classify.outputs.version }}'
           --tag '${{ needs.classify.outputs.tag }}'
           --commit '${{ needs.classify.outputs.commitSha }}'
-      - name: Upload the closed release aggregate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-aggregate-${{ needs.classify.outputs.version }}
-          if-no-files-found: error
-          retention-days: 7
-          path: release-aggregate
+      # Promoting the staged prerelease to stable is the last thing that happens, so a failure
+      # anywhere above leaves a prerelease nobody is being offered rather than an announced
+      # stable version without downloads. Promotion uses github.token, which cannot retrigger
+      # this workflow, and the prerelease-to-stable transition emits `released`, not `published`.
+      - name: Attach assets and promote the staged prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.classify.outputs.commitSha }}
+          RELEASE_TAG: ${{ needs.classify.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.classify.outputs.version }}
+        run: node scripts/release-pipeline/finalize-release.mjs release-aggregate
 
-  publish:
-    name: Publish release
-    needs: [classify, aggregate]
-    environment: Production
+  # The recovery path for a run that promoted the release but failed before it could confirm it.
+  # Reaching it requires "Re-run all jobs": classify must run again to observe the promoted state,
+  # and "Re-run failed jobs" would reuse the previous run's classification and skip this job.
+  # It rebuilds nothing and holds only the workflow's default read permission, because signed
+  # macOS artifacts and generated update metadata are not byte-reproducible: a rebuild would
+  # disagree with what is already published, and replacing a public asset deletes the working one.
+  # The release is proven against the manifest the original run attached instead.
+  reconcile:
+    name: Verify an already-promoted release
+    needs: [classify]
+    if: needs.classify.outputs.releaseState == 'promoted'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - name: Check out the classified commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0
           ref: ${{ needs.classify.outputs.commitSha }}
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -247,15 +261,10 @@ jobs:
         run: corepack enable
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Download the release aggregate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-aggregate-${{ needs.classify.outputs.version }}
-          path: release-aggregate
-      - name: Revalidate aggregate and publish
+      - name: Verify the promoted release against its attached manifest
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_COMMIT: ${{ needs.classify.outputs.commitSha }}
           RELEASE_TAG: ${{ needs.classify.outputs.tag }}
           RELEASE_VERSION: ${{ needs.classify.outputs.version }}
-        run: node scripts/release-pipeline/publish-release.mjs release-aggregate
+        run: node scripts/release-pipeline/reconcile-release.mjs

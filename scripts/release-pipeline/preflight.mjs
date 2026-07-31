@@ -9,6 +9,7 @@ import { Cause, Effect, Exit } from 'effect';
 
 import { classifyReleaseTag, parseCanonicalVersion } from '../release-version-contract.mjs';
 import { verifyPackageVersions } from '../sync-package-versions.mjs';
+import { releaseManifestName } from './artifact-manifest.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -33,13 +34,45 @@ export async function preflightRelease({ adapters, commitSha, repoRoot, tag }) {
     throw new Error(`Remote tag ${tag} resolves to ${remoteCommit}, expected ${commitSha}.`);
   }
   const releases = await adapters.listReleases();
+  const releaseState = classifyPipelineReleaseState(tag, releases);
   assertStrictlyIncreasing(classification.version, tag, releases);
   return {
     commitSha,
     kind: classification._tag,
+    releaseState,
     tag,
     version: classification.version,
   };
+}
+
+// A stable release is the pipeline's output, never its input: publishing one before the assets
+// exist would announce a version nobody can download and no later failure could retract it. The
+// staged prerelease is the state the pipeline starts from, and it promotes that release to stable
+// itself once the complete validated asset set is attached.
+//
+// The one stable release the pipeline may re-enter is one a previous run already promoted, which
+// happens when promotion succeeds but the run fails while confirming it. That case is provable
+// rather than assumed: only the pipeline attaches the release manifest, so a stable release
+// carrying it is a run to reconcile, and a stable release without it was published by hand.
+export function classifyPipelineReleaseState(tag, releases) {
+  const release = releases.find((candidate) => candidate.tag_name === tag);
+  if (!release) {
+    throw new Error(
+      `Published GitHub release ${tag} is required before the release workflow can run.`,
+    );
+  }
+  if (release.draft !== false) {
+    throw new Error(
+      `GitHub release ${tag} is still a draft; publish it as a prerelease to start the release pipeline.`,
+    );
+  }
+  if (release.prerelease === true) return 'staged';
+  if (!(release.assets ?? []).some((asset) => asset.name === releaseManifestName)) {
+    throw new Error(
+      `GitHub release ${tag} is already stable but carries no ${releaseManifestName}; publish the release as a prerelease and let the pipeline promote it.`,
+    );
+  }
+  return 'promoted';
 }
 
 export function assertStrictlyIncreasing(version, currentTag, releases) {
@@ -153,14 +186,21 @@ export async function runCommand(command, args) {
 
 export function formatPreflightSummary({ error, result, tag, commitSha }) {
   if (result) {
-    return `## Release classification\n\n- Kind: \`${result.kind}\`\n- Tag: \`${result.tag}\`\n- Version: \`${result.version}\`\n- Commit: \`${result.commitSha}\`\n`;
+    const state = result.releaseState
+      ? `\n- Release state: \`${result.releaseState}\`${
+          result.releaseState === 'promoted'
+            ? ' (reconciling a release a previous run already promoted)'
+            : ''
+        }`
+      : '';
+    return `## Release classification\n\n- Kind: \`${result.kind}\`\n- Tag: \`${result.tag}\`\n- Version: \`${result.version}\`\n- Commit: \`${result.commitSha}\`${state}\n`;
   }
   return `## Release classification failed\n\n- Tag: \`${tag}\`\n- Commit: \`${commitSha}\`\n- Reason: ${String(error?.message ?? error)}\n`;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const tag = process.env.GITHUB_REF_NAME;
-  const commitSha = process.env.GITHUB_SHA;
+  const tag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
+  const commitSha = process.env.RELEASE_COMMIT ?? process.env.GITHUB_SHA;
   const repository = process.env.GITHUB_REPOSITORY;
   if (!tag || !commitSha || !repository) throw new Error('GitHub release context is incomplete.');
   let result;
