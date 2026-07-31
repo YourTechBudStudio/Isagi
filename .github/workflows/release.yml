@@ -98,6 +98,7 @@ jobs:
     name: macOS arm64
     needs: [classify, quality]
     if: needs.classify.outputs.kind == 'stable_release'
+    environment: Production
     runs-on: macos-15
     steps:
       - name: Check out the classified commit
@@ -138,6 +139,7 @@ jobs:
     name: macOS x64
     needs: [classify, quality]
     if: needs.classify.outputs.kind == 'stable_release'
+    environment: Production
     runs-on: macos-15-intel
     steps:
       - name: Check out the classified commit
@@ -227,6 +229,7 @@ jobs:
   publish:
     name: Publish release
     needs: [classify, aggregate]
+    environment: Production
     runs-on: ubuntu-24.04
     permissions:
       contents: write

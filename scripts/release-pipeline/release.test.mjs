@@ -435,7 +435,7 @@ test('publisher fails without retry or rollback when publication state is not st
   }
 });
 
-test('release workflow pins actions, scopes signing secrets, and preserves gate dependencies', () => {
+test('release workflow pins actions, scopes signing secrets, binds production, and preserves gate dependencies', () => {
   const workflow = readFileSync(resolve('.github/workflows/release.yml'), 'utf8');
   for (const use of workflow.matchAll(/uses:\s+([^\s#]+)/gu)) {
     assert.match(use[1], /^[\w-]+\/[\w-]+@[a-f0-9]{40}$/u);
@@ -444,6 +444,15 @@ test('release workflow pins actions, scopes signing secrets, and preserves gate 
   assert.doesNotMatch(workflow, /if:\s*always\(\)/u);
   assert.match(workflow, /runs-on: macos-15\n/u);
   assert.match(workflow, /runs-on: macos-15-intel/u);
+  assert.equal(workflow.match(/^    environment: Production$/gmu)?.length, 3);
+  assert.match(
+    workflow,
+    /mac_arm64:\n    name: macOS arm64\n    needs: \[classify, quality\]\n    if: .+\n    environment: Production\n    runs-on: macos-15\n/u,
+  );
+  assert.match(
+    workflow,
+    /mac_x64:\n    name: macOS x64\n    needs: \[classify, quality\]\n    if: .+\n    environment: Production\n    runs-on: macos-15-intel\n/u,
+  );
   assert.equal(workflow.match(/secrets\.APPLE_ID/gu)?.length, 2);
   assert.equal(workflow.match(/secrets\./gu)?.length, 12);
   const packagingSteps = workflow.match(
@@ -455,7 +464,10 @@ test('release workflow pins actions, scopes signing secrets, and preserves gate 
     /secrets\./u,
   );
   assert.equal(workflow.match(/contents: write/gu)?.length, 1);
-  assert.match(workflow, /publish:[\s\S]*needs: \[classify, aggregate\]/u);
+  assert.match(
+    workflow,
+    /publish:\n    name: Publish release\n    needs: \[classify, aggregate\]\n    environment: Production\n/u,
+  );
 });
 
 function createAggregateFixture() {
