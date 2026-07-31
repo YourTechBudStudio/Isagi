@@ -61,7 +61,3 @@ appImage:
 mac:
   category: public.app-category.developer-tools
   icon: app-icon.png
-  identity: null
-  target:
-    - dmg
-    - zip

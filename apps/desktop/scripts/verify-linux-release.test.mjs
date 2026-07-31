@@ -50,7 +50,7 @@ test('electron-builder configuration pins the AppImage distribution boundary', a
   const manifest = JSON.parse(
     readFileSync(resolve(import.meta.dirname, '../package.json'), 'utf8'),
   );
-  assert.equal(manifest.scripts.dist.endsWith('--publish never'), true);
+  assert.equal('dist' in manifest.scripts, false);
   assert.equal(
     manifest.scripts['dist:linux'],
     'node scripts/run-electron-builder.mjs --linux AppImage --x64 --publish never',

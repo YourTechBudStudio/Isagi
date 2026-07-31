@@ -4,18 +4,22 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { Cause, Data, Effect, Exit } from 'effect';
+import { Cause, Data, Effect, Fiber } from 'effect';
 
 import {
   classifyPackagingRequest,
+  normalizePackagingArguments,
   resolveApplicationRoot,
   unsupportedPackagingMessage,
 } from './electron-builder-target.mjs';
+import { preflightMacRelease } from './macos-release-contract.mjs';
+import { classifyProgramExit, signalExitCode } from './program-exit.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
 import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 import { prepareRuntimeStage } from './runtime-stage/stage.mjs';
 import { linuxReleaseContract, verifyLinuxRelease } from './verify-linux-release.mjs';
+import { verifyMacRelease } from './verify-macos-release.mjs';
 import { verifyUpdaterPackage } from './verify-updater-package.mjs';
 
 class CommandStartError extends Data.TaggedError('CommandStartError') {}
@@ -24,6 +28,8 @@ class PackagedRuntimeParityError extends Data.TaggedError('PackagedRuntimeParity
 class UpdaterPackageVerificationError extends Data.TaggedError('UpdaterPackageVerificationError') {}
 class LinuxReleaseStagingError extends Data.TaggedError('LinuxReleaseStagingError') {}
 class LinuxReleaseVerificationError extends Data.TaggedError('LinuxReleaseVerificationError') {}
+class MacReleasePreflightError extends Data.TaggedError('MacReleasePreflightError') {}
+class MacReleaseVerificationError extends Data.TaggedError('MacReleaseVerificationError') {}
 class UnsupportedPackagingRequestError extends Data.TaggedError(
   'UnsupportedPackagingRequestError',
 ) {}
@@ -36,35 +42,55 @@ const electronBuilderCommand = join(
   '.bin',
   `electron-builder${executableSuffix}`,
 );
+const packagingArguments = normalizePackagingArguments(process.argv.slice(2));
 
 const program = Effect.gen(function* () {
   // Reject an unshippable or unrecognized packaging request before anything is
   // built, so it can never leave a stable-named artifact behind unverified.
-  const request = classifyPackagingRequest(process.argv.slice(2));
+  const request = classifyPackagingRequest(packagingArguments);
   if (request.kind === 'unsupported') {
     return yield* new UnsupportedPackagingRequestError({
       message: unsupportedPackagingMessage(request.reason),
     });
   }
+  const macPreflight =
+    request.kind === 'mac-release'
+      ? yield* Effect.try({
+          try: () =>
+            preflightMacRelease({
+              architecture: request.architecture,
+              env: process.env,
+              hostArchitecture: process.arch,
+              platform: process.platform,
+            }),
+          catch: (cause) => new MacReleasePreflightError({ cause }),
+        })
+      : undefined;
   yield* prepareRuntimeStage();
-  const packageResult = yield* runCommand(electronBuilderCommand, process.argv.slice(2));
+  const packageResult = yield* runCommand(electronBuilderCommand, [
+    ...packagingArguments,
+    '--config',
+    builderConfiguration(request),
+  ]);
   const packageExitCode = commandExitCode(packageResult);
   if (packageExitCode !== 0) return packageExitCode;
 
   const releaseRoot = resolve(desktopDirectory, 'release');
   const applicationRoot = yield* Effect.try({
-    try: () => resolveApplicationRoot(process.argv.slice(2), releaseRoot),
+    try: () => resolveApplicationRoot(request, releaseRoot),
     catch: (cause) => new PackagedRuntimeMissingError({ cause }),
   });
   const packagedRuntimeRoot = join(packagedResourcesRoot(applicationRoot), 'runtime');
-  const parity = yield* Effect.try({
-    try: () => verifyRuntimeStageParity(stageRoot, packagedRuntimeRoot),
-    catch: (cause) => new PackagedRuntimeParityError({ cause }),
-  });
-  console.log(
-    `[desktop] Runtime stage parity passed (${parity.byteFileCount} byte-matched files, ${parity.executableFileCount} executable helpers, ${Object.keys(parity.dependencyVersions).length} exact external dependencies)`,
-  );
-  yield* smokeRuntimeStage(packagedRuntimeRoot);
+  if (request.kind !== 'mac-release') {
+    const parity = yield* Effect.try({
+      try: () => verifyRuntimeStageParity(stageRoot, packagedRuntimeRoot),
+      catch: (cause) => new PackagedRuntimeParityError({ cause }),
+    });
+    console.log(
+      `[desktop] Runtime stage parity passed (${parity.byteFileCount} byte-matched files, ${parity.executableFileCount} executable helpers, ${Object.keys(parity.dependencyVersions).length} exact external dependencies)`,
+    );
+    yield* smokeRuntimeStage(packagedRuntimeRoot);
+  }
   const updaterVerification = yield* Effect.tryPromise({
     try: () =>
       verifyUpdaterPackage({
@@ -98,17 +124,49 @@ const program = Effect.gen(function* () {
       `[desktop] Linux release verification passed (${linuxVerification.appImageSize} bytes, ${linuxVerification.iconSizes.length} icon frames, ${linuxVerification.elfPayloadCount} x86-64 ELF payloads, blockmap ${linuxVerification.blockMapSize} bytes)`,
     );
   }
+  if (request.kind === 'mac-release') {
+    const manifest = JSON.parse(readFileSync(join(desktopDirectory, 'package.json'), 'utf8'));
+    const macVerification = yield* verifyMacRelease({
+      architecture: request.architecture,
+      expectedTeamId: macPreflight.expectedTeamId,
+      expectedVersion: manifest.version,
+      releaseDirectory: resolve(releaseRoot, `mac-${request.architecture}`),
+    }).pipe(Effect.mapError((cause) => new MacReleaseVerificationError({ cause })));
+    console.log(
+      `[desktop] macOS ${request.architecture} release verification passed (${macVerification.artifactCount} artifacts, ${macVerification.nativePayloadCount} native payloads, ${macVerification.iconSizes.length} icon sizes)`,
+    );
+  }
   return 0;
 });
 
-const exit = await Effect.runPromiseExit(program);
+// The first termination signal interrupts the program instead of killing the
+// process, so scoped finalizers — notably DMG detachment and temporary-tree
+// removal during post-build verification — still run. A second signal abandons
+// that cleanup rather than letting a stuck finalizer trap the operator.
+const fiber = Effect.runFork(program);
+let receivedSignal;
 
-if (Exit.isFailure(exit)) {
-  console.error(Cause.pretty(exit.cause, { renderErrorCause: true }));
-  process.exitCode = 1;
-} else {
-  process.exitCode = exit.value;
-}
+const onSignal = (signal) => {
+  if (receivedSignal) {
+    process.exit(signalExitCode(signal));
+  }
+  receivedSignal = signal;
+  console.error(`[desktop] ${signal} received; unwinding packaging before exit`);
+  Effect.runFork(Fiber.interrupt(fiber));
+};
+
+const onInterruptSignal = () => onSignal('SIGINT');
+const onTerminateSignal = () => onSignal('SIGTERM');
+process.on('SIGINT', onInterruptSignal);
+process.on('SIGTERM', onTerminateSignal);
+
+const exit = await Effect.runPromise(Fiber.await(fiber));
+process.off('SIGINT', onInterruptSignal);
+process.off('SIGTERM', onTerminateSignal);
+
+const outcome = classifyProgramExit(exit, receivedSignal);
+if (outcome.cause) console.error(Cause.pretty(outcome.cause, { renderErrorCause: true }));
+process.exitCode = outcome.code;
 
 function runCommand(command, args) {
   return Effect.async((resume) => {
@@ -186,4 +244,15 @@ function packagedResourcesRoot(applicationRoot) {
   return process.platform === 'darwin' || applicationRoot.endsWith('.app')
     ? join(applicationRoot, 'Contents', 'Resources')
     : join(applicationRoot, 'resources');
+}
+
+function builderConfiguration(request) {
+  return resolve(
+    desktopDirectory,
+    request.kind === 'local-directory'
+      ? 'electron-builder.local.yml'
+      : request.kind === 'mac-release'
+        ? 'electron-builder.mac-release.yml'
+        : 'electron-builder.yml',
+  );
 }
