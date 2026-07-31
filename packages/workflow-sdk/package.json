@@ -2,7 +2,7 @@
   "name": "@yourtechbudstudio/isagi-workflow-sdk",
   "version": "0.0.1",
   "description": "Public authoring contract for Isagi workflows.",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "author": "YourTechBud",
   "repository": {
     "type": "git",

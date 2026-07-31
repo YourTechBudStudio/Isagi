@@ -44,6 +44,8 @@ Get the recommended workflows and agent skills from [`coding-harness-config`](ht
 
 ## License
 
-Isagi is available under the ISC License.
+Except where otherwise noted, Isagi's original software and documentation are licensed under the [Apache License 2.0](./LICENSE).
+
+The app logo files [`app-icon.png`](./apps/desktop/assets/app-icon.png) and [`app-icon-linux.png`](./apps/desktop/assets/app-icon-linux.png) are licensed separately under the [Creative Commons Attribution 4.0 International License](./apps/desktop/assets/LOGO-LICENSE.md). Bundled third-party materials retain the licenses identified alongside those materials.
 
 `// built for developers who ship`

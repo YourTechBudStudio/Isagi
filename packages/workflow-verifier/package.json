@@ -2,7 +2,7 @@
   "name": "@yourtechbudstudio/isagi-workflow-verifier",
   "version": "0.0.1",
   "description": "Verify standalone Isagi workflow artifacts and issue build receipts.",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "author": "YourTechBud",
   "repository": {
     "type": "git",

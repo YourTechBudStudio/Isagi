@@ -1,0 +1,11 @@
+Isagi
+Copyright 2026 YourTechBud
+
+The following app logo files are not covered by the Apache License 2.0:
+
+- apps/desktop/assets/app-icon.png
+- apps/desktop/assets/app-icon-linux.png
+
+Those files are licensed under the Creative Commons Attribution 4.0 International License. See apps/desktop/assets/LOGO-LICENSE.md.
+
+Bundled third-party materials retain their respective licenses. See the license notice stored alongside each such material.
