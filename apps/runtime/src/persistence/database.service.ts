@@ -10,7 +10,7 @@ import * as schema from './schema.js';
 const applicationId = 0x49534147; // ISAG
 const schemaVersion = 1;
 
-type RuntimeDrizzleDatabase = BetterSQLite3Database<typeof schema>;
+export type RuntimeDrizzleDatabase = BetterSQLite3Database<typeof schema>;
 
 type RuntimeDatabaseClient = BetterSqlite.Database;
 

@@ -1,0 +1,11 @@
+extends: electron-builder.yml
+
+# This configuration is intentionally incapable of producing distribution
+# artifacts. The wrapper also requires --dir and disables identity discovery.
+directories:
+  output: release/local
+
+mac:
+  identity: null
+  target:
+    - dir

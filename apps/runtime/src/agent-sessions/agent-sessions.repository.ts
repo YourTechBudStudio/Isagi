@@ -5,12 +5,9 @@ import type { AgentHarness } from '@isagi/contracts';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { agentSessions, ptyProcesses, surfacePanes } from '../persistence/schema.js';
-import type { AgentSessionRow, PtyProcessRow } from '../surfaces/index.js';
-import {
-  AgentSessionArtifacts,
-  type AgentSessionArtifactsService,
-  type AgentSessionHarnessMetadataRead,
-} from './harness/ledger.js';
+import type { AgentSessionRow } from '../surfaces/index.js';
+import { agentSessionRow } from '../surfaces/row-mappers.js';
+import { AgentSessionArtifacts } from './harness/ledger.js';
 
 export interface AgentSessionRepositoryService {
   readonly create: (input: {
@@ -147,81 +144,3 @@ export const AgentSessionRepositoryLive = Layer.effect(
     } satisfies AgentSessionRepositoryService;
   }),
 );
-
-function agentSessionRow(
-  artifacts: AgentSessionArtifactsService,
-  row: typeof agentSessions.$inferSelect,
-  process: typeof ptyProcesses.$inferSelect | null,
-): Effect.Effect<AgentSessionRow> {
-  return Effect.gen(function* () {
-    const metadata = yield* artifacts.readMetadata(row.id);
-    return {
-      ...agentMetadataFields(metadata),
-      id: row.id,
-      worktreeId: row.worktreeId,
-      harness: row.harness,
-      cwd: row.cwd,
-      activePtyProcessId: row.activePtyProcessId,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      lastSeenAt: row.lastSeenAt,
-      activePtyProcess: process ? ptyProcessRow(process) : null,
-    };
-  });
-}
-
-function agentMetadataFields(metadata: AgentSessionHarnessMetadataRead) {
-  switch (metadata.status) {
-    case 'valid':
-      return {
-        harnessSessionId: metadata.metadata.harnessSessionId,
-        harnessMetadataStatus: 'valid' as const,
-        harnessMetadataDiagnostic: null,
-      };
-    case 'missing':
-      return {
-        harnessSessionId: null,
-        harnessMetadataStatus: 'missing' as const,
-        harnessMetadataDiagnostic: `Harness metadata file is missing: ${metadata.metadataPath}`,
-      };
-    case 'invalid':
-      return {
-        harnessSessionId: null,
-        harnessMetadataStatus: 'invalid' as const,
-        harnessMetadataDiagnostic: metadata.diagnostic,
-      };
-  }
-}
-
-function ptyProcessRow(row: typeof ptyProcesses.$inferSelect): PtyProcessRow {
-  return {
-    id: row.id,
-    backend: row.backend,
-    backendRefJson: row.backendRefJson,
-    command: row.command,
-    args: decodeArgs(row.argsJson),
-    argsJson: row.argsJson,
-    cwd: row.cwd,
-    status: row.status,
-    statusReason: row.statusReason,
-    exitCode: row.exitCode,
-    signal: row.signal,
-    logMode: row.logMode,
-    logPath: row.logPath,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    exitedAt: row.exitedAt,
-    lastSeenAt: row.lastSeenAt,
-  };
-}
-
-function decodeArgs(json: string) {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : [];
-  } catch {
-    return [];
-  }
-}

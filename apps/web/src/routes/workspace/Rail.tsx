@@ -10,16 +10,17 @@ import { useWorkspace } from '../../lib/workspace/hooks.js';
 import type { MissingProject, PresentProject } from '../../lib/workspace/types.js';
 import { DisconnectedProjectRow } from './DisconnectedProjectRow.js';
 import { ProjectGroup } from './ProjectGroup.js';
-
-const APP_VERSION = '0.0.1';
+import { RailUpdateFooter } from './RailUpdateFooter.js';
+import { useDesktopUpdate } from './useDesktopUpdate.js';
 
 /**
  * The Rail — Isagi's navigation spine. Brand at the top, the add-project
  * affordance, then projects split into two sections: `Active` (present projects,
  * each an expandable worktree group) and `Disconnected` (projects the runtime
- * can't reach right now), pinned at the foot of the list. A version whisper sits
- * at the very bottom. The host shell may provide a larger top inset; the whole
- * top is the drag region in desktop builds.
+ * can't reach right now), pinned at the foot of the list. The update footer sits
+ * at the very bottom — the installed version and whatever the desktop update has
+ * to say (see {@link ./RailUpdateFooter}). The host shell may provide a larger
+ * top inset; the whole top is the drag region in desktop builds.
  *
  * The two sections share one `LayoutGroup`, and each project carries a stable
  * `layoutId`. Because a project is mounted in exactly one section at a time, a
@@ -118,11 +119,32 @@ export function Rail() {
         </LayoutGroup>
       </div>
 
-      <div className="px-4 pt-2.5 pb-3.5">
-        <span className="font-mono text-[11px] text-fg-subtle opacity-50">v{APP_VERSION}</span>
-      </div>
+      <UpdateFooter />
     </aside>
   );
+}
+
+/**
+ * The footer, or the space it will occupy. A desktop host that has not yet
+ * answered still gets its geometry reserved: the whole point of this treatment
+ * is that the rail never moves, and a footer that appears one IPC round trip
+ * after mount would shove the project list up on the way in. A hosted web build
+ * has no host and reserves nothing.
+ */
+export function UpdateFooter() {
+  const update = useDesktopUpdate();
+  if (update.presence === 'unsupported') return null;
+  if (update.presence === 'unresolved') {
+    // The same metrics as the populated footer, and nothing invented to fill
+    // them: no version, no token, no skeleton.
+    return (
+      <div data-update-footer data-update-state="unresolved" aria-hidden>
+        <div className="h-9" />
+        <div className="h-0.5 w-full" />
+      </div>
+    );
+  }
+  return <RailUpdateFooter {...update} />;
 }
 
 function AddProjectButton({ onOpen }: { onOpen: () => void }) {

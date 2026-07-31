@@ -2,6 +2,14 @@ appId: studio.yourtechbud.isagi
 productName: Isagi
 asar: true
 
+publish:
+  provider: github
+  owner: YourTechBudStudio
+  repo: Isagi
+
+toolsets:
+  appimage: '1.0.3'
+
 directories:
   buildResources: assets
   output: release
@@ -31,16 +39,25 @@ extraResources:
     to: runtime/node_modules
 
 linux:
-  artifactName: Isagi-${version}-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  artifactName: Isagi-linux-x86_64.${ext}
   category: Development
   executableName: isagi
   icon: app-icon-linux.png
   syncDesktopName: true
+  desktop:
+    entry:
+      Name: Isagi
+      Categories: Development;
+      Terminal: 'false'
+      StartupWMClass: studio.yourtechbud.isagi
+
+appImage:
+  compression: zstd
 
 mac:
   category: public.app-category.developer-tools
   icon: app-icon.png
-  identity: null
-  target:
-    - dmg
-    - zip

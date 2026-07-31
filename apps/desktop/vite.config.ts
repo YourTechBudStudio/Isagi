@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 
 const external = [
   'electron',
+  'electron-updater',
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
 ];

@@ -12,15 +12,17 @@ import {
   worktreeSurfaces,
 } from '../persistence/schema.js';
 import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
+import { agentSessionRow } from '../surfaces/row-mappers.js';
 import { deriveAgentSessionState } from '../surfaces/session-status.js';
 import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
-import { AgentSessionArtifacts, type AgentSessionHarnessMetadataRead } from './harness/ledger.js';
+import { AgentSessionArtifacts } from './harness/ledger.js';
 import { HarnessLedgerObserver } from './harness/observer.service.js';
 
 export interface AgentSessionAttentionProjectionService {
   readonly agentSessionAttention: (session: AgentSessionRow) => Effect.Effect<AttentionState>;
   readonly terminalSessionAttention: (session: TerminalSessionRow) => TerminalAttentionState;
   readonly listAttentionSources: Effect.Effect<readonly AttentionSource[], DatabaseError>;
+  readonly workingAgentCount: Effect.Effect<number, DatabaseError>;
 }
 
 export const AgentSessionAttentionProjection =
@@ -46,10 +48,36 @@ export const AgentSessionAttentionProjectionLive = Layer.effect(
       listAttentionSources: Effect.suspend(() =>
         listAttentionSources(artifacts, database, service),
       ),
+      workingAgentCount: Effect.suspend(() => workingAgentCount(artifacts, database, service)),
     };
     return service;
   }),
 );
+
+function workingAgentCount(
+  artifacts: import('./harness/ledger.js').AgentSessionArtifactsService,
+  database: import('../persistence/index.js').RuntimeDatabaseService,
+  attention: Pick<AgentSessionAttentionProjectionService, 'agentSessionAttention'>,
+) {
+  return Effect.gen(function* () {
+    const rows = yield* database.use('working_agent_count', (db) =>
+      db
+        .select({ session: agentSessions, process: ptyProcesses })
+        .from(agentSessions)
+        .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+        .all(),
+    );
+    const states = yield* Effect.all(
+      rows.map((row) =>
+        Effect.flatMap(
+          agentSessionRow(artifacts, row.session, row.process),
+          attention.agentSessionAttention,
+        ),
+      ),
+    );
+    return states.filter((state) => state === 'working').length;
+  });
+}
 
 function listAttentionSources(
   artifacts: import('./harness/ledger.js').AgentSessionArtifactsService,
@@ -127,51 +155,6 @@ function listAttentionSources(
 
 function attentionSourceKey(source: AttentionSource) {
   return `${source.source.kind}:${source.source.id}`;
-}
-
-function agentSessionRow(
-  artifacts: import('./harness/ledger.js').AgentSessionArtifactsService,
-  row: typeof agentSessions.$inferSelect,
-  process: typeof ptyProcesses.$inferSelect | null,
-): Effect.Effect<AgentSessionRow> {
-  return Effect.gen(function* () {
-    const metadata = yield* artifacts.readMetadata(row.id);
-    return {
-      ...agentMetadataFields(metadata),
-      id: row.id,
-      worktreeId: row.worktreeId,
-      harness: row.harness,
-      cwd: row.cwd,
-      activePtyProcessId: row.activePtyProcessId,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      lastSeenAt: row.lastSeenAt,
-      activePtyProcess: process ? ptyProcessRow(process) : null,
-    };
-  });
-}
-
-function agentMetadataFields(metadata: AgentSessionHarnessMetadataRead) {
-  switch (metadata.status) {
-    case 'valid':
-      return {
-        harnessSessionId: metadata.metadata.harnessSessionId,
-        harnessMetadataStatus: 'valid' as const,
-        harnessMetadataDiagnostic: null,
-      };
-    case 'missing':
-      return {
-        harnessSessionId: null,
-        harnessMetadataStatus: 'missing' as const,
-        harnessMetadataDiagnostic: `Harness metadata file is missing: ${metadata.metadataPath}`,
-      };
-    case 'invalid':
-      return {
-        harnessSessionId: null,
-        harnessMetadataStatus: 'invalid' as const,
-        harnessMetadataDiagnostic: metadata.diagnostic,
-      };
-  }
 }
 
 function terminalSessionRow(

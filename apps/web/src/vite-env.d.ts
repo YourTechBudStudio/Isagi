@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { HostRuntimeStatusSnapshot } from './lib/desktop-bridge.js';
+import type { DesktopUpdateSnapshot, HostRuntimeStatusSnapshot } from './lib/desktop-bridge.js';
 
 declare global {
   interface Window {
@@ -12,6 +12,13 @@ declare global {
       ) => () => void;
       setHostChromeVisible?: (visible: boolean) => Promise<void>;
       quitApp?: () => Promise<void>;
+      getDesktopUpdate?: () => Promise<DesktopUpdateSnapshot>;
+      subscribeDesktopUpdate?: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
+      checkForUpdates?: () => Promise<void>;
+      requestUpdateRestart?: () => Promise<void>;
+      confirmUpdateRestart?: () => Promise<void>;
+      cancelUpdateRestart?: () => Promise<void>;
+      openUpdateDownloadPage?: () => Promise<void>;
     };
   }
 }

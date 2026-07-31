@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import {
   hasRuntimeHost,
-  reconcileRuntimeStatus,
+  reconcileRevision,
   subscribeRuntimeStatus,
   type HostRuntimeStatusSnapshot,
 } from '../../lib/desktop-bridge.js';
@@ -14,7 +14,7 @@ export function useHostRuntimeGate() {
   useEffect(() => {
     if (!hosted) return;
     return subscribeRuntimeStatus((next) => {
-      setSnapshot((current) => reconcileRuntimeStatus(current, next));
+      setSnapshot((current) => reconcileRevision(current, next));
     });
   }, [hosted]);
 

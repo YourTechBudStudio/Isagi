@@ -33,3 +33,4 @@ export {
   AgentSessionServiceLive,
 } from './agent-sessions.service.js';
 export type { AgentSessionService as AgentSessionServiceShape } from './agent-sessions.service.js';
+export { registerAgentSessionsApi } from './api.js';

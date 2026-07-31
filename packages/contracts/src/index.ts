@@ -1,3 +1,4 @@
+import { agentSessionsEndpoints } from './agent-sessions/api.js';
 import { clientSettingsEndpoint } from './client-settings/api.js';
 import { commandsEndpoints } from './commands/api.js';
 import { controlPlaneEndpoints } from './control-plane/api.js';
@@ -11,6 +12,7 @@ import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
 
 export const apiEndpoints = {
+  agentSessions: agentSessionsEndpoints,
   commands: commandsEndpoints,
   clientSettings: clientSettingsEndpoint,
   controlPlane: controlPlaneEndpoints,
@@ -23,6 +25,14 @@ export const apiEndpoints = {
   workflows: workflowsEndpoints,
   paths: pathsEndpoints,
 } as const;
+
+export {
+  agentSessionActivityApiErrorSchema,
+  agentSessionActivityUnavailableErrorSchema,
+  agentSessionsEndpoints,
+} from './agent-sessions/api.js';
+export { agentSessionActivityOutputSchema } from './agent-sessions/types.js';
+export type { AgentSessionActivityOutput } from './agent-sessions/types.js';
 
 export { clientSettingsEndpoint } from './client-settings/api.js';
 export {
@@ -51,6 +61,18 @@ export {
   apiSuccessResponseSchema,
   responseMetaSchema,
 } from './api/responses.js';
+
+export {
+  DESKTOP_UPDATE_PROTOCOL_VERSION,
+  desktopUpdateFailureCodeSchema,
+  desktopUpdateIntentSchema,
+  desktopUpdateSnapshotSchema,
+} from './desktop-update/types.js';
+export type {
+  DesktopUpdateFailureCode,
+  DesktopUpdateIntent,
+  DesktopUpdateSnapshot,
+} from './desktop-update/types.js';
 export type {
   ApiError,
   ApiErrorResponse,

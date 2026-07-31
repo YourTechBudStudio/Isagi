@@ -1,9 +1,14 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { Effect, Layer } from 'effect';
 
-import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
+import {
+  DataDirectory,
+  RuntimeDatabase,
+  RuntimeDatabaseLive,
+  type RuntimeDrizzleDatabase,
+} from '../../persistence/index.js';
 import { agentSessions, projects, ptyProcesses, worktrees } from '../../persistence/schema.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyForegroundStateLive } from '../../pty-processes/index.js';
@@ -17,7 +22,11 @@ export function appendRecord(
   path: string,
   nativeEvent: 'agent_start' | 'agent_end',
   pending: boolean | null,
-  options: { readonly agentSessionId?: number; readonly harnessSessionId?: string } = {},
+  options: {
+    readonly agentSessionId?: number;
+    readonly harnessSessionId?: string;
+    readonly ptyProcessId?: number;
+  } = {},
 ) {
   const agentSessionId = options.agentSessionId ?? 10;
   const harnessSessionId = options.harnessSessionId ?? 'pi-session-1';
@@ -28,7 +37,7 @@ export function appendRecord(
       recordedAt: new Date().toISOString(),
       agentSessionId,
       harnessSessionId,
-      ptyProcessId: 20,
+      ptyProcessId: options.ptyProcessId ?? 20,
       harness: 'pi',
       nativeEvent,
       event: {
@@ -37,6 +46,40 @@ export function appendRecord(
       },
     })}\n`,
     'utf8',
+  );
+}
+
+/** Writes the on-disk harness artifacts (metadata plus one ledger record) for an agent session. */
+export function writeHarnessObservation(
+  dataRoot: string,
+  options: {
+    readonly agentSessionId: number;
+    readonly harnessSessionId: string;
+    readonly ptyProcessId: number;
+    readonly nativeEvent: 'agent_start' | 'agent_end';
+    readonly pending: boolean | null;
+  },
+) {
+  const directory = join(dataRoot, 'sessions', 'agent-sessions', String(options.agentSessionId));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(directory, 'harness.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      harnessSessionId: options.harnessSessionId,
+      updatedAt: '2026-07-09T00:00:00.000Z',
+    })}\n`,
+    { mode: 0o600 },
+  );
+  appendRecord(
+    harnessLogPath(directory, options.harnessSessionId),
+    options.nativeEvent,
+    options.pending,
+    {
+      agentSessionId: options.agentSessionId,
+      harnessSessionId: options.harnessSessionId,
+      ptyProcessId: options.ptyProcessId,
+    },
   );
 }
 
@@ -168,6 +211,23 @@ export async function seedActiveAgentSession(
           })
           .run();
       });
+    }).pipe(Effect.provide(databaseLayer(dataRoot))),
+  );
+}
+
+/**
+ * Seeds durable rows before the projection layer is built, so the harness
+ * observer's startup inventory actually sees them. Tests that insert rows
+ * inside the projection effect are only exercising the unobserved path.
+ */
+export function seedRuntimeDatabase(
+  dataRoot: string,
+  seed: (database: RuntimeDrizzleDatabase) => void,
+) {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const database = yield* RuntimeDatabase;
+      yield* database.use('seed_attention_fixture', seed);
     }).pipe(Effect.provide(databaseLayer(dataRoot))),
   );
 }
