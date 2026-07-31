@@ -198,7 +198,7 @@ export const CommandServiceLive = Layer.scoped(
             command: shell,
             args: ['-lc', target.command.command],
             cwd,
-            env: envResult.right,
+            envOverrides: envResult.right,
             shellIntegration: false,
           })
           .pipe(Effect.either);
@@ -801,9 +801,12 @@ function loadCommandTarget(
   });
 }
 
+// Returns only the configured overrides (env files, then command `env`). The PTY
+// layer supplies the login-shell baseline, so premerging `process.env` here would
+// both duplicate that baseline and expose the runtime's own controls to commands.
 function buildCommandEnv(worktreeRoot: string, command: WorktreeCommandConfig) {
   return Effect.gen(function* () {
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env: NodeJS.ProcessEnv = {};
     for (const envFile of command.envFiles) {
       const path = resolve(worktreeRoot, envFile);
       if (!existsSync(path)) {

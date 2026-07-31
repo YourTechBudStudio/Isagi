@@ -21,13 +21,14 @@ const success = (stdout: string, stderr = ''): UserShellCommandResult => ({
 });
 
 test('inventory begins pending and atomically publishes a whitelisted ready snapshot', async () => {
-  const shell = fakeShell((input) => {
-    if (input.command === 'env') {
-      return success(
-        'HOME=/home/dev\nPATH=/tools with spaces\nCODEX_HOME=/codex\nSECRET_TOKEN=nope\n',
-      );
-    }
-    return success(`shell noise\n${input.command} 1.2.3\n`);
+  const shell = fakeShell((input) => success(`shell noise\n${input.command} 1.2.3\n`), {
+    _tag: 'Available',
+    values: {
+      HOME: '/home/dev',
+      PATH: '/tools with spaces',
+      CODEX_HOME: '/codex',
+      SECRET_TOKEN: 'nope',
+    },
   });
 
   await Effect.runPromise(
@@ -47,13 +48,19 @@ test('inventory begins pending and atomically publishes a whitelisted ready snap
 });
 
 test('inventory distinguishes missing, nonzero, malformed, and bounded output', async () => {
-  const shell = fakeShell((input) => {
-    if (input.command === 'env') return { ...success('HOME=/home/dev\n'), outputTruncated: true };
-    if (input.command === 'pi') return { ...success('bad'), exitCode: 2, stderr: 'bad flag' };
-    if (input.command === 'opencode') return success('no version here');
-    if (input.command === 'claude') return { ...success(''), exitCode: 127, stderr: 'not found' };
-    return { ...success('huge'), outputTruncated: true };
-  });
+  const shell = fakeShell(
+    (input) => {
+      if (input.command === 'pi') return { ...success('bad'), exitCode: 2, stderr: 'bad flag' };
+      if (input.command === 'opencode') return success('no version here');
+      if (input.command === 'claude') return { ...success(''), exitCode: 127, stderr: 'not found' };
+      return { ...success('huge'), outputTruncated: true };
+    },
+    {
+      _tag: 'ProbeFailed',
+      values: { HOME: '/fallback', PATH: '/fallback/bin' },
+      diagnostic: 'Environment output exceeded its limit.',
+    },
+  );
 
   const snapshot = await Effect.runPromise(
     Effect.gen(function* () {
@@ -77,7 +84,6 @@ test('concurrent refreshes are single-flight and keep the previous ready snapsho
     Effect.gen(function* () {
       calls += 1;
       if (generation === 2) yield* Effect.sleep('30 millis');
-      if (input.command === 'env') return success('HOME=/home/dev\n');
       return success(`${input.command} ${generation}.0.0`);
     }),
   );
@@ -89,7 +95,7 @@ test('concurrent refreshes are single-flight and keep the previous ready snapsho
         concurrency: 'unbounded',
       });
       assert.deepEqual(firstPair[0], firstPair[1]);
-      assert.equal(calls, 5);
+      assert.equal(calls, 4);
 
       generation = 2;
       const refreshFiber = yield* Effect.fork(inventory.refresh);
@@ -124,9 +130,13 @@ test('managed runtime disposal interrupts an in-flight inventory refresh', async
 
 function fakeShell(
   run: (input: UserShellCommand) => UserShellCommandResult | Effect.Effect<UserShellCommandResult>,
+  environment: UserShellService['environment'] = {
+    _tag: 'Available',
+    values: { HOME: '/fallback', PATH: '/fallback/bin' },
+  },
 ): UserShellService {
   return {
-    baseEnvironment: { HOME: '/fallback', PATH: '/fallback/bin' },
+    environment,
     run: (input) =>
       Effect.suspend(() => {
         const result = run(input);

@@ -35,6 +35,11 @@ export function preflightMacRelease({ architecture, env, platform, hostArchitect
   if (missing.length > 0) {
     throw new Error(`macOS release credentials are missing: ${missing.join(', ')}.`);
   }
+  if (env.CSC_NAME.trim().startsWith('Developer ID Application:')) {
+    throw new Error(
+      'CSC_NAME must omit the "Developer ID Application:" prefix; electron-builder selects that certificate class automatically.',
+    );
+  }
   return {
     architecture,
     expectedTeamId: env.APPLE_TEAM_ID.trim(),

@@ -36,7 +36,7 @@ import {
 } from './paths.mjs';
 import { runCommand } from './process.mjs';
 
-export const stagingRecipeVersion = 2;
+export const stagingRecipeVersion = 3;
 const completionFileName = 'runtime-native-cache.json';
 const stageMetadataFileName = 'runtime-stage.json';
 
@@ -290,6 +290,7 @@ function assembleStage({ cacheRoot, dependencyVersions, electron, fingerprint, n
     verbatimSymlinks: true,
   });
   writeJson(resolve(nextRoot, 'package.json'), stagedPackageManifest(dependencyVersions));
+  pruneStagedNativePrebuilds(nextRoot, electron);
   writeJson(resolve(nextRoot, stageMetadataFileName), {
     dependencyVersions,
     electron: {
@@ -303,6 +304,33 @@ function assembleStage({ cacheRoot, dependencyVersions, electron, fingerprint, n
     fingerprint,
     layoutVersion: 1,
   });
+}
+
+function pruneStagedNativePrebuilds(root, electron) {
+  const require = createRequire(resolve(root, 'package.json'));
+  const entry = require.resolve('node-pty');
+  const packageRoot = findPackageRoot(entry, 'node-pty');
+  pruneNodePtyPrebuilds(packageRoot, {
+    arch: electron.arch,
+    platform: electron.platform,
+  });
+}
+
+export function pruneNodePtyPrebuilds(packageRoot, { arch, platform }) {
+  const prebuildsRoot = resolve(packageRoot, 'prebuilds');
+  if (!existsSync(prebuildsRoot)) return [];
+
+  const target = `${platform}-${arch}`;
+  const removed = [];
+  for (const entry of readdirSync(prebuildsRoot, { withFileTypes: true })) {
+    if (entry.name === target && entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    rmSync(resolve(prebuildsRoot, entry.name), { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+  if (readdirSync(prebuildsRoot).length === 0) {
+    rmSync(prebuildsRoot, { recursive: true, force: true });
+  }
+  return removed.sort();
 }
 
 function publishStage(nextRoot) {

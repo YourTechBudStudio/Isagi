@@ -18,11 +18,13 @@ import process from 'node:process';
 
 import { Data, Effect } from 'effect';
 
+import { verifyDesktopLicenseBundle } from './desktop-license-bundle.mjs';
 import { macReleaseContract } from './macos-release-contract.mjs';
 import { verifyMacArchitectureMetadata } from './macos-update-metadata.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
 
 const minimumIconSizes = Object.freeze([16, 32, 128, 256, 512, 1024]);
+const canonicalMacIconPath = resolve(import.meta.dirname, '../assets/app-icon.icns');
 
 export class MacReleaseVerificationFailure extends Data.TaggedError(
   'MacReleaseVerificationFailure',
@@ -110,6 +112,11 @@ export function verifyMacRelease(options) {
       artifactCount:
         2 + names.blockmaps.filter((name) => inspection.releaseEntries.has(name)).length,
       iconSizes: unpacked.iconSizes,
+      licenseFileCount: Math.min(
+        unpacked.licenseFileCount,
+        zip.licenseFileCount,
+        dmg.licenseFileCount,
+      ),
       metadata: inspection.metadata.metadata,
       nativePayloadCount: Math.min(
         unpacked.nativePayloadCount,
@@ -177,6 +184,7 @@ function verifyApp(appPath, options, run, label) {
         : `${parsed.CFBundleIconFile}.icns`;
       const path = resolve(appPath, 'Contents/Resources', iconName);
       assertRegularFile(path, `${label} icon`);
+      verifyMacIconAsset(path, label);
       return { iconPath: path, info: parsed };
     });
 
@@ -201,6 +209,9 @@ function verifyApp(appPath, options, run, label) {
       yield* attempt(() => verifyEntitlements(entitlements, `${label} ${basename(executable)}`));
     }
 
+    const licenseBundle = yield* attempt(() =>
+      verifyDesktopLicenseBundle(resolve(appPath, 'Contents/Resources'), label),
+    );
     const runtimeRoot = resolve(appPath, 'Contents/Resources/runtime');
     const nativePayloads = yield* attempt(() => {
       verifyRuntimeTarget(runtimeRoot, options.architecture, label);
@@ -233,7 +244,11 @@ function verifyApp(appPath, options, run, label) {
     );
     const iconSizes = yield* inspectIconSizes(iconPath, run);
     if (options.smoke !== false) yield* smokeRuntimeStage(runtimeRoot);
-    return { iconSizes, nativePayloadCount: machOPayloads.length };
+    return {
+      iconSizes,
+      licenseFileCount: licenseBundle.fileCount,
+      nativePayloadCount: machOPayloads.length,
+    };
   });
 }
 
@@ -242,6 +257,12 @@ export function verifyBundleVersions(info, expectedVersion, label) {
     if (info[key] !== expectedVersion) {
       fail(`${label} ${key} is ${info[key] ?? 'missing'}, expected ${expectedVersion}.`);
     }
+  }
+}
+
+export function verifyMacIconAsset(iconPath, label) {
+  if (!readFileSync(iconPath).equals(readFileSync(canonicalMacIconPath))) {
+    fail(`${label} icon does not match the canonical macOS icon asset.`);
   }
 }
 

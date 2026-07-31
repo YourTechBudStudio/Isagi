@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
+import { UserShell, type UserShellService } from '../host-inventory/user-shell.service.js';
 import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
@@ -32,14 +33,36 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
   const repository = PtyRepositoryLive.pipe(Layer.provide(database));
   const backendLayer = Layer.succeed(PtyBackend, backend);
+  const userShellLayer = Layer.succeed(UserShell, testUserShell());
   const service = PtyServiceLive.pipe(
     Layer.provide(repository),
     Layer.provide(backendLayer),
     Layer.provide(PtyForegroundStateLive),
     Layer.provide(directory),
     Layer.provide(InternalRuntimeEventBusLive),
+    Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
+}
+
+function testUserShell(): UserShellService {
+  const environment = {
+    _tag: 'Available' as const,
+    values: {
+      HOME: '/home/developer',
+      USER: 'developer',
+      SHELL: '/bin/zsh',
+      PATH: '/login-shell/bin:/usr/bin:/bin',
+      HOST: '127.0.0.1',
+      PORT: '0',
+      ELECTRON_RUN_AS_NODE: '1',
+      ISAGI_ALLOWED_ORIGINS: 'file://',
+    },
+  };
+  return {
+    environment,
+    run: () => Effect.die('PTY service tests do not run user-shell commands.'),
+  };
 }
 
 test('PTY process repository creates owner-unaware process metadata', async () => {
@@ -96,6 +119,90 @@ test('PTY process repository transitions process lifecycle facts only', async ()
     assert.equal(row.statusReason, 'backend_launch_failed');
     assert.equal(row.exitCode, 1);
     assert.equal(row.exitedAt !== null, true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY launches inherit the resolved login-shell environment without runtime controls', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-user-environment-'));
+  let launchedEnvironment: NodeJS.ProcessEnv | undefined;
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        yield* pty.launch({
+          command: 'bash',
+          args: [],
+          cwd: '/repo/isagi',
+          envForProcess: () => Effect.succeed({ ISAGI_AGENT_SESSION_ID: '10' }),
+        });
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend((environment) => {
+              launchedEnvironment = environment;
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.ok(launchedEnvironment);
+    assert.match(launchedEnvironment.PATH ?? '', /\/login-shell\/bin/);
+    assert.equal(launchedEnvironment.USER, 'developer');
+    assert.equal(launchedEnvironment.HOME, '/home/developer');
+    assert.equal(launchedEnvironment.HOST, undefined);
+    assert.equal(launchedEnvironment.PORT, undefined);
+    assert.equal(launchedEnvironment.ELECTRON_RUN_AS_NODE, undefined);
+    assert.equal(launchedEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
+    assert.equal(launchedEnvironment.ISAGI_AGENT_SESSION_ID, '10');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY launches honour explicit environment overrides the inherited baseline strips', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-env-overrides-'));
+  let launchedEnvironment: NodeJS.ProcessEnv | undefined;
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        yield* pty.launch({
+          command: 'bash',
+          args: [],
+          cwd: '/repo/isagi',
+          envOverrides: {
+            PORT: '5173',
+            HOST: '0.0.0.0',
+            ISAGI_CUSTOM: 'wanted',
+            APP_MODE: 'dev',
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend((environment) => {
+              launchedEnvironment = environment;
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.ok(launchedEnvironment);
+    assert.equal(launchedEnvironment.PORT, '5173');
+    assert.equal(launchedEnvironment.HOST, '0.0.0.0');
+    assert.equal(launchedEnvironment.ISAGI_CUSTOM, 'wanted');
+    assert.equal(launchedEnvironment.APP_MODE, 'dev');
+    // Inherited runtime controls the caller did not override stay stripped.
+    assert.equal(launchedEnvironment.ISAGI_ALLOWED_ORIGINS, undefined);
+    assert.equal(launchedEnvironment.ELECTRON_RUN_AS_NODE, undefined);
+    assert.equal(launchedEnvironment.USER, 'developer');
+    assert.match(launchedEnvironment.PATH ?? '', /\/login-shell\/bin/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -286,6 +393,29 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
         input.send({ type: 'replay_start', bytes: 0 });
         input.send({ type: 'replay_end' });
       }),
+    inspect: () => Effect.succeed({ status: 'alive' }),
+    listSessions: Effect.succeed([]),
+    kill: () => Effect.void,
+  } satisfies PtyBackendShape;
+}
+
+function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void): PtyBackendShape {
+  return {
+    name: 'node_pty',
+    available: Effect.succeed(true),
+    launch: (input) =>
+      Effect.sync(() => {
+        onLaunch(input.env);
+        return {
+          schemaVersion: 1,
+          backend: 'node_pty',
+          ptyProcessId: input.ptyProcessId,
+          pid: 1234,
+        };
+      }),
+    attach: () => Effect.die('launch environment test should not attach'),
+    writeInput: () => Effect.void,
+    replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
     kill: () => Effect.void,

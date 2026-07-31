@@ -37,6 +37,19 @@ test('macOS release preflight requires the one six-variable credential contract'
         !Object.values(completeEnvironment).some((value) => error.message.includes(value)),
     );
   }
+  assert.throws(
+    () =>
+      preflightMacRelease({
+        architecture: 'arm64',
+        env: {
+          ...completeEnvironment,
+          CSC_NAME: 'Developer ID Application: Example Developer (TEAM123456)',
+        },
+        hostArchitecture: 'arm64',
+        platform: 'darwin',
+      }),
+    /must omit the "Developer ID Application:" prefix/u,
+  );
 });
 
 test('macOS release preflight refuses cross-building before inspecting credentials', () => {

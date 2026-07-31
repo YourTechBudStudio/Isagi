@@ -111,6 +111,8 @@ commands:
         stop: false
 ```
 
+Commands run in your login shell's environment. On top of that baseline Isagi layers `envFiles[]` in order, then `env`, so a variable you set in `env` wins over the same name in an env file, and both win over whatever your shell exported. Isagi's own runtime controls (`PORT`, `HOST`, and `ISAGI_*`) are never inherited from the runtime process, but setting any of them in `envFiles[]` or `env` works normally — a command configured with `env: { PORT: "5173" }` starts with `PORT=5173`.
+
 The lifecycle defaults are conservative, and they are asymmetric on purpose: Isagi does not start
 things you did not ask it to start, and does stop things when the worktree goes away.
 

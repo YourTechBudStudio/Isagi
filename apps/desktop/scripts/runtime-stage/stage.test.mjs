@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -15,6 +15,7 @@ import {
   createFingerprint,
   createFingerprintInputs,
   isValidNativeCache,
+  pruneNodePtyPrebuilds,
   recoverGeneratedState,
   validateDependencyTree,
 } from './stage.mjs';
@@ -87,6 +88,44 @@ test('an incomplete cache directory is never a cache hit', () => {
     assert.equal(isValidNativeCache(root, 'fingerprint', {}), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('node-pty staging keeps only the target platform prebuild', () => {
+  const packageRoot = mkdtempSync(resolve(tmpdir(), 'isagi-node-pty-prune-test-'));
+  const prebuildsRoot = resolve(packageRoot, 'prebuilds');
+  for (const name of ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64']) {
+    mkdirSync(resolve(prebuildsRoot, name), { recursive: true });
+    writeFileSync(resolve(prebuildsRoot, name, 'native.node'), name, 'utf8');
+  }
+  writeFileSync(resolve(prebuildsRoot, 'README.md'), 'not a runtime prebuild', 'utf8');
+
+  try {
+    assert.deepEqual(pruneNodePtyPrebuilds(packageRoot, { arch: 'arm64', platform: 'darwin' }), [
+      'README.md',
+      'darwin-x64',
+      'win32-arm64',
+      'win32-x64',
+    ]);
+    assert.equal(existsSync(resolve(prebuildsRoot, 'darwin-arm64/native.node')), true);
+    assert.deepEqual(readdirSync(prebuildsRoot), ['darwin-arm64']);
+  } finally {
+    rmSync(packageRoot, { recursive: true, force: true });
+  }
+});
+
+test('node-pty staging removes an empty prebuild set when no target exists', () => {
+  const packageRoot = mkdtempSync(resolve(tmpdir(), 'isagi-node-pty-prune-empty-test-'));
+  const prebuildsRoot = resolve(packageRoot, 'prebuilds');
+  mkdirSync(resolve(prebuildsRoot, 'darwin-x64'), { recursive: true });
+
+  try {
+    assert.deepEqual(pruneNodePtyPrebuilds(packageRoot, { arch: 'x64', platform: 'linux' }), [
+      'darwin-x64',
+    ]);
+    assert.equal(existsSync(prebuildsRoot), false);
+  } finally {
+    rmSync(packageRoot, { recursive: true, force: true });
   }
 });
 

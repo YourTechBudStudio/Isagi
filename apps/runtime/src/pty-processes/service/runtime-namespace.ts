@@ -6,19 +6,28 @@ export function terminalShellCommand() {
   return process.env.SHELL || 'bash';
 }
 
-export function launchEnv() {
+export function launchEnv(environment: NodeJS.ProcessEnv = process.env) {
+  const sanitized = userShellBaseEnv(environment);
   return {
-    ...userShellBaseEnv(),
-    PATH: pathWithRuntimeNodeBin(process.env.PATH),
+    ...sanitized,
+    PATH: pathWithRuntimeNodeBin(sanitized.PATH),
   } satisfies NodeJS.ProcessEnv;
 }
 
-export function userShellBaseEnv() {
-  return {
-    ...process.env,
+export function userShellBaseEnv(environment: NodeJS.ProcessEnv = process.env) {
+  const sanitized: NodeJS.ProcessEnv = {
+    ...environment,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
-  } satisfies NodeJS.ProcessEnv;
+  };
+  for (const key of Object.keys(sanitized)) {
+    if (key.startsWith('ISAGI_')) delete sanitized[key];
+  }
+  delete sanitized.ELECTRON_RUN_AS_NODE;
+  delete sanitized.HOST;
+  delete sanitized.PORT;
+  delete sanitized.VITE_ISAGI_RUNTIME_URL;
+  return sanitized;
 }
 
 function pathWithRuntimeNodeBin(path: string | undefined) {

@@ -1,6 +1,5 @@
 import { Effect } from 'effect';
 
-import { launchEnv } from '../../pty-processes/service/runtime-namespace.js';
 import type { AgentSessionArtifactsService } from './ledger.js';
 
 export function harnessEnvForProcess(input: {
@@ -33,7 +32,6 @@ export function harnessEnvForProcess(input: {
         ),
       );
     const environment: NodeJS.ProcessEnv = {
-      ...launchEnv(),
       ...input.extraEnv,
       ISAGI_AGENT_SESSION_ID: String(input.agentSessionId),
       ISAGI_PTY_PROCESS_ID: String(input.ptyProcessId),

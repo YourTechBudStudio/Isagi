@@ -21,6 +21,7 @@ import { inflateRawSync, inflateSync } from 'node:zlib';
 
 import { Effect } from 'effect';
 
+import { verifyDesktopLicenseBundle } from './desktop-license-bundle.mjs';
 import { verifyRuntimeStageParity } from './runtime-stage/parity.mjs';
 import { stageRoot } from './runtime-stage/paths.mjs';
 import { smokeRuntimeStage } from './runtime-stage/smoke.mjs';
@@ -95,6 +96,7 @@ export async function verifyLinuxRelease(options) {
       blockMapSize: manifest.files[0].blockMapSize,
       elfPayloadCount: payloads.elfPayloadCount,
       iconSizes: [...linuxReleaseContract.iconSizes],
+      licenseFileCount: payloads.licenseFileCount,
       parity,
       version: manifest.version,
     };
@@ -315,6 +317,10 @@ function verifyExtractedAppImage(root) {
     }
   }
   verifyDirIcon(root);
+  const licenseBundle = verifyDesktopLicenseBundle(
+    resolve(root, 'resources'),
+    'extracted AppImage',
+  );
   const launcher = resolve(root, 'isagi');
   verifyElfX64(launcher);
   const elfPayloads = verifyElfPayloads(root);
@@ -322,7 +328,10 @@ function verifyExtractedAppImage(root) {
   if (elfPayloads.length < 2) {
     fail('extracted AppImage contains no Electron ELF payloads beside the launcher.');
   }
-  return { elfPayloadCount: elfPayloads.length };
+  return {
+    elfPayloadCount: elfPayloads.length,
+    licenseFileCount: licenseBundle.fileCount,
+  };
 }
 
 function verifyDirIcon(root) {

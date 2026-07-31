@@ -9,4 +9,10 @@ export type {
   HostInventory as HostInventorySnapshot,
   HostInventoryState,
 } from './types.js';
-export { UserShell, UserShellLive, type UserShellService } from './user-shell.service.js';
+export {
+  resolveUserShellEnvironment,
+  UserShell,
+  UserShellLive,
+  type UserShellEnvironmentResult,
+  type UserShellService,
+} from './user-shell.service.js';

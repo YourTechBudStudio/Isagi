@@ -12,6 +12,7 @@ import {
 import { waitForRuntimeHealth } from './boot.js';
 import { sanitizeManagedRuntimeEnvironment } from './development-environment.js';
 import { resolveDevelopmentRoot } from './development.js';
+import { managedRuntimeAllowedOrigins } from './runtime-origin.js';
 import {
   createRuntimeLogSink,
   nodeRuntimeProcessAdapter,
@@ -39,9 +40,14 @@ export function createRuntimeLifecycle() {
 }
 
 function prepareManagedRuntime(): RuntimeSpawnSpecification {
-  const webOrigin = app.isPackaged ? undefined : requiredDevelopmentWebOrigin();
   const configuredDataDirectory = process.env.ISAGI_DATA_DIR;
-  const configuredAllowedOrigins = process.env.ISAGI_ALLOWED_ORIGINS;
+  const allowedOrigins = app.isPackaged
+    ? managedRuntimeAllowedOrigins({ mode: 'packaged' })
+    : managedRuntimeAllowedOrigins({
+        mode: 'development',
+        webOrigin: requiredDevelopmentWebOrigin(),
+        configuredAllowedOrigins: process.env.ISAGI_ALLOWED_ORIGINS,
+      });
   const locations = app.isPackaged
     ? {
         stageRoot: resolve(process.resourcesPath, 'runtime'),
@@ -81,11 +87,7 @@ function prepareManagedRuntime(): RuntimeSpawnSpecification {
       ELECTRON_RUN_AS_NODE: '1',
       HOST: '127.0.0.1',
       PORT: '0',
-      ...(webOrigin
-        ? { ISAGI_ALLOWED_ORIGINS: mergeAllowedOrigins(webOrigin) }
-        : configuredAllowedOrigins
-          ? { ISAGI_ALLOWED_ORIGINS: configuredAllowedOrigins }
-          : {}),
+      ISAGI_ALLOWED_ORIGINS: allowedOrigins,
       ...(dataDirectory ? { ISAGI_DATA_DIR: dataDirectory } : {}),
     },
   };
@@ -121,13 +123,6 @@ function requiredDevelopmentWebOrigin() {
       diagnostic: { message: 'ISAGI_WEB_URL must be an absolute HTTP(S) URL without credentials.' },
     });
   }
-}
-
-function mergeAllowedOrigins(webOrigin: string) {
-  const configured = process.env.ISAGI_ALLOWED_ORIGINS?.split(',') ?? [];
-  return [
-    ...new Set([webOrigin, ...configured.map((origin) => origin.trim()).filter(Boolean)]),
-  ].join(',');
 }
 
 function errorMessage(error: unknown) {

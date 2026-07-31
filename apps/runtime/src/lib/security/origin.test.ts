@@ -18,7 +18,21 @@ test('allows only exact configured browser origins', () => {
   }
 });
 
-test('allows absent and null origins for packaged and local non-browser clients', () => {
+test('allows absent and null origins for local non-browser and opaque clients', () => {
   assert.equal(isAllowedRuntimeOrigin(undefined), true);
   assert.equal(isAllowedRuntimeOrigin('null'), true);
+});
+
+test('allows the packaged file renderer only when it is explicitly configured', () => {
+  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
+  delete process.env.ISAGI_ALLOWED_ORIGINS;
+  try {
+    assert.equal(isAllowedRuntimeOrigin('file://'), false);
+    process.env.ISAGI_ALLOWED_ORIGINS = 'file://';
+    assert.equal(isAllowedRuntimeOrigin('file://'), true);
+    assert.equal(isAllowedRuntimeOrigin('file:///Applications/Isagi.app'), false);
+  } finally {
+    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
+    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
+  }
 });

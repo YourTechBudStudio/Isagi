@@ -85,7 +85,7 @@ import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktre
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
-const HostInventoryLayer = HostInventoryLive.pipe(Layer.provide(UserShellLive));
+const HostInventoryLayer = HostInventoryLive;
 const HarnessControlPlaneLayer = HarnessControlPlaneLive.pipe(
   Layer.provide(HostInventoryLayer),
   Layer.provide(RuntimeConfigLayer),
@@ -280,6 +280,7 @@ const ServicesLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(InternalRuntimeEventBusLive), Layer.provideMerge(RuntimeEventBusLive));
 
 export const RuntimeLayer = ServicesLayer.pipe(
+  Layer.provide(UserShellLive),
   Layer.provide(
     Layer.mergeAll(
       RepositoryLive,

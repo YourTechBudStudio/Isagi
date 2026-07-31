@@ -121,7 +121,7 @@ const program = Effect.gen(function* () {
       catch: (cause) => new LinuxReleaseVerificationError({ cause }),
     });
     console.log(
-      `[desktop] Linux release verification passed (${linuxVerification.appImageSize} bytes, ${linuxVerification.iconSizes.length} icon frames, ${linuxVerification.elfPayloadCount} x86-64 ELF payloads, blockmap ${linuxVerification.blockMapSize} bytes)`,
+      `[desktop] Linux release verification passed (${linuxVerification.appImageSize} bytes, ${linuxVerification.iconSizes.length} icon frames, ${linuxVerification.elfPayloadCount} x86-64 ELF payloads, ${linuxVerification.licenseFileCount} license files, blockmap ${linuxVerification.blockMapSize} bytes)`,
     );
   }
   if (request.kind === 'mac-release') {
@@ -133,7 +133,7 @@ const program = Effect.gen(function* () {
       releaseDirectory: resolve(releaseRoot, `mac-${request.architecture}`),
     }).pipe(Effect.mapError((cause) => new MacReleaseVerificationError({ cause })));
     console.log(
-      `[desktop] macOS ${request.architecture} release verification passed (${macVerification.artifactCount} artifacts, ${macVerification.nativePayloadCount} native payloads, ${macVerification.iconSizes.length} icon sizes)`,
+      `[desktop] macOS ${request.architecture} release verification passed (${macVerification.artifactCount} artifacts, ${macVerification.nativePayloadCount} native payloads, ${macVerification.iconSizes.length} icon sizes, ${macVerification.licenseFileCount} license files)`,
     );
   }
   return 0;

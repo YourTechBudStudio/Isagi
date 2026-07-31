@@ -1,17 +1,27 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
+import { desktopLicenseBundle } from './desktop-license-bundle.mjs';
 import {
   classifyCommandFailure,
   parseCodesignDetails,
   parseEntitlements,
   verifyBundleVersions,
+  verifyMacIconAsset,
   verifyMacRelease,
   withMountedDmg,
 } from './verify-macos-release.mjs';
@@ -81,6 +91,22 @@ test('bundle versions must both equal the canonical release version', () => {
       () => verifyBundleVersions(missing, '1.2.3', 'test app'),
       new RegExp(`${key} is missing, expected 1\\.2\\.3`, 'u'),
     );
+  }
+});
+
+test('macOS icon verification rejects an asset that differs from the canonical ICNS', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'isagi-mac-icon-'));
+  const icon = resolve(root, 'icon.icns');
+  try {
+    copyFileSync(resolve(import.meta.dirname, '../assets/app-icon.icns'), icon);
+    assert.doesNotThrow(() => verifyMacIconAsset(icon, 'test app'));
+    writeFileSync(icon, 'corrupted icon');
+    assert.throws(
+      () => verifyMacIconAsset(icon, 'test app'),
+      /test app icon does not match the canonical macOS icon asset/u,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 });
 
@@ -193,6 +219,7 @@ test('macOS verifier drives the complete app, ZIP, and DMG command contract thro
     );
     assert.equal(result.architecture, 'arm64');
     assert.equal(result.artifactCount, 4);
+    assert.equal(result.licenseFileCount, desktopLicenseBundle.files.length);
     assert.equal(result.nativePayloadCount >= 4, true);
     for (const expected of [
       ['ditto', '-x', '-k'],
@@ -290,7 +317,10 @@ function createApp(app) {
     resolve(app, 'Contents/Info.plist'),
     '<plist><dict><key>CFBundleIdentifier</key><string>studio.yourtechbud.isagi</string><key>CFBundleShortVersionString</key><string>1.2.3</string><key>CFBundleVersion</key><string>1.2.3</string></dict></plist>',
   );
-  writeFileSync(resolve(resources, 'AppIcon.icns'), 'icns');
+  copyFileSync(
+    resolve(import.meta.dirname, '../assets/app-icon.icns'),
+    resolve(resources, 'AppIcon.icns'),
+  );
   writeFileSync(
     resolve(runtime, 'runtime-stage.json'),
     JSON.stringify({ electron: { arch: 'arm64', platform: 'darwin' } }),
@@ -299,6 +329,11 @@ function createApp(app) {
     resolve(resources, 'app-update.yml'),
     'provider: github\nowner: YourTechBudStudio\nrepo: Isagi\n',
   );
+  const licenses = resolve(resources, desktopLicenseBundle.directoryName);
+  mkdirSync(licenses);
+  for (const file of desktopLicenseBundle.files) {
+    copyFileSync(file.sourcePath, resolve(licenses, file.name));
+  }
 }
 
 function fakeCommand(fixture, command, args) {

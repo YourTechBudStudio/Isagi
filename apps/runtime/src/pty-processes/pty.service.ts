@@ -4,6 +4,7 @@ import { Context, Effect, Either, Layer } from 'effect';
 
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
+import { UserShell } from '../host-inventory/user-shell.service.js';
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import {
   InternalRuntimeEventBus,
@@ -127,6 +128,8 @@ export const PtyServiceLive = Layer.scoped(
     const foreground = yield* PtyForegroundState;
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
+    const userShell = yield* UserShell;
+    const userProcessEnvironment = launchEnv(userShell.environment.values);
     const activeAttachments = new Map<number, ActiveAttachment>();
     const pendingAttachments = new Set<number>();
     const pinnedPtyProcessIds = new Set<number>();
@@ -167,12 +170,16 @@ export const PtyServiceLive = Layer.scoped(
             logPath: null,
           };
           yield* foreground.clear(ptyProcessId);
-          const baseEnv = input.envForProcess
-            ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
-            : (input.env ?? launchEnv());
+          const processEnvironment: NodeJS.ProcessEnv = {
+            ...userProcessEnvironment,
+            ...input.envOverrides,
+            ...(input.envForProcess
+              ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
+              : {}),
+          };
           const backendCommand = backendLaunchCommand({
             launch: input,
-            env: baseEnv,
+            env: processEnvironment,
           });
           const launch = prepareShellIntegration({
             launch: {
@@ -183,7 +190,7 @@ export const PtyServiceLive = Layer.scoped(
             },
             ptyProcessId,
             sessionsPath: directory.paths.sessionsPath,
-            env: baseEnv,
+            env: processEnvironment,
           });
           const startResult = yield* launchWithBackend({
             backend,

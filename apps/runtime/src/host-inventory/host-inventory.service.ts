@@ -16,7 +16,6 @@ import { UserShell, type UserShellCommandResult } from './user-shell.service.js'
 
 const probeTimeoutMs = 5_000;
 const probeOutputLimitBytes = 16 * 1024;
-const environmentOutputLimitBytes = 128 * 1024;
 
 export interface HostInventoryService {
   readonly getCached: Effect.Effect<HostInventoryState>;
@@ -101,9 +100,8 @@ export const HostInventoryLive = Layer.scoped(
 
 function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
   return Effect.gen(function* () {
-    const [environment, pi, opencode, claude, codex] = yield* Effect.all(
+    const [pi, opencode, claude, codex] = yield* Effect.all(
       [
-        captureApprovedEnvironment(shell),
         probeVersion(shell, harnessDefinitions.pi.probe),
         probeVersion(shell, harnessDefinitions.opencode.probe),
         probeVersion(shell, harnessDefinitions.claude.probe),
@@ -112,35 +110,10 @@ function collectHostInventory(shell: Context.Tag.Service<typeof UserShell>) {
       { concurrency: 'unbounded' },
     );
     return {
-      environment,
+      environment: approvedEnvironmentResult(shell.environment),
       harnesses: { pi, opencode, claude, codex },
     } satisfies HostInventorySnapshot;
   });
-}
-
-function captureApprovedEnvironment(
-  shell: Context.Tag.Service<typeof UserShell>,
-): Effect.Effect<HostEnvironmentResult> {
-  return shell
-    .run({
-      command: 'env',
-      args: [],
-      timeoutMs: probeTimeoutMs,
-      maxOutputBytes: environmentOutputLimitBytes,
-    })
-    .pipe(
-      Effect.map((result) => {
-        const fallback = approvedEnvironment(shell.baseEnvironment);
-        if (result.exitCode !== 0 || result.timedOut || result.outputTruncated) {
-          return {
-            _tag: 'ProbeFailed',
-            values: fallback,
-            diagnostic: conciseFailure(result),
-          };
-        }
-        return { _tag: 'Available', values: approvedEnvironment(parseEnvironment(result.stdout)) };
-      }),
-    );
 }
 
 function probeVersion(shell: Context.Tag.Service<typeof UserShell>, probe: HarnessProbeDefinition) {
@@ -202,15 +175,6 @@ function versionLines(output: string) {
     .filter((line) => line && /\d/.test(line));
 }
 
-function parseEnvironment(stdout: string): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    stdout.split(/\r?\n/).flatMap((line) => {
-      const separator = line.indexOf('=');
-      return separator > 0 ? [[line.slice(0, separator), line.slice(separator + 1)]] : [];
-    }),
-  );
-}
-
 function approvedEnvironment(environment: NodeJS.ProcessEnv): ApprovedHostEnvironment {
   return Object.fromEntries(
     approvedHostEnvironmentKeys.flatMap((key) => {
@@ -218,4 +182,13 @@ function approvedEnvironment(environment: NodeJS.ProcessEnv): ApprovedHostEnviro
       return value ? [[key, value]] : [];
     }),
   );
+}
+
+function approvedEnvironmentResult(
+  environment: Context.Tag.Service<typeof UserShell>['environment'],
+): HostEnvironmentResult {
+  const values = approvedEnvironment(environment.values);
+  return environment._tag === 'Available'
+    ? { _tag: 'Available', values }
+    : { _tag: 'ProbeFailed', values, diagnostic: environment.diagnostic };
 }

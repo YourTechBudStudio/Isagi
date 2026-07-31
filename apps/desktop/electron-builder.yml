@@ -37,6 +37,24 @@ extraResources:
   # native bindings, and executable helpers remain physically self-contained.
   - from: .generated/runtime/node_modules
     to: runtime/node_modules
+  - from: ../../LICENSE
+    to: licenses/Isagi-LICENSE.txt
+  - from: ../../NOTICE
+    to: licenses/Isagi-NOTICE.txt
+  - from: assets/LOGO-LICENSE.md
+    to: licenses/Isagi-Logo-CC-BY-4.0.md
+  - from: ../web/node_modules/@fontsource-variable/fira-code/LICENSE
+    to: licenses/Fira-Code-LICENSE.txt
+  - from: ../web/node_modules/@fontsource-variable/sora/LICENSE
+    to: licenses/Sora-LICENSE.txt
+  - from: ../web/node_modules/@fontsource-variable/source-sans-3/LICENSE
+    to: licenses/Source-Sans-3-LICENSE.txt
+  - from: ../web/src/assets/fonts/LICENSE.txt
+    to: licenses/Symbols-Nerd-Font-LICENSE.txt
+  - from: node_modules/electron/LICENSE
+    to: licenses/Electron-LICENSE.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: licenses/Electron-Chromium-LICENSES.html
 
 linux:
   target:
@@ -60,4 +78,6 @@ appImage:
 
 mac:
   category: public.app-category.developer-tools
-  icon: app-icon.png
+  # Use the Apple-generated asset directly. electron-builder's PNG-to-ICNS
+  # converter corrupts the non-Retina 16x16 frame used by compact Finder views.
+  icon: app-icon.icns

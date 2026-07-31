@@ -126,6 +126,29 @@ test('runtime events websocket rejects disallowed origins before upgrade', async
   }
 });
 
+test('runtime events websocket accepts the explicitly configured packaged file origin', async () => {
+  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
+  process.env.ISAGI_ALLOWED_ORIGINS = 'file://';
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(RuntimeEventBusLive);
+
+  try {
+    await fastify.register(websocket);
+    registerRuntimeEventsApi(fastify, runtime as never);
+    await fastify.ready();
+
+    const ws = await fastify.injectWS('/api/v1/events', {
+      headers: { origin: 'file://' },
+    });
+    ws.terminate();
+  } finally {
+    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
+    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 test('runtime events websocket unsubscribes if the socket closes before subscribe resolves', async () => {
   let markSubscribeStarted!: () => void;
   let resolveSubscribe!: (subscription: RuntimeEventSubscription) => void;

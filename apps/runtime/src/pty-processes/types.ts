@@ -185,7 +185,11 @@ export interface LaunchPtyProcessInput {
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd: string;
-  readonly env?: NodeJS.ProcessEnv | undefined;
+  // Explicit variables layered on top of the resolved login-shell environment.
+  // Callers pass only what they mean to add or override — never a premerged
+  // copy of `process.env` — because the baseline is already sanitized of runtime
+  // controls (`PORT`, `HOST`, `ISAGI_*`) while overrides are honoured verbatim.
+  readonly envOverrides?: NodeJS.ProcessEnv | undefined;
   readonly launchMode?: PtyLaunchMode | undefined;
   readonly shellIntegration?: boolean | undefined;
   readonly envForProcess?:

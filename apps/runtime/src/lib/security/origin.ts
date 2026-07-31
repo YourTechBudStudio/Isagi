@@ -3,9 +3,9 @@ import process from 'node:process';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 export function isAllowedRuntimeOrigin(origin: string | undefined) {
-  // Packaged file:// renderers send Origin: null, while local non-browser clients
-  // commonly omit Origin. This is a deliberate local-client trust allowance, not
-  // browser authentication; every concrete browser origin must match exactly.
+  // Local non-browser clients commonly omit Origin, and opaque origins use null.
+  // This is a deliberate local-client trust allowance, not browser authentication.
+  // The packaged desktop's concrete file:// origin is configured explicitly.
   if (!origin || origin === 'null') {
     return true;
   }
