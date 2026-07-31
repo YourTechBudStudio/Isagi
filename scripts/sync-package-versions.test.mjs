@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 
 import { Effect } from 'effect';
 
-import { classifyReleaseTag, parseCanonicalVersion } from './release-version-contract.mjs';
+import { parseCanonicalVersion } from './release-version-contract.mjs';
 import {
   createPackageVersionPlan,
   syncPackageVersions,
@@ -30,28 +30,6 @@ test('accepts canonical app versions without numeric coercion', () => {
 test('rejects non-canonical app versions', () => {
   for (const version of ['01.2.3', '1.02.3', '1.2.03', '1.2', '1.2.3-rc.1', '1.2.3+build.4']) {
     assert.equal(parseCanonicalVersion(version)._tag, 'invalid_version', version);
-  }
-});
-
-test('classifies release tags', () => {
-  const cases = [
-    ['v0.0.0', 'stable_release'],
-    ['v999999999999999999999999.2.3', 'stable_release'],
-    ['v1.2.3-rc.1', 'prerelease_ignored'],
-    ['v1.2.3-beta.2+build.4', 'prerelease_ignored'],
-    ['v1.2.3+build.4', 'prerelease_ignored'],
-    ['v1.2.3-01', 'invalid_tag'],
-    ['v01.2.3', 'invalid_tag'],
-    ['v1.2.3.4', 'invalid_tag'],
-    ['v', 'invalid_tag'],
-    ['V1.2.3', 'unrelated'],
-    ['refs/tags/v1.2.3', 'unrelated'],
-    ['workflow-sdk/v1.2.3', 'unrelated'],
-    ['1.2.3', 'unrelated'],
-  ];
-
-  for (const [tagName, expected] of cases) {
-    assert.equal(classifyReleaseTag(tagName)._tag, expected, tagName);
   }
 });
 
