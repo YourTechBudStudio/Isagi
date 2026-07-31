@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 
 import { classifyReleaseTag, parseCanonicalVersion } from '../release-version-contract.mjs';
 import { verifyPackageVersions } from '../sync-package-versions.mjs';
@@ -73,7 +73,21 @@ export function compareVersions(left, right) {
 export function createPreflightAdapters({ repository, run }) {
   return {
     assertMainAncestor: async (commitSha) => {
-      await run('git', ['merge-base', '--is-ancestor', commitSha, 'origin/main']);
+      try {
+        await run('git', ['merge-base', '--is-ancestor', commitSha, 'origin/main']);
+      } catch (cause) {
+        // git merge-base --is-ancestor reserves exit 1 for the answer "no"; every other
+        // failure means the check itself could not run and must stay distinguishable.
+        if (cause?.exitCode === 1) {
+          throw new Error(`Tagged commit ${commitSha} is not reachable from origin/main.`, {
+            cause,
+          });
+        }
+        throw new Error(
+          `Ancestry check for ${commitSha} against origin/main could not be completed: ${String(cause?.message ?? cause)}`,
+          { cause },
+        );
+      }
     },
     listReleases: async () => {
       const result = await run('gh', [
@@ -100,8 +114,10 @@ export function createPreflightAdapters({ repository, run }) {
   };
 }
 
-export function runCommand(command, args) {
-  return Effect.runPromise(
+export async function runCommand(command, args) {
+  // Callers classify failures by exit status, so the original error must survive the
+  // Effect boundary rather than arriving as an opaque FiberFailure.
+  const exit = await Effect.runPromiseExit(
     Effect.tryPromise({
       try: async () => {
         const { spawn } = await import('node:child_process');
@@ -114,15 +130,32 @@ export function runCommand(command, args) {
           child.stdout.on('data', (chunk) => (stdout += chunk));
           child.stderr.on('data', (chunk) => (stderr += chunk));
           child.once('error', reject);
-          child.once('exit', (code) => {
+          child.once('exit', (code, signal) => {
             if (code === 0) resolvePromise({ stderr, stdout });
-            else reject(new Error(`${command} ${args.join(' ')} failed: ${stderr.trim()}`));
+            else {
+              const outcome = code === null ? `signal ${signal}` : `exit ${code}`;
+              reject(
+                Object.assign(
+                  new Error(`${command} ${args.join(' ')} failed (${outcome}): ${stderr.trim()}`),
+                  { exitCode: code, signal, stderr, stdout },
+                ),
+              );
+            }
           });
         });
       },
       catch: (cause) => cause,
     }),
   );
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw Cause.squash(exit.cause);
+}
+
+export function formatPreflightSummary({ error, result, tag, commitSha }) {
+  if (result) {
+    return `## Release classification\n\n- Kind: \`${result.kind}\`\n- Tag: \`${result.tag}\`\n- Version: \`${result.version}\`\n- Commit: \`${result.commitSha}\`\n`;
+  }
+  return `## Release classification failed\n\n- Tag: \`${tag}\`\n- Commit: \`${commitSha}\`\n- Reason: ${String(error?.message ?? error)}\n`;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -130,12 +163,23 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const commitSha = process.env.GITHUB_SHA;
   const repository = process.env.GITHUB_REPOSITORY;
   if (!tag || !commitSha || !repository) throw new Error('GitHub release context is incomplete.');
-  const result = await preflightRelease({
-    adapters: createPreflightAdapters({ repository, run: runCommand }),
-    commitSha,
-    repoRoot: repositoryRoot,
-    tag,
-  });
+  let result;
+  try {
+    result = await preflightRelease({
+      adapters: createPreflightAdapters({ repository, run: runCommand }),
+      commitSha,
+      repoRoot: repositoryRoot,
+      tag,
+    });
+  } catch (error) {
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        formatPreflightSummary({ commitSha, error, tag }),
+      );
+    }
+    throw error;
+  }
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(
       process.env.GITHUB_OUTPUT,
@@ -145,10 +189,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     );
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `## Release classification\n\n- Kind: \`${result.kind}\`\n- Tag: \`${result.tag}\`\n- Version: \`${result.version}\`\n- Commit: \`${result.commitSha}\`\n`,
-    );
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, formatPreflightSummary({ result }));
   }
   console.log(JSON.stringify(result));
 }

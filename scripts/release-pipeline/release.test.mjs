@@ -13,7 +13,13 @@ import {
   serializeReleaseManifest,
   validatePlatformDirectory,
 } from './artifact-manifest.mjs';
-import { assertStrictlyIncreasing, preflightRelease } from './preflight.mjs';
+import {
+  assertStrictlyIncreasing,
+  createPreflightAdapters,
+  formatPreflightSummary,
+  preflightRelease,
+  runCommand,
+} from './preflight.mjs';
 import {
   compareRemoteAssets,
   createGitHubAdapter,
@@ -21,23 +27,25 @@ import {
   publishRelease,
 } from './publish-release.mjs';
 
+const testCommitSha = 'a'.repeat(40);
+
 test('release preflight centralizes ignored and stable classification facts', async () => {
   let stableChecks = 0;
   const adapters = {
     assertMainAncestor: async () => (stableChecks += 1),
     listReleases: async () => [],
-    resolveRemoteTag: async () => 'abc123',
+    resolveRemoteTag: async () => testCommitSha,
     verifyVersions: async () => ({ version: '1.2.3' }),
   };
   assert.deepEqual(
     await preflightRelease({
       adapters,
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       repoRoot: '/repo',
       tag: 'v1.2.3-rc.1',
     }),
     {
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       kind: 'prerelease_ignored',
       tag: 'v1.2.3-rc.1',
       version: '1.2.3-rc.1',
@@ -45,8 +53,13 @@ test('release preflight centralizes ignored and stable classification facts', as
   );
   assert.equal(stableChecks, 0);
   assert.deepEqual(
-    await preflightRelease({ adapters, commitSha: 'abc123', repoRoot: '/repo', tag: 'v1.2.3' }),
-    { commitSha: 'abc123', kind: 'stable_release', tag: 'v1.2.3', version: '1.2.3' },
+    await preflightRelease({
+      adapters,
+      commitSha: testCommitSha,
+      repoRoot: '/repo',
+      tag: 'v1.2.3',
+    }),
+    { commitSha: testCommitSha, kind: 'stable_release', tag: 'v1.2.3', version: '1.2.3' },
   );
   assert.equal(stableChecks, 1);
 });
@@ -55,17 +68,22 @@ test('release preflight rejects malformed, moved, drifting, and non-increasing r
   const base = {
     assertMainAncestor: async () => undefined,
     listReleases: async () => [],
-    resolveRemoteTag: async () => 'abc123',
+    resolveRemoteTag: async () => testCommitSha,
     verifyVersions: async () => ({ version: '1.2.3' }),
   };
   await assert.rejects(
-    preflightRelease({ adapters: base, commitSha: 'abc123', repoRoot: '/repo', tag: 'v01.2.3' }),
+    preflightRelease({
+      adapters: base,
+      commitSha: testCommitSha,
+      repoRoot: '/repo',
+      tag: 'v01.2.3',
+    }),
     /not a supported release tag/u,
   );
   await assert.rejects(
     preflightRelease({
       adapters: { ...base, verifyVersions: async () => ({ version: '1.2.2' }) },
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       repoRoot: '/repo',
       tag: 'v1.2.3',
     }),
@@ -74,7 +92,7 @@ test('release preflight rejects malformed, moved, drifting, and non-increasing r
   await assert.rejects(
     preflightRelease({
       adapters: { ...base, resolveRemoteTag: async () => 'moved' },
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       repoRoot: '/repo',
       tag: 'v1.2.3',
     }),
@@ -97,6 +115,51 @@ test('release preflight rejects malformed, moved, drifting, and non-increasing r
   );
 });
 
+test('preflight adapters and summaries make attempted-release failures actionable', async () => {
+  const adapterFailingWith = (failure) =>
+    createPreflightAdapters({
+      repository: 'owner/repo',
+      run: async () => {
+        throw failure;
+      },
+    });
+  await assert.rejects(
+    adapterFailingWith(
+      Object.assign(new Error('git merge-base failed (exit 1): '), { exitCode: 1 }),
+    ).assertMainAncestor(testCommitSha),
+    /is not reachable from origin\/main/u,
+  );
+  await assert.rejects(
+    adapterFailingWith(
+      Object.assign(new Error('git merge-base failed (exit 128): bad object'), { exitCode: 128 }),
+    ).assertMainAncestor(testCommitSha),
+    /could not be completed: .*exit 128.*bad object/u,
+  );
+  await assert.rejects(
+    adapterFailingWith(new Error('spawn git ENOENT')).assertMainAncestor(testCommitSha),
+    /could not be completed: spawn git ENOENT/u,
+  );
+  assert.equal(
+    formatPreflightSummary({
+      commitSha: testCommitSha,
+      error: new Error('Version drift.'),
+      tag: 'v1.2.3',
+    }),
+    `## Release classification failed\n\n- Tag: \`v1.2.3\`\n- Commit: \`${testCommitSha}\`\n- Reason: Version drift.\n`,
+  );
+});
+
+test('runCommand preserves the exit status that classifies a command failure', async () => {
+  await assert.rejects(
+    runCommand(process.execPath, ['-e', 'process.exit(128)']),
+    (error) => error.exitCode === 128 && /exit 128/u.test(error.message),
+  );
+  await assert.rejects(
+    runCommand('isagi-command-that-does-not-exist', []),
+    (error) => error.exitCode === undefined && error.code === 'ENOENT',
+  );
+});
+
 test('aggregation validates isolated platform inputs and recomputes the closed manifest', () => {
   const fixture = createAggregateFixture();
   try {
@@ -104,7 +167,7 @@ test('aggregation validates isolated platform inputs and recomputes the closed m
     assert.equal(manifest.assets.length, 8);
     assert.deepEqual(
       readAndVerifyReleaseManifest(fixture.output, {
-        commitSha: 'abc123',
+        commitSha: testCommitSha,
         tag: 'v1.2.3',
         version: '1.2.3',
       }),
@@ -117,6 +180,14 @@ test('aggregation validates isolated platform inputs and recomputes the closed m
     const unsupported = { ...manifest, note: 'not part of schema' };
     writeFileSync(resolve(fixture.output, releaseManifestName), serializeReleaseManifest(manifest));
     assert.throws(() => serializeReleaseManifest(unsupported), /unsupported top-level fields/u);
+    assert.throws(
+      () => serializeReleaseManifest({ ...manifest, tag: 'v1.2.4' }),
+      /do not identify the same stable release/u,
+    );
+    assert.throws(
+      () => serializeReleaseManifest({ ...manifest, commitSha: 'abc123' }),
+      /not a full Git commit SHA/u,
+    );
     writeFileSync(resolve(fixture.output, 'Isagi-mac-arm64.zip'), 'tampered');
     assert.throws(
       () => readAndVerifyReleaseManifest(fixture.output),
@@ -236,7 +307,7 @@ test('publisher validates locally before draft mutation and synchronizes only a 
     const adapter = createFakePublisherAdapter(state, expected);
     const result = await publishRelease({
       adapter,
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       directory: fixture.output,
       repository: 'owner/repo',
       tag: 'v1.2.3',
@@ -252,7 +323,7 @@ test('publisher validates locally before draft mutation and synchronizes only a 
     await assert.rejects(
       publishRelease({
         adapter: createFakePublisherAdapter(blocked, expected),
-        commitSha: 'abc123',
+        commitSha: testCommitSha,
         directory: fixture.output,
         repository: 'owner/repo',
         tag: 'v1.2.3',
@@ -292,7 +363,7 @@ test('publisher retries a draft but never modifies a mismatched published releas
     };
     const retried = await publishRelease({
       adapter: createFakePublisherAdapter(draftState, expected),
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       directory: fixture.output,
       repository: 'owner/repo',
       tag: 'v1.2.3',
@@ -313,7 +384,7 @@ test('publisher retries a draft but never modifies a mismatched published releas
     await assert.rejects(
       publishRelease({
         adapter: createFakePublisherAdapter(publishedState, expected),
-        commitSha: 'abc123',
+        commitSha: testCommitSha,
         directory: fixture.output,
         repository: 'owner/repo',
         tag: 'v1.2.3',
@@ -345,7 +416,7 @@ test('publisher fails without retry or rollback when publication state is not st
       await assert.rejects(
         publishRelease({
           adapter,
-          commitSha: 'abc123',
+          commitSha: testCommitSha,
           directory: fixture.output,
           repository: 'owner/repo',
           tag: 'v1.2.3',
@@ -406,7 +477,7 @@ function createAggregateFixture() {
   return {
     cleanup: () => rmSync(root, { force: true, recursive: true }),
     options: {
-      commitSha: 'abc123',
+      commitSha: testCommitSha,
       linuxDirectory: linux,
       macArm64Directory: arm64,
       macX64Directory: x64,
@@ -455,7 +526,7 @@ function createFakePublisherAdapter(state, expected) {
     },
     resolveRemoteTag: async () => {
       state.calls.push('resolve-tag');
-      return 'abc123';
+      return testCommitSha;
     },
     uploadAsset: async (_tag, path) => {
       const name = path.split('/').at(-1);

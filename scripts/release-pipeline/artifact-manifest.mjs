@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
+import { classifyReleaseTag, parseCanonicalVersion } from '../release-version-contract.mjs';
+
 export const releaseManifestName = 'release-manifest.json';
 
 const requiredAssetNames = Object.freeze([
@@ -106,6 +108,18 @@ export function validateReleaseManifest(manifest, expected = {}) {
     if (expected[key] !== undefined && manifest[key] !== expected[key]) {
       throw new Error(`Release manifest ${key} does not match the classified release.`);
     }
+  }
+  const parsedVersion = parseCanonicalVersion(manifest.version);
+  const classifiedTag = classifyReleaseTag(manifest.tag);
+  if (
+    parsedVersion._tag !== 'canonical_version' ||
+    classifiedTag._tag !== 'stable_release' ||
+    classifiedTag.version !== manifest.version
+  ) {
+    throw new Error('Release manifest tag and version do not identify the same stable release.');
+  }
+  if (!/^[a-f0-9]{40}$/u.test(manifest.commitSha)) {
+    throw new Error('Release manifest commitSha is not a full Git commit SHA.');
   }
   if (!Array.isArray(manifest.assets)) throw new Error('Release manifest assets are missing.');
   const names = manifest.assets.map((asset) => asset?.name);
