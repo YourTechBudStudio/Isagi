@@ -14,6 +14,7 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 - `packages/workflow-verifier` owns workflow verification, build receipts, and the canonical scaffold.
 - `apps/runtime/src/workflows` discovers, loads, and executes verified workflows.
 - `apps/runtime/src/agent-sessions/harness/skill-content` is the source of the shipped `isagi-docs` skill for configuring Isagi and authoring workflows.
+- `docs/milestone-guidance.md` defines how milestones and stories are represented on GitHub Issues, how to create, retrieve and amend them.
 
 ## Rules
 
