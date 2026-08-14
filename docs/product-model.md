@@ -78,7 +78,7 @@ A panel may live inside the main window or in a secondary work surface.
 
 A status that tells the user something needs attention.
 
-The most important attention signal is an agent session waiting for human input. Worktrees can also aggregate attention from the agent sessions, commands, or processes inside their associated environment.
+The most important attention signal is an agent session waiting for human input. Worktrees can also aggregate attention from agent sessions, workflows, commands, or processes inside their associated environment, but a surface holding only terminal panes keeps its terminal-session signal local so long-lived or failed terminal commands do not imply that an agent is still working. A workflow attached to such a surface still aggregates upward, because a workflow that is running, waiting on the user, or failed always needs to be visible from the worktree.
 
 ## Relationship model
 

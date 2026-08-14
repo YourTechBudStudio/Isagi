@@ -11,7 +11,7 @@ test('attention aggregation prioritizes error, then working, then waiting, then 
   assert.equal(aggregateAttention(['working', 'error']), 'error');
 });
 
-test('attention snapshots replace source state and derive surface and worktree rollups', () => {
+test('attention snapshots replace source state without rolling terminal-only surfaces into worktrees', () => {
   useAttentionStore.getState().replaceSources([
     {
       worktreeId: 10,
@@ -37,9 +37,25 @@ test('attention snapshots replace source state and derive surface and worktree r
   );
   const worktree = project?.worktrees[0];
 
-  assert.equal(worktree?.attention, 'working');
+  assert.equal(worktree?.attention, 'idle');
   assert.equal(worktree?.surfaces[0]?.attention, 'idle');
   assert.equal(worktree?.surfaces[1]?.attention, 'working');
+});
+
+test('terminal-only surface errors stay visible on the surface without updating worktree attention', () => {
+  const [project] = applyAttentionToProjects([projectFixture()], {
+    'terminal_session:2': {
+      worktreeId: 10,
+      surfaceId: 102,
+      paneId: 1002,
+      source: { kind: 'terminal_session', id: 2 },
+      attention: 'error',
+    },
+  });
+
+  const worktree = project?.worktrees[0];
+  assert.equal(worktree?.attention, 'idle');
+  assert.equal(worktree?.surfaces[1]?.attention, 'error');
 });
 
 test('a working pane wins over a waiting pane within the same surface', () => {
@@ -60,7 +76,39 @@ test('a working pane wins over a waiting pane within the same surface', () => {
     },
   });
 
+  assert.equal(project?.worktrees[0]?.attention, 'working');
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'working');
+});
+
+test('a mixed agent and terminal surface still contributes to worktree attention', () => {
+  const fixture = projectFixture();
+  const [project] = applyAttentionToProjects(
+    [
+      {
+        ...fixture,
+        worktrees: fixture.worktrees.map((worktree) => ({
+          ...worktree,
+          surfaces: worktree.surfaces.map((surface) =>
+            surface.id === 101
+              ? { ...surface, paneKinds: ['agent_session', 'terminal_session'] }
+              : surface,
+          ),
+        })),
+      },
+    ],
+    {
+      'terminal_session:2': {
+        worktreeId: 10,
+        surfaceId: 101,
+        paneId: 1002,
+        source: { kind: 'terminal_session', id: 2 },
+        attention: 'error',
+      },
+    },
+  );
+
+  assert.equal(project?.worktrees[0]?.attention, 'error');
+  assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'error');
 });
 
 test('surface attention aggregates workflow and pane signals through the shared hierarchy', () => {
@@ -115,6 +163,71 @@ test('workflow errors remain higher priority than working panes', () => {
   );
 
   assert.equal(project?.worktrees[0]?.surfaces[0]?.attention, 'error');
+});
+
+test('a workflow on a terminal-only surface still reaches worktree attention', () => {
+  for (const [summary, expected] of [
+    [
+      workflowSummaryFixture({
+        runId: 78,
+        rootRunId: 78,
+        surfaceId: 102,
+        status: 'waiting',
+        waitKind: 'workflow',
+        blockingWait: { kind: 'user_input', runId: 78 },
+      }),
+      'waiting',
+    ],
+    [
+      workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'failed' }),
+      'error',
+    ],
+    [
+      workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'running' }),
+      'working',
+    ],
+  ] as const) {
+    const [project] = applyAttentionToProjects(
+      [projectFixture()],
+      {
+        'terminal_session:2': {
+          worktreeId: 10,
+          surfaceId: 102,
+          paneId: 1002,
+          source: { kind: 'terminal_session', id: 2 },
+          attention: 'working',
+        },
+      },
+      { 78: summary },
+      { 102: 78 },
+    );
+
+    assert.equal(project?.worktrees[0]?.attention, expected);
+    assert.equal(
+      project?.worktrees[0]?.surfaces[1]?.attention,
+      expected === 'waiting' ? 'working' : expected,
+    );
+  }
+});
+
+test('a finished workflow on a terminal-only surface leaves the worktree idle', () => {
+  const [project] = applyAttentionToProjects(
+    [projectFixture()],
+    {
+      'terminal_session:2': {
+        worktreeId: 10,
+        surfaceId: 102,
+        paneId: 1002,
+        source: { kind: 'terminal_session', id: 2 },
+        attention: 'error',
+      },
+    },
+    { 78: workflowSummaryFixture({ runId: 78, rootRunId: 78, surfaceId: 102, status: 'done' }) },
+    { 102: 78 },
+  );
+
+  assert.equal(project?.worktrees[0]?.attention, 'idle');
+  assert.equal(project?.worktrees[0]?.surfaces[1]?.attention, 'error');
 });
 
 test('workflow derivations map status to attention signals', () => {

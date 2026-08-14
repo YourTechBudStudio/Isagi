@@ -78,14 +78,32 @@ function applyAttentionToWorktree(
   workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
   rootRunIdBySurfaceId: Readonly<Record<number, number>>,
 ): Worktree {
-  const surfaces = worktree.surfaces.map((surface) =>
+  const resolved = worktree.surfaces.map((surface) =>
     applyAttentionToSurface(surface, sources, workflowRunsById, rootRunIdBySurfaceId),
   );
   return {
     ...worktree,
-    surfaces,
-    attention: aggregateAttention(surfaces.map((surface) => surface.attention)),
+    surfaces: resolved.map((entry) => entry.surface),
+    attention: aggregateAttention(resolved.map((entry) => entry.worktreeContribution)),
   };
+}
+
+function isTerminalOnlySurface(surface: Surface): boolean {
+  return (
+    surface.paneKinds.length > 0 &&
+    surface.paneKinds.every((paneKind) => paneKind === 'terminal_session')
+  );
+}
+
+/**
+ * A surface always shows its own full attention. What it contributes upward to the worktree can
+ * be narrower: a terminal-only surface suppresses its terminal pane noise so a long-running or
+ * failed command never implies an agent needs the user, but a workflow attached to that surface
+ * still bubbles up because it can genuinely be waiting or failed.
+ */
+interface ResolvedSurfaceAttention {
+  readonly surface: Surface;
+  readonly worktreeContribution: AttentionState;
 }
 
 function applyAttentionToSurface(
@@ -93,7 +111,7 @@ function applyAttentionToSurface(
   sources: readonly AttentionSource[],
   workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
   rootRunIdBySurfaceId: Readonly<Record<number, number>>,
-): Surface {
+): ResolvedSurfaceAttention {
   const rootRunId = rootRunIdBySurfaceId[surface.id];
   const workflowAttention = workflowRunAttention(
     rootRunId === undefined ? undefined : workflowRunsById[rootRunId],
@@ -101,12 +119,15 @@ function applyAttentionToSurface(
   const paneAttention = aggregateAttention(
     sources.filter((source) => source.surfaceId === surface.id).map((source) => source.attention),
   );
+  const attention =
+    workflowAttention === null
+      ? paneAttention
+      : aggregateAttention([paneAttention, workflowAttention]);
   return {
-    ...surface,
-    attention:
-      workflowAttention === null
-        ? paneAttention
-        : aggregateAttention([paneAttention, workflowAttention]),
+    surface: { ...surface, attention },
+    worktreeContribution: isTerminalOnlySurface(surface)
+      ? (workflowAttention ?? 'idle')
+      : attention,
   };
 }
 
