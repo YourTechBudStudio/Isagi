@@ -178,6 +178,37 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
+test('workspace snapshots pin the derived root first without resorting the other worktrees', () => {
+  const feature = { ...worktreeBase, id: 11, path: '/repo/isagi-feature', branch: 'feature/one' };
+  const chore = { ...worktreeBase, id: 12, path: '/repo/isagi-chore', branch: 'chore/two' };
+
+  // Rows arrive with the root in the middle and the non-roots deliberately not
+  // in identifier order, so a re-sort would be visible.
+  const snapshot = buildWorkspaceSnapshot([project], [chore, worktreeBase, feature]);
+
+  assert.deepEqual(
+    snapshot.projects[0]?.worktrees.map((worktree) => worktree.id),
+    [worktreeBase.id, chore.id, feature.id],
+  );
+  assert.equal(snapshot.projects[0]?.worktrees[0]?.isRoot, true);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+test('workspace snapshots preserve worktree order when no worktree is the project root', () => {
+  const feature = { ...worktreeBase, id: 11, path: '/repo/isagi-feature', branch: 'feature/one' };
+  const chore = { ...worktreeBase, id: 12, path: '/repo/isagi-chore', branch: 'chore/two' };
+
+  const snapshot = buildWorkspaceSnapshot(
+    [{ ...project, rootPath: '/repo/isagi-relocated' }],
+    [chore, feature],
+  );
+
+  assert.deepEqual(
+    snapshot.projects[0]?.worktrees.map((worktree) => worktree.id),
+    [chore.id, feature.id],
+  );
+});
+
 test('workspace snapshots include surface rail metadata and active surface id', () => {
   const snapshot = buildWorkspaceSnapshot(
     [project],

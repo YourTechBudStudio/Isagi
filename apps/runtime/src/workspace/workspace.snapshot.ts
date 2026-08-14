@@ -29,9 +29,10 @@ export function buildProjectSnapshot(
     rootPath: project.rootPath,
     worktrees:
       project.status === 'present'
-        ? worktrees
-            .filter((worktree) => worktree.projectId === project.id)
-            .map((worktree) => buildWorktreeSnapshot(project, worktree, surfaces, environmentFocus))
+        ? rootWorktreeFirst(
+            project,
+            worktrees.filter((worktree) => worktree.projectId === project.id),
+          ).map((worktree) => buildWorktreeSnapshot(project, worktree, surfaces, environmentFocus))
         : [],
   };
 
@@ -49,6 +50,31 @@ export function buildProjectSnapshot(
   };
 }
 
+/**
+ * Root-ness is a product invariant, not a rank: the root worktree always renders
+ * first. Persisted order governs the rest, so the root is lifted to the front
+ * and every other worktree keeps its relative position. This is a stable move,
+ * not a re-sort — the repository already returned the intended order.
+ */
+function rootWorktreeFirst(
+  project: ProjectRow,
+  worktrees: readonly WorktreeRow[],
+): readonly WorktreeRow[] {
+  const rootIndex = worktrees.findIndex((worktree) => isRootWorktree(project, worktree));
+  if (rootIndex <= 0) {
+    return worktrees;
+  }
+  const root = worktrees[rootIndex] as WorktreeRow;
+  return [root, ...worktrees.slice(0, rootIndex), ...worktrees.slice(rootIndex + 1)];
+}
+
+// Root-ness is derived, not persisted. Git reports worktrees by checkout path;
+// the root checkout is the discovered worktree whose path equals the current
+// project root path. Persisting this separately creates drift.
+function isRootWorktree(project: ProjectRow, worktree: WorktreeRow) {
+  return worktree.path === project.rootPath;
+}
+
 function buildWorktreeSnapshot(
   project: ProjectRow,
   worktree: WorktreeRow,
@@ -64,10 +90,7 @@ function buildWorktreeSnapshot(
     path: worktree.path,
     branch: worktree.branch,
     head: worktree.head,
-    // Root-ness is derived, not persisted. Git reports worktrees by checkout
-    // path; the root checkout is the discovered worktree whose path equals the
-    // current project root path. Persisting this separately creates drift.
-    isRoot: worktree.path === project.rootPath,
+    isRoot: isRootWorktree(project, worktree),
     parked: false,
     surfaces: worktreeSurfaces.map((surface) => ({
       id: surface.id,

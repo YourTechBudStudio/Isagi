@@ -1,4 +1,4 @@
-import { and, eq, inArray, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, inArray, max, sql, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type { DurableSessionInventory } from '@isagi/contracts';
@@ -250,7 +250,9 @@ export const WorkspaceRepositoryLive = Layer.effect(
           } satisfies WorktreeDeleteDiagnostics;
         }),
       insertProject: (input) =>
-        database.use('insert_project', (db) => {
+        // A transaction, not a plain read/write pair: the appended rank is read
+        // from the same present-project set the insert then joins.
+        database.transaction('insert_project', (db) => {
           const now = timestamp();
           const row = db
             .insert(projects)
@@ -258,6 +260,7 @@ export const WorkspaceRepositoryLive = Layer.effect(
               name: input.name,
               rootPath: input.rootPath,
               status: 'present',
+              sortOrder: nextPresentProjectOrder(db),
               createdAt: now,
               updatedAt: now,
               lastSeenAt: now,
@@ -268,13 +271,18 @@ export const WorkspaceRepositoryLive = Layer.effect(
           return row.id;
         }),
       listProjects: database.use<ProjectRow[]>('list_projects', (db) =>
-        db.select().from(projects).orderBy(projects.id).all().map(projectRow),
+        db
+          .select()
+          .from(projects)
+          .orderBy(...projectDisplayOrder)
+          .all()
+          .map(projectRow),
       ),
       listWorktrees: database.use<WorktreeRow[]>('list_worktrees', (db) =>
         db
           .select()
           .from(worktrees)
-          .orderBy(worktrees.projectId, worktrees.id)
+          .orderBy(worktrees.projectId, worktrees.sortOrder, worktrees.id)
           .all()
           .map(worktreeRow),
       ),
@@ -289,6 +297,9 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .set({
               rootPath: input.rootPath,
               status: 'present',
+              // Read before the write below lands, so the transition is judged
+              // against the stored status rather than the caller's stale row.
+              ...presenceRankPatch(db, input.projectId),
               updatedAt: now,
               lastSeenAt: now,
               missingReason: null,
@@ -299,11 +310,15 @@ export const WorkspaceRepositoryLive = Layer.effect(
           return reconcileProjectWorktreesInTransaction(db, input);
         }),
       setProjectStatus: (input) =>
-        database.use('set_project_status', (db) => {
+        // Reconciliation calls this for every project on every sweep, so the
+        // rank patch must read the stored status and stay empty for a project
+        // that is already present. Presence metadata still refreshes.
+        database.transaction('set_project_status', (db) => {
           const now = timestamp();
           db.update(projects)
             .set({
               status: input.status,
+              ...(input.status === 'present' ? presenceRankPatch(db, input.id) : {}),
               updatedAt: now,
               lastSeenAt: input.status === 'present' ? now : null,
               missingReason: input.status === 'missing' ? (input.missingReason ?? null) : null,
@@ -324,6 +339,10 @@ function reconcileProjectWorktreesInTransaction(
 ) {
   const now = timestamp();
   const added: ReconciledWorktreeSummary[] = [];
+  // Resolved on first insertion and advanced per inserted row, so a discovery
+  // pass that only refreshes known worktrees consumes no ranks and leaves the
+  // existing order untouched.
+  let nextOrder: number | null = null;
 
   for (const worktree of input.discovered) {
     const existing =
@@ -344,6 +363,7 @@ function reconcileProjectWorktreesInTransaction(
         .where(eq(worktrees.id, existing.id))
         .run();
     } else {
+      nextOrder ??= nextProjectWorktreeOrder(db, input.projectId);
       const inserted = db
         .insert(worktrees)
         .values({
@@ -351,6 +371,7 @@ function reconcileProjectWorktreesInTransaction(
           path: worktree.path,
           branch: worktree.branch,
           head: worktree.head,
+          sortOrder: nextOrder,
           createdAt: now,
           updatedAt: now,
           firstSeenAt: now,
@@ -358,6 +379,7 @@ function reconcileProjectWorktreesInTransaction(
         })
         .returning({ id: worktrees.id, path: worktrees.path, branch: worktrees.branch })
         .get();
+      nextOrder += 1;
       added.push(inserted);
     }
   }
@@ -377,6 +399,64 @@ function reconcileProjectWorktreesInTransaction(
     .map((worktree) => ({ id: worktree.id, path: worktree.path, branch: worktree.branch }));
 
   return { added, missing } satisfies WorkspaceReconcileProjectWorktreesResult;
+}
+
+/**
+ * Display order for `projects`: the present section first, ranked; then the
+ * disconnected section by identifier alone.
+ *
+ * A missing project keeps whatever rank it held, but that rank is deliberately
+ * meaningless — restoration always appends — so ordering the disconnected
+ * section by it would hand the value semantics it is not supposed to have.
+ */
+const projectDisplayOrder = [
+  sql`case when ${projects.status} = 'present' then 0 else 1 end`,
+  sql`case when ${projects.status} = 'present' then ${projects.sortOrder} else 0 end`,
+  projects.id,
+];
+
+/**
+ * The rank an appended present project should take. Missing projects are
+ * excluded, so a restored project lands after every present sibling.
+ */
+function nextPresentProjectOrder(db: RuntimeDatabaseConnection) {
+  const row = db
+    .select({ highest: max(projects.sortOrder) })
+    .from(projects)
+    .where(eq(projects.status, 'present'))
+    .get();
+  return (row?.highest ?? -1) + 1;
+}
+
+function nextProjectWorktreeOrder(db: RuntimeDatabaseConnection, projectId: number) {
+  const row = db
+    .select({ highest: max(worktrees.sortOrder) })
+    .from(worktrees)
+    .where(eq(worktrees.projectId, projectId))
+    .get();
+  return (row?.highest ?? -1) + 1;
+}
+
+/**
+ * The single rule for how a project status write touches its rank, shared by
+ * both paths that can make a project present so their append semantics cannot
+ * drift apart.
+ *
+ * Appends only on a genuine `missing -> present` transition, judged against the
+ * stored row inside the caller's transaction. Every other case returns nothing,
+ * which is what keeps repeated reconciliation of a present project from
+ * reshuffling the rail.
+ */
+function presenceRankPatch(db: RuntimeDatabaseConnection, projectId: number) {
+  const current = db
+    .select({ status: projects.status })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .get();
+  if (!current || current.status === 'present') {
+    return {};
+  }
+  return { sortOrder: nextPresentProjectOrder(db) };
 }
 
 export function prunedWorktreeIds(input: {
