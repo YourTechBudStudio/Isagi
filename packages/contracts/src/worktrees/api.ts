@@ -2,6 +2,7 @@ import {
   worktreeBranchListApiErrorSchema,
   worktreeDeleteApiErrorSchema,
   worktreeOpenApiErrorSchema,
+  worktreeOrderApiErrorSchema,
   worktreeSetupApiErrorSchema,
 } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
@@ -10,6 +11,8 @@ import {
   deleteWorktreeOutputSchema,
   deleteWorktreePreflightOutputSchema,
   listProjectBranchesOutputSchema,
+  moveWorktreeOrderInputSchema,
+  moveWorktreeOrderOutputSchema,
   openWorktreeInputSchema,
   openWorktreeOutputSchema,
   projectWorktreeRouteParamsSchema,
@@ -71,6 +74,15 @@ export const worktreesEndpoints = {
     output: deleteWorktreeOutputSchema,
     errors: worktreeDeleteApiErrorSchema,
   },
+  moveOrder: {
+    id: 'worktrees.moveOrder',
+    method: 'PUT',
+    path: '/projects/:projectId/worktrees/:worktreeId/order',
+    params: worktreeRouteParamsSchema,
+    body: moveWorktreeOrderInputSchema,
+    output: moveWorktreeOrderOutputSchema,
+    errors: worktreeOrderApiErrorSchema,
+  },
 } as const satisfies {
   readonly branches: ApiEndpoint<
     undefined,
@@ -106,6 +118,12 @@ export const worktreesEndpoints = {
     typeof deleteWorktreeInputSchema,
     typeof deleteWorktreeOutputSchema,
     typeof worktreeDeleteApiErrorSchema,
+    typeof worktreeRouteParamsSchema
+  >;
+  readonly moveOrder: ApiEndpoint<
+    typeof moveWorktreeOrderInputSchema,
+    typeof moveWorktreeOrderOutputSchema,
+    typeof worktreeOrderApiErrorSchema,
     typeof worktreeRouteParamsSchema
   >;
 };

@@ -31,9 +31,23 @@ export const deleteProjectOutputSchema = Schema.Struct({
   deleted: Schema.Boolean,
 });
 
+/**
+ * One bounded move against an explicit sibling anchor. `null` appends to the
+ * end of the present-project list; ranks are never exchanged over the wire.
+ */
+export const moveProjectOrderInputSchema = Schema.Struct({
+  beforeProjectId: Schema.NullOr(positiveIntegerSchema),
+});
+
+export const moveProjectOrderOutputSchema = Schema.Struct({
+  projectId: positiveIntegerSchema,
+});
+
 export type ProjectRouteParams = Schema.Schema.Type<typeof projectRouteParamsSchema>;
 export type AddProjectInput = Schema.Schema.Type<typeof addProjectInputSchema>;
 export type AddProjectOutput = Schema.Schema.Type<typeof addProjectOutputSchema>;
 export type RelocateProjectInput = Schema.Schema.Type<typeof relocateProjectInputSchema>;
 export type RelocateProjectOutput = Schema.Schema.Type<typeof relocateProjectOutputSchema>;
 export type DeleteProjectOutput = Schema.Schema.Type<typeof deleteProjectOutputSchema>;
+export type MoveProjectOrderInput = Schema.Schema.Type<typeof moveProjectOrderInputSchema>;
+export type MoveProjectOrderOutput = Schema.Schema.Type<typeof moveProjectOrderOutputSchema>;

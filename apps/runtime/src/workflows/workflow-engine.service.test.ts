@@ -4282,6 +4282,8 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
     reconcileProjectWorktrees: () => Effect.die('workspace reconcileProjectWorktrees is not used'),
     restoreProjectAtRootPath: () => Effect.die('workspace restoreProjectAtRootPath is not used'),
     setProjectStatus: () => Effect.die('workspace setProjectStatus is not used'),
+    moveProjectOrder: () => Effect.die('workspace moveProjectOrder is not used'),
+    moveProjectWorktreeOrder: () => Effect.die('workspace moveProjectWorktreeOrder is not used'),
   };
 }
 
@@ -4356,6 +4358,7 @@ function fakeSurfaceService(): SurfaceServiceShape {
     createSinglePaneSurface: () => Effect.die('surface createSinglePaneSurface is not used'),
     setWorktreeEnvironmentFocus: () =>
       Effect.die('surface setWorktreeEnvironmentFocus is not used'),
+    moveSurfaceOrder: () => Effect.die('surface moveSurfaceOrder is not used'),
   };
 }
 

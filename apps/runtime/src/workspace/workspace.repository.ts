@@ -1,8 +1,13 @@
-import { and, eq, inArray, max, sql, type InferSelectModel } from 'drizzle-orm';
+import { and, eq, inArray, max, ne, sql, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { DurableSessionInventory } from '@isagi/contracts';
+import type {
+  DurableSessionInventory,
+  ProjectOrderRejectionReason,
+  WorktreeOrderRejectionReason,
+} from '@isagi/contracts';
 
+import { compactedRankChanges, moveBefore } from '../lib/sibling-order.js';
 import {
   DatabaseError,
   RuntimeDatabase,
@@ -42,6 +47,19 @@ export interface WorktreeDeleteDiagnostics {
   readonly terminalSessionCount: number;
   readonly terminalSessionActivePtyProcessIds: readonly number[];
 }
+
+/**
+ * Reorder outcomes are returned, never thrown: `database.transaction` turns any
+ * throw into a `DatabaseError`, which would report an expected rejection as a
+ * runtime fault. The service converts a rejection into its tagged domain error.
+ */
+export type ProjectOrderMoveResult =
+  | { readonly status: 'moved' }
+  | { readonly status: 'rejected'; readonly reason: ProjectOrderRejectionReason };
+
+export type WorktreeOrderMoveResult =
+  | { readonly status: 'moved' }
+  | { readonly status: 'rejected'; readonly reason: WorktreeOrderRejectionReason };
 
 export interface WorkspaceRepositoryService {
   /**
@@ -92,6 +110,15 @@ export interface WorkspaceRepositoryService {
     readonly missingReason?: string | undefined;
     readonly status: 'present' | 'missing';
   }) => Effect.Effect<void, DatabaseError>;
+  readonly moveProjectOrder: (input: {
+    readonly projectId: number;
+    readonly beforeProjectId: number | null;
+  }) => Effect.Effect<ProjectOrderMoveResult, DatabaseError>;
+  readonly moveProjectWorktreeOrder: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+    readonly beforeWorktreeId: number | null;
+  }) => Effect.Effect<WorktreeOrderMoveResult, DatabaseError>;
 }
 
 export const WorkspaceRepository = Context.GenericTag<WorkspaceRepositoryService>(
@@ -326,6 +353,14 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .where(eq(projects.id, input.id))
             .run();
         }),
+      moveProjectOrder: (input) =>
+        database.transaction('move_project_order', (db) =>
+          moveProjectOrderInTransaction(db, input),
+        ),
+      moveProjectWorktreeOrder: (input) =>
+        database.transaction('move_project_worktree_order', (db) =>
+          moveProjectWorktreeOrderInTransaction(db, input),
+        ),
     } satisfies WorkspaceRepositoryService;
   }),
 );
@@ -399,6 +434,141 @@ function reconcileProjectWorktreesInTransaction(
     .map((worktree) => ({ id: worktree.id, path: worktree.path, branch: worktree.branch }));
 
   return { added, missing } satisfies WorkspaceReconcileProjectWorktreesResult;
+}
+
+/**
+ * Moves one present project against an explicit present anchor.
+ *
+ * Every fact is re-read here rather than trusted from the service: this is the
+ * only point at which the request's assumptions and the stored rows are known to
+ * agree. The source is loaded on its own before the sibling list so a project
+ * that exists but is missing reports `project_not_present` instead of vanishing
+ * into "not found".
+ */
+function moveProjectOrderInTransaction(
+  db: RuntimeDatabaseConnection,
+  input: { readonly projectId: number; readonly beforeProjectId: number | null },
+): ProjectOrderMoveResult {
+  const source = db
+    .select({ id: projects.id, status: projects.status })
+    .from(projects)
+    .where(eq(projects.id, input.projectId))
+    .get();
+  if (!source) return { status: 'rejected', reason: 'project_not_found' };
+  if (source.status !== 'present') return { status: 'rejected', reason: 'project_not_present' };
+
+  if (input.beforeProjectId !== null) {
+    const anchor = db
+      .select({ id: projects.id, status: projects.status })
+      .from(projects)
+      .where(eq(projects.id, input.beforeProjectId))
+      .get();
+    if (!anchor) return { status: 'rejected', reason: 'before_project_not_found' };
+    if (anchor.status !== 'present')
+      return { status: 'rejected', reason: 'before_project_not_present' };
+  }
+
+  // Only present projects are ranked. A missing project's rank is meaningless by
+  // Phase 02's contract, so it is neither a sibling here nor renumbered below.
+  const siblings = db
+    .select({ id: projects.id, sortOrder: projects.sortOrder })
+    .from(projects)
+    .where(eq(projects.status, 'present'))
+    .orderBy(projects.sortOrder, projects.id)
+    .all();
+
+  const now = timestamp();
+  for (const change of compactedRankChanges(
+    siblings,
+    moveBefore(
+      siblings.map((sibling) => sibling.id),
+      input.projectId,
+      input.beforeProjectId,
+    ),
+  )) {
+    db.update(projects)
+      .set({ sortOrder: change.sortOrder, updatedAt: now })
+      .where(eq(projects.id, change.id))
+      .run();
+  }
+
+  return { status: 'moved' };
+}
+
+/**
+ * Moves one non-root worktree within a single project.
+ *
+ * The derived root is loaded, refused as both source and anchor, and then left
+ * out of the sibling list entirely — so its stored rank is never rewritten and
+ * nothing can be placed above it. Source and anchor are looked up globally, not
+ * within the project, so a worktree belonging to another project is reported as
+ * a mismatch rather than as missing.
+ */
+function moveProjectWorktreeOrderInTransaction(
+  db: RuntimeDatabaseConnection,
+  input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+    readonly beforeWorktreeId: number | null;
+  },
+): WorktreeOrderMoveResult {
+  const project = db
+    .select({ id: projects.id, status: projects.status, rootPath: projects.rootPath })
+    .from(projects)
+    .where(eq(projects.id, input.projectId))
+    .get();
+  if (!project) return { status: 'rejected', reason: 'project_not_found' };
+  if (project.status !== 'present') return { status: 'rejected', reason: 'project_not_present' };
+
+  const source = db
+    .select({ id: worktrees.id, projectId: worktrees.projectId, path: worktrees.path })
+    .from(worktrees)
+    .where(eq(worktrees.id, input.worktreeId))
+    .get();
+  if (!source) return { status: 'rejected', reason: 'worktree_not_found' };
+  if (source.projectId !== project.id)
+    return { status: 'rejected', reason: 'worktree_project_mismatch' };
+  if (source.path === project.rootPath)
+    return { status: 'rejected', reason: 'root_worktree_fixed' };
+
+  if (input.beforeWorktreeId !== null) {
+    const anchor = db
+      .select({ id: worktrees.id, projectId: worktrees.projectId, path: worktrees.path })
+      .from(worktrees)
+      .where(eq(worktrees.id, input.beforeWorktreeId))
+      .get();
+    if (!anchor) return { status: 'rejected', reason: 'before_worktree_not_found' };
+    if (anchor.projectId !== project.id)
+      return { status: 'rejected', reason: 'before_worktree_project_mismatch' };
+    // The root contributes no insertion slot, so naming it as an anchor is the
+    // only way to ask for a position above it.
+    if (anchor.path === project.rootPath)
+      return { status: 'rejected', reason: 'before_root_worktree_fixed' };
+  }
+
+  const siblings = db
+    .select({ id: worktrees.id, sortOrder: worktrees.sortOrder })
+    .from(worktrees)
+    .where(and(eq(worktrees.projectId, project.id), ne(worktrees.path, project.rootPath)))
+    .orderBy(worktrees.sortOrder, worktrees.id)
+    .all();
+
+  const now = timestamp();
+  for (const change of compactedRankChanges(
+    siblings,
+    moveBefore(
+      siblings.map((sibling) => sibling.id),
+      input.worktreeId,
+      input.beforeWorktreeId,
+    ),
+  )) {
+    db.update(worktrees)
+      .set({ sortOrder: change.sortOrder, updatedAt: now })
+      .where(eq(worktrees.id, change.id))
+      .run();
+  }
+
+  return { status: 'moved' };
 }
 
 /**

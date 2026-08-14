@@ -13,7 +13,12 @@ import type {
 } from '@isagi/contracts';
 
 import { registerSurfacesApi } from '../api.js';
-import { SurfaceError, SurfaceService, type SurfaceServiceShape } from '../index.js';
+import {
+  SurfaceError,
+  SurfaceOrderError,
+  SurfaceService,
+  type SurfaceServiceShape,
+} from '../index.js';
 
 test('surface rename route decodes params and body through the contract path', async () => {
   let input: { readonly surfaceId: number; readonly title: string } | null = null;
@@ -330,6 +335,150 @@ test('surface API maps pane failures to surface_rejected contract errors', async
   );
 });
 
+test('surface order route decodes the parent worktree, the surface, and a null anchor', async () => {
+  let input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly beforeSurfaceId: number | null;
+  } | null = null;
+
+  await withSurfacesApi(
+    fakeSurfaceService({
+      moveSurfaceOrder: (request) =>
+        Effect.sync(() => {
+          input = request;
+          return { worktreeId: request.worktreeId, surfaceId: request.surfaceId };
+        }),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/worktrees/10/surfaces/42/order',
+        payload: { beforeSurfaceId: null },
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(input, { worktreeId: 10, surfaceId: 42, beforeSurfaceId: null });
+      assert.deepEqual(response.json().data, { worktreeId: 10, surfaceId: 42 });
+    },
+  );
+});
+
+test('surface order route carries an explicit anchor through to the service', async () => {
+  let input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly beforeSurfaceId: number | null;
+  } | null = null;
+
+  await withSurfacesApi(
+    fakeSurfaceService({
+      moveSurfaceOrder: (request) =>
+        Effect.sync(() => {
+          input = request;
+          return { worktreeId: request.worktreeId, surfaceId: request.surfaceId };
+        }),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/worktrees/10/surfaces/42/order',
+        payload: { beforeSurfaceId: 43 },
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(input, { worktreeId: 10, surfaceId: 42, beforeSurfaceId: 43 });
+    },
+  );
+});
+
+test('surface order route rejects a body that omits the anchor field', async () => {
+  await withSurfacesApi(fakeSurfaceService(), async (fastify) => {
+    const response = await fastify.inject({
+      method: 'PUT',
+      url: '/api/v1/worktrees/10/surfaces/42/order',
+      payload: {},
+    });
+    const payload = response.json() as { error?: { readonly code?: string } };
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(payload.error?.code, 'api_request_decoding_failed');
+  });
+});
+
+test('surface order route reports a cross-worktree surface rather than adopting it', async () => {
+  await withSurfacesApi(
+    fakeSurfaceService({
+      moveSurfaceOrder: (request) =>
+        Effect.fail(
+          new SurfaceOrderError({
+            reason: 'surface_worktree_mismatch',
+            message: 'That surface belongs to a different worktree.',
+            worktreeId: request.worktreeId,
+            surfaceId: request.surfaceId,
+          }),
+        ),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/worktrees/10/surfaces/42/order',
+        payload: { beforeSurfaceId: null },
+      });
+      const payload = response.json() as {
+        error?: { readonly code?: string; readonly data?: unknown; readonly requestId?: unknown };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(payload.error?.code, 'surface_order_rejected');
+      assert.equal(typeof payload.error?.requestId, 'string');
+      assert.deepEqual(payload.error?.data, {
+        reason: 'surface_worktree_mismatch',
+        worktreeId: 10,
+        surfaceId: 42,
+      });
+    },
+  );
+});
+
+test('surface order route reports a cross-worktree anchor with the anchor identifier', async () => {
+  await withSurfacesApi(
+    fakeSurfaceService({
+      moveSurfaceOrder: (request) =>
+        Effect.fail(
+          new SurfaceOrderError({
+            reason: 'before_surface_worktree_mismatch',
+            message: 'The insertion anchor belongs to a different worktree.',
+            worktreeId: request.worktreeId,
+            surfaceId: request.surfaceId,
+            ...(request.beforeSurfaceId === null
+              ? {}
+              : { beforeSurfaceId: request.beforeSurfaceId }),
+          }),
+        ),
+    }),
+    async (fastify) => {
+      const response = await fastify.inject({
+        method: 'PUT',
+        url: '/api/v1/worktrees/10/surfaces/42/order',
+        payload: { beforeSurfaceId: 77 },
+      });
+      const payload = response.json() as {
+        error?: { readonly code?: string; readonly data?: unknown };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(payload.error?.code, 'surface_order_rejected');
+      assert.deepEqual(payload.error?.data, {
+        reason: 'before_surface_worktree_mismatch',
+        worktreeId: 10,
+        surfaceId: 42,
+        beforeSurfaceId: 77,
+      });
+    },
+  );
+});
+
 async function withSurfacesApi<A>(
   service: SurfaceServiceShape,
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,
@@ -422,6 +571,8 @@ function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): Surfa
         activeSurfaceId: input.focus.activeSurfaceId,
         activePaneId: input.focus.activePaneId,
       }),
+    moveSurfaceOrder: (input) =>
+      Effect.succeed({ worktreeId: input.worktreeId, surfaceId: input.surfaceId }),
     ...overrides,
   };
 }

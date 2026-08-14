@@ -102,6 +102,7 @@ export const testSurfaceRepository = {
   setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
+  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
 } satisfies SurfaceRepositoryService;
 
 export const testSurfaceService = {
@@ -116,6 +117,7 @@ export const testSurfaceService = {
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
+  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
 
 export const testCommandService = {
@@ -229,6 +231,8 @@ export function repositoryWith(input: {
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
+    moveProjectOrder: () => Effect.succeed({ status: 'moved' }),
+    moveProjectWorktreeOrder: () => Effect.succeed({ status: 'moved' }),
   };
 }
 
@@ -287,6 +291,8 @@ export function repositoryWithWorktrees(input: {
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
+    moveProjectOrder: () => Effect.succeed({ status: 'moved' }),
+    moveProjectWorktreeOrder: () => Effect.succeed({ status: 'moved' }),
   };
 }
 

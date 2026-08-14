@@ -1,12 +1,17 @@
 import { and, eq, getTableColumns, inArray, isNotNull } from 'drizzle-orm';
 import { Context, Effect, Layer, Schema } from 'effect';
 
-import { surfaceLayoutNodeSchema, type SurfaceLayoutNode } from '@isagi/contracts';
+import {
+  surfaceLayoutNodeSchema,
+  type SurfaceLayoutNode,
+  type SurfaceOrderRejectionReason,
+} from '@isagi/contracts';
 
 import {
   AgentSessionArtifacts,
   type AgentSessionArtifactsService,
 } from '../agent-sessions/harness/ledger.js';
+import { compactedRankChanges, moveBefore } from '../lib/sibling-order.js';
 import {
   DatabaseError,
   RuntimeDatabase,
@@ -113,7 +118,20 @@ export interface SurfaceRepositoryService {
   readonly setEnvironmentFocus: (
     input: EnvironmentFocusRow,
   ) => Effect.Effect<EnvironmentFocusRow, DatabaseError>;
+  readonly moveSurfaceOrder: (input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly beforeSurfaceId: number | null;
+  }) => Effect.Effect<SurfaceOrderMoveResult, DatabaseError>;
 }
+
+/**
+ * Returned rather than thrown: `database.transaction` converts a throw into a
+ * `DatabaseError`, which would report an expected rejection as a runtime fault.
+ */
+export type SurfaceOrderMoveResult =
+  | { readonly status: 'moved' }
+  | { readonly status: 'rejected'; readonly reason: SurfaceOrderRejectionReason };
 
 export class SurfaceRepositoryWorktreeMissing extends Error {
   constructor(readonly worktreeId: number) {
@@ -419,9 +437,82 @@ export const SurfaceRepositoryLive = Layer.effect(
           }
           return input;
         }),
+      moveSurfaceOrder: (input) =>
+        database.transaction('move_surface_order', (db) =>
+          moveSurfaceOrderInTransaction(db, input),
+        ),
     } satisfies SurfaceRepositoryService;
   }),
 );
+
+/**
+ * Moves one surface within the worktree named in the route.
+ *
+ * The parent is the trust boundary: the surface row knows its own worktree, but
+ * a surface belonging to a different one is rejected rather than adopted, so a
+ * stale or hostile client cannot reparent through this endpoint. Source and
+ * anchor are looked up globally for that reason — scoping the query to the
+ * worktree would report a cross-worktree surface as merely missing.
+ */
+function moveSurfaceOrderInTransaction(
+  db: RuntimeDatabaseConnection,
+  input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly beforeSurfaceId: number | null;
+  },
+): SurfaceOrderMoveResult {
+  const worktree = db
+    .select({ id: worktrees.id })
+    .from(worktrees)
+    .where(eq(worktrees.id, input.worktreeId))
+    .get();
+  if (!worktree) return { status: 'rejected', reason: 'worktree_not_found' };
+
+  const source = db
+    .select({ id: worktreeSurfaces.id, worktreeId: worktreeSurfaces.worktreeId })
+    .from(worktreeSurfaces)
+    .where(eq(worktreeSurfaces.id, input.surfaceId))
+    .get();
+  if (!source) return { status: 'rejected', reason: 'surface_not_found' };
+  if (source.worktreeId !== worktree.id)
+    return { status: 'rejected', reason: 'surface_worktree_mismatch' };
+
+  if (input.beforeSurfaceId !== null) {
+    const anchor = db
+      .select({ id: worktreeSurfaces.id, worktreeId: worktreeSurfaces.worktreeId })
+      .from(worktreeSurfaces)
+      .where(eq(worktreeSurfaces.id, input.beforeSurfaceId))
+      .get();
+    if (!anchor) return { status: 'rejected', reason: 'before_surface_not_found' };
+    if (anchor.worktreeId !== worktree.id)
+      return { status: 'rejected', reason: 'before_surface_worktree_mismatch' };
+  }
+
+  const siblings = db
+    .select({ id: worktreeSurfaces.id, sortOrder: worktreeSurfaces.sortOrder })
+    .from(worktreeSurfaces)
+    .where(eq(worktreeSurfaces.worktreeId, worktree.id))
+    .orderBy(worktreeSurfaces.sortOrder, worktreeSurfaces.id)
+    .all();
+
+  const now = timestamp();
+  for (const change of compactedRankChanges(
+    siblings,
+    moveBefore(
+      siblings.map((sibling) => sibling.id),
+      input.surfaceId,
+      input.beforeSurfaceId,
+    ),
+  )) {
+    db.update(worktreeSurfaces)
+      .set({ sortOrder: change.sortOrder, updatedAt: now })
+      .where(eq(worktreeSurfaces.id, change.id))
+      .run();
+  }
+
+  return { status: 'moved' };
+}
 
 function listAgentSessionsForPanes(
   artifacts: AgentSessionArtifactsService,

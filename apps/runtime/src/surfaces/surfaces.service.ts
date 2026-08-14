@@ -10,10 +10,12 @@ import type {
   RenameSurfaceOutput,
   SetSplitWeightsInput,
   SetSplitWeightsOutput,
+  MoveSurfaceOrderOutput,
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
   SurfaceDetail,
   SurfaceLayoutNode,
+  SurfaceOrderRejectionReason,
   WorktreeEnvironmentFocusOutput,
 } from '@isagi/contracts';
 import { surfaceLayoutNodeSchema } from '@isagi/contracts';
@@ -61,7 +63,26 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
   readonly sessionId?: number | undefined;
 }> {}
 
+/**
+ * Kept separate from `SurfaceError` because `surfaceRejectionReason` ends in a
+ * catch-all default: a reorder reason added to that union and left unmapped
+ * would surface as `surface_not_found`. This one maps straight through.
+ */
+export class SurfaceOrderError extends Data.TaggedError('SurfaceOrderError')<{
+  readonly reason: SurfaceOrderRejectionReason;
+  readonly message: string;
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly beforeSurfaceId?: number | undefined;
+}> {}
+
 export type SurfaceServiceError = DatabaseError | SurfaceError;
+
+/**
+ * Extends the shared union for the reorder method only, so no other surface
+ * operation can be typed to fail with a rejection its contract cannot encode.
+ */
+export type MoveSurfaceOrderServiceError = SurfaceServiceError | SurfaceOrderError;
 type PaneSessionClaimError =
   | SurfaceServiceError
   | PtyLaunchError
@@ -110,6 +131,11 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly focus: SetWorktreeEnvironmentFocusInput;
   }) => Effect.Effect<WorktreeEnvironmentFocusOutput, SurfaceServiceError>;
+  readonly moveSurfaceOrder: (input: {
+    readonly worktreeId: number;
+    readonly surfaceId: number;
+    readonly beforeSurfaceId: number | null;
+  }) => Effect.Effect<MoveSurfaceOrderOutput, MoveSurfaceOrderServiceError>;
 }
 
 export const SurfaceService = Context.GenericTag<SurfaceService>('isagi/SurfaceService');
@@ -414,9 +440,50 @@ export const SurfaceServiceLive = Layer.effect(
           return output;
         }),
       setWorktreeEnvironmentFocus: (input) => setWorktreeEnvironmentFocus(repository, input),
+      // Reordering changes no surface's identity, panes, sessions, or layout, so
+      // it publishes no `surface_changed` event: that event drives surface-detail
+      // invalidation, and nothing in a surface's detail has changed. The client
+      // that issued the move refetches the workspace snapshot itself.
+      moveSurfaceOrder: (input) =>
+        repository.moveSurfaceOrder(input).pipe(
+          Effect.flatMap((result) =>
+            result.status === 'moved'
+              ? Effect.succeed({ worktreeId: input.worktreeId, surfaceId: input.surfaceId })
+              : Effect.fail(
+                  new SurfaceOrderError({
+                    reason: result.reason,
+                    message: surfaceOrderMessage(result.reason),
+                    worktreeId: input.worktreeId,
+                    surfaceId: input.surfaceId,
+                    ...(input.beforeSurfaceId === null
+                      ? {}
+                      : { beforeSurfaceId: input.beforeSurfaceId }),
+                  }),
+                ),
+          ),
+        ),
     } satisfies SurfaceService;
   }),
 );
+
+/**
+ * Diagnostic only. The web app writes the line a person reads from the stable
+ * `reason`; this exists so logs and API responses explain themselves.
+ */
+function surfaceOrderMessage(reason: SurfaceOrderRejectionReason) {
+  switch (reason) {
+    case 'worktree_not_found':
+      return 'The worktree that owns the surface was not found.';
+    case 'surface_not_found':
+      return 'The surface being reordered was not found.';
+    case 'surface_worktree_mismatch':
+      return 'That surface belongs to a different worktree.';
+    case 'before_surface_not_found':
+      return 'The surface named as the insertion anchor was not found.';
+    case 'before_surface_worktree_mismatch':
+      return 'The insertion anchor belongs to a different worktree.';
+  }
+}
 
 function createSinglePaneSurface(
   repository: SurfaceRepositoryService,

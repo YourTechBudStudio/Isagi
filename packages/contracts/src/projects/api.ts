@@ -1,6 +1,7 @@
 import {
   projectApiErrorSchema,
   projectDeleteApiErrorSchema,
+  projectOrderApiErrorSchema,
   projectRelocateApiErrorSchema,
 } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
@@ -8,6 +9,8 @@ import {
   addProjectInputSchema,
   addProjectOutputSchema,
   deleteProjectOutputSchema,
+  moveProjectOrderInputSchema,
+  moveProjectOrderOutputSchema,
   projectRouteParamsSchema,
   relocateProjectInputSchema,
   relocateProjectOutputSchema,
@@ -39,6 +42,15 @@ export const projectsEndpoints = {
     output: deleteProjectOutputSchema,
     errors: projectDeleteApiErrorSchema,
   },
+  moveOrder: {
+    id: 'projects.moveOrder',
+    method: 'PUT',
+    path: '/projects/:projectId/order',
+    params: projectRouteParamsSchema,
+    body: moveProjectOrderInputSchema,
+    output: moveProjectOrderOutputSchema,
+    errors: projectOrderApiErrorSchema,
+  },
 } as const satisfies {
   readonly add: ApiEndpoint<
     typeof addProjectInputSchema,
@@ -55,6 +67,12 @@ export const projectsEndpoints = {
     undefined,
     typeof deleteProjectOutputSchema,
     typeof projectDeleteApiErrorSchema,
+    typeof projectRouteParamsSchema
+  >;
+  readonly moveOrder: ApiEndpoint<
+    typeof moveProjectOrderInputSchema,
+    typeof moveProjectOrderOutputSchema,
+    typeof projectOrderApiErrorSchema,
     typeof projectRouteParamsSchema
   >;
 };

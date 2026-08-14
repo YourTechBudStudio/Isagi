@@ -144,6 +144,38 @@ export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
 
 export const projectDeleteRejectionReasonSchema = Schema.Literal('command_cleanup_failed');
 
+/**
+ * Sibling reorder rejections. Each scope has its own disjoint reason set because
+ * the legal sibling list differs: present projects, a project's non-root
+ * worktrees, and one worktree's surfaces. A `before_*` reason always describes
+ * the anchor, never the moved item.
+ */
+export const projectOrderRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_present',
+  'before_project_not_found',
+  'before_project_not_present',
+);
+
+export const worktreeOrderRejectionReasonSchema = Schema.Literal(
+  'project_not_found',
+  'project_not_present',
+  'worktree_not_found',
+  'worktree_project_mismatch',
+  'root_worktree_fixed',
+  'before_worktree_not_found',
+  'before_worktree_project_mismatch',
+  'before_root_worktree_fixed',
+);
+
+export const surfaceOrderRejectionReasonSchema = Schema.Literal(
+  'worktree_not_found',
+  'surface_not_found',
+  'surface_worktree_mismatch',
+  'before_surface_not_found',
+  'before_surface_worktree_mismatch',
+);
+
 export const worktreeBranchListRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('worktree_branch_list_rejected'),
   status: Schema.Literal(400),
@@ -226,6 +258,47 @@ export const projectDeleteRejectedErrorSchema = Schema.Struct({
     reason: projectDeleteRejectionReasonSchema,
     projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
     worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+// The source identifiers are required because they come from the route and are
+// therefore always known; the anchor is optional because a `null` anchor cannot
+// be the thing that failed.
+export const projectOrderRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('project_order_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: projectOrderRejectionReasonSchema,
+    projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    beforeProjectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const worktreeOrderRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('worktree_order_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: worktreeOrderRejectionReasonSchema,
+    projectId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    worktreeId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    beforeWorktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+});
+
+export const surfaceOrderRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('surface_order_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: surfaceOrderRejectionReasonSchema,
+    worktreeId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    surfaceId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    beforeSurfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
   }),
 });
 
@@ -432,6 +505,24 @@ export const projectDeleteApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+export const projectOrderApiErrorSchema = Schema.Union(
+  projectOrderRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const worktreeOrderApiErrorSchema = Schema.Union(
+  worktreeOrderRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
+export const surfaceOrderApiErrorSchema = Schema.Union(
+  surfaceOrderRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+  runtimeDataDirectoryFailedErrorSchema,
+);
+
 export const worktreeBranchListApiErrorSchema = Schema.Union(
   worktreeBranchListRejectedErrorSchema,
   gitCommandFailedErrorSchema,
@@ -497,6 +588,20 @@ export type WorktreeSetupRejectionReason = Schema.Schema.Type<
 export type WorktreeDeleteRejectionReason = Schema.Schema.Type<
   typeof worktreeDeleteRejectionReasonSchema
 >;
+export type ProjectOrderRejectionReason = Schema.Schema.Type<
+  typeof projectOrderRejectionReasonSchema
+>;
+export type WorktreeOrderRejectionReason = Schema.Schema.Type<
+  typeof worktreeOrderRejectionReasonSchema
+>;
+export type SurfaceOrderRejectionReason = Schema.Schema.Type<
+  typeof surfaceOrderRejectionReasonSchema
+>;
+export type ProjectOrderRejectedError = Schema.Schema.Type<typeof projectOrderRejectedErrorSchema>;
+export type WorktreeOrderRejectedError = Schema.Schema.Type<
+  typeof worktreeOrderRejectedErrorSchema
+>;
+export type SurfaceOrderRejectedError = Schema.Schema.Type<typeof surfaceOrderRejectedErrorSchema>;
 export type ProjectPathRejectedError = Schema.Schema.Type<typeof projectPathRejectedErrorSchema>;
 export type WorkspaceActiveContextRejectedError = Schema.Schema.Type<
   typeof workspaceActiveContextRejectedErrorSchema

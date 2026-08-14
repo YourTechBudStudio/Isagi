@@ -91,6 +91,7 @@ const testSurfaceRepository = {
   setPaneSession: () => Effect.die('surface pane session placement is not used by workspace tests'),
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   setEnvironmentFocus: (input) => Effect.succeed(input),
+  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace snapshot tests'),
 } satisfies SurfaceRepositoryService;
 
 const testSurfaceService = {
@@ -106,6 +107,7 @@ const testSurfaceService = {
   claimPaneSession: () => Effect.die('surface pane session claim is not used by workspace tests'),
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
+  moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
 
 const testCommandService = {
@@ -325,6 +327,9 @@ test('workspace reads known rows without reconciling Git state', async () => {
           missingReason: input.missingReason ?? null,
         };
       }),
+    moveProjectOrder: () => Effect.die('project reorder is not used by workspace snapshot tests'),
+    moveProjectWorktreeOrder: () =>
+      Effect.die('worktree reorder is not used by workspace snapshot tests'),
   } satisfies WorkspaceRepositoryService;
 
   const git = {

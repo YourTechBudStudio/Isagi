@@ -475,6 +475,8 @@ export function repository(rootPath: string): WorkspaceRepositoryService {
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
     restoreProjectAtRootPath: () => Effect.succeed({ added: [], missing: [] }),
     setProjectStatus: () => Effect.void,
+    moveProjectOrder: () => Effect.die('project reorder is not used by command tests'),
+    moveProjectWorktreeOrder: () => Effect.die('worktree reorder is not used by command tests'),
   };
 }
 

@@ -67,6 +67,25 @@ export const worktreeEnvironmentFocusRouteParamsSchema = Schema.Struct({
   worktreeId: positiveIntegerSchema,
 });
 
+/**
+ * The surface row already knows its worktree, but reordering names the parent
+ * explicitly: the path is the trust boundary the runtime uses to reject a
+ * cross-worktree move instead of quietly adopting the surface.
+ */
+export const worktreeSurfaceRouteParamsSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+});
+
+export const moveSurfaceOrderInputSchema = Schema.Struct({
+  beforeSurfaceId: Schema.NullOr(positiveIntegerSchema),
+});
+
+export const moveSurfaceOrderOutputSchema = Schema.Struct({
+  worktreeId: positiveIntegerSchema,
+  surfaceId: positiveIntegerSchema,
+});
+
 export const agentSessionRouteParamsSchema = Schema.Struct({
   agentSessionId: positiveIntegerSchema,
 });
@@ -368,6 +387,11 @@ export type SurfacePaneRouteParams = Schema.Schema.Type<typeof surfacePaneRouteP
 export type WorktreeEnvironmentFocusRouteParams = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRouteParamsSchema
 >;
+export type WorktreeSurfaceRouteParams = Schema.Schema.Type<
+  typeof worktreeSurfaceRouteParamsSchema
+>;
+export type MoveSurfaceOrderInput = Schema.Schema.Type<typeof moveSurfaceOrderInputSchema>;
+export type MoveSurfaceOrderOutput = Schema.Schema.Type<typeof moveSurfaceOrderOutputSchema>;
 export type AgentSessionRouteParams = Schema.Schema.Type<typeof agentSessionRouteParamsSchema>;
 export type TerminalSessionRouteParams = Schema.Schema.Type<
   typeof terminalSessionRouteParamsSchema

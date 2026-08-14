@@ -13,8 +13,12 @@ import type {
   DeleteProjectOutput,
   DeleteWorktreePreflightOutput,
   ListProjectBranchesOutput,
+  MoveProjectOrderOutput,
+  MoveWorktreeOrderOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
+  ProjectOrderRejectionReason,
+  WorktreeOrderRejectionReason,
   ReconciliationFinding,
   WorktreeSetupPreflightOutput,
   WorktreeSetupTrustInput,
@@ -100,6 +104,27 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly cause?: unknown;
 }> {}
 
+/**
+ * Reorder rejections stay out of `WorkspaceError` on purpose. That union is
+ * shared by roughly a dozen endpoints whose mappers end in a catch-all default,
+ * so a reason added there and left unmapped would be reported as some other
+ * failure. These carry the contract reason directly and are mapped exhaustively.
+ */
+export class ProjectOrderError extends Data.TaggedError('ProjectOrderError')<{
+  readonly reason: ProjectOrderRejectionReason;
+  readonly message: string;
+  readonly projectId: number;
+  readonly beforeProjectId?: number | undefined;
+}> {}
+
+export class WorktreeOrderError extends Data.TaggedError('WorktreeOrderError')<{
+  readonly reason: WorktreeOrderRejectionReason;
+  readonly message: string;
+  readonly projectId: number;
+  readonly worktreeId: number;
+  readonly beforeWorktreeId?: number | undefined;
+}> {}
+
 export type WorkspaceServiceError =
   | DatabaseError
   | GitCommandError
@@ -109,6 +134,13 @@ export type WorkspaceServiceError =
   | WorktreeSetupError
   | WorktreeSetupRunError
   | WorkspaceError;
+
+/**
+ * Reorder failures extend the shared union per method instead of joining it, so
+ * only the reorder endpoints can ever be asked to encode an order rejection.
+ */
+export type MoveProjectOrderServiceError = WorkspaceServiceError | ProjectOrderError;
+export type MoveWorktreeOrderServiceError = WorkspaceServiceError | WorktreeOrderError;
 
 export interface WorkspaceService {
   readonly get: Effect.Effect<WorkspaceSnapshot, WorkspaceServiceError>;
@@ -153,6 +185,15 @@ export interface WorkspaceService {
   readonly setActiveContext: (
     input: ActiveContextPersistenceInput,
   ) => Effect.Effect<ActiveContextOutput, WorkspaceServiceError>;
+  readonly moveProjectOrder: (input: {
+    readonly projectId: number;
+    readonly beforeProjectId: number | null;
+  }) => Effect.Effect<MoveProjectOrderOutput, MoveProjectOrderServiceError>;
+  readonly moveWorktreeOrder: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+    readonly beforeWorktreeId: number | null;
+  }) => Effect.Effect<MoveWorktreeOrderOutput, MoveWorktreeOrderServiceError>;
 }
 
 export const WorkspaceService = Context.GenericTag<WorkspaceService>('isagi/WorkspaceService');
@@ -696,9 +737,85 @@ export const WorkspaceServiceLive = Layer.effect(
           }
           return { activeContext: activeContextFromState(nextState) };
         }),
+      // No pre-read: the repository transaction is the only validation site, so
+      // there is no window in which the service's view and the stored rows can
+      // disagree. These methods only translate a rejection into a tagged error.
+      moveProjectOrder: (input) =>
+        repository.moveProjectOrder(input).pipe(
+          Effect.flatMap((result) =>
+            result.status === 'moved'
+              ? Effect.succeed({ projectId: input.projectId })
+              : Effect.fail(
+                  new ProjectOrderError({
+                    reason: result.reason,
+                    message: projectOrderMessage(result.reason),
+                    projectId: input.projectId,
+                    ...(input.beforeProjectId === null
+                      ? {}
+                      : { beforeProjectId: input.beforeProjectId }),
+                  }),
+                ),
+          ),
+        ),
+      moveWorktreeOrder: (input) =>
+        repository.moveProjectWorktreeOrder(input).pipe(
+          Effect.flatMap((result) =>
+            result.status === 'moved'
+              ? Effect.succeed({ projectId: input.projectId, worktreeId: input.worktreeId })
+              : Effect.fail(
+                  new WorktreeOrderError({
+                    reason: result.reason,
+                    message: worktreeOrderMessage(result.reason),
+                    projectId: input.projectId,
+                    worktreeId: input.worktreeId,
+                    ...(input.beforeWorktreeId === null
+                      ? {}
+                      : { beforeWorktreeId: input.beforeWorktreeId }),
+                  }),
+                ),
+          ),
+        ),
     } satisfies WorkspaceService;
   }),
 );
+
+/**
+ * Diagnostic only. The line a person reads is written by the web app from the
+ * stable `reason`; these exist so a log or an API response explains itself.
+ */
+function projectOrderMessage(reason: ProjectOrderRejectionReason) {
+  switch (reason) {
+    case 'project_not_found':
+      return 'The project being reordered was not found.';
+    case 'project_not_present':
+      return 'A missing project has no position in the ordered project list.';
+    case 'before_project_not_found':
+      return 'The project named as the insertion anchor was not found.';
+    case 'before_project_not_present':
+      return 'A missing project cannot be used as an insertion anchor.';
+  }
+}
+
+function worktreeOrderMessage(reason: WorktreeOrderRejectionReason) {
+  switch (reason) {
+    case 'project_not_found':
+      return 'The project that owns the worktree was not found.';
+    case 'project_not_present':
+      return 'A missing project has no ordered worktree list.';
+    case 'worktree_not_found':
+      return 'The worktree being reordered was not found.';
+    case 'worktree_project_mismatch':
+      return 'That worktree belongs to a different project.';
+    case 'root_worktree_fixed':
+      return 'The root worktree is always first and cannot be reordered.';
+    case 'before_worktree_not_found':
+      return 'The worktree named as the insertion anchor was not found.';
+    case 'before_worktree_project_mismatch':
+      return 'The insertion anchor belongs to a different project.';
+    case 'before_root_worktree_fixed':
+      return 'Nothing can be placed above the root worktree.';
+  }
+}
 
 function requireProject(repository: WorkspaceRepositoryService, projectId: number) {
   return Effect.gen(function* () {

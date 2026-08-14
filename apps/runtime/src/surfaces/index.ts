@@ -5,8 +5,13 @@ export {
   SurfaceRepositoryWorktreeMissing,
   duplicateSafeTitle,
 } from './surfaces.repository.js';
-export type { SurfaceRepositoryService } from './surfaces.repository.js';
-export { SurfaceError, SurfaceService, SurfaceServiceLive } from './surfaces.service.js';
+export type { SurfaceOrderMoveResult, SurfaceRepositoryService } from './surfaces.repository.js';
+export {
+  SurfaceError,
+  SurfaceOrderError,
+  SurfaceService,
+  SurfaceServiceLive,
+} from './surfaces.service.js';
 export type { SurfaceService as SurfaceServiceShape } from './surfaces.service.js';
 export { insertPaneIntoLayout, layoutContainsPane, prunePaneFromLayout } from './layout.js';
 export type {

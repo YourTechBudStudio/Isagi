@@ -200,9 +200,25 @@ export const openWorktreeOutputSchema = Schema.Union(
   }),
 );
 
+/**
+ * One bounded move within a single project's non-root worktrees. `null` appends
+ * after the last non-root sibling. The root worktree is never a legal source or
+ * anchor, so this shape cannot express placing a worktree above it.
+ */
+export const moveWorktreeOrderInputSchema = Schema.Struct({
+  beforeWorktreeId: Schema.NullOr(positiveIntegerSchema),
+});
+
+export const moveWorktreeOrderOutputSchema = Schema.Struct({
+  projectId: positiveIntegerSchema,
+  worktreeId: positiveIntegerSchema,
+});
+
 export type ProjectWorktreeRouteParams = Schema.Schema.Type<
   typeof projectWorktreeRouteParamsSchema
 >;
+export type MoveWorktreeOrderInput = Schema.Schema.Type<typeof moveWorktreeOrderInputSchema>;
+export type MoveWorktreeOrderOutput = Schema.Schema.Type<typeof moveWorktreeOrderOutputSchema>;
 export type WorktreeRouteParams = Schema.Schema.Type<typeof worktreeRouteParamsSchema>;
 export type WorktreeBranch = Schema.Schema.Type<typeof worktreeBranchSchema>;
 export type ListProjectBranchesOutput = Schema.Schema.Type<typeof listProjectBranchesOutputSchema>;

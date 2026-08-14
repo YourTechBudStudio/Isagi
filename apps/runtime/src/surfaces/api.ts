@@ -7,7 +7,7 @@ import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { SurfaceError, SurfaceService } from './surfaces.service.js';
+import { SurfaceError, SurfaceOrderError, SurfaceService } from './surfaces.service.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -134,9 +134,38 @@ export function registerSurfacesApi(
     mapError: (error, context) => toSurfaceApiError(error, context),
     run,
   });
+
+  registerApiEndpoint(fastify, apiEndpoints.surfaces.moveOrder, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        return yield* surfaces.moveSurfaceOrder({
+          worktreeId: params.worktreeId,
+          surfaceId: params.surfaceId,
+          beforeSurfaceId: input.beforeSurfaceId,
+        });
+      }),
+    mapError: (error, context) => toSurfaceApiError(error, context),
+    run,
+  });
 }
 
 export function toSurfaceApiError(error: unknown, context: ApiRouteContext): ApiError {
+  // Ahead of `SurfaceError`, whose reason mapping ends in a catch-all default.
+  // This reason is already the contract reason, so it maps straight through.
+  if (error instanceof SurfaceOrderError)
+    return {
+      code: 'surface_order_rejected',
+      status: 400,
+      message: error.message,
+      requestId: context.requestId,
+      data: {
+        reason: error.reason,
+        worktreeId: error.worktreeId,
+        surfaceId: error.surfaceId,
+        ...(error.beforeSurfaceId ? { beforeSurfaceId: error.beforeSurfaceId } : {}),
+      },
+    };
   if (error instanceof HarnessLaunchBlocked)
     return {
       code: 'session_launch_rejected',

@@ -560,6 +560,7 @@ function fakeSurfaceRepository(
     setPaneSession: () => Effect.die('setPaneSession is not used'),
     claimPaneSession: () => Effect.die('claimPaneSession is not used'),
     setEnvironmentFocus: () => Effect.die('setEnvironmentFocus is not used'),
+    moveSurfaceOrder: () => Effect.die('moveSurfaceOrder is not used'),
   } satisfies SurfaceRepositoryService;
 }
 

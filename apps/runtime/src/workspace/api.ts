@@ -9,7 +9,12 @@ import { DataDirectoryError, DatabaseError, StateFileError } from '../persistenc
 import { ProjectConfigError } from '../project-config/project-config.service.js';
 import type { RuntimeServices } from '../runtime.layer.js';
 import { WorktreeSetupError } from '../worktree-setup/index.js';
-import { WorkspaceError, WorkspaceService } from './index.js';
+import {
+  ProjectOrderError,
+  WorkspaceError,
+  WorkspaceService,
+  WorktreeOrderError,
+} from './index.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -100,6 +105,33 @@ export function registerWorkspaceApi(
       Effect.gen(function* () {
         const workspace = yield* WorkspaceService;
         return yield* workspace.deleteProject(params.projectId);
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.projects.moveOrder, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.moveProjectOrder({
+          projectId: params.projectId,
+          beforeProjectId: input.beforeProjectId,
+        });
+      }),
+    mapError: (error, context) => toWorkspaceApiError(error, context),
+    run,
+  });
+
+  registerApiEndpoint(fastify, apiEndpoints.worktrees.moveOrder, {
+    handle: (input, _context, params) =>
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.moveWorktreeOrder({
+          projectId: params.projectId,
+          worktreeId: params.worktreeId,
+          beforeWorktreeId: input.beforeWorktreeId,
+        });
       }),
     mapError: (error, context) => toWorkspaceApiError(error, context),
     run,
@@ -235,6 +267,38 @@ function worktreeDeleteRejectionReason(error: WorkspaceError) {
 }
 
 function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError {
+  // Handled before the broad errors below: the reason is already the contract
+  // reason, so these map straight through with no endpoint switch and no
+  // default branch that could relabel an unmapped case.
+  if (error instanceof ProjectOrderError) {
+    return {
+      code: 'project_order_rejected',
+      status: 400,
+      message: error.message,
+      requestId: context.requestId,
+      data: {
+        reason: error.reason,
+        projectId: error.projectId,
+        ...(error.beforeProjectId ? { beforeProjectId: error.beforeProjectId } : {}),
+      },
+    };
+  }
+
+  if (error instanceof WorktreeOrderError) {
+    return {
+      code: 'worktree_order_rejected',
+      status: 400,
+      message: error.message,
+      requestId: context.requestId,
+      data: {
+        reason: error.reason,
+        projectId: error.projectId,
+        worktreeId: error.worktreeId,
+        ...(error.beforeWorktreeId ? { beforeWorktreeId: error.beforeWorktreeId } : {}),
+      },
+    };
+  }
+
   if (error instanceof ProjectPathValidationError) {
     return {
       code: 'project_path_rejected',

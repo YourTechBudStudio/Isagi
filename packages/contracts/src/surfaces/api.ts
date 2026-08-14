@@ -1,10 +1,16 @@
-import { surfaceApiErrorSchema, worktreeEnvironmentFocusApiErrorSchema } from '../api/errors.js';
+import {
+  surfaceApiErrorSchema,
+  surfaceOrderApiErrorSchema,
+  worktreeEnvironmentFocusApiErrorSchema,
+} from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
   agentSessionRouteParamsSchema,
   createSurfaceInputSchema,
   createSurfaceOutputSchema,
   deleteSurfaceOutputSchema,
+  moveSurfaceOrderInputSchema,
+  moveSurfaceOrderOutputSchema,
   paneSessionClaimInputSchema,
   paneSessionClaimOutputSchema,
   paneSessionCreateInputSchema,
@@ -22,6 +28,7 @@ import {
   terminalSessionRouteParamsSchema,
   worktreeEnvironmentFocusOutputSchema,
   worktreeEnvironmentFocusRouteParamsSchema,
+  worktreeSurfaceRouteParamsSchema,
 } from './types.js';
 
 export const agentSessionPtyWebSocketEndpoint = {
@@ -128,6 +135,15 @@ export const surfacesEndpoints = {
     output: paneSessionClaimOutputSchema,
     errors: surfaceApiErrorSchema,
   },
+  moveOrder: {
+    id: 'surfaces.moveOrder',
+    method: 'PUT',
+    path: '/worktrees/:worktreeId/surfaces/:surfaceId/order',
+    params: worktreeSurfaceRouteParamsSchema,
+    body: moveSurfaceOrderInputSchema,
+    output: moveSurfaceOrderOutputSchema,
+    errors: surfaceOrderApiErrorSchema,
+  },
 } as const satisfies {
   readonly get: ApiEndpoint<
     undefined,
@@ -188,5 +204,11 @@ export const surfacesEndpoints = {
     typeof paneSessionClaimOutputSchema,
     typeof surfaceApiErrorSchema,
     typeof worktreeEnvironmentFocusRouteParamsSchema
+  >;
+  readonly moveOrder: ApiEndpoint<
+    typeof moveSurfaceOrderInputSchema,
+    typeof moveSurfaceOrderOutputSchema,
+    typeof surfaceOrderApiErrorSchema,
+    typeof worktreeSurfaceRouteParamsSchema
   >;
 };
