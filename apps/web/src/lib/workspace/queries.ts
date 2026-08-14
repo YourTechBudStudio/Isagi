@@ -37,6 +37,7 @@ import {
   workspaceQueryKey,
   worktreeCommandsQueryKey,
 } from './query-keys.js';
+import { applyPendingRailMoves } from './rail-order-state.js';
 import {
   addProject,
   deleteSurface,
@@ -70,11 +71,26 @@ import {
 import { useWorkspaceStore } from './store.js';
 import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
 
+/**
+ * Fetch, decode, and install-shape the workspace snapshot.
+ *
+ * The pending-reorder replay belongs here rather than at each call site because
+ * this is the one place a fresh snapshot enters the cache: a move still being
+ * persisted must survive a refresh started by anything else (ADR 0001 — the
+ * runtime owns the durable order, the client owns what the rail shows while it
+ * waits). Exported so the reorder tests can drive this exact path.
+ */
+export function loadWorkspaceData(signal?: AbortSignal | undefined): Promise<WorkspaceData> {
+  return runRuntimeEffect(
+    fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot), Effect.map(applyPendingRailMoves)),
+    { signal },
+  );
+}
+
 export function useWorkspaceQuery() {
   return useQuery({
     queryKey: workspaceQueryKey,
-    queryFn: ({ signal }) =>
-      runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+    queryFn: ({ signal }) => loadWorkspaceData(signal),
   });
 }
 
@@ -460,8 +476,9 @@ export async function setSplitWeightsFromSurface(input: {
 export async function commitOpenWorktreeSuccess(
   client: QueryClient,
   output: OpenWorktreeOutput,
-  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+  fetchWorkspaceData: (
+    signal?: AbortSignal | undefined,
+  ) => Promise<WorkspaceData> = loadWorkspaceData,
 ) {
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -478,8 +495,9 @@ export async function commitOpenWorktreeSuccess(
 export async function commitLaunchSessionSuccess(
   client: QueryClient,
   output: CreateSurfaceOutput,
-  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+  fetchWorkspaceData: (
+    signal?: AbortSignal | undefined,
+  ) => Promise<WorkspaceData> = loadWorkspaceData,
 ) {
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -520,10 +538,7 @@ export async function commitDeleteSurfaceSuccess(
     readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
   },
 ) {
-  const fetchWorkspaceData =
-    input.fetchWorkspaceData ??
-    ((signal?: AbortSignal | undefined) =>
-      runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }));
+  const fetchWorkspaceData = input.fetchWorkspaceData ?? loadWorkspaceData;
 
   await client.fetchQuery({
     queryKey: workspaceQueryKey,
@@ -552,8 +567,9 @@ export async function commitDeleteSurfaceSuccess(
 export async function commitDeleteWorktreeSuccess(
   client: QueryClient,
   output: DeleteWorktreeOutput,
-  fetchWorkspaceData: (signal?: AbortSignal | undefined) => Promise<WorkspaceData> = (signal) =>
-    runRuntimeEffect(fetchWorkspace().pipe(Effect.map(workspaceDataFromSnapshot)), { signal }),
+  fetchWorkspaceData: (
+    signal?: AbortSignal | undefined,
+  ) => Promise<WorkspaceData> = loadWorkspaceData,
 ) {
   publishTerminalWorkspaceFact({
     type: 'durable_worktree_deleted',

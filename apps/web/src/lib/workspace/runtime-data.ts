@@ -18,6 +18,12 @@ import type {
   PaneSessionClaimOutput,
   PaneSessionCreateInput,
   ListProjectBranchesOutput,
+  MoveProjectOrderInput,
+  MoveProjectOrderOutput,
+  MoveSurfaceOrderInput,
+  MoveSurfaceOrderOutput,
+  MoveWorktreeOrderInput,
+  MoveWorktreeOrderOutput,
   OpenWorktreeInput,
   OpenWorktreeOutput,
   DeleteWorktreePreflightOutput,
@@ -301,6 +307,33 @@ export function relocateProject(
 
 export function deleteProject(projectId: number): Effect.Effect<DeleteProjectOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.deleteProject(projectId)));
+}
+
+export function moveProjectOrder(
+  projectId: number,
+  input: MoveProjectOrderInput,
+): Effect.Effect<MoveProjectOrderOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.moveProjectOrder(projectId, input)));
+}
+
+export function moveWorktreeOrder(
+  projectId: number,
+  worktreeId: number,
+  input: MoveWorktreeOrderInput,
+): Effect.Effect<MoveWorktreeOrderOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.moveWorktreeOrder(projectId, worktreeId, input)),
+  );
+}
+
+export function moveSurfaceOrder(
+  worktreeId: number,
+  surfaceId: number,
+  input: MoveSurfaceOrderInput,
+): Effect.Effect<MoveSurfaceOrderOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.moveSurfaceOrder(worktreeId, surfaceId, input)),
+  );
 }
 
 export function listProjectBranches(

@@ -41,6 +41,12 @@ import {
   type AddProjectOutput,
   type DeleteProjectOutput,
   type ListProjectBranchesOutput,
+  type MoveProjectOrderInput,
+  type MoveProjectOrderOutput,
+  type MoveSurfaceOrderInput,
+  type MoveSurfaceOrderOutput,
+  type MoveWorktreeOrderInput,
+  type MoveWorktreeOrderOutput,
   type OpenWorktreeInput,
   type OpenWorktreeOutput,
   type DeleteWorktreePreflightOutput,
@@ -223,6 +229,34 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     DeleteProjectOutput,
     RuntimeEndpointError<typeof apiEndpoints.projects.delete>
+  >;
+  /**
+   * The three sibling reorder mutations. Each carries a `before…Id | null`
+   * anchor — `null` appends — and returns only identifiers, so a caller that
+   * needs the new order must refetch the workspace snapshot.
+   */
+  readonly moveProjectOrder: (
+    projectId: number,
+    input: MoveProjectOrderInput,
+  ) => Effect.Effect<
+    MoveProjectOrderOutput,
+    RuntimeEndpointError<typeof apiEndpoints.projects.moveOrder>
+  >;
+  readonly moveWorktreeOrder: (
+    projectId: number,
+    worktreeId: number,
+    input: MoveWorktreeOrderInput,
+  ) => Effect.Effect<
+    MoveWorktreeOrderOutput,
+    RuntimeEndpointError<typeof apiEndpoints.worktrees.moveOrder>
+  >;
+  readonly moveSurfaceOrder: (
+    worktreeId: number,
+    surfaceId: number,
+    input: MoveSurfaceOrderInput,
+  ) => Effect.Effect<
+    MoveSurfaceOrderOutput,
+    RuntimeEndpointError<typeof apiEndpoints.surfaces.moveOrder>
   >;
   readonly listProjectBranches: (
     projectId: number,
@@ -411,6 +445,12 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     relocateProject: (projectId, path) =>
       request(apiEndpoints.projects.relocate, { projectId }, { path }),
     deleteProject: (projectId) => request(apiEndpoints.projects.delete, { projectId }),
+    moveProjectOrder: (projectId, input) =>
+      request(apiEndpoints.projects.moveOrder, { projectId }, input),
+    moveWorktreeOrder: (projectId, worktreeId, input) =>
+      request(apiEndpoints.worktrees.moveOrder, { projectId, worktreeId }, input),
+    moveSurfaceOrder: (worktreeId, surfaceId, input) =>
+      request(apiEndpoints.surfaces.moveOrder, { worktreeId, surfaceId }, input),
     listProjectBranches: (projectId) => request(apiEndpoints.worktrees.branches, { projectId }),
     preflightWorktreeSetup: (projectId) =>
       request(apiEndpoints.worktrees.setupPreflight, { projectId }),

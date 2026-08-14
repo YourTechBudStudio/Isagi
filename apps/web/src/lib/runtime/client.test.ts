@@ -365,6 +365,100 @@ test('runtime client calls split pane endpoint with source pane and new pane spe
   });
 });
 
+test('runtime client calls each rail order endpoint with its scope and anchor', async () => {
+  const requests: Array<{ readonly url: string; readonly method: string; readonly body: string }> =
+    [];
+  const outputs = [
+    { projectId: 1 },
+    { projectId: 1, worktreeId: 13 },
+    { worktreeId: 12, surfaceId: 123 },
+  ];
+  globalThis.fetch = ((input, init) => {
+    requests.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body: String(init?.body ?? ''),
+    });
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          data: outputs[requests.length - 1],
+          meta: { requestId: `req-order-${requests.length}` },
+        }),
+        { status: 200 },
+      ),
+    );
+  }) as typeof fetch;
+
+  const client = createRuntimeClient('http://runtime.test');
+  // A null anchor is "move to the end", and it has to survive as JSON null
+  // rather than being dropped from the body.
+  assert.deepEqual(
+    await Effect.runPromise(client.moveProjectOrder(1, { beforeProjectId: null })),
+    outputs[0],
+  );
+  assert.deepEqual(
+    await Effect.runPromise(client.moveWorktreeOrder(1, 13, { beforeWorktreeId: 12 })),
+    outputs[1],
+  );
+  assert.deepEqual(
+    await Effect.runPromise(client.moveSurfaceOrder(12, 123, { beforeSurfaceId: 121 })),
+    outputs[2],
+  );
+
+  assert.deepEqual(requests, [
+    {
+      url: 'http://runtime.test/api/v1/projects/1/order',
+      method: 'PUT',
+      body: JSON.stringify({ beforeProjectId: null }),
+    },
+    {
+      url: 'http://runtime.test/api/v1/projects/1/worktrees/13/order',
+      method: 'PUT',
+      body: JSON.stringify({ beforeWorktreeId: 12 }),
+    },
+    {
+      url: 'http://runtime.test/api/v1/worktrees/12/surfaces/123/order',
+      method: 'PUT',
+      body: JSON.stringify({ beforeSurfaceId: 121 }),
+    },
+  ]);
+});
+
+test('runtime client surfaces rail order refusals as typed API errors', async () => {
+  const apiError = {
+    code: 'surface_order_rejected',
+    status: 400,
+    message: 'surface 123 does not belong to worktree 12',
+    requestId: 'req-order-refused',
+    data: {
+      reason: 'surface_worktree_mismatch',
+      worktreeId: 12,
+      surfaceId: 123,
+      beforeSurfaceId: 121,
+    },
+  } satisfies ApiError;
+
+  globalThis.fetch = mockFetch(new Response(JSON.stringify({ error: apiError }), { status: 400 }));
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      createRuntimeClient('http://runtime.test').moveSurfaceOrder(12, 123, {
+        beforeSurfaceId: 121,
+      }),
+    ),
+  );
+
+  assert.ok(error instanceof RuntimeApiError);
+  assert.equal(error.apiError.code, 'surface_order_rejected');
+  assert.deepEqual(error.apiError.data, {
+    reason: 'surface_worktree_mismatch',
+    worktreeId: 12,
+    surfaceId: 123,
+    beforeSurfaceId: 121,
+  });
+});
+
 test('runtime client decodes endpoint API errors before base API errors', async () => {
   const apiError = {
     code: 'project_path_rejected',

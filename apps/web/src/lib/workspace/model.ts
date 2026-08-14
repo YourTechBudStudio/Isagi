@@ -46,14 +46,6 @@ export function projectFromContract(project: ContractProject): Project {
   };
 }
 
-export function replaceProject(projects: readonly Project[], project: Project): readonly Project[] {
-  const index = projects.findIndex((candidate) => candidate.id === project.id);
-  if (index === -1) {
-    return [...projects, project].sort((left, right) => left.id - right.id);
-  }
-  return projects.map((candidate) => (candidate.id === project.id ? project : candidate));
-}
-
 export function activeContextFromSelection(
   selection: WorkspaceSelection,
 ): SetActiveContextInput | null {

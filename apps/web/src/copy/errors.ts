@@ -1,7 +1,13 @@
 import { Schema } from 'effect';
 
 import { workflowRejectedErrorSchema } from '@isagi/contracts';
-import type { ApiError, PtyWebSocketErrorCode } from '@isagi/contracts';
+import type {
+  ApiError,
+  ProjectOrderRejectionReason,
+  PtyWebSocketErrorCode,
+  SurfaceOrderRejectionReason,
+  WorktreeOrderRejectionReason,
+} from '@isagi/contracts';
 
 import { workflowLoadFailureReasonCopyOrFallback } from './workflows.js';
 
@@ -15,6 +21,7 @@ const projectGone = "That project isn't on Isagi's list anymore.";
 const projectFilesGone = "That project's files aren't where Isagi left them.";
 const worktreeGone = "Can't find that worktree. Did it get removed?";
 const surfaceGone = "That surface isn't here anymore.";
+const orderNotSaved = "Couldn't save that order.";
 const setupConfigInvalid = "This project's .isagi setup config is malformed.";
 const setupTrustMismatch = 'The setup hooks changed since you last trusted them.';
 const harnessLaunchBlockCopy = {
@@ -30,6 +37,21 @@ const harnessLaunchBlockCopy = {
 interface CodeCopy {
   readonly summary: string;
   readonly byReason?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A partial reason map checked against a contract reason union. Reasons left out
+ * fall through to the code's `summary` on purpose; the point of the constraint is
+ * that a reason which is *listed* must actually exist, so a renamed or misspelled
+ * literal fails the build instead of quietly never matching.
+ */
+function byReason<Reason extends string>(
+  map: Partial<Record<Reason, string>>,
+): Readonly<Record<string, string>> {
+  // The constraint is on the argument, where it does its work. Reason lookups
+  // are already treated as possibly-absent at the call site, which is exactly
+  // what a partial map is.
+  return map as Readonly<Record<string, string>>;
 }
 
 // Keyed by API error `code`. `byReason` refines on `data.reason` where the reason
@@ -173,6 +195,38 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_missing: "That project isn't missing — there's nothing to relocate.",
       project_path_already_registered: 'Another project already lives at that path.',
     },
+  },
+  // Sibling reorder refusals. Most of the runtime's reasons describe a client
+  // that asked for something the rail cannot express — a cross-project move, or
+  // the pinned root — so they are trust-boundary checks rather than states a
+  // person can reach or act on, and they deliberately read as the summary. Only
+  // a concurrent disappearance tells the user something they did not already
+  // know, so only those get their own line.
+  project_order_rejected: {
+    summary: orderNotSaved,
+    byReason: byReason<ProjectOrderRejectionReason>({
+      project_not_found: projectGone,
+      project_not_present: projectFilesGone,
+      before_project_not_found: projectGone,
+      before_project_not_present: projectFilesGone,
+    }),
+  },
+  worktree_order_rejected: {
+    summary: orderNotSaved,
+    byReason: byReason<WorktreeOrderRejectionReason>({
+      project_not_found: projectGone,
+      project_not_present: projectFilesGone,
+      worktree_not_found: worktreeGone,
+      before_worktree_not_found: worktreeGone,
+    }),
+  },
+  surface_order_rejected: {
+    summary: orderNotSaved,
+    byReason: byReason<SurfaceOrderRejectionReason>({
+      worktree_not_found: worktreeGone,
+      surface_not_found: surfaceGone,
+      before_surface_not_found: surfaceGone,
+    }),
   },
   git_command_failed: {
     summary: "A Git command didn't go through.",
