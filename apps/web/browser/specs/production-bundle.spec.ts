@@ -16,6 +16,12 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('data-state-option');
   expect(bundle).not.toContain('data-activity-option');
   expect(bundle).not.toContain('useSimulatedRestart');
+  // The rail reorder playground forks the rail and carries provisional variant
+  // controls. None of it may reach a shipped build before Phase 05 lands the
+  // chosen treatment in the real components.
+  expect(bundle).not.toContain('data-fixture-rail');
+  expect(bundle).not.toContain('data-drag-scope');
+  expect(bundle).not.toContain('RailReorderApp');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {

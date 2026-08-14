@@ -40,5 +40,10 @@ export default defineConfig({
       testMatch: /update-surface\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/update/` },
     },
+    {
+      name: 'rail-reorder',
+      testMatch: /rail-reorder\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
+    },
   ],
 });
