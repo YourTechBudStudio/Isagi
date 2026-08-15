@@ -65,6 +65,19 @@ function setWorktreeRank(worktreeId: number, sortOrder: number) {
   });
 }
 
+function readWorktreeRanks() {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    return yield* database.use('test_read_worktree_ranks', (db) =>
+      db
+        .select({ id: worktrees.id, path: worktrees.path, sortOrder: worktrees.sortOrder })
+        .from(worktrees)
+        .orderBy(worktrees.id)
+        .all(),
+    );
+  });
+}
+
 function readProjectRow(projectId: number) {
   return Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
@@ -298,6 +311,68 @@ test('newly discovered worktrees append in discovery order and consume no rank w
     '/repo/isagi-chore',
     '/repo/isagi-late',
   ]);
+});
+
+test('reconciliation cannot reclaim ownership of a reordered worktree list', async () => {
+  const result = await runWithDatabase(
+    'worktree-reconcile-preserves-order',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const projectId = yield* repository.insertProject({
+        name: 'isagi',
+        rootPath: '/repo/isagi',
+      });
+      const discovered = [
+        { path: '/repo/isagi', branch: 'main', head: 'aaa1111' },
+        { path: '/repo/isagi-one', branch: 'one', head: 'bbb2222' },
+        { path: '/repo/isagi-two', branch: 'two', head: 'ccc3333' },
+        { path: '/repo/isagi-three', branch: 'three', head: 'ddd4444' },
+      ];
+      yield* repository.reconcileProjectWorktrees({ projectId, discovered });
+
+      const inserted = yield* repository.listWorktrees;
+      const worktreeId = (path: string) => {
+        const found = inserted.find((worktree) => worktree.path === path);
+        if (!found) throw new Error(`Missing test worktree ${path}.`);
+        return found.id;
+      };
+      // three, one, two — an order no discovery sweep would produce on its own.
+      yield* repository.moveProjectWorktreeOrder({
+        projectId,
+        worktreeId: worktreeId('/repo/isagi-three'),
+        beforeWorktreeId: worktreeId('/repo/isagi-one'),
+      });
+
+      const reordered = yield* readWorktreeRanks();
+      const reorderedPaths = (yield* repository.listWorktrees).map((worktree) => worktree.path);
+
+      // Git reports worktrees in its own order, which here is deliberately
+      // neither the discovery order nor the user's. Existing rows are refreshed,
+      // never re-ranked, so the sweep must not move anything.
+      yield* repository.reconcileProjectWorktrees({
+        projectId,
+        discovered: [discovered[2]!, discovered[0]!, discovered[3]!, discovered[1]!],
+      });
+
+      return {
+        reordered,
+        reorderedPaths,
+        reconciled: yield* readWorktreeRanks(),
+        reconciledPaths: (yield* repository.listWorktrees).map((worktree) => worktree.path),
+      };
+    }),
+  );
+
+  assert.deepEqual(result.reorderedPaths, [
+    '/repo/isagi',
+    '/repo/isagi-three',
+    '/repo/isagi-one',
+    '/repo/isagi-two',
+  ]);
+  assert.deepEqual(result.reconciledPaths, result.reorderedPaths);
+  // Raw ranks, not just display order: a sweep that renumbered every row back to
+  // discovery order and happened to agree would still be a defect.
+  assert.deepEqual(result.reconciled, result.reordered);
 });
 
 test('worktree order honors explicit ranks and falls back to identifiers when tied', async () => {

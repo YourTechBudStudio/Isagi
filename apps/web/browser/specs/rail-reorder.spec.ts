@@ -139,29 +139,88 @@ test('a surface drops before the sibling it is released over', async ({ page }) 
  * scopes because all three clip differently.
  */
 for (const scenario of [
-  { name: 'surface', source: 'surfaces:12#124', prefix: 'surfaces:12#', siblings: 3 },
-  { name: 'worktree', source: 'worktrees:1#15', prefix: 'worktrees:1#', siblings: 3 },
-  { name: 'project', source: 'projects#3', prefix: 'projects#', siblings: 2 },
+  {
+    name: 'surface',
+    source: 'surfaces:12#124',
+    prefix: 'surfaces:12#',
+    siblings: 3,
+    grab: '',
+    anchor: 'surfaces:12#121',
+  },
+  {
+    name: 'worktree',
+    source: 'worktrees:1#15',
+    prefix: 'worktrees:1#',
+    siblings: 3,
+    grab: '',
+    anchor: 'worktrees:1#12',
+  },
+  // Two things are specific to a project. It is only grabbable by its header
+  // strip, because the root worktree below it is inert and claims its own press.
+  // And picking up the last project scrolls the rail far enough that the first
+  // one leaves the window entirely — hovering there is off-screen, which the
+  // engine correctly refuses, so the anchor is the highest project still on
+  // screen. The carried row is still the last one, which is what this is about.
+  {
+    name: 'project',
+    source: 'projects#3',
+    prefix: 'projects#',
+    siblings: 2,
+    grab: ' [data-project-header]',
+    anchor: 'projects#2',
+  },
 ] as const) {
   test(`carrying the last ${scenario.name} to the top keeps every sibling visible`, async ({
     page,
   }) => {
     // Matched by scope prefix, not by container: a project's container encloses
     // its worktrees' and surfaces' sources too.
-    const rows = page.locator(`[data-drag-source^="${scenario.prefix}"]`);
     const others = page.locator(
       `[data-drag-source^="${scenario.prefix}"]:not([data-drag-source="${scenario.source}"])`,
     );
+    const container = scope(page, scenario.prefix.replace('#', ''));
+    const carriedBefore = await rawBox(row(page, scenario.source));
+    const containerBefore = await rawBox(container);
 
-    await pickUp(page, scenario.source);
-    const top = await rawBox(rows.first());
-    await hover(page, top.x + 24, top.y + 1);
+    // Pressed at the middle of the handle and pulled *upwards*, the same gesture
+    // the other project test uses. A project's handle is a thin strip, and a
+    // downward pull from its top edge leaves it before the drag activates.
+    const handle = await box(
+      page.locator(`[data-drag-source="${scenario.source}"]${scenario.grab}`),
+    );
+    await page.mouse.move(handle.x + 30, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + 30, handle.y + handle.height / 2 - 30, { steps: 5 });
 
-    // The carried row keeps its box and only goes invisible, so the list is the
-    // same height it always was and every sibling is still laid out inside it.
+    const top = await rawBox(row(page, scenario.anchor));
+    await hover(page, top.x + 24, top.y);
+
+    // Neither a press that never activated nor a hover the engine refused would
+    // reflow anything, and both would satisfy every assertion below. The overlay
+    // proves a drag is in flight; `data-overlay-valid` proves it found a slot.
+    await expect(page.locator(OVERLAY)).toBeVisible();
+    await expect(page.locator(OVERLAY)).toHaveAttribute('data-overlay-valid', 'true');
+
     await expect(others).toHaveCount(scenario.siblings);
     for (let index = 0; index < scenario.siblings; index += 1) {
       await expect(others.nth(index)).toBeVisible();
+    }
+
+    // Visibility alone cannot see this bug. A clipped row still reports a
+    // non-empty box and still passes `toBeVisible`, which is exactly how the
+    // rows vanished on screen while these tests stayed green.
+    //
+    // So the invariant the fix established is asserted directly: the carried row
+    // *keeps its box* and is only made invisible. That is what holds the list at
+    // a constant height, which in turn is what stops siblings being pushed out of
+    // a container that clips — every row wrapper, and the rail's scroll box. A
+    // collapsing placeholder fails here at the first assertion.
+    const carriedDuring = await rawBox(row(page, scenario.source));
+    expect(Math.round(carriedDuring.height)).toBe(Math.round(carriedBefore.height));
+    expect(Math.round((await rawBox(container)).height)).toBe(Math.round(containerBefore.height));
+
+    for (let index = 0; index < scenario.siblings; index += 1) {
+      expect((await rawBox(others.nth(index))).height).toBeGreaterThan(0);
     }
 
     await page.mouse.up();
@@ -265,6 +324,10 @@ test('the drop lands in one commit instead of replaying the move', async ({ page
 
   const samples = await page.evaluate(() => (window as unknown as { samples: number[] }).samples);
   expect(samples.length).toBeGreaterThan(20);
+  // `-1` is the sampler's "selector matched nothing". Without this, a change to
+  // the wrapper nesting would make every sample -1, and a test measuring a node
+  // that does not exist would report a perfectly stable position.
+  expect(samples).not.toContain(-1);
   expect([...new Set(samples)]).toHaveLength(1);
 });
 

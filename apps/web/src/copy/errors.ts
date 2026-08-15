@@ -202,13 +202,16 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   // person can reach or act on, and they deliberately read as the summary. Only
   // a concurrent disappearance tells the user something they did not already
   // know, so only those get their own line.
+  //
+  // The `before_*` reasons are deliberately absent. They mean the *anchor* went
+  // away, and the disappearance lines all name the thing the user dragged —
+  // which is still on screen, hosting the message. Saying it is gone would be
+  // false, so those reasons read as the summary instead.
   project_order_rejected: {
     summary: orderNotSaved,
     byReason: byReason<ProjectOrderRejectionReason>({
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
-      before_project_not_found: projectGone,
-      before_project_not_present: projectFilesGone,
     }),
   },
   worktree_order_rejected: {
@@ -217,7 +220,6 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
       worktree_not_found: worktreeGone,
-      before_worktree_not_found: worktreeGone,
     }),
   },
   surface_order_rejected: {
@@ -225,7 +227,6 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
     byReason: byReason<SurfaceOrderRejectionReason>({
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
-      before_surface_not_found: surfaceGone,
     }),
   },
   git_command_failed: {

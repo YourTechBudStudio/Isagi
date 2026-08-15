@@ -70,6 +70,12 @@ function entries() {
   return useRailOrderStore.getState().entriesByScope;
 }
 
+/** The inline refusal text at `scopeKey`, or `null` when the scope is not failed. */
+function failureMessage(scopeKey: string) {
+  const entry = entries()[scopeKey];
+  return entry?.status === 'failed' ? entry.message : null;
+}
+
 function apiFailure(code: string, reason: string): RuntimeApiError<ApiError> {
   return new RuntimeApiError({
     code,
@@ -271,6 +277,19 @@ test('an anchor that vanished keeps the failure at the still-present row', async
   // The row the user dragged is still on screen, so the message belongs there.
   assert.equal(entries()['surfaces:12']?.status, 'failed');
   assert.equal(useToastStore.getState().toasts.length, 0);
+
+  // ...and it must not claim that row is gone. The disappearance lines all name
+  // the dragged thing, but a vanished *anchor* leaves it visible, so this reason
+  // reads as the plain code summary — the same line a trust-boundary refusal
+  // produces. Compared against that rather than a literal, so rewording the copy
+  // does not churn the test.
+  const anchorGone = failureMessage('surfaces:12');
+  await commitRailMove({
+    intent: { scope: SURFACES, movedId: 123, beforeId: 121 },
+    client,
+    move: () => Promise.reject(apiFailure('surface_order_rejected', 'surface_worktree_mismatch')),
+  });
+  assert.equal(anchorGone, failureMessage('surfaces:12'));
 });
 
 test('a transport failure falls back to the cache to place its message', async () => {

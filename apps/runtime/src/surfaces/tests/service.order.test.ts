@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
 import { Effect, Either, type Layer } from 'effect';
 
+import { RuntimeDatabase } from '../../persistence/index.js';
+import { worktreeSurfaces } from '../../persistence/schema.js';
 import { SurfaceOrderError, SurfaceRepository, SurfaceService } from '../index.js';
 import { insertWorktree, testLayer } from './test-support.js';
 
@@ -35,6 +38,41 @@ function surfaceIdsInOrder(worktreeId: number) {
     return (yield* repository.listWorkspaceSurfaceMetadata)
       .filter((surface) => surface.worktreeId === worktreeId)
       .map((surface) => surface.id);
+  });
+}
+
+/**
+ * Displayed order can look untouched while stored ranks were rewritten, so the
+ * rejection tests compare the raw column instead. Scrambling the ranks first is
+ * what gives that comparison teeth: against an already-compact list a stray
+ * normalization would write nothing and stay invisible.
+ */
+function readSurfaceRanks() {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    return yield* database.use('test_read_surface_ranks', (db) =>
+      db
+        .select({
+          id: worktreeSurfaces.id,
+          sortOrder: worktreeSurfaces.sortOrder,
+          updatedAt: worktreeSurfaces.updatedAt,
+        })
+        .from(worktreeSurfaces)
+        .orderBy(worktreeSurfaces.id)
+        .all(),
+    );
+  });
+}
+
+function setSurfaceRank(surfaceId: number, sortOrder: number) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    yield* database.use('test_set_surface_rank', (db) => {
+      db.update(worktreeSurfaces)
+        .set({ sortOrder })
+        .where(eq(worktreeSurfaces.id, surfaceId))
+        .run();
+    });
   });
 }
 
@@ -118,11 +156,19 @@ test('a surface from another worktree is rejected rather than adopted', async ()
         worktreeId: otherWorktreeId,
         titleBase: 'Elsewhere',
       });
+      yield* setSurfaceRank(1, 7);
+      yield* setSurfaceRank(2, 9);
+      const ranksBefore = yield* readSurfaceRanks();
 
       const rejected = yield* surfaces
         .moveSurfaceOrder({ worktreeId, surfaceId: foreign.surfaceId, beforeSurfaceId: null })
         .pipe(Effect.either);
-      return { rejected, ids: yield* surfaceIdsInOrder(worktreeId) };
+      return {
+        rejected,
+        ranksBefore,
+        ranksAfter: yield* readSurfaceRanks(),
+        ids: yield* surfaceIdsInOrder(worktreeId),
+      };
     }),
   );
 
@@ -131,7 +177,8 @@ test('a surface from another worktree is rejected rather than adopted', async ()
     assert.ok(output.rejected.left instanceof SurfaceOrderError);
     assert.equal(output.rejected.left.reason, 'surface_worktree_mismatch');
   }
-  assert.deepEqual(output.ids, [1, 2, 3]);
+  assert.deepEqual(output.ids, [3, 1, 2]);
+  assert.deepEqual(output.ranksAfter, output.ranksBefore);
 });
 
 test('an anchor from another worktree is rejected and the order is untouched', async () => {
@@ -144,6 +191,9 @@ test('an anchor from another worktree is rejected and the order is untouched', a
         worktreeId: otherWorktreeId,
         titleBase: 'Elsewhere',
       });
+      yield* setSurfaceRank(1, 7);
+      yield* setSurfaceRank(2, 9);
+      const ranksBefore = yield* readSurfaceRanks();
 
       const rejected = yield* surfaces
         .moveSurfaceOrder({
@@ -152,7 +202,12 @@ test('an anchor from another worktree is rejected and the order is untouched', a
           beforeSurfaceId: foreign.surfaceId,
         })
         .pipe(Effect.either);
-      return { rejected, ids: yield* surfaceIdsInOrder(worktreeId) };
+      return {
+        rejected,
+        ranksBefore,
+        ranksAfter: yield* readSurfaceRanks(),
+        ids: yield* surfaceIdsInOrder(worktreeId),
+      };
     }),
   );
 
@@ -162,7 +217,8 @@ test('an anchor from another worktree is rejected and the order is untouched', a
     assert.equal(output.rejected.left.reason, 'before_surface_worktree_mismatch');
     assert.equal(output.rejected.left.beforeSurfaceId, 4);
   }
-  assert.deepEqual(output.ids, [1, 2, 3]);
+  assert.deepEqual(output.ids, [3, 1, 2]);
+  assert.deepEqual(output.ranksAfter, output.ranksBefore);
 });
 
 test('unknown worktrees, surfaces, and anchors each get their own reason', async () => {
@@ -170,6 +226,9 @@ test('unknown worktrees, surfaces, and anchors each get their own reason', async
     Effect.gen(function* () {
       const surfaces = yield* SurfaceService;
       const [first] = yield* threeSurfaces(worktreeId);
+      yield* setSurfaceRank(1, 7);
+      yield* setSurfaceRank(2, 9);
+      const ranksBefore = yield* readSurfaceRanks();
       const unknownWorktree = yield* surfaces
         .moveSurfaceOrder({ worktreeId: 999, surfaceId: first!, beforeSurfaceId: null })
         .pipe(Effect.either);
@@ -183,6 +242,8 @@ test('unknown worktrees, surfaces, and anchors each get their own reason', async
         unknownWorktree,
         unknownSurface,
         unknownAnchor,
+        ranksBefore,
+        ranksAfter: yield* readSurfaceRanks(),
         ids: yield* surfaceIdsInOrder(worktreeId),
       };
     }),
@@ -199,5 +260,26 @@ test('unknown worktrees, surfaces, and anchors each get their own reason', async
     'surface_not_found',
     'before_surface_not_found',
   ]);
-  assert.deepEqual(output.ids, [1, 2, 3]);
+  assert.deepEqual(output.ids, [3, 1, 2]);
+  assert.deepEqual(output.ranksAfter, output.ranksBefore);
+});
+
+test('a surface created after a reorder appends below the user-established order', async () => {
+  const output = await withSurfaces('order-create-appends', (worktreeId) =>
+    Effect.gen(function* () {
+      const surfaces = yield* SurfaceService;
+      const [first, , third] = yield* threeSurfaces(worktreeId);
+      // Third, First, Second — the maximum rank is now held by a surface that is
+      // neither the newest nor the last created.
+      yield* surfaces.moveSurfaceOrder({
+        worktreeId,
+        surfaceId: third!,
+        beforeSurfaceId: first!,
+      });
+      const created = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Fourth' });
+      return { created: created.surfaceId, ids: yield* surfaceIdsInOrder(worktreeId) };
+    }),
+  );
+
+  assert.deepEqual(output.ids, [3, 1, 2, output.created]);
 });

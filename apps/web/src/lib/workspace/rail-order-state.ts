@@ -102,11 +102,6 @@ export function applyPendingRailMoves(data: WorkspaceData): WorkspaceData {
   );
 }
 
-/** Reactive pending state, for rendering a list as busy. */
-export function useRailOrderPending(scopeKey: string): boolean {
-  return useRailOrderStore((state) => state.entriesByScope[scopeKey]?.status === 'pending');
-}
-
 /** The refusal to render inline at this list, or `null` when there is none. */
 export function useRailOrderFailure(
   scopeKey: string,
