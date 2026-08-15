@@ -1,142 +1,110 @@
-import type { RailModel } from './model.js';
+import type { WorkspaceSnapshot } from '@isagi/contracts';
 
 /**
- * Enough rail to make the variant question answerable. The comparison is about
- * *height and nesting*, so the shape matters more than the names: one tall
- * project whose active worktree is expanded to four surfaces, a second present
- * project with its own non-root worktrees, a third short one to prove a project
- * can be dropped at either end, and a Disconnected section to hover illegally.
+ * The workspace the fixture's fake runtime serves.
+ *
+ * This is a real {@link WorkspaceSnapshot}, not a fixture-shaped lookalike: the
+ * page mounts the production `Rail`, so the data has to arrive through the same
+ * decode the app uses. The shape is chosen for *height and nesting* rather than
+ * for plausible names — one tall project whose active worktree is expanded to
+ * four surfaces, a second present project with its own non-root worktrees, a
+ * third short one to prove a project can be dropped at either end, and a
+ * Disconnected section to hover illegally.
  *
  * All names, paths and branches are invented. Nothing here is real workspace
- * data and nothing here is loaded from the runtime.
+ * data and nothing here is loaded from a runtime.
  */
-export const SEED: RailModel = {
+export const FIXTURE_SNAPSHOT: WorkspaceSnapshot = {
   projects: [
     {
       id: 1,
       name: 'isagi',
-      glyph: 'IS',
-      accent: 'blue',
+      rootPath: '/work/isagi',
+      status: 'present',
       worktrees: [
-        {
-          id: 11,
-          title: 'main',
-          path: '~/work/isagi',
-          branch: 'main',
-          isRoot: true,
-          parked: false,
-          attention: 'idle',
-          surfaces: [{ id: 111, title: 'shell', paneKind: 'terminal_session', attention: 'idle' }],
-        },
-        {
-          id: 12,
-          title: 'rail drag reordering',
-          path: '~/work/.isagi/wt/rail-drag',
-          branch: 'feat/draggable-sidebar-items',
-          isRoot: false,
-          parked: false,
-          attention: 'working',
-          surfaces: [
-            { id: 121, title: 'plan review', paneKind: 'agent_session', attention: 'working' },
-            { id: 122, title: 'fixture', paneKind: 'agent_session', attention: 'waiting' },
-            { id: 123, title: 'pnpm check', paneKind: 'terminal_session', attention: 'idle' },
-            { id: 124, title: 'scratch', paneKind: null, attention: 'idle' },
-          ],
-        },
-        {
-          id: 13,
-          title: 'update footer polish',
-          path: '~/work/.isagi/wt/update-footer',
-          branch: 'fix/footer-metrics',
-          isRoot: false,
-          parked: false,
-          attention: 'waiting',
-          surfaces: [{ id: 131, title: 'agent', paneKind: 'agent_session', attention: 'waiting' }],
-        },
-        {
-          id: 14,
-          title: 'linux packaging',
-          path: '~/work/.isagi/wt/linux-pkg',
-          branch: 'fix/linux-icons',
-          isRoot: false,
+        worktree(11, 1, 'main', '/work/isagi', 'main', { isRoot: true, surfaces: [['shell']] }),
+        worktree(12, 1, 'rail drag reordering', '/work/.isagi/wt/rail-drag', 'feat/rail-drag', {
+          surfaces: [['plan review'], ['fixture'], ['pnpm check'], ['scratch']],
+        }),
+        worktree(13, 1, 'update footer polish', '/work/.isagi/wt/update-footer', 'fix/footer', {
+          surfaces: [['agent']],
+        }),
+        worktree(14, 1, 'linux packaging', '/work/.isagi/wt/linux-pkg', 'fix/linux-icons', {
           parked: true,
-          attention: 'idle',
-          surfaces: [],
-        },
-        {
-          id: 15,
-          title: 'harness ledger',
-          path: '~/work/.isagi/wt/harness-ledger',
-          branch: 'feat/ledger',
-          isRoot: false,
-          parked: false,
-          attention: 'error',
-          surfaces: [{ id: 151, title: 'agent', paneKind: 'agent_session', attention: 'error' }],
-        },
+        }),
+        worktree(15, 1, 'harness ledger', '/work/.isagi/wt/harness-ledger', 'feat/ledger', {
+          surfaces: [['agent']],
+        }),
       ],
     },
     {
       id: 2,
       name: 'toph',
-      glyph: 'TO',
-      accent: 'violet',
+      rootPath: '/work/toph',
+      status: 'present',
       worktrees: [
-        {
-          id: 21,
-          title: 'main',
-          path: '~/work/toph',
-          branch: 'main',
-          isRoot: true,
-          parked: false,
-          attention: 'idle',
-          surfaces: [],
-        },
-        {
-          id: 22,
-          title: 'streaming rewrite',
-          path: '~/work/.toph/wt/streaming',
-          branch: 'feat/streaming',
-          isRoot: false,
-          parked: false,
-          attention: 'idle',
-          surfaces: [],
-        },
-        {
-          id: 23,
-          title: 'docs pass',
-          path: '~/work/.toph/wt/docs',
-          branch: 'chore/docs',
-          isRoot: false,
-          parked: false,
-          attention: 'idle',
-          surfaces: [],
-        },
+        worktree(21, 2, 'main', '/work/toph', 'main', { isRoot: true }),
+        worktree(22, 2, 'streaming rewrite', '/work/.toph/wt/streaming', 'feat/streaming'),
+        worktree(23, 2, 'docs pass', '/work/.toph/wt/docs', 'chore/docs'),
       ],
     },
     {
       id: 3,
       name: 'sketchbook',
-      glyph: 'SK',
-      accent: 'green',
-      worktrees: [
-        {
-          id: 31,
-          title: 'main',
-          path: '~/work/sketchbook',
-          branch: 'main',
-          isRoot: true,
-          parked: false,
-          attention: 'idle',
-          surfaces: [],
-        },
-      ],
+      rootPath: '/work/sketchbook',
+      status: 'present',
+      worktrees: [worktree(31, 3, 'main', '/work/sketchbook', 'main', { isRoot: true })],
     },
-  ],
-  missing: [
-    { id: 8, name: 'archive-2025', glyph: 'AR' },
-    { id: 9, name: 'old-runtime', glyph: 'OL' },
+    {
+      id: 8,
+      name: 'archive-2025',
+      rootPath: '/work/archive-2025',
+      status: 'missing',
+      missingReason: 'The project directory is not on disk.',
+      worktrees: [],
+    },
+    {
+      id: 9,
+      name: 'old-runtime',
+      rootPath: '/work/old-runtime',
+      status: 'missing',
+      missingReason: 'The project directory is not on disk.',
+      worktrees: [],
+    },
   ],
 };
 
-/** The worktree the fixture opens expanded — the tall case the variants are judged against. */
-export const SEED_ACTIVE_WORKTREE_ID = 12;
+/** The worktree the fixture opens expanded — the only one showing a surface list. */
+export const FIXTURE_ACTIVE = { projectId: 1, worktreeId: 12 } as const;
+
+function worktree(
+  id: number,
+  projectId: number,
+  title: string,
+  path: string,
+  branch: string,
+  options: {
+    isRoot?: boolean;
+    parked?: boolean;
+    /** Surface titles, in display order. Ids are derived as `<worktreeId><n>`. */
+    surfaces?: readonly (readonly [string])[];
+  } = {},
+): WorkspaceSnapshot['projects'][number]['worktrees'][number] {
+  const surfaces = (options.surfaces ?? []).map(([surfaceTitle], index) => ({
+    id: id * 10 + index + 1,
+    title: surfaceTitle,
+    paneKinds: ['terminal_session' as const],
+  }));
+  return {
+    id,
+    projectId,
+    title,
+    path,
+    branch,
+    head: 'abc1234',
+    isRoot: options.isRoot ?? false,
+    parked: options.parked ?? false,
+    surfaces,
+    activeSurfaceId: surfaces[0]?.id ?? null,
+  };
+}

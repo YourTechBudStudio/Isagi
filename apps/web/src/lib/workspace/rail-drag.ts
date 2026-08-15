@@ -5,43 +5,46 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * drag library.
  *
  * The reason is that the settled interaction asks for almost none of what a
- * drag library sells. Siblings hold still, nothing reparents, nothing sorts
- * itself, there is no keyboard sensor, and every reorderable list is a flat run
- * of siblings whose geometry is already on screen. What is left is: cross a
- * threshold, find the nearest boundary in one known list, draw a line, and
- * report a single anchored move. That is this file.
+ * drag library sells. Nothing reparents, nothing sorts itself, there is no
+ * keyboard sensor, and every reorderable list is a flat run of siblings whose
+ * geometry is already on screen. What is left is: cross a threshold, find the
+ * nearest boundary in one known list, and report a single anchored move. That is
+ * this file.
  *
  * The two things a library would genuinely have supplied — edge auto-scroll and
  * a future keyboard path — are respectively implemented below and consciously
- * deferred (see the plan; keyboard reorder is a recorded product limitation for
- * this version, not hidden debt).
+ * deferred (keyboard reorder is a recorded product limitation for this version,
+ * not hidden debt).
  *
  * Legality is expressed geometrically instead of as a rule table. Every
  * reorderable list marks its container with `data-drag-scope="<key>"`, and a
- * hover is legal only when the dragged item's own scope key is found on the
- * ancestor chain under the pointer. A surface therefore cannot land in another
- * worktree and a worktree cannot land in another project, because the pointer
- * is never inside those items' scope container. Nothing has to remember to
- * reject it.
+ * hover is legal only when the dragged item's own key is found on the ancestor
+ * chain under the pointer. A surface therefore cannot land in another worktree
+ * and a worktree cannot land in another project, because the pointer is never
+ * inside those items' scope container. Nothing has to remember to reject it.
+ *
+ * The engine knows nothing about workspaces. A source carries an opaque
+ * `payload` that is handed back untouched on drop, so the caller keeps its typed
+ * domain scope without this file acquiring workspace vocabulary — and without
+ * anyone parsing the flat `key` back into a scope.
  */
 
-export interface DragRef {
-  readonly scope: string;
+/** A registered drag source. `key` addresses its sibling list; `payload` is the caller's. */
+export interface DragRef<Payload> {
+  /** The sibling list this source belongs to, matching a `data-drag-scope` value. */
+  readonly key: string;
   readonly id: number;
+  /** Opaque to the engine, returned verbatim through {@link RailDragOptions.onDrop}. */
+  readonly payload: Payload;
 }
 
 /** A resolved insertion point: "put the dragged item before `beforeId`, or last". */
 export interface DropTarget {
-  readonly scope: string;
   readonly beforeId: number | null;
-  /** Viewport geometry of the insertion boundary, for drawing the guide. */
-  readonly y: number;
-  readonly left: number;
-  readonly width: number;
 }
 
-export interface DragState {
-  readonly ref: DragRef;
+export interface DragState<Payload> {
+  readonly ref: DragRef<Payload>;
   readonly pointer: { readonly x: number; readonly y: number };
   /** Where inside the source the pointer grabbed it, so the preview tracks honestly. */
   readonly grab: { readonly dx: number; readonly dy: number };
@@ -50,22 +53,22 @@ export interface DragState {
   readonly target: DropTarget | null;
 }
 
-export interface RailDragOptions {
+export interface RailDragOptions<Payload> {
   /** Pointer travel, in px, before a press becomes a drag instead of a click. */
   readonly activationDistance?: number;
   /** The scroll container the rail lives in, for edge auto-scroll. */
   readonly scrollRef: React.RefObject<HTMLElement | null>;
   /** A list already awaiting a persisted move refuses to start another. */
-  readonly isBlocked?: (scope: string) => boolean;
-  readonly onDrop: (scope: string, movedId: number, beforeId: number | null) => void;
+  readonly isBlocked?: (key: string) => boolean;
+  readonly onDrop: (ref: DragRef<Payload>, beforeId: number | null) => void;
 }
 
 const AUTOSCROLL_MARGIN = 52;
 const AUTOSCROLL_MAX_SPEED = 14;
 
-interface Session {
+interface Session<Payload> {
   /** `null` for a pinned row, which owns the press but can never be carried. */
-  ref: DragRef | null;
+  ref: DragRef<Payload> | null;
   element: HTMLElement;
   startX: number;
   startY: number;
@@ -76,15 +79,15 @@ interface Session {
   target: DropTarget | null;
 }
 
-export function useRailDrag({
+export function useRailDrag<Payload>({
   activationDistance = 5,
   scrollRef,
   isBlocked,
   onDrop,
-}: RailDragOptions) {
-  const [state, setState] = useState<DragState | null>(null);
-  const sources = useRef(new Map<string, { ref: DragRef; element: HTMLElement }>());
-  const session = useRef<Session | null>(null);
+}: RailDragOptions<Payload>) {
+  const [state, setState] = useState<DragState<Payload> | null>(null);
+  const sources = useRef(new Map<string, { ref: DragRef<Payload>; element: HTMLElement }>());
+  const session = useRef<Session<Payload> | null>(null);
   const frame = useRef(0);
 
   // Read through refs inside the window listeners so the listeners can be
@@ -93,15 +96,15 @@ export function useRailDrag({
   const latest = useRef({ isBlocked, onDrop });
   latest.current = { isBlocked, onDrop };
 
-  const resolveTarget = useCallback((scope: string, dragged: number, x: number, y: number) => {
+  const resolveTarget = useCallback((key: string, dragged: number, x: number, y: number) => {
     const under = document.elementFromPoint(x, y);
-    const container = under?.closest<HTMLElement>(`[data-drag-scope="${CSS.escape(scope)}"]`);
+    const container = under?.closest<HTMLElement>(`[data-drag-scope="${CSS.escape(key)}"]`);
     if (!container) return null;
 
     // The dragged item is excluded from the boundary set, so N siblings always
     // yield N legal slots and `beforeId` can never name the item being moved.
     const siblings = [...sources.current.values()]
-      .filter((entry) => entry.ref.scope === scope && entry.ref.id !== dragged)
+      .filter((entry) => entry.ref.key === key && entry.ref.id !== dragged)
       .filter((entry) => entry.element.isConnected)
       .map((entry) => ({ id: entry.ref.id, rect: entry.element.getBoundingClientRect() }))
       .sort((a, b) => a.rect.top - b.rect.top);
@@ -113,13 +116,12 @@ export function useRailDrag({
       { beforeId: null, y: last ? last.rect.bottom : bounds.top },
     ];
 
-    // Nearest boundary, not nearest item midpoint: with a stationary list and a
-    // visible guide the user is aiming at the line itself, so the line should
-    // go where they aimed. It is also what keeps a pinned root un-passable —
-    // the root is inside the scope but is not a source, so no slot exists above
-    // the first draggable sibling and the guide simply clamps below it.
+    // Nearest boundary, not nearest item midpoint: the user is aiming at the
+    // seam between two rows, so the insertion point goes where they aimed. It is
+    // also what keeps a pinned root un-passable — the root is inside the scope
+    // but is not a source, so no slot exists above the first draggable sibling.
     const best = slots.reduce((a, b) => (Math.abs(b.y - y) < Math.abs(a.y - y) ? b : a));
-    return { scope, beforeId: best.beforeId, y: best.y, left: bounds.left, width: bounds.width };
+    return { beforeId: best.beforeId };
   }, []);
 
   const stop = useCallback(() => {
@@ -131,7 +133,7 @@ export function useRailDrag({
   }, []);
 
   const onPointerDown = useCallback(
-    (event: React.PointerEvent, ref: DragRef | null) => {
+    (event: React.PointerEvent, ref: DragRef<Payload> | null) => {
       if (event.button !== 0) return;
       // Controls nested inside a draggable row keep their own press semantics.
       // Every source on the bubble path sees the same target, so they all
@@ -145,7 +147,7 @@ export function useRailDrag({
       // *refuse* the gesture, not hand it up to its parent, or pressing a
       // surface mid-write would pick up the whole worktree.
       event.stopPropagation();
-      if (ref && latest.current.isBlocked?.(ref.scope)) return;
+      if (ref && latest.current.isBlocked?.(ref.key)) return;
 
       session.current = {
         ref,
@@ -201,7 +203,7 @@ export function useRailDrag({
       // The list moved under a stationary pointer, so the resolved slot is now
       // stale even though no pointer event fired.
       current.target = resolveTarget(
-        current.ref.scope,
+        current.ref.key,
         current.ref.id,
         current.pointer.x,
         current.pointer.y,
@@ -242,14 +244,9 @@ export function useRailDrag({
       const live = measure(current.element);
       current.size = { width: live.width, height: live.height };
       current.pointer = { x: event.clientX, y: event.clientY };
-      current.target = resolveTarget(
-        current.ref.scope,
-        current.ref.id,
-        event.clientX,
-        event.clientY,
-      );
+      current.target = resolveTarget(current.ref.key, current.ref.id, event.clientX, event.clientY);
       // The invalid signal is the standard refusal cursor and the absence of a
-      // guide. No red, because hovering the wrong list is not an error.
+      // gap. No red, because hovering the wrong list is not an error.
       document.body.style.cursor = current.target ? 'grabbing' : 'not-allowed';
       publish();
     };
@@ -263,11 +260,24 @@ export function useRailDrag({
 
       // The press became a gesture, so the click it would otherwise synthesise
       // must not also select the row. True for a refused pinned row too: having
-      // tried to drag `main`, the user did not also ask to select it.
+      // tried to drag the root, the user did not also ask to select it.
       window.addEventListener('click', swallow, { capture: true, once: true });
-      if (ref && target && !latest.current.isBlocked?.(ref.scope)) {
-        latest.current.onDrop(ref.scope, ref.id, target.beforeId);
+      if (ref && target && !latest.current.isBlocked?.(ref.key)) {
+        latest.current.onDrop(ref, target.beforeId);
       }
+    };
+
+    /**
+     * The browser took the gesture away — a lost pointer, a system gesture, a
+     * touch turned into a scroll. That is not a release, so it commits nothing:
+     * only the visual and global state is restored.
+     *
+     * It also installs no click suppressor. A cancelled pointer sequence
+     * produces no click of its own, so a one-shot swallower armed here would sit
+     * waiting and eat whatever the user pressed next instead.
+     */
+    const onCancel = () => {
+      if (session.current) stop();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -279,25 +289,28 @@ export function useRailDrag({
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('pointercancel', onCancel);
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('pointercancel', onCancel);
       window.removeEventListener('keydown', onKeyDown);
-      cancelAnimationFrame(frame.current);
+      // Going away mid-drag is another way to lose the gesture, and the cursor
+      // and text-selection locks are on `document.body` rather than on anything
+      // this hook is about to unmount.
+      stop();
     };
   }, [activationDistance, resolveTarget, scrollRef, stop]);
 
   const sourceProps = useCallback(
-    (ref: DragRef) => {
-      const key = `${ref.scope}#${ref.id}`;
+    (ref: DragRef<Payload>) => {
+      const registryKey = `${ref.key}#${ref.id}`;
       return {
-        'data-drag-source': key,
+        'data-drag-source': registryKey,
         ref: (element: HTMLElement | null) => {
-          if (element) sources.current.set(key, { ref, element });
-          else sources.current.delete(key);
+          if (element) sources.current.set(registryKey, { ref, element });
+          else sources.current.delete(registryKey);
         },
         onPointerDown: (event: React.PointerEvent) => onPointerDown(event, ref),
       };
@@ -323,16 +336,20 @@ export function useRailDrag({
 }
 
 /**
- * Measure a source's *content*, not its outer box.
+ * Measure the space a source occupies.
  *
- * Every source wraps its content in exactly one child. While an item is being
- * carried its outer box is collapsed to zero height so the list closes up, but
- * the child keeps its natural layout size — so this still reports how tall the
- * thing in flight actually is, which is the size of the gap that must open for
- * it. Reading the outer box would report zero the moment the drag began.
+ * This is the registered element's own box, and it has to stay that way: the
+ * number is the size of the gap the list opens for the carried row, so it must
+ * be the space that row actually takes up — including any padding used for
+ * separation. A carried row is only made invisible, never collapsed, so this
+ * keeps reporting the truth for the whole gesture.
+ *
+ * Rows must therefore express their spacing as padding rather than margin. A
+ * margin is not in any rect, so it would silently make every gap too small by
+ * the size of the separation.
  */
 function measure(element: HTMLElement) {
-  return (element.firstElementChild ?? element).getBoundingClientRect();
+  return element.getBoundingClientRect();
 }
 
 function swallow(event: MouseEvent) {

@@ -16,12 +16,14 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('data-state-option');
   expect(bundle).not.toContain('data-activity-option');
   expect(bundle).not.toContain('useSimulatedRestart');
-  // The rail reorder playground forks the rail and carries provisional variant
-  // controls. None of it may reach a shipped build before Phase 05 lands the
-  // chosen treatment in the real components.
-  expect(bundle).not.toContain('data-fixture-rail');
-  expect(bundle).not.toContain('data-drag-scope');
+  // The rail reorder fixture now mounts the *production* rail, so the drag
+  // attributes it drives are expected in a shipped build. What must not ship is
+  // the shell around it: the fake runtime and the handle tests steer it by.
+  expect(bundle).not.toContain('data-fixture-shell');
   expect(bundle).not.toContain('RailReorderApp');
+  expect(bundle).not.toContain('railFixture');
+  expect(bundle).not.toContain('installFakeRuntime');
+  expect(bundle).not.toContain('FIXTURE_SNAPSHOT');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {
