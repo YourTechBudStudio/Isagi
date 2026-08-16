@@ -13,7 +13,7 @@ import {
   workflowVerifierPackage,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 import { eq } from 'drizzle-orm';
-import { Effect, Either, Layer } from 'effect';
+import { Deferred, Effect, Either, Fiber, Layer } from 'effect';
 
 import type { WorkflowEvent } from '@isagi/contracts';
 
@@ -171,6 +171,394 @@ test('startWorkflow persists the real hash resolved by the filesystem registry',
 
     assert.equal(run.workflowArtifactHash, artifactHash);
     assert.equal(existsSync(join(dataRoot, 'workflow-artifacts', artifactHash, 'index.mjs')), true);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('resume refreshes a paused run to the latest verified workflow artifact', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-refresh-'));
+  try {
+    const packageRoot = join(dataRoot, 'workflows', 'refresh-on-resume');
+    const oldArtifactHash = writeVerifiedWorkflowPackage(
+      packageRoot,
+      `export default {
+  command: () => ({ title: 'Refresh on resume' }),
+  validate: () => {},
+  init: () => ({ phase: 'unused' }),
+  step: async () => ({ type: 'fail', reason: 'old artifact ran' })
+};\n`,
+    );
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'refresh-on-resume',
+          workflowTitle: 'Refresh on resume',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'preserved' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* engine.pause({ runId: run.id });
+        const paused = yield* repository.findRun(run.id);
+        const currentArtifactHash = yield* Effect.sync(() =>
+          writeVerifiedWorkflowPackage(
+            packageRoot,
+            `export default {
+  command: () => ({ title: 'Refresh on resume' }),
+  validate: () => {},
+  init: () => ({ phase: 'unused' }),
+  step: async () => ({ type: 'done', value: { artifact: 'latest' } })
+};\n`,
+          ),
+        );
+        yield* engine.resume({ runId: run.id });
+        const resumed = yield* repository.findRun(run.id);
+        yield* engine.drainOnce;
+        return {
+          paused,
+          resumed,
+          currentArtifactHash,
+          completed: yield* repository.findRun(run.id),
+        };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.equal(result.paused?.paused, true);
+    assert.equal(result.paused?.workflowArtifactHash, oldArtifactHash);
+    assert.notEqual(result.currentArtifactHash, oldArtifactHash);
+    assert.equal(result.resumed?.paused, false);
+    assert.equal(result.resumed?.workflowArtifactHash, result.currentArtifactHash);
+    assert.equal(result.completed?.status, 'done');
+    assert.equal(result.completed?.workflowArtifactHash, result.currentArtifactHash);
+    assert.deepEqual(JSON.parse(result.completed?.stateJson ?? '{}'), { phase: 'preserved' });
+    assert.deepEqual(JSON.parse(result.completed?.resultJson ?? '{}'), { artifact: 'latest' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('resume keeps an in-flight step running and applies the latest artifact at its next boundary', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-running-boundary-'));
+  try {
+    const currentArtifactHash = '0'.repeat(64);
+    const oldArtifactHash = '1'.repeat(64);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'running-boundary',
+          workflowTitle: 'Running boundary',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'old-step' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* claimWorkflowRunForTest(repository, run.id);
+        yield* engine.pause({ runId: run.id });
+        const paused = yield* repository.findRun(run.id);
+        yield* engine.resume({ runId: run.id });
+        const resumed = yield* repository.findRun(run.id);
+
+        // Simulate the already-running old step reaching its durable boundary. Resume
+        // must not have requeued the row while that execution was still in flight.
+        yield* repository.completeCont({
+          runId: run.id,
+          state: { phase: 'returned-by-old-step' },
+        });
+        const boundary = yield* repository.findRun(run.id);
+        yield* engine.drainOnce;
+        return {
+          paused,
+          resumed,
+          boundary,
+          completed: yield* repository.findRun(run.id),
+        };
+      }).pipe(
+        Effect.provide(
+          workflowLayer(
+            dataRoot,
+            Layer.succeed(
+              WorkflowRegistry,
+              createWorkflowRegistry({
+                'running-boundary': {
+                  command: () => ({ title: 'Running boundary' }),
+                  validate: () => {},
+                  init: () => ({ phase: 'unused' }),
+                  step: async () => done({ artifact: 'latest' }),
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(result.paused?.status, 'running');
+    assert.equal(result.paused?.paused, true);
+    assert.equal(result.paused?.owner, 'test-worker');
+    assert.equal(result.paused?.controlRevision, 1);
+    assert.equal(result.resumed?.status, 'running');
+    assert.equal(result.resumed?.paused, false);
+    assert.equal(result.resumed?.owner, 'test-worker');
+    assert.equal(result.resumed?.workflowArtifactHash, currentArtifactHash);
+    assert.equal(result.resumed?.controlRevision, 2);
+    assert.equal(result.boundary?.status, 'ready');
+    assert.equal(result.boundary?.workflowArtifactHash, currentArtifactHash);
+    assert.deepEqual(JSON.parse(result.boundary?.stateJson ?? '{}'), {
+      phase: 'returned-by-old-step',
+    });
+    assert.equal(result.completed?.status, 'done');
+    assert.deepEqual(JSON.parse(result.completed?.resultJson ?? '{}'), { artifact: 'latest' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('a newer pause supersedes a resume that is still resolving current artifacts', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-superseded-'));
+  try {
+    const oldArtifactHash = '1'.repeat(64);
+    const baseRegistry = createWorkflowRegistry({
+      'superseded-resume': {
+        command: () => ({ title: 'Superseded resume' }),
+        validate: () => {},
+        init: () => ({ phase: 'unused' }),
+        step: async () => done(),
+      },
+    });
+    const resolutionStarted = Effect.runSync(Deferred.make<void>());
+    const releaseResolution = Effect.runSync(Deferred.make<void>());
+    const delayedRegistry: WorkflowRegistryService = {
+      ...baseRegistry,
+      loadDiscovered: (entry) =>
+        Deferred.succeed(resolutionStarted, undefined).pipe(
+          Effect.zipRight(Deferred.await(releaseResolution)),
+          Effect.zipRight(baseRegistry.loadDiscovered(entry)),
+        ),
+    };
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'superseded-resume',
+          workflowTitle: 'Superseded resume',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'preserved' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* engine.pause({ runId: run.id });
+        const resumeFiber = yield* Effect.fork(engine.resume({ runId: run.id }));
+        yield* Deferred.await(resolutionStarted);
+        yield* engine.pause({ runId: run.id });
+        yield* Deferred.succeed(releaseResolution, undefined);
+        const resumeResult = yield* Fiber.join(resumeFiber);
+        return { resumeResult, after: yield* repository.findRun(run.id) };
+      }).pipe(
+        Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, delayedRegistry))),
+      ),
+    );
+
+    assert.equal(result.resumeResult.status, 'ready');
+    assert.equal(result.after?.status, 'ready');
+    assert.equal(result.after?.paused, true);
+    assert.equal(result.after?.controlRevision, 2);
+    assert.equal(result.after?.workflowArtifactHash, oldArtifactHash);
+    assert.deepEqual(JSON.parse(result.after?.stateJson ?? '{}'), { phase: 'preserved' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('concurrent resume commits are idempotent', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-idempotent-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const run = yield* repository.createRun({
+          workflowKey: 'idempotent-resume',
+          workflowTitle: 'Idempotent resume',
+          workflowArtifactHash: '1'.repeat(64),
+          state: { phase: 'preserved' },
+          stateVersion: 1,
+        });
+        const paused = (yield* repository.pauseRunTree(run.id)).find(
+          (candidate) => candidate.id === run.id,
+        );
+        assert.ok(paused);
+        const input = {
+          rootRunId: run.id,
+          expectedControlRevision: paused.controlRevision,
+          artifactPins: [
+            {
+              runId: run.id,
+              workflowKey: run.workflowKey,
+              artifactHash: '0'.repeat(64),
+            },
+          ],
+        } as const;
+        const commits = yield* Effect.all(
+          [repository.resumeRunTree(input), repository.resumeRunTree(input)],
+          { concurrency: 'unbounded' },
+        );
+        return { commits, after: yield* repository.findRun(run.id) };
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
+    );
+
+    assert.deepEqual(result.commits.map((commit) => commit.outcome).sort(), [
+      'already_resumed',
+      'resumed',
+    ]);
+    assert.equal(result.after?.paused, false);
+    assert.equal(result.after?.controlRevision, 2);
+    assert.equal(result.after?.workflowArtifactHash, '0'.repeat(64));
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('resume leaves a paused run unchanged when its current workflow cannot be discovered', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-missing-current-'));
+  try {
+    const packageRoot = join(dataRoot, 'workflows', 'removed-before-resume');
+    const artifactHash = writeVerifiedWorkflowPackage(packageRoot);
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const run = yield* repository.createRun({
+          workflowKey: 'removed-before-resume',
+          workflowTitle: 'Removed before resume',
+          workflowArtifactHash: artifactHash,
+          state: { phase: 'preserved' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        yield* engine.pause({ runId: run.id });
+        yield* Effect.sync(() => rmSync(packageRoot, { recursive: true, force: true }));
+        const resumed = yield* engine.resume({ runId: run.id }).pipe(Effect.either);
+        return { resumed, after: yield* repository.findRun(run.id) };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.ok(Either.isLeft(result.resumed));
+    assert.ok(result.resumed.left instanceof WorkflowEngineError);
+    assert.equal(result.resumed.left.code, 'unknown_workflow_key');
+    assert.equal(result.after?.paused, true);
+    assert.equal(result.after?.status, 'ready');
+    assert.equal(result.after?.workflowArtifactHash, artifactHash);
+    assert.deepEqual(JSON.parse(result.after?.stateJson ?? '{}'), { phase: 'preserved' });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('resume refreshes every paused non-terminal run and leaves completed siblings pinned', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-resume-tree-refresh-'));
+  try {
+    const definition = {
+      command: () => ({ title: 'Resume tree' }),
+      validate: () => {},
+      init: () => ({ phase: 'unused' }),
+      step: async () => done(),
+    };
+    const baseRegistry = createWorkflowRegistry({
+      parent: definition,
+      'active-child': definition,
+    });
+    const currentArtifactHashes = new Map([
+      ['parent', 'a'.repeat(64)],
+      ['active-child', 'b'.repeat(64)],
+    ]);
+    const registry: WorkflowRegistryService = {
+      ...baseRegistry,
+      loadDiscovered: (entry) =>
+        baseRegistry.loadDiscovered(entry).pipe(
+          Effect.map((loaded) => ({
+            ...loaded,
+            artifactHash: currentArtifactHashes.get(entry.workflowKey)!,
+          })),
+        ),
+    };
+    const oldArtifactHash = '1'.repeat(64);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const root = yield* repository.createRun({
+          workflowKey: 'parent',
+          workflowTitle: 'Parent',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'parent' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        const activeChild = yield* repository.createRun({
+          workflowKey: 'active-child',
+          workflowTitle: 'Active child',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'active' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+          parentRunId: root.id,
+          rootRunId: root.id,
+        });
+        const completedChild = yield* repository.createRun({
+          workflowKey: 'completed-child',
+          workflowTitle: 'Completed child',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'completed' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+          parentRunId: root.id,
+          rootRunId: root.id,
+        });
+        yield* claimWorkflowRunForTest(repository, completedChild.id);
+        yield* repository.completeDone({
+          runId: completedChild.id,
+          state: { phase: 'completed' },
+        });
+        yield* engine.pause({ runId: root.id });
+        yield* engine.resume({ runId: root.id });
+        return {
+          root: yield* repository.findRun(root.id),
+          activeChild: yield* repository.findRun(activeChild.id),
+          completedChild: yield* repository.findRun(completedChild.id),
+        };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.equal(result.root?.workflowArtifactHash, currentArtifactHashes.get('parent'));
+    assert.equal(
+      result.activeChild?.workflowArtifactHash,
+      currentArtifactHashes.get('active-child'),
+    );
+    assert.equal(result.completedChild?.status, 'done');
+    assert.equal(result.completedChild?.workflowArtifactHash, oldArtifactHash);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -1614,7 +2002,24 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
         yield* engine.resume({ runId: parent.id });
         const readied = yield* repository.findRun(parent.id);
         return { readied };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(
+        Effect.provide(
+          workflowLayer(
+            dataRoot,
+            Layer.succeed(
+              WorkflowRegistry,
+              createWorkflowRegistry({
+                parent: {
+                  command: () => ({ title: 'Parent' }),
+                  validate: () => {},
+                  init: () => ({}),
+                  step: async () => done(),
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
     );
 
     assert.equal(result.readied?.status, 'ready');
@@ -1630,7 +2035,7 @@ test('recovery continue resolves paused workflow JOINs from workflow_runs truth'
   }
 });
 
-test('setPaused(false) re-arms a paused workflow JOIN whose children have not all terminated', async () => {
+test('resume re-arms a paused workflow JOIN whose children have not all terminated', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-join-continue-pending-'));
   try {
     const result = await Effect.runPromise(
@@ -1669,7 +2074,24 @@ test('setPaused(false) re-arms a paused workflow JOIN whose children have not al
           parent: yield* repository.findRun(parent.id),
           child: yield* repository.findRun(child.id),
         };
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(
+        Effect.provide(
+          workflowLayer(
+            dataRoot,
+            Layer.succeed(
+              WorkflowRegistry,
+              createWorkflowRegistry({
+                'parent-pending': {
+                  command: () => ({ title: 'Parent pending' }),
+                  validate: () => {},
+                  init: () => ({}),
+                  step: async () => done(),
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
     );
 
     // The join is unsatisfied, so continuing must re-arm the wait rather than resume
@@ -2320,7 +2742,7 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
   }
 });
 
-test('setPaused(false) moves a paused null-wait run back to ready', async () => {
+test('resume moves a paused null-wait run back to ready', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-ready-'));
   try {
     const row = await Effect.runPromise(
@@ -2350,7 +2772,7 @@ test('setPaused(false) moves a paused null-wait run back to ready', async () => 
   }
 });
 
-test('setPaused(false) reconciles a satisfied paused turn across a changed harness session', async () => {
+test('resume reconciles a satisfied paused turn across a changed harness session', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-satisfied-'));
   try {
     const row = await Effect.runPromise(
@@ -2417,7 +2839,7 @@ test('setPaused(false) reconciles a satisfied paused turn across a changed harne
   }
 });
 
-test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies it', async () => {
+test('resume re-arms a paused turn run when no terminal edge satisfies it', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-not-satisfied-'));
   try {
     const row = await Effect.runPromise(
@@ -2473,7 +2895,7 @@ test('setPaused(false) re-arms a paused turn run when no terminal edge satisfies
   }
 });
 
-test('setPaused(false) reconciles turn edges that land while rearming a paused run', async () => {
+test('resume reconciles turn edges that land while rearming a paused run', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-turn-race-'));
   let edgeReads = 0;
   const terminalEdges: readonly ObservedHarnessTurnEdge[] = [
@@ -2556,7 +2978,7 @@ test('setPaused(false) reconciles turn edges that land while rearming a paused r
   }
 });
 
-test('setPaused(false) re-arms a paused turn when metadata changed and no terminal exists', async () => {
+test('resume re-arms a paused turn when metadata changed and no terminal exists', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-metadata-change-'));
   try {
     const row = await Effect.runPromise(
@@ -2604,7 +3026,7 @@ test('setPaused(false) re-arms a paused turn when metadata changed and no termin
   }
 });
 
-test('setPaused(false) re-arms paused human waits without satisfying them', async () => {
+test('resume re-arms paused human waits without satisfying them', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-human-wait-'));
   try {
     const row = await Effect.runPromise(
@@ -2645,7 +3067,7 @@ test('setPaused(false) re-arms paused human waits without satisfying them', asyn
   }
 });
 
-test('setPaused(false) reissues paused headless waits without changing the persisted opId', async () => {
+test('resume reissues paused headless waits without changing the persisted opId', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-headless-wait-'));
   const reissues: unknown[] = [];
   try {
@@ -2735,7 +3157,7 @@ test('setPaused(false) reissues paused headless waits without changing the persi
   }
 });
 
-test('setPaused(false) reconciles a headless result that completes while rearming', async () => {
+test('resume reconciles a headless result that completes while rearming', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-continue-headless-race-'));
   let completed = false;
   const released: string[][] = [];
@@ -2825,7 +3247,7 @@ test('setPaused(false) reconciles a headless result that completes while rearmin
   }
 });
 
-test('setPaused(true) sets the flag without changing lifecycle status or state', async () => {
+test('pause sets the flag without changing lifecycle status or state', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-pause-flag-'));
   try {
     const row = await Effect.runPromise(
@@ -2982,13 +3404,12 @@ test('clear marks a running tree cancel-requested without deleting the claimed r
   }
 });
 
-test('retry flips a failed root back to ready and preserves its invocation marker across pause', async () => {
+test('retry preserves its invocation marker across pause and resume commits', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-failed-'));
   try {
     const row = await Effect.runPromise(
       Effect.gen(function* () {
         const repository = yield* WorkflowRepository;
-        const engine = yield* WorkflowEngine;
         const run = yield* repository.createRun({
           workflowKey: 'agentless-throws',
           workflowTitle: 'agentless throws',
@@ -3005,12 +3426,34 @@ test('retry flips a failed root back to ready and preserves its invocation marke
           stateSnapshot: { stateJson: run.stateJson },
           thrown: true,
         });
-        yield* engine.retry({ runId: run.id });
-        yield* repository.setPausedForRunTree({ rootRunId: run.id, paused: true });
-        yield* repository.setPausedForRunTree({ rootRunId: run.id, paused: false });
-        yield* repository.readyPausedRun({ runId: run.id });
+        const recovery = yield* repository.retryFailedRunTree({
+          rootRunId: run.id,
+          artifactPins: [
+            {
+              runId: run.id,
+              workflowKey: run.workflowKey,
+              artifactHash: run.workflowArtifactHash!,
+            },
+          ],
+        });
+        assert.ok(recovery);
+        const paused = (yield* repository.pauseRunTree(run.id)).find(
+          (candidate) => candidate.id === run.id,
+        );
+        assert.ok(paused);
+        yield* repository.resumeRunTree({
+          rootRunId: run.id,
+          expectedControlRevision: paused.controlRevision,
+          artifactPins: [
+            {
+              runId: run.id,
+              workflowKey: run.workflowKey,
+              artifactHash: run.workflowArtifactHash!,
+            },
+          ],
+        });
         return yield* repository.findRun(run.id);
-      }).pipe(Effect.provide(testLayer(dataRoot))),
+      }).pipe(Effect.provide(repositoryOnlyLayer(dataRoot))),
     );
 
     assert.equal(row?.status, 'ready');
@@ -4215,6 +4658,7 @@ function workflowRunFixture(
     parentRunId: null,
     rootRunId: id,
     status: 'ready',
+    controlRevision: 0,
     retrying: false,
     paused: false,
     cancelRequested: false,
@@ -4687,6 +5131,7 @@ function fakeWorkflowRun(
     parentRunId: null,
     rootRunId: 99,
     status: 'running',
+    controlRevision: 0,
     retrying: false,
     paused: false,
     cancelRequested: false,

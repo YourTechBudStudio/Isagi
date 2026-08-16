@@ -17,7 +17,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 | Configuring terminal history, scrollback, or cache retention | [Global config](references/config-global.md) for `terminal` |
 | Enabling harnesses or their Docs integration | [Global config](references/config-global.md) for `harnesses` |
 | Adding machine-global directories Isagi discovers workflows in | [Global config](references/config-global.md) for `workflows.additionalDirectories` |
-| Creating, modifying, reviewing, or making a workflow retry-aware | [Workflows](references/workflows.md) |
+| Creating, modifying, reviewing, or making a workflow resume/retry-aware | [Workflows](references/workflows.md) |
 
 ## Boundaries
 

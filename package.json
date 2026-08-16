@@ -10,7 +10,7 @@
   "scripts": {
     "build": "pnpm -r --if-present build",
     "check": "pnpm lint && pnpm build && pnpm typecheck && pnpm test && pnpm format:check",
-    "db:migrate": "pnpm -C apps/runtime exec drizzle-kit generate",
+    "db:migrate": "pnpm -C apps/runtime exec cross-env NODE_OPTIONS=--conditions=import drizzle-kit generate",
     "dev": "pnpm dev:prepare && node scripts/dev-supervisor/index.mjs",
     "dev:install-launcher": "pnpm --filter @isagi/desktop dev:install-launcher",
     "dev:prepare": "pnpm build && pnpm --filter @isagi/desktop stage:runtime -- --skip-runtime-build",

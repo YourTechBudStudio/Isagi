@@ -248,6 +248,7 @@ export const workflowRuns = sqliteTable(
     status: text('status', {
       enum: ['waiting', 'ready', 'running', 'done', 'failed'],
     }).notNull(),
+    controlRevision: integer('control_revision').notNull().default(0),
     retrying: integer('retrying', { mode: 'boolean' }).notNull().default(false),
     paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
     cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),

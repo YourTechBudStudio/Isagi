@@ -171,7 +171,6 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_root_run_required: 'That action needs the main workflow run.',
       workflow_surface_busy: 'This surface already has a workflow running.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
-      workflow_run_not_paused: "That workflow isn't paused.",
       workflow_run_not_failed: "That workflow isn't in a failed state.",
       workflow_wait_not_satisfiable: "That workflow can't be advanced right now.",
       workflow_user_input_invalid:

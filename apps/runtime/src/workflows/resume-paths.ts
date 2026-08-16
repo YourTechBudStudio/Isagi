@@ -1,5 +1,5 @@
 // How a suspended run gets resolved. Two complementary paths:
-//   - `continuePaused*`: the user-gated resume of a `paused` run. Asserts the
+//   - `continueResumed*`: the user-gated continuation of a newly unpaused run. Asserts the
 //     harness session pin (it may have drifted while paused) before resuming, or
 //     re-arms the wait when it isn't satisfied yet.
 //   - `reconcileArmed*`: live-path catch-up for the suspend-commit race. Reads the
@@ -33,7 +33,7 @@ import {
   resumePayload,
 } from './wait-conditions.js';
 
-export function continuePausedRun(input: {
+export function continueResumedRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
   readonly observer: HarnessLedgerObserverService;
@@ -43,47 +43,62 @@ export function continuePausedRun(input: {
   readonly eventBus: InternalRuntimeEventBusService;
   readonly poke: Effect.Effect<void>;
 }) {
+  if (input.run.status === 'running') {
+    return appendInternalWorkflowLogBestEffort(
+      input.eventLedger,
+      input.run,
+      'info',
+      `Workflow run ${input.run.id} resumed while its current step was still executing; the latest artifact will be used at the next step boundary.`,
+    );
+  }
+
   if (input.run.waitKind === null) {
-    return input.repository
-      .readyPausedRun({ runId: input.run.id })
-      .pipe(
-        Effect.zipRight(
-          appendInternalWorkflowLogBestEffort(
-            input.eventLedger,
-            input.run,
-            'info',
-            `Paused workflow run ${input.run.id} had no wait condition; run is ready to resume.`,
-          ),
-        ),
-      )
-      .pipe(Effect.zipRight(input.poke));
+    if (input.run.status === 'ready') {
+      return appendInternalWorkflowLogBestEffort(
+        input.eventLedger,
+        input.run,
+        'info',
+        `Workflow run ${input.run.id} is ready to continue after resume.`,
+      );
+    }
+    return failWorkflowRunAndPublish({
+      repository: input.repository,
+      eventBus: input.eventBus,
+      eventLedger: input.eventLedger,
+      run: input.run,
+      error: {
+        message: `Workflow run ${input.run.id} resumed from ${input.run.status} without a wait condition.`,
+        context: { workflowRunId: input.run.id, status: input.run.status },
+      },
+      stateSnapshot: { stateJson: input.run.stateJson },
+    });
   }
 
   if (input.run.waitKind === 'agent_turn') {
-    return continuePausedTurnRun(input);
+    return continueResumedTurnRun(input);
   }
 
   if (input.run.waitKind === 'user_continue' || input.run.waitKind === 'user_input') {
     return input.repository
-      .rearmPausedRun(input.run.id)
+      .rearmResumedWait(input.run.id)
       .pipe(
         Effect.zipRight(
           appendInternalWorkflowLogBestEffort(
             input.eventLedger,
             input.run,
             'info',
-            `Paused workflow run ${input.run.id} re-armed ${input.run.waitKind} wait.`,
+            `Workflow run ${input.run.id} re-armed ${input.run.waitKind} wait after resume.`,
           ),
         ),
       );
   }
 
   if (input.run.waitKind === 'headless_agent') {
-    return continuePausedHeadlessRun(input);
+    return continueResumedHeadlessRun(input);
   }
 
   if (input.run.waitKind === 'workflow') {
-    return continuePausedWorkflowRun(input);
+    return continueResumedWorkflowRun(input);
   }
 
   return failWorkflowRunAndPublish({
@@ -99,7 +114,7 @@ export function continuePausedRun(input: {
   });
 }
 
-function continuePausedWorkflowRun(input: {
+function continueResumedWorkflowRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
   readonly eventLedger: WorkflowEventLedgerService;
@@ -124,12 +139,12 @@ function continuePausedWorkflowRun(input: {
     }
     const resolution = yield* input.repository.resolveWorkflowJoin(condition);
     if (resolution.status === 'pending') {
-      yield* input.repository.rearmPausedRun(input.run.id);
+      yield* input.repository.rearmResumedWait(input.run.id);
       yield* appendInternalWorkflowLogBestEffort(
         input.eventLedger,
         input.run,
         'info',
-        `Paused workflow run ${input.run.id} re-armed workflow join wait.`,
+        `Workflow run ${input.run.id} re-armed workflow join wait after resume.`,
       );
       yield* reconcileArmedWorkflowWait({
         run: input.run,
@@ -156,7 +171,7 @@ function continuePausedWorkflowRun(input: {
       yield* input.poke;
       return;
     }
-    yield* input.repository.readyPausedRun({
+    yield* input.repository.readyResumedWait({
       runId: input.run.id,
       resumePayload: { kind: 'workflow', results: resolution.results },
     });
@@ -171,7 +186,7 @@ function continuePausedWorkflowRun(input: {
   });
 }
 
-function continuePausedHeadlessRun(input: {
+function continueResumedHeadlessRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
   readonly headless: WorkflowHeadlessService;
@@ -212,7 +227,7 @@ function continuePausedHeadlessRun(input: {
     }
     const results = yield* input.headless.completedResults(condition);
     if (results) {
-      yield* input.repository.readyPausedRun({
+      yield* input.repository.readyResumedWait({
         runId: input.run.id,
         resumePayload: { kind: 'headless_agent', results },
       });
@@ -245,12 +260,12 @@ function continuePausedHeadlessRun(input: {
       });
       return;
     }
-    yield* input.repository.rearmPausedRun(input.run.id);
+    yield* input.repository.rearmResumedWait(input.run.id);
     yield* appendInternalWorkflowLogBestEffort(
       input.eventLedger,
       input.run,
       'info',
-      `Paused workflow run ${input.run.id} reissued and re-armed headless wait.`,
+      `Workflow run ${input.run.id} reissued and re-armed headless wait after resume.`,
     );
     yield* reconcileArmedHeadlessWait({
       run: input.run,
@@ -263,7 +278,7 @@ function continuePausedHeadlessRun(input: {
   });
 }
 
-function continuePausedTurnRun(input: {
+function continueResumedTurnRun(input: {
   readonly run: WorkflowRunRow;
   readonly repository: WorkflowRepositoryService;
   readonly observer: HarnessLedgerObserverService;
@@ -291,12 +306,12 @@ function continuePausedTurnRun(input: {
     const edges = yield* input.observer.getTurnEdges(condition.agentSessionId);
     const terminalEdge = findSatisfiedTerminalTurnEdge(condition, edges);
     if (!terminalEdge) {
-      yield* input.repository.rearmPausedRun(input.run.id);
+      yield* input.repository.rearmResumedWait(input.run.id);
       yield* appendInternalWorkflowLogBestEffort(
         input.eventLedger,
         input.run,
         'info',
-        `Paused workflow run ${input.run.id} re-armed turn wait for agent session ${condition.agentSessionId}.`,
+        `Workflow run ${input.run.id} re-armed turn wait for agent session ${condition.agentSessionId} after resume.`,
       );
       yield* reconcileArmedTurnWait({
         run: input.run,
@@ -309,7 +324,7 @@ function continuePausedTurnRun(input: {
       return;
     }
 
-    yield* input.repository.readyPausedRun({
+    yield* input.repository.readyResumedWait({
       runId: input.run.id,
       resumePayload: resumePayload(terminalEdge),
     });

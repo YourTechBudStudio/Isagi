@@ -39,6 +39,7 @@ export interface WorkflowRunRow {
   readonly parentRunId: number | null;
   readonly rootRunId: number | null;
   readonly status: WorkflowStatus;
+  readonly controlRevision: number;
   readonly retrying: boolean;
   readonly paused: boolean;
   readonly cancelRequested: boolean;
@@ -73,7 +74,6 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
     | 'workflow_root_run_required'
     | 'workflow_surface_busy'
     | 'workflow_run_not_found'
-    | 'workflow_run_not_paused'
     | 'workflow_run_not_failed'
     | 'workflow_wait_not_satisfiable'
     | 'workflow_user_input_invalid';

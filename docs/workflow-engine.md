@@ -145,10 +145,7 @@ The engine is **durable-by-design via snapshot-at-suspension — deliberately no
 replay.** State is an explicit serialized object on the row; the engine never replays completed
 phases. On wake it loads the row and runs one step.
 
-The decisive reason is **edit-resilience**: workflows are hand-edited while runs are in flight, so
-re-executing completed phases on recovery would corrupt them. We never re-run a completed phase,
-so editing one cannot break recovery. Determinism is required only within the current segment, not
-across the multi-hour life of a run.
+The decisive reason is **edit-resilience**: workflows are hand-edited while runs are in flight, so re-executing completed phases on recovery would corrupt them. We never re-run a completed phase. Resume and Retry deliberately load newer verified code over the existing durable snapshot, so authors must keep persisted state compatible with the next step that code will execute. Determinism is required only within the current segment, not across the multi-hour life of a run.
 
 Restart behaviour:
 
@@ -159,7 +156,7 @@ Restart behaviour:
   replayed event — it must **read the JSONL ledger and re-evaluate its condition**.
 - Agents do **not** auto-restart on this desktop app. So recovery is **user-gated**: the recoverer
   parks runs as `paused`; the user reopens the surface (restarting its agent sessions) and issues
-  `resume`, which unpauses the tree and runs the per-run continue path (`continuePausedRun`),
+  `resume`, which unpauses the tree and runs the per-run continue path (`continueResumedRun`),
   re-evaluating each run's persisted wait against durable truth (harness ledger/artifacts and DB
   rows), not bus replay.
 - Recovery resume is distinct from satisfying a workflow's human gate. If a restart parks a run
@@ -171,9 +168,8 @@ Pause is an orthogonal dispatch gate with precise semantics:
 - A paused **`ready`** run is not claimed by the dispatcher.
 - A paused **`waiting`** run may still be woken by the resolver/reconcile into `ready` with
   `paused = true`; it simply remains gated from dispatch.
-- A paused **`running`** step finishes and persists its normal result; further dispatch is gated.
-- `resume` (unpause) dispatches the current durable state; human waits re-arm rather than
-  auto-satisfy.
+- A paused **`running`** step finishes and persists its normal result; further dispatch is gated. Resuming before that step returns never requeues it: the row stays `running`, and the refreshed artifact pin takes effect at its next invocation boundary if it has one.
+- `resume` snapshots the root control revision, resolves the latest verified artifact once per workflow key, and atomically repins every currently paused non-terminal run before unpausing anything. A newer Pause increments the revision and supersedes any older Resume still resolving artifacts; duplicate Resume commits are idempotent. Terminal siblings retain their existing pins, human waits re-arm rather than auto-satisfy, and discovery or verification failure leaves the whole tree paused on its existing pins.
 
 **Fast intra-step effects have no durability in v1.** A crash mid-step replays the step on resume,
 accepting a rare double `sendAgentPrompt`/`spawnAgentSession`. Idempotency keys (keyed by
@@ -203,14 +199,7 @@ than the mutable package path. No generated content is written below a project w
 Source-only, stale, corrupt, incompatible, or otherwise unverified packages remain discoverable as
 broken descriptors but cannot run.
 
-New runs use the newest winning verified package. The validated artifact hash is persisted on the
-run in the same database transaction that creates it; cache publication happens first, and an
-unreferenced immutable entry is retained if run creation later fails. Every callback for that run,
-including retries and continuation after a runtime restart, reloads by the persisted hash. Cached
-bytes are rehashed before import and the export shape is revalidated. Missing or corrupt pinned
-artifacts fail closed without falling back to the latest package. A run without a persisted artifact
-pin is unsupported and fails closed. The runtime performs no cache eviction today; future collection
-must derive liveness from durable run pins.
+New runs use the newest winning verified package. The validated artifact hash is persisted on the run in the same database transaction that creates it; cache publication happens first, and an unreferenced immutable entry is retained if run creation later fails. Ordinary dispatch reloads by the persisted hash. Resume atomically replaces the pins of all currently paused non-terminal runs with the latest winning verified artifacts when its captured control revision is still current, and Retry does the same for the failed leaves and ancestors in its recovery plan; terminal siblings keep their existing pins. A step already executing under an older pin is allowed to reach its durable boundary, and the refreshed pin applies only to a later invocation. Cached bytes are rehashed before import and the export shape is revalidated. Missing or corrupt pinned artifacts fail closed without falling back to the latest package. A run without a persisted artifact pin is unsupported and fails closed. The runtime performs no cache eviction today; future collection must derive liveness from durable run pins.
 
 Starting a workflow is an explicit-context operation. The caller supplies `worktreeId`,
 `surfaceId`, and optionally `paneId`; the runtime resolves `worktreePath` and the originating
@@ -501,7 +490,7 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 | ------ | -------------------------------- | ---------------------------------------------------------- |
 | POST   | `/workflows/runs`                | Start a root run.                                          |
 | POST   | `/workflows/runs/:runId/pause`   | Pause a root run tree. **Root-only.**                      |
-| POST   | `/workflows/runs/:runId/resume`  | Resume (unpause) a root run tree. **Root-only.**           |
+| POST   | `/workflows/runs/:runId/resume`  | Refresh pins and resume a root run tree. **Root-only.**    |
 | POST   | `/workflows/runs/:runId/clear`   | Cancel/delete a root run tree. **Root-only.**              |
 | POST   | `/workflows/runs/:runId/retry`   | Recover the failed branch of a root run. **Root-only.**    |
 | POST   | `/workflows/runs/:runId/advance` | Satisfy a human wait. **Run-scoped** — may target a child. |
@@ -514,7 +503,7 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 
 Notes:
 
-- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with `workflow_root_run_required`. `retry` additionally requires a `failed` root (`workflow_run_not_failed`). It walks preserved workflow-join results, readies each still-failed leaf with `ctx.invocation.kind === 'retry'`, and rearms failed ancestors on their recorded joins; completed siblings remain terminal. A failed run without a recoverable failed-child join is the leaf. Ordinary dispatch and resume continue using each run's pinned artifact, while explicit Retry resolves and verifies the latest discoverable artifact for every failed run in the recovered branch and replaces those pins atomically before recovery. Completed siblings keep their existing pins. If any current artifact cannot be discovered or loaded, Retry leaves the whole tree unchanged. Persisted state and the preserved resume event are passed to the updated workflow, so workflow authors own state compatibility across a workflow update and retry.
+- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with `workflow_root_run_required`. Resume resolves and verifies the latest discoverable artifact for every currently paused non-terminal run and replaces those pins atomically when no newer control action superseded it. `retry` additionally requires a `failed` root (`workflow_run_not_failed`). It walks preserved workflow-join results, readies each still-failed leaf with `ctx.invocation.kind === 'retry'`, and rearms failed ancestors on their recorded joins; completed siblings remain terminal. A failed run without a recoverable failed-child join is the leaf. Retry resolves and verifies the latest discoverable artifact for every failed run in the recovered branch and replaces those pins atomically before recovery. Completed siblings keep their existing pins. If any current artifact cannot be discovered or loaded, Resume or Retry leaves the tree on its existing pins. Persisted state and any preserved resume event are passed to the updated workflow, so workflow authors own state compatibility across workflow updates.
 - `clear` is `POST`, not HTTP `DELETE`, because it requests **async cancellation** when a step is
   running (the running step finishes, then its tree is reaped); otherwise it deletes the tree
   immediately.
@@ -579,7 +568,7 @@ from the latest such event in the run tree (`error` is a column, holding the ter
 The `workflow_run_events` table is the append-only reducer history described in Event surfaces
 (#1); it references `workflow_runs` with `ON DELETE CASCADE` and is ordered by autoincrement `id`.
 
-Each result write updates only the engine-owned lifecycle columns for that outcome (`status`, `retrying`, `wait_kind`/`wait_condition`, `resume_payload`, `state_json`, `result_json`/`error`) and clears `owner` on every result transition. `wait_kind` values are `agent_turn`, `user_continue`, `user_input`, `workflow`, and `headless_agent`. `paused`, `cancel_requested`, and `retrying` are orthogonal flags, not lifecycle statuses. Indexes cover `status`, `(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`; `rootOnly` listing narrows on `parent_run_id IS NULL`.
+Each result write updates only the engine-owned lifecycle columns for that outcome (`status`, `retrying`, `wait_kind`/`wait_condition`, `resume_payload`, `state_json`, `result_json`/`error`) and clears `owner` on every result transition. `wait_kind` values are `agent_turn`, `user_continue`, `user_input`, `workflow`, and `headless_agent`. `paused`, `cancel_requested`, and `retrying` are orthogonal flags, not lifecycle statuses. Root `control_revision` orders Pause and Resume commits so stale asynchronous discovery cannot overwrite newer user intent; it is runtime-internal and is not part of the client projection. Indexes cover `status`, `(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`; `rootOnly` listing narrows on `parent_run_id IS NULL`.
 
 Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant reasons include
 `unknown_workflow_key`, `workflow_load_failed`, `worktree_not_found`, `surface_not_found`,
@@ -624,8 +613,7 @@ Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant 
   explicit, serializable continuation.
 - **No fast-effect durability in v1** — accept a rare double effect on mid-step replay rather than
   journal every activity; idempotency keys are the future lever.
-- **User-gated resume** — agents don't auto-restart on a desktop app, so the recoverer parks runs and
-  the user reopens + resumes; resume reconciles against durable truth.
+- **User-gated resume** — agents don't auto-restart on a desktop app, so the recoverer parks runs and the user reopens + resumes; resume atomically refreshes non-terminal artifact pins and reconciles waits against durable truth.
 - **No steady-state poll** — coalescing wake + drain-to-empty + a one-time boot drain.
 
 ## Current scope and deferrals

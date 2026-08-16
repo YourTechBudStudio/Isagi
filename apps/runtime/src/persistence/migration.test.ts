@@ -14,7 +14,7 @@ import { buildWorkspaceSnapshot } from '../workspace/workspace.snapshot.js';
 import { DataDirectory } from './data-directory.service.js';
 import { RuntimeDatabase, RuntimeDatabaseLive } from './database.service.js';
 import { migrationsDirectory } from './migrations.js';
-import { projects, worktrees } from './schema.js';
+import { projects, workflowRuns, worktrees } from './schema.js';
 import { makeTestDataDirectory } from './test-support.js';
 
 /**
@@ -34,6 +34,11 @@ import { makeTestDataDirectory } from './test-support.js';
 
 /** The migration set as it stood before rail ordering added `sort_order`. */
 const HISTORICAL_TAGS = ['0000_lazy_morbius', '0001_durable_workflow_artifact_pin'] as const;
+const PRE_WORKFLOW_CONTROL_TAGS = [
+  ...HISTORICAL_TAGS,
+  '0002_daily_thor_girl',
+  '0003_peaceful_squirrel_girl',
+] as const;
 
 interface JournalEntry {
   readonly idx: number;
@@ -50,23 +55,21 @@ interface Journal {
  * artifacts are never read for anything but their exact bytes, so the upgrade
  * being exercised is the one users actually receive.
  */
-function historicalMigrationsFolder(root: string) {
+function historicalMigrationsFolder(root: string, tags: readonly string[] = HISTORICAL_TAGS) {
   const source = migrationsDirectory();
   const folder = join(root, 'migrations');
   mkdirSync(join(folder, 'meta'), { recursive: true });
 
-  for (const tag of HISTORICAL_TAGS) {
+  for (const tag of tags) {
     copyFileSync(join(source, `${tag}.sql`), join(folder, `${tag}.sql`));
   }
 
   const journal = JSON.parse(readFileSync(join(source, 'meta/_journal.json'), 'utf8')) as Journal;
-  const entries = journal.entries.filter((entry) =>
-    HISTORICAL_TAGS.includes(entry.tag as (typeof HISTORICAL_TAGS)[number]),
-  );
+  const entries = journal.entries.filter((entry) => tags.includes(entry.tag));
   assert.equal(
     entries.length,
-    HISTORICAL_TAGS.length,
-    'Expected the committed journal to still contain the pre-0002 migrations.',
+    tags.length,
+    'Expected the committed journal to contain every requested historical migration.',
   );
   writeFileSync(
     join(folder, 'meta/_journal.json'),
@@ -276,6 +279,65 @@ test('the rail-order migration upgrades a pre-0002 database without losing data'
       upgraded.snapshot.projects[0]?.worktrees.map((worktree) => worktree.isRoot),
       [true, false, false],
     );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('the workflow control revision migration preserves existing runs', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-control-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+  const historicalFolder = historicalMigrationsFolder(dataRoot, PRE_WORKFLOW_CONTROL_TAGS);
+
+  try {
+    const client = new BetterSqlite(dataDirectory.paths.databasePath);
+    try {
+      client.pragma('foreign_keys = ON');
+      migrate(drizzle(client), { migrationsFolder: historicalFolder });
+      const inserted = client
+        .prepare(
+          `INSERT INTO workflow_runs (
+             workflow_key, workflow_title, workflow_artifact_hash, status, retrying, paused,
+             cancel_requested, state_json, state_version, created_at, updated_at
+           ) VALUES (?, ?, ?, 'waiting', 0, 1, 0, ?, 1, ?, ?)`,
+        )
+        .run(
+          'migration-fixture',
+          'Migration fixture',
+          'a'.repeat(64),
+          '{"phase":"waiting"}',
+          '2026-08-16T00:00:00.000Z',
+          '2026-08-16T00:00:00.000Z',
+        );
+      client
+        .prepare('UPDATE workflow_runs SET root_run_id = ? WHERE id = ?')
+        .run(inserted.lastInsertRowid, inserted.lastInsertRowid);
+      assert.equal(hasColumn(client, 'workflow_runs', 'control_revision'), false);
+    } finally {
+      client.close();
+    }
+
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    const run = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_read_migrated_workflow_run', (connection) =>
+          connection.select().from(workflowRuns).get(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+
+    assert.ok(run);
+    assert.equal(run.workflowKey, 'migration-fixture');
+    assert.equal(run.workflowArtifactHash, 'a'.repeat(64));
+    assert.equal(run.status, 'waiting');
+    assert.equal(run.paused, true);
+    assert.equal(run.stateJson, '{"phase":"waiting"}');
+    assert.equal(run.controlRevision, 0);
+    assert.equal(run.createdAt, '2026-08-16T00:00:00.000Z');
+    assert.equal(run.updatedAt, '2026-08-16T00:00:00.000Z');
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

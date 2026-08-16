@@ -92,7 +92,6 @@ export const workflowRejectionReasonSchema = Schema.Literal(
   'workflow_root_run_required',
   'workflow_surface_busy',
   'workflow_run_not_found',
-  'workflow_run_not_paused',
   'workflow_run_not_failed',
   'workflow_wait_not_satisfiable',
   'workflow_user_input_invalid',

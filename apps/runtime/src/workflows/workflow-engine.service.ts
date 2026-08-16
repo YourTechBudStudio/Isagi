@@ -21,16 +21,18 @@ import {
   WorkflowRegistry,
   type WorkflowPackageProvenance,
   type WorkflowRegistryContext,
+  type WorkflowRegistryService,
 } from './registry.js';
 import {
   planFailedWorkflowRunTreeRetry,
   WorkflowRepository,
+  type WorkflowArtifactPin,
   type WorkflowRepositoryService,
   type WorkflowRunErrorPayload,
 } from './repository.js';
 import { startWorkflowResolver } from './resolver.js';
 import {
-  continuePausedRun,
+  continueResumedRun,
   reconcileArmedHeadlessWait,
   reconcileArmedTurnWait,
   reconcileArmedWorkflowWait,
@@ -577,9 +579,9 @@ export const WorkflowEngineLive = Layer.scoped(
         return run;
       });
 
-    const setPausedForRootRun = (runId: number, paused: boolean, operation: string) =>
+    const pauseRootRun = (runId: number) =>
       Effect.gen(function* () {
-        const root = yield* findRootRunForOperation(runId, operation);
+        const root = yield* findRootRunForOperation(runId, 'pause');
         if (root.status === 'done' || root.status === 'failed') {
           return yield* Effect.fail(
             new WorkflowEngineError({
@@ -590,28 +592,76 @@ export const WorkflowEngineLive = Layer.scoped(
             }),
           );
         }
-        const pausedRunsBeforeResume = paused
-          ? []
-          : (yield* repository.listRunTree(root.id)).filter((run) => run.paused);
-        yield* repository.setPausedForRunTree({
-          rootRunId: root.id,
-          paused,
-        });
-        if (!paused) {
-          for (const run of pausedRunsBeforeResume) {
-            yield* continuePausedRun({
-              run,
-              repository,
-              observer,
-              headless,
-              eventLedger,
-              workspaceRepository,
-              eventBus,
-              poke,
-            });
-          }
-          yield* poke;
+        yield* repository.pauseRunTree(root.id);
+        const current = yield* repository.findRun(root.id);
+        return { runId: root.id, status: current?.status ?? root.status };
+      });
+
+    const resumeRootRun = (runId: number) =>
+      Effect.gen(function* () {
+        const root = yield* findRootRunForOperation(runId, 'resume');
+        if (root.status === 'done' || root.status === 'failed') {
+          return yield* Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_run_not_found',
+              message: `Workflow run ${root.id} does not have a non-terminal workflow.`,
+              workflowRunId: root.id,
+              surfaceId: root.surfaceId ?? undefined,
+            }),
+          );
         }
+        const pausedRuns = (yield* repository.listRunTree(root.id)).filter(
+          (run) => run.paused && run.status !== 'done' && run.status !== 'failed',
+        );
+        if (pausedRuns.length === 0) {
+          return { runId: root.id, status: root.status };
+        }
+
+        const artifactPins = yield* resolveCurrentWorkflowArtifactPins({
+          operation: 'resume',
+          root,
+          runs: pausedRuns,
+          registry,
+          workspaceRepository,
+        });
+        const resume = yield* repository.resumeRunTree({
+          rootRunId: root.id,
+          expectedControlRevision: root.controlRevision,
+          artifactPins,
+        });
+        if (resume.outcome !== 'resumed') {
+          yield* appendInternalWorkflowLogBestEffort(
+            eventLedger,
+            resume.root ?? root,
+            'debug',
+            resume.outcome === 'already_resumed'
+              ? `Workflow run ${root.id} was already resumed by another request.`
+              : `Workflow run ${root.id} resume was superseded by newer workflow control state.`,
+          );
+          return {
+            runId: root.id,
+            status: resume.root?.status ?? root.status,
+          };
+        }
+        yield* appendInternalWorkflowLogBestEffort(
+          eventLedger,
+          resume.root,
+          'info',
+          `Workflow run ${root.id} resumed with current workflow artifacts for runs [${resume.runs.map((run) => run.id).join(', ')}].`,
+        );
+        for (const run of resume.runs) {
+          yield* continueResumedRun({
+            run,
+            repository,
+            observer,
+            headless,
+            eventLedger,
+            workspaceRepository,
+            eventBus,
+            poke: Effect.void,
+          });
+        }
+        yield* poke;
         const current = yield* repository.findRun(root.id);
         return { runId: root.id, status: current?.status ?? root.status };
       });
@@ -673,8 +723,8 @@ export const WorkflowEngineLive = Layer.scoped(
           return results;
         }),
       startWorkflow: (input) => startWorkflowRun(input),
-      pause: (input) => setPausedForRootRun(input.runId, true, 'pause'),
-      resume: (input) => setPausedForRootRun(input.runId, false, 'resume'),
+      pause: (input) => pauseRootRun(input.runId),
+      resume: (input) => resumeRootRun(input.runId),
       clear: (input) =>
         Effect.gen(function* () {
           const root = yield* findRootRunForOperation(input.runId, 'clear');
@@ -724,113 +774,16 @@ export const WorkflowEngineLive = Layer.scoped(
               }),
             );
           }
-          if (root.worktreeId === null) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_load_failed',
-                message: `Workflow run ${root.id} has no worktree for current artifact discovery.`,
-                workflowRunId: root.id,
-                surfaceId: root.surfaceId ?? undefined,
-              }),
-            );
-          }
-
           const plannedRuns = [...retryPlan.retriedRuns, ...retryPlan.rearmedRuns];
-          const mismatchedWorktree = plannedRuns.find((run) => run.worktreeId !== root.worktreeId);
-          if (mismatchedWorktree) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_load_failed',
-                message: `Workflow retry run ${mismatchedWorktree.id} does not belong to worktree ${root.worktreeId}.`,
-                workflowKey: mismatchedWorktree.workflowKey,
-                workflowRunId: mismatchedWorktree.id,
-                worktreeId: root.worktreeId,
-                surfaceId: root.surfaceId ?? undefined,
-              }),
-            );
-          }
-
-          const diagnosticContext = {
-            operation: 'retry',
-            workflowRunId: root.id,
-            worktreeId: root.worktreeId,
-            surfaceId: root.surfaceId,
-          };
-          const registryContext = yield* workflowRegistryContextForWorktreeId(
-            root.worktreeId,
-            workspaceRepository,
-          );
-          const discovery = yield* diagnosticPhase(
-            'workflow.retry.discover',
-            diagnosticContext,
-            registry.discover(registryContext).pipe(Effect.either),
-          );
-          if (Either.isLeft(discovery)) {
-            return yield* Effect.fail(
-              new WorkflowEngineError({
-                code: 'workflow_discovery_failed',
-                message: discovery.left.message,
-                workflowRunId: root.id,
-                workflowSourceDirectory: discovery.left.workflowSourceDirectory,
-                worktreeId: root.worktreeId,
-                surfaceId: root.surfaceId ?? undefined,
-              }),
-            );
-          }
-
-          const currentArtifacts = new Map<string, string>();
-          for (const run of plannedRuns) {
-            if (currentArtifacts.has(run.workflowKey)) continue;
-            const discoveredEntry = discovery.right.find(run.workflowKey);
-            if (!discoveredEntry) {
-              const knownWorkflowKeys = discovery.right.entries.map((entry) => entry.workflowKey);
-              return yield* Effect.fail(
-                new WorkflowEngineError({
-                  code: 'unknown_workflow_key',
-                  message: unknownWorkflowMessage(run.workflowKey, knownWorkflowKeys),
-                  workflowKey: run.workflowKey,
-                  knownWorkflowKeys,
-                  workflowRunId: run.id,
-                  worktreeId: root.worktreeId,
-                  surfaceId: root.surfaceId ?? undefined,
-                }),
-              );
-            }
-            const definition = yield* diagnosticPhase(
-              'workflow.retry.load_definition',
-              { ...diagnosticContext, workflowKey: run.workflowKey, retryRunId: run.id },
-              registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
-            );
-            if (Either.isLeft(definition)) {
-              const provenance = discoveredEntry.provenance;
-              return yield* Effect.fail(
-                new WorkflowEngineError({
-                  code: 'workflow_load_failed',
-                  message: packageFailureDiagnostic(definition.left.message, provenance),
-                  workflowKey: run.workflowKey,
-                  workflowLoadFailureReason:
-                    definition.left instanceof WorkflowLoadError
-                      ? definition.left.reason
-                      : 'artifact_load_failed',
-                  workflowPackageDirectory: provenance?.workflowPackageDirectory,
-                  shadowedWorkflowPackageDirectories:
-                    provenance?.shadowedWorkflowPackageDirectories,
-                  workflowRunId: run.id,
-                  worktreeId: root.worktreeId,
-                  surfaceId: root.surfaceId ?? undefined,
-                }),
-              );
-            }
-            currentArtifacts.set(run.workflowKey, definition.right.artifactHash);
-          }
-
           const recovery = yield* repository.retryFailedRunTree({
             rootRunId: root.id,
-            artifactPins: plannedRuns.map((run) => ({
-              runId: run.id,
-              workflowKey: run.workflowKey,
-              artifactHash: currentArtifacts.get(run.workflowKey)!,
-            })),
+            artifactPins: yield* resolveCurrentWorkflowArtifactPins({
+              operation: 'retry',
+              root,
+              runs: plannedRuns,
+              registry,
+              workspaceRepository,
+            }),
           });
           if (!recovery) {
             return yield* Effect.fail(
@@ -1069,6 +1022,121 @@ function packageFailureDiagnostic(
     );
   }
   return `${message}\n${details.join('\n')}`;
+}
+
+function resolveCurrentWorkflowArtifactPins(input: {
+  readonly operation: 'resume' | 'retry';
+  readonly root: WorkflowRunRow;
+  readonly runs: readonly WorkflowRunRow[];
+  readonly registry: WorkflowRegistryService;
+  readonly workspaceRepository: WorkspaceRepositoryService;
+}): Effect.Effect<readonly WorkflowArtifactPin[], WorkflowEngineServiceError> {
+  return Effect.gen(function* () {
+    const worktreeId = input.root.worktreeId;
+    if (worktreeId === null) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_load_failed',
+          message: `Workflow run ${input.root.id} has no worktree for current artifact discovery.`,
+          workflowRunId: input.root.id,
+          surfaceId: input.root.surfaceId ?? undefined,
+        }),
+      );
+    }
+
+    const mismatchedWorktree = input.runs.find((run) => run.worktreeId !== worktreeId);
+    if (mismatchedWorktree) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_load_failed',
+          message: `Workflow ${input.operation} run ${mismatchedWorktree.id} does not belong to worktree ${worktreeId}.`,
+          workflowKey: mismatchedWorktree.workflowKey,
+          workflowRunId: mismatchedWorktree.id,
+          worktreeId,
+          surfaceId: input.root.surfaceId ?? undefined,
+        }),
+      );
+    }
+
+    const diagnosticContext = {
+      operation: input.operation,
+      workflowRunId: input.root.id,
+      worktreeId,
+      surfaceId: input.root.surfaceId,
+    };
+    const registryContext = yield* workflowRegistryContextForWorktreeId(
+      worktreeId,
+      input.workspaceRepository,
+    );
+    const discovery = yield* diagnosticPhase(
+      `workflow.${input.operation}.discover`,
+      diagnosticContext,
+      input.registry.discover(registryContext).pipe(Effect.either),
+    );
+    if (Either.isLeft(discovery)) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_discovery_failed',
+          message: discovery.left.message,
+          workflowRunId: input.root.id,
+          workflowSourceDirectory: discovery.left.workflowSourceDirectory,
+          worktreeId,
+          surfaceId: input.root.surfaceId ?? undefined,
+        }),
+      );
+    }
+
+    const currentArtifacts = new Map<string, string>();
+    for (const run of input.runs) {
+      if (currentArtifacts.has(run.workflowKey)) continue;
+      const discoveredEntry = discovery.right.find(run.workflowKey);
+      if (!discoveredEntry) {
+        const knownWorkflowKeys = discovery.right.entries.map((entry) => entry.workflowKey);
+        return yield* Effect.fail(
+          new WorkflowEngineError({
+            code: 'unknown_workflow_key',
+            message: unknownWorkflowMessage(run.workflowKey, knownWorkflowKeys),
+            workflowKey: run.workflowKey,
+            knownWorkflowKeys,
+            workflowRunId: run.id,
+            worktreeId,
+            surfaceId: input.root.surfaceId ?? undefined,
+          }),
+        );
+      }
+      const definition = yield* diagnosticPhase(
+        `workflow.${input.operation}.load_definition`,
+        { ...diagnosticContext, workflowKey: run.workflowKey, targetRunId: run.id },
+        input.registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
+      );
+      if (Either.isLeft(definition)) {
+        const provenance = discoveredEntry.provenance;
+        return yield* Effect.fail(
+          new WorkflowEngineError({
+            code: 'workflow_load_failed',
+            message: packageFailureDiagnostic(definition.left.message, provenance),
+            workflowKey: run.workflowKey,
+            workflowLoadFailureReason:
+              definition.left instanceof WorkflowLoadError
+                ? definition.left.reason
+                : 'artifact_load_failed',
+            workflowPackageDirectory: provenance?.workflowPackageDirectory,
+            shadowedWorkflowPackageDirectories: provenance?.shadowedWorkflowPackageDirectories,
+            workflowRunId: run.id,
+            worktreeId,
+            surfaceId: input.root.surfaceId ?? undefined,
+          }),
+        );
+      }
+      currentArtifacts.set(run.workflowKey, definition.right.artifactHash);
+    }
+
+    return input.runs.map((run) => ({
+      runId: run.id,
+      workflowKey: run.workflowKey,
+      artifactHash: currentArtifacts.get(run.workflowKey)!,
+    }));
+  });
 }
 
 function workflowRegistryContextForWorktreeId(
