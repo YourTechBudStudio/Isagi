@@ -193,8 +193,13 @@ export type WorkflowResult =
   | { readonly type: 'done'; readonly value?: unknown }
   | { readonly type: 'fail'; readonly reason: string };
 
+export type WorkflowInvocation = {
+  readonly kind: 'normal' | 'retry';
+};
+
 export interface WorkflowContext {
   readonly worktreePath: string;
+  readonly invocation: WorkflowInvocation;
   readonly spawnAgentSession: (
     input: WorkflowPromptInput & {
       readonly harness: WorkflowAgentHarness;

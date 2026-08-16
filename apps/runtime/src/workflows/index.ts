@@ -49,6 +49,7 @@ export type {
   WorkflowContext,
   WorkflowDefinition,
   WorkflowEngineServiceError,
+  WorkflowInvocation,
   WorkflowResult,
   WorkflowRunRow,
   WorkflowStatus,

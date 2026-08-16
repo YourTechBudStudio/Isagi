@@ -15,6 +15,7 @@ export type {
   WorkflowConversationRole,
   WorkflowDefinition,
   WorkflowHeadlessResult,
+  WorkflowInvocation,
   WorkflowLaunchContext,
   WorkflowQuestionOption,
   WorkflowQuestionSpec,
@@ -38,6 +39,7 @@ export interface WorkflowRunRow {
   readonly parentRunId: number | null;
   readonly rootRunId: number | null;
   readonly status: WorkflowStatus;
+  readonly retrying: boolean;
   readonly paused: boolean;
   readonly cancelRequested: boolean;
   readonly waitKind: WorkflowWaitKind | null;

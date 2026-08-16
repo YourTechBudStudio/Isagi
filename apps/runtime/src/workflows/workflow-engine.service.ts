@@ -23,6 +23,7 @@ import {
   type WorkflowRegistryContext,
 } from './registry.js';
 import {
+  planFailedWorkflowRunTreeRetry,
   WorkflowRepository,
   type WorkflowRepositoryService,
   type WorkflowRunErrorPayload,
@@ -711,8 +712,127 @@ export const WorkflowEngineLive = Layer.scoped(
               }),
             );
           }
-          const retried = yield* repository.retryFailedRun(root.id);
-          if (!retried) {
+          const tree = yield* repository.listRunTree(root.id);
+          const retryPlan = planFailedWorkflowRunTreeRetry(tree, root.id);
+          if (!retryPlan) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_not_failed',
+                message: `Workflow run ${root.id} is not failed.`,
+                workflowRunId: root.id,
+                surfaceId: root.surfaceId ?? undefined,
+              }),
+            );
+          }
+          if (root.worktreeId === null) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_load_failed',
+                message: `Workflow run ${root.id} has no worktree for current artifact discovery.`,
+                workflowRunId: root.id,
+                surfaceId: root.surfaceId ?? undefined,
+              }),
+            );
+          }
+
+          const plannedRuns = [...retryPlan.retriedRuns, ...retryPlan.rearmedRuns];
+          const mismatchedWorktree = plannedRuns.find((run) => run.worktreeId !== root.worktreeId);
+          if (mismatchedWorktree) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_load_failed',
+                message: `Workflow retry run ${mismatchedWorktree.id} does not belong to worktree ${root.worktreeId}.`,
+                workflowKey: mismatchedWorktree.workflowKey,
+                workflowRunId: mismatchedWorktree.id,
+                worktreeId: root.worktreeId,
+                surfaceId: root.surfaceId ?? undefined,
+              }),
+            );
+          }
+
+          const diagnosticContext = {
+            operation: 'retry',
+            workflowRunId: root.id,
+            worktreeId: root.worktreeId,
+            surfaceId: root.surfaceId,
+          };
+          const registryContext = yield* workflowRegistryContextForWorktreeId(
+            root.worktreeId,
+            workspaceRepository,
+          );
+          const discovery = yield* diagnosticPhase(
+            'workflow.retry.discover',
+            diagnosticContext,
+            registry.discover(registryContext).pipe(Effect.either),
+          );
+          if (Either.isLeft(discovery)) {
+            return yield* Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_discovery_failed',
+                message: discovery.left.message,
+                workflowRunId: root.id,
+                workflowSourceDirectory: discovery.left.workflowSourceDirectory,
+                worktreeId: root.worktreeId,
+                surfaceId: root.surfaceId ?? undefined,
+              }),
+            );
+          }
+
+          const currentArtifacts = new Map<string, string>();
+          for (const run of plannedRuns) {
+            if (currentArtifacts.has(run.workflowKey)) continue;
+            const discoveredEntry = discovery.right.find(run.workflowKey);
+            if (!discoveredEntry) {
+              const knownWorkflowKeys = discovery.right.entries.map((entry) => entry.workflowKey);
+              return yield* Effect.fail(
+                new WorkflowEngineError({
+                  code: 'unknown_workflow_key',
+                  message: unknownWorkflowMessage(run.workflowKey, knownWorkflowKeys),
+                  workflowKey: run.workflowKey,
+                  knownWorkflowKeys,
+                  workflowRunId: run.id,
+                  worktreeId: root.worktreeId,
+                  surfaceId: root.surfaceId ?? undefined,
+                }),
+              );
+            }
+            const definition = yield* diagnosticPhase(
+              'workflow.retry.load_definition',
+              { ...diagnosticContext, workflowKey: run.workflowKey, retryRunId: run.id },
+              registry.loadDiscovered(discoveredEntry).pipe(Effect.either),
+            );
+            if (Either.isLeft(definition)) {
+              const provenance = discoveredEntry.provenance;
+              return yield* Effect.fail(
+                new WorkflowEngineError({
+                  code: 'workflow_load_failed',
+                  message: packageFailureDiagnostic(definition.left.message, provenance),
+                  workflowKey: run.workflowKey,
+                  workflowLoadFailureReason:
+                    definition.left instanceof WorkflowLoadError
+                      ? definition.left.reason
+                      : 'artifact_load_failed',
+                  workflowPackageDirectory: provenance?.workflowPackageDirectory,
+                  shadowedWorkflowPackageDirectories:
+                    provenance?.shadowedWorkflowPackageDirectories,
+                  workflowRunId: run.id,
+                  worktreeId: root.worktreeId,
+                  surfaceId: root.surfaceId ?? undefined,
+                }),
+              );
+            }
+            currentArtifacts.set(run.workflowKey, definition.right.artifactHash);
+          }
+
+          const recovery = yield* repository.retryFailedRunTree({
+            rootRunId: root.id,
+            artifactPins: plannedRuns.map((run) => ({
+              runId: run.id,
+              workflowKey: run.workflowKey,
+              artifactHash: currentArtifacts.get(run.workflowKey)!,
+            })),
+          });
+          if (!recovery) {
             return yield* Effect.fail(
               new WorkflowEngineError({
                 code: 'workflow_run_not_failed',
@@ -724,12 +844,12 @@ export const WorkflowEngineLive = Layer.scoped(
           }
           yield* appendInternalWorkflowLogBestEffort(
             eventLedger,
-            retried,
+            recovery.root,
             'info',
-            `Workflow run ${retried.id} retried; run is ready for execution.`,
+            `Workflow run ${recovery.root.id} retried with current workflow artifacts; recovered failed runs [${recovery.retriedRunIds.join(', ')}] and rearmed waiting runs [${recovery.rearmedRunIds.join(', ')}].`,
           );
           yield* poke;
-          return { runId: retried.id, status: retried.status };
+          return { runId: recovery.root.id, status: recovery.root.status };
         }),
       advance: (input) =>
         Effect.gen(function* () {

@@ -3,7 +3,7 @@
 The public TypeScript contract for authoring Isagi workflows.
 
 ```ts
-import { defineWorkflow, done } from '@yourtechbudstudio/isagi-workflow-sdk';
+import { defineWorkflow, done } from "@yourtechbudstudio/isagi-workflow-sdk";
 ```
 
 Pin this package exactly. The current release is `0.0.1`, paired with

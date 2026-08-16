@@ -176,6 +176,115 @@ test('startWorkflow persists the real hash resolved by the filesystem registry',
   }
 });
 
+test('retry refreshes a failed run to the latest verified workflow artifact', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-refresh-'));
+  try {
+    const packageRoot = join(dataRoot, 'workflows', 'refresh-on-retry');
+    const firstArtifactHash = writeVerifiedWorkflowPackage(
+      packageRoot,
+      `export default {
+  command: () => ({ title: 'Refresh on retry' }),
+  validate: () => {},
+  init: () => ({ phase: 'preserved' }),
+  step: async () => { throw new Error('old artifact failed'); }
+};\n`,
+    );
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const run = yield* engine.startWorkflow({
+          workflowKey: 'refresh-on-retry',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1 },
+        });
+        yield* engine.drainOnce;
+        const failed = yield* repository.findRun(run.id);
+        const currentArtifactHash = yield* Effect.sync(() =>
+          writeVerifiedWorkflowPackage(
+            packageRoot,
+            `export default {
+  command: () => ({ title: 'Refresh on retry' }),
+  validate: () => {},
+  init: () => ({ phase: 'preserved' }),
+  step: async () => ({ type: 'done', value: { recovered: true } })
+};\n`,
+          ),
+        );
+        yield* engine.retry({ runId: run.id });
+        yield* engine.drainOnce;
+        return {
+          failed,
+          currentArtifactHash,
+          completed: yield* repository.findRun(run.id),
+        };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.equal(result.failed?.status, 'failed');
+    assert.equal(result.failed?.workflowArtifactHash, firstArtifactHash);
+    assert.notEqual(result.currentArtifactHash, firstArtifactHash);
+    assert.equal(result.completed?.status, 'done');
+    assert.equal(result.completed?.workflowArtifactHash, result.currentArtifactHash);
+    assert.deepEqual(JSON.parse(result.completed?.stateJson ?? '{}'), { phase: 'preserved' });
+    assert.deepEqual(JSON.parse(result.completed?.resultJson ?? '{}'), { recovered: true });
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('retry leaves a failed tree unchanged when the current workflow cannot be discovered', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-missing-current-'));
+  try {
+    const packageRoot = join(dataRoot, 'workflows', 'removed-before-retry');
+    const artifactHash = writeVerifiedWorkflowPackage(
+      packageRoot,
+      `export default {
+  command: () => ({ title: 'Removed before retry' }),
+  validate: () => {},
+  init: () => ({ phase: 'preserved' }),
+  step: async () => { throw new Error('expected failure'); }
+};\n`,
+    );
+    const registry = createFilesystemWorkflowRegistry(
+      join(dataRoot, 'workflows'),
+      join(dataRoot, 'workflow-artifacts'),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine;
+        const repository = yield* WorkflowRepository;
+        const run = yield* engine.startWorkflow({
+          workflowKey: 'removed-before-retry',
+          variables: {},
+          context: { worktreeId: 1, surfaceId: 1 },
+        });
+        yield* engine.drainOnce;
+        const failed = yield* repository.findRun(run.id);
+        yield* Effect.sync(() => rmSync(packageRoot, { recursive: true, force: true }));
+        const retried = yield* engine.retry({ runId: run.id }).pipe(Effect.either);
+        return { failed, retried, after: yield* repository.findRun(run.id) };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.ok(Either.isLeft(result.retried));
+    assert.ok(result.retried.left instanceof WorkflowEngineError);
+    assert.equal(result.retried.left.code, 'unknown_workflow_key');
+    assert.equal(result.after?.status, 'failed');
+    assert.equal(result.after?.workflowArtifactHash, artifactHash);
+    assert.equal(result.after?.error, result.failed?.error);
+    assert.equal(result.after?.retrying, false);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('descriptor listing uses one discovery and a subsequent start discovers afresh', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-fresh-start-discovery-'));
   try {
@@ -2873,7 +2982,7 @@ test('clear marks a running tree cancel-requested without deleting the claimed r
   }
 });
 
-test('retry flips a failed surface root back to ready and clears error', async () => {
+test('retry flips a failed root back to ready and preserves its invocation marker across pause', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-failed-'));
   try {
     const row = await Effect.runPromise(
@@ -2897,11 +3006,15 @@ test('retry flips a failed surface root back to ready and clears error', async (
           thrown: true,
         });
         yield* engine.retry({ runId: run.id });
+        yield* repository.setPausedForRunTree({ rootRunId: run.id, paused: true });
+        yield* repository.setPausedForRunTree({ rootRunId: run.id, paused: false });
+        yield* repository.readyPausedRun({ runId: run.id });
         return yield* repository.findRun(run.id);
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
     assert.equal(row?.status, 'ready');
+    assert.equal(row?.retrying, true);
     assert.equal(row?.error, null);
     assert.deepEqual(JSON.parse(row?.stateJson ?? '{}'), { phase: 'before_throw' });
   } finally {
@@ -2915,6 +3028,7 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const events: unknown[] = [];
+        const invocationKinds: string[] = [];
         const registry = yield* WorkflowRegistry;
         // The step throws whenever it sees a failed turn edge. If `retry` re-ran
         // it with `event === undefined` (the bug), `outcome` would be missing and
@@ -2923,8 +3037,9 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
           command: () => ({ title: 'Resume retry' }),
           validate: () => {},
           init: () => ({ phase: 'unused' }),
-          step: async (_ctx, _state, event) => {
+          step: async (ctx, _state, event) => {
             events.push(event);
+            invocationKinds.push(ctx.invocation.kind);
             const payload = event as { readonly outcome?: string; readonly reason?: string };
             if (payload.outcome === 'failed') throw new Error(`turn failed: ${payload.reason}`);
             return done();
@@ -2986,7 +3101,7 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
         yield* engine.retry({ runId: run.id });
         yield* engine.drainOnce;
         const reRun = yield* repository.findRun(run.id);
-        return { failed, reRun, events };
+        return { failed, reRun, events, invocationKinds };
       }).pipe(Effect.provide(testLayer(dataRoot))),
     );
 
@@ -2999,11 +3114,150 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
     // The step saw the failed edge on the first run and again after retry — the
     // event survived the failure and was replayed from snapshot.
     assert.deepEqual(result.events, [expectedEvent, expectedEvent]);
+    assert.deepEqual(result.invocationKinds, ['normal', 'retry']);
     assert.equal(result.reRun?.status, 'failed');
     assert.match(
       JSON.parse(result.reRun?.error ?? '{}').message,
       /turn failed: new_start_supersedes/,
     );
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('retry reopens failed child branches and rearms their failed parent join', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-tree-'));
+  try {
+    const replayableDefinition = {
+      command: () => ({ title: 'Replayable' }),
+      validate: () => {},
+      init: () => ({ phase: 'work' }),
+      step: async () => done(),
+    };
+    const baseRegistry = createWorkflowRegistry({
+      parent: replayableDefinition,
+      'failed-child-a': replayableDefinition,
+      'failed-child-b': replayableDefinition,
+    });
+    const currentArtifactHashes = new Map([
+      ['parent', 'a'.repeat(64)],
+      ['failed-child-a', 'b'.repeat(64)],
+      ['failed-child-b', 'c'.repeat(64)],
+    ]);
+    const registry: WorkflowRegistryService = {
+      ...baseRegistry,
+      loadDiscovered: (entry) =>
+        baseRegistry.loadDiscovered(entry).pipe(
+          Effect.map((loaded) => ({
+            ...loaded,
+            artifactHash: currentArtifactHashes.get(entry.workflowKey)!,
+          })),
+        ),
+    };
+    const oldArtifactHash = '1'.repeat(64);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkflowRepository;
+        const engine = yield* WorkflowEngine;
+        const root = yield* repository.createRun({
+          workflowKey: 'parent',
+          workflowTitle: 'Parent',
+          workflowArtifactHash: oldArtifactHash,
+          state: { phase: 'await_children' },
+          stateVersion: 1,
+          worktreeId: 1,
+          surfaceId: 1,
+        });
+        const children = yield* Effect.all(
+          ['done-child', 'failed-child-a', 'failed-child-b'].map((workflowKey) =>
+            repository.createRun({
+              workflowKey,
+              workflowTitle: workflowKey,
+              workflowArtifactHash: oldArtifactHash,
+              state: { phase: 'work' },
+              stateVersion: 1,
+              worktreeId: 1,
+              surfaceId: 1,
+              parentRunId: root.id,
+              rootRunId: root.id,
+            }),
+          ),
+        );
+        yield* claimWorkflowRunForTest(repository, root.id);
+        yield* repository.completeSuspend({
+          runId: root.id,
+          state: { phase: 'await_children' },
+          waitKind: 'workflow',
+          waitCondition: { kind: 'workflow', runIds: children.map((child) => child.id) },
+        });
+        for (const [index, child] of children.entries()) {
+          yield* claimWorkflowRunForTest(repository, child.id);
+          if (index === 0) {
+            yield* repository.completeDone({
+              runId: child.id,
+              state: { phase: 'done' },
+              value: { ok: true },
+            });
+          } else {
+            yield* repository.failRun({
+              runId: child.id,
+              error: { message: `child ${index} failed` },
+              stateSnapshot: { state: { phase: 'work' } },
+              thrown: false,
+            });
+          }
+        }
+        const joinResults = children.map((child, index) =>
+          index === 0
+            ? { runId: child.id, status: 'done' as const, result: { ok: true } }
+            : {
+                runId: child.id,
+                status: 'failed' as const,
+                error: { message: `child ${index} failed` },
+              },
+        );
+        yield* repository.wakeWaitingRun({
+          runId: root.id,
+          resumePayload: { kind: 'workflow', results: joinResults },
+        });
+        yield* claimWorkflowRunForTest(repository, root.id);
+        yield* repository.failRun({
+          runId: root.id,
+          error: { message: 'child workflow failed' },
+          stateSnapshot: { state: { phase: 'await_children' } },
+          thrown: false,
+        });
+
+        const retried = yield* engine.retry({ runId: root.id });
+        return {
+          retried,
+          root: yield* repository.findRun(root.id),
+          children: yield* Effect.all(children.map((child) => repository.findRun(child.id))),
+        };
+      }).pipe(Effect.provide(workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry)))),
+    );
+
+    assert.deepEqual(result.retried, { runId: result.root?.id, status: 'waiting' });
+    assert.equal(result.root?.status, 'waiting');
+    assert.equal(result.root?.retrying, false);
+    assert.equal(result.root?.error, null);
+    assert.equal(result.root?.workflowArtifactHash, currentArtifactHashes.get('parent'));
+    assert.deepEqual(JSON.parse(result.root?.waitCondition ?? '{}'), {
+      kind: 'workflow',
+      runIds: result.children.map((child) => child?.id),
+    });
+    assert.equal(result.children[0]?.status, 'done');
+    assert.equal(result.children[0]?.retrying, false);
+    assert.equal(result.children[0]?.workflowArtifactHash, oldArtifactHash);
+    for (const [index, child] of result.children.slice(1).entries()) {
+      assert.equal(child?.status, 'ready');
+      assert.equal(child?.retrying, true);
+      assert.equal(child?.error, null);
+      assert.equal(
+        child?.workflowArtifactHash,
+        currentArtifactHashes.get(index === 0 ? 'failed-child-a' : 'failed-child-b'),
+      );
+    }
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
@@ -3961,6 +4215,7 @@ function workflowRunFixture(
     parentRunId: null,
     rootRunId: id,
     status: 'ready',
+    retrying: false,
     paused: false,
     cancelRequested: false,
     waitKind: null,
@@ -4118,13 +4373,15 @@ function readWorkflowLedgerEvents(path: string) {
     .map((line) => JSON.parse(line) as WorkflowEvent);
 }
 
-function writeVerifiedWorkflowPackage(root: string): string {
-  const artifact = `export default {
+function writeVerifiedWorkflowPackage(
+  root: string,
+  artifact = `export default {
   command: () => ({ title: 'Filesystem start' }),
   validate: () => {},
   init: () => ({ phase: 'start' }),
   step: async () => ({ type: 'done' })
-};\n`;
+};\n`,
+): string {
   const packageJson = `${JSON.stringify(
     {
       name: 'filesystem-start',
@@ -4430,6 +4687,7 @@ function fakeWorkflowRun(
     parentRunId: null,
     rootRunId: 99,
     status: 'running',
+    retrying: false,
     paused: false,
     cancelRequested: false,
     waitKind: null,

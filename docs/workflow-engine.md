@@ -104,10 +104,7 @@ waiting → ready → …            (resolver wakes a waiting run)
 - **waiting** — parked on a condition; carries `wait_kind` + `wait_condition`, no `resume_payload`.
 - **done** / **failed** — terminal. `failed` carries an `error`.
 
-**`paused` and `cancel_requested` are orthogonal boolean columns, not statuses.** A run has a
-status _and_ a paused flag, and the two are independent. This is the most important correction
-from earlier models that drew `paused` as a lifecycle node: pausing never changes `status`, it
-gates dispatch (see Durability).
+**`paused`, `cancel_requested`, and `retrying` are orthogonal boolean columns, not statuses.** A run has a lifecycle status plus independent control flags. Pausing never changes `status`; it gates dispatch. `retrying` marks only the first replay of a failed leaf and is cleared when that replay persists a result (see Durability).
 
 A load-bearing invariant: **`wait_kind != null` ⟺ the run is `waiting`.** Waking a run clears its
 wait fields, so a run's persisted shape unambiguously encodes its lifecycle position.
@@ -254,10 +251,9 @@ Callbacks are plain async TypeScript; the engine runs the whole step inside `Eff
 each `ctx` verb is a **Promise-returning** crossing of the Effect→Promise boundary. A rejected verb
 Promise becomes a thrown step, which the engine records as a `failed` run.
 
-### The `ctx` verbs
+### The `ctx` facts and verbs
 
-The action surface is `worktreePath` plus eight verbs (`WorkflowContext` in
-`packages/workflow-sdk/src/index.ts`):
+The context surface is `worktreePath`, `invocation`, and eight verbs (`WorkflowContext` in `packages/workflow-sdk/src/index.ts`). `invocation.kind` is `normal` for ordinary dispatch and `retry` for the first replay of a failed leaf; the retry marker is cleared by the next persisted result transition, while the leaf's original `event` remains available for compatibility.
 
 - **`spawnAgentSession({ harness, prompt?, modifiers?, model?, effort? })` →
   `{ agentSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
@@ -507,7 +503,7 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 | POST   | `/workflows/runs/:runId/pause`   | Pause a root run tree. **Root-only.**                      |
 | POST   | `/workflows/runs/:runId/resume`  | Resume (unpause) a root run tree. **Root-only.**           |
 | POST   | `/workflows/runs/:runId/clear`   | Cancel/delete a root run tree. **Root-only.**              |
-| POST   | `/workflows/runs/:runId/retry`   | Retry a failed root run. **Root-only.**                    |
+| POST   | `/workflows/runs/:runId/retry`   | Recover the failed branch of a root run. **Root-only.**    |
 | POST   | `/workflows/runs/:runId/advance` | Satisfy a human wait. **Run-scoped** — may target a child. |
 
 **Stream**
@@ -518,11 +514,7 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 
 Notes:
 
-- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with
-  `workflow_root_run_required`. `retry` additionally requires a `failed` root
-  (`workflow_run_not_failed`) and deliberately retains the run's artifact pin. Verifying changed
-  workflow code affects new runs, not a retry of an existing run; clear and start a new run to use
-  the new artifact.
+- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with `workflow_root_run_required`. `retry` additionally requires a `failed` root (`workflow_run_not_failed`). It walks preserved workflow-join results, readies each still-failed leaf with `ctx.invocation.kind === 'retry'`, and rearms failed ancestors on their recorded joins; completed siblings remain terminal. A failed run without a recoverable failed-child join is the leaf. Ordinary dispatch and resume continue using each run's pinned artifact, while explicit Retry resolves and verifies the latest discoverable artifact for every failed run in the recovered branch and replaces those pins atomically before recovery. Completed siblings keep their existing pins. If any current artifact cannot be discovered or loaded, Retry leaves the whole tree unchanged. Persisted state and the preserved resume event are passed to the updated workflow, so workflow authors own state compatibility across a workflow update and retry.
 - `clear` is `POST`, not HTTP `DELETE`, because it requests **async cancellation** when a step is
   running (the running step finishes, then its tree is reaped); otherwise it deletes the tree
   immediately.
@@ -575,6 +567,7 @@ runtime owns the row; four columns carry structured JSON with distinct ownership
   per-kind tagged union.
 - **`resume_payload`** (JSON) — "what woke you"; the resolver writes it, the step reads it (as the
   `event` arg), and the result write clears it.
+- **`retrying`** — marks the first dispatch after a failed leaf is readied by Retry. Context construction exposes it as `ctx.invocation.kind === 'retry'`; every persisted step outcome clears it.
 - **`result_json`** (JSON) — terminal value written by `done(value)`. Separate from `state_json`:
   `state_json` is the reducer's current state, while `result_json` is the value other workflows can
   later join on.
@@ -586,13 +579,7 @@ from the latest such event in the run tree (`error` is a column, holding the ter
 The `workflow_run_events` table is the append-only reducer history described in Event surfaces
 (#1); it references `workflow_runs` with `ON DELETE CASCADE` and is ordered by autoincrement `id`.
 
-Each result write updates only the engine-owned lifecycle columns for that outcome (`status`,
-`wait_kind`/`wait_condition`, `resume_payload`, `state_json`, `result_json`/`error`) and clears
-`owner` on every result transition. `wait_kind` values are `agent_turn`, `user_continue`,
-`user_input`, `workflow`, and `headless_agent`. `paused`
-and `cancel_requested` are orthogonal flags, not lifecycle statuses. Indexes cover `status`,
-`(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`; `rootOnly` listing narrows on
-`parent_run_id IS NULL`.
+Each result write updates only the engine-owned lifecycle columns for that outcome (`status`, `retrying`, `wait_kind`/`wait_condition`, `resume_payload`, `state_json`, `result_json`/`error`) and clears `owner` on every result transition. `wait_kind` values are `agent_turn`, `user_continue`, `user_input`, `workflow`, and `headless_agent`. `paused`, `cancel_requested`, and `retrying` are orthogonal flags, not lifecycle statuses. Indexes cover `status`, `(status, wait_kind)`, `paused`, `worktree_id`, and `surface_id`; `rootOnly` listing narrows on `parent_run_id IS NULL`.
 
 Expected failures surface as the tagged `WorkflowEngineError`. Control-relevant reasons include
 `unknown_workflow_key`, `workflow_load_failed`, `worktree_not_found`, `surface_not_found`,

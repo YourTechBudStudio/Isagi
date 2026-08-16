@@ -55,7 +55,10 @@ export interface WorkflowRepositoryService {
     readonly rootRunId: number;
     readonly surfaceId: number | null;
   }) => Effect.Effect<number, DatabaseError>;
-  readonly retryFailedRun: (runId: number) => Effect.Effect<WorkflowRunRow | null, DatabaseError>;
+  readonly retryFailedRunTree: (input: {
+    readonly rootRunId: number;
+    readonly artifactPins: readonly WorkflowRetryArtifactPin[];
+  }) => Effect.Effect<WorkflowRetryResult | null, DatabaseError>;
   readonly claimReadyRun: (input: {
     readonly runId: number;
     readonly owner: string;
@@ -105,6 +108,24 @@ export interface WorkflowRepositoryService {
     readonly stateSnapshot: WorkflowStateSnapshotInput;
     readonly thrown: boolean;
   }) => Effect.Effect<void, DatabaseError>;
+}
+
+export interface WorkflowRetryResult {
+  readonly root: WorkflowRunRow;
+  readonly retriedRunIds: readonly number[];
+  readonly rearmedRunIds: readonly number[];
+}
+
+export interface WorkflowRetryArtifactPin {
+  readonly runId: number;
+  readonly workflowKey: string;
+  readonly artifactHash: string;
+}
+
+export interface WorkflowRetryPlan {
+  readonly root: WorkflowRunRow;
+  readonly retriedRuns: readonly WorkflowRunRow[];
+  readonly rearmedRuns: readonly WorkflowRunRow[];
 }
 
 export interface WorkflowRunErrorPayload {
@@ -370,26 +391,106 @@ export const WorkflowRepositoryLive = Layer.effect(
               }),
             ),
           ),
-      retryFailedRun: (runId) =>
+      retryFailedRunTree: (input) =>
         database
-          .transaction('retry_failed_workflow_run', (db) => {
-            const row = db
-              .update(workflowRuns)
-              .set({
-                status: 'ready',
-                paused: false,
-                cancelRequested: false,
-                owner: null,
-                error: null,
-                updatedAt: timestamp(),
+          .transaction('retry_failed_workflow_run_tree', (db) => {
+            const rows = db
+              .select(runColumns)
+              .from(workflowRuns)
+              .where(eq(workflowRuns.rootRunId, input.rootRunId))
+              .all()
+              .map(workflowRunRow);
+            const plan = planFailedWorkflowRunTreeRetry(rows, input.rootRunId);
+            if (!plan) return null;
+
+            const plannedRuns = [...plan.retriedRuns, ...plan.rearmedRuns];
+            const artifactPins = new Map(input.artifactPins.map((pin) => [pin.runId, pin]));
+            if (
+              artifactPins.size !== plannedRuns.length ||
+              plannedRuns.some((run) => {
+                const pin = artifactPins.get(run.id);
+                return !pin || pin.workflowKey !== run.workflowKey;
               })
-              .where(and(eq(workflowRuns.id, runId), eq(workflowRuns.status, 'failed')))
-              .returning(runColumns)
+            ) {
+              throw new Error('Workflow retry plan changed while resolving current artifacts.');
+            }
+
+            for (const run of plan.retriedRuns) {
+              const artifactPin = artifactPins.get(run.id);
+              if (!artifactPin)
+                throw new Error(`Workflow retry artifact missing for run ${run.id}.`);
+              const updated = db
+                .update(workflowRuns)
+                .set({
+                  workflowArtifactHash: artifactPin.artifactHash,
+                  status: 'ready',
+                  retrying: true,
+                  paused: false,
+                  cancelRequested: false,
+                  owner: null,
+                  error: null,
+                  updatedAt: timestamp(),
+                })
+                .where(and(eq(workflowRuns.id, run.id), eq(workflowRuns.status, 'failed')))
+                .run();
+              if (updated.changes !== 1) {
+                throw new Error(
+                  `Workflow retry leaf ${run.id} changed before it could be updated.`,
+                );
+              }
+            }
+
+            for (const run of plan.rearmedRuns) {
+              const artifactPin = artifactPins.get(run.id);
+              if (!artifactPin)
+                throw new Error(`Workflow retry artifact missing for run ${run.id}.`);
+              const join = parseWorkflowRetryJoin(run.resumePayload);
+              if (!join) throw new Error(`Workflow retry join missing for run ${run.id}.`);
+              const updated = db
+                .update(workflowRuns)
+                .set({
+                  workflowArtifactHash: artifactPin.artifactHash,
+                  status: 'waiting',
+                  retrying: false,
+                  paused: false,
+                  cancelRequested: false,
+                  waitKind: 'workflow',
+                  waitCondition: json({ kind: 'workflow', runIds: join.runIds }),
+                  resumePayload: null,
+                  owner: null,
+                  error: null,
+                  updatedAt: timestamp(),
+                })
+                .where(and(eq(workflowRuns.id, run.id), eq(workflowRuns.status, 'failed')))
+                .run();
+              if (updated.changes !== 1) {
+                throw new Error(
+                  `Workflow retry ancestor ${run.id} changed before it could be updated.`,
+                );
+              }
+            }
+
+            const updatedRoot = db
+              .select(runColumns)
+              .from(workflowRuns)
+              .where(eq(workflowRuns.id, input.rootRunId))
               .get();
-            return row ? workflowRunRow(row) : null;
+            if (!updatedRoot) return null;
+            return {
+              root: workflowRunRow(updatedRoot),
+              retriedRunIds: plan.retriedRuns.map((run) => run.id),
+              rearmedRunIds: plan.rearmedRuns.map((run) => run.id),
+            } satisfies WorkflowRetryResult;
           })
           .pipe(
-            Effect.tap((run) => (run ? publishWorkflowRunTouched(eventBus, run) : Effect.void)),
+            Effect.tap((result) =>
+              result
+                ? publishWorkflowRunRecompute(eventBus, {
+                    rootRunId: result.root.id,
+                    surfaceId: result.root.surfaceId,
+                  })
+                : Effect.void,
+            ),
           ),
       claimReadyRun: (input) =>
         database
@@ -476,6 +577,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'ready',
+                retrying: false,
                 waitKind: null,
                 waitCondition: null,
                 resumePayload: json(input.resumePayload),
@@ -544,6 +646,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'waiting',
+                retrying: false,
                 paused: false,
                 resumePayload: null,
                 owner: null,
@@ -574,6 +677,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'ready',
+                retrying: false,
                 waitKind: null,
                 waitCondition: null,
                 resumePayload: null,
@@ -607,6 +711,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'waiting',
+                retrying: false,
                 waitKind: input.waitKind,
                 waitCondition: json(input.waitCondition),
                 resumePayload: null,
@@ -640,6 +745,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'done',
+                retrying: false,
                 waitKind: null,
                 waitCondition: null,
                 resumePayload: null,
@@ -672,6 +778,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'failed',
+                retrying: false,
                 waitKind: null,
                 waitCondition: null,
                 // Preserve `resumePayload` (the event that drove the throwing step)
@@ -706,6 +813,7 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'failed',
+                retrying: false,
                 paused: false,
                 cancelRequested: false,
                 waitKind: null,
@@ -753,6 +861,7 @@ function workflowRunRow(row: WorkflowRunRecord): WorkflowRunRow {
     parentRunId: row.parentRunId,
     rootRunId: row.rootRunId,
     status: row.status as WorkflowStatus,
+    retrying: row.retrying,
     paused: row.paused,
     cancelRequested: row.cancelRequested,
     waitKind: row.waitKind,
@@ -820,6 +929,81 @@ function json(value: unknown) {
 
 function parseOptionalJson(value: string | null) {
   return value === null ? undefined : (JSON.parse(value) as unknown);
+}
+
+function parseWorkflowRetryJoin(value: string | null): {
+  readonly runIds: readonly number[];
+  readonly failedRunIds: readonly number[];
+} | null {
+  if (value === null) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record.kind !== 'workflow' || !Array.isArray(record.results)) return null;
+    const runIds: number[] = [];
+    const failedRunIds: number[] = [];
+    for (const result of record.results) {
+      if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+      const entry = result as Record<string, unknown>;
+      if (
+        !Number.isInteger(entry.runId) ||
+        (entry.status !== 'done' && entry.status !== 'failed') ||
+        runIds.includes(entry.runId as number)
+      ) {
+        return null;
+      }
+      const runId = entry.runId as number;
+      runIds.push(runId);
+      if (entry.status === 'failed') failedRunIds.push(runId);
+    }
+    return failedRunIds.length > 0 ? { runIds, failedRunIds } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function planFailedWorkflowRunTreeRetry(
+  runs: readonly WorkflowRunRow[],
+  rootRunId: number,
+): WorkflowRetryPlan | null {
+  const root = runs.find((run) => run.id === rootRunId && run.status === 'failed');
+  if (!root) return null;
+
+  const runsById = new Map(runs.map((run) => [run.id, run]));
+  const retriedRuns: WorkflowRunRow[] = [];
+  const rearmedRuns: WorkflowRunRow[] = [];
+  const visited = new Set<number>();
+  const recover = (run: WorkflowRunRow): void => {
+    if (visited.has(run.id)) return;
+    visited.add(run.id);
+
+    const join = parseWorkflowRetryJoin(run.resumePayload);
+    const failedChildren = join
+      ? join.failedRunIds.map((failedRunId) => runsById.get(failedRunId))
+      : [];
+    const hasRecoverableJoin =
+      join !== null &&
+      failedChildren.length > 0 &&
+      failedChildren.every(
+        (child): child is WorkflowRunRow =>
+          child !== undefined &&
+          child.status === 'failed' &&
+          child.parentRunId === run.id &&
+          child.rootRunId === run.rootRunId,
+      );
+
+    if (hasRecoverableJoin) {
+      for (const child of failedChildren) recover(child);
+      rearmedRuns.push(run);
+      return;
+    }
+
+    retriedRuns.push(run);
+  };
+
+  recover(root);
+  return { root, retriedRuns, rearmedRuns };
 }
 
 function timestamp() {

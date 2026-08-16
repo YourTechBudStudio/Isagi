@@ -39,6 +39,9 @@ type State = {
 - Treat `event` as `unknown`. Narrow every resumed event with the SDK event helpers before reading it, and fail clearly on an unexpected or failed result.
 - Inspect every joined result from `wait.workflow` and `wait.headlessAgent`. A failed child operation still satisfies the wait and must be handled by the resumed stage.
 - Treat operational calls as replayable. Do not make correctness depend on spawning a session, sending a prompt, or starting a child workflow exactly once.
+- Read `ctx.invocation.kind` when a failed step needs retry-specific recovery. `normal` is ordinary dispatch; `retry` marks only the first replay of the failed leaf. The original `event` is preserved for compatibility.
+- Root Retry repairs the failed workflow branch using the latest verified workflow artifacts: failed child leaves become ready, failed ancestors return to their recorded workflow joins, and both kinds of failed run receive current artifact pins before recovery; completed siblings remain terminal on their existing pins. The persisted state and original event are replayed into the updated code, so keep state compatible across workflow updates. A retry-aware leaf should reread current durable state such as conversation history before trusting a previously captured response.
+- Bound recovery attempts in persisted stage state. If a retry sends a continuation to an existing agent session, record that transition and fail normally if the resulting turn is still incomplete; do not create an automatic retry loop.
 - Send one prompt per agent turn. Do not reset, resume, or switch the underlying harness conversation while a workflow-controlled turn is active.
 - Keep provider and harness-session identity out of workflow state. Durable `agentSessionId` and `paneId` values are sufficient.
 - Close panes created by the workflow when they are no longer needed. Never close the pane from which the workflow was launched.

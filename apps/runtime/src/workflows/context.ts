@@ -31,6 +31,7 @@ export function workflowContext(input: {
 
   return {
     worktreePath: input.worktreePath,
+    invocation: { kind: input.run.retrying ? 'retry' : 'normal' },
     spawnAgentSession: (session) =>
       runEffect(
         input.capabilities.spawnAgentSessionForRun({
