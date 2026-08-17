@@ -416,6 +416,92 @@ describe('terminal presentation controller', () => {
     harness.cache.dispose();
   });
 
+  it('does not self-focus on setFocused while pane focus is disallowed', async () => {
+    const harness = await startController({ paneFocusAllowed: () => false });
+    const { env, controller } = harness;
+    openSlot(harness);
+    await harness.settle();
+
+    const before = env.terminal.focusCount;
+    controller.setFocused(true);
+    assert.equal(
+      env.terminal.focusCount,
+      before,
+      'an attached, focused terminal still yields focus to an open overlay',
+    );
+    harness.cache.dispose();
+  });
+
+  it('does not self-focus on activation completion while pane focus is disallowed', async () => {
+    let allowed = true;
+    const harness = await startController({ paneFocusAllowed: () => allowed });
+    const { env, controller } = harness;
+    const slot = openSlot(harness);
+    await harness.settle();
+
+    controller.setFocused(true);
+    await harness.settle();
+    const before = env.terminal.focusCount;
+
+    // An overlay opens, then a late activation pass completes. Activation
+    // retries across frames, so in production this lands arbitrarily late.
+    allowed = false;
+    slot.destination.resize();
+    await harness.settle();
+
+    assert.equal(
+      env.terminal.focusCount,
+      before,
+      'delayed activation cannot capture keystrokes behind an open overlay',
+    );
+
+    // Control: the same activation pass with ownership available does focus,
+    // so the assertion above suppressed a call that really would have happened.
+    allowed = true;
+    slot.destination.resize();
+    await harness.settle();
+    assert.ok(
+      env.terminal.focusCount > before,
+      'the suppressed path is a real one: it focuses once ownership allows it',
+    );
+    harness.cache.dispose();
+  });
+
+  it('never gates commanded focus, so an overlay close path can restore the pane', async () => {
+    const harness = await startController({ paneFocusAllowed: () => false });
+    const { env, controller } = harness;
+    openSlot(harness);
+    await harness.settle();
+
+    const before = env.terminal.focusCount;
+    controller.focus();
+    assert.equal(
+      env.terminal.focusCount,
+      before + 1,
+      'commanded focus arrives only through ownership-aware paths and is the recovery mechanism',
+    );
+    harness.cache.dispose();
+  });
+
+  it('evaluates the ownership predicate at focus time, not construction time', async () => {
+    let allowed = false;
+    const harness = await startController({ paneFocusAllowed: () => allowed });
+    const { env, controller } = harness;
+    openSlot(harness);
+    await harness.settle();
+
+    const before = env.terminal.focusCount;
+    controller.setFocused(true);
+    assert.equal(env.terminal.focusCount, before, 'denied while the overlay is open');
+
+    // The denied call still recorded `focused`, but recovery is commanded, so
+    // a later allowed self-assertion is what proves the predicate is re-read.
+    allowed = true;
+    controller.setFocused(true);
+    assert.equal(env.terminal.focusCount, before + 1, 'allowed once ownership returns');
+    harness.cache.dispose();
+  });
+
   it('falls back to the DOM renderer on context loss without churning addons', async () => {
     const harness = await startController();
     const { env, controller } = harness;
@@ -468,6 +554,7 @@ describe('terminal presentation controller', () => {
       onEvent: () => undefined,
       initialViewport: null,
       onViewport: () => undefined,
+      paneFocusAllowed: () => true,
       resolveUrl: () => {
         env.claims += 1;
         // A claim that never settles on its own: only interruption ends it.
@@ -514,6 +601,7 @@ describe('terminal presentation controller', () => {
       onEvent: () => undefined,
       initialViewport: null,
       onViewport: () => undefined,
+      paneFocusAllowed: () => true,
       resolveUrl: () => Effect.fail(failure),
     });
 
@@ -543,7 +631,11 @@ interface Harness {
 }
 
 async function startController(
-  options: { readonly initialViewport?: TerminalViewportMemory } = {},
+  options: {
+    readonly initialViewport?: TerminalViewportMemory;
+    /** Ownership gate for self-asserting focus; defaults to "allowed". */
+    readonly paneFocusAllowed?: () => boolean;
+  } = {},
 ): Promise<Harness> {
   const env = createFakeTerminalEnvironment();
   const cache = createTerminalPresentationCache<TerminalPresentationController>({
@@ -565,6 +657,7 @@ async function startController(
       viewports.push(viewport);
       session.updateViewport(viewport);
     },
+    paneFocusAllowed: options.paneFocusAllowed ?? (() => true),
     resolveUrl: () => {
       env.claims += 1;
       return Effect.succeed('ws://runtime.test/pty/7');

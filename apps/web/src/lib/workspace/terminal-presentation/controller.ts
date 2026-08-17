@@ -107,6 +107,16 @@ export interface CreateTerminalPresentationControllerInput {
    * `browserTerminalEnvironment`; tests pass fakes and drive the real lifecycle.
    */
   readonly environment: TerminalPresentationEnvironment;
+  /**
+   * Whether this controller may take DOM focus on its own initiative
+   * (`setFocused`, activation completion). Commanded focus via `focus()` is
+   * never gated — it only arrives through ownership-aware paths, and it is how
+   * an overlay's close path hands focus back. Production injects the shared
+   * workbench owner predicate — no focus-owning overlay (palette, drawer) is
+   * open — and tests inject fakes. Required so no construction site can
+   * silently omit the decision.
+   */
+  readonly paneFocusAllowed: () => boolean;
 }
 
 export function createTerminalPresentationController(
@@ -303,7 +313,10 @@ export function createTerminalPresentationController(
       if (fitted) pendingActivationWork = null;
       activationWork?.();
       terminal.refresh(0, Math.max(0, terminal.rows - 1));
-      if (focused) terminal.focus();
+      // Activation retries across frames and installs the renderer first, so
+      // this can land arbitrarily late — seconds after an overlay took focus.
+      // Self-asserting focus is therefore ownership-gated.
+      if (focused && input.paneFocusAllowed()) terminal.focus();
     });
   };
   const park = () => {
@@ -704,8 +717,11 @@ export function createTerminalPresentationController(
       return registration.release;
     },
     setFocused(next) {
+      // `focused` is recorded even when the focus call is denied: that retained
+      // state is what lets the commanded close-path recovery focus this
+      // terminal later, once the owning overlay releases focus.
       focused = next;
-      if (next && arbiter.size > 0) terminal.focus();
+      if (next && arbiter.size > 0 && input.paneFocusAllowed()) terminal.focus();
     },
     focus: () => terminal.focus(),
     dispose: () => lifecycle.dispose(),

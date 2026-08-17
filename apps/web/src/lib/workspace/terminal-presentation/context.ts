@@ -1,6 +1,7 @@
 import type { Effect } from 'effect';
 import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import { paneFocusAllowed } from '../activation.js';
 import {
   type TerminalPlacement,
   type TerminalSessionIdentity,
@@ -145,6 +146,10 @@ export function useTerminalAttachmentResource(input: {
       onCustomKey: input.onCustomKey,
       parkingRoot: workspace.parkingRoot,
       environment: workspace.environment ?? browserTerminalEnvironment,
+      // Passed by reference, not wrapped: both enforcement points (the focus
+      // scheduler and this controller) read the identical owner rule and
+      // cannot drift.
+      paneFocusAllowed,
       // Superseded by a newer request, not by an effect teardown: a StrictMode
       // probe re-runs this effect with the same request key and must not cancel
       // the preparation it is about to reuse.

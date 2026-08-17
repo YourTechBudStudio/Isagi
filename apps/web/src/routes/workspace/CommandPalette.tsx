@@ -47,7 +47,7 @@ import {
   workflowStartFailureContent,
 } from '../../lib/palette/workflow-failure.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
-import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
+import { restoreWorkbenchFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
 import {
   useStartWorkflowMutation,
@@ -171,12 +171,24 @@ export function CommandPalette() {
     send({ type: 'closed' });
   }, []);
 
+  // A command's async run (or a workflow launch) is in flight. The machine stays
+  // in search/step while the run effect resolves, so without this the palette
+  // would keep rendering the frozen list/wizard with no sign of progress.
+  // Declared here rather than beside the view because the global-hotkey effect
+  // below depends on it.
+  const running = isBusy(machine) || startWorkflowMutation.isPending;
+
   useEffect(() => {
     if (!open || machine.kind !== 'closed' || lastOpenRequest.current === null) {
       return;
     }
     closePalette();
-    restoreActivePaneFocus();
+    // The palette's single focus-relinquish point, so every close — drawer
+    // handoffs, Mod+K, Escape, scrim click — routes to the current workbench
+    // owner. `closePalette()` must come first: it flips the store's `open`
+    // synchronously, so the router and the scheduler's ownership guard both
+    // see the palette as closed.
+    restoreWorkbenchFocus();
   }, [closePalette, machine.kind, open]);
 
   // Global hotkeys: Mod+K toggles the palette, Mod+N opens Add project.
@@ -186,8 +198,22 @@ export function CommandPalette() {
         return;
       }
       const key = event.key.toLowerCase();
+      // The busy lock extends to the shortcuts. Closing or replacing the
+      // palette mid-run makes the machine drop the attempt's outcome
+      // (`runMatches` fails), so a rejection would vanish unseen and a
+      // resolution would act later, detached from any visible action. The
+      // scrim and Escape-back are already locked while running; these were the
+      // remaining paths that could abandon in-flight work.
+      //
+      // `preventDefault` still fires for a recognized shortcut even when it
+      // no-ops, so native host/browser behavior cannot leak through the lock.
       if (key === 'k') {
         event.preventDefault();
+        // Only the close half is locked; Mod+K with the palette closed always
+        // opens it, so the lock can never make the palette unreachable.
+        if (open && running) {
+          return;
+        }
         if (open) {
           closeCurrentPalette();
         } else {
@@ -195,12 +221,15 @@ export function CommandPalette() {
         }
       } else if (key === 'n') {
         event.preventDefault();
+        if (running) {
+          return;
+        }
         openPalette('add-project');
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, openPalette, closeCurrentPalette]);
+  }, [open, openPalette, closeCurrentPalette, running]);
 
   // Reset on open; jump straight into a command flow when autostarted.
   useEffect(() => {
@@ -257,11 +286,6 @@ export function CommandPalette() {
       },
     });
   }, [command, machine.kind, spec]);
-
-  // A command's async run (or a workflow launch) is in flight. The machine stays
-  // in search/step while the run effect resolves, so without this the palette
-  // would keep rendering the frozen list/wizard with no sign of progress.
-  const running = isBusy(machine) || startWorkflowMutation.isPending;
 
   const view = useMemo(() => {
     if (running) {
@@ -362,7 +386,25 @@ export function CommandPalette() {
   // with no text input (review steps, outcomes). input-flow controls that own a
   // text input autofocus themselves; the workflow form manages its own focus.
   useEffect(() => {
-    if (!open || running || view.kind === 'workflow-form') {
+    // `machine.kind === 'closed'` is a correctness guard, not polish, and `open`
+    // cannot do its job. On the render where the machine transitions to closed,
+    // this effect re-runs (its `view`/`viewKey` deps changed) and the earlier
+    // close effect has already routed focus to the drawer — but React processes
+    // a store update scheduled inside a passive effect only after the current
+    // passive-effect traversal, so the captured `open` still reads true here.
+    // Without this guard the fall-through below would steal focus back from the
+    // just-focused drawer, then drop it to the document body on unmount.
+    // `machine.kind` belongs to the very render whose effects are flushing, so
+    // the guard is exact.
+    if (!open || machine.kind === 'closed' || view.kind === 'workflow-form') {
+      return;
+    }
+    // The busy view unmounts the focused search input, so without this the
+    // palette would be a focus owner in name only and focus would fall to the
+    // document body — leaving keystrokes free to land behind the overlay. The
+    // panel is already focusable and its key handler no-ops while running.
+    if (running) {
+      panelRef.current?.focus();
       return;
     }
     if (acceptsInput) {
@@ -373,7 +415,7 @@ export function CommandPalette() {
       return;
     }
     panelRef.current?.focus();
-  }, [open, running, acceptsInput, view, viewKey]);
+  }, [open, machine.kind, running, acceptsInput, view, viewKey]);
 
   const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowInputAnswers) => {
     if (!entry.workflow || !workflowLaunchContext) {

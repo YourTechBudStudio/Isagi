@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import type { SurfaceDetail } from '@isagi/contracts';
 
 import { toastCopy } from '../../copy/index.js';
+import { usePaletteStore } from '../palette/store.js';
 import { queryClient } from '../query/client.js';
 import { runRuntimeEffect } from '../runtime/run.js';
 import { showToast } from '../toast/index.js';
@@ -38,6 +39,7 @@ const focusTargetsByPaneKey = new Map<string, PaneFocusRegistration[]>();
 let pendingFocusKey: string | null = null;
 let scheduledFocusRevision = 0;
 let scheduledFocusFrames: readonly number[] = [];
+let drawerFocusTarget: (() => void) | null = null;
 
 /**
  * Activate a surface as a workbench-level user action. The surface switches
@@ -128,6 +130,58 @@ export function restoreActivePaneFocus() {
   requestPaneFocus(target.surfaceId, target.paneId);
 }
 
+/**
+ * Register the commands drawer's keyboard-focus function while the drawer is
+ * mounted open. Last registration wins; the returned unregister clears only its
+ * own registration, mirroring `registerPaneFocusTarget`'s token discipline so a
+ * late cleanup cannot strand a newer target.
+ */
+export function registerDrawerFocusTarget(focus: () => void): () => void {
+  drawerFocusTarget = focus;
+  return () => {
+    if (drawerFocusTarget === focus) {
+      drawerFocusTarget = null;
+    }
+  };
+}
+
+/**
+ * Route keyboard focus to the current workbench owner after focus-capturing
+ * chrome closes: the open drawer when present, else the active pane.
+ *
+ * When the drawer is open but its target has not registered yet (it mounted in
+ * the same commit), this does nothing on purpose — the drawer's own
+ * focus-on-open effect lands focus, whereas a pane restore here would schedule a
+ * deferred focus that steals it back and misdirects keystrokes to a hidden PTY.
+ *
+ * The rule is owner-based, not handoff-based: if the drawer is open for any
+ * reason, pane restoration is wrong. `drawer.open` in the store is synchronous
+ * and authoritative even before the drawer component's effects run.
+ *
+ * `restorePaneFocus` is a unit-test seam only; production callers pass nothing.
+ */
+export function restoreWorkbenchFocus(restorePaneFocus: () => void = restoreActivePaneFocus) {
+  if (useWorkspaceStore.getState().drawer.open) {
+    drawerFocusTarget?.();
+    return;
+  }
+  restorePaneFocus();
+}
+
+/**
+ * Whether the active pane may take keyboard focus right now: true only when no
+ * focus-owning overlay is open. The command palette owns focus while open (its
+ * focus effect asserts it in every view, the busy panel included); the commands
+ * drawer owns it when open with the palette closed.
+ *
+ * One fact, two enforcement points: the focus scheduler below, and the terminal
+ * presentation controller's self-asserting focus calls. Read at focus time,
+ * never cached, so it is always current.
+ */
+export function paneFocusAllowed(): boolean {
+  return !usePaletteStore.getState().open && !useWorkspaceStore.getState().drawer.open;
+}
+
 export function cancelWorkbenchFocusPersistence(worktreeId: number) {
   nextFocusRevision(worktreeId);
 }
@@ -215,6 +269,18 @@ function scheduleFocus(key: string) {
 
   const run = () => {
     if (revision !== scheduledFocusRevision) {
+      return;
+    }
+    // Ownership is checked at fire time, not request time: that is what defeats
+    // the steal. A palette row's `run()` may request pane focus while the
+    // palette is still up; by the time the deferred callback runs an overlay
+    // owns focus and the request dies here. `pendingFocusKey` is cleared so a
+    // later pane registration cannot resurrect an obsolete request — each
+    // overlay's own close path is the correctly ordered way pane focus returns.
+    // The revision check above must stay first, so a stale callback never
+    // clears a newer request's pending key.
+    if (!paneFocusAllowed()) {
+      pendingFocusKey = null;
       return;
     }
     const target = bestTargetForKey(key);

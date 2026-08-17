@@ -9,7 +9,11 @@ import {
 } from 'react';
 
 import { surfaceTransition } from '../../lib/motion.js';
-import { restoreActivePaneFocus } from '../../lib/workspace/activation.js';
+import { usePaletteStore } from '../../lib/palette/store.js';
+import {
+  registerDrawerFocusTarget,
+  restoreActivePaneFocus,
+} from '../../lib/workspace/activation.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { CommandsView } from './WorkbenchCommands.js';
 
@@ -37,17 +41,50 @@ export function WorkbenchDrawer() {
     restoreActivePaneFocus();
   }, [closeDrawer]);
 
+  // The drawer owns keyboard focus while it is the topmost open surface. One
+  // effect covers both halves because the aside only exists while `open`:
+  // focus-on-open (for pointer entry paths like the status strip, where no
+  // focus router runs) and target registration (so the palette's close path can
+  // route focus here when the drawer was already open and no open transition
+  // fired). `preventScroll` keeps the slide-in from triggering a scroll jump.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const focusDrawer = () => asideRef.current?.focus({ preventScroll: true });
+    focusDrawer();
+    return registerDrawerFocusTarget(focusDrawer);
+  }, [open]);
+
   // Dismiss on Escape or a click anywhere outside the drawer.
+  //
+  // Dismissal belongs to the topmost open surface. These are window-level
+  // listeners on a surface that sits *beneath* the palette, so without the
+  // guard any pointer selection in the palette would dismiss the drawer on
+  // `pointerdown` (React's handlers run at the root before the event reaches
+  // window), and an Escape the busy palette leaves unconsumed would dismiss it
+  // mid-run. Palette state is read via `getState()` at event time rather than
+  // subscribed: during the very click that closes the palette, this listener
+  // fires after React's handlers but before the close effect commits
+  // `closePalette()`, so `open` still reads true and the drawer correctly
+  // ignores that click. The next outside click dismisses it normally. When the
+  // palette is closed both handlers behave exactly as they did before.
   useEffect(() => {
     if (!open) {
       return;
     }
     const onKey = (event: KeyboardEvent) => {
+      if (usePaletteStore.getState().open) {
+        return;
+      }
       if (event.key === 'Escape') {
         closeDrawerAndRestoreFocus();
       }
     };
     const onPointerDown = (event: PointerEvent) => {
+      if (usePaletteStore.getState().open) {
+        return;
+      }
       if (asideRef.current && !asideRef.current.contains(event.target as Node)) {
         closeDrawerAndRestoreFocus();
       }
@@ -86,12 +123,24 @@ export function WorkbenchDrawer() {
         <motion.aside
           key="drawer"
           ref={asideRef}
+          // The aside is the stable focus target: a landmark that exists in
+          // every catalog state, unlike the inner controls (a command detail
+          // only exists when a command is selected, and diagnostics replace
+          // it). Screen readers announce the handoff as focus landing on the
+          // "Commands" complementary region. Tab from here reaches the header
+          // controls, then the command list, in existing DOM order — no
+          // tab-index surgery on inner controls.
+          tabIndex={-1}
+          aria-labelledby="workbench-drawer-title"
           initial={{ x: '100%', opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: '100%', opacity: 0 }}
           transition={surfaceTransition}
           style={{ width: expanded ? '100%' : (width ?? DEFAULT_WIDTH) }}
-          className="absolute top-0 right-0 bottom-0 z-20 flex flex-col border-l border-line/24 bg-canvas/85 shadow-lift backdrop-blur-lg"
+          // `outline-none` is paired with a focus-visible ring, never left
+          // bare: a keyboard handoff has to be visible. Pointer interaction
+          // inside the drawer shows nothing.
+          className="absolute top-0 right-0 bottom-0 z-20 flex flex-col border-l border-line/24 bg-canvas/85 shadow-lift outline-none backdrop-blur-lg focus-visible:ring-1 focus-visible:ring-blue/40 focus-visible:ring-inset"
         >
           <div
             onPointerDown={startResize}
@@ -101,7 +150,9 @@ export function WorkbenchDrawer() {
           </div>
 
           <div className="flex h-11 flex-none items-center gap-2 border-b border-line/14 px-3.5">
-            <span className="font-mono text-[12px] text-fg-muted">Commands</span>
+            <span id="workbench-drawer-title" className="font-mono text-[12px] text-fg-muted">
+              Commands
+            </span>
             <div className="ml-auto flex items-center gap-1">
               <button
                 type="button"
