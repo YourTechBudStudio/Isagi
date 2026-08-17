@@ -45,5 +45,10 @@ export default defineConfig({
       testMatch: /rail-reorder\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
     },
+    {
+      name: 'command-palette',
+      testMatch: /command-palette\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },
+    },
   ],
 });

@@ -4,13 +4,19 @@ import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
 
 /**
- * The four palette groups. **Only `global` is config-driven** (the extensible
- * command registry); the other three are first-class internal features assembled
- * from workspace state.
+ * The palette groups, distinguished by how entries are registered.
+ *
+ * `global` is the extensible static registry: commands are declared in code and
+ * new ones are added by extending that registry. `workflows` and
+ * `worktree-commands` are internal groups whose entries are populated at runtime
+ * from discovered per-worktree configuration. The remaining groups are internal
+ * features assembled from workspace state or from server state the palette
+ * observes while it is open.
  */
 export type PaletteGroup =
   | 'global'
   | 'workflows'
+  | 'worktree-commands'
   | 'worktree-actions'
   | 'worktree-surfaces'
   | 'switch-worktree';
@@ -266,13 +272,21 @@ export interface PaletteEntry {
   readonly sub?: string;
   readonly accent?: boolean;
   /**
-   * Presentation-only marker for an error-detail row (a broken workflow package
-   * or a discovery failure). It tints the row as a genuine error and reads as a
-   * detail action, not a runnable command; behavior stays defined by `run()`,
-   * which returns an error `CommandOutcome`. Deliberately not a `warning`/
-   * `success` union until a real entry needs one.
+   * Presentation-only state marker; behavior always stays defined by `run()`.
+   *
+   * `error` marks an error-detail row (a broken workflow package, a discovery
+   * failure, an unreadable command catalog): it tints the row as a genuine error
+   * and reads as a detail action rather than a runnable command.
+   *
+   * `working` marks a row whose subject is a live process — a configured command
+   * that is already running. It tints the icon with the `working` attention
+   * token, which is the same signal the rail and status strip use, so "this is
+   * already up" reads the same everywhere. It is a state tint, not decoration:
+   * `accent` remains the decorative marker.
+   *
+   * Deliberately not a `warning`/`success` union until a real entry needs one.
    */
-  readonly tone?: 'error';
+  readonly tone?: 'error' | 'working';
   /** Values captured when the entry was assembled, before async command effects run. */
   readonly values?: ArgValues;
   readonly disabled?: { readonly reason: string } | undefined;
