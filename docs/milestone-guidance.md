@@ -10,8 +10,8 @@ Read this document before retrieving, creating, or amending any milestone or sto
 
 | Concept                        | GitHub representation                                                                                                      |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Milestone                      | An issue labeled `type:milestone`                                                                                          |
-| Story                          | An issue labeled with exactly one `story:*` label, attached as a **sub-issue** of its milestone issue                      |
+| Milestone                      | An issue whose title begins with `[milestone] ` and is labeled `type:milestone`                                             |
+| Story                          | An issue whose title begins with `[story] `, is labeled with exactly one `story:*` label, and is attached as a **sub-issue** of its milestone issue |
 | Story kind                     | `story:exploration`, `story:implementation`, or `story:release`                                                            |
 | Milestone ↔ story navigation   | GitHub's native sub-issue relationship                                                                                     |
 | Dependency between stories     | A plain issue reference in the body (`Blocked by #12`)                                                                     |
@@ -66,7 +66,7 @@ Include only the sections that carry real content. An empty heading is worse tha
 - **Key decisions** — consequential choices, their rationale, and the serious alternatives that were rejected.
 - **Open questions** — known unresolved areas and why they matter.
 
-Title format: `Milestone: <product outcome>`.
+Title format: `[milestone] <product outcome>`. The lowercase prefix is mandatory.
 
 ### Story Issue
 
@@ -83,6 +83,8 @@ An exploration story additionally names:
 - **Feeds** — the milestone or downstream stories that will consume the conclusions, as issue references.
 
 A story is a vertical slice large enough to warrant its own brainstorming session. It is not a task checklist item.
+
+Title format: `[story] <product outcome>`. The lowercase prefix is mandatory for every story kind.
 
 ## Amendments
 
@@ -128,13 +130,13 @@ After approval, publish in dependency order so parentage can be set at creation 
 Create a milestone:
 
 ```
-gh issue create --title "Milestone: <outcome>" --label type:milestone --body-file <file>
+gh issue create --title "[milestone] <outcome>" --label type:milestone --body-file <file>
 ```
 
 Create a story under it:
 
 ```
-gh issue create --title "<outcome>" --label story:implementation --parent <milestone> --body-file <file>
+gh issue create --title "[story] <outcome>" --label story:implementation --parent <milestone> --body-file <file>
 ```
 
 Attach or move an existing story:
