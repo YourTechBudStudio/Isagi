@@ -16,6 +16,7 @@ import { paletteCopy } from '../../copy/index.js';
 import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';
 import { useLaunchableHarnesses } from '../../lib/control-plane/queries.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
+import { configuredCommandSection } from '../../lib/palette/configured-commands.js';
 import {
   buildPaletteContext,
   workflowContextFromSurfaceDetail,
@@ -53,11 +54,17 @@ import {
   useStartWorkflowMutation,
   useSurfaceDetailQuery,
   useWorkflowDescriptorsQuery,
+  useWorktreeCommandsQuery,
 } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
 import { EntryList, OutcomePanel, RunningPanel, Tip } from './CommandPaletteViews.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
+
+// Command membership is file-backed with no config-change event. Open-only
+// polling bounds visible drift to ~10 s plus request latency; closing the
+// palette disables this interval.
+const COMMAND_CATALOG_POLL_MS = 10_000;
 
 function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
   if (screen.kind === 'select' || screen.kind === 'combo') {
@@ -129,6 +136,21 @@ export function CommandPalette() {
         : undefined,
     [workflowLaunchContext, workflowDescriptors.isError, workflowDescriptors.error],
   );
+  // Override the shared 10 s staleTime for this observer so each open, and each
+  // worktree switch while open, starts a read; cached data may render meanwhile.
+  const worktreeCommandsQuery = useWorktreeCommandsQuery(activeWorktreeId, {
+    enabled: open,
+    staleTime: 0,
+    refetchInterval: COMMAND_CATALOG_POLL_MS,
+  });
+  const configuredCommandsSection = useMemo(
+    () =>
+      configuredCommandSection({
+        data: worktreeCommandsQuery.data,
+        isError: worktreeCommandsQuery.isError,
+      }),
+    [worktreeCommandsQuery.data, worktreeCommandsQuery.isError],
+  );
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
@@ -138,6 +160,8 @@ export function CommandPalette() {
         workflowDescriptors: workflowDescriptors.data?.workflows,
         activeSurfaceWorkflowSummary,
         workflowFailure,
+        configuredCommands: configuredCommandsSection.configuredCommands,
+        configuredCommandsFailure: configuredCommandsSection.configuredCommandsFailure,
       }),
     [
       projects,
@@ -148,6 +172,7 @@ export function CommandPalette() {
       workflowDescriptors.data?.workflows,
       activeSurfaceWorkflowSummary,
       workflowFailure,
+      configuredCommandsSection,
     ],
   );
   const allEntries = useMemo(() => assembleEntries(ctx), [ctx]);
