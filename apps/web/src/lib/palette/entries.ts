@@ -7,6 +7,7 @@ import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
 import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
+import { configuredCommandEntries } from './configured-commands.js';
 import { GLOBAL_COMMANDS } from './registry.js';
 import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
 
@@ -107,6 +108,12 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         );
       }
     }
+
+    // Between the workflow rows and the worktree actions: `EntryList` starts a
+    // new group header wherever `group` changes and `filterEntries` preserves
+    // assembly order, so this placement is what makes the section contiguous and
+    // puts `Commands` between `Workflows` and `This worktree`.
+    entries.push(...configuredCommandEntries(ctx));
 
     const activeSurfaceTitle = ctx.activeSurface?.title;
     const activeWorktreeCommands = worktreeActionCommands.filter(

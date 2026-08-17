@@ -23,6 +23,8 @@ export function buildPaletteContext(
     readonly workflowDescriptors?: PaletteContext['workflowDescriptors'];
     readonly activeSurfaceWorkflowSummary?: PaletteContext['activeSurfaceWorkflowSummary'];
     readonly workflowFailure?: PaletteContext['workflowFailure'];
+    readonly configuredCommands?: PaletteContext['configuredCommands'];
+    readonly configuredCommandsFailure?: PaletteContext['configuredCommandsFailure'];
   },
 ): PaletteContext {
   const activeWorktree =
@@ -51,6 +53,8 @@ export function buildPaletteContext(
     workflowDescriptors: options.workflowDescriptors,
     activeSurfaceWorkflowSummary: options.activeSurfaceWorkflowSummary,
     workflowFailure: options.workflowFailure,
+    configuredCommands: options.configuredCommands,
+    configuredCommandsFailure: options.configuredCommandsFailure,
   };
 }
 

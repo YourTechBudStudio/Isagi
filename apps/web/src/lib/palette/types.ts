@@ -1,4 +1,9 @@
-import type { AgentHarness, WorkflowDescriptorResult, WorkflowRunSummary } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  CommandSummary,
+  WorkflowDescriptorResult,
+  WorkflowRunSummary,
+} from '@isagi/contracts';
 
 import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
@@ -20,6 +25,15 @@ export type PaletteGroup =
   | 'worktree-actions'
   | 'worktree-surfaces'
   | 'switch-worktree';
+
+/**
+ * Why the palette has no valid configured-command catalog to show: the config
+ * file is invalid (`config_error`, a *successful* read of a broken file) or the
+ * catalog read itself failed (`unavailable`, a terminal query error). A kind
+ * only — the commands drawer owns the diagnostics, so no diagnostic copy
+ * travels through the palette context.
+ */
+export type ConfiguredCommandsFailureKind = 'config_error' | 'unavailable';
 
 /**
  * Snapshot of the current workspace context, derived from the Zustand store.
@@ -47,6 +61,18 @@ export interface PaletteContext {
    * synthetic detail row and never touches unrelated palette groups.
    */
   readonly workflowFailure?: WorkflowFailurePresentation | undefined;
+  /**
+   * The active worktree's valid configured-command catalog (the `configured`
+   * read variant's `commands`). Absent means no data has arrived yet; an empty
+   * array means the worktree really configures no commands, which is an honest
+   * zero-row section rather than a placeholder.
+   */
+  readonly configuredCommands?: readonly CommandSummary[] | undefined;
+  /**
+   * When present it replaces the command rows with one failure row and never
+   * touches other groups (mirrors `workflowFailure`).
+   */
+  readonly configuredCommandsFailure?: ConfiguredCommandsFailureKind | undefined;
 }
 
 export interface Option<Payload = unknown> {

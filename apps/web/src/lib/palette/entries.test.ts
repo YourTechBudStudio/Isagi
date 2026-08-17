@@ -185,6 +185,60 @@ test('workflow entries are disabled while the active surface is occupied', () =>
   assert.equal(entry?.sub, 'Dismiss the current workflow first.');
 });
 
+test('configured command rows assemble contiguously between workflows and worktree actions', () => {
+  const entries = assembleEntries(
+    ctx({
+      workflowDescriptors: [{ ok: true, workflowKey: 'release', manifest: { title: 'Release' } }],
+      configuredCommands: [
+        { name: 'dev', status: 'idle', ports: [] },
+        { name: 'api', status: 'running', ports: [8080] },
+      ],
+    }),
+  );
+
+  const groups = entries.map((entry) => entry.group);
+  const first = groups.indexOf('worktree-commands');
+  const last = groups.lastIndexOf('worktree-commands');
+
+  assert.equal(last - first, 1, 'the two command rows must be adjacent');
+  assert.ok(first > groups.lastIndexOf('workflows'), 'commands follow the workflow rows');
+  assert.ok(last < groups.indexOf('worktree-actions'), 'commands precede the worktree actions');
+  assert.deepEqual(
+    entries.filter((entry) => entry.group === 'worktree-commands').map((entry) => entry.id),
+    ['command:11:dev', 'command:11:api'],
+  );
+});
+
+test('a commands catalog failure row suppresses no other group', () => {
+  const entries = assembleEntries(
+    ctx({
+      workflowDescriptors: [{ ok: true, workflowKey: 'release', manifest: { title: 'Release' } }],
+      configuredCommandsFailure: 'config_error',
+    }),
+  );
+
+  const commandEntries = entries.filter((entry) => entry.group === 'worktree-commands');
+  assert.equal(commandEntries.length, 1);
+  assert.equal(commandEntries[0]?.id, 'configured-commands-failure');
+  assert.ok(entries.some((entry) => entry.id === 'workflow:release'));
+  assert.ok(entries.some((entry) => entry.id === 'delete-active-worktree'));
+});
+
+test('no worktree-commands rows without an active worktree', () => {
+  const entries = assembleEntries(
+    ctx({
+      activeWorktree: null,
+      activeSurface: null,
+      configuredCommands: [{ name: 'dev', status: 'idle', ports: [] }],
+    }),
+  );
+
+  assert.equal(
+    entries.some((entry) => entry.group === 'worktree-commands'),
+    false,
+  );
+});
+
 // Error-detail rows define their behavior through `run()`, which returns a
 // synchronous error `CommandOutcome`. This unwraps it and fails loudly if a row
 // is ever wired to launch (void), resolve async, or return a non-error outcome.

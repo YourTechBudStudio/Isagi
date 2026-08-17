@@ -1,24 +1,28 @@
-import { Activity, Bot, Play, SquareTerminal, TriangleAlert, Workflow } from 'lucide-react';
+import { Bot, SquareTerminal, Workflow } from 'lucide-react';
 
 import type { CommandSummary } from '@isagi/contracts';
 
 import { paletteCopy } from '../../../src/copy/index.js';
-import type { PaletteEntry } from '../../../src/lib/palette/types.js';
+import { configuredCommandEntries } from '../../../src/lib/palette/configured-commands.js';
+import type { PaletteContext, PaletteEntry } from '../../../src/lib/palette/types.js';
 
 /**
  * Fixture seed for the `Commands` palette group.
  *
- * **This whole module is mock-only debt.** Phase 02 owns the real
- * `configuredCommandSection` / `configuredCommandEntries` in
- * `src/lib/palette/configured-commands.ts`, and phase 05 replaces everything
- * here with the production section over a contract-shaped fake runtime. Nothing
- * in this file may be imported by the shipped app, and the row shapes below are
- * a deliberate stand-in for the production assembly, not a second definition of
- * it — when the two disagree, production wins and this file is wrong.
+ * The rows themselves are no longer mocked: phase 02 landed the production
+ * `configuredCommandEntries` and this module now calls it, injecting recording
+ * effects through the dependency seam it already exposes. The parallel row
+ * builder that lived here is gone, so the spec can no longer pass against a
+ * palette the app does not have.
  *
- * What is real: the `PaletteEntry` contract, the copy, the icons, the group id,
- * and the group ordering. What is mocked: where the catalog comes from, and what
- * selecting a row does.
+ * **What remains mock-only debt, owned by phase 05:** the catalog source (the
+ * hardcoded variants below stand in for a runtime read) and the forked palette
+ * shell in `CommandPaletteFixtureApp.tsx`. Nothing in this file may be imported
+ * by the shipped app.
+ *
+ * What is real and therefore genuinely reviewed here: the production section
+ * assembly, the `PaletteEntry` contract, the copy, the icons, the tones, the
+ * group id, and the group ordering.
  */
 
 /** Which failure the catalog read produced, mirroring the phase-02 mapping. */
@@ -111,65 +115,65 @@ export const VARIANTS: readonly FixtureVariant[] = [
 export type FixtureRecorder = (action: string) => void;
 
 /**
- * The mock stand-in for phase 02's `configuredCommandEntries`. The branch is
- * frozen on the summary's status at assembly time, and the startable branch
- * awaits its run *before* opening details, so the recorded order proves the
- * handoff rather than assuming it.
+ * The section rows, built by the **production** `configuredCommandEntries` over
+ * a fixture-built context with recording effects injected. There is deliberately
+ * no second branching implementation here: what the spec judges is the real
+ * assembly, so a change to row shape, copy, icon, tone, or handoff order shows
+ * up in this fixture instead of quietly diverging from it.
+ *
+ * Still mock-only: where the catalog comes from (a hardcoded variant rather than
+ * a runtime read) and what the injected effects do (record a string rather than
+ * call the runtime and open the drawer). Phase 05 replaces both.
  */
 export function fixtureCommandEntries(
   variant: FixtureVariant,
   record: FixtureRecorder,
 ): readonly PaletteEntry[] {
-  if (!variant.hasActiveWorktree) return [];
+  return configuredCommandEntries(fixtureContext(variant), {
+    runCommand: async (worktreeId, commandName) => {
+      record(`run:${commandName}`);
+      return {
+        worktreeId,
+        commandName,
+        summary: { name: commandName, status: 'running', ports: [] },
+      };
+    },
+    openDrawer: (commandName) => {
+      record(`open:${commandName ?? ''}`);
+    },
+  });
+}
 
-  if (variant.failure) {
-    const copy =
-      variant.failure === 'config_error'
-        ? paletteCopy.commands.failure.configError
-        : paletteCopy.commands.failure.unavailable;
-    return [
-      {
-        id: 'configured-commands-failure',
-        label: copy.label,
-        icon: TriangleAlert,
-        group: 'worktree-commands',
-        sub: copy.sub,
-        tone: 'error',
-        // No command focus argument: the drawer's diagnostic surface renders
-        // regardless, and any prior selection is preserved.
-        run: () => {
-          record('open:');
-        },
-      },
-    ];
-  }
-
-  return (variant.commands ?? []).map((command) =>
-    command.status === 'running'
+/**
+ * The narrowest context the section reads: an active worktree (or none) plus the
+ * variant's catalog state, in the same two fields `configuredCommandSection`
+ * produces from a real query.
+ */
+function fixtureContext(variant: FixtureVariant): PaletteContext {
+  return {
+    projects: [],
+    activeProject: null,
+    activeWorktree: variant.hasActiveWorktree
       ? {
-          id: `command:${WORKTREE_ID}:${command.name}`,
-          label: command.name,
-          icon: Activity,
-          group: 'worktree-commands',
-          sub: paletteCopy.commands.sub.running(command.ports),
-          tone: 'working',
-          run: () => {
-            record(`open:${command.name}`);
-          },
+          id: WORKTREE_ID,
+          projectId: 1,
+          title: 'feature/commands',
+          path: '/repo/isagi-feature',
+          branch: 'feature/commands',
+          head: 'abcdef0',
+          isRoot: false,
+          attention: 'idle',
+          parked: false,
+          surfaces: [],
+          activeSurfaceId: null,
         }
-      : {
-          id: `command:${WORKTREE_ID}:${command.name}`,
-          label: command.name,
-          icon: Play,
-          group: 'worktree-commands',
-          sub: paletteCopy.commands.sub.run,
-          run: async () => {
-            record(`run:${command.name}`);
-            await Promise.resolve();
-            record(`open:${command.name}`);
-          },
-        },
-  );
+      : null,
+    activeSurface: null,
+    activePaneId: null,
+    launchableHarnesses: [],
+    ...(variant.commands ? { configuredCommands: variant.commands } : {}),
+    ...(variant.failure ? { configuredCommandsFailure: variant.failure } : {}),
+  };
 }
 
 /**
