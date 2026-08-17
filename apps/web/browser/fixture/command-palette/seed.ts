@@ -1,215 +1,166 @@
-import { Bot, SquareTerminal, Workflow } from 'lucide-react';
-
-import type { CommandSummary } from '@isagi/contracts';
-
-import { paletteCopy } from '../../../src/copy/index.js';
-import { configuredCommandEntries } from '../../../src/lib/palette/configured-commands.js';
-import type { PaletteContext, PaletteEntry } from '../../../src/lib/palette/types.js';
-
-/**
- * Fixture seed for the `Commands` palette group.
- *
- * The rows themselves are no longer mocked: phase 02 landed the production
- * `configuredCommandEntries` and this module now calls it, injecting recording
- * effects through the dependency seam it already exposes. The parallel row
- * builder that lived here is gone, so the spec can no longer pass against a
- * palette the app does not have.
- *
- * **What remains mock-only debt, owned by phase 05:** the catalog source (the
- * hardcoded variants below stand in for a runtime read) and the forked palette
- * shell in `CommandPaletteFixtureApp.tsx`. Nothing in this file may be imported
- * by the shipped app.
- *
- * What is real and therefore genuinely reviewed here: the production section
- * assembly, the `PaletteEntry` contract, the copy, the icons, the tones, the
- * group id, and the group ordering.
- */
-
-/** Which failure the catalog read produced, mirroring the phase-02 mapping. */
-export type FixtureFailureKind = 'config_error' | 'unavailable';
-
-export interface FixtureVariant {
-  readonly id: string;
-  readonly label: string;
-  /** Shown under the controls so a human reviewer knows what they are judging. */
-  readonly note: string;
-  /** `false` models "no active worktree": the section is absent entirely. */
-  readonly hasActiveWorktree: boolean;
-  readonly commands?: readonly CommandSummary[];
-  readonly failure?: FixtureFailureKind;
-}
-
-const WORKTREE_ID = 4;
-
-export const VARIANTS: readonly FixtureVariant[] = [
-  {
-    id: 'mixed',
-    label: 'Mixed catalog',
-    note: 'The everyday case: some commands up, some not, one with ports.',
-    hasActiveWorktree: true,
-    commands: [
-      { name: 'dev', status: 'idle', ports: [] },
-      { name: 'api', status: 'running', ports: [8080] },
-      { name: 'storybook', status: 'running', ports: [] },
-      { name: 'typecheck', status: 'exited', ports: [] },
-    ],
-  },
-  {
-    id: 'startable',
-    label: 'Every startable status',
-    note: 'idle · stopped · exited · failed all render as one ordinary startable row. A failed last run is still startable, because starting a fresh run is what selecting it does.',
-    hasActiveWorktree: true,
-    commands: [
-      { name: 'dev', status: 'idle', ports: [] },
-      { name: 'api', status: 'stopped', ports: [] },
-      { name: 'worker', status: 'exited', ports: [] },
-      { name: 'migrate', status: 'failed', ports: [] },
-    ],
-  },
-  {
-    id: 'running',
-    label: 'Running, with and without ports',
-    note: 'The running row must never read as a restart. Ports use the drawer’s :port notation.',
-    hasActiveWorktree: true,
-    commands: [
-      { name: 'worker', status: 'running', ports: [] },
-      { name: 'api', status: 'running', ports: [8080] },
-      { name: 'dev:api', status: 'running', ports: [8080, 9229] },
-      {
-        name: 'a-really-long-configured-command-name-that-has-to-truncate',
-        status: 'idle',
-        ports: [],
-      },
-    ],
-  },
-  {
-    id: 'config-error',
-    label: 'Invalid config',
-    note: 'One error-toned row, alone in the group. Neighbouring groups are untouched — a broken command config must not make the whole palette look broken.',
-    hasActiveWorktree: true,
-    failure: 'config_error',
-  },
-  {
-    id: 'unavailable',
-    label: 'Catalog unreadable',
-    note: 'A terminal read failure beats retained stale data, so no command rows appear beside it.',
-    hasActiveWorktree: true,
-    failure: 'unavailable',
-  },
-  {
-    id: 'empty',
-    label: 'Empty valid catalog',
-    note: 'Zero rows, so no group header at all. No placeholder row and no “nothing configured” line — the palette is a launcher, not a report.',
-    hasActiveWorktree: true,
-    commands: [],
-  },
-  {
-    id: 'no-worktree',
-    label: 'No active worktree',
-    note: 'The section is out of scope entirely, exactly as the worktree-scoped groups already behave.',
-    hasActiveWorktree: false,
-  },
-];
-
-/** Records what a selection did, in the order it happened. */
-export type FixtureRecorder = (action: string) => void;
+import type {
+  CommandSummary,
+  ControlPlaneSnapshot,
+  SurfaceDetail,
+  WorkspaceSnapshot,
+} from '@isagi/contracts';
 
 /**
- * The section rows, built by the **production** `configuredCommandEntries` over
- * a fixture-built context with recording effects injected. There is deliberately
- * no second branching implementation here: what the spec judges is the real
- * assembly, so a change to row shape, copy, icon, tone, or handoff order shows
- * up in this fixture instead of quietly diverging from it.
+ * The world the command-palette fixture's fake runtime serves.
  *
- * Still mock-only: where the catalog comes from (a hardcoded variant rather than
- * a runtime read) and what the injected effects do (record a string rather than
- * call the runtime and open the drawer). Phase 05 replaces both.
+ * These are real contract shapes, not lookalikes: the page mounts the production
+ * `CommandPalette` and `WorkbenchDrawer`, so everything here arrives through the
+ * same decode the app uses.
+ *
+ * The shape is chosen for what the focus assertions need rather than for
+ * plausible names. **Two** worktrees, each with one surface and one pane, so a
+ * switch-worktree row has a real destination whose pane target is registered and
+ * observable — without that, a "the drawer kept focus" assertion would pass
+ * because nothing was ever going to take it. One missing project is present so
+ * `relocate-project` is available and the Global group has its full three rows
+ * for the four-group density state.
+ *
+ * All names, paths and branches are invented. Nothing here is real workspace
+ * data and nothing here is loaded from a runtime.
  */
-export function fixtureCommandEntries(
-  variant: FixtureVariant,
-  record: FixtureRecorder,
-): readonly PaletteEntry[] {
-  return configuredCommandEntries(fixtureContext(variant), {
-    runCommand: async (worktreeId, commandName) => {
-      record(`run:${commandName}`);
-      return {
-        worktreeId,
-        commandName,
-        summary: { name: commandName, status: 'running', ports: [] },
-      };
+
+/** The worktree the fixture starts on, and the one a switch row navigates to. */
+export const FIXTURE_ORIGIN = {
+  projectId: 1,
+  worktreeId: 12,
+  surfaceId: 121,
+  paneId: 1211,
+} as const;
+export const FIXTURE_DESTINATION = {
+  projectId: 1,
+  worktreeId: 13,
+  surfaceId: 131,
+  paneId: 1311,
+} as const;
+
+/** Both sides of the switch, seeded identically so neither can be the vacuous one. */
+export const FIXTURE_PANES = [FIXTURE_ORIGIN, FIXTURE_DESTINATION] as const;
+
+export const FIXTURE_SNAPSHOT: WorkspaceSnapshot = {
+  projects: [
+    {
+      id: 1,
+      name: 'isagi',
+      rootPath: '/work/isagi',
+      status: 'present',
+      worktrees: [
+        worktree(11, 'main', 'main', { isRoot: true }),
+        worktree(12, 'commands in the palette', 'feat/palette-commands', {
+          surface: [FIXTURE_ORIGIN.surfaceId, 'shell'],
+        }),
+        worktree(13, 'second worktree', 'feat/second', {
+          surface: [FIXTURE_DESTINATION.surfaceId, 'shell'],
+        }),
+      ],
     },
-    openDrawer: (commandName) => {
-      record(`open:${commandName ?? ''}`);
+    {
+      id: 8,
+      name: 'archive-2025',
+      rootPath: '/work/archive-2025',
+      status: 'missing',
+      missingReason: 'The project directory is not on disk.',
+      worktrees: [],
     },
-  });
-}
+  ],
+};
+
+export const FIXTURE_SURFACE_DETAILS: Readonly<Record<number, SurfaceDetail>> = {
+  [FIXTURE_ORIGIN.surfaceId]: surfaceDetail(FIXTURE_ORIGIN),
+  [FIXTURE_DESTINATION.surfaceId]: surfaceDetail(FIXTURE_DESTINATION),
+};
 
 /**
- * The narrowest context the section reads: an active worktree (or none) plus the
- * variant's catalog state, in the same two fields `configuredCommandSection`
- * produces from a real query.
+ * The catalog each worktree starts with. The origin carries one of every
+ * presentation the phase-01 review approved — a startable row, a running row
+ * with a port, an exited row, and a `failed` row that is still ordinary and
+ * still startable — plus a fourth so the three-per-group cap is observable.
  */
-function fixtureContext(variant: FixtureVariant): PaletteContext {
+export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>> = {
+  [FIXTURE_ORIGIN.worktreeId]: [
+    { name: 'dev', status: 'idle', ports: [] },
+    { name: 'api', status: 'running', ports: [8080] },
+    { name: 'typecheck', status: 'exited', ports: [] },
+    { name: 'migrate', status: 'failed', ports: [] },
+  ],
+  [FIXTURE_DESTINATION.worktreeId]: [{ name: 'worker', status: 'idle', ports: [] }],
+};
+
+/**
+ * A settled control plane: inventory `ready` so the production query does not
+ * start its one-second startup poll, and no harnesses, so the palette's
+ * launchable-harness list is empty and the agent-session row stays inert.
+ */
+export const FIXTURE_CONTROL_PLANE: ControlPlaneSnapshot = {
+  onboardingComplete: true,
+  configStatus: 'valid',
+  configDiagnostic: null,
+  policyRevision: 'fixture-policy',
+  inventory: { status: 'ready', generation: 1, environment: 'trusted' },
+  harnesses: [],
+  reconciliation: {
+    desiredFingerprint: null,
+    runningFingerprint: null,
+    lastCompletedFingerprint: null,
+    lastAppliedFingerprint: null,
+    lastResult: null,
+  },
+};
+
+function worktree(
+  id: number,
+  title: string,
+  branch: string,
+  options: { isRoot?: boolean; surface?: readonly [number, string] } = {},
+): WorkspaceSnapshot['projects'][number]['worktrees'][number] {
+  const surfaces = options.surface
+    ? [
+        {
+          id: options.surface[0],
+          title: options.surface[1],
+          paneKinds: ['terminal_session' as const],
+        },
+      ]
+    : [];
   return {
-    projects: [],
-    activeProject: null,
-    activeWorktree: variant.hasActiveWorktree
-      ? {
-          id: WORKTREE_ID,
-          projectId: 1,
-          title: 'feature/commands',
-          path: '/repo/isagi-feature',
-          branch: 'feature/commands',
-          head: 'abcdef0',
-          isRoot: false,
-          attention: 'idle',
-          parked: false,
-          surfaces: [],
-          activeSurfaceId: null,
-        }
-      : null,
-    activeSurface: null,
-    activePaneId: null,
-    launchableHarnesses: [],
-    ...(variant.commands ? { configuredCommands: variant.commands } : {}),
-    ...(variant.failure ? { configuredCommandsFailure: variant.failure } : {}),
+    id,
+    projectId: 1,
+    title,
+    path: `/work/.isagi/wt/${id}`,
+    branch,
+    head: 'abc1234',
+    isRoot: options.isRoot ?? false,
+    parked: false,
+    surfaces,
+    activeSurfaceId: surfaces[0]?.id ?? null,
   };
 }
 
-/**
- * Static rows from the groups that bracket `Commands`. They exist so the section
- * is always judged in its real neighbourhood — placement, header contiguity, and
- * whether an error row bleeds into groups it has nothing to do with.
- */
-export function neighbourEntries(record: FixtureRecorder): readonly PaletteEntry[] {
-  const inert =
-    (id: string): (() => void) =>
-    () =>
-      record(`neighbour:${id}`);
-  return [
-    {
-      id: 'neighbour:workflow',
-      label: 'Ship a story',
-      icon: Workflow,
-      group: 'workflows',
-      sub: paletteCopy.workflows.start,
-      run: inert('workflow'),
+function surfaceDetail(place: {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly paneId: number;
+}): SurfaceDetail {
+  return {
+    id: place.surfaceId,
+    worktreeId: place.worktreeId,
+    title: 'shell',
+    layout: {
+      kind: 'leaf',
+      nodeId: `leaf-${place.paneId}`,
+      paneId: place.paneId,
+      collapsed: false,
     },
-    {
-      id: 'neighbour:terminal',
-      label: 'Start terminal',
-      icon: SquareTerminal,
-      group: 'worktree-actions',
-      sub: 'open shell',
-      run: inert('terminal'),
-    },
-    {
-      id: 'neighbour:agent',
-      label: 'Start agent session',
-      icon: Bot,
-      group: 'worktree-actions',
-      sub: 'choose a harness',
-      run: inert('agent'),
-    },
-  ];
+    activePaneId: place.paneId,
+    // A pane with no session still forms a workflow launch context, which is what
+    // keeps the Workflows group a real (and by default empty) production query
+    // rather than a broken one.
+    panes: [
+      { id: place.paneId, surfaceId: place.surfaceId, title: 'shell', sortOrder: 0, session: null },
+    ],
+  };
 }
