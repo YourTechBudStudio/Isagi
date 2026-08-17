@@ -131,16 +131,21 @@ export function EntryList({
                 disabled ? 'opacity-45' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
               }`}
             >
+              {/* Tone wins over selection because it reports state the row is
+                  telling the truth about — an already-running command stays
+                  marked as running whether or not the cursor is on it. */}
               <Icon
                 size={16}
                 className={
                   entry.tone === 'error'
                     ? 'text-error/80'
-                    : entry.accent && !disabled
-                      ? 'text-violet'
-                      : index === sel && !disabled
-                        ? 'text-fg'
-                        : 'text-fg-subtle'
+                    : entry.tone === 'working'
+                      ? 'text-working'
+                      : entry.accent && !disabled
+                        ? 'text-violet'
+                        : index === sel && !disabled
+                          ? 'text-fg'
+                          : 'text-fg-subtle'
                 }
               />
               <span className="min-w-0 flex-1">

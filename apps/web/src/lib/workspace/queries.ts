@@ -3,6 +3,7 @@ import { Effect } from 'effect';
 
 import type {
   AgentHarness,
+  CommandActionOutput,
   CreateSurfaceOutput,
   DeleteWorktreeInput,
   DeleteWorktreeOutput,
@@ -94,10 +95,27 @@ export function useWorkspaceQuery() {
   });
 }
 
-export function useWorktreeCommandsQuery(worktreeId: number | null) {
+/**
+ * The worktree's configured-command catalog. All three options are per-observer,
+ * so a caller that wants stricter freshness than the always-mounted consumers
+ * (the palette, which reads on open and polls only while it is visible) gets it
+ * without changing anyone else's behavior. Omitted options leave the TanStack
+ * defaults in place, which is why they are spread conditionally rather than
+ * passed as `undefined`.
+ */
+export function useWorktreeCommandsQuery(
+  worktreeId: number | null,
+  options: {
+    readonly enabled?: boolean | undefined;
+    readonly staleTime?: number | undefined;
+    readonly refetchInterval?: number | undefined;
+  } = {},
+) {
   return useQuery({
     queryKey: worktreeCommandsQueryKey(worktreeId),
-    enabled: worktreeId !== null,
+    enabled: (options.enabled ?? true) && worktreeId !== null,
+    ...(options.staleTime !== undefined ? { staleTime: options.staleTime } : {}),
+    ...(options.refetchInterval !== undefined ? { refetchInterval: options.refetchInterval } : {}),
     queryFn: ({ signal }) => {
       if (worktreeId === null) {
         throw new Error('Worktree command query requires an active worktree.');
@@ -366,6 +384,27 @@ export async function startTerminalSessionFromPalette(worktreeId: number) {
   const output = await runRuntimeEffect(launchTerminalSession(worktreeId));
   await commitLaunchSessionSuccess(queryClient, output);
   return output;
+}
+
+/**
+ * Launch a configured command from outside a React component, for palette rows
+ * that have no mutation hook to lean on. Invalidation runs in `finally` so the
+ * catalog and the command's log metadata are reconciled on both outcomes — the
+ * same settle semantics `useRunCommandMutation` gives the drawer. The endpoint's
+ * output is returned unchanged; the palette caller ignores it and hands off to
+ * the drawer, which is the surface that owns run diagnostics.
+ */
+export async function runConfiguredCommandFromPalette(
+  worktreeId: number,
+  commandName: string,
+  run: typeof runCommand = runCommand,
+  client: QueryClient = queryClient,
+): Promise<CommandActionOutput> {
+  try {
+    return await runRuntimeEffect(run(worktreeId, commandName));
+  } finally {
+    await invalidateCommandQueries(client, worktreeId, commandName);
+  }
 }
 
 export async function renameSurfaceTitleFromPalette(surfaceId: number, title: string) {

@@ -89,6 +89,7 @@ function begin(t: TestContext) {
       initialViewport: null,
       onViewport: () => undefined,
       onEvent: () => undefined,
+      paneFocusAllowed: () => true,
       resolveUrl: () => Effect.succeed('ws://runtime.test/pty/7'),
       isCancelled,
     });

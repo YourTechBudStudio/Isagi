@@ -1,19 +1,39 @@
-import type { AgentHarness, WorkflowDescriptorResult, WorkflowRunSummary } from '@isagi/contracts';
+import type {
+  AgentHarness,
+  CommandSummary,
+  WorkflowDescriptorResult,
+  WorkflowRunSummary,
+} from '@isagi/contracts';
 
 import type { IconType } from '../icon.js';
 import type { Project, Surface, Worktree } from '../workspace/types.js';
 
 /**
- * The four palette groups. **Only `global` is config-driven** (the extensible
- * command registry); the other three are first-class internal features assembled
- * from workspace state.
+ * The palette groups, distinguished by how entries are registered.
+ *
+ * `global` is the extensible static registry: commands are declared in code and
+ * new ones are added by extending that registry. `workflows` and
+ * `worktree-commands` are internal groups whose entries are populated at runtime
+ * from discovered per-worktree configuration. The remaining groups are internal
+ * features assembled from workspace state or from server state the palette
+ * observes while it is open.
  */
 export type PaletteGroup =
   | 'global'
   | 'workflows'
+  | 'worktree-commands'
   | 'worktree-actions'
   | 'worktree-surfaces'
   | 'switch-worktree';
+
+/**
+ * Why the palette has no valid configured-command catalog to show: the config
+ * file is invalid (`config_error`, a *successful* read of a broken file) or the
+ * catalog read itself failed (`unavailable`, a terminal query error). A kind
+ * only — the commands drawer owns the diagnostics, so no diagnostic copy
+ * travels through the palette context.
+ */
+export type ConfiguredCommandsFailureKind = 'config_error' | 'unavailable';
 
 /**
  * Snapshot of the current workspace context, derived from the Zustand store.
@@ -41,6 +61,18 @@ export interface PaletteContext {
    * synthetic detail row and never touches unrelated palette groups.
    */
   readonly workflowFailure?: WorkflowFailurePresentation | undefined;
+  /**
+   * The active worktree's valid configured-command catalog (the `configured`
+   * read variant's `commands`). Absent means no data has arrived yet; an empty
+   * array means the worktree really configures no commands, which is an honest
+   * zero-row section rather than a placeholder.
+   */
+  readonly configuredCommands?: readonly CommandSummary[] | undefined;
+  /**
+   * When present it replaces the command rows with one failure row and never
+   * touches other groups (mirrors `workflowFailure`).
+   */
+  readonly configuredCommandsFailure?: ConfiguredCommandsFailureKind | undefined;
 }
 
 export interface Option<Payload = unknown> {
@@ -266,13 +298,21 @@ export interface PaletteEntry {
   readonly sub?: string;
   readonly accent?: boolean;
   /**
-   * Presentation-only marker for an error-detail row (a broken workflow package
-   * or a discovery failure). It tints the row as a genuine error and reads as a
-   * detail action, not a runnable command; behavior stays defined by `run()`,
-   * which returns an error `CommandOutcome`. Deliberately not a `warning`/
-   * `success` union until a real entry needs one.
+   * Presentation-only state marker; behavior always stays defined by `run()`.
+   *
+   * `error` marks an error-detail row (a broken workflow package, a discovery
+   * failure, an unreadable command catalog): it tints the row as a genuine error
+   * and reads as a detail action rather than a runnable command.
+   *
+   * `working` marks a row whose subject is a live process — a configured command
+   * that is already running. It tints the icon with the `working` attention
+   * token, which is the same signal the rail and status strip use, so "this is
+   * already up" reads the same everywhere. It is a state tint, not decoration:
+   * `accent` remains the decorative marker.
+   *
+   * Deliberately not a `warning`/`success` union until a real entry needs one.
    */
-  readonly tone?: 'error';
+  readonly tone?: 'error' | 'working';
   /** Values captured when the entry was assembled, before async command effects run. */
   readonly values?: ArgValues;
   readonly disabled?: { readonly reason: string } | undefined;

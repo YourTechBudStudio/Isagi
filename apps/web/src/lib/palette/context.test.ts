@@ -37,6 +37,29 @@ test('palette context ignores stale active surface overrides', () => {
   assert.equal(ctx.activePaneId, 501);
 });
 
+test('configured command fields thread through buildPaletteContext', () => {
+  const projects = [project({ surfaces: [], activeSurfaceId: null })];
+  const commands = [{ name: 'dev', status: 'idle', ports: [] }] as const;
+
+  const ctx = buildPaletteContext(projects, 10, {
+    launchableHarnesses: [],
+    configuredCommands: commands,
+    configuredCommandsFailure: 'unavailable',
+  });
+
+  assert.equal(ctx.configuredCommands, commands);
+  assert.equal(ctx.configuredCommandsFailure, 'unavailable');
+});
+
+test('omitted configured command options leave both context fields undefined', () => {
+  const ctx = buildPaletteContext([project({ surfaces: [], activeSurfaceId: null })], 10, {
+    launchableHarnesses: [],
+  });
+
+  assert.equal(ctx.configuredCommands, undefined);
+  assert.equal(ctx.configuredCommandsFailure, undefined);
+});
+
 test('workflow launch context carries focused agent session from surface detail', () => {
   const context = workflowContextFromSurfaceDetail({
     worktreeId: 10,

@@ -1,3 +1,5 @@
+import { workbenchCopy } from './workbench.js';
+
 export const paletteCopy = {
   placeholders: {
     choose: 'choose\u2026',
@@ -52,6 +54,32 @@ export const paletteCopy = {
     startFailed: {
       title: 'Workflow did not start.',
       diagnosticLabel: 'Runtime detail',
+    },
+  },
+  // The Commands section: rows are configured worktree processes. Subs state
+  // the selection behavior in plain working chrome \u2014 startable rows launch, the
+  // running row only opens details (it must never read like a restart). A
+  // command whose last run failed is still a startable row, because starting a
+  // fresh run is exactly what selecting it does; the drawer owns run history.
+  // Failure-row labels reuse the drawer panel titles verbatim: the row opens
+  // exactly that panel, so the sentence must be the same sentence.
+  commands: {
+    sub: {
+      run: 'run command',
+      running: (ports: readonly number[]) =>
+        ports.length === 0
+          ? 'open details'
+          : `open details \u00b7 ${ports.map((port) => `:${port}`).join(' ')}`,
+    },
+    failure: {
+      configError: {
+        label: workbenchCopy.commandConfigDiagnosticTitle,
+        sub: 'Select for details.',
+      },
+      unavailable: {
+        label: workbenchCopy.commandReadFailedTitle,
+        sub: 'Select for details.',
+      },
     },
   },
   wizardStep: {
