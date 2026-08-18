@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
+import { reduceClaudeLifecycle } from './lifecycle.js';
 
 export function readClaudeConversation(input: {
   readonly agentSessionId: number;
@@ -38,7 +39,10 @@ export function readClaudeConversation(input: {
           paths: stopHookTranscriptPaths(input.streams),
           missingIsExpected: false,
         });
-    return conversationFromClaudeEntries(transcriptRead.entries);
+    return reconcileLatestTerminalMessage(
+      conversationFromClaudeEntries(transcriptRead.entries),
+      latestTerminalMessage(input.streams),
+    );
   });
 }
 
@@ -195,6 +199,61 @@ function stopHookTranscriptPaths(
     }
   }
   return paths;
+}
+
+function latestTerminalMessage(
+  streams: readonly [harnessSessionId: string, records: readonly HarnessObservationRecord[]][],
+): string | null {
+  const records = streams.at(-1)?.[1];
+  if (!records) return null;
+  const lifecycle = reduceClaudeLifecycle(records);
+  if (lifecycle.activeTurn) return null;
+  const terminal = lifecycle.terminalEdges.at(-1);
+  if (!terminal || terminal.type !== 'turn_ended') return null;
+  const stop = records.findLast(
+    (record) =>
+      record.harness === 'claude' &&
+      record.nativeEvent === 'Stop' &&
+      record.recordedAt === terminal.recordedAt,
+  );
+  const message = stringField(stop?.event, 'last_assistant_message');
+  return message?.trim() ? message : null;
+}
+
+function reconcileLatestTerminalMessage(
+  history: readonly ConversationMessage[],
+  terminalMessage: string | null,
+): readonly ConversationMessage[] {
+  if (!terminalMessage) return history;
+  const latestUserIndex = findLastIndex(history, (message) => message.role === 'user');
+  const latestAssistantIndex = findLastIndex(
+    history,
+    (message, index) => index > latestUserIndex && message.role === 'assistant',
+  );
+  if (latestAssistantIndex >= 0) {
+    const assistant = history[latestAssistantIndex];
+    if (!assistant) return history;
+    if (assistant.parts.some((part) => part.type === 'text' && part.text === terminalMessage)) {
+      return history;
+    }
+    return history.map((message, index) =>
+      index === latestAssistantIndex
+        ? { ...message, parts: [...message.parts, { type: 'text', text: terminalMessage }] }
+        : message,
+    );
+  }
+  return [...history, { role: 'assistant', parts: [{ type: 'text', text: terminalMessage }] }];
+}
+
+function findLastIndex<Value>(
+  values: readonly Value[],
+  predicate: (value: Value, index: number) => boolean,
+) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = values[index];
+    if (value !== undefined && predicate(value, index)) return index;
+  }
+  return -1;
 }
 
 type ClaudeTranscriptEntry = Record<string, unknown>;

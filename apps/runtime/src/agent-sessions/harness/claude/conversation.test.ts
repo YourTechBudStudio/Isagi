@@ -473,6 +473,225 @@ test('Claude conversation prefers native session transcript over stale hook tran
   }
 });
 
+test('Claude conversation appends the terminal Stop message when the native transcript is behind', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-terminal-message-'));
+  try {
+    const transcript = join(root, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      [
+        entry({
+          uuid: 'user-1',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'revise the artifact' },
+        }),
+        entry({
+          uuid: 'assistant-progress',
+          parentUuid: 'user-1',
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'One final consistency fix:' }],
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [
+          [
+            'claude-1',
+            [
+              promptRecord(0, transcript),
+              stopRecord(1, transcript, {
+                background_tasks: [],
+                last_assistant_message: 'The artifact is complete and ready for review.',
+              }),
+            ],
+          ],
+        ],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'revise the artifact' }] },
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'One final consistency fix:' },
+          { type: 'text', text: 'The artifact is complete and ready for review.' },
+        ],
+      },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude conversation does not duplicate a terminal message already in the transcript', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-terminal-dedupe-'));
+  try {
+    const transcript = join(root, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      [
+        entry({
+          uuid: 'user-1',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'finish the artifact' },
+        }),
+        entry({
+          uuid: 'assistant-final',
+          parentUuid: 'user-1',
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'The artifact is ready.' }],
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [
+          [
+            'claude-1',
+            [
+              promptRecord(0, transcript),
+              stopRecord(1, transcript, {
+                background_tasks: [],
+                last_assistant_message: 'The artifact is ready.',
+              }),
+            ],
+          ],
+        ],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'finish the artifact' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'The artifact is ready.' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude conversation does not attach a prior terminal message to a newer active turn', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-active-turn-'));
+  try {
+    const transcript = join(root, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      [
+        entry({
+          uuid: 'user-1',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'first prompt' },
+        }),
+        entry({
+          uuid: 'assistant-1',
+          parentUuid: 'user-1',
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+        }),
+        entry({
+          uuid: 'user-2',
+          parentUuid: 'assistant-1',
+          type: 'user',
+          promptSource: 'typed',
+          message: { role: 'user', content: 'second prompt' },
+        }),
+        entry({
+          uuid: 'assistant-progress',
+          parentUuid: 'user-2',
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [
+          [
+            'claude-1',
+            [
+              promptRecord(0, transcript),
+              stopRecord(1, transcript, {
+                background_tasks: [],
+                last_assistant_message: 'first answer',
+              }),
+              promptRecord(2, transcript),
+            ],
+          ],
+        ],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'first prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'first answer' }] },
+      { role: 'user', parts: [{ type: 'text', text: 'second prompt' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'working' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude conversation does not reconcile a non-terminal background-work Stop', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-claude-background-stop-'));
+  try {
+    const transcript = join(root, 'transcript.jsonl');
+    writeFileSync(
+      transcript,
+      entry({
+        uuid: 'user-1',
+        type: 'user',
+        promptSource: 'typed',
+        message: { role: 'user', content: 'run the review' },
+      }),
+      'utf8',
+    );
+
+    const history = await Effect.runPromise(
+      readClaudeConversation({
+        agentSessionId: 10,
+        streams: [
+          [
+            'claude-1',
+            [
+              promptRecord(0, transcript),
+              stopRecord(1, transcript, {
+                background_tasks: [{ task_id: 'reviewer' }],
+                last_assistant_message: 'The reviewer is still running.',
+              }),
+            ],
+          ],
+        ],
+      }),
+    );
+
+    assert.deepEqual(history, [
+      { role: 'user', parts: [{ type: 'text', text: 'run the review' }] },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('Claude conversation finds native transcript by session id when stored under a different cwd directory', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-claude-discovered-transcript-'));
   try {
@@ -588,7 +807,11 @@ test('Claude conversation reads raw Stop transcript_path records', async () => {
   }
 });
 
-function stopRecord(seq: number, transcriptPath: string): HarnessObservationRecord {
+function stopRecord(
+  seq: number,
+  transcriptPath: string,
+  event: Record<string, unknown> = {},
+): HarnessObservationRecord {
   return {
     recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
     seq,
@@ -597,6 +820,21 @@ function stopRecord(seq: number, transcriptPath: string): HarnessObservationReco
     nativeEvent: 'Stop',
     event: {
       hook_event_name: 'Stop',
+      transcript_path: transcriptPath,
+      ...event,
+    },
+  };
+}
+
+function promptRecord(seq: number, transcriptPath: string): HarnessObservationRecord {
+  return {
+    recordedAt: `2026-06-18T00:00:0${seq}.000Z`,
+    seq,
+    ptyProcessId: 20,
+    harness: 'claude',
+    nativeEvent: 'UserPromptSubmit',
+    event: {
+      hook_event_name: 'UserPromptSubmit',
       transcript_path: transcriptPath,
     },
   };
