@@ -8,16 +8,16 @@ Read this document before retrieving, creating, or amending any milestone or sto
 
 ## Object Model
 
-| Concept                        | GitHub representation                                                                                                      |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| Milestone                      | An issue whose title begins with `[milestone] ` and is labeled `type:milestone`                                             |
+| Concept                        | GitHub representation                                                                                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Milestone                      | An issue whose title begins with `[milestone] ` and is labeled `type:milestone`                                                                     |
 | Story                          | An issue whose title begins with `[story] `, is labeled with exactly one `story:*` label, and is attached as a **sub-issue** of its milestone issue |
-| Story kind                     | `story:exploration`, `story:implementation`, or `story:release`                                                            |
-| Milestone ↔ story navigation   | GitHub's native sub-issue relationship                                                                                     |
-| Dependency between stories     | A plain issue reference in the body (`Blocked by #12`)                                                                     |
-| Exploration consumer           | A plain issue reference in the body (`Feeds #14, #15`)                                                                     |
-| Amendment to any shaped object | A new comment on that issue, never an edit                                                                                 |
-| Spark                          | Not configured. Sparks arrive from an external system that has not been chosen yet. Do not create GitHub objects for them. |
+| Story kind                     | `story:exploration`, `story:implementation`, or `story:release`                                                                                     |
+| Milestone ↔ story navigation   | GitHub's native sub-issue relationship                                                                                                              |
+| Dependency between stories     | A plain issue reference in the body (`Blocked by #12`)                                                                                              |
+| Exploration consumer           | A plain issue reference in the body (`Feeds #14, #15`)                                                                                              |
+| Amendment to any shaped object | A new comment on that issue, never an edit                                                                                                          |
+| Spark                          | Not configured. Sparks arrive from an external system that has not been chosen yet. Do not create GitHub objects for them.                          |
 
 An issue carrying neither `type:milestone` nor a `story:*` label is not a shaped object. On a public repository that is usually community input, and it is outside this system.
 
