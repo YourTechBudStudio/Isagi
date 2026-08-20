@@ -8,31 +8,36 @@ Read this document before retrieving, creating, or amending any milestone or sto
 
 ## Object Model
 
-| Concept                        | GitHub representation                                                                                                                               |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Milestone                      | An issue whose title begins with `[milestone] ` and is labeled `type:milestone`                                                                     |
-| Story                          | An issue whose title begins with `[story] `, is labeled with exactly one `story:*` label, and is attached as a **sub-issue** of its milestone issue |
-| Story kind                     | `story:exploration`, `story:implementation`, or `story:release`                                                                                     |
-| Milestone ↔ story navigation   | GitHub's native sub-issue relationship                                                                                                              |
-| Dependency between stories     | A plain issue reference in the body (`Blocked by #12`)                                                                                              |
-| Exploration consumer           | A plain issue reference in the body (`Feeds #14, #15`)                                                                                              |
-| Amendment to any shaped object | A new comment on that issue, never an edit                                                                                                          |
-| Spark                          | Not configured. Sparks arrive from an external system that has not been chosen yet. Do not create GitHub objects for them.                          |
+| Concept                         | GitHub representation                                                                                                                                                      |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Candidate milestone             | An issue whose title begins with `[milestone] `, is labeled `Type: Milestone` and `Milestone: Candidate`, and has no stories                                               |
+| Committed milestone             | An issue whose title begins with `[milestone] ` and is labeled `Type: Milestone` and `Milestone: Committed`                                                                |
+| Story                           | An issue whose title begins with `[story] `, is labeled `Type: Story` and exactly one `Story:*` label, and is attached as a **sub-issue** of its committed milestone issue |
+| Story kind                      | `Story: Exploration`, `Story: Implementation`, or `Story: Release`                                                                                                         |
+| Milestone ↔ story navigation    | GitHub's native sub-issue relationship                                                                                                                                     |
+| Relationship between milestones | A plain issue reference in the body (`Blocked by #12` or `Related to #12`)                                                                                                 |
+| Dependency between stories      | A plain issue reference in the body (`Blocked by #12`)                                                                                                                     |
+| Exploration consumer            | A plain issue reference in the body (`Feeds #14, #15`)                                                                                                                     |
+| Amendment to any shaped object  | A new comment on that issue; established body content is never edited                                                                                                      |
+| Spark                           | Not configured. Sparks arrive from an external system that has not been chosen yet. Do not create GitHub objects for them.                                                 |
 
-An issue carrying neither `type:milestone` nor a `story:*` label is not a shaped object. On a public repository that is usually community input, and it is outside this system.
+A shaped issue carries exactly one matching type-and-kind pair. Report missing, mixed, or duplicate classification labels rather than inferring intent. An issue carrying no classification label is outside this system.
 
 ## Labels
 
-These four labels are owned by this system.
+These seven classification labels are owned by this system.
 
-| Label                  | Meaning                                                                                                                                                            |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `type:milestone`       | The issue is a milestone. It has stories as sub-issues.                                                                                                            |
-| `story:exploration`    | The story reduces a consequential uncertainty and applies its conclusions to the milestone and downstream stories.                                                 |
-| `story:implementation` | The story delivers a coherent vertical product outcome that satisfies its acceptance criteria.                                                                     |
-| `story:release`        | The story handles an exceptional external transition whose coordination, judgment, or risk requires direct human work. Routine publication is not a release story. |
+| Label                   | Meaning                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Type: Milestone`       | The issue is a milestone.                                                                                                                                          |
+| `Milestone: Candidate`  | The milestone is an uncommitted, storyless direction preserved for future shaping.                                                                                 |
+| `Milestone: Committed`  | The milestone is hardened and may have stories.                                                                                                                    |
+| `Type: Story`           | The issue is a story under a committed milestone.                                                                                                                  |
+| `Story: Exploration`    | The story reduces a consequential uncertainty and applies its conclusions to the milestone and downstream stories.                                                 |
+| `Story: Implementation` | The story delivers a coherent vertical product outcome that satisfies its acceptance criteria.                                                                     |
+| `Story: Release`        | The story handles an exceptional external transition whose coordination, judgment, or risk requires direct human work. Routine publication is not a release story. |
 
-GitHub's stock labels (`bug`, `enhancement`, `documentation`, `wontfix`, and the rest) remain available and are used normally alongside these.
+`Won't Fix` marks a discarded or abandoned issue without replacing its classification labels. GitHub's other stock labels remain available and are used normally alongside these.
 
 ## Native GitHub Milestones Are Off Limits
 
@@ -45,9 +50,10 @@ Never create, close, rename, or assign a native GitHub Milestone as part of shap
 Given an issue number, build the full working context before reasoning about the task.
 
 1. Read the issue with its entire comment thread: `gh issue view <n> --comments`.
-2. If it is a story, read its parent milestone the same way, comments included.
-3. List the milestone's other stories for sibling context: `gh api repos/YourTechBudStudio/Isagi/issues/<milestone>/sub_issues --jq '.[] | "\(.number) \(.title) [\(.state)]"'`.
-4. Follow any `Blocked by` or `Feeds` references that bear on the task.
+2. Validate its type-and-kind label pair. If it is a candidate, confirm that it has no sub-issues.
+3. If it is a story, read its committed parent milestone the same way, comments included.
+4. List the milestone's other stories for sibling context: `gh api repos/YourTechBudStudio/Isagi/issues/<milestone>/sub_issues --jq '.[] | "\(.number) \(.title) [\(.state)]"'`.
+5. Follow any `Blocked by`, `Related to`, or `Feeds` references that bear on the task.
 
 The parent of a story is available programmatically as `gh issue view <n> --json parent`.
 
@@ -57,7 +63,18 @@ Comments are not discussion. Every comment on a shaped object is the recorded co
 
 Include only the sections that carry real content. An empty heading is worse than an absent one.
 
-### Milestone Issue
+### Candidate Milestone Issue
+
+- **Possible outcome** — the direction that may become valuable.
+- **Why it may matter** — the potential value.
+- **Why deferred** — why no commitment is being made now.
+- **Activation signals** — what should bring it back into shaping, when meaningful.
+- **Blocked by** or **Related to** — issue references, only when the relationship is consequential.
+- **Context worth preserving** — reasoning that would be expensive to reconstruct.
+
+The first three sections are required. Candidates are unordered, carry no priority, and have no stories, detailed scope, completion condition, or implementation commitment.
+
+### Committed Milestone Issue
 
 - **Goal** — the product outcome being pursued and why it matters.
 - **Scope** — what is inside the milestone.
@@ -65,8 +82,9 @@ Include only the sections that carry real content. An empty heading is worse tha
 - **Completion condition** — what makes this milestone done.
 - **Key decisions** — consequential choices, their rationale, and the serious alternatives that were rejected.
 - **Open questions** — known unresolved areas and why they matter.
+- **Blocked by** or **Related to** — issue references, only when the relationship is consequential.
 
-Title format: `[milestone] <product outcome>`. The lowercase prefix is mandatory.
+Both milestone kinds use `[milestone] <product outcome>`. The lowercase prefix is mandatory. Refine the title when understanding changes; record a material rename in an amendment.
 
 ### Story Issue
 
@@ -95,9 +113,13 @@ A body may be edited freely while the issue is still fresh and has no substantiv
 An amendment comment contains:
 
 - **What changed** — the revision, and the reasoning that produced it.
-- **`## Consolidated State`** — a restatement of the object's current goal, scope, and acceptance criteria as of this comment. This is the replay checkpoint for future readers and supersedes everything above it.
+- **`## Consolidated State`** — a complete restatement using the body contract for the object's current kind. This is the replay checkpoint for future readers and supersedes everything above it.
 
-Every kind of revision is an amendment: reshaping a milestone, changing acceptance criteria, splitting or merging stories, recording an exploration's conclusions, or parking work.
+Every kind of revision is an amendment: reshaping a milestone, changing acceptance criteria, splitting or merging shaped objects, recording an exploration's conclusions, or parking work.
+
+### Candidate Activation
+
+Use the candidate as input to fresh shaping. Once hardened, post an amendment with the activation reasoning and consolidated committed state, refine the title if needed, replace `Milestone: Candidate` with `Milestone: Committed`, then create its stories. Never attach a story to a candidate.
 
 ### Exploration Reconciliation
 
@@ -111,15 +133,18 @@ A parked story stays open. Record the reason and the return condition as an amen
 
 ## Lifecycle
 
-- **Open** — active or parked.
-- **Closed** — done, and not expected to be revisited.
-- **Closed with `wontfix`** — discarded. Apply the label, record why in a comment, then close.
+- **Open candidate milestone** — uncommitted and available for future shaping.
+- **Open committed milestone or story** — active or parked.
+- **Closed committed milestone or story** — done and not expected to be revisited.
+- **Closed with `Won't Fix`** — discarded or abandoned. Keep the classification labels, record why, add `Won't Fix`, then close.
+
+Candidates close only with `Won't Fix`. To reopen a discarded object, amend it with the reason, remove `Won't Fix`, then reopen it. Removing a shaped object means discarding it, never deleting its history.
 
 ## Publication Flow
 
-Preview before publishing. Present the intended milestone and its stories in the working conversation at summary depth: titles, story kinds, the shape of each body, and the acceptance criteria in substance. Verbatim body text is not required for approval.
+Preview before publishing. Present a candidate at summary depth. Present a committed milestone and its stories with titles, story kinds, body shapes, and acceptance criteria in substance. Verbatim body text is not required for approval.
 
-After approval, publish in dependency order so parentage can be set at creation time.
+Publish a candidate by itself. Publish a committed milestone and its stories in dependency order so parentage can be set at creation time.
 
 1. Create the milestone issue first.
 2. Create each story one at a time, attached to the milestone.
@@ -127,16 +152,22 @@ After approval, publish in dependency order so parentage can be set at creation 
 
 ## Commands
 
-Create a milestone:
+Create a candidate milestone:
 
 ```
-gh issue create --title "[milestone] <outcome>" --label type:milestone --body-file <file>
+gh issue create --title "[milestone] <outcome>" --label "Type: Milestone" --label "Milestone: Candidate" --body-file <file>
+```
+
+Create a committed milestone:
+
+```
+gh issue create --title "[milestone] <outcome>" --label "Type: Milestone" --label "Milestone: Committed" --body-file <file>
 ```
 
 Create a story under it:
 
 ```
-gh issue create --title "[story] <outcome>" --label story:implementation --parent <milestone> --body-file <file>
+gh issue create --title "[story] <outcome>" --label "Type: Story" --label "Story: Implementation" --parent <milestone> --body-file <file>
 ```
 
 Attach or move an existing story:
@@ -153,18 +184,25 @@ Amend:
 gh issue comment <n> --body-file <file>
 ```
 
+Activate a candidate after posting its amendment:
+
+```
+gh issue edit <candidate> --remove-label "Milestone: Candidate" --add-label "Milestone: Committed"
+```
+
 Complete or discard:
 
 ```
 gh issue close <n>
-gh issue edit <n> --add-label wontfix && gh issue close <n>
+gh issue edit <n> --add-label "Won't Fix" && gh issue close <n>
 ```
 
 Survey:
 
 ```
-gh issue list --label type:milestone --state all
-gh issue list --label story:exploration --state open
+gh issue list --label "Type: Milestone" --label "Milestone: Candidate" --state open
+gh issue list --label "Type: Milestone" --label "Milestone: Committed" --state all
+gh issue list --label "Type: Story" --label "Story: Exploration" --state open
 gh api repos/YourTechBudStudio/Isagi/issues/<milestone>/sub_issues
 ```
 
@@ -172,8 +210,10 @@ Write bodies and comments to a file and pass `--body-file`. Inline `--body` mang
 
 ## Splitting and Merging
 
-Splitting a story creates the new stories under the same milestone, then records the split as an amendment comment on the original. If the original no longer has an outcome of its own, close it with `wontfix` and point at the replacements.
+Splitting a story creates the new stories under the same milestone, then records the split as an amendment comment on the original. If the original no longer has an outcome of its own, close it with `Won't Fix` and point at the replacements.
 
-Merging closes the absorbed stories with `wontfix`, pointing at the survivor, and records the merge as an amendment on the survivor with a consolidated state that covers the combined outcome.
+Merging closes the absorbed stories with `Won't Fix`, pointing at the survivor, and records the merge as an amendment on the survivor with a consolidated state that covers the combined outcome.
 
 In both cases the milestone gets an amendment when its story set changes materially.
+
+Splitting a candidate creates storyless candidate issues and amends the original. Merging candidates amends the survivor and closes the absorbed candidates with `Won't Fix`. Close a split candidate with `Won't Fix` when it retains no outcome of its own.
