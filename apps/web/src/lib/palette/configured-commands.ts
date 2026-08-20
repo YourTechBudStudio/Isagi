@@ -144,6 +144,22 @@ function commandEntry(
           openDrawer(command.name);
         },
       };
+    // Suspended joins the runnable group deliberately. Selecting it launches the
+    // command exactly as a startable row does; only the word changes, because
+    // the user is continuing something that already exists rather than starting
+    // something fresh. Resuming early is always allowed — the activation that
+    // would have resumed it re-checks state under the command lock, so a manual
+    // resume cannot race a second launch into existence.
+    case 'suspended':
+      return {
+        ...base,
+        icon: Play,
+        sub: paletteCopy.commands.sub.resume,
+        run: async () => {
+          await runCommand(worktreeId, command.name);
+          openDrawer(command.name);
+        },
+      };
     case 'idle':
     case 'stopped':
     case 'exited':

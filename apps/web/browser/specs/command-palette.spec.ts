@@ -117,7 +117,15 @@ const activeElementInside = (page: Page, selector: string) =>
 const fixture = {
   setCatalog: (page: Page, commands: readonly CommandSummary[]) =>
     page.evaluate((value) => window.commandPaletteFixture!.setCatalog(value), commands),
-  breakConfig: (page: Page) => page.evaluate(() => window.commandPaletteFixture!.breakConfig()),
+  breakConfig: (page: Page, managedCommands: readonly CommandSummary[] = []) =>
+    page.evaluate(
+      (value) => window.commandPaletteFixture!.breakConfig(undefined, value),
+      managedCommands,
+    ),
+  actionRequests: (page: Page) =>
+    page.evaluate(() => window.commandPaletteFixture!.actionRequests()),
+  applyScenario: (page: Page, scenario: 'suspended' | 'removed' | 'managed' | 'diagnostic') =>
+    page.evaluate((value) => window.commandPaletteFixture!.applyScenario(value), scenario),
   setCatalogUnavailable: (page: Page, unavailable: boolean) =>
     page.evaluate(
       (value) => window.commandPaletteFixture!.setCatalogUnavailable(value),
@@ -154,13 +162,18 @@ test.beforeEach(async ({ page }) => {
 test('opening the palette reads the catalog and renders the Commands group in place', async ({
   page,
 }) => {
-  expect(await fixture.commandsFetchCount(page, ORIGIN_WORKTREE)).toBe(0);
+  // Not zero any more: the page now mounts the production status strip, which is
+  // always on in the app and reads the same key. Measuring against a baseline
+  // keeps this about the palette's own observer instead of asserting an absence
+  // the real app never had.
+  const baseline = await fixture.commandsFetchCount(page, ORIGIN_WORKTREE);
 
   await openPalette(page);
   await expect(row(page, 'dev')).toBeVisible();
 
-  // The open itself is what starts the read: the observer is disabled until then.
-  expect(await fixture.commandsFetchCount(page, ORIGIN_WORKTREE)).toBeGreaterThan(0);
+  // The open itself is what starts the palette's read: its observer is disabled
+  // until then.
+  expect(await fixture.commandsFetchCount(page, ORIGIN_WORKTREE)).toBeGreaterThan(baseline);
 
   const headers = await groupHeaders(page).allTextContents();
   expect(headers).toEqual(['Global', 'Commands', 'This worktree', 'Surfaces', 'Switch worktree']);
@@ -494,4 +507,197 @@ test('the catalog is polled while the palette is open and left alone once it clo
   // a claim about production command traffic in general: the status strip is an
   // independent observer and window-focus refetches can still touch the key.
   expect(await fixture.commandsFetchCount(page, ORIGIN_WORKTREE)).toBe(closedBaseline);
+});
+
+// ---------------------------------------------------------------------------
+// Suspension
+//
+// The runtime cannot produce `suspended` yet, so every state below is authored
+// by the fixture. What is *not* authored is the rendering: these run against the
+// production drawer, status strip, and palette, which is the point of reviewing
+// the presentation a phase before the lifecycle that emits it.
+//
+// The load-bearing question in each test is what the user can tell and what they
+// can do — a suspended command is the one state that carries a pending decision,
+// and it is worthless if it reads as "stopped" or offers no way out.
+// ---------------------------------------------------------------------------
+
+/** The always-on strip, mounted by the fixture in the app's own position. */
+const strip = (page: Page) => page.locator('[data-fixture-strip]');
+
+/** The drawer's single notice band, located by what it says rather than by shape. */
+const suspendedNotice = (page: Page) =>
+  drawer(page).getByText(/^Suspended when leaving this worktree/);
+
+/**
+ * Open the drawer and land on one command *without* acting on it.
+ *
+ * The way in is always the running row, because selecting a suspended row in the
+ * palette resumes it — that is the feature. Routing through the palette's only
+ * details-opening row and then selecting inside the drawer keeps the state under
+ * test intact instead of destroying it on the way to observing it.
+ */
+async function openDrawerOn(page: Page, commandName: string) {
+  await openPalette(page);
+  await row(page, 'api').click();
+  await expect(drawer(page)).toBeVisible();
+  if (commandName !== 'api') {
+    await drawer(page).getByText(commandName, { exact: true }).first().click();
+  }
+}
+
+test('a suspended configured command reads as waiting and offers both Run and Stop', async ({
+  page,
+}) => {
+  await fixture.applyScenario(page, 'suspended');
+  await openDrawerOn(page, 'dev');
+
+  // Waiting, not idle and not working: nothing is happening, and that is the
+  // user's call to make. The dot carries an accessible name, so this is the
+  // signal a screen reader gets too, not just a colour.
+  await expect(drawer(page).getByRole('img', { name: 'Waiting on you' }).first()).toBeVisible();
+  await expect(drawer(page).getByText('suspended').first()).toBeVisible();
+
+  // The copy has to name both recoveries without promising an auto-restart.
+  await expect(suspendedNotice(page)).toBeVisible();
+  await expect(suspendedNotice(page)).toContainText('next activation');
+  await expect(suspendedNotice(page)).not.toContainText(/come back|when you return/i);
+
+  // Both affordances, which is unique to this status: Run resumes it now, Stop
+  // abandons the intent. A suspended command that could not be stopped would be
+  // a state with no way out that does not involve editing config.
+  await expect(drawer(page).getByTitle('Run dev').first()).toBeVisible();
+  await expect(drawer(page).getByTitle('Stop dev').first()).toBeVisible();
+});
+
+test('an ordinary status grows no explanatory notice', async ({ page }) => {
+  await fixture.applyScenario(page, 'suspended');
+  await openDrawerOn(page, 'api');
+
+  // The gating that keeps the band from becoming chrome: it belongs to the
+  // states that owe the user an explanation, and `running` is not one of them.
+  await expect(drawer(page).getByText('running').first()).toBeVisible();
+  await expect(suspendedNotice(page)).toHaveCount(0);
+});
+
+test('stopping a suspended command clears the intent and drops it off the strip', async ({
+  page,
+}) => {
+  await fixture.applyScenario(page, 'suspended');
+  await openDrawerOn(page, 'dev');
+  await expect(strip(page).getByText('suspended')).toBeVisible();
+
+  await drawer(page).getByTitle('Stop dev').first().click();
+
+  // Converged server state, not a recorded request: the drawer re-reads and the
+  // command is now an ordinary `stopped`, which after this feature unambiguously
+  // means a person did it.
+  await expect(drawer(page).getByText('stopped').first()).toBeVisible();
+  await expect(suspendedNotice(page)).toHaveCount(0);
+  expect(await fixture.actionRequests(page)).toEqual([
+    { action: 'stop', worktreeId: ORIGIN_WORKTREE, commandName: 'dev' },
+  ]);
+  // `stopped` is not attention-worthy, so the chip leaves the always-on strip
+  // while the still-running command keeps its place.
+  await expect(strip(page).getByText('suspended')).toHaveCount(0);
+  await expect(strip(page).getByText('api')).toBeVisible();
+});
+
+test('the status strip keeps a suspended command visible, in waiting tones', async ({ page }) => {
+  await fixture.applyScenario(page, 'suspended');
+  await openPalette(page);
+  await page.keyboard.press('Escape');
+
+  // Visibility here is the whole fix: before this phase the strip admitted only
+  // `running` and `failed`, so a suspension the user had to resolve vanished from
+  // the one surface that is always on screen.
+  const badge = strip(page).getByText('suspended');
+  await expect(badge).toBeVisible();
+  // State colour comes from the attention semantics rather than the error tones
+  // every non-running status used to share — a suspension is not a failure.
+  await expect(badge).toHaveClass(/text-waiting/);
+  await expect(badge).not.toHaveClass(/text-error/);
+});
+
+test('a removed suspended command offers Stop only, under one notice', async ({ page }) => {
+  await fixture.applyScenario(page, 'removed');
+  await openDrawerOn(page, 'api');
+  await drawer(page).getByText('worker').first().click();
+
+  // One band, not two. The suspension copy already states the entry is gone, so
+  // the standalone removed notice would be a second paragraph saying an
+  // overlapping thing.
+  await expect(drawer(page).getByText(/config entry is gone/)).toBeVisible();
+  await expect(
+    drawer(page).getByText('This command is no longer in .isagi/config.yaml.'),
+  ).toHaveCount(0);
+  // Nothing in the catalog to launch, so Run and Restart are absent — but the
+  // intent can still be cleared.
+  await expect(drawer(page).getByTitle('Stop worker').first()).toBeVisible();
+  await expect(drawer(page).getByTitle('Run worker')).toHaveCount(0);
+  await expect(drawer(page).getByTitle('Restart worker')).toHaveCount(0);
+});
+
+test('an unreadable config keeps the ordinary drawer, the parse error, and a way to re-read', async ({
+  page,
+}) => {
+  await fixture.applyScenario(page, 'managed');
+  await openPalette(page);
+  await row(page, 'Command config needs a look.').click();
+  await expect(drawer(page)).toBeVisible();
+
+  // The full-width diagnostic panel and the `runtime-managed commands` heading
+  // are gone: the heading named an internal concept, and the panel rebuilt the
+  // layout for a state the badge and the notice already carry.
+  await expect(drawer(page).getByText('runtime-managed commands')).toHaveCount(0);
+  await expect(drawer(page).getByRole('heading')).toHaveCount(0);
+  // Terse in the 208px list row, subject named in the roomier header — the same
+  // fact at two lengths rather than a truncation of one wording.
+  await expect(drawer(page).getByText('broken', { exact: true }).first()).toBeVisible();
+  await expect(drawer(page).getByText('config broken', { exact: true })).toBeVisible();
+
+  // The managed suspension says the config is unreadable rather than claiming the
+  // entry is gone — its presence is unknown, which is a different fact.
+  await expect(drawer(page).getByText(/config can't be read right now/)).toBeVisible();
+  // The parse error survives the panel's removal. Without it a user can see that
+  // the config is broken but never what is wrong with it.
+  await expect(drawer(page).getByText(/commands\.dev\.run/)).toBeVisible();
+  // A fix happens on disk and emits nothing, so the re-read stays reachable.
+  await expect(drawer(page).getByRole('button', { name: 'Refresh' })).toBeVisible();
+});
+
+test('a failed stop is voiced above the log rather than floating over it', async ({ page }) => {
+  await fixture.applyScenario(page, 'diagnostic');
+  await openDrawerOn(page, 'api');
+
+  // The command is truthfully still running — the stop failed, so claiming it
+  // stopped or failed would both be lies. What it owes the user is the reason.
+  await expect(drawer(page).getByText('running').first()).toBeVisible();
+  const notice = drawer(page).getByText("Isagi couldn't stop or verify this command's process.");
+  await expect(notice).toBeVisible();
+  // Isagi's voice carries the summary; the runtime's sentence is labelled
+  // diagnostic detail and never promoted to the headline (ADR 0004).
+  await expect(
+    drawer(page).getByText(/Diagnostic detail: Could not stop the process/),
+  ).toBeVisible();
+
+  // Above the terminal, not on top of it: the band costs one row of height and
+  // never hides live output.
+  await expect(notice.locator('xpath=ancestor::*[contains(@class,"isagi-xterm")]')).toHaveCount(0);
+});
+
+test('the palette calls a suspended command Resume', async ({ page }) => {
+  await fixture.applyScenario(page, 'suspended');
+  await openPalette(page);
+
+  // Same runnable group and same Play icon as a startable row — only the word
+  // changes, because the user is continuing a command that already exists.
+  await expect(row(page, 'dev')).toContainText('Resume');
+  await expect(row(page, 'dev')).not.toContainText('run command');
+
+  await selectByQuery(page, 'dev', 'dev');
+  await expect(drawer(page)).toBeVisible();
+  expect(await fixture.runRequests(page)).toEqual([
+    { worktreeId: ORIGIN_WORKTREE, commandName: 'dev' },
+  ]);
 });

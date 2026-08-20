@@ -2,8 +2,13 @@ import { Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtyProcessRecord } from '../../surfaces/index.js';
-import type { PtyRepositoryService } from '../pty.repository.js';
-import type { PtyProcessStatus, PtyProcessStatusReason } from '../types.js';
+import type { PtyForegroundStateService } from '../foreground-state.js';
+import type { PtyProcessTransitionResult, PtyRepositoryService } from '../pty.repository.js';
+import type {
+  PtyForegroundCommandState,
+  PtyProcessStatus,
+  PtyProcessStatusReason,
+} from '../types.js';
 
 export interface PtyProcessTransitionInput {
   readonly ptyProcessId: number;
@@ -14,22 +19,21 @@ export interface PtyProcessTransitionInput {
   readonly lastSeenAt?: string | null | undefined;
 }
 
+// A lifecycle event is published only when the write durably `applied` **and**
+// materially changed the row. Both halves matter: PTY events are shared facts
+// other domains derive process state from, so a rejected write must be
+// observably a no-op rather than an announcement of a status that never landed.
 export function transitionProcessAndPublish(
   repository: PtyRepositoryService,
   eventBus: InternalRuntimeEventBusService,
   previous: PtyProcessRecord,
   input: PtyProcessTransitionInput,
 ) {
-  return repository.transitionProcess(input).pipe(
-    Effect.zipRight(
-      publishPtyProcessChangedIfNeeded(eventBus, previous, {
-        status: input.status,
-        statusReason: input.statusReason ?? null,
-        exitCode: input.exitCode ?? previous.exitCode,
-        signal: input.signal ?? previous.signal,
-      }),
-    ),
-  );
+  return Effect.gen(function* () {
+    const result = yield* repository.transitionProcess(input);
+    yield* publishAppliedTransition(eventBus, previous, input, result);
+    return result;
+  });
 }
 
 export function transitionProcessByIdAndPublish(
@@ -39,15 +43,26 @@ export function transitionProcessByIdAndPublish(
 ) {
   return Effect.gen(function* () {
     const previous = yield* repository.findProcess(input.ptyProcessId);
-    yield* repository.transitionProcess(input);
+    const result = yield* repository.transitionProcess(input);
     if (previous) {
-      yield* publishPtyProcessChangedIfNeeded(eventBus, previous, {
-        status: input.status,
-        statusReason: input.statusReason ?? null,
-        exitCode: input.exitCode ?? previous.exitCode,
-        signal: input.signal ?? previous.signal,
-      });
+      yield* publishAppliedTransition(eventBus, previous, input, result);
     }
+    return result;
+  });
+}
+
+function publishAppliedTransition(
+  eventBus: InternalRuntimeEventBusService,
+  previous: PtyProcessRecord,
+  input: PtyProcessTransitionInput,
+  result: PtyProcessTransitionResult,
+) {
+  if (!result.applied) return Effect.void;
+  return publishPtyProcessChangedIfNeeded(eventBus, previous, {
+    status: input.status,
+    statusReason: input.statusReason ?? null,
+    exitCode: input.exitCode ?? previous.exitCode,
+    signal: input.signal ?? previous.signal,
   });
 }
 
@@ -95,4 +110,27 @@ function publishPtyProcessChangedIfNeeded(
     status: next.status,
     statusReason: next.statusReason,
   });
+}
+
+// Shared by the launch path and the attach path, which both receive foreground
+// notifications from a backend and must announce only real changes.
+export function recordForegroundCommandState(
+  foreground: PtyForegroundStateService,
+  eventBus: InternalRuntimeEventBusService,
+  ptyProcessId: number,
+  state: PtyForegroundCommandState,
+) {
+  return foreground.set(ptyProcessId, state).pipe(
+    Effect.flatMap((changed) =>
+      changed
+        ? eventBus.publish({
+            type:
+              state === 'working'
+                ? 'pty_foreground_command_started'
+                : 'pty_foreground_command_ended',
+            ptyProcessId,
+          })
+        : Effect.void,
+    ),
+  );
 }

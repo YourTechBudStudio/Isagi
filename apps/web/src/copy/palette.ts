@@ -66,6 +66,10 @@ export const paletteCopy = {
   commands: {
     sub: {
       run: 'run command',
+      // A suspended command already exists and is waiting to continue, so the
+      // row says what selecting it does to *that* command rather than offering a
+      // generic launch.
+      resume: 'Resume',
       running: (ports: readonly number[]) =>
         ports.length === 0
           ? 'open details'

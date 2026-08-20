@@ -452,6 +452,7 @@ function fakePtyService(input: {
     | undefined;
 }): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({
@@ -471,10 +472,11 @@ function fakePtyService(input: {
     write: ({ data }) => input.write?.(data) ?? Effect.void,
     writeInput: ({ data }) => input.write?.(data) ?? Effect.void,
     resize: ({ cols, rows }) => input.resize?.({ cols, rows }) ?? Effect.void,
-    kill: () => Effect.void,
-    terminate: () => Effect.void,
+    kill: () => Effect.succeed('terminated_live' as const),
+    terminate: () => Effect.succeed('terminated_live' as const),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
 import { Context, Effect, Either, Layer } from 'effect';
 
@@ -11,36 +11,44 @@ import {
   type InternalRuntimeEventBusService,
 } from '../runtime-events/index.js';
 import type { PtyProcessRecord } from '../surfaces/index.js';
-import { PtyBackend } from './backend.js';
+import { PtyBackendCatalog, type PtyBackendCatalogService } from './backend.js';
 import { PtyForegroundState, type PtyForegroundStateService } from './foreground-state.js';
-import { appendLog, PtyRepository, type PtyRepositoryService } from './pty.repository.js';
+import { PtyRepository, type PtyRepositoryService } from './pty.repository.js';
 import {
   detachActiveAttachment,
   requireActiveAttachment,
   type ActiveAttachment,
 } from './service/attachments.js';
-import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-ref.js';
-import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
-import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
-import { backendLaunchCommand } from './service/launch-mode.js';
-import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
-import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
-import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
+import { decodeBackendRef } from './service/backend-ref.js';
 import {
-  prepareShellIntegration,
-  refWithShellIntegrationToken,
-} from './service/shell-integration.js';
-import type { ShellIntegrationConfig } from './service/shell-integration.js';
-import { terminatePtyProcessAndPersistKilled } from './service/termination.js';
+  cleanupPtyProcess,
+  type PtyCleanupDependencies,
+  type PtyProcessCleanupError,
+  type PtyProcessCleanupOutcome,
+} from './service/cleanup.js';
+import { recordForegroundCommandState, transitionProcessAndPublish } from './service/events.js';
+import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
+import { allocateLaunch, type PtyLaunchDependencies } from './service/launch.js';
+import {
+  isRowReserved,
+  skipReservedRow,
+  type DurablePtyTerminationReason,
+  type PtyReservations,
+} from './service/lifecycle.js';
+import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
+import { makePtyRetryScheduler } from './service/retry.js';
+import { launchEnv, runtimeNamespace } from './service/runtime-namespace.js';
+import { terminatePtyProcess, type PtyTerminateOutcome } from './service/termination.js';
 import {
   PtyKillError,
   PtyResizeError,
   PtyServiceError,
+  PtyTerminationInProgressError,
   PtyWriteError,
   type BackendSessionRef,
   type LaunchPtyProcessInput,
   type PtyBackend as PtyBackendShape,
-  type PtyForegroundCommandState,
+  type PtyProcessAllocation,
   type PtyProcessLaunchMetadata,
 } from './types.js';
 
@@ -48,10 +56,17 @@ const defaultCols = 100;
 const defaultRows = 30;
 const statusPollIntervalMs = 10_000;
 
-export type PtyLaunchError = DatabaseError | PtyServiceError;
+// Allocation is the only fallible public stage of a launch: `start` has an
+// empty expected-error channel and the composed `launch` inherits allocation's.
+export type PtyLaunchError = DatabaseError;
 export type PtyAttachError = DatabaseError | PtyServiceError;
 export type PtyInputError = DatabaseError | PtyServiceError | PtyWriteError | PtyResizeError;
-export type PtyKillProcessError = DatabaseError | PtyServiceError | PtyKillError;
+export type PtyKillProcessError =
+  | DatabaseError
+  | PtyServiceError
+  | PtyKillError
+  | PtyTerminationInProgressError;
+export type PtyCleanupProcessError = PtyProcessCleanupError;
 export type PtyAttachmentMode = 'interactive' | 'read_only';
 
 export interface PtyAttachment {
@@ -74,6 +89,13 @@ export interface PtyService {
   readonly launch: (
     input: LaunchPtyProcessInput,
   ) => Effect.Effect<PtyProcessLaunchMetadata, PtyLaunchError>;
+  // Durable PTY metadata before any process exists, so a caller can persist
+  // ownership pre-spawn. Acquire it with
+  // `Effect.acquireRelease(allocateLaunch(input), a => a.abandon)`; `launch` is
+  // exactly this followed by `start`.
+  readonly allocateLaunch: (
+    input: LaunchPtyProcessInput,
+  ) => Effect.Effect<PtyProcessAllocation, PtyLaunchError>;
   readonly getAttachmentPlan: (input: {
     readonly ptyProcessId: number;
   }) => Effect.Effect<PtyAttachmentPlan, PtyAttachError>;
@@ -106,13 +128,26 @@ export interface PtyService {
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyInputError>;
+  // Resolves to what the attempt actually did, so a caller that owns a stop
+  // cause can bind it only to an affirmative kill.
   readonly kill: (input: {
     readonly ptyProcessId: number;
-  }) => Effect.Effect<void, PtyKillProcessError>;
+  }) => Effect.Effect<PtyTerminateOutcome, PtyKillProcessError>;
   readonly terminate: (input: {
     readonly ptyProcessId: number;
     readonly gracefulTimeoutMs: number;
-  }) => Effect.Effect<void, PtyKillProcessError>;
+  }) => Effect.Effect<PtyTerminateOutcome, PtyKillProcessError>;
+
+  // Verify-or-terminate one incarnation for a caller that owns durable cleanup:
+  // boot convergence and the worktree-deletion audit. Unlike `terminate` it
+  // tolerates an already-finished row, and unlike the poller it never guesses —
+  // anything it could not establish fails.
+  readonly cleanupProcess: (input: {
+    readonly ptyProcessId: number;
+    readonly reason: DurablePtyTerminationReason;
+    readonly gracefulTimeoutMs?: number | undefined;
+    readonly ensureBackendAbsence?: boolean | undefined;
+  }) => Effect.Effect<PtyProcessCleanupOutcome, PtyCleanupProcessError>;
   readonly pin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly unpin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly isPinned: (input: { readonly ptyProcessId: number }) => Effect.Effect<boolean>;
@@ -124,7 +159,7 @@ export const PtyServiceLive = Layer.scoped(
   PtyService,
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
-    const backend = yield* PtyBackend;
+    const catalog = yield* PtyBackendCatalog;
     const foreground = yield* PtyForegroundState;
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
@@ -133,137 +168,87 @@ export const PtyServiceLive = Layer.scoped(
     const activeAttachments = new Map<number, ActiveAttachment>();
     const pendingAttachments = new Set<number>();
     const pinnedPtyProcessIds = new Set<number>();
-    const terminations = new Map<number, PtyTerminationState>();
+    // Two windows, one bundle: a termination attempt and a pending launch can
+    // legitimately hold the same row at once during cancellation cleanup.
+    const reservations: PtyReservations = { terminations: new Map(), launches: new Map() };
+    // Deferred terminal writes belong to this scope: they are scheduled here and
+    // drained in the finalizer below, while the repository is still open.
+    const retry = makePtyRetryScheduler();
     const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedProcesses(repository, backend, eventBus, { startup: true });
-    yield* collectPtyGarbage(repository, backend, namespace, directory.paths.sessionsPath, {
-      pinnedPtyProcessIds,
+    yield* reconcilePersistedProcesses(repository, catalog, eventBus, reservations, {
+      startup: true,
     });
-    const pollTimer = startStatusPolling(repository, backend, eventBus);
+    yield* collectPtyGarbage(repository, catalog, namespace, directory.paths.sessionsPath, {
+      pinnedPtyProcessIds,
+      pendingLaunches: reservations.launches,
+    });
+    const pollTimer = startStatusPolling(repository, catalog, eventBus, reservations);
     const gcTimer = startPtyGarbageCollector(
       repository,
-      backend,
+      catalog,
       namespace,
       directory.paths.sessionsPath,
-      { pinnedPtyProcessIds },
+      { pinnedPtyProcessIds, pendingLaunches: reservations.launches },
     );
+
+    // The cleanup flow needs the same process-truth capabilities termination
+    // does; bundling them keeps the call site from re-listing six fields.
+    const cleanupDependencies: PtyCleanupDependencies = {
+      repository,
+      catalog,
+      eventBus,
+      activeAttachments,
+      terminations: reservations.terminations,
+      retry,
+    };
+
+    const launchDependencies: PtyLaunchDependencies = {
+      repository,
+      catalog,
+      eventBus,
+      foreground,
+      retry,
+      reservations,
+      activeAttachments,
+      runtimeNamespace: namespace,
+      sessionsPath: directory.paths.sessionsPath,
+      userProcessEnvironment,
+    };
 
     const service = {
       launch: (input) =>
-        Effect.gen(function* () {
-          console.info(
-            `[runtime] PTY process launch starting command=${input.command} cwd=${input.cwd}`,
-          );
-          const ptyProcessId = yield* repository.createProcessMetadata({
-            command: input.command,
-            args: input.args,
-            cwd: input.cwd,
-          });
-          const metadata: PtyProcessLaunchMetadata = {
-            ptyProcessId,
-            command: input.command,
-            args: input.args,
-            cwd: input.cwd,
-            logPath: null,
-          };
-          yield* foreground.clear(ptyProcessId);
-          const processEnvironment: NodeJS.ProcessEnv = {
-            ...userProcessEnvironment,
-            ...input.envOverrides,
-            ...(input.envForProcess
-              ? yield* input.envForProcess({ ptyProcessId: metadata.ptyProcessId })
-              : {}),
-          };
-          const backendCommand = backendLaunchCommand({
-            launch: input,
-            env: processEnvironment,
-          });
-          const launch = prepareShellIntegration({
-            launch: {
-              ...input,
-              command: backendCommand.command,
-              args: backendCommand.args,
-              launchMode: 'direct',
-            },
-            ptyProcessId,
-            sessionsPath: directory.paths.sessionsPath,
-            env: processEnvironment,
-          });
-          const startResult = yield* launchWithBackend({
-            backend,
-            metadata: {
-              ...metadata,
-              command: launch.command,
-              args: launch.args,
-            },
-            repository,
-            activeAttachments,
-            runtimeNamespace: namespace,
-            sessionsPath: directory.paths.sessionsPath,
-            terminations,
-            eventBus,
-            foreground,
-            shellIntegration: launch.shellIntegration,
-            env: launch.env,
-          }).pipe(Effect.either);
-          if (Either.isLeft(startResult)) {
-            const message = spawnFailureMessage(metadata.command, metadata.cwd, startResult.left);
-            console.warn(
-              `[runtime] PTY process launch failed ptyProcessId=${metadata.ptyProcessId} command=${metadata.command}`,
-              startResult.left,
+        Effect.scoped(
+          Effect.gen(function* () {
+            console.info(
+              `[runtime] PTY process launch starting command=${input.command} cwd=${input.cwd}`,
             );
-            const failedProcess = yield* repository
-              .findProcess(metadata.ptyProcessId)
-              .pipe(Effect.orElseSucceed(() => null));
-            if (failedProcess?.logPath) appendLog(failedProcess.logPath, message);
-            yield* transitionProcessByIdAndPublish(repository, eventBus, {
-              ptyProcessId: metadata.ptyProcessId,
-              status: 'failed',
-              statusReason: 'backend_launch_failed',
-              exitCode: null,
-              signal: null,
-            });
-          } else {
-            yield* repository
-              .updateBackendRef({
-                ptyProcessId: metadata.ptyProcessId,
-                backendRefJson: JSON.stringify(startResult.right),
-              })
-              .pipe(
-                Effect.zipRight(
-                  transitionProcessByIdAndPublish(repository, eventBus, {
-                    ptyProcessId: metadata.ptyProcessId,
-                    status: 'running',
-                    statusReason: null,
-                    exitCode: null,
-                    signal: null,
-                  }),
-                ),
-                Effect.catchAll((error) =>
-                  backend
-                    .kill(startResult.right)
-                    .pipe(Effect.ignore, Effect.zipRight(Effect.fail(error))),
-                ),
-              );
-          }
-          const row = yield* repository.findProcess(metadata.ptyProcessId);
-          return { ...metadata, logPath: row?.logPath ?? null } satisfies PtyProcessLaunchMetadata;
-        }),
-      getAttachmentPlan: (input) => getAttachmentPlan(repository, backend, input.ptyProcessId),
+            // The scoped releaser covers the never-started case — including an
+            // interruption landing between acquisition and `start` — and is a
+            // no-op once `start` has begun.
+            const allocation = yield* Effect.acquireRelease(
+              allocateLaunch(launchDependencies, input),
+              (acquired) => acquired.abandon,
+            );
+            return yield* allocation.start;
+          }),
+        ),
+      allocateLaunch: (input) => allocateLaunch(launchDependencies, input),
+      getAttachmentPlan: (input) => getAttachmentPlan(repository, catalog, input.ptyProcessId),
       attach: (input) =>
         attachToProcess(
           repository,
-          backend,
+          catalog,
           eventBus,
           foreground,
           activeAttachments,
           pendingAttachments,
+          reservations,
           input,
         ),
-      replay: (input) => replayProcess(backend, input),
+      replay: (input) => replayProcess(catalog, input),
       write: (input) =>
         Effect.gen(function* () {
           const active = yield* requireActiveAttachment(
@@ -275,7 +260,7 @@ export const PtyServiceLive = Layer.scoped(
         }),
       writeInput: (input) =>
         Effect.gen(function* () {
-          const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+          const plan = yield* getAttachmentPlan(repository, catalog, input.ptyProcessId);
           if (!plan.live) {
             return yield* Effect.fail(
               new PtyServiceError({
@@ -286,7 +271,9 @@ export const PtyServiceLive = Layer.scoped(
             );
           }
           const ref = yield* decodeBackendRef(plan.session);
-          yield* backend.writeInput({ ref, data: input.data });
+          // `getAttachmentPlan` already probed this row's adapter; re-checking
+          // availability here would only buy a second `tmux -V`.
+          yield* catalog.forBackend(plan.session.backend).writeInput({ ref, data: input.data });
         }),
       resize: (input) =>
         Effect.gen(function* () {
@@ -298,26 +285,29 @@ export const PtyServiceLive = Layer.scoped(
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
       kill: (input) =>
-        terminatePtyProcessAndPersistKilled({
+        terminatePtyProcess({
           repository,
-          backend,
+          catalog,
           eventBus,
           activeAttachments,
-          terminations,
+          terminations: reservations.terminations,
+          retry,
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
         }),
       terminate: (input) =>
-        terminatePtyProcessAndPersistKilled({
+        terminatePtyProcess({
           repository,
-          backend,
+          catalog,
           eventBus,
           activeAttachments,
-          terminations,
+          terminations: reservations.terminations,
+          retry,
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
           gracefulTimeoutMs: input.gracefulTimeoutMs,
         }),
+      cleanupProcess: (input) => cleanupPtyProcess(cleanupDependencies, input),
       pin: (input) =>
         Effect.sync(() => {
           pinnedPtyProcessIds.add(input.ptyProcessId);
@@ -340,17 +330,23 @@ export const PtyServiceLive = Layer.scoped(
         activeAttachments.clear();
         for (const session of sessions) {
           if (session.backend !== 'node_pty') continue;
-          yield* terminatePtyProcessAndPersistKilled({
+          // Best effort: an already-dead incarnation is an `already_absent` that
+          // commits nothing false, and a genuine control failure leaves the row
+          // running for the next startup reconciliation to classify honestly.
+          yield* terminatePtyProcess({
             repository,
-            backend,
+            catalog,
             eventBus,
             activeAttachments,
-            terminations,
+            terminations: reservations.terminations,
+            retry,
             ptyProcessId: session.id,
             reason: 'runtime_shutdown',
-            killFailurePolicy: 'persist_killed',
           }).pipe(Effect.ignore);
         }
+        // Last: the sweep above can hand work to the scheduler, and draining it
+        // here is what keeps a deferred terminal write out of a closed database.
+        yield* retry.shutdown;
       }),
     );
   }),
@@ -358,11 +354,12 @@ export const PtyServiceLive = Layer.scoped(
 
 function attachToProcess(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
   foreground: PtyForegroundStateService,
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
+  reservations: PtyReservations,
   input: {
     readonly ptyProcessId: number;
     readonly mode: PtyAttachmentMode;
@@ -374,7 +371,7 @@ function attachToProcess(
   },
 ) {
   return Effect.gen(function* () {
-    const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+    const plan = yield* getAttachmentPlan(repository, catalog, input.ptyProcessId);
     if (!plan.live)
       return {
         session: plan.session,
@@ -386,6 +383,8 @@ function attachToProcess(
       } satisfies PtyAttachment;
     const session = plan.session;
     const ref = yield* decodeBackendRef(session);
+    // The plan already probed this row's adapter for availability.
+    const backend = catalog.forBackend(session.backend);
     if (activeAttachments.has(session.id) || pendingAttachments.has(session.id)) {
       const active = activeAttachments.get(session.id);
       if (input.supersede && active && !pendingAttachments.has(session.id)) {
@@ -434,7 +433,7 @@ function attachToProcess(
         })
         .pipe(Effect.either);
       if (Either.isLeft(attachResult)) {
-        yield* handleAttachFailure(repository, backend, eventBus, session, ref);
+        yield* handleAttachFailure(repository, backend, eventBus, reservations, session, ref);
         return yield* Effect.fail(
           new PtyServiceError({
             code: 'backend_attach_failed',
@@ -477,7 +476,7 @@ function attachToProcess(
 }
 
 function replayProcess(
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   input: {
     readonly session: PtyProcessRecord;
     readonly bytes: number | null;
@@ -499,11 +498,12 @@ function replayProcess(
       return;
     }
     const ref = yield* decodeBackendRef(input.session);
-    if (input.session.backend !== backend.name)
+    const backend = catalog.forBackend(input.session.backend);
+    if (!(yield* backend.available))
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
-          message: `PTY backend ${input.session.backend} is not active in this runtime process.`,
+          message: `PTY backend ${input.session.backend} is unavailable.`,
           ptyProcessId: input.session.id,
         }),
       );
@@ -518,7 +518,7 @@ function replayProcess(
 
 function getAttachmentPlan(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   ptyProcessId: number,
 ) {
   return Effect.gen(function* () {
@@ -532,11 +532,14 @@ function getAttachmentPlan(
         }),
       );
     const live = session.status === 'running';
-    if (live && session.backend !== backend.name)
+    // Only a live row needs a transport. A dead row still plans a file-log
+    // replay, so it must never pay an availability probe. This one check also
+    // covers the attach and `writeInput` paths that plan first.
+    if (live && !(yield* catalog.forBackend(session.backend).available))
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
-          message: `PTY backend ${session.backend} is not active in this runtime process.`,
+          message: `PTY backend ${session.backend} is unavailable.`,
           ptyProcessId: session.id,
         }),
       );
@@ -551,12 +554,15 @@ function getAttachmentPlan(
 
 function startStatusPolling(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
+  reservations: PtyReservations,
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedProcesses(repository, backend, eventBus, { startup: false }).pipe(
+      reconcilePersistedProcesses(repository, catalog, eventBus, reservations, {
+        startup: false,
+      }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => console.warn('[runtime] PTY status polling failed', error)),
         ),
@@ -567,15 +573,24 @@ function startStatusPolling(
   return timer;
 }
 
-function reconcilePersistedProcesses(
+// Exported as a test seam. The reservation skip below is otherwise only
+// reachable on the ten-second poll timer, and a race that important should be
+// proven by injecting a pass, not by racing a clock.
+export function reconcilePersistedProcesses(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
+  reservations: PtyReservations,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
     const sessions = yield* repository.listProcesses({ statuses: ['starting', 'running'] });
     for (const session of sessions) {
+      // A committed termination attempt or an in-flight launch owns this row's
+      // outcome. Inspecting now could assign `backend_process_missing` to a
+      // process one demonstrably killed or is still starting, and immutability
+      // would make that misattribution permanent.
+      if (skipReservedRow(reservations, session.id, statusPollIntervalMs)) continue;
       if (session.backend === 'node_pty' && options.startup) {
         yield* transitionIfChanged(repository, eventBus, session, {
           status: 'failed',
@@ -591,14 +606,11 @@ function reconcilePersistedProcesses(
         });
         continue;
       }
-      if (session.backend !== backend.name) {
-        yield* transitionIfChanged(repository, eventBus, session, {
-          status: 'running',
-          statusReason: 'backend_unavailable',
-        });
-        continue;
-      }
-      const inspection = yield* backend
+      // No availability pre-check: `inspect` already answers
+      // alive | missing | unavailable, so probing first would only add a second
+      // round-trip to the same backend on every poll.
+      const inspection = yield* catalog
+        .forBackend(session.backend)
         .inspect(ref)
         .pipe(
           Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })),
@@ -631,106 +643,19 @@ function reconcilePersistedProcesses(
   });
 }
 
-function launchWithBackend(input: {
-  readonly backend: PtyBackendShape;
-  readonly metadata: PtyProcessLaunchMetadata;
-  readonly repository: PtyRepositoryService;
-  readonly activeAttachments: Map<number, ActiveAttachment>;
-  readonly runtimeNamespace: string;
-  readonly sessionsPath: string;
-  readonly terminations: Map<number, PtyTerminationState>;
-  readonly eventBus: InternalRuntimeEventBusService;
-  readonly foreground: PtyForegroundStateService;
-  readonly shellIntegration: ShellIntegrationConfig | null;
-  readonly env: NodeJS.ProcessEnv;
-}) {
-  return Effect.gen(function* () {
-    const backendMetadata = backendMetadataForLaunch(
-      input.backend,
-      input.metadata,
-      input.runtimeNamespace,
-      input.sessionsPath,
-    );
-    if (backendMetadata.logPath && !existsSync(backendMetadata.logPath))
-      appendLog(backendMetadata.logPath, '');
-    yield* input.repository.updateBackendMetadata({
-      ptyProcessId: input.metadata.ptyProcessId,
-      backend: input.backend.name,
-      backendRefJson: JSON.stringify(backendMetadata.ref),
-      logMode: backendMetadata.logMode,
-      logPath: backendMetadata.logPath,
-    });
-    const startResult = yield* input.backend.launch({
-      ptyProcessId: input.metadata.ptyProcessId,
-      backendSessionName: backendMetadata.backendSessionName,
-      command: input.metadata.command,
-      args: input.metadata.args,
-      cwd: input.metadata.cwd,
-      env: input.env,
-      shellIntegration: input.shellIntegration,
-      onForegroundCommand: (event) =>
-        void Effect.runPromise(
-          recordForegroundCommandState(
-            input.foreground,
-            input.eventBus,
-            event.ptyProcessId,
-            event.state,
-          ),
-        ),
-      cols: defaultCols,
-      rows: defaultRows,
-      logPath: backendMetadata.logPath,
-      onExit: (exit) =>
-        void Effect.runPromise(
-          input.foreground
-            .clear(input.metadata.ptyProcessId)
-            .pipe(
-              Effect.zipRight(
-                handleExit(
-                  input.repository,
-                  input.eventBus,
-                  input.activeAttachments,
-                  input.terminations,
-                  input.metadata.ptyProcessId,
-                  exit,
-                ),
-              ),
-            ),
-        ),
-    });
-    return refWithShellIntegrationToken(startResult, input.shellIntegration);
-  });
-}
-
-function recordForegroundCommandState(
-  foreground: PtyForegroundStateService,
-  eventBus: InternalRuntimeEventBusService,
-  ptyProcessId: number,
-  state: PtyForegroundCommandState,
-) {
-  return foreground.set(ptyProcessId, state).pipe(
-    Effect.flatMap((changed) =>
-      changed
-        ? eventBus.publish({
-            type:
-              state === 'working'
-                ? 'pty_foreground_command_started'
-                : 'pty_foreground_command_ended',
-            ptyProcessId,
-          })
-        : Effect.void,
-    ),
-  );
-}
-
 function handleAttachFailure(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
   eventBus: InternalRuntimeEventBusService,
+  reservations: PtyReservations,
   session: PtyProcessRecord,
   ref: BackendSessionRef,
 ) {
   return Effect.gen(function* () {
+    // Silently defer to the reserving attempt or launch. Unlike the poller this
+    // has no fixed cadence to bound a warning against, so logging here would
+    // make diagnostics depend on how often a user tries to attach.
+    if (isRowReserved(reservations, session.id)) return;
     if (session.backend === 'node_pty') {
       yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',

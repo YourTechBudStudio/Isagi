@@ -13,6 +13,29 @@ export type PtyProcessStatusReason =
   | 'backend_launch_failed'
   | 'runtime_ephemeral_lost';
 
+// A process dies exactly once: once one of these is persisted, no later
+// transition may replace it. Shared vocabulary rather than a private set in the
+// repository, because the guarded write, the generic cleanup flow, and the
+// startup/boot readers all have to agree on what "already terminal" means.
+const terminalPtyProcessStatuses: ReadonlySet<PtyProcessStatus> = new Set([
+  'exited',
+  'failed',
+  'killed',
+]);
+
+export function isTerminalPtyProcessStatus(status: PtyProcessStatus) {
+  return terminalPtyProcessStatuses.has(status);
+}
+
+// Why an incarnation the backend can no longer find is gone. A node-pty process
+// lives and dies with the runtime, so its absence is an ephemeral loss rather
+// than a missing backend process. The two operational flows that classify an
+// absent process — the status poller and generic cleanup — must not drift on
+// this, so the split lives here rather than being spelled out at each site.
+export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProcessStatusReason {
+  return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
+}
+
 export interface NodePtyBackendRef {
   readonly schemaVersion: 1;
   readonly backend: 'node_pty';
@@ -102,6 +125,16 @@ export class PtyKillError extends Data.TaggedError('PtyKillError')<{
   readonly cause: unknown;
 }> {}
 
+// A termination attempt is already reserved for this row. The second caller is
+// rejected rather than joined: reusing the first attempt's outcome would lend
+// its affirmative kill to a cause that did not commit it. Internal to
+// `pty-processes` — deliberately not re-exported from the feature barrel.
+export class PtyTerminationInProgressError extends Data.TaggedError(
+  'PtyTerminationInProgressError',
+)<{
+  readonly ptyProcessId: number;
+}> {}
+
 export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
   readonly code:
     | 'worktree_not_found'
@@ -124,6 +157,12 @@ export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
   readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
+
+// Attempt-honest kill result. `false` means this attempt found no live process
+// for the ref: it terminated nothing and must persist no `killed` fact.
+export interface BackendTerminateResult {
+  readonly terminated: boolean;
+}
 
 export type BackendInspection =
   | { readonly status: 'alive' }
@@ -174,8 +213,8 @@ export interface PtyBackend {
   readonly terminate?: (input: {
     readonly ref: BackendSessionRef;
     readonly gracefulTimeoutMs: number;
-  }) => Effect.Effect<void, PtyKillError>;
-  readonly kill: (ref: BackendSessionRef) => Effect.Effect<void, PtyKillError>;
+  }) => Effect.Effect<BackendTerminateResult, PtyKillError>;
+  readonly kill: (ref: BackendSessionRef) => Effect.Effect<BackendTerminateResult, PtyKillError>;
   readonly collectGarbage?: (
     input: PtyBackendGcInput,
   ) => Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;
@@ -205,6 +244,26 @@ export interface PtyProcessLaunchMetadata {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly logPath: string | null;
+}
+
+// One-shot pre-start launch allocation. The durable PTY row exists and is
+// reserved the moment this resolves, so a caller can persist ownership before
+// any backend process exists.
+//
+// The phase machine is `allocated -> starting -> settled` or
+// `allocated -> abandoned`. `start` is total for every uninterrupted path: it
+// has no expected-failure channel and folds pre-spawn and spawn failures into
+// the row, returning metadata the caller can still inspect and kill through.
+// An interrupted `start` deliberately returns nothing and hands convergence to
+// its own cleanup and the caller's interruption handling.
+export interface PtyProcessAllocation {
+  // The durable row already exists with status `starting` and is reserved
+  // against the generic liveness observers. No process exists yet.
+  readonly ptyProcessId: number;
+  readonly start: Effect.Effect<PtyProcessLaunchMetadata>;
+  // Idempotent, and a no-op once `start` has begun, so it is safe to attach
+  // unconditionally as a scoped releaser or interruption cleanup.
+  readonly abandon: Effect.Effect<void, never>;
 }
 
 export type PtyForegroundCommandState = 'idle' | 'working';

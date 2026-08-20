@@ -15,7 +15,9 @@ import { DatabaseError } from '../persistence/index.js';
 import { PtyServiceError } from '../pty-processes/index.js';
 import { registerPtyStreamRoute, type PtyStreamStrategy } from '../pty-processes/stream-route.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { CommandError, CommandService } from './commands.service.js';
+import { describeOperationalCause } from './commands.diagnostics.js';
+import { CommandError } from './commands.errors.js';
+import { CommandService } from './commands.service.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>
@@ -225,9 +227,11 @@ function toCommandApiError(error: unknown, context: ApiRouteContext): ApiError {
     };
   }
 
+  // Sanitized like every other command-domain log: a defect reaching this
+  // boundary can still be a decode failure carrying persisted ref content. The
+  // cost — no stack trace for genuine bugs — is recorded as follow-up debt.
   console.error(
-    `[runtime] Unhandled command API handler error during ${context.endpointId}`,
-    error,
+    `[runtime] Unhandled command API handler error during ${context.endpointId} cause=${describeOperationalCause(error)}`,
   );
 
   return {

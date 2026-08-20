@@ -1,5 +1,6 @@
 export { registerPtyApi } from './api.js';
-export { PtyBackend, PtyBackendLive } from './backend.js';
+export { PtyBackendCatalog, PtyBackendCatalogLive } from './backend.js';
+export type { PtyBackendCatalogService } from './backend.js';
 export { PtyForegroundState, PtyForegroundStateLive } from './foreground-state.js';
 export type { PtyForegroundStateService } from './foreground-state.js';
 export { NodePtyBackend, NodePtyBackendLive } from './adapters/node-pty.js';
@@ -14,11 +15,16 @@ export {
 } from './session-teardown.js';
 export { TmuxBackend, TmuxBackendLive } from './adapters/tmux.js';
 export type { PtyService as PtyServiceShape } from './pty.service.js';
+// The command domain names a durable termination reason when it asks for
+// generic cleanup; it stays PTY-layer vocabulary, exported rather than
+// re-spelled so the two cannot drift.
+export type { DurablePtyTerminationReason } from './service/lifecycle.js';
 export type {
   BackendAttachment,
   LaunchBackendSessionInput,
   PtyBackend as PtyBackendShape,
   PtyExit,
+  PtyProcessAllocation,
 } from './types.js';
 export {
   PtyKillError,

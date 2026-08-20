@@ -123,9 +123,13 @@ things you did not ask it to start, and does stop things when the worktree goes 
 | `deactivate` | `stop`  | `true`  |
 | `preDelete`  | `stop`  | `true`  |
 
-So `dev` above starts whenever the user activates that worktree and stops when they leave it. `db`
-starts once at creation and keeps running across worktree switches, because it opts out of the
-`deactivate` stop.
+With the defaults above, a running command is stopped when you leave its worktree and recorded as suspended. When you return through a user-driven worktree activation, Isagi starts a new process incarnation for it. Resume preserves command intent, not the operating-system process.
+
+`activate.start: true` gives `dev` first-start automation: on activation it starts only when it has no prior outcome. It does not revive a command that exited, failed, or was explicitly stopped. Explicitly stopping a suspended command also clears its resume intent.
+
+After a runtime restart, Isagi does not automatically start a command with a prior outcome. A suspended command waits for manual Run or until the user returns to the worktree through a later user-driven activation.
+
+`db` starts once at creation and keeps running across worktree switches because `deactivate.stop: false` opts out of suspension.
 
 `ports` is metadata. It tells Isagi which ports the command is expected to bind so it can show them;
 it does not allocate, reserve, or remap anything.

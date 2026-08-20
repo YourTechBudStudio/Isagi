@@ -33,7 +33,7 @@ import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persist
 import { StateFile } from './persistence/index.js';
 import {
   NodePtyBackendLive,
-  PtyBackendLive,
+  PtyBackendCatalogLive,
   PtyForegroundStateLive,
   PtyRepositoryLive,
   PtyServiceLive,
@@ -121,7 +121,7 @@ const WorkflowEventLedgerLayer = WorkflowEventLedgerLive.pipe(
 );
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
-  Layer.provide(PtyBackendLive),
+  Layer.provide(PtyBackendCatalogLive),
   Layer.provide(PtyForegroundStateLayer),
   Layer.provide(RuntimeConfigLayer),
   Layer.provide(NodePtyBackendLive),

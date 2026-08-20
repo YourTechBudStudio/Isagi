@@ -1,14 +1,17 @@
 import { AlertTriangle, Play, RefreshCw, RotateCcw, Square } from 'lucide-react';
 
-import type {
-  CommandRunDiagnosticReason,
-  CommandStatus,
-  CommandSummary,
-  WorktreeCommandsOutput,
-} from '@isagi/contracts';
+import type { CommandRunStatus, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
+import {
+  commandAffordances,
+  commandAttentionState,
+  commandDetailNotice,
+  type CommandDetailNotice as CommandDetailNoticeValue,
+  type CommandNoticeTone,
+  type CommandPresentation,
+} from '../../lib/workspace/command-attention.js';
 import { commandLogDisplayState } from '../../lib/workspace/command-log/display.js';
 import { useCommandLogStream } from '../../lib/workspace/command-log/stream.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
@@ -21,10 +24,7 @@ import {
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import type { AttentionState } from '../../lib/workspace/types.js';
 import { XtermSurface } from './XtermSurface.js';
-
-type CommandPresentation = 'configured' | 'removed' | 'managed';
 
 type CommandListItem = CommandSummary & {
   readonly presentation: CommandPresentation;
@@ -62,32 +62,54 @@ export function CommandsView() {
     const managedCommands = commandRead.managedCommands.map((command) =>
       commandItem(command, 'managed'),
     );
+    const { path, message } = commandRead.diagnostic;
+
+    // Nothing to list, so the diagnostic *is* the content. Without this branch a
+    // broken config with no live commands would render an empty drawer, which
+    // says nothing about why the commands are gone.
+    if (managedCommands.length === 0) {
+      return (
+        <CommandDiagnosticState
+          title={workbenchCopy.commandConfigDiagnosticTitle}
+          body={workbenchCopy.commandConfigDiagnosticBody}
+          diagnostic={`${path}\n${message}`}
+          onRefresh={() => void commandsQuery.refetch()}
+        />
+      );
+    }
+
+    // With commands to show, the drawer keeps its ordinary master-detail shape.
+    // The old full-width panel and the `runtime-managed commands` heading are
+    // gone: the heading named an internal concept no user could place, and the
+    // panel rebuilt the whole layout for a state the badge and the detail notice
+    // already carry. The parse error survives as the notice's diagnostic detail,
+    // because a user who cannot see it cannot fix it.
     const selected =
       managedCommands.find((command) => command.name === selectedId) ?? managedCommands[0] ?? null;
 
     return (
-      <div className="flex min-w-0 flex-1 flex-col">
-        <CommandDiagnosticPanel
-          title={workbenchCopy.commandConfigDiagnosticTitle}
-          body={workbenchCopy.commandConfigDiagnosticBody}
-          diagnostic={`${commandRead.diagnostic.path}\n${commandRead.diagnostic.message}`}
-          onRefresh={() => void commandsQuery.refetch()}
+      <>
+        <CommandList
+          sections={[{ commands: managedCommands }]}
+          selected={selected}
+          onSelect={selectCommand}
+          runCommand={runCommand}
+          stopCommand={stopCommand}
         />
-        {managedCommands.length > 0 ? (
-          <div className="flex min-h-0 flex-1 border-t border-line/12">
-            <CommandList
-              sections={[{ title: workbenchCopy.commandManagedSection, commands: managedCommands }]}
-              selected={selected}
-              onSelect={selectCommand}
-              runCommand={runCommand}
-              stopCommand={stopCommand}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {selected ? (
+            <CommandDetail
+              command={selected}
+              worktreeId={worktree.id}
+              // Joined for prose rather than for a `pre`: the notice renders it as
+              // one inline run, where a bare newline would collapse into a space
+              // mid-sentence and read as a typo.
+              configDiagnostic={`${path} — ${message}`}
+              onRefreshCatalog={() => void commandsQuery.refetch()}
             />
-            <div className="flex min-w-0 flex-1 flex-col">
-              {selected ? <CommandDetail command={selected} worktreeId={worktree.id} /> : null}
-            </div>
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      </>
     );
   }
 
@@ -196,12 +218,16 @@ function CommandListRow({
   readonly runCommand: ReturnType<typeof useRunCommandMutation>;
   readonly stopCommand: ReturnType<typeof useStopCommandMutation>;
 }) {
-  const canRun = command.presentation === 'configured' && command.status !== 'running';
-  const canStop = command.status === 'running';
-  const showAction = canRun || canStop;
+  const { canRun, canStop } = commandAffordances(command.status, command.presentation);
+  // The row has space for one affordance, so it carries the likelier intent and
+  // the detail header carries the full set. Run wins wherever it is offered: a
+  // suspended command is far more often resumed than abandoned, and Stop is
+  // never more than one click further on. A running command has no Run, so the
+  // row still shows Stop exactly as it always did.
+  const rowAction = canRun ? 'run' : canStop ? 'stop' : null;
   const runAction = () => {
     onSelect(command.name);
-    if (canStop) {
+    if (rowAction === 'stop') {
       stopCommand.mutate(command.name);
       return;
     }
@@ -214,16 +240,16 @@ function CommandListRow({
         selected ? 'bg-white/8' : 'hover:bg-white/4'
       }`}
     >
-      {showAction ? (
+      {rowAction ? (
         <button
           type="button"
           onClick={runAction}
           disabled={runCommand.isPending || stopCommand.isPending}
-          title={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
-          aria-label={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
+          title={`${rowAction === 'stop' ? 'Stop' : 'Run'} ${command.name}`}
+          aria-label={`${rowAction === 'stop' ? 'Stop' : 'Run'} ${command.name}`}
           className="grid size-5 flex-none place-items-center rounded-md border border-line/20 text-fg-subtle transition-colors hover:border-blue/45 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
         >
-          {canStop ? <Square size={9} /> : <Play size={9} />}
+          {rowAction === 'stop' ? <Square size={9} /> : <Play size={9} />}
         </button>
       ) : (
         <span className="size-5 flex-none" />
@@ -234,11 +260,13 @@ function CommandListRow({
         aria-current={selected ? 'true' : undefined}
         className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
       >
-        <AttentionDot state={attentionForCommandStatus(command.status)} />
+        <AttentionDot state={commandAttentionState(command.status)} />
         <span className="truncate font-mono text-[12px] text-fg">{command.name}</span>
-        {command.presentation === 'removed' && (
+        {command.presentation !== 'configured' && (
           <span className="rounded-md border border-amber/24 bg-amber/10 px-1.5 py-px font-mono text-[9.5px] text-amber">
-            {workbenchCopy.commandRemovedMarker}
+            {command.presentation === 'removed'
+              ? workbenchCopy.commandRemovedMarker
+              : workbenchCopy.commandConfigMarker}
           </span>
         )}
       </button>
@@ -246,26 +274,44 @@ function CommandListRow({
   );
 }
 
-function CommandDetail({ command, worktreeId }: { command: CommandListItem; worktreeId: number }) {
+function CommandDetail({
+  command,
+  worktreeId,
+  configDiagnostic = null,
+  onRefreshCatalog,
+}: {
+  readonly command: CommandListItem;
+  readonly worktreeId: number;
+  /** The parse error behind a `managed` presentation, if there is one. */
+  readonly configDiagnostic?: string | null | undefined;
+  /** Offered only for `managed`, where a fix happens on disk and needs a re-read. */
+  readonly onRefreshCatalog?: (() => void) | undefined;
+}) {
   const logMetadataQuery = useCommandLogMetadataQuery(worktreeId, command.name);
   const restartCommand = useRestartCommandMutation(worktreeId);
   const runCommand = useRunCommandMutation(worktreeId);
   const stopCommand = useStopCommandMutation(worktreeId);
   const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
   const latestRun = logMetadataQuery.data?.latestRun;
-  const canRun = command.presentation === 'configured' && command.status !== 'running';
-  const canRestart = command.presentation === 'configured';
-  const canStop = command.status === 'running';
+  const { canRun, canStop, canRestart } = commandAffordances(command.status, command.presentation);
+  const notice = commandDetailNotice({
+    status: command.status,
+    presentation: command.presentation,
+    runDiagnostic: latestRun?.diagnostic ?? null,
+    configDiagnostic,
+  });
 
   return (
     <>
       <div className="flex h-11 flex-none items-center gap-2.5 border-b border-line/12 px-3.5">
-        <AttentionDot state={attentionForCommandStatus(command.status)} />
+        <AttentionDot state={commandAttentionState(command.status)} />
         <span className="font-mono text-[12px] text-fg">{command.name}</span>
         <span className="font-mono text-[10.5px] text-fg-subtle">{command.status}</span>
-        {command.presentation === 'removed' && (
+        {command.presentation !== 'configured' && (
           <span className="rounded-md border border-amber/24 bg-amber/10 px-1.5 py-px font-mono text-[10px] text-amber">
-            {workbenchCopy.commandRemovedMarker}
+            {command.presentation === 'removed'
+              ? workbenchCopy.commandRemovedMarker
+              : workbenchCopy.commandConfigLabel}
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
@@ -279,6 +325,17 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
                 :{port}
               </span>
             ))}
+          {onRefreshCatalog && (
+            <button
+              type="button"
+              onClick={onRefreshCatalog}
+              title={workbenchCopy.refreshCommands}
+              aria-label={workbenchCopy.refreshCommands}
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg"
+            >
+              <RefreshCw size={12} />
+            </button>
+          )}
           {canRestart && (
             <button
               type="button"
@@ -290,32 +347,39 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
               <RotateCcw size={12} />
             </button>
           )}
-          {(canRun || canStop) && (
+          {/* Two buttons, not one. Until `suspended` existed these were mutually
+              exclusive — a command was either startable or stoppable — and one
+              button that flipped its icon was enough. A suspended command is
+              both: Run resumes it now, Stop clears the resume intent. Collapsing
+              them would silently drop whichever one lost. */}
+          {canRun && (
             <button
               type="button"
-              onClick={() =>
-                canStop ? stopCommand.mutate(command.name) : runCommand.mutate(command.name)
-              }
+              onClick={() => runCommand.mutate(command.name)}
               disabled={runCommand.isPending || stopCommand.isPending}
-              title={`${canStop ? 'Stop' : 'Run'} ${command.name}`}
+              title={`Run ${command.name}`}
+              aria-label={`Run ${command.name}`}
               className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
             >
-              {canStop ? <Square size={12} /> : <Play size={12} />}
+              <Play size={12} />
+            </button>
+          )}
+          {canStop && (
+            <button
+              type="button"
+              onClick={() => stopCommand.mutate(command.name)}
+              disabled={runCommand.isPending || stopCommand.isPending}
+              title={`Stop ${command.name}`}
+              aria-label={`Stop ${command.name}`}
+              className="grid size-6 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-white/6 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Square size={12} />
             </button>
           )}
         </span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
-        {command.presentation === 'removed' && (
-          <p className="mb-3 rounded-md border border-amber/18 bg-amber/8 px-2.5 py-2 text-[12px] text-fg-muted">
-            {workbenchCopy.commandRemovedDetail}
-          </p>
-        )}
-        {command.presentation === 'managed' && (
-          <p className="mb-3 rounded-md border border-line/16 bg-white/4 px-2.5 py-2 text-[12px] text-fg-muted">
-            {workbenchCopy.commandManagedDetail}
-          </p>
-        )}
+        {notice && <CommandDetailNotice notice={notice} />}
         {mutationError && (
           <p className="mb-3 rounded-md border border-error/20 bg-error/8 px-2.5 py-2 text-[12px] text-error">
             {formatRuntimeError(mutationError)}
@@ -339,8 +403,6 @@ function CommandDetail({ command, worktreeId }: { command: CommandListItem; work
           <CommandRunMetadataState
             status={latestRun.status}
             hasPtyProcess={latestRun.hasPtyProcess}
-            diagnosticReason={latestRun.diagnostic?.reason ?? null}
-            diagnosticDetail={latestRun.diagnostic?.detail ?? null}
           />
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center">
@@ -396,42 +458,61 @@ function CommandLogTerminal({
   );
 }
 
+/**
+ * The one notice a command's detail pane shows. Which notice that is — and that
+ * there is never a second one stacked under it — is decided by
+ * `commandDetailNotice`; this component only paints it.
+ */
+function CommandDetailNotice({ notice }: { readonly notice: CommandDetailNoticeValue }) {
+  return (
+    <div className={`mb-3 rounded-md border px-2.5 py-2 ${noticeTone(notice.tone)}`}>
+      <p className="text-[12px] leading-relaxed text-fg-muted">{notice.text}</p>
+      {notice.detail && (
+        <p className="mt-1.5 font-mono text-[10.5px] leading-relaxed text-fg-subtle opacity-75">
+          {workbenchCopy.commandRunDiagnosticDetailLabel}: {notice.detail}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function noticeTone(tone: CommandNoticeTone): string {
+  switch (tone) {
+    case 'waiting':
+      return 'border-waiting/18 bg-waiting/8';
+    case 'warning':
+      return 'border-amber/18 bg-amber/8';
+    case 'neutral':
+      return 'border-line/16 bg-white/4';
+  }
+}
+
+/**
+ * The run's own summary, for a run with no PTY output to show. Run diagnostics
+ * are deliberately absent here: they are voiced once, by the notice band above,
+ * for both PTY-linked and metadata-only runs. Saying it twice on the same screen
+ * was the duplication the single-band rule exists to prevent.
+ */
 function CommandRunMetadataState({
   status,
   hasPtyProcess,
-  diagnosticReason,
-  diagnosticDetail,
 }: {
-  readonly status: Exclude<CommandStatus, 'idle'>;
+  readonly status: CommandRunStatus;
   readonly hasPtyProcess: boolean;
-  readonly diagnosticReason: CommandRunDiagnosticReason | null;
-  readonly diagnosticDetail: string | null;
 }) {
-  const primary = diagnosticReason
-    ? workbenchCopy.commandRunDiagnostic[diagnosticReason]
-    : hasPtyProcess
-      ? workbenchCopy.commandOutputWillStream
-      : workbenchCopy.commandOutputNotRecorded;
-
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded-md border border-line/14 bg-black/12 px-3.5 py-3">
       <div className="flex items-center gap-2">
-        <AttentionDot state={attentionForCommandStatus(status)} />
-        <p className="font-mono text-[11.5px] text-fg-muted">{primary}</p>
+        <AttentionDot state={commandAttentionState(status)} />
+        <p className="font-mono text-[11.5px] text-fg-muted">
+          {hasPtyProcess
+            ? workbenchCopy.commandOutputWillStream
+            : workbenchCopy.commandOutputNotRecorded}
+        </p>
       </div>
       <p className="font-mono text-[10.5px] text-fg-subtle opacity-65">
         {workbenchCopy.commandOutputStatusCurrent}
       </p>
-      {diagnosticDetail && (
-        <div className="rounded-md border border-line/16 bg-black/14 p-2.5">
-          <p className="mb-1 font-mono text-[10px] text-fg-subtle opacity-65">
-            {workbenchCopy.commandRunDiagnosticDetailLabel}
-          </p>
-          <p className="font-mono text-[10.5px] leading-relaxed text-fg-subtle">
-            {diagnosticDetail}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -479,49 +560,10 @@ function CommandDiagnosticState({
   );
 }
 
-function CommandDiagnosticPanel({
-  title,
-  body,
-  diagnostic,
-  onRefresh,
-}: {
-  readonly title: string;
-  readonly body: string;
-  readonly diagnostic: string;
-  readonly onRefresh: () => void;
-}) {
-  return (
-    <div className="flex-none p-4">
-      <div className="flex items-center gap-2">
-        <AlertTriangle size={15} className="text-error" />
-        <h2 className="font-mono text-[12px] text-fg">{title}</h2>
-      </div>
-      <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-fg-muted">{body}</p>
-      <pre className="mt-4 max-h-32 overflow-auto rounded-md border border-line/18 bg-black/15 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-fg-subtle">
-        {diagnostic}
-      </pre>
-      <button
-        type="button"
-        onClick={onRefresh}
-        className="mt-4 flex w-fit items-center gap-2 rounded-md border border-line/24 px-2.5 py-1.5 font-mono text-[11px] text-fg-muted transition-colors hover:border-blue/45 hover:text-fg"
-      >
-        <RefreshCw size={12} />
-        {workbenchCopy.refreshCommands}
-      </button>
-    </div>
-  );
-}
-
 function configuredCommands(output: WorktreeCommandsOutput | undefined) {
   return output?.status === 'configured' ? output.commands : [];
 }
 
 function commandItem(command: CommandSummary, presentation: CommandPresentation): CommandListItem {
   return { ...command, presentation };
-}
-
-function attentionForCommandStatus(status: CommandStatus): AttentionState {
-  if (status === 'running') return 'working';
-  if (status === 'failed') return 'error';
-  return 'idle';
 }

@@ -1,17 +1,20 @@
 import { Fragment } from 'react';
 
-import type { CommandSummary, CommandStatus } from '@isagi/contracts';
+import type { CommandStatus, CommandSummary } from '@isagi/contracts';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
+import {
+  commandAttentionState,
+  type CommandPresentation,
+} from '../../lib/workspace/command-attention.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
 import { branchLabel } from '../../lib/workspace/selectors.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import type { AttentionState } from '../../lib/workspace/types.js';
 
 type CommandChipItem = CommandSummary & {
-  readonly presentation: 'configured' | 'removed' | 'managed';
+  readonly presentation: CommandPresentation;
 };
 
 /**
@@ -107,7 +110,7 @@ export function StatusStrip() {
 }
 
 function CommandChip({ command, onOpen }: { command: CommandChipItem; onOpen: () => void }) {
-  const attention = attentionForCommandStatus(command.status);
+  const attention = commandAttentionState(command.status);
   return (
     <button
       type="button"
@@ -118,7 +121,9 @@ function CommandChip({ command, onOpen }: { command: CommandChipItem; onOpen: ()
       <AttentionDot state={attention} />
       <span className="font-mono text-[11px]">{command.name}</span>
       {command.status !== 'running' && (
-        <span className="rounded-md border border-error/24 bg-error/10 px-1.5 py-px font-mono text-[10px] text-error">
+        <span
+          className={`rounded-md border px-1.5 py-px font-mono text-[10px] ${statusBadgeTokens(command.status)}`}
+        >
           {command.status}
         </span>
       )}
@@ -141,17 +146,38 @@ function CommandChip({ command, onOpen }: { command: CommandChipItem; onOpen: ()
   );
 }
 
+/**
+ * Which commands earn a chip on the always-on strip.
+ *
+ * `suspended` is here for every presentation, not just configured ones. During a
+ * normal switch the previous worktree's chips are not rendered at all and the
+ * destination's suspended chips last only the seconds of resume backlog; the
+ * case that matters is the one where the suspension does *not* self-resolve —
+ * after a runtime restart, or when the resume is blocked — and silently dropping
+ * the chip there would hide a process the user is expected to act on.
+ */
 function visibleCommandChips(
   commands: readonly CommandSummary[],
-  presentation: CommandChipItem['presentation'],
+  presentation: CommandPresentation,
 ): CommandChipItem[] {
   return commands
-    .filter((command) => command.status === 'running' || command.status === 'failed')
+    .filter(
+      (command) =>
+        command.status === 'running' ||
+        command.status === 'failed' ||
+        command.status === 'suspended',
+    )
     .map((command) => ({ ...command, presentation }));
 }
 
-function attentionForCommandStatus(status: CommandStatus): AttentionState {
-  if (status === 'running') return 'working';
-  if (status === 'failed') return 'error';
-  return 'idle';
+/**
+ * The badge tones a visible non-running chip can carry. State colour comes from
+ * the attention semantics rather than a raw accent, so `suspended` reads as the
+ * same `waiting` signal its dot already carries instead of borrowing the error
+ * tones every non-running status used to share.
+ */
+function statusBadgeTokens(status: CommandStatus): string {
+  return commandAttentionState(status) === 'waiting'
+    ? 'border-waiting/24 bg-waiting/10 text-waiting'
+    : 'border-error/24 bg-error/10 text-error';
 }

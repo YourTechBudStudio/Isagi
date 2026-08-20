@@ -5065,6 +5065,7 @@ function fakeSurfaceService(): SurfaceServiceShape {
 
 function fakePtyService(): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () => Effect.die('pty launch is not used'),
     getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
     attach: () => Effect.die('pty attach is not used'),
@@ -5076,6 +5077,7 @@ function fakePtyService(): PtyServiceShape {
     terminate: () => Effect.die('pty terminate is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   };
 }

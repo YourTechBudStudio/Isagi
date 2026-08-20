@@ -119,10 +119,10 @@ const testCommandService = {
   runPostCreateLifecycle: () => Effect.void,
   cleanupBeforeWorktreeDelete: () => Effect.void,
   cleanupBeforeWorktreePrune: () => Effect.void,
-  reconcileStaleRunningCommands: Effect.void,
 } satisfies CommandServiceShape;
 
 const testPtyService = {
+  allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
   launch: () => Effect.die('pty launch is not used by workspace snapshot tests'),
   getAttachmentPlan: () =>
     Effect.die('pty attachment planning is not used by workspace snapshot tests'),
@@ -131,10 +131,11 @@ const testPtyService = {
   write: () => Effect.die('pty write is not used by workspace snapshot tests'),
   writeInput: () => Effect.die('pty write input is not used by workspace snapshot tests'),
   resize: () => Effect.die('pty resize is not used by workspace snapshot tests'),
-  kill: () => Effect.void,
-  terminate: () => Effect.void,
+  kill: () => Effect.succeed('terminated_live' as const),
+  terminate: () => Effect.succeed('terminated_live' as const),
   pin: () => Effect.void,
   unpin: () => Effect.void,
+  cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
   isPinned: () => Effect.succeed(false),
 } satisfies PtyServiceShape;
 

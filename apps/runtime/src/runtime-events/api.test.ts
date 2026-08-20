@@ -195,6 +195,42 @@ test('runtime events websocket unsubscribes if the socket closes before subscrib
   }
 });
 
+test('runtime events websocket streams a suspended command_changed through the contract path', async () => {
+  // The widened status rides the existing event: no new event type, no envelope
+  // change, and the client decodes it or the test fails at the boundary.
+  const event = {
+    id: 'evt_test_2',
+    type: 'command_changed',
+    occurredAt: '2026-06-12T00:00:00.000Z',
+    payload: { worktreeId: 10, commandName: 'dev', status: 'suspended' },
+  } satisfies RuntimeEvent;
+  const fastify = Fastify({ logger: false });
+  const runtime = ManagedRuntime.make(RuntimeEventBusLive);
+
+  try {
+    await fastify.register(websocket);
+    registerRuntimeEventsApi(fastify, runtime as never);
+    await fastify.ready();
+
+    const ws = await fastify.injectWS('/api/v1/events');
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          const eventBus = yield* RuntimeEventBus;
+          yield* eventBus.publish(event);
+        }),
+      );
+      assert.deepEqual(await takeMessage(ws), event);
+    } finally {
+      ws.terminate();
+    }
+  } finally {
+    await fastify.close();
+    await runtime.dispose();
+  }
+});
+
 function fakeEventBus() {
   return {
     publish: () => Effect.void,

@@ -12,6 +12,7 @@ import {
   worktreeCommandStates,
 } from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
+import { isTerminalPtyProcessStatus } from './types.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
 type PtyProcessTableRow = InferSelectModel<typeof ptyProcesses>;
@@ -21,6 +22,13 @@ export interface PtyRepositoryService {
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd: string;
+    // Invoked with the generated id as the transaction's final, non-failing
+    // operation. It exists so a caller can make an in-memory reservation for
+    // the new row co-visible with the row itself: the guarantee is the
+    // repository's own write/commit boundary, not any assumption about how the
+    // Effect runtime schedules a continuation. The transaction can still fail
+    // at commit after the hook ran, so callers must compensate on failure.
+    readonly onInserted?: ((ptyProcessId: number) => void) | undefined;
   }) => Effect.Effect<number, DatabaseError>;
   readonly findProcess: (
     ptyProcessId: number,
@@ -49,7 +57,17 @@ export interface PtyRepositoryService {
     readonly exitCode?: number | null | undefined;
     readonly signal?: string | null | undefined;
     readonly lastSeenAt?: string | null | undefined;
-  }) => Effect.Effect<void, DatabaseError>;
+  }) => Effect.Effect<PtyProcessTransitionResult, DatabaseError>;
+}
+
+// The outcome of a guarded transition. `applied` is the durable authority:
+// callers converge on `row` rather than on what they requested, and persistence
+// retry loops treat a rejection as resolution instead of retrying forever.
+export interface PtyProcessTransitionResult {
+  // Post-write row when applied; the persisted row that rejected the write;
+  // `null` when the row does not exist.
+  readonly applied: boolean;
+  readonly row: PtyProcessRow | null;
 }
 
 export const PtyRepository = Context.GenericTag<PtyRepositoryService>('isagi/PtyProcessRepository');
@@ -62,7 +80,9 @@ export const PtyRepositoryLive = Layer.effect(
 
     return {
       createProcessMetadata: (input) =>
-        database.use('create_pty_process_metadata', (db) => {
+        // One transaction: the insert and the id-bearing ref update are a
+        // single durable fact, and `onInserted` runs inside the same boundary.
+        database.transaction('create_pty_process_metadata', (db) => {
           const now = timestamp();
           const placeholderRef = {
             schemaVersion: 1,
@@ -98,6 +118,9 @@ export const PtyRepositoryLive = Layer.effect(
             })
             .where(eq(ptyProcesses.id, row.id))
             .run();
+          // Last, and deliberately not fallible: no expected-failure statement
+          // may sit between the hook and the caller's success.
+          input.onInserted?.(row.id);
           return row.id;
         }),
       findProcess: (ptyProcessId) => findProcess(database, ptyProcessId, 'find_pty_process'),
@@ -168,24 +191,36 @@ export const PtyRepositoryLive = Layer.effect(
             .where(eq(ptyProcesses.id, input.ptyProcessId))
             .run();
         }),
+      // Read, terminal check, and write happen in one transaction so the guard
+      // cannot be raced: a row that is already terminal rejects the write and the
+      // caller receives the persisted fact rather than the one it asked for.
       transitionProcess: (input) =>
-        database.use('transition_pty_process', (db) => {
+        database.transaction('transition_pty_process', (db) => {
+          const existing = db
+            .select()
+            .from(ptyProcesses)
+            .where(eq(ptyProcesses.id, input.ptyProcessId))
+            .get();
+          if (!existing) return { applied: false, row: null };
+          if (isTerminalPtyProcessStatus(existing.status)) {
+            return { applied: false, row: ptyProcessRow(existing) };
+          }
           const now = timestamp();
-          db.update(ptyProcesses)
+          const updated = db
+            .update(ptyProcesses)
             .set({
               status: input.status,
               statusReason: input.statusReason ?? null,
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
               updatedAt: now,
-              exitedAt:
-                input.status === 'exited' || input.status === 'failed' || input.status === 'killed'
-                  ? now
-                  : null,
+              exitedAt: isTerminalPtyProcessStatus(input.status) ? now : null,
               ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
             .where(eq(ptyProcesses.id, input.ptyProcessId))
-            .run();
+            .returning()
+            .get();
+          return { applied: true, row: ptyProcessRow(updated) };
         }),
     } satisfies PtyRepositoryService;
   }),

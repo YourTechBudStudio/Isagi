@@ -20,6 +20,9 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   // attributes it drives are expected in a shipped build. What must not ship is
   // the shell around it: the fake runtime and the handle tests steer it by.
   expect(bundle).not.toContain('data-fixture-shell');
+  // The command-palette fixture positions the production status strip itself.
+  // The strip ships; the fixture's placement wrapper must not.
+  expect(bundle).not.toContain('data-fixture-strip');
   expect(bundle).not.toContain('RailReorderApp');
   expect(bundle).not.toContain('railFixture');
   expect(bundle).not.toContain('installFakeRuntime');

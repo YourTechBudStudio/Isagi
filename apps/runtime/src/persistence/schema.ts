@@ -189,7 +189,9 @@ export const worktreeCommandStates = sqliteTable(
       .notNull()
       .references(() => worktrees.id, { onDelete: 'cascade' }),
     commandName: text('command_name').notNull(),
-    status: text('status', { enum: ['idle', 'running', 'exited', 'stopped', 'failed'] }).notNull(),
+    status: text('status', {
+      enum: ['idle', 'running', 'exited', 'stopped', 'failed', 'suspended'],
+    }).notNull(),
     activePtyProcessId: integer('active_pty_process_id').references(() => ptyProcesses.id),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -214,7 +216,13 @@ export const worktreeCommandRuns = sqliteTable(
     ptyProcessId: integer('pty_process_id').references(() => ptyProcesses.id),
     status: text('status', { enum: ['running', 'exited', 'stopped', 'failed'] }).notNull(),
     diagnosticReason: text('diagnostic_reason', {
-      enum: ['missing_cwd', 'env_invalid', 'pty_launch_failed', 'runtime_stopped'],
+      enum: [
+        'missing_cwd',
+        'env_invalid',
+        'pty_launch_failed',
+        'runtime_stopped',
+        'process_control_failed',
+      ],
     }),
     diagnosticDetail: text('diagnostic_detail'),
     startedAt: text('started_at').notNull(),

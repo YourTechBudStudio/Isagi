@@ -26,10 +26,23 @@ export const workbenchCopy = {
   commandIdleDetail: 'This command has not run yet.',
   commandRemovedDetail: 'This command is no longer in .isagi/config.yaml.',
   commandRemovedSection: 'removed commands',
-  commandManagedSection: 'runtime-managed commands',
   commandManagedDetail:
-    'Command config needs a look, but this managed command still has live runtime state.',
+    'Command config needs a look, but this command still has live runtime state.',
   commandRemovedMarker: 'removed',
+  /** The narrow list-row badge. The detail header has room to name the subject too. */
+  commandConfigMarker: 'broken',
+  commandConfigLabel: 'config broken',
+  // Suspension copy, keyed by presentation because the facts genuinely differ.
+  // None of these promise "it starts when you come back": after a runtime
+  // restart the user *is* back and nothing auto-starts, so "the next activation
+  // — run it to resume now" is the phrasing that stays true in both the
+  // switch-away case and the restart case, and names both manual recoveries.
+  commandSuspendedDetail:
+    'Suspended when leaving this worktree. It resumes on the next activation — run it to resume now, or stop it to clear the resume intent.',
+  commandSuspendedRemovedDetail:
+    "Suspended when leaving this worktree, but its config entry is gone, so it can't resume on its own. Stop it to clear the resume intent.",
+  commandSuspendedManagedDetail:
+    "Suspended when leaving this worktree, but the command config can't be read right now, so it won't resume until the config is fixed. Stop it to clear the resume intent.",
   commandOutputNotRecorded: 'No terminal output was recorded for this run.',
   commandOutputStatusCurrent: 'Command status is still current.',
   commandOutputWillStream: 'This run has PTY output ready for the streaming view.',
@@ -52,6 +65,7 @@ export const workbenchCopy = {
     env_invalid: 'The command environment could not be prepared.',
     pty_launch_failed: 'The command could not start a PTY process.',
     runtime_stopped: 'The runtime stopped while this command was running.',
+    process_control_failed: "Isagi couldn't stop or verify this command's process.",
   },
   commandConfigDiagnosticTitle: 'Command config needs a look.',
   commandConfigDiagnosticBody:

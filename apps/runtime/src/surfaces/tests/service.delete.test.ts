@@ -239,6 +239,7 @@ test('delete surface best-effort terminates live PTYs', async () => {
               terminate: (input) =>
                 Effect.sync(() => {
                   terminations.push(input.ptyProcessId);
+                  return 'terminated_live' as const;
                 }),
             },
           }),

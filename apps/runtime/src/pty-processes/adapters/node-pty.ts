@@ -13,6 +13,7 @@ import {
 } from '../service/shell-integration.js';
 import type {
   BackendAttachment,
+  BackendTerminateResult,
   LaunchBackendSessionInput,
   NodePtyBackendRef,
   PtyBackend as PtyBackendShape,
@@ -211,22 +212,27 @@ export const NodePtyBackendLive = Layer.effect(
         ),
       listSessions,
       collectGarbage: (input) => collectNodePtyGarbage(input, listSessions),
+      // Absence and signalling are reported separately: `terminated: false` means
+      // no live handle existed for this ref, so the attempt terminated nothing
+      // and its caller must persist no `killed` fact. `true` is returned only
+      // when a signal operation completed successfully — a throwing SIGKILL
+      // escalation surfaces `PtyKillError` instead.
       terminate: (input) =>
         Effect.tryPromise({
-          try: async () => {
+          try: async (): Promise<BackendTerminateResult> => {
             const ref = input.ref;
             if (ref.backend !== 'node_pty') {
               throw new Error(`Cannot terminate node-pty backend for ${ref.backend} ref.`);
             }
             const live = liveSessions.get(ref.ptyProcessId);
             if (!live) {
-              return;
+              return { terminated: false };
             }
             try {
               live.process.kill('SIGTERM');
             } catch {
               live.process.kill();
-              return;
+              return { terminated: true };
             }
             await delay(input.gracefulTimeoutMs);
             const current = liveSessions.get(ref.ptyProcessId);
@@ -235,6 +241,7 @@ export const NodePtyBackendLive = Layer.effect(
               liveSessions.delete(ref.ptyProcessId);
               current.process.kill('SIGKILL');
             }
+            return { terminated: true };
           },
           catch: (cause) =>
             new PtyKillError({
@@ -244,14 +251,14 @@ export const NodePtyBackendLive = Layer.effect(
         }),
       kill: (ref) =>
         Effect.try({
-          try: () => {
+          try: (): BackendTerminateResult => {
             if (ref.backend !== 'node_pty') {
               throw new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`);
             }
             const nodeRef = ref;
             const live = liveSessions.get(nodeRef.ptyProcessId);
             if (!live) {
-              return;
+              return { terminated: false };
             }
             live.suppressExitCallback = true;
             liveSessions.delete(nodeRef.ptyProcessId);
@@ -264,6 +271,7 @@ export const NodePtyBackendLive = Layer.effect(
               }
               throw error;
             }
+            return { terminated: true };
           },
           catch: (cause) =>
             new PtyKillError({

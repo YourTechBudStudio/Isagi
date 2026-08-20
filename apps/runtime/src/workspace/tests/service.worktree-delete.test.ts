@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandService, type CommandServiceShape } from '../../commands/index.js';
+import { CommandError, CommandService, type CommandServiceShape } from '../../commands/index.js';
 import { Git, GitCommandError, type GitService } from '../../git/index.js';
 import { DataDirectory, StateFile } from '../../persistence/index.js';
 import { PtyService, PtyServiceError, type PtyServiceShape } from '../../pty-processes/index.js';
@@ -141,6 +141,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
       Effect.sync(() => {
         events.push(`pty:${input.ptyProcessId}:${input.gracefulTimeoutMs}`);
+        return 'terminated_live' as const;
       }),
   } satisfies PtyServiceShape;
 
@@ -324,6 +325,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
             }),
           );
         }
+        return 'terminated_live' as const;
       }),
   } satisfies PtyServiceShape;
 
@@ -364,6 +366,86 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
     [],
   );
   assert.deepEqual(new Set(events), new Set(['commands', 'pty:21', 'pty:22']));
+  fixtures.cleanup();
+});
+
+test('delete worktree refuses the cascade when command cleanup cannot account for a process', async () => {
+  // The command domain's audit is what proves no observable command process
+  // survives a delete. When it cannot, the workspace must refuse before any
+  // destructive work — the worktree's rows, including every link to the
+  // unresolved incarnation, have to still be there for the user's retry.
+  const fixtures = deleteFixtures();
+  const events: string[] = [];
+  let dbDeleteCalls = 0;
+  const repository = {
+    ...repositoryWithWorktrees({
+      project: fixtures.project,
+      worktrees: [fixtures.rootWorktree, fixtures.targetWorktree],
+    }),
+    deleteWorktree: () =>
+      Effect.sync(() => {
+        dbDeleteCalls += 1;
+        events.push('db');
+        return true;
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const deleteGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        events.push(`git:${args.join(' ')}`);
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+  const commandService = {
+    ...testCommandService,
+    cleanupBeforeWorktreeDelete: () =>
+      Effect.gen(function* () {
+        events.push('commands');
+        return yield* Effect.fail(
+          new CommandError({
+            code: 'command_action_failed',
+            message: 'Could not account for 1 command process(es) while cleaning up worktree 2.',
+            worktreeId: fixtures.targetWorktree.id,
+          }),
+        );
+      }),
+  } satisfies CommandServiceShape;
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.deleteWorktree({
+          projectId: fixtures.project.id,
+          worktreeId: fixtures.targetWorktree.id,
+          request: { checkoutRemovalMode: 'normal', branchRemovalMode: 'preserve' },
+        });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, commandService),
+        Effect.provideService(PtyService, testPtyService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(
+          StateFile,
+          stateFileWithWriteCounter(() => {}),
+        ),
+        Effect.provideService(Git, deleteGit),
+        Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+      ),
+    ),
+  );
+
+  assert.ok(error instanceof WorkspaceError);
+  assert.equal(error.code, 'command_cleanup_failed');
+  assert.equal(error.worktreeId, fixtures.targetWorktree.id);
+  assert.equal(dbDeleteCalls, 0);
+  assert.deepEqual(events, ['commands'], 'nothing destructive may run after the refusal');
   fixtures.cleanup();
 });
 

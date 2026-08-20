@@ -479,6 +479,7 @@ function fakeRealRestorePtyService(
   launches: LaunchPtyProcessInput[],
 ): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: (input) =>
       Effect.gen(function* () {
         launches.push(input);
@@ -526,9 +527,10 @@ function fakeRealRestorePtyService(
     writeInput: () => Effect.die('writeInput is not used'),
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
-    terminate: () => Effect.void,
+    terminate: () => Effect.succeed('terminated_live' as const),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }

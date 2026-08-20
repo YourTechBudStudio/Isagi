@@ -29,6 +29,7 @@ const firstPtyProcessId = 100;
 function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyServiceShape {
   let nextPtyProcessId = firstPtyProcessId;
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () =>
       Effect.sync(() => {
         onLaunch?.();
@@ -44,6 +45,7 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
     terminate: (input) =>
       Effect.sync(() => {
         calls.terminated.push(input.ptyProcessId);
+        return 'terminated_live' as const;
       }),
     getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
     attach: () => Effect.die('pty attach is not used'),
@@ -52,6 +54,7 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
     writeInput: () => Effect.die('pty writeInput is not used'),
     resize: () => Effect.die('pty resize is not used'),
     kill: () => Effect.die('pty kill is not used'),
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   };
 }

@@ -10,10 +10,11 @@ import { UserShell, type UserShellService } from '../host-inventory/user-shell.s
 import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
-import { PtyBackend } from './backend.js';
+import { PtyBackendCatalog } from './backend.js';
 import { PtyForegroundStateLive } from './foreground-state.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { PtyService, PtyServiceLive } from './pty.service.js';
+import { fakeBackendCatalog } from './test-support.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from './types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
@@ -32,7 +33,10 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const directory = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
   const repository = PtyRepositoryLive.pipe(Layer.provide(database));
-  const backendLayer = Layer.succeed(PtyBackend, backend);
+  const backendLayer = Layer.succeed(
+    PtyBackendCatalog,
+    fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
+  );
   const userShellLayer = Layer.succeed(UserShell, testUserShell());
   const service = PtyServiceLive.pipe(
     Layer.provide(repository),
@@ -43,6 +47,23 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
+}
+
+// These tests exercise node-pty-configured behaviour; the tmux slot exists only
+// so the catalog is complete. Any dispatch to it is a test defect, not a
+// fallback, so it dies rather than answering.
+function unusedTmuxBackend(): PtyBackendShape {
+  return {
+    name: 'tmux',
+    available: Effect.die('tmux availability is not expected in these tests'),
+    launch: () => Effect.die('tmux launch is not expected in these tests'),
+    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
+    attach: () => Effect.die('tmux attach is not expected in these tests'),
+    replay: () => Effect.die('tmux replay is not expected in these tests'),
+    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
+    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
+    kill: () => Effect.die('tmux kill is not expected in these tests'),
+  };
 }
 
 function testUserShell(): UserShellService {
@@ -395,11 +416,14 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
 
-function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void): PtyBackendShape {
+function launchCaptureBackend(
+  onLaunch: (environment: NodeJS.ProcessEnv) => void,
+  overrides: Partial<PtyBackendShape> = {},
+): PtyBackendShape {
   return {
     name: 'node_pty',
     available: Effect.succeed(true),
@@ -418,7 +442,8 @@ function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void
     replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
+    ...overrides,
   } satisfies PtyBackendShape;
 }
 
@@ -458,7 +483,7 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
 
@@ -485,6 +510,98 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
+
+// The composed `launch` is now `allocateLaunch` plus a one-shot `start`. These
+// two cases pin the property every current caller depends on: whatever happened
+// during the launch, the returned metadata is enough to take ownership of — and
+// operate — the incarnation.
+test('a terminal-session-style caller can own and stop a process from returned metadata', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-handoff-terminal-'));
+  let killed = 0;
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const repository = yield* PtyRepository;
+        // Exactly the terminal-session shape: launch, then install ownership
+        // from the returned metadata after the call returns.
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        const row = yield* repository.findProcess(process.ptyProcessId);
+        const outcome = yield* pty.terminate({
+          ptyProcessId: process.ptyProcessId,
+          gracefulTimeoutMs: 10,
+        });
+        return { process, row, outcome };
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend(() => {}, {
+              kill: () =>
+                Effect.sync(() => {
+                  killed += 1;
+                  return { terminated: true };
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(result.row?.status, 'running');
+    assert.equal(result.process.logPath, result.row?.logPath);
+    assert.equal(result.outcome, 'terminated_live');
+    assert.equal(killed, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('a command-style caller reads the terminal fact of a process that died during launch', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-handoff-command-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const repository = yield* PtyRepository;
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        // The command launch handshake: link the run to the returned id, then
+        // re-read the row. The exit landed before any owner existed, so this
+        // read is the only thing that can observe it.
+        return {
+          process,
+          row: yield* repository.findProcess(process.ptyProcessId),
+        };
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend(() => {}, {
+              launch: (input) =>
+                Effect.sync(() => {
+                  input.onExit({ exitCode: 3, signal: null });
+                  return {
+                    schemaVersion: 1,
+                    backend: 'node_pty',
+                    ptyProcessId: input.ptyProcessId,
+                    pid: 42,
+                  } as const;
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(result.process.ptyProcessId > 0, true);
+    // The immediate exit stands: the post-spawn `running` transition is
+    // rejected by terminal immutability rather than erasing it.
+    assert.equal(result.row?.status, 'failed');
+    assert.equal(result.row?.exitCode, 3);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

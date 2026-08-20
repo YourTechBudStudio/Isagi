@@ -355,6 +355,7 @@ function fakePtyService(
   ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>,
 ): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: (input) =>
       Effect.sync(() => {
         ptyLaunches.push({ command: input.command, args: input.args, cwd: input.cwd });
@@ -376,6 +377,7 @@ function fakePtyService(
     terminate: () => Effect.die('terminate is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }
