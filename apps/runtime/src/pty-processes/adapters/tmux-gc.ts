@@ -22,7 +22,11 @@ export function collectTmuxGarbage(
         continue;
       }
       const session = persisted.get(parsed.ptyProcessId);
-      if (!session) {
+      // A row whose incarnation is not a tmux one does not own this tmux session,
+      // even though the session name embeds its id. The session is an orphan by
+      // the only identity that matters here — the persisted backend ref (ADR
+      // 0005) — so treating the id match as ownership would strand it forever.
+      if (!session || session.ref.backend !== 'tmux') {
         findings.push({
           type: 'orphan_backend_session',
           ref,
@@ -31,8 +35,9 @@ export function collectTmuxGarbage(
         continue;
       }
       if (
-        session.ref.backend === 'tmux' &&
-        (session.status === 'exited' || session.status === 'failed' || session.status === 'killed')
+        session.status === 'exited' ||
+        session.status === 'failed' ||
+        session.status === 'killed'
       ) {
         findings.push({
           type: 'terminal_backend_session',

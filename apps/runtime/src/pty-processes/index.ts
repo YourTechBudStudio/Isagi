@@ -1,5 +1,6 @@
 export { registerPtyApi } from './api.js';
-export { PtyBackend, PtyBackendLive } from './backend.js';
+export { PtyBackendCatalog, PtyBackendCatalogLive } from './backend.js';
+export type { PtyBackendCatalogService } from './backend.js';
 export { PtyForegroundState, PtyForegroundStateLive } from './foreground-state.js';
 export type { PtyForegroundStateService } from './foreground-state.js';
 export { NodePtyBackend, NodePtyBackendLive } from './adapters/node-pty.js';

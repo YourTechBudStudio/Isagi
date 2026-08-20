@@ -4,6 +4,7 @@ import { Effect, Either } from 'effect';
 
 import { diagnosticPhase, logDiagnosticEvent } from '../../diagnostics/phase.js';
 import type { PtyProcessRow } from '../../surfaces/index.js';
+import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';
@@ -19,7 +20,7 @@ const orphanPtyLogRetentionMs = orphanPtyProcessRetentionMs;
 
 export function startPtyGarbageCollector(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  catalog: PtyBackendCatalogService,
   runtimeNamespace: string,
   sessionsPath: string,
   options: {
@@ -28,7 +29,7 @@ export function startPtyGarbageCollector(
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      collectPtyGarbage(repository, backend, runtimeNamespace, sessionsPath, options).pipe(
+      collectPtyGarbage(repository, catalog, runtimeNamespace, sessionsPath, options).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn('[runtime] PTY GC failed', error);
@@ -43,7 +44,7 @@ export function startPtyGarbageCollector(
 
 export function collectPtyGarbage(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  catalog: PtyBackendCatalogService,
   runtimeNamespace: string,
   sessionsPath: string,
   options: {
@@ -54,13 +55,13 @@ export function collectPtyGarbage(
   return Effect.gen(function* () {
     yield* diagnosticPhase(
       'pty.gc.backend_processes',
-      { backend: backend.name, runtimeNamespace },
-      cleanupBackendProcesses(repository, backend, runtimeNamespace),
+      { runtimeNamespace },
+      cleanupBackendProcesses(repository, catalog, runtimeNamespace),
     ).pipe(tagGcPhaseError('backend_processes'));
     yield* diagnosticPhase(
       'pty.gc.orphan_processes',
-      { backend: backend.name },
-      cleanupOrphanPtyProcesses(repository, backend, {
+      {},
+      cleanupOrphanPtyProcesses(repository, catalog, {
         nowMs: options.nowMs ?? Date.now(),
         pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
       }),
@@ -89,34 +90,42 @@ function tagGcPhaseError<A, E, R>(phase: string) {
     );
 }
 
+// Backend-only sessions have no persisted row to dispatch from, so this sweep
+// cannot be driven by the rows the runtime knows about — gating it on persisted
+// tmux rows would miss exactly the orphans it exists to find. Every registered
+// adapter that is actually available therefore collects, whatever the current
+// launch preference is.
 function cleanupBackendProcesses(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  catalog: PtyBackendCatalogService,
   runtimeNamespace: string,
 ) {
   return Effect.gen(function* () {
-    if (!backend.collectGarbage) return;
     const sessions = yield* collectGcSessions(repository);
-    const findings = yield* backend.collectGarbage({ runtimeNamespace, sessions }).pipe(
-      Effect.catchAll((error) =>
-        Effect.sync(() => {
-          console.warn(
-            `[runtime] Could not collect PTY backend GC findings backend=${backend.name}`,
-            error,
-          );
-          return [];
-        }),
-      ),
-    );
-    for (const finding of findings) {
-      yield* applyGcFinding(backend, finding);
+    for (const backend of catalog.all) {
+      if (!backend.collectGarbage) continue;
+      if (!(yield* backend.available)) continue;
+      const findings = yield* backend.collectGarbage({ runtimeNamespace, sessions }).pipe(
+        Effect.catchAll((error) =>
+          Effect.sync(() => {
+            console.warn(
+              `[runtime] Could not collect PTY backend GC findings backend=${backend.name}`,
+              error,
+            );
+            return [] as readonly PtyBackendGcFinding[];
+          }),
+        ),
+      );
+      for (const finding of findings) {
+        yield* applyGcFinding(backend, finding);
+      }
     }
   });
 }
 
 function cleanupOrphanPtyProcesses(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  catalog: PtyBackendCatalogService,
   options: {
     readonly nowMs: number;
     readonly pinnedPtyProcessIds: ReadonlySet<number>;
@@ -125,7 +134,6 @@ function cleanupOrphanPtyProcesses(
   return Effect.gen(function* () {
     const processes = yield* repository.listOrphanProcesses;
     logDiagnosticEvent('pty.gc.orphan_processes_discovered', {
-      backend: backend.name,
       orphanCount: processes.length,
       pinnedCount: options.pinnedPtyProcessIds.size,
     });
@@ -155,7 +163,7 @@ function cleanupOrphanPtyProcesses(
           statusReason: process.statusReason,
           cwd: process.cwd,
         },
-        cleanupOrphanPtyProcess(repository, backend, process),
+        cleanupOrphanPtyProcess(repository, catalog, process),
       );
     }
   });
@@ -163,12 +171,15 @@ function cleanupOrphanPtyProcesses(
 
 function cleanupOrphanPtyProcess(
   repository: PtyRepositoryService,
-  backend: PtyBackend,
+  catalog: PtyBackendCatalogService,
   process: PtyProcessRow,
 ) {
   return Effect.gen(function* () {
     if (process.status === 'starting' || process.status === 'running') {
-      const backendCleaned = yield* cleanupLiveOrphanPtyBackend(backend, process);
+      const backendCleaned = yield* cleanupLiveOrphanPtyBackend(
+        catalog.forBackend(process.backend),
+        process,
+      );
       if (!backendCleaned) return;
     }
 
@@ -182,13 +193,6 @@ function cleanupOrphanPtyProcess(
 
 function cleanupLiveOrphanPtyBackend(backend: PtyBackend, process: PtyProcessRow) {
   return Effect.gen(function* () {
-    if (process.backend !== backend.name) {
-      console.warn(
-        `[runtime] Keeping orphan PTY process because backend is unavailable backend=${process.backend} ptyProcessId=${process.id}`,
-      );
-      return false;
-    }
-
     const ref = yield* decodeBackendRef(process).pipe(Effect.orElseSucceed(() => null));
     if (!ref) {
       // The row claims a live process but its backend ref is undecodable, so we

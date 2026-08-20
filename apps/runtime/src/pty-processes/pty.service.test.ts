@@ -10,10 +10,11 @@ import { UserShell, type UserShellService } from '../host-inventory/user-shell.s
 import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
-import { PtyBackend } from './backend.js';
+import { PtyBackendCatalog } from './backend.js';
 import { PtyForegroundStateLive } from './foreground-state.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { PtyService, PtyServiceLive } from './pty.service.js';
+import { fakeBackendCatalog } from './test-support.js';
 import { PtyServiceError, type PtyBackend as PtyBackendShape } from './types.js';
 
 function dataDirectoryLayer(dataRoot: string) {
@@ -32,7 +33,10 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
   const directory = dataDirectoryLayer(dataRoot);
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
   const repository = PtyRepositoryLive.pipe(Layer.provide(database));
-  const backendLayer = Layer.succeed(PtyBackend, backend);
+  const backendLayer = Layer.succeed(
+    PtyBackendCatalog,
+    fakeBackendCatalog({ configured: 'node_pty', nodePty: backend, tmux: unusedTmuxBackend() }),
+  );
   const userShellLayer = Layer.succeed(UserShell, testUserShell());
   const service = PtyServiceLive.pipe(
     Layer.provide(repository),
@@ -43,6 +47,23 @@ function serviceTestLayer(dataRoot: string, backend: PtyBackendShape) {
     Layer.provide(userShellLayer),
   );
   return Layer.mergeAll(database, repository, service);
+}
+
+// These tests exercise node-pty-configured behaviour; the tmux slot exists only
+// so the catalog is complete. Any dispatch to it is a test defect, not a
+// fallback, so it dies rather than answering.
+function unusedTmuxBackend(): PtyBackendShape {
+  return {
+    name: 'tmux',
+    available: Effect.die('tmux availability is not expected in these tests'),
+    launch: () => Effect.die('tmux launch is not expected in these tests'),
+    writeInput: () => Effect.die('tmux writeInput is not expected in these tests'),
+    attach: () => Effect.die('tmux attach is not expected in these tests'),
+    replay: () => Effect.die('tmux replay is not expected in these tests'),
+    inspect: () => Effect.die('tmux inspect is not expected in these tests'),
+    listSessions: Effect.die('tmux listSessions is not expected in these tests'),
+    kill: () => Effect.die('tmux kill is not expected in these tests'),
+  };
 }
 
 function testUserShell(): UserShellService {

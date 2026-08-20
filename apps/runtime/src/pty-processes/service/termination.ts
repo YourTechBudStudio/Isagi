@@ -2,9 +2,10 @@ import { Effect, Either } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtyProcessRecord } from '../../surfaces/index.js';
+import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyProcessStatusReason } from '../types.js';
-import { PtyServiceError, type PtyBackend } from '../types.js';
+import { PtyServiceError } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { detachActiveAttachment } from './attachments.js';
 import { decodeBackendRef } from './backend-ref.js';
@@ -22,7 +23,7 @@ export type DurablePtyTerminationReason = Extract<
 
 export function terminatePtyProcessAndPersistKilled(input: {
   readonly repository: PtyRepositoryService;
-  readonly backend: PtyBackend;
+  readonly catalog: PtyBackendCatalogService;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly terminations: Map<number, PtyTerminationState>;
@@ -34,11 +35,16 @@ export function terminatePtyProcessAndPersistKilled(input: {
   return Effect.gen(function* () {
     const session = yield* findPtyProcessOrFail(input.repository, input.ptyProcessId);
     const ref = yield* decodeBackendRef(session);
-    if (session.backend !== input.backend.name) {
+    // The incarnation is operated through the transport that created it, not the
+    // current launch preference. Termination has no `unavailable` outcome of its
+    // own, so the adapter is probed first to keep a genuinely missing backend a
+    // structured `backend_unavailable` rather than a raw kill failure.
+    const backend = input.catalog.forBackend(session.backend);
+    if (!(yield* backend.available)) {
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
-          message: `PTY backend ${session.backend} is not active in this runtime process.`,
+          message: `PTY backend ${session.backend} is unavailable.`,
           ptyProcessId: session.id,
         }),
       );
@@ -50,12 +56,12 @@ export function terminatePtyProcessAndPersistKilled(input: {
     yield* detachActiveAttachment(input.activeAttachments, session.id);
 
     const killResult = yield* (
-      input.backend.terminate
-        ? input.backend.terminate({
+      backend.terminate
+        ? backend.terminate({
             ref,
             gracefulTimeoutMs: input.gracefulTimeoutMs ?? 2_000,
           })
-        : input.backend.kill(ref)
+        : backend.kill(ref)
     ).pipe(Effect.either);
     if (Either.isLeft(killResult)) {
       if (input.killFailurePolicy === 'persist_killed') {

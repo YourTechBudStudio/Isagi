@@ -11,7 +11,7 @@ import {
   type InternalRuntimeEventBusService,
 } from '../runtime-events/index.js';
 import type { PtyProcessRecord } from '../surfaces/index.js';
-import { PtyBackend } from './backend.js';
+import { PtyBackendCatalog, type PtyBackendCatalogService } from './backend.js';
 import { PtyForegroundState, type PtyForegroundStateService } from './foreground-state.js';
 import { appendLog, PtyRepository, type PtyRepositoryService } from './pty.repository.js';
 import {
@@ -124,7 +124,7 @@ export const PtyServiceLive = Layer.scoped(
   PtyService,
   Effect.gen(function* () {
     const repository = yield* PtyRepository;
-    const backend = yield* PtyBackend;
+    const catalog = yield* PtyBackendCatalog;
     const foreground = yield* PtyForegroundState;
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
@@ -138,14 +138,14 @@ export const PtyServiceLive = Layer.scoped(
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedProcesses(repository, backend, eventBus, { startup: true });
-    yield* collectPtyGarbage(repository, backend, namespace, directory.paths.sessionsPath, {
+    yield* reconcilePersistedProcesses(repository, catalog, eventBus, { startup: true });
+    yield* collectPtyGarbage(repository, catalog, namespace, directory.paths.sessionsPath, {
       pinnedPtyProcessIds,
     });
-    const pollTimer = startStatusPolling(repository, backend, eventBus);
+    const pollTimer = startStatusPolling(repository, catalog, eventBus);
     const gcTimer = startPtyGarbageCollector(
       repository,
-      backend,
+      catalog,
       namespace,
       directory.paths.sessionsPath,
       { pinnedPtyProcessIds },
@@ -193,7 +193,7 @@ export const PtyServiceLive = Layer.scoped(
             env: processEnvironment,
           });
           const startResult = yield* launchWithBackend({
-            backend,
+            backend: catalog.configured,
             metadata: {
               ...metadata,
               command: launch.command,
@@ -243,7 +243,7 @@ export const PtyServiceLive = Layer.scoped(
                   }),
                 ),
                 Effect.catchAll((error) =>
-                  backend
+                  catalog.configured
                     .kill(startResult.right)
                     .pipe(Effect.ignore, Effect.zipRight(Effect.fail(error))),
                 ),
@@ -252,18 +252,18 @@ export const PtyServiceLive = Layer.scoped(
           const row = yield* repository.findProcess(metadata.ptyProcessId);
           return { ...metadata, logPath: row?.logPath ?? null } satisfies PtyProcessLaunchMetadata;
         }),
-      getAttachmentPlan: (input) => getAttachmentPlan(repository, backend, input.ptyProcessId),
+      getAttachmentPlan: (input) => getAttachmentPlan(repository, catalog, input.ptyProcessId),
       attach: (input) =>
         attachToProcess(
           repository,
-          backend,
+          catalog,
           eventBus,
           foreground,
           activeAttachments,
           pendingAttachments,
           input,
         ),
-      replay: (input) => replayProcess(backend, input),
+      replay: (input) => replayProcess(catalog, input),
       write: (input) =>
         Effect.gen(function* () {
           const active = yield* requireActiveAttachment(
@@ -275,7 +275,7 @@ export const PtyServiceLive = Layer.scoped(
         }),
       writeInput: (input) =>
         Effect.gen(function* () {
-          const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+          const plan = yield* getAttachmentPlan(repository, catalog, input.ptyProcessId);
           if (!plan.live) {
             return yield* Effect.fail(
               new PtyServiceError({
@@ -286,7 +286,9 @@ export const PtyServiceLive = Layer.scoped(
             );
           }
           const ref = yield* decodeBackendRef(plan.session);
-          yield* backend.writeInput({ ref, data: input.data });
+          // `getAttachmentPlan` already probed this row's adapter; re-checking
+          // availability here would only buy a second `tmux -V`.
+          yield* catalog.forBackend(plan.session.backend).writeInput({ ref, data: input.data });
         }),
       resize: (input) =>
         Effect.gen(function* () {
@@ -300,7 +302,7 @@ export const PtyServiceLive = Layer.scoped(
       kill: (input) =>
         terminatePtyProcessAndPersistKilled({
           repository,
-          backend,
+          catalog,
           eventBus,
           activeAttachments,
           terminations,
@@ -310,7 +312,7 @@ export const PtyServiceLive = Layer.scoped(
       terminate: (input) =>
         terminatePtyProcessAndPersistKilled({
           repository,
-          backend,
+          catalog,
           eventBus,
           activeAttachments,
           terminations,
@@ -342,7 +344,7 @@ export const PtyServiceLive = Layer.scoped(
           if (session.backend !== 'node_pty') continue;
           yield* terminatePtyProcessAndPersistKilled({
             repository,
-            backend,
+            catalog,
             eventBus,
             activeAttachments,
             terminations,
@@ -358,7 +360,7 @@ export const PtyServiceLive = Layer.scoped(
 
 function attachToProcess(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
   foreground: PtyForegroundStateService,
   activeAttachments: Map<number, ActiveAttachment>,
@@ -374,7 +376,7 @@ function attachToProcess(
   },
 ) {
   return Effect.gen(function* () {
-    const plan = yield* getAttachmentPlan(repository, backend, input.ptyProcessId);
+    const plan = yield* getAttachmentPlan(repository, catalog, input.ptyProcessId);
     if (!plan.live)
       return {
         session: plan.session,
@@ -386,6 +388,8 @@ function attachToProcess(
       } satisfies PtyAttachment;
     const session = plan.session;
     const ref = yield* decodeBackendRef(session);
+    // The plan already probed this row's adapter for availability.
+    const backend = catalog.forBackend(session.backend);
     if (activeAttachments.has(session.id) || pendingAttachments.has(session.id)) {
       const active = activeAttachments.get(session.id);
       if (input.supersede && active && !pendingAttachments.has(session.id)) {
@@ -477,7 +481,7 @@ function attachToProcess(
 }
 
 function replayProcess(
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   input: {
     readonly session: PtyProcessRecord;
     readonly bytes: number | null;
@@ -499,11 +503,12 @@ function replayProcess(
       return;
     }
     const ref = yield* decodeBackendRef(input.session);
-    if (input.session.backend !== backend.name)
+    const backend = catalog.forBackend(input.session.backend);
+    if (!(yield* backend.available))
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
-          message: `PTY backend ${input.session.backend} is not active in this runtime process.`,
+          message: `PTY backend ${input.session.backend} is unavailable.`,
           ptyProcessId: input.session.id,
         }),
       );
@@ -518,7 +523,7 @@ function replayProcess(
 
 function getAttachmentPlan(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   ptyProcessId: number,
 ) {
   return Effect.gen(function* () {
@@ -532,11 +537,14 @@ function getAttachmentPlan(
         }),
       );
     const live = session.status === 'running';
-    if (live && session.backend !== backend.name)
+    // Only a live row needs a transport. A dead row still plans a file-log
+    // replay, so it must never pay an availability probe. This one check also
+    // covers the attach and `writeInput` paths that plan first.
+    if (live && !(yield* catalog.forBackend(session.backend).available))
       return yield* Effect.fail(
         new PtyServiceError({
           code: 'backend_unavailable',
-          message: `PTY backend ${session.backend} is not active in this runtime process.`,
+          message: `PTY backend ${session.backend} is unavailable.`,
           ptyProcessId: session.id,
         }),
       );
@@ -551,12 +559,12 @@ function getAttachmentPlan(
 
 function startStatusPolling(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedProcesses(repository, backend, eventBus, { startup: false }).pipe(
+      reconcilePersistedProcesses(repository, catalog, eventBus, { startup: false }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => console.warn('[runtime] PTY status polling failed', error)),
         ),
@@ -569,7 +577,7 @@ function startStatusPolling(
 
 function reconcilePersistedProcesses(
   repository: PtyRepositoryService,
-  backend: PtyBackendShape,
+  catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
   options: { readonly startup: boolean },
 ) {
@@ -591,14 +599,11 @@ function reconcilePersistedProcesses(
         });
         continue;
       }
-      if (session.backend !== backend.name) {
-        yield* transitionIfChanged(repository, eventBus, session, {
-          status: 'running',
-          statusReason: 'backend_unavailable',
-        });
-        continue;
-      }
-      const inspection = yield* backend
+      // No availability pre-check: `inspect` already answers
+      // alive | missing | unavailable, so probing first would only add a second
+      // round-trip to the same backend on every poll.
+      const inspection = yield* catalog
+        .forBackend(session.backend)
         .inspect(ref)
         .pipe(
           Effect.catchAll((cause) => Effect.succeed({ status: 'unavailable' as const, cause })),
