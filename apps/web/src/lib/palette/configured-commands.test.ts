@@ -116,6 +116,26 @@ test('startable rows run then open the drawer, for resolved running and failed l
   }
 });
 
+test('a suspended row resumes the command and says so, without looking like a fresh run', async () => {
+  const { deps, calls } = recorder();
+  const [entry] = configuredCommandEntries(
+    ctx({ configuredCommands: [summary('dev', 'suspended')] }),
+    deps,
+  );
+
+  await entry?.run();
+
+  // Behaviourally a suspended row is a startable row — same launch, same handoff
+  // to the drawer. Only the word differs, because the user is continuing a
+  // command that already exists rather than starting a new one.
+  assert.deepEqual(calls, ['run:dev', 'open:dev']);
+  assert.equal(entry?.sub, paletteCopy.commands.sub.resume);
+  assert.notEqual(entry?.sub, paletteCopy.commands.sub.run);
+  // No state tint: `working` is reserved for a command that is actually running,
+  // and a suspended row must not borrow the live cue.
+  assert.equal(entry?.tone, undefined);
+});
+
 test('a rejected run rethrows and never opens the drawer', async () => {
   const { deps, calls } = recorder();
   const [entry] = configuredCommandEntries(ctx({ configuredCommands: [summary('dev')] }), {

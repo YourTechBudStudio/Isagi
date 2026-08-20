@@ -1,4 +1,5 @@
 import type {
+  CommandLogMetadataLatestRun,
   CommandSummary,
   ControlPlaneSnapshot,
   SurfaceDetail,
@@ -88,6 +89,53 @@ export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>
     { name: 'migrate', status: 'failed', ports: [] },
   ],
   [FIXTURE_DESTINATION.worktreeId]: [{ name: 'worker', status: 'idle', ports: [] }],
+};
+
+/**
+ * The suspension review scenarios, applied by a test rather than served by
+ * default — the catalog above is what the phase-01 palette assertions are
+ * pinned to, and widening it would move counts those tests own.
+ *
+ * `dev` is the case a human is asked to judge first: a configured command that
+ * was suspended by leaving the worktree and is still suspended after a runtime
+ * restart, so nothing will start it without the user. `api` is degraded rather
+ * than suspended — Isagi tried to stop it and could not — which is the one state
+ * where a running command still owes the user an explanation.
+ */
+export const FIXTURE_SUSPENDED_COMMANDS: readonly CommandSummary[] = [
+  { name: 'dev', status: 'suspended', ports: [] },
+  { name: 'api', status: 'running', ports: [5173] },
+  { name: 'typecheck', status: 'failed', ports: [] },
+];
+
+/** A suspended command whose config entry vanished while it was suspended. */
+export const FIXTURE_REMOVED_SUSPENDED: readonly CommandSummary[] = [
+  { name: 'worker', status: 'suspended', ports: [] },
+];
+
+/** Live runtime state seen through a catalog that could not be parsed at all. */
+export const FIXTURE_MANAGED_SUSPENDED: readonly CommandSummary[] = [
+  { name: 'dev', status: 'suspended', ports: [] },
+  { name: 'api', status: 'running', ports: [3000] },
+];
+
+/**
+ * The latest run behind `api` in the suspension scenarios: the stop attempt that
+ * failed. The command is truthfully still `running`, and `process_control_failed`
+ * is the reason the drawer has to voice — before this phase it had nowhere to
+ * appear on a PTY-linked run at all.
+ */
+export const FIXTURE_CONTROL_FAILED_RUN: CommandLogMetadataLatestRun = {
+  id: 41,
+  startedAt: '2026-08-19T10:41:02.000Z',
+  completedAt: null,
+  status: 'running',
+  ptyProcessId: 907,
+  hasPtyProcess: true,
+  diagnostic: {
+    reason: 'process_control_failed',
+    detail: 'Could not stop the process while leaving the worktree: kill ESRCH',
+  },
 };
 
 /**

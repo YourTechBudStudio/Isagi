@@ -5,6 +5,7 @@ import { queryClient } from '../../../src/lib/query/client.js';
 import { registerPaneFocusTarget } from '../../../src/lib/workspace/activation.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from '../../../src/lib/workspace/store.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
+import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
 import { WorkbenchDrawer } from '../../../src/routes/workspace/WorkbenchDrawer.js';
 import type { CommandPaletteRuntimeControls } from './fake-runtime.js';
 import { FIXTURE_ORIGIN, FIXTURE_PANES } from './seed.js';
@@ -81,6 +82,13 @@ export function CommandPaletteFixtureApp({
           <>
             <WorkbenchDrawer />
             <CommandPalette />
+            {/* The strip is the always-on surface, so it sits at the foot of the
+                work area exactly as the app places it. It shares the drawer's
+                catalog query, which is the point: a command's chip and its drawer
+                row must never disagree about the same read. */}
+            <div data-fixture-strip className="absolute inset-x-0 bottom-0 z-10">
+              <StatusStrip />
+            </div>
           </>
         )}
       </div>
