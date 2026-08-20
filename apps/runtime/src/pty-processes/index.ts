@@ -20,6 +20,7 @@ export type {
   LaunchBackendSessionInput,
   PtyBackend as PtyBackendShape,
   PtyExit,
+  PtyProcessAllocation,
 } from './types.js';
 export {
   PtyKillError,

@@ -1,17 +1,13 @@
-import {
-  and,
-  desc,
-  eq,
-  getTableColumns,
-  inArray,
-  isNotNull,
-  type InferSelectModel,
-} from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
-import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
+import {
+  DatabaseError,
+  RuntimeDatabase,
+  type RuntimeDrizzleDatabase,
+} from '../persistence/index.js';
 import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schema.js';
 
 type CommandStateRecord = InferSelectModel<typeof worktreeCommandStates>;
@@ -39,6 +35,21 @@ export interface CommandRunRow {
   readonly completedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+// The shared result of both atomic finalizers. `runCompleted` and
+// `stateTransitioned` report what this call actually changed, so the service can
+// publish only real transitions instead of re-announcing a status a late echo
+// merely observed. The two are independent decisions inside one transaction: a
+// state pointer can be repaired even when no run row remains to complete.
+export interface CommandFinalizeResult {
+  // The targeted run after the transaction; null when no run matched.
+  readonly run: CommandRunRow | null;
+  // True only when this call moved that run out of `running`.
+  readonly runCompleted: boolean;
+  // True only when this call moved the state row.
+  readonly stateTransitioned: boolean;
+  readonly state: CommandStateRow | null;
 }
 
 export interface CommandRepositoryService {
@@ -84,12 +95,34 @@ export interface CommandRepositoryService {
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
-  readonly completeRunByPtyProcess: (input: {
+  // Event-driven finalization — stops and the PTY event reconciler. Keyed by the
+  // incarnation: the run is the newest one linked to `ptyProcessId`, and the
+  // state transitions only while its active pointer still names that same
+  // incarnation, so a late echo from a superseded process cannot clobber the
+  // state a newer launch installed.
+  readonly finalizeRunAndStateByPty: (input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
     readonly ptyProcessId: number;
-    readonly status: Exclude<CommandRunStatus, 'running'>;
+    readonly runStatus: Exclude<CommandRunStatus, 'running'>;
+    readonly stateStatus: CommandStatus;
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
-  }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
+  }) => Effect.Effect<CommandFinalizeResult, DatabaseError>;
+  // Launch-flow convergence. Keyed by the run the caller just created, with the
+  // state guarded by `status === 'running'` — the launch-in-progress marker —
+  // because the active pointer is still null there and no pointer guard could
+  // ever match. The guard is also what leaves a prior entity status (a resume's
+  // `suspended`) untouched when the launch never reached its marker.
+  readonly finalizeRunAndStateByRun: (input: {
+    readonly runId: number;
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly runStatus: Exclude<CommandRunStatus, 'running'>;
+    readonly stateStatus: CommandStatus;
+    readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
+    readonly diagnosticDetail?: string | null | undefined;
+  }) => Effect.Effect<CommandFinalizeResult, DatabaseError>;
   readonly findLatestRun: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
@@ -102,7 +135,6 @@ export interface CommandRepositoryService {
     readonly commandName: string;
     readonly keep: number;
   }) => Effect.Effect<CommandRunRow[], DatabaseError>;
-  readonly listReferencedPtyProcessIds: Effect.Effect<number[], DatabaseError>;
 }
 
 export const CommandRepository =
@@ -284,30 +316,46 @@ export const CommandRepositoryLive = Layer.effect(
             .get();
           return row ? commandRunRow(row) : null;
         }),
-      completeRunByPtyProcess: (input) =>
-        database.use('complete_worktree_command_run_by_pty', (db) => {
-          const now = timestamp();
-          const existing = db
-            .select(runColumns)
-            .from(worktreeCommandRuns)
-            .where(eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId))
-            .orderBy(desc(worktreeCommandRuns.id))
-            .get();
-          if (!existing) return null;
-          const row = db
-            .update(worktreeCommandRuns)
-            .set({
-              status: input.status,
-              diagnosticReason: input.diagnosticReason ?? null,
-              diagnosticDetail: input.diagnosticDetail ?? null,
-              completedAt: now,
-              updatedAt: now,
-            })
-            .where(eq(worktreeCommandRuns.id, existing.id))
-            .returning(runColumns)
-            .get();
-          return row ? commandRunRow(row) : null;
-        }),
+      finalizeRunAndStateByPty: (input) =>
+        database.transaction('finalize_worktree_command_run_and_state_by_pty', (db) =>
+          finalizeRunAndState(db, stateColumns, runColumns, input, {
+            selectRun: () =>
+              db
+                .select(runColumns)
+                .from(worktreeCommandRuns)
+                .where(
+                  and(
+                    eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                    eq(worktreeCommandRuns.commandName, input.commandName),
+                    eq(worktreeCommandRuns.ptyProcessId, input.ptyProcessId),
+                  ),
+                )
+                .orderBy(desc(worktreeCommandRuns.id))
+                .get(),
+            stateMatches: (state) => state.activePtyProcessId === input.ptyProcessId,
+          }),
+        ),
+      finalizeRunAndStateByRun: (input) =>
+        database.transaction('finalize_worktree_command_run_and_state_by_run', (db) =>
+          finalizeRunAndState(db, stateColumns, runColumns, input, {
+            // Scoped by identity as well as id: a caller that mixes up its
+            // inputs must complete nothing rather than complete one command's
+            // run while transitioning another command's state.
+            selectRun: () =>
+              db
+                .select(runColumns)
+                .from(worktreeCommandRuns)
+                .where(
+                  and(
+                    eq(worktreeCommandRuns.id, input.runId),
+                    eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                    eq(worktreeCommandRuns.commandName, input.commandName),
+                  ),
+                )
+                .get(),
+            stateMatches: (state) => state.status === 'running',
+          }),
+        ),
       findLatestRun: (input) =>
         database.use('find_latest_worktree_command_run', (db) => {
           const row = db
@@ -363,17 +411,87 @@ export const CommandRepositoryLive = Layer.effect(
             .run();
           return stale.map(commandRunRow);
         }),
-      listReferencedPtyProcessIds: database.use('list_command_run_pty_process_ids', (db) =>
-        db
-          .select({ ptyProcessId: worktreeCommandRuns.ptyProcessId })
-          .from(worktreeCommandRuns)
-          .where(isNotNull(worktreeCommandRuns.ptyProcessId))
-          .all()
-          .flatMap((row) => (row.ptyProcessId ? [row.ptyProcessId] : [])),
-      ),
     } satisfies CommandRepositoryService;
   }),
 );
+
+// The shared body of both finalizers, run directly on the caller's transaction
+// handle so run completion and state transition commit or roll back together.
+// Two guards, both deliberate:
+//   - the run is completed only while it is still `running`, so a terminal run's
+//     first recorded outcome (and its diagnostics) is never overwritten by a
+//     later echo;
+//   - the state is transitioned only when the caller's keying guard holds, and
+//     its pointer is cleared in the same statement.
+// Neither guard implies the other, so a state pointer can be repaired even when
+// the run it named has already been pruned or completed.
+function finalizeRunAndState(
+  db: RuntimeDrizzleDatabase,
+  stateColumns: ReturnType<typeof getTableColumns<typeof worktreeCommandStates>>,
+  runColumns: ReturnType<typeof getTableColumns<typeof worktreeCommandRuns>>,
+  input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly runStatus: Exclude<CommandRunStatus, 'running'>;
+    readonly stateStatus: CommandStatus;
+    readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
+    readonly diagnosticDetail?: string | null | undefined;
+  },
+  keying: {
+    readonly selectRun: () => CommandRunRecord | undefined;
+    readonly stateMatches: (state: CommandStateRecord) => boolean;
+  },
+): CommandFinalizeResult {
+  const now = timestamp();
+  const existingRun = keying.selectRun();
+  let run = existingRun ? commandRunRow(existingRun) : null;
+  let runCompleted = false;
+  if (existingRun && existingRun.status === 'running') {
+    const updated = db
+      .update(worktreeCommandRuns)
+      .set({
+        status: input.runStatus,
+        diagnosticReason: input.diagnosticReason ?? null,
+        diagnosticDetail: input.diagnosticDetail ?? null,
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(worktreeCommandRuns.id, existingRun.id))
+      .returning(runColumns)
+      .get();
+    if (updated) {
+      run = commandRunRow(updated);
+      runCompleted = true;
+    }
+  }
+
+  const existingState = db
+    .select(stateColumns)
+    .from(worktreeCommandStates)
+    .where(
+      and(
+        eq(worktreeCommandStates.worktreeId, input.worktreeId),
+        eq(worktreeCommandStates.commandName, input.commandName),
+      ),
+    )
+    .get();
+  let state = existingState ? commandStateRow(existingState) : null;
+  let stateTransitioned = false;
+  if (existingState && keying.stateMatches(existingState)) {
+    const updated = db
+      .update(worktreeCommandStates)
+      .set({ status: input.stateStatus, activePtyProcessId: null, updatedAt: now })
+      .where(eq(worktreeCommandStates.id, existingState.id))
+      .returning(stateColumns)
+      .get();
+    if (updated) {
+      state = commandStateRow(updated);
+      stateTransitioned = true;
+    }
+  }
+
+  return { run, runCompleted, stateTransitioned, state };
+}
 
 function commandStateRow(row: CommandStateRecord): CommandStateRow {
   return {

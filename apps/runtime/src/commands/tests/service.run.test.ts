@@ -10,6 +10,7 @@ import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { type CommandRunRow } from '../commands.repository.js';
 import { CommandService } from '../commands.service.js';
 import {
+  commandLaunchAllocation,
   commandRun,
   commandState,
   createFixture,
@@ -21,7 +22,11 @@ import {
 test('command service stops a running removed managed command', async () => {
   const fixture = createFixture();
   const terminated: number[] = [];
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   try {
     writeConfig(
       fixture.rootPath,
@@ -93,7 +98,7 @@ commands:
           // Allocation is a launch's only expected-failure stage now that
           // `start` is total, so the command's launch-failure branch is
           // reached through the durable allocation write.
-          launch: () =>
+          allocateLaunch: () =>
             Effect.fail(
               new DatabaseError({
                 operation: 'create_pty_process_metadata',
@@ -118,7 +123,11 @@ commands:
 
 test('command service maps non-zero process exits to failed command state', async () => {
   const fixture = createFixture();
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
   try {
     writeConfig(
@@ -163,9 +172,119 @@ commands:
   }
 });
 
+test('a shutdown kill is recorded as an interruption, not a plain failure', async () => {
+  const fixture = createFixture();
+  const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      () =>
+        Effect.gen(function* () {
+          yield* CommandService;
+          const bus = yield* InternalRuntimeEventBus;
+          yield* bus.publish({
+            type: 'pty_process_killed',
+            ptyProcessId: 123,
+            status: 'killed',
+            statusReason: 'runtime_shutdown',
+          });
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
+        }),
+      {
+        states: [commandState({ commandName: 'dev', status: 'running' })],
+        runs,
+      },
+    );
+
+    assert.equal(runs[0]?.status, 'failed');
+    // The same bytes boot reconciliation writes, so both teardown orderings are
+    // indistinguishable to the user.
+    assert.equal(runs[0]?.diagnosticReason, 'runtime_stopped');
+    assert.equal(
+      runs[0]?.diagnosticDetail,
+      'Runtime stopped while this command was running. Not restarted.',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a late echo from a superseded incarnation changes and announces nothing', async () => {
+  const fixture = createFixture();
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
+  // The old incarnation's run is already terminal, and the command has since
+  // been relaunched onto a new one.
+  const runs = [
+    commandRun({ commandName: 'dev', status: 'stopped', ptyProcessId: 123 }),
+    { ...commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 777 }), id: 2 },
+  ];
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      () =>
+        Effect.gen(function* () {
+          yield* CommandService;
+          const bus = yield* InternalRuntimeEventBus;
+          yield* bus.publish({
+            type: 'pty_process_exited',
+            ptyProcessId: 123,
+            status: 'exited',
+            exitCode: 0,
+            signal: null,
+          });
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
+        }),
+      {
+        states: [
+          {
+            ...commandState({ commandName: 'dev', status: 'running' }),
+            activePtyProcessId: 777,
+          },
+        ],
+        runs,
+        onTransition: (input) => transitioned.push(input),
+      },
+    );
+
+    // The terminal run keeps its first recorded outcome, the newer incarnation
+    // keeps the pointer, and no stale status is announced over the running one.
+    assert.equal(runs[0]?.status, 'stopped');
+    assert.equal(runs[1]?.status, 'running');
+    assert.deepEqual(transitioned, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('command service records a successful run and retains its log after the process exits', async () => {
   const fixture = createFixture();
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   const runs: CommandRunRow[] = [];
   const ptyLogPath = join(fixture.rootPath, 'sessions', 'cmd-901.ptylog');
   try {
@@ -203,14 +322,14 @@ commands:
       {
         runs,
         pty: {
-          launch: () =>
-            Effect.succeed({
-              ptyProcessId: 901,
-              command: '/bin/sh',
-              args: ['-lc', 'pnpm dev'],
-              cwd: fixture.rootPath,
-              logPath: ptyLogPath,
-            }),
+          allocateLaunch: () =>
+            Effect.succeed(
+              commandLaunchAllocation({
+                ptyProcessId: 901,
+                cwd: fixture.rootPath,
+                logPath: ptyLogPath,
+              }),
+            ),
         },
         onTransition: (input) => transitioned.push(input),
       },
@@ -234,7 +353,11 @@ commands:
 
 test('command service marks stale running commands as failed on reconcile', async () => {
   const fixture = createFixture();
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
   try {
     writeConfig(
@@ -311,7 +434,11 @@ async function runWithImmediateOutcome(
   process: Partial<ReturnType<typeof fakePtyProcessRow>>,
 ) {
   const runs: CommandRunRow[] = [];
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   writeConfig(
     fixture.rootPath,
     `
@@ -327,14 +454,8 @@ commands:
       runs,
       ptyProcess: fakePtyProcessRow({ id: 902, ...process }),
       pty: {
-        launch: () =>
-          Effect.succeed({
-            ptyProcessId: 902,
-            command: '/bin/sh',
-            args: ['-lc', 'pnpm dev'],
-            cwd: fixture.rootPath,
-            logPath: null,
-          }),
+        allocateLaunch: () =>
+          Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: fixture.rootPath })),
       },
       onTransition: (input) => transitioned.push(input),
     },
@@ -354,7 +475,11 @@ test('a command whose process exits before its run is linked is not left recorde
     assert.equal(runs.at(-1)?.status, 'exited');
     // A clean exit is not a launch failure, so it carries no launch diagnostic.
     assert.equal(runs.at(-1)?.diagnosticReason, null);
-    assert.deepEqual(transitioned.at(-1), { commandName: 'dev', status: 'exited' });
+    assert.deepEqual(transitioned.at(-1), {
+      commandName: 'dev',
+      status: 'exited',
+      activePtyProcessId: null,
+    });
   } finally {
     fixture.cleanup();
   }
@@ -412,7 +537,11 @@ test('a killed row observed during the handoff maps through the shared run-statu
 
 test('stopping a command whose process was already gone claims no stop it did not perform', async () => {
   const fixture = createFixture();
-  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  const transitioned: Array<{
+    readonly commandName: string;
+    readonly status: string;
+    readonly activePtyProcessId: number | null;
+  }> = [];
   try {
     writeConfig(
       fixture.rootPath,

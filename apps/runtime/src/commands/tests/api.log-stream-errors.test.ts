@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { CommandError } from '../commands.service.js';
+import { CommandError } from '../commands.errors.js';
 import {
   commandService,
   delay,
