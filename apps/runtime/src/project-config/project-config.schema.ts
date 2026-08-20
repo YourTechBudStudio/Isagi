@@ -129,7 +129,8 @@ const lifecyclePostCreateSchema = Schema.Struct({
 
 const lifecycleActivateSchema = Schema.Struct({
   start: Schema.optional(Schema.Boolean).annotations({
-    description: 'Start the command when the worktree is activated. Defaults to false.',
+    description:
+      'When activate.start is true, start the command on activation only if it has no prior outcome. This automation does not restart an exited, failed, explicitly stopped, or suspended command; suspension resumes separately when the user returns to the worktree. Defaults to false.',
   }),
 }).annotations({
   description: 'activate lifecycle action. Only the start field is supported.',
@@ -137,7 +138,8 @@ const lifecycleActivateSchema = Schema.Struct({
 
 const lifecycleDeactivateSchema = Schema.Struct({
   stop: Schema.optional(Schema.Boolean).annotations({
-    description: 'Stop the command when the worktree is deactivated. Defaults to true.',
+    description:
+      'Stop the current command process when the worktree is deactivated. A command stopped this way is suspended: Isagi records resume intent and starts a new process incarnation when the user returns to the worktree, unless explicit Stop clears that intent. Runtime startup alone does not resume it. Defaults to true.',
   }),
 }).annotations({
   description: 'deactivate lifecycle action. Only the stop field is supported.',
