@@ -1,4 +1,4 @@
-import type { CommandRunDiagnosticReason, CommandRunStatus } from '@isagi/contracts';
+import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
 // How a terminal PTY incarnation becomes a terminal command run. Both the launch
 // handshake and the PTY event reconciler read this module, so a verdict reached
@@ -83,4 +83,29 @@ export function terminalPtyFactsForRow(
   if (!row) return null;
   if (row.status !== 'exited' && row.status !== 'failed' && row.status !== 'killed') return null;
   return { status: row.status, exitCode: row.exitCode, statusReason: row.statusReason };
+}
+
+// Why a command is being stopped. The cause is decided at the call site and
+// bound only to that attempt's own affirmative outcome: it is what separates a
+// worktree switch's verified kill (which mints resume intent) from a person
+// stopping the command (which clears it). There is no default — every stop
+// origin names one — and no cause outlives its stop call.
+export type CommandStopCause = 'user' | 'deactivation';
+
+// What a stop attempt actually did. `unchanged` covers every no-op: a command
+// that was not running, a deactivation meeting an existing suspension, and an
+// `already_absent` termination whose real terminal fact belongs to whatever
+// ended the process. `unassociated` is the pointerless dead-end — a manufactured
+// `failed`, kept distinct from `converged` so a pass can tell "this command's
+// process really ended" from "no process could be associated with it".
+export type CommandStopResolution =
+  | 'suspended'
+  | 'stopped'
+  | 'converged'
+  | 'unassociated'
+  | 'unchanged';
+
+export interface CommandStopResult {
+  readonly status: CommandStatus;
+  readonly resolution: CommandStopResolution;
 }

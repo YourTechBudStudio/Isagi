@@ -498,3 +498,124 @@ test('a failed run write leaves the state alone', async () => {
   assert.equal(result.rows.state?.status, 'running');
   assert.equal(result.rows.state?.activePtyProcessId, null);
 });
+
+test('re-adoption rebinds the pointer, reopens the retained run, and records the diagnostic', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      // A command recorded as finished over an incarnation that turns out to be
+      // alive: the live process is what disproves the recorded completion.
+      const seeded = yield* seed({
+        stateStatus: 'stopped',
+        activePtyProcessId: null,
+        run: { status: 'stopped', ptyProcessId: null },
+      });
+      const readopted = yield* repository.readoptCommandIncarnation({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        ptyProcessId: seeded.ptyProcessId,
+        diagnostic: { reason: 'process_control_failed', detail: 'could not verify' },
+      });
+      const rows = yield* readRows(seeded.worktreeId);
+      return { seeded, readopted, rows };
+    }),
+  );
+
+  assert.equal(result.rows.state?.status, 'running');
+  assert.equal(result.rows.state?.activePtyProcessId, result.seeded.ptyProcessId);
+  assert.equal(result.rows.run?.id, result.seeded.runId);
+  assert.equal(result.rows.run?.status, 'running');
+  assert.equal(result.rows.run?.ptyProcessId, result.seeded.ptyProcessId);
+  assert.equal(result.rows.run?.completedAt, null);
+  assert.equal(result.rows.run?.diagnosticReason, 'process_control_failed');
+  assert.equal(result.rows.run?.diagnosticDetail, 'could not verify');
+});
+
+test('re-adoption inserts a run when the command has none to reopen', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({ stateStatus: 'stopped', activePtyProcessId: null });
+      yield* repository.readoptCommandIncarnation({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        ptyProcessId: seeded.ptyProcessId,
+        diagnostic: { reason: 'process_control_failed', detail: null },
+      });
+      const rows = yield* readRows(seeded.worktreeId);
+      return { seeded, rows };
+    }),
+  );
+
+  assert.equal(result.rows.run?.status, 'running');
+  assert.equal(result.rows.run?.ptyProcessId, result.seeded.ptyProcessId);
+  assert.equal(result.rows.run?.diagnosticReason, 'process_control_failed');
+});
+
+test('a failed run write rolls the re-adopted state back with it', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({
+        stateStatus: 'stopped',
+        activePtyProcessId: null,
+        run: { status: 'stopped', ptyProcessId: null },
+      });
+      const outcome = yield* repository
+        .readoptCommandIncarnation({
+          worktreeId: seeded.worktreeId,
+          commandName: seeded.commandName,
+          ptyProcessId: seeded.ptyProcessId,
+          diagnostic: { reason: 'process_control_failed', detail: null },
+        })
+        .pipe(Effect.either);
+      const rows = yield* readRows(seeded.worktreeId);
+      return { outcome, rows };
+    }),
+    { fault: 'runs' },
+  );
+
+  assert.equal(result.outcome._tag, 'Left');
+  // Ownership is never half-repaired: the state write went first and was undone.
+  assert.equal(result.rows.state?.status, 'stopped');
+  assert.equal(result.rows.state?.activePtyProcessId, null);
+  assert.equal(result.rows.run?.status, 'stopped');
+});
+
+test('re-adoption without a diagnostic repairs ownership and preserves the recorded one', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      // The run already explains why this command is in trouble. Re-adopting
+      // ownership is not a reason to destroy that explanation, so the
+      // conditional update must not name the diagnostic columns at all.
+      const seeded = yield* seed({
+        stateStatus: 'stopped',
+        activePtyProcessId: null,
+        run: {
+          status: 'failed',
+          ptyProcessId: null,
+          diagnosticReason: 'pty_launch_failed',
+          diagnosticDetail: 'earlier evidence',
+        },
+      });
+      yield* repository.readoptCommandIncarnation({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        ptyProcessId: seeded.ptyProcessId,
+      });
+      const rows = yield* readRows(seeded.worktreeId);
+      return { seeded, rows };
+    }),
+  );
+
+  // Ownership repaired…
+  assert.equal(result.rows.state?.status, 'running');
+  assert.equal(result.rows.state?.activePtyProcessId, result.seeded.ptyProcessId);
+  assert.equal(result.rows.run?.status, 'running');
+  assert.equal(result.rows.run?.ptyProcessId, result.seeded.ptyProcessId);
+  assert.equal(result.rows.run?.completedAt, null);
+  // …and both diagnostic columns left exactly as they were.
+  assert.equal(result.rows.run?.diagnosticReason, 'pty_launch_failed');
+  assert.equal(result.rows.run?.diagnosticDetail, 'earlier evidence');
+});

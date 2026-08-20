@@ -7,7 +7,7 @@ import { Effect, Either } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
 
-import { DatabaseError } from '../persistence/index.js';
+import type { DatabaseError } from '../persistence/index.js';
 import type { WorktreeCommandConfig } from '../project-config/project-config.schema.js';
 import type {
   PtyProcessAllocation,
@@ -15,6 +15,7 @@ import type {
   PtyServiceShape,
 } from '../pty-processes/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
+import { describeOperationalCause } from './commands.diagnostics.js';
 import {
   terminalCommandOutcomeForPtyRow,
   terminalPtyFactsForRow,
@@ -22,7 +23,7 @@ import {
   type TerminalCommandOutcome,
   type TerminalRunStatus,
 } from './commands.outcomes.js';
-import type { CommandRepositoryService } from './commands.repository.js';
+import type { CommandFinalizeResult, CommandRepositoryService } from './commands.repository.js';
 import { actionOutput, resolveConfiguredCommand, type CommandTarget } from './commands.targets.js';
 import { parseDotenv } from './dotenv.js';
 
@@ -40,43 +41,34 @@ export interface CommandLauncherDependencies {
     commandName: string,
     status: CommandStatus,
   ) => Effect.Effect<void>;
-}
-
-// The command launch flow, extracted from the service layer so one launch can be
-// read end to end. The caller holds the command lock for the (worktreeId,
-// commandName) being launched.
-export function makeCommandLauncher(deps: CommandLauncherDependencies) {
-  const { workspaceRepository, commandRepository, ptyRepository, pty, publishCommandChanged } =
-    deps;
-
-  // The launch flow's finalizer. Keyed by the run rather than the incarnation
-  // because the state's pointer is still null there — it is the
+  // The run-keyed finalizer, owned by the service layer because pointerless
+  // recovery uses the same seam. Keyed by the run rather than the incarnation
+  // because the state's pointer is still null during a launch — it is the
   // launch-in-progress marker — so no pointer guard could ever match, and a
   // two-step complete-then-transition would leave a terminal run under a
   // `running` state that nothing could later repair.
-  const finalizeCommandRunByRun = (input: {
+  readonly finalizeCommandRunByRun: (input: {
     readonly runId: number;
     readonly worktreeId: number;
     readonly commandName: string;
     readonly runStatus: TerminalRunStatus;
     readonly stateStatus: CommandStatus;
     readonly runDiagnostic?: CommandRunDiagnosticInput | null | undefined;
-  }) =>
-    Effect.gen(function* () {
-      const result = yield* commandRepository.finalizeRunAndStateByRun({
-        runId: input.runId,
-        worktreeId: input.worktreeId,
-        commandName: input.commandName,
-        runStatus: input.runStatus,
-        stateStatus: input.stateStatus,
-        diagnosticReason: input.runDiagnostic?.reason ?? null,
-        diagnosticDetail: input.runDiagnostic?.detail ?? null,
-      });
-      if (result.stateTransitioned) {
-        yield* publishCommandChanged(input.worktreeId, input.commandName, input.stateStatus);
-      }
-      return result;
-    });
+  }) => Effect.Effect<CommandFinalizeResult, DatabaseError>;
+}
+
+// The command launch flow, extracted from the service layer so one launch can be
+// read end to end. The caller holds the command lock for the (worktreeId,
+// commandName) being launched.
+export function makeCommandLauncher(deps: CommandLauncherDependencies) {
+  const {
+    workspaceRepository,
+    commandRepository,
+    ptyRepository,
+    pty,
+    publishCommandChanged,
+    finalizeCommandRunByRun,
+  } = deps;
 
   // Launch with ownership before spawn. The durable order is: create the run,
   // write the launch-in-progress marker, allocate (and reserve) the PTY row,
@@ -222,7 +214,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Either.isLeft(pruned)) {
           return yield* convergeBeforeMarker(
             pruned.left,
-            `Could not prepare the launch: ${diagnosticDetailForCause(pruned.left)}`,
+            `Could not prepare the launch: ${describeOperationalCause(pruned.left)}`,
           );
         }
 
@@ -241,7 +233,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Either.isLeft(marker)) {
           return yield* convergeBeforeMarker(
             marker.left,
-            `Could not record the launch: ${diagnosticDetailForCause(marker.left)}`,
+            `Could not record the launch: ${describeOperationalCause(marker.left)}`,
           );
         }
 
@@ -262,7 +254,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               (candidate) => candidate.abandon,
             ).pipe(Effect.either);
             if (Either.isLeft(acquired)) {
-              yield* converge(launchFailure(diagnosticDetailForCause(acquired.left)));
+              yield* converge(launchFailure(describeOperationalCause(acquired.left)));
               return actionOutput(target.command, 'failed', worktreeId);
             }
             const acquiredAllocation = acquired.right;
@@ -276,7 +268,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               yield* acquiredAllocation.abandon;
               const converged = yield* converge(
                 launchFailure(
-                  `Could not record the process association; the command was not started: ${diagnosticDetailForCause(link.left)}`,
+                  `Could not record the process association; the command was not started: ${describeOperationalCause(link.left)}`,
                 ),
               ).pipe(Effect.either);
               // Only when the convergence write also fails does the original
@@ -406,20 +398,4 @@ function pruneCommandRunHistory(
       keep: latestCommandRunsToRetain,
     })
     .pipe(Effect.asVoid);
-}
-
-function diagnosticDetailForCause(cause: unknown) {
-  // `DatabaseError` is the launch path's only expected failure now that a
-  // started launch is total, and it carries its context in `operation`/`cause`
-  // rather than in `message` — reading `message` alone would show the user an
-  // empty diagnostic for a real persistence fault.
-  if (cause instanceof DatabaseError) {
-    return `Database operation ${cause.operation} failed: ${describeCause(cause.cause)}`;
-  }
-  return describeCause(cause);
-}
-
-function describeCause(cause: unknown) {
-  if (cause instanceof Error && cause.message) return cause.message;
-  return String(cause);
 }

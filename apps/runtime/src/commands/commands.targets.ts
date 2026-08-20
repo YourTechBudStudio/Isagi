@@ -108,8 +108,11 @@ export function resolveStoppableCommand(
       }
     }
 
+    // A command the config no longer names is still stoppable while the runtime
+    // holds something for it: a live process (`running`), or the intent to bring
+    // it back (`suspended`, which Stop is how the user clears).
     const state = yield* commandRepository.findState(input);
-    if (state?.status === 'running') {
+    if (state && (state.status === 'running' || state.status === 'suspended')) {
       return { worktree: target.worktree, commandName: state.commandName, ports: [] };
     }
 

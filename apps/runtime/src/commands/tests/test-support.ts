@@ -19,7 +19,9 @@ import type { PtyAttachment } from '../../pty-processes/pty.service.js';
 import { fakePtyAllocation } from '../../pty-processes/test-support.js';
 import type { PtyProcessLaunchMetadata } from '../../pty-processes/types.js';
 import {
+  InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
+  RuntimeEventBus,
   RuntimeEventBusLive,
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
@@ -237,6 +239,27 @@ export interface CommandRepositoryOptions {
         readonly runId?: number | undefined;
       }) => DatabaseError | null | undefined)
     | undefined;
+  // Replaces the public event bus. Scenario harnesses pass a synchronous
+  // recording bus so a published event is observable the instant the service
+  // publishes it, with no drain fiber and no settle window.
+  readonly eventBus?: Layer.Layer<RuntimeEventBusService> | undefined;
+  // Fires with the repository's own mutable state rows immediately after a
+  // worktree listing, which is the snapshot point every lifecycle pass plans
+  // from. Splicing that array — or rewriting the config file — from here is how
+  // a test forces a stale-plan race deterministically, with no clocks.
+  readonly afterListStates?: ((states: CommandStateRow[]) => void) | undefined;
+  // Records re-adoption calls, so a test can prove which incarnation a degraded
+  // ownership repair bound the command to and what diagnostic it wrote.
+  readonly onReadopt?:
+    | ((input: {
+        readonly commandName: string;
+        readonly ptyProcessId: number;
+        readonly diagnostic:
+          | { readonly reason: CommandRunRow['diagnosticReason']; readonly detail: string | null }
+          | undefined;
+      }) => void)
+    | undefined;
+  readonly readoptFault?: (() => DatabaseError | null | undefined) | undefined;
   readonly onTransition?:
     | ((input: {
         readonly commandName: string;
@@ -277,7 +300,7 @@ export async function runCommandServiceEffect<A>(
       ),
       Effect.provide(Layer.succeed(PtyService, ptyService(options.pty))),
       Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
-      Effect.provide(RuntimeEventBusLive),
+      Effect.provide(options.eventBus ?? RuntimeEventBusLive),
       Effect.provide(InternalRuntimeEventBusLive),
     ),
   );
@@ -350,7 +373,11 @@ export function commandRepository(
 
   return {
     listStatesForWorktree: (worktreeId) =>
-      Effect.succeed(states.filter((state) => state.worktreeId === worktreeId)),
+      Effect.sync(() => {
+        const snapshot = states.filter((state) => state.worktreeId === worktreeId);
+        options.afterListStates?.(states);
+        return snapshot;
+      }),
     findState: (input) =>
       Effect.succeed(
         states.find(
@@ -473,6 +500,72 @@ export function commandRepository(
           ) ?? null,
         stateMatches: (state) => state.status === 'running',
         fault: () => options.finalizeFault?.({ keying: 'run', runId: input.runId }),
+      }),
+    // Mirrors the real transaction: the state is upserted to `running` on the
+    // target incarnation, and the newest run is reopened (or inserted) with its
+    // link moved to the same target and the diagnostic written.
+    readoptCommandIncarnation: (input) =>
+      Effect.suspend(() => {
+        const fault = options.readoptFault?.();
+        if (fault) return Effect.fail(fault);
+        return Effect.sync(() => {
+          options.onReadopt?.({
+            commandName: input.commandName,
+            ptyProcessId: input.ptyProcessId,
+            diagnostic: input.diagnostic,
+          });
+          const existingState = states.find(
+            (state) =>
+              state.worktreeId === input.worktreeId && state.commandName === input.commandName,
+          );
+          const state = {
+            ...(existingState ??
+              commandState({ commandName: input.commandName, status: 'running' })),
+            status: 'running' as const,
+            activePtyProcessId: input.ptyProcessId,
+          };
+          if (existingState) {
+            states.splice(states.indexOf(existingState), 1, state);
+          } else {
+            states.push(state);
+          }
+          options.onTransition?.({
+            commandName: input.commandName,
+            status: 'running',
+            activePtyProcessId: input.ptyProcessId,
+          });
+
+          const existingRun =
+            runs.findLast(
+              (candidate) =>
+                candidate.worktreeId === input.worktreeId &&
+                candidate.commandName === input.commandName,
+            ) ?? null;
+          const run: CommandRunRow = {
+            ...(existingRun ?? commandRun({ commandName: input.commandName, status: 'running' })),
+            worktreeId: input.worktreeId,
+            id: existingRun?.id ?? runs.length + 1,
+            ptyProcessId: input.ptyProcessId,
+            status: 'running' as const,
+            // Mirrors the conditional update: an omitted diagnostic preserves
+            // whatever the run already carries.
+            ...(input.diagnostic
+              ? {
+                  diagnosticReason: input.diagnostic.reason,
+                  diagnosticDetail: input.diagnostic.detail,
+                }
+              : existingRun
+                ? {}
+                : { diagnosticReason: null, diagnosticDetail: null }),
+            completedAt: null,
+          };
+          if (existingRun) {
+            runs.splice(runs.indexOf(existingRun), 1, run);
+          } else {
+            runs.push(run);
+          }
+          return { state, run };
+        });
       }),
     findLatestRun: (input) =>
       Effect.succeed(
@@ -707,4 +800,173 @@ export function writeConfig(rootPath: string, contents: string) {
   const configDir = join(rootPath, '.isagi');
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, 'config.yaml'), contents);
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle scenario harness
+// ---------------------------------------------------------------------------
+
+export interface CommandScenarioRecorder {
+  readonly transitions: Array<{
+    readonly commandName: string;
+    readonly status: CommandStateRow['status'];
+    readonly activePtyProcessId: number | null;
+  }>;
+  readonly published: Array<{ readonly commandName: string; readonly status: string }>;
+  readonly logs: string[];
+  readonly terminated: number[];
+  readonly readopted: Array<{
+    readonly commandName: string;
+    readonly ptyProcessId: number;
+    readonly diagnostic:
+      | { readonly reason: CommandRunRow['diagnosticReason']; readonly detail: string | null }
+      | undefined;
+  }>;
+  readonly launched: string[];
+  readonly runs: CommandRunRow[];
+}
+
+/**
+ * Drives the real `CommandServiceLive` with everything a lifecycle scenario
+ * needs to observe: durable state transitions, published `command_changed`
+ * events, the runtime's own log lines (which are also how a pass signals it
+ * finished), terminate calls, and re-adoptions.
+ *
+ * Console output is captured rather than printed, so the log lines a scenario
+ * asserts on are the same ones a user would see in support.
+ */
+export async function runCommandScenario<A>(
+  rootPath: string,
+  body: (input: {
+    readonly service: CommandServiceShape;
+    readonly internalEvents: InternalRuntimeEventBusService;
+    readonly recorder: CommandScenarioRecorder;
+  }) => Effect.Effect<
+    A,
+    unknown,
+    CommandServiceShape | InternalRuntimeEventBusService | RuntimeEventBusService
+  >,
+  options: CommandRepositoryOptions = {},
+) {
+  const recorder: CommandScenarioRecorder = {
+    transitions: [],
+    published: [],
+    logs: [],
+    terminated: [],
+    readopted: [],
+    launched: [],
+    runs: options.runs ?? [],
+  };
+  const restore = captureConsole(recorder.logs);
+  try {
+    const result = await runCommandServiceEffect(
+      rootPath,
+      (service) =>
+        Effect.gen(function* () {
+          const internalEvents = yield* InternalRuntimeEventBus;
+          return yield* body({ service, internalEvents, recorder });
+        }),
+      {
+        ...options,
+        eventBus: recordingEventBus(recorder.published),
+        runs: recorder.runs,
+        onTransition: (input) => {
+          recorder.transitions.push(input);
+          options.onTransition?.(input);
+        },
+        onReadopt: (input) => {
+          recorder.readopted.push(input);
+          options.onReadopt?.(input);
+        },
+        pty: {
+          ...options.pty,
+          terminate: (input) =>
+            Effect.suspend(() => {
+              recorder.terminated.push(input.ptyProcessId);
+              return options.pty?.terminate
+                ? options.pty.terminate(input)
+                : Effect.succeed('terminated_live' as const);
+            }),
+          allocateLaunch: (input) =>
+            Effect.suspend(() => {
+              recorder.launched.push(input.args.at(-1) ?? input.command);
+              return options.pty?.allocateLaunch
+                ? options.pty.allocateLaunch(input)
+                : Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: input.cwd }));
+            }),
+        },
+      },
+    );
+    return { result, recorder };
+  } finally {
+    restore();
+  }
+}
+
+/**
+ * Waits until a runtime log line appears. It proves exactly one thing: the
+ * serial lifecycle pass reached the named terminal log. It is not a claim that
+ * the runtime is quiescent, and the timeout is test diagnostics — nothing in the
+ * runtime falls back after it.
+ */
+export function waitForLog(recorder: CommandScenarioRecorder, fragment: string) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < scenarioPollLimit; attempt += 1) {
+      if (recorder.logs.some((line) => line.includes(fragment))) return;
+      yield* scenarioTick();
+    }
+    throw new Error(
+      `Timed out waiting for a log line containing "${fragment}". Saw:\n${recorder.logs.join('\n')}`,
+    );
+  });
+}
+
+// Five seconds of headroom: the launch-gate scenarios write config files and
+// run a full launch inside this budget, and CI machines are not idle.
+const scenarioPollLimit = 1_000;
+
+/**
+ * A public event bus whose `publish` records synchronously into the caller's
+ * array. Nothing is queued and nothing is forked, so an assertion that *no*
+ * event was published is conclusive the moment the code under test returns —
+ * which a drained subscription could never guarantee. Real bus transport is
+ * covered by `runtime-events/api.test.ts`; these suites verify the service's
+ * publication calls and their ordering.
+ */
+export function recordingEventBus(
+  published: Array<{ readonly commandName: string; readonly status: string }>,
+) {
+  return Layer.succeed(RuntimeEventBus, {
+    publish: (event) =>
+      Effect.sync(() => {
+        if (event.type === 'command_changed') {
+          published.push({
+            commandName: event.payload.commandName,
+            status: event.payload.status,
+          });
+        }
+      }),
+    subscribe: Effect.die('the recording event bus has no subscribers'),
+  } satisfies RuntimeEventBusService);
+}
+
+function scenarioTick() {
+  return Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
+}
+
+function captureConsole(lines: string[]) {
+  const original = { info: console.info, warn: console.warn, error: console.error };
+  const record =
+    (level: 'info' | 'warn' | 'error') =>
+    (...args: unknown[]) => {
+      lines.push(`${level} ${args.map((arg) => String(arg)).join(' ')}`);
+    };
+  console.info = record('info');
+  console.warn = record('warn');
+  console.error = record('error');
+  return () => {
+    console.info = original.info;
+    console.warn = original.warn;
+    console.error = original.error;
+  };
 }

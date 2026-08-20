@@ -123,6 +123,42 @@ export interface CommandRepositoryService {
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandFinalizeResult, DatabaseError>;
+  // Atomic re-adoption: bind a command to one incarnation it is not currently
+  // recorded as owning. In one transaction the state is upserted to `running`
+  // with its pointer on the target, the newest run is reopened (or one is
+  // inserted when none exists) with its link moved to the same target, and the
+  // diagnostic explaining the degraded ownership is written to that run when
+  // supplied.
+  //
+  // The three callers share one semantics: recording a failed stop on a command
+  // that is already recorded as owning the incarnation (the rebind is then a
+  // no-op and only the diagnostic lands), repairing a pointerless `running`
+  // state from its run's own link, and — from Phase 08 — re-adopting an
+  // incarnation that survived a cleanup attempt. Reopening a terminal run is
+  // sanctioned only because a live process disproves the recorded completion.
+  //
+  // Callers hold the command lock and must not call this for out-of-model data
+  // with more than one nonterminal linked incarnation: the rebind would erase a
+  // link to a live process.
+  readonly readoptCommandIncarnation: (input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly ptyProcessId: number;
+    // Omitted, the reopened run keeps whatever diagnostics it already carries —
+    // re-adopting ownership is not a reason to destroy an earlier explanation of
+    // why this command is in trouble. Provided, both columns move together, so
+    // a reason can never end up paired with a stale detail. A defensively
+    // inserted run has no history to preserve and starts with nulls.
+    readonly diagnostic?:
+      | {
+          readonly reason: CommandRunDiagnosticReason;
+          readonly detail: string | null;
+        }
+      | undefined;
+  }) => Effect.Effect<
+    { readonly state: CommandStateRow; readonly run: CommandRunRow },
+    DatabaseError
+  >;
   readonly findLatestRun: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
@@ -356,6 +392,95 @@ export const CommandRepositoryLive = Layer.effect(
             stateMatches: (state) => state.status === 'running',
           }),
         ),
+      readoptCommandIncarnation: (input) =>
+        database.transaction('readopt_worktree_command_incarnation', (db) => {
+          const now = timestamp();
+          const existingState = db
+            .select(stateColumns)
+            .from(worktreeCommandStates)
+            .where(
+              and(
+                eq(worktreeCommandStates.worktreeId, input.worktreeId),
+                eq(worktreeCommandStates.commandName, input.commandName),
+              ),
+            )
+            .get();
+          const state = existingState
+            ? db
+                .update(worktreeCommandStates)
+                .set({
+                  status: 'running',
+                  activePtyProcessId: input.ptyProcessId,
+                  updatedAt: now,
+                })
+                .where(eq(worktreeCommandStates.id, existingState.id))
+                .returning(stateColumns)
+                .get()
+            : db
+                .insert(worktreeCommandStates)
+                .values({
+                  worktreeId: input.worktreeId,
+                  commandName: input.commandName,
+                  status: 'running',
+                  activePtyProcessId: input.ptyProcessId,
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .returning(stateColumns)
+                .get();
+
+          const existingRun = db
+            .select(runColumns)
+            .from(worktreeCommandRuns)
+            .where(
+              and(
+                eq(worktreeCommandRuns.worktreeId, input.worktreeId),
+                eq(worktreeCommandRuns.commandName, input.commandName),
+              ),
+            )
+            .orderBy(desc(worktreeCommandRuns.id))
+            .get();
+          // The diagnostic columns are only named in the update when the caller
+          // supplied them, so an omitted diagnostic leaves the persisted values
+          // untouched rather than overwriting them with nulls.
+          const runDiagnosticColumns = input.diagnostic
+            ? {
+                diagnosticReason: input.diagnostic.reason,
+                diagnosticDetail: input.diagnostic.detail,
+              }
+            : {};
+          const run = existingRun
+            ? db
+                .update(worktreeCommandRuns)
+                .set({
+                  status: 'running',
+                  ptyProcessId: input.ptyProcessId,
+                  ...runDiagnosticColumns,
+                  completedAt: null,
+                  updatedAt: now,
+                })
+                .where(eq(worktreeCommandRuns.id, existingRun.id))
+                .returning(runColumns)
+                .get()
+            : db
+                .insert(worktreeCommandRuns)
+                .values({
+                  worktreeId: input.worktreeId,
+                  commandName: input.commandName,
+                  ptyProcessId: input.ptyProcessId,
+                  status: 'running',
+                  diagnosticReason: input.diagnostic?.reason ?? null,
+                  diagnosticDetail: input.diagnostic?.detail ?? null,
+                  startedAt: now,
+                  completedAt: null,
+                  createdAt: now,
+                  updatedAt: now,
+                })
+                .returning(runColumns)
+                .get();
+
+          return { state: commandStateRow(state), run: commandRunRow(run) };
+        }),
       findLatestRun: (input) =>
         database.use('find_latest_worktree_command_run', (db) => {
           const row = db

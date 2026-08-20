@@ -4,10 +4,10 @@ import test from 'node:test';
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
 import { DatabaseError } from '../../persistence/index.js';
-import { RuntimeEventBus } from '../../runtime-events/index.js';
 import { type CommandRunRow, type CommandStateRow } from '../commands.repository.js';
 import {
   commandLaunchAllocation,
+  recordingEventBus,
   commandRun,
   commandState,
   createFixture,
@@ -89,38 +89,19 @@ async function launch(
       fixture.rootPath,
       (service) =>
         Effect.gen(function* () {
-          const bus = yield* RuntimeEventBus;
-          const subscription = yield* bus.subscribe;
-          const drain = yield* Effect.fork(
-            Effect.forever(
-              subscription.take.pipe(
-                Effect.tap((event) =>
-                  Effect.sync(() => {
-                    if (event.type === 'command_changed') {
-                      published.push({
-                        commandName: event.payload.commandName,
-                        status: event.payload.status,
-                      });
-                    }
-                  }),
-                ),
-              ),
-            ),
-          );
-
           const launching = yield* Effect.fork(service.run({ worktreeId: 10, commandName: 'dev' }));
           if (options.interruptWhen) {
             yield* waitUntilEffect(() => options.interruptWhen!(harness));
             yield* Fiber.interrupt(launching);
           }
-          const exit = yield* Fiber.await(launching);
-          // Let the finalizer's publishes reach the subscriber queue.
-          yield* settle();
-          yield* Fiber.interrupt(drain);
-          yield* subscription.unsubscribe;
-          return exit;
+          // The recording bus publishes synchronously, and the interruption
+          // finalizer is uninterruptible and runs before the fiber completes, so
+          // awaiting the launch is enough: no settle window, and "nothing was
+          // published" is a conclusive assertion rather than a hopeful one.
+          return yield* Fiber.await(launching);
         }),
       {
+        eventBus: recordingEventBus(published),
         states,
         runs,
         ...(options.ptyProcess === undefined ? {} : { ptyProcess: options.ptyProcess }),
@@ -153,10 +134,6 @@ async function launch(
   } finally {
     fixture.cleanup();
   }
-}
-
-function settle() {
-  return Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 10)));
 }
 
 function waitUntilEffect(predicate: () => boolean) {
