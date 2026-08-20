@@ -2,6 +2,7 @@ import { AlertTriangle, Play, RefreshCw, RotateCcw, Square } from 'lucide-react'
 
 import type {
   CommandRunDiagnosticReason,
+  CommandRunStatus,
   CommandStatus,
   CommandSummary,
   WorktreeCommandsOutput,
@@ -402,7 +403,7 @@ function CommandRunMetadataState({
   diagnosticReason,
   diagnosticDetail,
 }: {
-  readonly status: Exclude<CommandStatus, 'idle'>;
+  readonly status: CommandRunStatus;
   readonly hasPtyProcess: boolean;
   readonly diagnosticReason: CommandRunDiagnosticReason | null;
   readonly diagnosticDetail: string | null;

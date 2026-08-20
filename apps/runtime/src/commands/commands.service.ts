@@ -9,6 +9,7 @@ import type {
   CommandActionOutput,
   CommandLogMetadataOutput,
   CommandRunDiagnosticReason,
+  CommandRunStatus,
   CommandSummary,
   CommandStatus,
   WorktreeCommandsOutput,
@@ -79,7 +80,9 @@ const commandStopGracefulTimeoutMs = 2_000;
 // for GC, and only the latest run is ever read, so one is the right bound.
 const latestCommandRunsToRetain = 1;
 
-type TerminalCommandStatus = Exclude<CommandStatus, 'idle' | 'running'>;
+// Terminal outcomes written to run history. Kept on `CommandRunStatus` so a
+// wider durable entity status can never leak into a completed run row.
+type TerminalRunStatus = Exclude<CommandRunStatus, 'running'>;
 
 type PtyCommandEvent =
   | {
@@ -131,7 +134,7 @@ export const CommandServiceLive = Layer.scoped(
       readonly worktreeId: number;
       readonly commandName: string;
       readonly ptyProcessId: number;
-      readonly status: TerminalCommandStatus;
+      readonly status: TerminalRunStatus;
       readonly publishChange?: boolean | undefined;
     }) =>
       Effect.gen(function* () {
@@ -465,7 +468,7 @@ export const CommandServiceLive = Layer.scoped(
 
     const reconcilePtyProcessEvent = (event: PtyCommandEvent) =>
       Effect.gen(function* () {
-        const status: TerminalCommandStatus =
+        const status: TerminalRunStatus =
           event.type === 'pty_process_exited'
             ? event.exitCode === 0
               ? 'exited'

@@ -22,7 +22,20 @@ export const worktreeCommandActionInputSchema = Schema.Struct({
   commandName: Schema.String.pipe(Schema.minLength(1)),
 });
 
-export const commandStatusSchema = Schema.Literal('idle', 'running', 'exited', 'stopped', 'failed');
+export const commandStatusSchema = Schema.Literal(
+  'idle',
+  'running',
+  'exited',
+  'stopped',
+  'failed',
+  'suspended',
+);
+
+// Run history keeps its own vocabulary. It is declared independently of
+// `commandStatusSchema` so widening the durable entity status can never widen a
+// completed run's status by accident; `suspended` is an entity-level resume
+// intent and is never a run outcome.
+export const commandRunStatusSchema = Schema.Literal('running', 'exited', 'stopped', 'failed');
 
 export const commandSummarySchema = Schema.Struct({
   name: Schema.String,
@@ -41,6 +54,7 @@ export const commandRunDiagnosticReasonSchema = Schema.Literal(
   'env_invalid',
   'pty_launch_failed',
   'runtime_stopped',
+  'process_control_failed',
 );
 
 export const commandRunDiagnosticSchema = Schema.Struct({
@@ -52,7 +66,7 @@ export const commandLogMetadataLatestRunSchema = Schema.Struct({
   id: positiveIntegerSchema,
   startedAt: Schema.String,
   completedAt: Schema.NullOr(Schema.String),
-  status: Schema.Literal('running', 'exited', 'stopped', 'failed'),
+  status: commandRunStatusSchema,
   ptyProcessId: Schema.NullOr(positiveIntegerSchema),
   hasPtyProcess: Schema.Boolean,
   diagnostic: Schema.NullOr(commandRunDiagnosticSchema),
@@ -130,6 +144,7 @@ export type WorktreeCommandActionInput = Schema.Schema.Type<
   typeof worktreeCommandActionInputSchema
 >;
 export type CommandStatus = Schema.Schema.Type<typeof commandStatusSchema>;
+export type CommandRunStatus = Schema.Schema.Type<typeof commandRunStatusSchema>;
 export type CommandSummary = Schema.Schema.Type<typeof commandSummarySchema>;
 export type CommandActionOutput = Schema.Schema.Type<typeof commandActionOutputSchema>;
 export type CommandRunDiagnosticReason = Schema.Schema.Type<

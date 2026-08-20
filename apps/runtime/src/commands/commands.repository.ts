@@ -9,7 +9,7 @@ import {
 } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
-import type { CommandRunDiagnosticReason, CommandStatus } from '@isagi/contracts';
+import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schema.js';
@@ -32,7 +32,7 @@ export interface CommandRunRow {
   readonly worktreeId: number;
   readonly commandName: string;
   readonly ptyProcessId: number | null;
-  readonly status: Exclude<CommandStatus, 'idle'>;
+  readonly status: CommandRunStatus;
   readonly diagnosticReason: CommandRunDiagnosticReason | null;
   readonly diagnosticDetail: string | null;
   readonly startedAt: string;
@@ -68,7 +68,7 @@ export interface CommandRepositoryService {
   readonly createRun: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
-    readonly status: Exclude<CommandStatus, 'idle'>;
+    readonly status: CommandRunStatus;
     readonly ptyProcessId?: number | null | undefined;
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
@@ -80,13 +80,13 @@ export interface CommandRepositoryService {
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly completeRun: (input: {
     readonly runId: number;
-    readonly status: Exclude<CommandStatus, 'idle' | 'running'>;
+    readonly status: Exclude<CommandRunStatus, 'running'>;
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
   readonly completeRunByPtyProcess: (input: {
     readonly ptyProcessId: number;
-    readonly status: Exclude<CommandStatus, 'idle' | 'running'>;
+    readonly status: Exclude<CommandRunStatus, 'running'>;
     readonly diagnosticReason?: CommandRunDiagnosticReason | null | undefined;
     readonly diagnosticDetail?: string | null | undefined;
   }) => Effect.Effect<CommandRunRow | null, DatabaseError>;
