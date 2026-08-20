@@ -82,6 +82,7 @@ test('PTY GC force-kills old orphan running processes and deletes their row and 
           kill: () =>
             Effect.sync(() => {
               kills += 1;
+              return { terminated: true };
             }),
         });
 
@@ -131,6 +132,7 @@ test('PTY GC keeps pinned orphan running processes', async () => {
           kill: () =>
             Effect.sync(() => {
               kills += 1;
+              return { terminated: true };
             }),
         });
 
@@ -231,6 +233,7 @@ test('PTY GC cleans a live orphan through its own backend while another backend 
           kill: (ref) =>
             Effect.sync(() => {
               kills.push(ref.backend);
+              return { terminated: true };
             }),
         };
         const nodePty = fakeBackend({
@@ -331,6 +334,7 @@ test('PTY GC keeps orphan running processes when backend inspection is unavailab
           kill: () =>
             Effect.sync(() => {
               kills += 1;
+              return { terminated: true };
             }),
         });
 
@@ -424,6 +428,7 @@ test('PTY GC keeps orphan processes whose retention window has not elapsed', asy
           kill: () =>
             Effect.sync(() => {
               kills += 1;
+              return { terminated: true };
             }),
         });
 
@@ -719,7 +724,7 @@ function fakeBackend(
     replay: () => Effect.die('replay is not used by PTY GC tests'),
     inspect: () => Effect.succeed({ status: 'missing' as const }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
     collectGarbage: () => Effect.succeed([]),
     ...overrides,
   };

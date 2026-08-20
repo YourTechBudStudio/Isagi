@@ -10,7 +10,12 @@ import {
   shellIntegrationTokenFromRef,
   stripShellIntegrationMarkers,
 } from '../service/shell-integration.js';
-import type { BackendAttachment, PtyBackend as PtyBackendShape, TmuxBackendRef } from '../types.js';
+import type {
+  BackendAttachment,
+  BackendTerminateResult,
+  PtyBackend as PtyBackendShape,
+  TmuxBackendRef,
+} from '../types.js';
 import {
   PtyInspectError,
   PtyKillError,
@@ -255,21 +260,25 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
     console.warn(
       '[runtime] tmux PTY backend does not support reliable graceful termination; killing tmux session directly.',
     );
-    return runTmux([
-      'kill-session',
-      '-t',
-      input.ref.backend === 'tmux' ? input.ref.sessionName : '',
-    ]).pipe(
-      Effect.asVoid,
-      Effect.mapError((cause) => new PtyKillError({ cause })),
-    );
+    return killTmuxSession(input.ref.backend === 'tmux' ? input.ref.sessionName : '');
   },
-  kill: (ref) =>
-    runTmux(['kill-session', '-t', ref.backend === 'tmux' ? ref.sessionName : '']).pipe(
-      Effect.asVoid,
-      Effect.mapError((cause) => new PtyKillError({ cause })),
-    ),
+  kill: (ref) => killTmuxSession(ref.backend === 'tmux' ? ref.sessionName : ''),
 } satisfies PtyBackendShape);
+
+// A successful `kill-session` is an affirmative kill. A missing session or a
+// missing server is verified absence: the attempt terminated nothing, so its
+// caller must persist no `killed` fact. Everything else — an unusable tmux
+// binary included — stays a control failure with no terminal evidence.
+function killTmuxSession(sessionName: string) {
+  return runTmux(['kill-session', '-t', sessionName]).pipe(
+    Effect.as({ terminated: true } satisfies BackendTerminateResult),
+    Effect.catchAll((cause) =>
+      isTmuxBinaryMissing(cause) || !(isTmuxSessionMissing(cause) || isTmuxServerMissing(cause))
+        ? Effect.fail(new PtyKillError({ cause }))
+        : Effect.succeed({ terminated: false } satisfies BackendTerminateResult),
+    ),
+  );
+}
 
 function terminalReplayDataFromCapturePane(output: string) {
   // `capture-pane -p` returns rendered screen rows separated with LF, not a raw PTY byte
@@ -336,24 +345,35 @@ function classifyTmuxInspectFailure(cause: unknown) {
 }
 
 function isTmuxUnavailable(cause: unknown) {
+  if (isTmuxBinaryMissing(cause)) {
+    return true;
+  }
+  return stderrOf(cause).includes('no server running');
+}
+
+function isTmuxBinaryMissing(cause: unknown) {
   if (!cause || typeof cause !== 'object') {
     return false;
   }
-  const code = 'code' in cause ? (cause as { readonly code?: unknown }).code : null;
-  if (code === 'ENOENT') {
-    return true;
+  return ('code' in cause ? (cause as { readonly code?: unknown }).code : null) === 'ENOENT';
+}
+
+// tmux reports an already-gone session on stderr rather than through an exit
+// code we can distinguish, so the established message shapes are the classifier.
+function isTmuxSessionMissing(cause: unknown) {
+  const stderr = stderrOf(cause);
+  return stderr.includes("can't find session") || stderr.includes('session not found');
+}
+
+function stderrOf(cause: unknown) {
+  if (!cause || typeof cause !== 'object') {
+    return '';
   }
   const stderr = 'stderr' in cause ? (cause as { readonly stderr?: unknown }).stderr : null;
-  return typeof stderr === 'string' && stderr.includes('no server running');
+  return typeof stderr === 'string' ? stderr : '';
 }
 
 function isTmuxServerMissing(cause: unknown) {
-  if (!cause || typeof cause !== 'object') {
-    return false;
-  }
-  const stderr = 'stderr' in cause ? (cause as { readonly stderr?: unknown }).stderr : null;
-  return (
-    typeof stderr === 'string' &&
-    (stderr.includes('no server running') || stderr.includes('error connecting'))
-  );
+  const stderr = stderrOf(cause);
+  return stderr.includes('no server running') || stderr.includes('error connecting');
 }

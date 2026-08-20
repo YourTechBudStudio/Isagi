@@ -84,6 +84,24 @@ const latestCommandRunsToRetain = 1;
 // wider durable entity status can never leak into a completed run row.
 type TerminalRunStatus = Exclude<CommandRunStatus, 'running'>;
 
+// One mapping from a terminal PTY fact to the run status it means, shared by the
+// launch handshake (which reads the row) and the event reconciler (which reads
+// the published event) so the two can never drift. Context decides the
+// diagnostic; this decides only the status.
+function terminalRunStatusForPtyOutcome(outcome: {
+  readonly status: 'exited' | 'failed' | 'killed';
+  readonly exitCode?: number | null | undefined;
+  readonly statusReason?: string | null | undefined;
+}): TerminalRunStatus {
+  if (outcome.status === 'exited') return outcome.exitCode === 0 ? 'exited' : 'failed';
+  // A kill nobody in the command domain initiated is only `stopped` when it was
+  // user-requested; every other cause (runtime shutdown, cleanup) is a failure.
+  if (outcome.status === 'killed') {
+    return outcome.statusReason === 'user_requested' ? 'stopped' : 'failed';
+  }
+  return 'failed';
+}
+
 type PtyCommandEvent =
   | {
       readonly type: 'pty_process_exited';
@@ -227,22 +245,41 @@ export const CommandServiceLive = Layer.scoped(
           runId: run.id,
           ptyProcessId: launch.right.ptyProcessId,
         });
+        // The launch handshake. A process that died before its run was linked
+        // published its terminal event to nobody — `findRunByPtyProcess` could not
+        // resolve an owner yet — and a PTY row's first terminal fact is now final,
+        // so nothing later resurrects it into the poller's view. Reading the row
+        // here is what makes an immediate exit observable to the command.
         const processRow = yield* ptyRepository.findProcess(launch.right.ptyProcessId);
-        if (processRow?.status === 'failed') {
+        const terminalProcess =
+          processRow &&
+          (processRow.status === 'exited' ||
+            processRow.status === 'failed' ||
+            processRow.status === 'killed')
+            ? { ...processRow, status: processRow.status }
+            : null;
+        if (terminalProcess) {
+          const status = terminalRunStatusForPtyOutcome(terminalProcess);
           yield* commandRepository.completeRun({
             runId: run.id,
-            status: 'failed',
-            diagnosticReason: 'pty_launch_failed',
-            diagnosticDetail: processRow.statusReason,
+            status,
+            // Launch context: any `failed` row observed during the handoff is a
+            // failed launch from the caller's perspective, whatever classified it.
+            ...(terminalProcess.status === 'failed'
+              ? {
+                  diagnosticReason: 'pty_launch_failed' as const,
+                  diagnosticDetail: terminalProcess.statusReason,
+                }
+              : {}),
           });
           yield* commandRepository.transitionState({
             worktreeId: target.worktree.id,
             commandName: target.command.name,
-            status: 'failed',
+            status,
             activePtyProcessId: null,
           });
-          yield* publishCommandChanged(target.worktree.id, target.command.name, 'failed');
-          return actionOutput(target.command, 'failed', target.worktree.id);
+          yield* publishCommandChanged(target.worktree.id, target.command.name, status);
+          return actionOutput(target.command, status, target.worktree.id);
         }
 
         yield* commandRepository.transitionState({
@@ -317,6 +354,13 @@ export const CommandServiceLive = Layer.scoped(
             }),
           );
         }
+        // Nothing was there to stop, so this call caused nothing and must not
+        // claim a `stopped` that never happened. The incarnation's real terminal
+        // fact — a captured exit, or the poller's verdict — owns the outcome and
+        // reconciles the command when it lands.
+        if (terminate.right === 'already_absent') {
+          return commandActionOutput(target, state.status);
+        }
 
         yield* finalizeCommandRunByPty({
           worktreeId: target.worktree.id,
@@ -356,6 +400,9 @@ export const CommandServiceLive = Layer.scoped(
               }),
             );
           }
+          // See `stopCommand`: an absent process leaves the durable outcome to
+          // whatever actually ended it.
+          if (terminate.right === 'already_absent') return;
           yield* finalizeCommandRunByPty({
             worktreeId: state.worktreeId,
             commandName: state.commandName,
@@ -468,14 +515,13 @@ export const CommandServiceLive = Layer.scoped(
 
     const reconcilePtyProcessEvent = (event: PtyCommandEvent) =>
       Effect.gen(function* () {
-        const status: TerminalRunStatus =
+        const status =
           event.type === 'pty_process_exited'
-            ? event.exitCode === 0
-              ? 'exited'
-              : 'failed'
-            : event.type === 'pty_process_killed' && event.statusReason === 'user_requested'
-              ? 'stopped'
-              : 'failed';
+            ? terminalRunStatusForPtyOutcome({ status: 'exited', exitCode: event.exitCode })
+            : terminalRunStatusForPtyOutcome({
+                status: event.type === 'pty_process_killed' ? 'killed' : 'failed',
+                statusReason: event.statusReason,
+              });
         // Find the owning command without the lock to derive the lock key, then
         // finalize under the lock so we serialize against in-flight run/stop. A
         // superseded (already-pruned) run resolves to null and we skip.

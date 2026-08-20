@@ -13,6 +13,7 @@ import {
   commandRun,
   commandState,
   createFixture,
+  fakePtyProcessRow,
   runCommandServiceEffect,
   writeConfig,
 } from './test-support.js';
@@ -41,6 +42,7 @@ commands:
           terminate: (input) =>
             Effect.sync(() => {
               terminated.push(input.ptyProcessId);
+              return 'terminated_live' as const;
             }),
         },
         onTransition: (input) => transitioned.push(input),
@@ -287,6 +289,150 @@ commands:
     assert.equal(runs[0]?.status, 'failed');
     assert.equal(runs[0]?.diagnosticReason, 'missing_cwd');
     assert.equal(runs[0]?.ptyProcessId, null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// The launch handshake. A process that dies before its run is linked publishes
+// its terminal event to nobody — `findRunByPtyProcess` cannot resolve an owner
+// yet — and a PTY row's first terminal fact is now final, so nothing later
+// resurrects the row into the poller's view. Reading the row after linking is
+// what keeps an immediate exit observable to the command.
+
+async function runWithImmediateOutcome(
+  fixture: ReturnType<typeof createFixture>,
+  process: Partial<ReturnType<typeof fakePtyProcessRow>>,
+) {
+  const runs: CommandRunRow[] = [];
+  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  writeConfig(
+    fixture.rootPath,
+    `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+  );
+  const output = await runCommandServiceEffect(
+    fixture.rootPath,
+    (service) => service.run({ worktreeId: 10, commandName: 'dev' }),
+    {
+      runs,
+      ptyProcess: fakePtyProcessRow({ id: 902, ...process }),
+      pty: {
+        launch: () =>
+          Effect.succeed({
+            ptyProcessId: 902,
+            command: '/bin/sh',
+            args: ['-lc', 'pnpm dev'],
+            cwd: fixture.rootPath,
+            logPath: null,
+          }),
+      },
+      onTransition: (input) => transitioned.push(input),
+    },
+  );
+  return { output, runs, transitioned };
+}
+
+test('a command whose process exits before its run is linked is not left recorded running', async () => {
+  const fixture = createFixture();
+  try {
+    const { output, runs, transitioned } = await runWithImmediateOutcome(fixture, {
+      status: 'exited',
+      exitCode: 0,
+    });
+
+    assert.equal(output.summary.status, 'exited');
+    assert.equal(runs.at(-1)?.status, 'exited');
+    // A clean exit is not a launch failure, so it carries no launch diagnostic.
+    assert.equal(runs.at(-1)?.diagnosticReason, null);
+    assert.deepEqual(transitioned.at(-1), { commandName: 'dev', status: 'exited' });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a non-zero immediate exit is recorded as a failed run without a launch diagnostic', async () => {
+  const fixture = createFixture();
+  try {
+    const { output, runs } = await runWithImmediateOutcome(fixture, {
+      status: 'exited',
+      exitCode: 127,
+    });
+
+    assert.equal(output.summary.status, 'failed');
+    assert.equal(runs.at(-1)?.status, 'failed');
+    assert.equal(runs.at(-1)?.diagnosticReason, null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('any failed row observed during the handoff is a failed launch from the caller perspective', async () => {
+  const fixture = createFixture();
+  try {
+    // `backend_process_missing` classified the row, not `backend_launch_failed` —
+    // but the command still never got a usable process out of this launch.
+    const { output, runs } = await runWithImmediateOutcome(fixture, {
+      status: 'failed',
+      statusReason: 'backend_process_missing',
+    });
+
+    assert.equal(output.summary.status, 'failed');
+    assert.equal(runs.at(-1)?.diagnosticReason, 'pty_launch_failed');
+    assert.equal(runs.at(-1)?.diagnosticDetail, 'backend_process_missing');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a killed row observed during the handoff maps through the shared run-status rule', async () => {
+  const fixture = createFixture();
+  try {
+    const { output, runs } = await runWithImmediateOutcome(fixture, {
+      status: 'killed',
+      statusReason: 'user_requested',
+    });
+
+    assert.equal(output.summary.status, 'stopped');
+    assert.equal(runs.at(-1)?.status, 'stopped');
+    assert.equal(runs.at(-1)?.diagnosticReason, null);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('stopping a command whose process was already gone claims no stop it did not perform', async () => {
+  const fixture = createFixture();
+  const transitioned: Array<{ readonly commandName: string; readonly status: string }> = [];
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+`,
+    );
+
+    const output = await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.stop({ worktreeId: 10, commandName: 'dev' }),
+      {
+        states: [commandState({ commandName: 'dev', status: 'running' })],
+        latestRun: commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 }),
+        pty: { terminate: () => Effect.succeed('already_absent' as const) },
+        onTransition: (input) => transitioned.push(input),
+      },
+    );
+
+    // The command stays truthfully `running` until the incarnation's real
+    // terminal fact reconciles it. Writing `stopped` here would assert that a
+    // person stopped a process this call never touched.
+    assert.equal(output.summary.status, 'running');
+    assert.deepEqual(transitioned, []);
   } finally {
     fixture.cleanup();
   }

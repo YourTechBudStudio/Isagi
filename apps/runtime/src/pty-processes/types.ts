@@ -102,6 +102,16 @@ export class PtyKillError extends Data.TaggedError('PtyKillError')<{
   readonly cause: unknown;
 }> {}
 
+// A termination attempt is already reserved for this row. The second caller is
+// rejected rather than joined: reusing the first attempt's outcome would lend
+// its affirmative kill to a cause that did not commit it. Internal to
+// `pty-processes` — deliberately not re-exported from the feature barrel.
+export class PtyTerminationInProgressError extends Data.TaggedError(
+  'PtyTerminationInProgressError',
+)<{
+  readonly ptyProcessId: number;
+}> {}
+
 export class PtyServiceError extends Data.TaggedError('PtyServiceError')<{
   readonly code:
     | 'worktree_not_found'
@@ -124,6 +134,12 @@ export class PtyInspectError extends Data.TaggedError('PtyInspectError')<{
   readonly ptyProcessId?: number | undefined;
   readonly cause: unknown;
 }> {}
+
+// Attempt-honest kill result. `false` means this attempt found no live process
+// for the ref: it terminated nothing and must persist no `killed` fact.
+export interface BackendTerminateResult {
+  readonly terminated: boolean;
+}
 
 export type BackendInspection =
   | { readonly status: 'alive' }
@@ -174,8 +190,8 @@ export interface PtyBackend {
   readonly terminate?: (input: {
     readonly ref: BackendSessionRef;
     readonly gracefulTimeoutMs: number;
-  }) => Effect.Effect<void, PtyKillError>;
-  readonly kill: (ref: BackendSessionRef) => Effect.Effect<void, PtyKillError>;
+  }) => Effect.Effect<BackendTerminateResult, PtyKillError>;
+  readonly kill: (ref: BackendSessionRef) => Effect.Effect<BackendTerminateResult, PtyKillError>;
   readonly collectGarbage?: (
     input: PtyBackendGcInput,
   ) => Effect.Effect<readonly PtyBackendGcFinding[], PtyInspectError>;

@@ -44,6 +44,7 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
     terminate: (input) =>
       Effect.sync(() => {
         calls.terminated.push(input.ptyProcessId);
+        return 'terminated_live' as const;
       }),
     getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
     attach: () => Effect.die('pty attach is not used'),

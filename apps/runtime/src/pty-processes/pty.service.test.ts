@@ -416,7 +416,7 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
 
@@ -439,7 +439,7 @@ function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void
     replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
 
@@ -479,7 +479,7 @@ function singleAttachmentBackend(events: string[]): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
 
@@ -506,6 +506,6 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
       }),
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }

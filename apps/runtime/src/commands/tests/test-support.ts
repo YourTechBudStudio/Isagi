@@ -20,6 +20,7 @@ import {
   RuntimeEventBusLive,
   type InternalRuntimeEventBusService,
 } from '../../runtime-events/index.js';
+import type { PtyProcessRow } from '../../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
 import { registerCommandsApi } from '../api.js';
 import {
@@ -199,6 +200,9 @@ export interface CommandRepositoryOptions {
   readonly runs?: CommandRunRow[] | undefined;
   readonly latestRun?: CommandRunRow | null | undefined;
   readonly pty?: Partial<PtyServiceShape> | undefined;
+  // The PTY row the launch handshake re-reads after linking its run. Defaults to
+  // absent, which is what every pre-existing test expects.
+  readonly ptyProcess?: PtyProcessRow | null | undefined;
   readonly onTransition?:
     | ((input: {
         readonly commandName: string;
@@ -228,7 +232,7 @@ export async function runCommandServiceEffect<A>(
       Effect.provide(CommandServiceLive),
       Effect.provide(Layer.succeed(WorkspaceRepository, repository(rootPath))),
       Effect.provide(Layer.succeed(CommandRepository, commandRepository(options))),
-      Effect.provide(Layer.succeed(PtyRepository, ptyRepository())),
+      Effect.provide(Layer.succeed(PtyRepository, ptyRepository(options.ptyProcess ?? null))),
       Effect.provide(Layer.succeed(PtyService, ptyService(options.pty))),
       Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
       Effect.provide(RuntimeEventBusLive),
@@ -399,17 +403,47 @@ export function commandRun(input: {
   };
 }
 
-export function ptyRepository(): PtyRepositoryService {
+// A strict persisted PTY row, for tests that exercise the launch handshake's
+// re-read of the row it just linked.
+export function fakePtyProcessRow(overrides: Partial<PtyProcessRow> = {}): PtyProcessRow {
+  return {
+    id: 902,
+    backend: 'node_pty',
+    backendRefJson: JSON.stringify({
+      schemaVersion: 1,
+      backend: 'node_pty',
+      ptyProcessId: 902,
+      pid: 4321,
+    }),
+    command: '/bin/sh',
+    args: ['-lc', 'pnpm dev'],
+    argsJson: JSON.stringify(['-lc', 'pnpm dev']),
+    cwd: '/repo/isagi',
+    status: 'running',
+    statusReason: null,
+    exitCode: null,
+    signal: null,
+    logMode: 'backend_file',
+    logPath: null,
+    createdAt: '2026-06-19T00:00:00.000Z',
+    updatedAt: '2026-06-19T00:00:00.000Z',
+    exitedAt: null,
+    lastSeenAt: null,
+    ...overrides,
+  };
+}
+
+export function ptyRepository(process: PtyProcessRow | null = null): PtyRepositoryService {
   return {
     createProcessMetadata: () => Effect.die('createProcessMetadata is not used'),
-    findProcess: () => Effect.succeed(null),
+    findProcess: () => Effect.succeed(process),
     listProcessLogPaths: Effect.succeed([]),
     listOrphanProcesses: Effect.succeed([]),
     listProcesses: () => Effect.succeed([]),
     deleteProcess: () => Effect.void,
     updateBackendRef: () => Effect.void,
     updateBackendMetadata: () => Effect.void,
-    transitionProcess: () => Effect.void,
+    transitionProcess: () => Effect.succeed({ applied: true, row: null }),
   };
 }
 
@@ -422,8 +456,8 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
     write: () => Effect.void,
     writeInput: () => Effect.void,
     resize: () => Effect.void,
-    kill: () => Effect.void,
-    terminate: overrides.terminate ?? (() => Effect.void),
+    kill: () => Effect.succeed('terminated_live' as const),
+    terminate: overrides.terminate ?? (() => Effect.succeed('terminated_live' as const)),
     pin: overrides.pin ?? (() => Effect.void),
     unpin: overrides.unpin ?? (() => Effect.void),
     isPinned: overrides.isPinned ?? (() => Effect.succeed(false)),

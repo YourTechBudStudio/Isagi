@@ -141,6 +141,7 @@ test('delete worktree force removes checkout before deleting DB row and returns 
     terminate: (input: { readonly ptyProcessId: number; readonly gracefulTimeoutMs: number }) =>
       Effect.sync(() => {
         events.push(`pty:${input.ptyProcessId}:${input.gracefulTimeoutMs}`);
+        return 'terminated_live' as const;
       }),
   } satisfies PtyServiceShape;
 
@@ -324,6 +325,7 @@ test('delete worktree stops before Git removal when active PTY teardown fails', 
             }),
           );
         }
+        return 'terminated_live' as const;
       }),
   } satisfies PtyServiceShape;
 

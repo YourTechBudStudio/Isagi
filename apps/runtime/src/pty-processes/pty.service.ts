@@ -23,19 +23,21 @@ import { backendMetadataForLaunch, decodeBackendRef } from './service/backend-re
 import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
 import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
 import { backendLaunchCommand } from './service/launch-mode.js';
-import { handleExit, type PtyTerminationState } from './service/lifecycle.js';
+import { handleExit, type PtyTerminations } from './service/lifecycle.js';
 import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
+import { makePtyRetryScheduler, type PtyRetryScheduler } from './service/retry.js';
 import { launchEnv, runtimeNamespace, spawnFailureMessage } from './service/runtime-namespace.js';
 import {
   prepareShellIntegration,
   refWithShellIntegrationToken,
 } from './service/shell-integration.js';
 import type { ShellIntegrationConfig } from './service/shell-integration.js';
-import { terminatePtyProcessAndPersistKilled } from './service/termination.js';
+import { terminatePtyProcess, type PtyTerminateOutcome } from './service/termination.js';
 import {
   PtyKillError,
   PtyResizeError,
   PtyServiceError,
+  PtyTerminationInProgressError,
   PtyWriteError,
   type BackendSessionRef,
   type LaunchPtyProcessInput,
@@ -51,7 +53,11 @@ const statusPollIntervalMs = 10_000;
 export type PtyLaunchError = DatabaseError | PtyServiceError;
 export type PtyAttachError = DatabaseError | PtyServiceError;
 export type PtyInputError = DatabaseError | PtyServiceError | PtyWriteError | PtyResizeError;
-export type PtyKillProcessError = DatabaseError | PtyServiceError | PtyKillError;
+export type PtyKillProcessError =
+  | DatabaseError
+  | PtyServiceError
+  | PtyKillError
+  | PtyTerminationInProgressError;
 export type PtyAttachmentMode = 'interactive' | 'read_only';
 
 export interface PtyAttachment {
@@ -106,13 +112,15 @@ export interface PtyService {
     readonly cols: number;
     readonly rows: number;
   }) => Effect.Effect<void, PtyInputError>;
+  // Resolves to what the attempt actually did, so a caller that owns a stop
+  // cause can bind it only to an affirmative kill.
   readonly kill: (input: {
     readonly ptyProcessId: number;
-  }) => Effect.Effect<void, PtyKillProcessError>;
+  }) => Effect.Effect<PtyTerminateOutcome, PtyKillProcessError>;
   readonly terminate: (input: {
     readonly ptyProcessId: number;
     readonly gracefulTimeoutMs: number;
-  }) => Effect.Effect<void, PtyKillProcessError>;
+  }) => Effect.Effect<PtyTerminateOutcome, PtyKillProcessError>;
   readonly pin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly unpin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly isPinned: (input: { readonly ptyProcessId: number }) => Effect.Effect<boolean>;
@@ -133,16 +141,21 @@ export const PtyServiceLive = Layer.scoped(
     const activeAttachments = new Map<number, ActiveAttachment>();
     const pendingAttachments = new Set<number>();
     const pinnedPtyProcessIds = new Set<number>();
-    const terminations = new Map<number, PtyTerminationState>();
+    const terminations: PtyTerminations = new Map();
+    // Deferred terminal writes belong to this scope: they are scheduled here and
+    // drained in the finalizer below, while the repository is still open.
+    const retry = makePtyRetryScheduler();
     const namespace = runtimeNamespace(directory.paths.root);
 
     mkdirSync(directory.paths.sessionsPath, { recursive: true });
     yield* reportOrphanPtyLogs(repository, directory.paths.sessionsPath);
-    yield* reconcilePersistedProcesses(repository, catalog, eventBus, { startup: true });
+    yield* reconcilePersistedProcesses(repository, catalog, eventBus, terminations, {
+      startup: true,
+    });
     yield* collectPtyGarbage(repository, catalog, namespace, directory.paths.sessionsPath, {
       pinnedPtyProcessIds,
     });
-    const pollTimer = startStatusPolling(repository, catalog, eventBus);
+    const pollTimer = startStatusPolling(repository, catalog, eventBus, terminations);
     const gcTimer = startPtyGarbageCollector(
       repository,
       catalog,
@@ -204,6 +217,7 @@ export const PtyServiceLive = Layer.scoped(
             runtimeNamespace: namespace,
             sessionsPath: directory.paths.sessionsPath,
             terminations,
+            retry,
             eventBus,
             foreground,
             shellIntegration: launch.shellIntegration,
@@ -261,6 +275,7 @@ export const PtyServiceLive = Layer.scoped(
           foreground,
           activeAttachments,
           pendingAttachments,
+          terminations,
           input,
         ),
       replay: (input) => replayProcess(catalog, input),
@@ -300,22 +315,24 @@ export const PtyServiceLive = Layer.scoped(
           yield* active.attachment.resize({ cols: input.cols, rows: input.rows });
         }),
       kill: (input) =>
-        terminatePtyProcessAndPersistKilled({
+        terminatePtyProcess({
           repository,
           catalog,
           eventBus,
           activeAttachments,
           terminations,
+          retry,
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
         }),
       terminate: (input) =>
-        terminatePtyProcessAndPersistKilled({
+        terminatePtyProcess({
           repository,
           catalog,
           eventBus,
           activeAttachments,
           terminations,
+          retry,
           ptyProcessId: input.ptyProcessId,
           reason: 'user_requested',
           gracefulTimeoutMs: input.gracefulTimeoutMs,
@@ -342,17 +359,23 @@ export const PtyServiceLive = Layer.scoped(
         activeAttachments.clear();
         for (const session of sessions) {
           if (session.backend !== 'node_pty') continue;
-          yield* terminatePtyProcessAndPersistKilled({
+          // Best effort: an already-dead incarnation is an `already_absent` that
+          // commits nothing false, and a genuine control failure leaves the row
+          // running for the next startup reconciliation to classify honestly.
+          yield* terminatePtyProcess({
             repository,
             catalog,
             eventBus,
             activeAttachments,
             terminations,
+            retry,
             ptyProcessId: session.id,
             reason: 'runtime_shutdown',
-            killFailurePolicy: 'persist_killed',
           }).pipe(Effect.ignore);
         }
+        // Last: the sweep above can hand work to the scheduler, and draining it
+        // here is what keeps a deferred terminal write out of a closed database.
+        yield* retry.shutdown;
       }),
     );
   }),
@@ -365,6 +388,7 @@ function attachToProcess(
   foreground: PtyForegroundStateService,
   activeAttachments: Map<number, ActiveAttachment>,
   pendingAttachments: Set<number>,
+  terminations: PtyTerminations,
   input: {
     readonly ptyProcessId: number;
     readonly mode: PtyAttachmentMode;
@@ -438,7 +462,7 @@ function attachToProcess(
         })
         .pipe(Effect.either);
       if (Either.isLeft(attachResult)) {
-        yield* handleAttachFailure(repository, backend, eventBus, session, ref);
+        yield* handleAttachFailure(repository, backend, eventBus, terminations, session, ref);
         return yield* Effect.fail(
           new PtyServiceError({
             code: 'backend_attach_failed',
@@ -561,10 +585,13 @@ function startStatusPolling(
   repository: PtyRepositoryService,
   catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
+  terminations: PtyTerminations,
 ) {
   const timer = setInterval(() => {
     void Effect.runPromise(
-      reconcilePersistedProcesses(repository, catalog, eventBus, { startup: false }).pipe(
+      reconcilePersistedProcesses(repository, catalog, eventBus, terminations, {
+        startup: false,
+      }).pipe(
         Effect.catchAll((error) =>
           Effect.sync(() => console.warn('[runtime] PTY status polling failed', error)),
         ),
@@ -575,15 +602,24 @@ function startStatusPolling(
   return timer;
 }
 
-function reconcilePersistedProcesses(
+// Exported as a test seam. The reservation skip below is otherwise only
+// reachable on the ten-second poll timer, and a race that important should be
+// proven by injecting a pass, not by racing a clock.
+export function reconcilePersistedProcesses(
   repository: PtyRepositoryService,
   catalog: PtyBackendCatalogService,
   eventBus: InternalRuntimeEventBusService,
+  terminations: PtyTerminations,
   options: { readonly startup: boolean },
 ) {
   return Effect.gen(function* () {
     const sessions = yield* repository.listProcesses({ statuses: ['starting', 'running'] });
     for (const session of sessions) {
+      // A committed termination attempt owns this row's outcome until its
+      // terminal fact lands. Inspecting now could assign `backend_process_missing`
+      // to a process that attempt demonstrably killed, and immutability would
+      // make that misattribution permanent.
+      if (skipReservedRow(terminations, session.id)) continue;
       if (session.backend === 'node_pty' && options.startup) {
         yield* transitionIfChanged(repository, eventBus, session, {
           status: 'failed',
@@ -636,6 +672,23 @@ function reconcilePersistedProcesses(
   });
 }
 
+// Age is diagnostic only: a reservation held by a genuinely in-flight kill or an
+// unbounded persistence retry is correct, so it is never expired or stolen. The
+// warning is bounded to once per reservation so a sick database cannot turn the
+// poller into a log flood.
+function skipReservedRow(terminations: PtyTerminations, ptyProcessId: number) {
+  const termination = terminations.get(ptyProcessId);
+  if (!termination) return false;
+  const ageMs = Date.now() - termination.reservedAt;
+  if (ageMs > statusPollIntervalMs && !termination.ageWarningLogged) {
+    termination.ageWarningLogged = true;
+    console.warn(
+      `[runtime] PTY termination reservation is still unresolved ptyProcessId=${ptyProcessId} reason=${termination.reason} ownership=${termination.ownership} ageMs=${ageMs}`,
+    );
+  }
+  return true;
+}
+
 function launchWithBackend(input: {
   readonly backend: PtyBackendShape;
   readonly metadata: PtyProcessLaunchMetadata;
@@ -643,7 +696,8 @@ function launchWithBackend(input: {
   readonly activeAttachments: Map<number, ActiveAttachment>;
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
-  readonly terminations: Map<number, PtyTerminationState>;
+  readonly terminations: PtyTerminations;
+  readonly retry: PtyRetryScheduler;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly foreground: PtyForegroundStateService;
   readonly shellIntegration: ShellIntegrationConfig | null;
@@ -694,6 +748,7 @@ function launchWithBackend(input: {
                 handleExit(
                   input.repository,
                   input.eventBus,
+                  input.retry,
                   input.activeAttachments,
                   input.terminations,
                   input.metadata.ptyProcessId,
@@ -732,10 +787,15 @@ function handleAttachFailure(
   repository: PtyRepositoryService,
   backend: PtyBackendShape,
   eventBus: InternalRuntimeEventBusService,
+  terminations: PtyTerminations,
   session: PtyProcessRecord,
   ref: BackendSessionRef,
 ) {
   return Effect.gen(function* () {
+    // Silently defer to the reserving attempt. Unlike the poller this has no
+    // fixed cadence to bound a warning against, so logging here would make
+    // diagnostics depend on how often a user tries to attach.
+    if (terminations.has(session.id)) return;
     if (session.backend === 'node_pty') {
       yield* transitionIfChanged(repository, eventBus, session, {
         status: 'failed',

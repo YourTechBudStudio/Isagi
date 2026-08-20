@@ -52,7 +52,7 @@ function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> =
     replay: () => Effect.void,
     inspect: () => Effect.succeed({ status: 'alive' as const }),
     listSessions: Effect.succeed([]),
-    kill: () => Effect.void,
+    kill: () => Effect.succeed({ terminated: true }),
     ...overrides,
   } satisfies PtyBackendShape;
 }
@@ -197,6 +197,7 @@ test('a persisted tmux row is terminable through its own backend while node-pty 
           kill: (ref) =>
             Effect.sync(() => {
               kills.push(ref.backend);
+              return { terminated: true };
             }),
         }),
         (ptyProcessId) =>
@@ -261,6 +262,7 @@ test('a persisted node-pty row is operated through node-pty while tmux is config
         kill: (ref) =>
           Effect.sync(() => {
             kills.push(ref.backend);
+            return { terminated: true };
           }),
       }),
       tmux: backendStub('tmux', {
