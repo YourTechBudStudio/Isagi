@@ -8,6 +8,7 @@ import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
 import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';
+import type { PtyLaunchReservations } from './lifecycle.js';
 import { cleanupOrphanPtyLogs } from './logs.js';
 
 const ptyGcIntervalMs = 5 * 60_000;
@@ -25,6 +26,7 @@ export function startPtyGarbageCollector(
   sessionsPath: string,
   options: {
     readonly pinnedPtyProcessIds?: ReadonlySet<number> | undefined;
+    readonly pendingLaunches?: PtyLaunchReservations | undefined;
   } = {},
 ) {
   const timer = setInterval(() => {
@@ -50,6 +52,11 @@ export function collectPtyGarbage(
   options: {
     readonly nowMs?: number | undefined;
     readonly pinnedPtyProcessIds?: ReadonlySet<number> | undefined;
+    // A launch that has allocated its row but not yet produced a process. Its
+    // row is legitimately unreferenced until the caller's handoff, so without
+    // this exclusion a spawn slower than the retention window could have its
+    // row and its live process collected mid-launch.
+    readonly pendingLaunches?: PtyLaunchReservations | undefined;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -64,6 +71,7 @@ export function collectPtyGarbage(
       cleanupOrphanPtyProcesses(repository, catalog, {
         nowMs: options.nowMs ?? Date.now(),
         pinnedPtyProcessIds: options.pinnedPtyProcessIds ?? new Set(),
+        pendingLaunches: options.pendingLaunches ?? new Map(),
       }),
     ).pipe(tagGcPhaseError('orphan_processes'));
     yield* diagnosticPhase(
@@ -129,6 +137,7 @@ function cleanupOrphanPtyProcesses(
   options: {
     readonly nowMs: number;
     readonly pinnedPtyProcessIds: ReadonlySet<number>;
+    readonly pendingLaunches: PtyLaunchReservations;
   },
 ) {
   return Effect.gen(function* () {
@@ -136,6 +145,7 @@ function cleanupOrphanPtyProcesses(
     logDiagnosticEvent('pty.gc.orphan_processes_discovered', {
       orphanCount: processes.length,
       pinnedCount: options.pinnedPtyProcessIds.size,
+      pendingLaunchCount: options.pendingLaunches.size,
     });
     for (const process of processes) {
       logDiagnosticEvent('pty.gc.orphan_process_considered', {
@@ -145,11 +155,22 @@ function cleanupOrphanPtyProcesses(
         statusReason: process.statusReason,
         cwd: process.cwd,
         pinned: options.pinnedPtyProcessIds.has(process.id),
+        pendingLaunch: options.pendingLaunches.has(process.id),
         retentionElapsed: isRetentionElapsed(process.updatedAt, options.nowMs),
       });
       if (options.pinnedPtyProcessIds.has(process.id)) {
         console.info(
           `[runtime] Keeping orphan PTY process because it is pinned ptyProcessId=${process.id}`,
+        );
+        continue;
+      }
+      // Distinct from pinning on purpose: pinning is a caller's explicit
+      // retention request, while this is a launch that has not finished yet.
+      // Reporting one as the other would make the GC log lie about why the row
+      // survived.
+      if (options.pendingLaunches.has(process.id)) {
+        console.info(
+          `[runtime] Keeping orphan PTY process because its launch is still pending ptyProcessId=${process.id}`,
         );
         continue;
       }

@@ -516,7 +516,7 @@ test('a poller pass leaves a reserved row alone instead of assigning it a compet
         harness.repository,
         catalog,
         harness.bus.service,
-        harness.terminations,
+        { terminations: harness.terminations, launches: new Map() },
         { startup: false },
       );
 
@@ -541,7 +541,7 @@ test('a poller pass still classifies rows no attempt has reserved', async () => 
         harness.repository,
         catalog,
         harness.bus.service,
-        harness.terminations,
+        { terminations: harness.terminations, launches: new Map() },
         { startup: false },
       );
 

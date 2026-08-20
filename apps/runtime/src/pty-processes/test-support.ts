@@ -2,7 +2,12 @@ import { Effect } from 'effect';
 
 import type { PtyBackendCatalogService } from './backend.js';
 import type { PtyRetryScheduler } from './service/retry.js';
-import type { PtyBackendName, PtyBackend as PtyBackendShape } from './types.js';
+import type {
+  PtyBackendName,
+  PtyProcessAllocation,
+  PtyProcessLaunchMetadata,
+  PtyBackend as PtyBackendShape,
+} from './types.js';
 
 /**
  * Test-only catalog. Every field is explicit on purpose: a cross-backend test
@@ -69,6 +74,45 @@ export function manualPtyRetryScheduler(): ManualPtyRetryScheduler {
       const jobs = pending;
       pending = [];
       return Effect.forEach(jobs, (job) => job, { discard: true });
+    }),
+  };
+}
+
+/**
+ * Test-only PTY launch allocation. Tests supply what `start` should do; the
+ * one-shot state machine is enforced here so a fake can never be more
+ * permissive than production and let a caller start twice, or abandon a
+ * launch that is already running, without the test noticing.
+ */
+export function fakePtyAllocation(input: {
+  readonly ptyProcessId: number;
+  readonly start: Effect.Effect<PtyProcessLaunchMetadata>;
+  readonly onAbandon?: (() => void) | undefined;
+}): PtyProcessAllocation {
+  let phase: 'allocated' | 'starting' | 'settled' | 'abandoned' = 'allocated';
+  return {
+    ptyProcessId: input.ptyProcessId,
+    start: Effect.suspend(() => {
+      if (phase !== 'allocated') {
+        return Effect.die(
+          new Error(
+            `Fake PTY launch allocation ${input.ptyProcessId} cannot be started from phase ${phase}.`,
+          ),
+        );
+      }
+      phase = 'starting';
+      return input.start.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            phase = 'settled';
+          }),
+        ),
+      );
+    }),
+    abandon: Effect.suspend(() => {
+      if (phase !== 'allocated') return Effect.void;
+      phase = 'abandoned';
+      return Effect.sync(() => input.onAbandon?.());
     }),
   };
 }

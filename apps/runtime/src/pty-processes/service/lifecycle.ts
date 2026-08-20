@@ -23,15 +23,107 @@ export type DurablePtyTerminationReason = Extract<
 // if the attempt's terminal write cannot be persisted it transfers to the
 // background retry, which holds the row reserved until that write finally
 // applies or is rejected by an already-terminal fact.
-export interface PtyTerminationState {
+export interface PtyTerminationState extends PtyReservationAge {
   readonly reason: DurablePtyTerminationReason;
-  readonly reservedAt: number;
   exit: PtyExit | null;
-  ageWarningLogged: boolean;
   ownership: 'attempt' | 'retry' | 'released';
 }
 
 export type PtyTerminations = Map<number, PtyTerminationState>;
+
+// The allocation-to-process window. A row exists and is durably `starting`, but
+// no backend process does yet, so a generic liveness observer inspecting it
+// would conclude `missing` and — under terminal immutability — permanently
+// fail a launch that is still perfectly in flight.
+export type PtyLaunchReservationState = PtyReservationAge;
+
+export type PtyLaunchReservations = Map<number, PtyLaunchReservationState>;
+
+// The two windows are deliberately separate structures rather than one keyed
+// entry: during an in-flight spawn's cancellation cleanup the same row is
+// legitimately held by both at once — the launch reservation until `start`'s
+// finalizer runs, and a termination reservation for the cleanup kill.
+export interface PtyReservations {
+  readonly terminations: PtyTerminations;
+  readonly launches: PtyLaunchReservations;
+}
+
+// Age is diagnostic only. A reservation held by a genuinely in-flight kill, an
+// unbounded persistence retry, or a hung spawn is correct, so it is never
+// expired or stolen — only reported, and at most once per reservation so a sick
+// database or a wedged backend cannot turn an observer into a log flood.
+export interface PtyReservationAge {
+  readonly reservedAt: number;
+  ageWarningLogged: boolean;
+}
+
+// One membership question for every generic observer. `handleAttachFailure`
+// uses this directly: unlike the poller it has no fixed cadence to bound a
+// warning against, so logging there would make diagnostics depend on how often
+// a user happens to try to attach.
+export function isRowReserved(reservations: PtyReservations, ptyProcessId: number) {
+  return reservations.terminations.has(ptyProcessId) || reservations.launches.has(ptyProcessId);
+}
+
+// The poller's variant: same membership answer, plus the age report the fixed
+// poll cadence makes meaningful.
+export function skipReservedRow(
+  reservations: PtyReservations,
+  ptyProcessId: number,
+  warnAfterMs: number,
+) {
+  const termination = reservations.terminations.get(ptyProcessId);
+  if (termination) {
+    warnOnceWhenStale(
+      termination,
+      warnAfterMs,
+      (ageMs) =>
+        `[runtime] PTY termination reservation is still unresolved ptyProcessId=${ptyProcessId} reason=${termination.reason} ownership=${termination.ownership} ageMs=${ageMs}`,
+    );
+    return true;
+  }
+  const launch = reservations.launches.get(ptyProcessId);
+  if (launch) {
+    warnOnceWhenStale(
+      launch,
+      warnAfterMs,
+      (ageMs) =>
+        `[runtime] PTY launch reservation is still unresolved ptyProcessId=${ptyProcessId} ageMs=${ageMs}`,
+    );
+    return true;
+  }
+  return false;
+}
+
+function warnOnceWhenStale(
+  reservation: PtyReservationAge,
+  warnAfterMs: number,
+  message: (ageMs: number) => string,
+) {
+  const ageMs = Date.now() - reservation.reservedAt;
+  if (ageMs <= warnAfterMs || reservation.ageWarningLogged) return;
+  reservation.ageWarningLogged = true;
+  console.warn(message(ageMs));
+}
+
+// Reserve the allocation window. Called from inside the repository's insert
+// transaction, so the reservation and the row become visible together.
+export function reserveLaunch(launches: PtyLaunchReservations, ptyProcessId: number) {
+  const reservation: PtyLaunchReservationState = {
+    reservedAt: Date.now(),
+    ageWarningLogged: false,
+  };
+  launches.set(ptyProcessId, reservation);
+  return reservation;
+}
+
+// Identity-agnostic on purpose: unlike a termination, a launch reservation has
+// exactly one owner for its whole lifetime (acquisition compensation before the
+// allocation exists, then `start`'s finalizer or `abandon`), so there is no
+// successor entry a late release could erase.
+export function releaseLaunch(launches: PtyLaunchReservations, ptyProcessId: number) {
+  launches.delete(ptyProcessId);
+}
 
 // Reserve the row for one attempt. A synchronous check-and-set with no
 // intervening suspension point, so two concurrent callers cannot both win and

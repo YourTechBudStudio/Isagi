@@ -29,6 +29,7 @@ const firstPtyProcessId = 100;
 function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyServiceShape {
   let nextPtyProcessId = firstPtyProcessId;
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () =>
       Effect.sync(() => {
         onLaunch?.();

@@ -452,6 +452,7 @@ function fakePtyService(input: {
     | undefined;
 }): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({

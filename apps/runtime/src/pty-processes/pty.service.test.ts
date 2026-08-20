@@ -420,7 +420,10 @@ function delayedAttachBackend(onAttach: () => void): PtyBackendShape {
   } satisfies PtyBackendShape;
 }
 
-function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void): PtyBackendShape {
+function launchCaptureBackend(
+  onLaunch: (environment: NodeJS.ProcessEnv) => void,
+  overrides: Partial<PtyBackendShape> = {},
+): PtyBackendShape {
   return {
     name: 'node_pty',
     available: Effect.succeed(true),
@@ -440,6 +443,7 @@ function launchCaptureBackend(onLaunch: (environment: NodeJS.ProcessEnv) => void
     inspect: () => Effect.succeed({ status: 'alive' }),
     listSessions: Effect.succeed([]),
     kill: () => Effect.succeed({ terminated: true }),
+    ...overrides,
   } satisfies PtyBackendShape;
 }
 
@@ -509,3 +513,95 @@ function writeInputBackend(writes: string[]): PtyBackendShape {
     kill: () => Effect.succeed({ terminated: true }),
   } satisfies PtyBackendShape;
 }
+
+// The composed `launch` is now `allocateLaunch` plus a one-shot `start`. These
+// two cases pin the property every current caller depends on: whatever happened
+// during the launch, the returned metadata is enough to take ownership of — and
+// operate — the incarnation.
+test('a terminal-session-style caller can own and stop a process from returned metadata', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-handoff-terminal-'));
+  let killed = 0;
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const repository = yield* PtyRepository;
+        // Exactly the terminal-session shape: launch, then install ownership
+        // from the returned metadata after the call returns.
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        const row = yield* repository.findProcess(process.ptyProcessId);
+        const outcome = yield* pty.terminate({
+          ptyProcessId: process.ptyProcessId,
+          gracefulTimeoutMs: 10,
+        });
+        return { process, row, outcome };
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend(() => {}, {
+              kill: () =>
+                Effect.sync(() => {
+                  killed += 1;
+                  return { terminated: true };
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(result.row?.status, 'running');
+    assert.equal(result.process.logPath, result.row?.logPath);
+    assert.equal(result.outcome, 'terminated_live');
+    assert.equal(killed, 1);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('a command-style caller reads the terminal fact of a process that died during launch', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-process-handoff-command-'));
+  try {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const pty = yield* PtyService;
+        const repository = yield* PtyRepository;
+        const process = yield* pty.launch({ command: 'bash', args: [], cwd: '/repo/isagi' });
+        // The command launch handshake: link the run to the returned id, then
+        // re-read the row. The exit landed before any owner existed, so this
+        // read is the only thing that can observe it.
+        return {
+          process,
+          row: yield* repository.findProcess(process.ptyProcessId),
+        };
+      }).pipe(
+        Effect.provide(
+          serviceTestLayer(
+            dataRoot,
+            launchCaptureBackend(() => {}, {
+              launch: (input) =>
+                Effect.sync(() => {
+                  input.onExit({ exitCode: 3, signal: null });
+                  return {
+                    schemaVersion: 1,
+                    backend: 'node_pty',
+                    ptyProcessId: input.ptyProcessId,
+                    pid: 42,
+                  } as const;
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    assert.equal(result.process.ptyProcessId > 0, true);
+    // The immediate exit stands: the post-spawn `running` transition is
+    // rejected by terminal immutability rather than erasing it.
+    assert.equal(result.row?.status, 'failed');
+    assert.equal(result.row?.exitCode, 3);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

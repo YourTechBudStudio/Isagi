@@ -479,6 +479,7 @@ function fakeRealRestorePtyService(
   launches: LaunchPtyProcessInput[],
 ): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: (input) =>
       Effect.gen(function* () {
         launches.push(input);

@@ -21,6 +21,13 @@ export interface PtyRepositoryService {
     readonly command: string;
     readonly args: readonly string[];
     readonly cwd: string;
+    // Invoked with the generated id as the transaction's final, non-failing
+    // operation. It exists so a caller can make an in-memory reservation for
+    // the new row co-visible with the row itself: the guarantee is the
+    // repository's own write/commit boundary, not any assumption about how the
+    // Effect runtime schedules a continuation. The transaction can still fail
+    // at commit after the hook ran, so callers must compensate on failure.
+    readonly onInserted?: ((ptyProcessId: number) => void) | undefined;
   }) => Effect.Effect<number, DatabaseError>;
   readonly findProcess: (
     ptyProcessId: number,
@@ -80,7 +87,9 @@ export const PtyRepositoryLive = Layer.effect(
 
     return {
       createProcessMetadata: (input) =>
-        database.use('create_pty_process_metadata', (db) => {
+        // One transaction: the insert and the id-bearing ref update are a
+        // single durable fact, and `onInserted` runs inside the same boundary.
+        database.transaction('create_pty_process_metadata', (db) => {
           const now = timestamp();
           const placeholderRef = {
             schemaVersion: 1,
@@ -116,6 +125,9 @@ export const PtyRepositoryLive = Layer.effect(
             })
             .where(eq(ptyProcesses.id, row.id))
             .run();
+          // Last, and deliberately not fallible: no expected-failure statement
+          // may sit between the hook and the caller's success.
+          input.onInserted?.(row.id);
           return row.id;
         }),
       findProcess: (ptyProcessId) => findProcess(database, ptyProcessId, 'find_pty_process'),

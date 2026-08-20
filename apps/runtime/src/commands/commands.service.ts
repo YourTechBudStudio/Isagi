@@ -16,7 +16,7 @@ import type {
   WorktreeCommandsRejectionReason,
 } from '@isagi/contracts';
 
-import type { DatabaseError } from '../persistence/index.js';
+import { DatabaseError } from '../persistence/index.js';
 import type { WorktreeCommandConfig } from '../project-config/project-config.schema.js';
 import { loadWorktreeCommandCatalog } from '../project-config/project-config.service.js';
 import { PtyRepository, PtyService } from '../pty-processes/index.js';
@@ -967,6 +967,17 @@ function pruneCommandRunHistory(
 }
 
 function diagnosticDetailForCause(cause: unknown) {
-  if (cause instanceof Error) return cause.message;
+  // `DatabaseError` is the launch path's only expected failure now that a
+  // started launch is total, and it carries its context in `operation`/`cause`
+  // rather than in `message` — reading `message` alone would show the user an
+  // empty diagnostic for a real persistence fault.
+  if (cause instanceof DatabaseError) {
+    return `Database operation ${cause.operation} failed: ${describeCause(cause.cause)}`;
+  }
+  return describeCause(cause);
+}
+
+function describeCause(cause: unknown) {
+  if (cause instanceof Error && cause.message) return cause.message;
   return String(cause);
 }

@@ -2,8 +2,13 @@ import { Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtyProcessRecord } from '../../surfaces/index.js';
+import type { PtyForegroundStateService } from '../foreground-state.js';
 import type { PtyProcessTransitionResult, PtyRepositoryService } from '../pty.repository.js';
-import type { PtyProcessStatus, PtyProcessStatusReason } from '../types.js';
+import type {
+  PtyForegroundCommandState,
+  PtyProcessStatus,
+  PtyProcessStatusReason,
+} from '../types.js';
 
 export interface PtyProcessTransitionInput {
   readonly ptyProcessId: number;
@@ -105,4 +110,27 @@ function publishPtyProcessChangedIfNeeded(
     status: next.status,
     statusReason: next.statusReason,
   });
+}
+
+// Shared by the launch path and the attach path, which both receive foreground
+// notifications from a backend and must announce only real changes.
+export function recordForegroundCommandState(
+  foreground: PtyForegroundStateService,
+  eventBus: InternalRuntimeEventBusService,
+  ptyProcessId: number,
+  state: PtyForegroundCommandState,
+) {
+  return foreground.set(ptyProcessId, state).pipe(
+    Effect.flatMap((changed) =>
+      changed
+        ? eventBus.publish({
+            type:
+              state === 'working'
+                ? 'pty_foreground_command_started'
+                : 'pty_foreground_command_ended',
+            ptyProcessId,
+          })
+        : Effect.void,
+    ),
+  );
 }

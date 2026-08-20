@@ -319,6 +319,7 @@ function fakeTerminalSessionService(
 
 function fakePtyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () => Effect.die('pty launch is not used by surface service tests'),
     getAttachmentPlan: () =>
       Effect.die('pty getAttachmentPlan is not used by surface service tests'),

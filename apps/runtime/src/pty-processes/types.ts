@@ -223,6 +223,26 @@ export interface PtyProcessLaunchMetadata {
   readonly logPath: string | null;
 }
 
+// One-shot pre-start launch allocation. The durable PTY row exists and is
+// reserved the moment this resolves, so a caller can persist ownership before
+// any backend process exists.
+//
+// The phase machine is `allocated -> starting -> settled` or
+// `allocated -> abandoned`. `start` is total for every uninterrupted path: it
+// has no expected-failure channel and folds pre-spawn and spawn failures into
+// the row, returning metadata the caller can still inspect and kill through.
+// An interrupted `start` deliberately returns nothing and hands convergence to
+// its own cleanup and the caller's interruption handling.
+export interface PtyProcessAllocation {
+  // The durable row already exists with status `starting` and is reserved
+  // against the generic liveness observers. No process exists yet.
+  readonly ptyProcessId: number;
+  readonly start: Effect.Effect<PtyProcessLaunchMetadata>;
+  // Idempotent, and a no-op once `start` has begun, so it is safe to attach
+  // unconditionally as a scoped releaser or interruption cleanup.
+  readonly abandon: Effect.Effect<void, never>;
+}
+
 export type PtyForegroundCommandState = 'idle' | 'working';
 
 export interface ShellIntegrationConfig {

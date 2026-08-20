@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { PtyServiceError } from '../../pty-processes/index.js';
+import { DatabaseError } from '../../persistence/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
 import { type CommandRunRow } from '../commands.repository.js';
 import { CommandService } from '../commands.service.js';
@@ -90,11 +90,14 @@ commands:
         }),
       {
         pty: {
+          // Allocation is a launch's only expected-failure stage now that
+          // `start` is total, so the command's launch-failure branch is
+          // reached through the durable allocation write.
           launch: () =>
             Effect.fail(
-              new PtyServiceError({
-                code: 'backend_unavailable',
-                message: 'launch failed',
+              new DatabaseError({
+                operation: 'create_pty_process_metadata',
+                cause: new Error('launch failed'),
               }),
             ),
         },
@@ -104,7 +107,10 @@ commands:
     assert.equal(output.action.summary.status, 'failed');
     assert.equal(output.metadata.status, 'failed');
     assert.equal(output.metadata.latestRun?.diagnostic?.reason, 'pty_launch_failed');
-    assert.equal(output.metadata.latestRun?.diagnostic?.detail, 'launch failed');
+    assert.equal(
+      output.metadata.latestRun?.diagnostic?.detail,
+      'Database operation create_pty_process_metadata failed: launch failed',
+    );
   } finally {
     fixture.cleanup();
   }

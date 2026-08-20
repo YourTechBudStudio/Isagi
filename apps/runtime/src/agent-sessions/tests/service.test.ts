@@ -355,6 +355,7 @@ function fakePtyService(
   ptyLaunches: Array<{ command: string; args: readonly string[]; cwd: string }>,
 ): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: (input) =>
       Effect.sync(() => {
         ptyLaunches.push({ command: input.command, args: input.args, cwd: input.cwd });

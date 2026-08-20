@@ -99,6 +99,7 @@ export function fakeCommandLogPtyService(
   overrides: Partial<PtyServiceShape> = {},
 ): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({
@@ -449,6 +450,7 @@ export function ptyRepository(process: PtyProcessRow | null = null): PtyReposito
 
 export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
   return {
+    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
     launch: overrides.launch ?? (() => Effect.die('launch is not used')),
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
     attach: () => Effect.die('attach is not used'),
