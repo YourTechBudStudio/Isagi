@@ -152,8 +152,11 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             // The linkless running run is bounded by the next launch's prune
             // and by boot reconciliation.
             console.warn(
-              `[runtime] Command launch could not record its failure diagnostic worktree=${worktreeId} command=${commandName}`,
-              Either.isLeft(completed) ? completed.left : 'run row missing',
+              `[runtime] Command launch could not record its failure diagnostic worktree=${worktreeId} command=${commandName} cause=${
+                Either.isLeft(completed)
+                  ? describeOperationalCause(completed.left)
+                  : 'run row missing'
+              }`,
             );
           }
           return yield* Effect.fail(error);
@@ -199,8 +202,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn(
-              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName}`,
-              error,
+              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeOperationalCause(error)}`,
             );
           }),
         ),

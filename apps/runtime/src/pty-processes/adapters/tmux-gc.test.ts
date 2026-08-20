@@ -84,3 +84,16 @@ test('tmux GC ignores sessions outside this runtime namespace', async () => {
 
   assert.deepEqual(findings, []);
 });
+
+test('tmux GC collects a session left behind after its worktree rows were cascaded away', async () => {
+  // The bounded transport residual the deletion audit cannot observe: the tmux
+  // server had not yet processed a creation request when the audit's kill
+  // round-trip completed, so the session appears after the cascade removed
+  // every row that referred to it. Nothing owns it, and this sweep is the only
+  // thing left that will reap it.
+  const findings = await collect({ live: [tmuxSession(31)], sessions: [] });
+
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.type, 'orphan_backend_session');
+  assert.equal(findings[0]?.ptyProcessId, 31);
+});

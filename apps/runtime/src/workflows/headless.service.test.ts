@@ -54,6 +54,7 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
     writeInput: () => Effect.die('pty writeInput is not used'),
     resize: () => Effect.die('pty resize is not used'),
     kill: () => Effect.die('pty kill is not used'),
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   };
 }

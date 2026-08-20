@@ -20,10 +20,21 @@ import {
   type ActiveAttachment,
 } from './service/attachments.js';
 import { decodeBackendRef } from './service/backend-ref.js';
+import {
+  cleanupPtyProcess,
+  type PtyCleanupDependencies,
+  type PtyProcessCleanupError,
+  type PtyProcessCleanupOutcome,
+} from './service/cleanup.js';
 import { recordForegroundCommandState, transitionProcessAndPublish } from './service/events.js';
 import { collectPtyGarbage, startPtyGarbageCollector } from './service/gc.js';
 import { allocateLaunch, type PtyLaunchDependencies } from './service/launch.js';
-import { isRowReserved, skipReservedRow, type PtyReservations } from './service/lifecycle.js';
+import {
+  isRowReserved,
+  skipReservedRow,
+  type DurablePtyTerminationReason,
+  type PtyReservations,
+} from './service/lifecycle.js';
 import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
 import { makePtyRetryScheduler } from './service/retry.js';
 import { launchEnv, runtimeNamespace } from './service/runtime-namespace.js';
@@ -55,6 +66,7 @@ export type PtyKillProcessError =
   | PtyServiceError
   | PtyKillError
   | PtyTerminationInProgressError;
+export type PtyCleanupProcessError = PtyProcessCleanupError;
 export type PtyAttachmentMode = 'interactive' | 'read_only';
 
 export interface PtyAttachment {
@@ -125,6 +137,17 @@ export interface PtyService {
     readonly ptyProcessId: number;
     readonly gracefulTimeoutMs: number;
   }) => Effect.Effect<PtyTerminateOutcome, PtyKillProcessError>;
+
+  // Verify-or-terminate one incarnation for a caller that owns durable cleanup:
+  // boot convergence and the worktree-deletion audit. Unlike `terminate` it
+  // tolerates an already-finished row, and unlike the poller it never guesses —
+  // anything it could not establish fails.
+  readonly cleanupProcess: (input: {
+    readonly ptyProcessId: number;
+    readonly reason: DurablePtyTerminationReason;
+    readonly gracefulTimeoutMs?: number | undefined;
+    readonly ensureBackendAbsence?: boolean | undefined;
+  }) => Effect.Effect<PtyProcessCleanupOutcome, PtyCleanupProcessError>;
   readonly pin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly unpin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly isPinned: (input: { readonly ptyProcessId: number }) => Effect.Effect<boolean>;
@@ -170,6 +193,17 @@ export const PtyServiceLive = Layer.scoped(
       directory.paths.sessionsPath,
       { pinnedPtyProcessIds, pendingLaunches: reservations.launches },
     );
+
+    // The cleanup flow needs the same process-truth capabilities termination
+    // does; bundling them keeps the call site from re-listing six fields.
+    const cleanupDependencies: PtyCleanupDependencies = {
+      repository,
+      catalog,
+      eventBus,
+      activeAttachments,
+      terminations: reservations.terminations,
+      retry,
+    };
 
     const launchDependencies: PtyLaunchDependencies = {
       repository,
@@ -273,6 +307,7 @@ export const PtyServiceLive = Layer.scoped(
           reason: 'user_requested',
           gracefulTimeoutMs: input.gracefulTimeoutMs,
         }),
+      cleanupProcess: (input) => cleanupPtyProcess(cleanupDependencies, input),
       pin: (input) =>
         Effect.sync(() => {
           pinnedPtyProcessIds.add(input.ptyProcessId);

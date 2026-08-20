@@ -119,7 +119,6 @@ const testCommandService = {
   runPostCreateLifecycle: () => Effect.void,
   cleanupBeforeWorktreeDelete: () => Effect.void,
   cleanupBeforeWorktreePrune: () => Effect.void,
-  reconcileStaleRunningCommands: Effect.void,
 } satisfies CommandServiceShape;
 
 const testPtyService = {
@@ -136,6 +135,7 @@ const testPtyService = {
   terminate: () => Effect.succeed('terminated_live' as const),
   pin: () => Effect.void,
   unpin: () => Effect.void,
+  cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
   isPinned: () => Effect.succeed(false),
 } satisfies PtyServiceShape;
 

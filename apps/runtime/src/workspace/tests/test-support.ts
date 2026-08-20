@@ -129,7 +129,6 @@ export const testCommandService = {
   runPostCreateLifecycle: () => Effect.void,
   cleanupBeforeWorktreeDelete: () => Effect.void,
   cleanupBeforeWorktreePrune: () => Effect.void,
-  reconcileStaleRunningCommands: Effect.void,
 } satisfies CommandServiceShape;
 
 export const testPtyService = {
@@ -143,6 +142,7 @@ export const testPtyService = {
   resize: () => Effect.die('pty resize is not used by workspace tests'),
   kill: () => Effect.succeed('terminated_live' as const),
   terminate: () => Effect.succeed('terminated_live' as const),
+  cleanupProcess: () => Effect.die('pty cleanupProcess is not used by workspace tests'),
   pin: () => Effect.void,
   unpin: () => Effect.void,
   isPinned: () => Effect.succeed(false),

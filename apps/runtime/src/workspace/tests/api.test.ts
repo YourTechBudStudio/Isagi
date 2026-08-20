@@ -381,6 +381,70 @@ test('order routes map database failures to the shared runtime envelope', async 
   );
 });
 
+// Command cleanup gates three flows beyond an explicit worktree delete, because
+// `cleanupBeforeWorktreePrune` runs inside project reconciliation. Each already
+// declares `command_cleanup_failed` in its contract; this pins that the runtime
+// actually maps the propagated failure onto the declared envelope rather than
+// falling through to a generic 500.
+const commandCleanupGatedRoutes = [
+  {
+    label: 'worktrees.open',
+    method: 'POST' as const,
+    url: '/api/v1/projects/1/worktrees/open',
+    payload: { branch: 'feature/new' },
+    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+      openWorktree: () => Effect.fail(error),
+    }),
+    code: 'worktree_open_rejected',
+  },
+  {
+    label: 'projects.add',
+    method: 'POST' as const,
+    url: '/api/v1/projects',
+    payload: { path: '/repo/isagi' },
+    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+      registerProject: () => Effect.fail(error),
+    }),
+    code: 'project_operation_rejected',
+  },
+  {
+    label: 'workspace.reconcile',
+    method: 'POST' as const,
+    url: '/api/v1/workspace/reconcile',
+    payload: { projectId: 1 },
+    service: (error: WorkspaceError): Partial<WorkspaceServiceShape> => ({
+      reconcileWorkspace: () => Effect.fail(error),
+    }),
+    code: 'workspace_reconcile_rejected',
+  },
+];
+
+for (const route of commandCleanupGatedRoutes) {
+  test(`${route.label} maps a command cleanup failure onto its declared envelope`, async () => {
+    const error = new WorkspaceError({
+      code: 'command_cleanup_failed',
+      message: 'Could not stop running commands for worktree 11.',
+      projectId: 1,
+      worktreeId: 11,
+    });
+
+    await withWorkspaceApi(fakeWorkspaceService(route.service(error)), async (fastify) => {
+      const response = await fastify.inject({
+        method: route.method,
+        url: route.url,
+        payload: route.payload,
+      });
+      const body = response.json() as {
+        readonly error?: { readonly code?: string; readonly data?: { readonly reason?: string } };
+      };
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(body.error?.code, route.code);
+      assert.equal(body.error?.data?.reason, 'command_cleanup_failed');
+    });
+  });
+}
+
 async function withWorkspaceApi<A>(
   service: WorkspaceServiceShape,
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,

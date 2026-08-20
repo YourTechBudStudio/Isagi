@@ -14,12 +14,16 @@ import { PtyRepository, PtyService } from '../pty-processes/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEventBus } from '../runtime-events/event-bus.js';
 import { InternalRuntimeEventBus } from '../runtime-events/internal-event-bus.js';
 import { WorkspaceRepository } from '../workspace/index.js';
+import {
+  cleanupCommandIncarnations,
+  reconcileCommandsAtBoot,
+  type CommandConvergenceDependencies,
+} from './commands.convergence.js';
 import { describeOperationalCause } from './commands.diagnostics.js';
 import { CommandError, type CommandServiceError } from './commands.errors.js';
 import { makeCommandLauncher } from './commands.launch.js';
 import { makeCommandLifecycle } from './commands.lifecycle.js';
 import {
-  runtimeStoppedDiagnosticDetail,
   terminalCommandOutcomeForPtyRow,
   terminalPtyFactsForRow,
   type CommandRunDiagnosticInput,
@@ -68,7 +72,6 @@ export interface CommandService {
   readonly cleanupBeforeWorktreePrune: (input: {
     readonly worktreeId: number;
   }) => Effect.Effect<void, CommandServiceError>;
-  readonly reconcileStaleRunningCommands: Effect.Effect<void, never>;
 }
 
 export const CommandService = Context.GenericTag<CommandService>('isagi/CommandService');
@@ -383,8 +386,7 @@ export const CommandServiceLive = Layer.scoped(
             Effect.tapError(() =>
               Effect.sync(() => {
                 console.warn(
-                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure:`,
-                  terminate.left,
+                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeOperationalCause(terminate.left)}`,
                 );
               }),
             ),
@@ -467,6 +469,18 @@ export const CommandServiceLive = Layer.scoped(
         return yield* stopResolvedCommand(input, state, options);
       });
 
+    // Boot convergence and the deletion audit share one process-accounting
+    // module; the layer keeps ownership of the lock, the bus, and the finalizer
+    // it hands them.
+    const convergenceDependencies: CommandConvergenceDependencies = {
+      commandRepository,
+      ptyRepository,
+      pty,
+      publishCommandChanged,
+      finalizeCommandRunByRun,
+      withLock: (target, effect) => withCommandLock(locks, target, effect),
+    };
+
     // The worktree-level passes — postCreate, deactivation, activation,
     // preDelete, and the teardown sweep — live in `commands.lifecycle.ts`. They
     // receive the capabilities they need rather than resolving anything of their
@@ -477,6 +491,7 @@ export const CommandServiceLive = Layer.scoped(
       runCommand,
       stopCommand,
       stopManagedCommand,
+      cleanupIncarnations: (input) => cleanupCommandIncarnations(convergenceDependencies, input),
       withLock: (target, effect) => withCommandLock(locks, target, effect),
     });
 
@@ -510,38 +525,17 @@ export const CommandServiceLive = Layer.scoped(
         );
       });
 
-    // Startup recovery: any command still marked running was orphaned by a
-    // runtime restart (its ephemeral PTY is gone and no exit event will arrive),
-    // so mark it failed directly. Not a live-PTY path, so it bypasses the
-    // finalizer.
-    const reconcileStaleRunningCommands = Effect.gen(function* () {
-      const states = yield* commandRepository.listRunningStates;
-      for (const state of states) {
-        const run = state.activePtyProcessId
-          ? yield* commandRepository.findRunByPtyProcess(state.activePtyProcessId)
-          : yield* commandRepository.findLatestRun(state);
-        if (run?.status === 'running') {
-          yield* commandRepository.completeRun({
-            runId: run.id,
-            status: 'failed',
-            diagnosticReason: 'runtime_stopped',
-            diagnosticDetail: runtimeStoppedDiagnosticDetail,
-          });
-        }
-        yield* commandRepository.transitionState({
-          worktreeId: state.worktreeId,
-          commandName: state.commandName,
-          status: 'failed',
-          activePtyProcessId: null,
-        });
-        yield* publishCommandChanged(state.worktreeId, state.commandName, 'failed');
-      }
-    });
-
-    yield* reconcileStaleRunningCommands.pipe(
+    // Startup process accounting. Runs here — after the PTY layer's own startup
+    // reconciliation, before the event subscriber and startup activation exist —
+    // because every conclusion it draws about a command depends on first
+    // establishing what happened to that command's processes. It is a
+    // construction-time internal with no production caller outside this block.
+    yield* reconcileCommandsAtBoot(convergenceDependencies).pipe(
       Effect.catchAll((error) =>
         Effect.sync(() => {
-          console.warn('[runtime] Command stale-running reconciliation failed', error);
+          console.warn(
+            `[runtime] Command boot convergence failed cause=${describeOperationalCause(error)}`,
+          );
         }),
       ),
     );
@@ -557,7 +551,9 @@ export const CommandServiceLive = Layer.scoped(
     yield* Effect.addFinalizer(() => subscription.unsubscribe);
     const logEventError = (error: unknown) =>
       Effect.sync(() => {
-        console.warn('[runtime] Command process event reconciliation failed', error);
+        console.warn(
+          `[runtime] Command process event reconciliation failed cause=${describeOperationalCause(error)}`,
+        );
       });
     yield* Effect.forkScoped(
       Effect.forever(
@@ -668,15 +664,16 @@ export const CommandServiceLive = Layer.scoped(
         Effect.gen(function* () {
           yield* lifecycle.stopPreDeleteCommands(input.worktreeId);
           yield* lifecycle.stopAllManagedCommands(input.worktreeId);
+          // Stops act on what the runtime believes; the audit acts on what the
+          // database still points at. Only the second can conclude that no
+          // observable process survives the cascade.
+          yield* lifecycle.auditWorktreeCommandIncarnations(input.worktreeId);
         }),
-      cleanupBeforeWorktreePrune: (input) => lifecycle.stopAllManagedCommands(input.worktreeId),
-      reconcileStaleRunningCommands: reconcileStaleRunningCommands.pipe(
-        Effect.catchAll((error) =>
-          Effect.sync(() => {
-            console.warn('[runtime] Command stale-running reconciliation failed', error);
-          }),
-        ),
-      ),
+      cleanupBeforeWorktreePrune: (input) =>
+        Effect.gen(function* () {
+          yield* lifecycle.stopAllManagedCommands(input.worktreeId);
+          yield* lifecycle.auditWorktreeCommandIncarnations(input.worktreeId);
+        }),
     } satisfies CommandService;
 
     return service;

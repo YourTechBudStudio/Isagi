@@ -476,6 +476,7 @@ function fakePtyService(input: {
     terminate: () => Effect.succeed('terminated_live' as const),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   } satisfies PtyServiceShape;
 }

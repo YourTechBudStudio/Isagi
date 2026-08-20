@@ -2,13 +2,21 @@ import { Effect } from 'effect';
 
 import type { CommandActionOutput } from '@isagi/contracts';
 
+import type { DatabaseError } from '../persistence/index.js';
 import type {
   WorktreeCommandCatalogConfig,
   WorktreeCommandConfig,
 } from '../project-config/project-config.schema.js';
 import { loadWorktreeCommandCatalog } from '../project-config/project-config.service.js';
+import type { DurablePtyTerminationReason } from '../pty-processes/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
-import type { CommandServiceError } from './commands.errors.js';
+import type {
+  CommandCleanupFailure,
+  CommandCleanupResult,
+  CommandTarget,
+} from './commands.convergence.js';
+import { describeOperationalCause } from './commands.diagnostics.js';
+import { CommandError, type CommandServiceError } from './commands.errors.js';
 import type { CommandStopCause, CommandStopResult } from './commands.outcomes.js';
 import type { CommandRepositoryService, CommandStateRow } from './commands.repository.js';
 import { loadCommandTarget } from './commands.targets.js';
@@ -58,6 +66,19 @@ export interface CommandLifecycleDependencies {
     input: { readonly worktreeId: number; readonly commandName: string },
     options: { readonly cause: CommandStopCause },
   ) => Effect.Effect<CommandStopResult, CommandServiceError>;
+  // Process accounting for one command, shared with boot convergence: clean up
+  // every incarnation it still refers to and repair ownership when exactly one
+  // nonterminal survivor remains. The audit below supplies its own reason and
+  // diagnostic wording, because "a worktree delete could not finish" is a
+  // different thing to tell the user than "the runtime restarted".
+  readonly cleanupIncarnations: (input: {
+    readonly target: CommandTarget;
+    readonly candidates: readonly number[];
+    readonly reason: DurablePtyTerminationReason;
+    readonly ensureBackendAbsence: boolean;
+    readonly readoptDetail: (message: string) => string;
+    readonly operation: string;
+  }) => Effect.Effect<CommandCleanupResult, DatabaseError>;
   readonly withLock: <A, E, R>(
     input: { readonly worktreeId: number; readonly commandName: string },
     effect: Effect.Effect<A, E, R>,
@@ -132,6 +153,66 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
           ),
         );
       }
+    });
+
+  // The last gate before a worktree's rows are cascaded away.
+  //
+  // Stopping the commands the runtime knows are running is not enough to
+  // conclude that no process survives: a link can outlive its command's status,
+  // and a backend session can outlive its row. So every incarnation this
+  // worktree's commands still refer to — from state pointers *and* retained run
+  // links — is audited, and the delete proceeds only if every one of them is
+  // either terminated here or verified absent.
+  //
+  // `ensureBackendAbsence` is set for every link, not only the ones that look
+  // terminal. Classifying first would leave a hole: a row that goes terminal
+  // between the read and the cleanup would skip its gating kill, and a session
+  // that materialized behind it would survive the cascade unobserved.
+  //
+  // No *cleanup failure* short-circuits: one command's unkillable process must
+  // not hide whether the next command's is still alive, because the user is
+  // going to retry this delete and the retry needs every survivor findable. A
+  // database fault while repairing ownership does stop the pass — at that point
+  // the runtime cannot record what it is learning, so continuing would only
+  // produce conclusions it has nowhere to put.
+  const auditWorktreeCommandIncarnations = (worktreeId: number) =>
+    Effect.gen(function* () {
+      const links = yield* commandRepository.listCommandPtyLinksForWorktree(worktreeId);
+      const byCommand = new Map<string, number[]>();
+      for (const link of links) {
+        const candidates = byCommand.get(link.commandName);
+        if (candidates) candidates.push(link.ptyProcessId);
+        else byCommand.set(link.commandName, [link.ptyProcessId]);
+      }
+
+      const failures: CommandCleanupFailure[] = [];
+      for (const [commandName, candidates] of byCommand) {
+        const result = yield* deps.withLock(
+          { worktreeId, commandName },
+          deps.cleanupIncarnations({
+            target: { worktreeId, commandName },
+            candidates,
+            reason: 'user_requested',
+            ensureBackendAbsence: true,
+            readoptDetail: deletionReadoptDetail,
+            operation: 'worktree_cleanup',
+          }),
+        );
+        failures.push(...result.failures);
+      }
+
+      if (failures.length === 0) return;
+      // Propagate. The workspace wrapper turns this into `command_cleanup_failed`
+      // and the worktree's rows — including every link to an unresolved
+      // incarnation — survive, so the retry's fresh read finds them all again.
+      return yield* Effect.fail(
+        new CommandError({
+          code: 'command_action_failed',
+          message: `Could not account for ${failures.length} command process(es) while cleaning up worktree ${worktreeId}.`,
+          worktreeId,
+          cause: failures[0]?.error,
+        }),
+      );
     });
 
   // Leaving a worktree. Two candidate sets, both drawn from one authoritative
@@ -323,6 +404,7 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
     runPostCreateLifecycle,
     stopPreDeleteCommands,
     stopAllManagedCommands,
+    auditWorktreeCommandIncarnations,
     applyActivationLifecycle,
   } as const;
 }
@@ -377,9 +459,14 @@ export function buildActivationPlan(input: {
   return entries;
 }
 
+const deletionReadoptDetail = (message: string) =>
+  `Could not stop the process during worktree cleanup: ${message}`;
+
 function logLifecycleError(operation: string) {
   return (error: unknown) =>
     Effect.sync(() => {
-      console.warn(`[runtime] Command lifecycle ${operation} failed`, error);
+      console.warn(
+        `[runtime] Command lifecycle ${operation} failed cause=${describeOperationalCause(error)}`,
+      );
     });
 }

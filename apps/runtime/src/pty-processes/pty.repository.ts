@@ -12,6 +12,7 @@ import {
   worktreeCommandStates,
 } from '../persistence/schema.js';
 import type { PtyProcessRow } from '../surfaces/index.js';
+import { isTerminalPtyProcessStatus } from './types.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
 type PtyProcessTableRow = InferSelectModel<typeof ptyProcesses>;
@@ -68,14 +69,6 @@ export interface PtyProcessTransitionResult {
   readonly applied: boolean;
   readonly row: PtyProcessRow | null;
 }
-
-// A process dies exactly once. Once one of these is persisted, no later
-// transition — terminal or not — may replace it.
-const terminalPtyProcessStatuses: ReadonlySet<PtyProcessStatus> = new Set([
-  'exited',
-  'failed',
-  'killed',
-]);
 
 export const PtyRepository = Context.GenericTag<PtyRepositoryService>('isagi/PtyProcessRepository');
 
@@ -209,7 +202,7 @@ export const PtyRepositoryLive = Layer.effect(
             .where(eq(ptyProcesses.id, input.ptyProcessId))
             .get();
           if (!existing) return { applied: false, row: null };
-          if (terminalPtyProcessStatuses.has(existing.status)) {
+          if (isTerminalPtyProcessStatus(existing.status)) {
             return { applied: false, row: ptyProcessRow(existing) };
           }
           const now = timestamp();
@@ -221,7 +214,7 @@ export const PtyRepositoryLive = Layer.effect(
               exitCode: input.exitCode ?? null,
               signal: input.signal ?? null,
               updatedAt: now,
-              exitedAt: terminalPtyProcessStatuses.has(input.status) ? now : null,
+              exitedAt: isTerminalPtyProcessStatus(input.status) ? now : null,
               ...(input.lastSeenAt !== undefined ? { lastSeenAt: input.lastSeenAt } : {}),
             })
             .where(eq(ptyProcesses.id, input.ptyProcessId))

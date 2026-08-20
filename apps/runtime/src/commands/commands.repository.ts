@@ -1,4 +1,12 @@
-import { and, desc, eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  type InferSelectModel,
+} from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
@@ -171,6 +179,34 @@ export interface CommandRepositoryService {
     readonly commandName: string;
     readonly keep: number;
   }) => Effect.Effect<CommandRunRow[], DatabaseError>;
+  // Every incarnation a command still durably refers to, from both sources: the
+  // state's active pointer and the retained runs' links. Under the single-link
+  // invariant the two agree whenever the pointer is set, so this is normally one
+  // row per command; the union shape exists so a pointerless state and
+  // out-of-model divergence are still enumerated rather than silently dropped.
+  //
+  // This is the same reference set that pins PTY rows against orphan GC, which
+  // is exactly why boot and the deletion audit must drive cleanup from it: an
+  // incarnation reachable from here is one nothing else will collect.
+  readonly listCommandPtyLinks: Effect.Effect<CommandPtyLink[], DatabaseError>;
+  readonly listCommandPtyLinksForWorktree: (
+    worktreeId: number,
+  ) => Effect.Effect<CommandPtyLink[], DatabaseError>;
+  // Boot's run residue: runs still recorded `running` that name no incarnation
+  // at all. Linklessness is the structural half of the residue predicate and is
+  // stable enough to live in SQL; the caller still re-reads the command state
+  // under its lock before completing anything, because that half is racy.
+  readonly listLinklessRunningRuns: Effect.Effect<CommandRunRow[], DatabaseError>;
+}
+
+// One command's reference to one process incarnation. Deliberately not a row
+// type: it is the distinct union of two different columns in two tables, and
+// callers only ever need the identity triple to take the command lock and drive
+// cleanup.
+export interface CommandPtyLink {
+  readonly worktreeId: number;
+  readonly commandName: string;
+  readonly ptyProcessId: number;
 }
 
 export const CommandRepository =
@@ -182,6 +218,19 @@ export const CommandRepositoryLive = Layer.effect(
     const database = yield* RuntimeDatabase;
     const stateColumns = getTableColumns(worktreeCommandStates);
     const runColumns = getTableColumns(worktreeCommandRuns);
+    // Link reads project only the identity triple: the union is built in
+    // JavaScript from two differently shaped tables, and selecting whole rows
+    // would invite a caller to reason about a `CommandPtyLink` as if it were one.
+    const stateLinkColumns = {
+      worktreeId: worktreeCommandStates.worktreeId,
+      commandName: worktreeCommandStates.commandName,
+      ptyProcessId: worktreeCommandStates.activePtyProcessId,
+    };
+    const runLinkColumns = {
+      worktreeId: worktreeCommandRuns.worktreeId,
+      commandName: worktreeCommandRuns.commandName,
+      ptyProcessId: worktreeCommandRuns.ptyProcessId,
+    };
 
     return {
       listStatesForWorktree: (worktreeId) =>
@@ -481,6 +530,40 @@ export const CommandRepositoryLive = Layer.effect(
 
           return { state: commandStateRow(state), run: commandRunRow(run) };
         }),
+      listCommandPtyLinks: database.use('list_worktree_command_pty_links', (db) =>
+        distinctCommandPtyLinks(
+          db.select(stateLinkColumns).from(worktreeCommandStates).all(),
+          db.select(runLinkColumns).from(worktreeCommandRuns).all(),
+        ),
+      ),
+      listCommandPtyLinksForWorktree: (worktreeId) =>
+        database.use('list_worktree_command_pty_links_for_worktree', (db) =>
+          distinctCommandPtyLinks(
+            db
+              .select(stateLinkColumns)
+              .from(worktreeCommandStates)
+              .where(eq(worktreeCommandStates.worktreeId, worktreeId))
+              .all(),
+            db
+              .select(runLinkColumns)
+              .from(worktreeCommandRuns)
+              .where(eq(worktreeCommandRuns.worktreeId, worktreeId))
+              .all(),
+          ),
+        ),
+      listLinklessRunningRuns: database.use('list_linkless_running_worktree_command_runs', (db) =>
+        db
+          .select(runColumns)
+          .from(worktreeCommandRuns)
+          .where(
+            and(
+              eq(worktreeCommandRuns.status, 'running'),
+              isNull(worktreeCommandRuns.ptyProcessId),
+            ),
+          )
+          .all()
+          .map(commandRunRow),
+      ),
       findLatestRun: (input) =>
         database.use('find_latest_worktree_command_run', (db) => {
           const row = db
@@ -648,4 +731,29 @@ function commandRunRow(row: CommandRunRecord): CommandRunRow {
 
 function timestamp() {
   return new Date().toISOString();
+}
+
+// Distinct by incarnation, not by source. A command whose pointer and retained
+// run name the same process — the ordinary case — must be cleaned up once, and
+// the callers key their per-command locks off the same triple.
+function distinctCommandPtyLinks(
+  ...sources: readonly (readonly {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly ptyProcessId: number | null;
+  }[])[]
+): CommandPtyLink[] {
+  const seen = new Map<string, CommandPtyLink>();
+  for (const source of sources) {
+    for (const row of source) {
+      if (row.ptyProcessId === null) continue;
+      const link = {
+        worktreeId: row.worktreeId,
+        commandName: row.commandName,
+        ptyProcessId: row.ptyProcessId,
+      };
+      seen.set(`${link.worktreeId}:${link.commandName}:${link.ptyProcessId}`, link);
+    }
+  }
+  return [...seen.values()];
 }

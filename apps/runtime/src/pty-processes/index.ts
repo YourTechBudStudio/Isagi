@@ -15,6 +15,10 @@ export {
 } from './session-teardown.js';
 export { TmuxBackend, TmuxBackendLive } from './adapters/tmux.js';
 export type { PtyService as PtyServiceShape } from './pty.service.js';
+// The command domain names a durable termination reason when it asks for
+// generic cleanup; it stays PTY-layer vocabulary, exported rather than
+// re-spelled so the two cannot drift.
+export type { DurablePtyTerminationReason } from './service/lifecycle.js';
 export type {
   BackendAttachment,
   LaunchBackendSessionInput,

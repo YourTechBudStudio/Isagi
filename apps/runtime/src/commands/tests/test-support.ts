@@ -32,6 +32,7 @@ import { registerCommandsApi } from '../api.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
+  type CommandPtyLink,
   type CommandRepositoryService,
   type CommandRunRow,
   type CommandStateRow,
@@ -93,7 +94,6 @@ export function commandService(overrides: Partial<CommandServiceShape> = {}): Co
     runPostCreateLifecycle: () => Effect.void,
     cleanupBeforeWorktreeDelete: () => Effect.void,
     cleanupBeforeWorktreePrune: () => Effect.void,
-    reconcileStaleRunningCommands: Effect.void,
     ...overrides,
   };
 }
@@ -122,6 +122,7 @@ export function fakeCommandLogPtyService(
     resize: () => Effect.die('resize is not used'),
     kill: () => Effect.die('kill is not used'),
     terminate: () => Effect.die('terminate is not used'),
+    cleanupProcess: () => Effect.die('cleanupProcess is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
     isPinned: () => Effect.succeed(false),
@@ -214,6 +215,11 @@ export interface CommandRepositoryOptions {
   // Fails that re-read, so a test can prove an unreadable row is never mistaken
   // for a dead process.
   readonly ptyProcessReadFault?: (() => DatabaseError | null | undefined) | undefined;
+  // Answers per incarnation instead of with one row for every id. Returning
+  // `undefined` falls through to `ptyProcess`.
+  readonly ptyProcessById?:
+    | ((ptyProcessId: number) => PtyProcessRow | null | undefined)
+    | undefined;
   // Records the run→PTY link, so a test can prove it is written before anything
   // reaches a backend.
   readonly onRunLinked?:
@@ -295,7 +301,11 @@ export async function runCommandServiceEffect<A>(
       Effect.provide(
         Layer.succeed(
           PtyRepository,
-          ptyRepository(options.ptyProcess ?? null, options.ptyProcessReadFault),
+          ptyRepository(
+            options.ptyProcess ?? null,
+            options.ptyProcessReadFault,
+            options.ptyProcessById,
+          ),
         ),
       ),
       Effect.provide(Layer.succeed(PtyService, ptyService(options.pty))),
@@ -390,6 +400,21 @@ export function commandRepository(
       Effect.succeed(
         (options.runningStates ?? []).filter((state) => state.worktreeId === worktreeId),
       ),
+    // Derived from the same live arrays the mutations write, exactly as the real
+    // repository derives them from the same two tables — so a test that seeds a
+    // state pointer or a run link automatically gets the link the production
+    // union would find, and a repair that moves a link is visible on the next read.
+    listCommandPtyLinks: Effect.sync(() => fakeCommandPtyLinks(states, runs)),
+    listCommandPtyLinksForWorktree: (worktreeId) =>
+      Effect.sync(() =>
+        fakeCommandPtyLinks(
+          states.filter((state) => state.worktreeId === worktreeId),
+          runs.filter((run) => run.worktreeId === worktreeId),
+        ),
+      ),
+    listLinklessRunningRuns: Effect.sync(() =>
+      runs.filter((run) => run.status === 'running' && run.ptyProcessId === null),
+    ),
     ensureState: () => Effect.die('ensureState is not used'),
     transitionState: (input) =>
       Effect.suspend(() => {
@@ -605,13 +630,23 @@ export function commandRepository(
 export function commandState(input: {
   readonly commandName: string;
   readonly status: CommandStateRow['status'];
+  readonly id?: number | undefined;
+  // Stated explicitly when a test cares which incarnation the state points at —
+  // boot convergence and the deletion audit both read the pointer as one half of
+  // the command↔incarnation link union.
+  readonly activePtyProcessId?: number | null | undefined;
 }): CommandStateRow {
   return {
-    id: 1,
+    id: input.id ?? 1,
     worktreeId: 10,
     commandName: input.commandName,
     status: input.status,
-    activePtyProcessId: input.status === 'running' ? 123 : null,
+    activePtyProcessId:
+      input.activePtyProcessId !== undefined
+        ? input.activePtyProcessId
+        : input.status === 'running'
+          ? 123
+          : null,
     createdAt: '2026-06-19T00:00:00.000Z',
     updatedAt: '2026-06-19T00:00:00.000Z',
   };
@@ -623,9 +658,12 @@ export function commandRun(input: {
   readonly ptyProcessId?: number | null | undefined;
   readonly diagnosticReason?: CommandRunRow['diagnosticReason'] | undefined;
   readonly diagnosticDetail?: string | null | undefined;
+  // Distinct ids matter once a fixture carries more than one run — the residue
+  // sweep and the finalizers are all run-keyed.
+  readonly id?: number | undefined;
 }): CommandRunRow {
   return {
-    id: 1,
+    id: input.id ?? 1,
     worktreeId: 10,
     commandName: input.commandName,
     ptyProcessId: input.ptyProcessId ?? null,
@@ -701,13 +739,19 @@ export function fakePtyProcessRow(overrides: Partial<PtyProcessRow> = {}): PtyPr
 export function ptyRepository(
   process: PtyProcessRow | null = null,
   readFault?: (() => DatabaseError | null | undefined) | undefined,
+  // Per-id lookup for fixtures with more than one incarnation — divergence and
+  // multi-link audits need each row to answer for itself. Falls back to the
+  // single-row shape every earlier test uses.
+  byId?: ((ptyProcessId: number) => PtyProcessRow | null | undefined) | undefined,
 ): PtyRepositoryService {
   return {
     createProcessMetadata: () => Effect.die('createProcessMetadata is not used'),
-    findProcess: () =>
+    findProcess: (ptyProcessId) =>
       Effect.suspend(() => {
         const fault = readFault?.();
-        return fault ? Effect.fail(fault) : Effect.succeed(process);
+        if (fault) return Effect.fail(fault);
+        const found = byId?.(ptyProcessId);
+        return Effect.succeed(found === undefined ? process : found);
       }),
     listProcessLogPaths: Effect.succeed([]),
     listOrphanProcesses: Effect.succeed([]),
@@ -732,6 +776,12 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
     resize: () => Effect.void,
     kill: () => Effect.succeed('terminated_live' as const),
     terminate: overrides.terminate ?? (() => Effect.succeed('terminated_live' as const)),
+    // Neutral by default: "there was nothing left to stop". Boot convergence
+    // runs during every service construction, so a fixture that is not about
+    // boot must be able to be built without stating a cleanup outcome — and the
+    // neutral outcome writes no command row unless the state also claims to be
+    // running. Tests about boot or deletion override this.
+    cleanupProcess: overrides.cleanupProcess ?? (() => Effect.succeed('already_terminal' as const)),
     pin: overrides.pin ?? (() => Effect.void),
     unpin: overrides.unpin ?? (() => Effect.void),
     isPinned: overrides.isPinned ?? (() => Effect.succeed(false)),
@@ -815,6 +865,14 @@ export interface CommandScenarioRecorder {
   readonly published: Array<{ readonly commandName: string; readonly status: string }>;
   readonly logs: string[];
   readonly terminated: number[];
+  // Generic cleanup attempts, in order, with the flags the caller chose. Boot
+  // and the deletion audit differ on exactly those flags, so recording them is
+  // how a test proves which pass it is watching.
+  readonly cleaned: Array<{
+    readonly ptyProcessId: number;
+    readonly reason: string;
+    readonly ensureBackendAbsence: boolean;
+  }>;
   readonly readopted: Array<{
     readonly commandName: string;
     readonly ptyProcessId: number;
@@ -824,6 +882,11 @@ export interface CommandScenarioRecorder {
   }>;
   readonly launched: string[];
   readonly runs: CommandRunRow[];
+  // Boot convergence runs during service construction, so a scenario about a
+  // *body-time* pass has to be able to draw a line between what boot did and
+  // what it is actually testing. `runs` is deliberately not cleared: it is
+  // durable fixture state, not a record of calls.
+  readonly reset: () => void;
 }
 
 /**
@@ -853,9 +916,19 @@ export async function runCommandScenario<A>(
     published: [],
     logs: [],
     terminated: [],
+    cleaned: [],
     readopted: [],
     launched: [],
     runs: options.runs ?? [],
+    reset: () => {
+      recorder.transitions.length = 0;
+      recorder.published.length = 0;
+      recorder.logs.length = 0;
+      recorder.terminated.length = 0;
+      recorder.cleaned.length = 0;
+      recorder.readopted.length = 0;
+      recorder.launched.length = 0;
+    },
   };
   const restore = captureConsole(recorder.logs);
   try {
@@ -886,6 +959,17 @@ export async function runCommandScenario<A>(
               return options.pty?.terminate
                 ? options.pty.terminate(input)
                 : Effect.succeed('terminated_live' as const);
+            }),
+          cleanupProcess: (input) =>
+            Effect.suspend(() => {
+              recorder.cleaned.push({
+                ptyProcessId: input.ptyProcessId,
+                reason: input.reason,
+                ensureBackendAbsence: input.ensureBackendAbsence ?? false,
+              });
+              return options.pty?.cleanupProcess
+                ? options.pty.cleanupProcess(input)
+                : Effect.succeed('already_terminal' as const);
             }),
           allocateLaunch: (input) =>
             Effect.suspend(() => {
@@ -969,4 +1053,36 @@ function captureConsole(lines: string[]) {
     console.warn = original.warn;
     console.error = original.error;
   };
+}
+
+// Mirrors `distinctCommandPtyLinks` in the real repository: the distinct union
+// of state pointers and run links, keyed by incarnation so the ordinary
+// pointer-equals-link case yields exactly one candidate.
+function fakeCommandPtyLinks(
+  states: readonly CommandStateRow[],
+  runs: readonly CommandRunRow[],
+): CommandPtyLink[] {
+  const seen = new Map<string, CommandPtyLink>();
+  for (const source of [
+    states.map((state) => ({
+      worktreeId: state.worktreeId,
+      commandName: state.commandName,
+      ptyProcessId: state.activePtyProcessId,
+    })),
+    runs.map((run) => ({
+      worktreeId: run.worktreeId,
+      commandName: run.commandName,
+      ptyProcessId: run.ptyProcessId,
+    })),
+  ]) {
+    for (const row of source) {
+      if (row.ptyProcessId === null) continue;
+      seen.set(`${row.worktreeId}:${row.commandName}:${row.ptyProcessId}`, {
+        worktreeId: row.worktreeId,
+        commandName: row.commandName,
+        ptyProcessId: row.ptyProcessId,
+      });
+    }
+  }
+  return [...seen.values()];
 }

@@ -13,6 +13,29 @@ export type PtyProcessStatusReason =
   | 'backend_launch_failed'
   | 'runtime_ephemeral_lost';
 
+// A process dies exactly once: once one of these is persisted, no later
+// transition may replace it. Shared vocabulary rather than a private set in the
+// repository, because the guarded write, the generic cleanup flow, and the
+// startup/boot readers all have to agree on what "already terminal" means.
+const terminalPtyProcessStatuses: ReadonlySet<PtyProcessStatus> = new Set([
+  'exited',
+  'failed',
+  'killed',
+]);
+
+export function isTerminalPtyProcessStatus(status: PtyProcessStatus) {
+  return terminalPtyProcessStatuses.has(status);
+}
+
+// Why an incarnation the backend can no longer find is gone. A node-pty process
+// lives and dies with the runtime, so its absence is an ephemeral loss rather
+// than a missing backend process. The two operational flows that classify an
+// absent process — the status poller and generic cleanup — must not drift on
+// this, so the split lives here rather than being spelled out at each site.
+export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProcessStatusReason {
+  return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
+}
+
 export interface NodePtyBackendRef {
   readonly schemaVersion: 1;
   readonly backend: 'node_pty';

@@ -114,7 +114,7 @@ commands:
     assert.equal(output.metadata.latestRun?.diagnostic?.reason, 'pty_launch_failed');
     assert.equal(
       output.metadata.latestRun?.diagnostic?.detail,
-      'Database operation create_pty_process_metadata failed: launch failed',
+      'Database operation create_pty_process_metadata failed: Error',
     );
   } finally {
     fixture.cleanup();
@@ -344,47 +344,6 @@ commands:
     assert.ok(
       transitioned.some(
         (transition) => transition.commandName === 'dev' && transition.status === 'exited',
-      ),
-    );
-  } finally {
-    fixture.cleanup();
-  }
-});
-
-test('command service marks stale running commands as failed on reconcile', async () => {
-  const fixture = createFixture();
-  const transitioned: Array<{
-    readonly commandName: string;
-    readonly status: string;
-    readonly activePtyProcessId: number | null;
-  }> = [];
-  const runs = [commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 })];
-  try {
-    writeConfig(
-      fixture.rootPath,
-      `
-commands:
-  - name: dev
-    command: pnpm dev
-`,
-    );
-
-    await runCommandServiceEffect(
-      fixture.rootPath,
-      (service) => service.reconcileStaleRunningCommands,
-      {
-        states: [commandState({ commandName: 'dev', status: 'running' })],
-        runningStates: [commandState({ commandName: 'dev', status: 'running' })],
-        runs,
-        onTransition: (input) => transitioned.push(input),
-      },
-    );
-
-    assert.equal(runs[0]?.status, 'failed');
-    assert.equal(runs[0]?.diagnosticReason, 'runtime_stopped');
-    assert.ok(
-      transitioned.some(
-        (transition) => transition.commandName === 'dev' && transition.status === 'failed',
       ),
     );
   } finally {

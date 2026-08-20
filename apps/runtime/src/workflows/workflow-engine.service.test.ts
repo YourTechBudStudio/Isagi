@@ -5077,6 +5077,7 @@ function fakePtyService(): PtyServiceShape {
     terminate: () => Effect.die('pty terminate is not used'),
     pin: () => Effect.void,
     unpin: () => Effect.void,
+    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
     isPinned: () => Effect.succeed(false),
   };
 }

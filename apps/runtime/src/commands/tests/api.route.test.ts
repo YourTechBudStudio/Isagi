@@ -26,7 +26,6 @@ test('command route returns configured command reads through the contract path',
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -80,7 +79,6 @@ test('command route returns command log metadata through the contract path', asy
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -115,7 +113,6 @@ test('command route maps missing worktree to command rejection envelope', async 
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -157,7 +154,6 @@ test('command route maps a failed termination to a degraded-runtime 500 envelope
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({
@@ -204,7 +200,6 @@ test('command routes carry a suspended command through the unchanged contract sh
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const read = await fastify.inject({ method: 'GET', url: '/api/v1/worktrees/10/commands' });
@@ -264,7 +259,6 @@ test('command route reports a failed diagnostic repair as a database failure', a
       runPostCreateLifecycle: () => Effect.void,
       cleanupBeforeWorktreeDelete: () => Effect.void,
       cleanupBeforeWorktreePrune: () => Effect.void,
-      reconcileStaleRunningCommands: Effect.void,
     },
     async (fastify) => {
       const response = await fastify.inject({

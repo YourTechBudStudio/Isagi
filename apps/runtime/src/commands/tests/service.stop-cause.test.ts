@@ -280,7 +280,10 @@ test('a failed stop keeps the command running and records why', async () => {
   // a bare `PtyKillError` diagnoses nothing.
   assert.equal(
     recorder.readopted[0]?.diagnostic?.detail,
-    'Could not stop the process: PtyKillError: nope',
+    // Composed from fields, never from the error's own text: the diagnostic is
+    // durable and user-visible, so it carries coordinates rather than whatever a
+    // backend or schema decoder happened to say. See `commands.diagnostics.ts`.
+    'Could not stop the process: PTY kill error (ptyProcess=123): Error',
   );
   // Reactivity: the unchanged `running` status is republished so the client
   // refetches the metadata carrying the new diagnostic.
@@ -303,7 +306,7 @@ test('a failed deactivation stop is logged and leaves the command running', asyn
   // touched by the user reads as an unexplained failure.
   assert.equal(
     recorder.readopted[0]?.diagnostic?.detail,
-    'Could not stop the process while leaving the worktree: PtyKillError: nope',
+    'Could not stop the process while leaving the worktree: PTY kill error (ptyProcess=123): Error',
   );
   assert.ok(
     recorder.logs.some((line) =>
