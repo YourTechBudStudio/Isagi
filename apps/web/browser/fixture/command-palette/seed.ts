@@ -86,10 +86,14 @@ export const FIXTURE_SURFACE_DETAILS: Readonly<Record<number, SurfaceDetail>> = 
  * complete URL the runtime composed. A pathless entry carries an empty `urls`
  * list — it is a real resolved port with nothing to open.
  */
-function fixturePort(port: number, urls: readonly (readonly [string, string])[] = []) {
+function fixturePort(
+  port: number,
+  urls: readonly (readonly [string, string])[] = [],
+  envVar: string | null = null,
+) {
   return {
     port,
-    envVar: null,
+    envVar,
     urls: urls.map(([label, path]) => ({ label, path, url: `http://localhost:${port}${path}` })),
   };
 }
@@ -100,7 +104,21 @@ export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>
     {
       name: 'api',
       status: 'running',
-      ports: [fixturePort(8080, [['api', '/']]), fixturePort(9229)],
+      // Every presentation the endpoint work has to survive, inside one command
+      // and at the density a real worktree actually reaches: an allocated port
+      // (the number the user did *not* choose) carrying two labelled paths, and
+      // a pathless port that is real but has nothing to open.
+      ports: [
+        fixturePort(
+          51824,
+          [
+            ['docs', '/docs'],
+            ['health', '/healthz'],
+          ],
+          'API_PORT',
+        ),
+        fixturePort(9229),
+      ],
     },
     { name: 'typecheck', status: 'exited', ports: [] },
     { name: 'migrate', status: 'failed', ports: [] },
@@ -134,6 +152,129 @@ export const FIXTURE_REMOVED_SUSPENDED: readonly CommandSummary[] = [
 export const FIXTURE_MANAGED_SUSPENDED: readonly CommandSummary[] = [
   { name: 'dev', status: 'suspended', ports: [] },
   { name: 'api', status: 'running', ports: [fixturePort(3000)] },
+];
+
+/**
+ * A running command whose resolved ports are genuinely unknown for this
+ * incarnation — the state a runtime restart leaves behind when a process
+ * outlives the snapshot that described it.
+ *
+ * `null` is not `[]`. Rendering it as "no ports" would be the exact dishonesty
+ * the nullable contract exists to prevent, so the drawer voices it and the strip
+ * shows nothing.
+ */
+export const FIXTURE_DEGRADED_PORTS: readonly CommandSummary[] = [
+  { name: 'dev', status: 'idle', ports: [] },
+  { name: 'api', status: 'running', ports: null },
+];
+
+/**
+ * Two labelled paths on one port that compose the *same* URL.
+ *
+ * Config requires labels to be unique within a port; it says nothing about
+ * paths. `docs` and `openapi` both pointing at `/api` is ordinary configuration,
+ * and it is the case where identifying a badge by the text it copies would let
+ * one click confirm inside two badges.
+ */
+export const FIXTURE_DUPLICATE_URLS: readonly CommandSummary[] = [
+  {
+    name: 'api',
+    status: 'running',
+    ports: [
+      fixturePort(
+        51824,
+        [
+          ['docs', '/api'],
+          ['openapi', '/api'],
+        ],
+        'API_PORT',
+      ),
+    ],
+  },
+];
+
+/**
+ * Two commands whose names and labels contain the separator a joined identity
+ * would use.
+ *
+ * `a:5001` on port 5002 with label `x`, and `a` on port 5001 with label
+ * `5002:x`, both flatten to `a:5001:5002:x`. Command names and URL labels reject
+ * only surrounding whitespace, so both of these are ordinary configuration —
+ * and the two badges copy *different* URLs, so a shared identity would put one
+ * badge's outcome inside the other's.
+ */
+export const FIXTURE_COLLIDING_BADGE_IDS: readonly CommandSummary[] = [
+  { name: 'a:5001', status: 'running', ports: [fixturePort(5002, [['x', '/x']])] },
+  { name: 'a', status: 'running', ports: [fixturePort(5001, [['5002:x', '/y']])] },
+];
+
+/** A running command whose only resolved port has no paths at all. */
+export const FIXTURE_PATHLESS_ONLY: readonly CommandSummary[] = [
+  { name: 'api', status: 'running', ports: [fixturePort(9229)] },
+];
+
+/**
+ * A running command whose config entry was deleted while it was up.
+ *
+ * The snapshot is incarnation truth, not a config echo, so it keeps reporting
+ * the ports its process actually received. The old config-derived implementation
+ * could not have shown anything here at all — this is the honesty improvement the
+ * replacement contract exists for, and it is server-gated rather than a client
+ * special case.
+ */
+export const FIXTURE_REMOVED_WITH_PORTS: readonly CommandSummary[] = [
+  {
+    name: 'legacy-api',
+    status: 'running',
+    ports: [fixturePort(4000, [['v1', '/v1']])],
+  },
+];
+
+/** Live runtime state seen through a config that could not be parsed at all. */
+export const FIXTURE_MANAGED_WITH_PORTS: readonly CommandSummary[] = [
+  {
+    name: 'api',
+    status: 'running',
+    ports: [fixturePort(51824, [['docs', '/docs']], 'API_PORT'), fixturePort(9229)],
+  },
+];
+
+/**
+ * A dense set, for the one thing the strip cannot prove at ordinary density:
+ * that badges stay reachable by scrolling rather than being clipped.
+ */
+export const FIXTURE_DENSE_PORTS: readonly CommandSummary[] = [
+  {
+    name: 'web',
+    status: 'running',
+    ports: [
+      fixturePort(5173, [
+        ['app', '/'],
+        ['health', '/healthz'],
+      ]),
+    ],
+  },
+  {
+    name: 'api',
+    status: 'running',
+    ports: [
+      fixturePort(
+        51824,
+        [
+          ['docs', '/docs'],
+          ['health', '/healthz'],
+          ['metrics', '/internal/metrics'],
+        ],
+        'API_PORT',
+      ),
+      fixturePort(9229),
+    ],
+  },
+  {
+    name: 'worker',
+    status: 'running',
+    ports: [fixturePort(7070, [['queue', '/queue']]), fixturePort(5432)],
+  },
 ];
 
 /**

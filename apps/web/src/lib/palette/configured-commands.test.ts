@@ -92,10 +92,41 @@ test('a running row opens focused details without running anything', async () =>
 
   assert.deepEqual(calls, ['open:api']);
   assert.equal(entry?.tone, 'working');
-  // No port token yet: the palette stopped echoing the summary's ports with the
-  // contract reset, and Phase 02 rebuilds the token from pathless resolved
-  // entries rather than from whatever the array happens to contain.
-  assert.equal(entry?.sub, paletteCopy.commands.sub.running([]));
+  // A pathless resolved entry is the one thing that still earns a raw token: it
+  // has no URL badge and no drawer URL row, so the palette is where it shows.
+  assert.equal(entry?.sub, paletteCopy.commands.sub.running([8080]));
+});
+
+test('a running row omits ports that already have a URL representation', () => {
+  // A port with paths appears as a strip badge and a drawer row. Repeating it
+  // here as a bare number would be a third, less informative presentation.
+  const [entry] = configuredCommandEntries(
+    ctx({
+      configuredCommands: [
+        summary('api', 'running', [
+          {
+            port: 8080,
+            envVar: null,
+            urls: [{ label: 'app', path: '/', url: 'http://localhost:8080/' }],
+          },
+          { port: 9229, envVar: null, urls: [] },
+        ]),
+      ],
+    }),
+    recorder().deps,
+  );
+
+  assert.equal(entry?.sub, paletteCopy.commands.sub.running([9229]));
+});
+
+test('a running row with degraded or empty ports keeps the plain subtitle', () => {
+  for (const ports of [null, []] as const) {
+    const [entry] = configuredCommandEntries(
+      ctx({ configuredCommands: [summary('api', 'running', ports)] }),
+      recorder().deps,
+    );
+    assert.equal(entry?.sub, paletteCopy.commands.sub.running([]));
+  }
 });
 
 test('the running subtitle still formats port tokens it is given', () => {

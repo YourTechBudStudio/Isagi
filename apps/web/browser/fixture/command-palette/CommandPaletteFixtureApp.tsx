@@ -2,7 +2,9 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 import { queryClient } from '../../../src/lib/query/client.js';
+import { RuntimeLocalityContext, type RuntimeLocality } from '../../../src/lib/runtime/locality.js';
 import { registerPaneFocusTarget } from '../../../src/lib/workspace/activation.js';
+import { worktreeCommandsQueryKey } from '../../../src/lib/workspace/query-keys.js';
 import { emptyWorkspaceSelection, useWorkspaceStore } from '../../../src/lib/workspace/store.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
@@ -31,6 +33,11 @@ export function CommandPaletteFixtureApp({
   readonly runtime: CommandPaletteRuntimeControls;
 }) {
   const [ready, setReady] = useState(false);
+  // Locality is a client-side capability, not something the runtime serves, so
+  // it is steered here rather than through the fake runtime. Phase 05 derives
+  // the production value; until then the fixture is the only place a `local`
+  // value exists at all.
+  const [locality, setLocality] = useState<RuntimeLocality>('local');
   // Counted through a ref so the stand-in focus closures stay stable and a
   // re-render cannot lose a count that a queued animation frame just recorded.
   const paneFocusCounts = useRef<Record<number, number>>({});
@@ -61,6 +68,13 @@ export function CommandPaletteFixtureApp({
         store.selectWorktree(FIXTURE_ORIGIN.projectId, worktreeId);
       },
       paneFocusCount: (worktreeId) => paneFocusCounts.current[worktreeId] ?? 0,
+      setLocality,
+      // The palette refetches when it opens, so its specs can seed a catalog and
+      // then open. The status strip is always mounted and holds its read, so a
+      // spec that changes the catalog behind it needs to say so — this is the
+      // fixture standing in for the invalidation a real mutation would cause.
+      refetchCommands: (worktreeId = FIXTURE_ORIGIN.worktreeId) =>
+        queryClient.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId) }),
     };
     return () => {
       delete window.commandPaletteFixture;
@@ -69,29 +83,31 @@ export function CommandPaletteFixtureApp({
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* `relative` because the drawer is absolutely positioned inside the work
+      <RuntimeLocalityContext.Provider value={locality}>
+        {/* `relative` because the drawer is absolutely positioned inside the work
           area in production; without a positioned ancestor it would anchor to the
           viewport and this fixture would be judging a drawer the app never renders. */}
-      <div data-fixture-shell className="relative h-screen overflow-hidden bg-canvas text-fg">
-        {FIXTURE_PANES.map((place) => (
-          <PaneStandIn key={place.paneId} place={place} counts={paneFocusCounts} />
-        ))}
-        {/* Declared in the production order — the drawer before the palette — so
+        <div data-fixture-shell className="relative h-screen overflow-hidden bg-canvas text-fg">
+          {FIXTURE_PANES.map((place) => (
+            <PaneStandIn key={place.paneId} place={place} counts={paneFocusCounts} />
+          ))}
+          {/* Declared in the production order — the drawer before the palette — so
             the effect flush order this page observes is the app's own. */}
-        {ready && (
-          <>
-            <WorkbenchDrawer />
-            <CommandPalette />
-            {/* The strip is the always-on surface, so it sits at the foot of the
+          {ready && (
+            <>
+              <WorkbenchDrawer />
+              <CommandPalette />
+              {/* The strip is the always-on surface, so it sits at the foot of the
                 work area exactly as the app places it. It shares the drawer's
                 catalog query, which is the point: a command's chip and its drawer
                 row must never disagree about the same read. */}
-            <div data-fixture-strip className="absolute inset-x-0 bottom-0 z-10">
-              <StatusStrip />
-            </div>
-          </>
-        )}
-      </div>
+              <div data-fixture-strip className="absolute inset-x-0 bottom-0 z-10">
+                <StatusStrip />
+              </div>
+            </>
+          )}
+        </div>
+      </RuntimeLocalityContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -145,6 +161,10 @@ declare global {
       readonly setActiveWorktree: (worktreeId: number | null) => void;
       /** How many times that worktree's pane stand-in was asked to take focus. */
       readonly paneFocusCount: (worktreeId: number) => number;
+      /** Client/runtime co-location, which decides whether URLs may be offered. */
+      readonly setLocality: (locality: RuntimeLocality) => void;
+      /** Force the always-mounted strip to re-read a catalog changed behind it. */
+      readonly refetchCommands: (worktreeId?: number) => Promise<void>;
     };
   }
 }
