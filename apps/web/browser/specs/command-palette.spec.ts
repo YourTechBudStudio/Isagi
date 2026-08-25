@@ -187,8 +187,10 @@ test('a running row reads as details, a startable row reads as a launch', async 
   // The distinction has to survive being read quickly: the running row must not
   // contain the launch verb at all.
   await expect(row(page, 'api')).not.toContainText('run command');
-  // Ports are part of the running sub, in the drawer's notation.
-  await expect(row(page, 'api')).toContainText(':8080');
+  // No port token: the palette stopped echoing configured numbers with the
+  // contract reset. Phase 02 rebuilds the `:<port>` token from resolved
+  // pathless entries, and this assertion inverts again there.
+  await expect(row(page, 'api')).not.toContainText(':8080');
 });
 
 test('running rows carry the working tone and startable rows do not', async ({ page }) => {

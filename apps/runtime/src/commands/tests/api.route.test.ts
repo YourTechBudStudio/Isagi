@@ -16,7 +16,19 @@ test('command route returns configured command reads through the contract path',
         Effect.succeed({
           status: 'configured',
           worktreeId,
-          commands: [{ name: 'dev', status: 'idle', ports: [5173] }],
+          commands: [
+            {
+              name: 'dev',
+              status: 'running',
+              ports: [
+                {
+                  port: 5173,
+                  envVar: null,
+                  urls: [{ label: 'app', path: '/', url: 'http://localhost:5173/' }],
+                },
+              ],
+            },
+          ],
           removedCommands: [],
         }),
       readLogMetadata: () => Effect.succeed(idleLogMetadata),
@@ -38,7 +50,19 @@ test('command route returns configured command reads through the contract path',
       assert.deepEqual(payload.data, {
         status: 'configured',
         worktreeId: 10,
-        commands: [{ name: 'dev', status: 'idle', ports: [5173] }],
+        commands: [
+          {
+            name: 'dev',
+            status: 'running',
+            ports: [
+              {
+                port: 5173,
+                envVar: null,
+                urls: [{ label: 'app', path: '/', url: 'http://localhost:5173/' }],
+              },
+            ],
+          },
+        ],
         removedCommands: [],
       });
     },

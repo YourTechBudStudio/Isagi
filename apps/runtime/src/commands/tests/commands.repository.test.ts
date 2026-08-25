@@ -619,3 +619,129 @@ test('re-adoption without a diagnostic repairs ownership and preserves the recor
   assert.equal(result.rows.run?.diagnosticReason, 'pty_launch_failed');
   assert.equal(result.rows.run?.diagnosticDetail, 'earlier evidence');
 });
+
+/**
+ * The resolved-port snapshot's keep-versus-replace contract.
+ *
+ * This is the mechanism the whole allocation-memory design rests on: the launch
+ * marker is the *only* write, and every other transition preserves the column by
+ * simply not naming it. Proving that here means later lifecycle work — stop,
+ * suspend, exit, convergence, boot repair — inherits the guarantee without
+ * having to restate it at each call site.
+ */
+
+const snapshot = [
+  { envVar: 'API_PORT', port: 5173, paths: [{ label: 'api', path: '/api' }] },
+] as const;
+
+test('an omitted resolved-port update preserves the stored snapshot', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({ stateStatus: 'running' });
+      yield* repository.transitionState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        status: 'running',
+        resolvedPorts: snapshot,
+      });
+      // A stop, exactly as the stop path writes it: status and pointer only.
+      const stopped = yield* repository.transitionState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        status: 'stopped',
+        activePtyProcessId: null,
+      });
+      return stopped;
+    }),
+  );
+
+  assert.equal(result.status, 'stopped');
+  assert.deepEqual(result.resolvedPorts, snapshot);
+});
+
+test('an explicit resolved-port array replaces the stored snapshot, empty included', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({ stateStatus: 'running' });
+      yield* repository.transitionState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        status: 'running',
+        resolvedPorts: snapshot,
+      });
+      // Removing every port declaration and launching again forgets the
+      // allocation — but only at the next successful launch, never before.
+      return yield* repository.transitionState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+        status: 'running',
+        resolvedPorts: [],
+      });
+    }),
+  );
+
+  assert.deepEqual(result.resolvedPorts, []);
+});
+
+test('a state row inserted by a transition carries the snapshot it was given', async () => {
+  // The first launch of a command whose state row does not exist yet takes the
+  // insert branch; losing the snapshot there would break memory from launch one.
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({ stateStatus: 'idle' });
+      return yield* repository.transitionState({
+        worktreeId: seeded.worktreeId,
+        commandName: 'never seen',
+        status: 'running',
+        resolvedPorts: snapshot,
+      });
+    }),
+  );
+
+  assert.deepEqual(result.resolvedPorts, snapshot);
+});
+
+test('a state row with no snapshot reads as null', async () => {
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const seeded = yield* seed({ stateStatus: 'running' });
+      return yield* repository.findState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+      });
+    }),
+  );
+
+  assert.equal(result?.resolvedPorts, null);
+});
+
+test('a malformed stored snapshot decodes to null rather than failing the read', async () => {
+  // Out-of-model data degrades to the value the contract already means by
+  // "unknown for this incarnation". A read that threw here would take the whole
+  // command drawer down over one bad row.
+  const result = await runWithDatabase(
+    Effect.gen(function* () {
+      const repository = yield* CommandRepository;
+      const database = yield* RuntimeDatabase;
+      const seeded = yield* seed({ stateStatus: 'running' });
+      yield* database.use('test_corrupt', (db) =>
+        db
+          .update(worktreeCommandStates)
+          .set({ resolvedPortsJson: '{"not":"an array"}' })
+          .where(eq(worktreeCommandStates.id, seeded.stateId))
+          .run(),
+      );
+      return yield* repository.findState({
+        worktreeId: seeded.worktreeId,
+        commandName: seeded.commandName,
+      });
+    }),
+  );
+
+  assert.equal(result?.status, 'running');
+  assert.equal(result?.resolvedPorts, null);
+});

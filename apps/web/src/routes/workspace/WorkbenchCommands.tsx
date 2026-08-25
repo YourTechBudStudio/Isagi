@@ -315,16 +315,6 @@ function CommandDetail({
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {command.status === 'running' &&
-            command.presentation === 'configured' &&
-            command.ports.map((port) => (
-              <span
-                key={port}
-                className="rounded-md border border-cyan/28 bg-cyan/10 px-1.5 py-px font-mono text-[10.5px] text-cyan"
-              >
-                :{port}
-              </span>
-            ))}
           {onRefreshCatalog && (
             <button
               type="button"

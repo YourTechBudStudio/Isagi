@@ -1,0 +1,1 @@
+ALTER TABLE `worktree_command_states` ADD `resolved_ports_json` text;

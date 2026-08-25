@@ -23,8 +23,8 @@ type CommandChipItem = CommandSummary & {
  * The label opens the Commands drawer; each command chip opens that command in
  * the drawer. Failed commands stay visible here too.
  *
- * Port chips are display-only for now — wiring a port to a browser surface is
- * parked until the runtime mechanism is known.
+ * Resolved endpoints are not presented here yet — this phase reset the port
+ * contract, and surfacing the composed URLs is the next phase's work.
  */
 export function StatusStrip() {
   const worktree = useActiveWorktree();
@@ -132,16 +132,6 @@ function CommandChip({ command, onOpen }: { command: CommandChipItem; onOpen: ()
           {workbenchCopy.commandRemovedMarker}
         </span>
       )}
-      {command.status === 'running' &&
-        command.presentation === 'configured' &&
-        command.ports.map((port) => (
-          <span
-            key={port}
-            className="rounded-md border border-cyan/28 bg-cyan/10 px-1.5 py-px font-mono text-[10.5px] text-cyan"
-          >
-            :{port}
-          </span>
-        ))}
     </button>
   );
 }

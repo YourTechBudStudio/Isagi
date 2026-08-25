@@ -39,7 +39,10 @@ commands:
     command: pnpm dev
     cwd: apps/web
     ports:
-      - 5173
+      - port: 5173
+        paths:
+          - label: app
+            path: /
 `,
     );
 
@@ -66,13 +69,22 @@ commands:
   - name: dev
     command: pnpm dev
     ports:
-      - 5173
+      - port: 5173
+        paths:
+          - label: app
+            path: /
 `,
     );
 
     const output = await runCommandService(fixture.rootPath, {
       states: [
-        commandState({ commandName: 'dev', status: 'running' }),
+        commandState({
+          commandName: 'dev',
+          status: 'running',
+          resolvedPorts: [{ envVar: null, port: 5173, paths: [{ label: 'app', path: '/' }] }],
+        }),
+        // No snapshot: a running command whose resolution is unknown reports
+        // the honest degraded `null`, not an empty list.
         commandState({ commandName: 'old dev', status: 'running' }),
         commandState({ commandName: 'old failed', status: 'failed' }),
         commandState({ commandName: 'old stopped', status: 'stopped' }),
@@ -82,9 +94,21 @@ commands:
     assert.deepEqual(output, {
       status: 'configured',
       worktreeId: 10,
-      commands: [{ name: 'dev', status: 'running', ports: [5173] }],
+      commands: [
+        {
+          name: 'dev',
+          status: 'running',
+          ports: [
+            {
+              port: 5173,
+              envVar: null,
+              urls: [{ label: 'app', path: '/', url: 'http://localhost:5173/' }],
+            },
+          ],
+        },
+      ],
       removedCommands: [
-        { name: 'old dev', status: 'running', ports: [] },
+        { name: 'old dev', status: 'running', ports: null },
         { name: 'old failed', status: 'failed', ports: [] },
       ],
     });
@@ -147,7 +171,7 @@ commands:
     assert.equal(output.status, 'config_error');
     if (output.status === 'config_error') {
       assert.deepEqual(output.managedCommands, [
-        { name: 'dev', status: 'running', ports: [] },
+        { name: 'dev', status: 'running', ports: null },
         { name: 'test', status: 'failed', ports: [] },
       ]);
     }
@@ -197,6 +221,113 @@ test('command service returns config diagnostics when the config path exists but
       assert.equal(output.diagnostic.path, join(fixture.rootPath, '.isagi', 'config.yaml'));
       assert.match(output.diagnostic.message, /EISDIR|illegal operation|directory/i);
       assert.deepEqual(output.managedCommands, []);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+/**
+ * The projection reads the durable snapshot, never fresh config.
+ *
+ * That is the honesty guarantee the old config-echo could not make: a running
+ * incarnation reports the ports its process actually received, so editing the
+ * config mid-run cannot retroactively rewrite what a live command claims, and a
+ * command deleted from config keeps reporting its real endpoints until it stops.
+ */
+test('a running command reports its snapshot, not the config it was launched from', async () => {
+  const fixture = createFixture();
+  try {
+    // The config now declares a *different* port than the one the running
+    // incarnation was given — a mid-run edit.
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - port: 4000
+        paths:
+          - label: edited
+            path: /edited
+`,
+    );
+
+    const output = await runCommandService(fixture.rootPath, {
+      states: [
+        commandState({
+          commandName: 'dev',
+          status: 'running',
+          resolvedPorts: [
+            { envVar: 'API_PORT', port: 5173, paths: [{ label: 'api', path: '/api' }] },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(output.status, 'configured');
+    if (output.status === 'configured') {
+      assert.deepEqual(output.commands[0]?.ports, [
+        {
+          port: 5173,
+          envVar: 'API_PORT',
+          urls: [{ label: 'api', path: '/api', url: 'http://localhost:5173/api' }],
+        },
+      ]);
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('resolved-port metadata is exposed only while a command is running', async () => {
+  const fixture = createFixture();
+  try {
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - port: 5173
+`,
+    );
+
+    // The snapshot survives the stop — it is the next launch's preference —
+    // but a stopped command has no live endpoints to report.
+    const output = await runCommandService(fixture.rootPath, {
+      states: [
+        commandState({
+          commandName: 'dev',
+          status: 'stopped',
+          resolvedPorts: [{ envVar: null, port: 5173, paths: [] }],
+        }),
+      ],
+    });
+
+    assert.equal(output.status, 'configured');
+    if (output.status === 'configured') {
+      assert.deepEqual(output.commands[0], { name: 'dev', status: 'stopped', ports: [] });
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a running command that declared no ports reports an empty list, not unknown', async () => {
+  const fixture = createFixture();
+  try {
+    writeConfig(fixture.rootPath, `\ncommands:\n  - name: dev\n    command: pnpm dev\n`);
+
+    const output = await runCommandService(fixture.rootPath, {
+      states: [commandState({ commandName: 'dev', status: 'running', resolvedPorts: [] })],
+    });
+
+    assert.equal(output.status, 'configured');
+    if (output.status === 'configured') {
+      assert.deepEqual(output.commands[0], { name: 'dev', status: 'running', ports: [] });
     }
   } finally {
     fixture.cleanup();

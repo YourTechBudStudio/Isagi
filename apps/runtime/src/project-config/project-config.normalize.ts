@@ -11,17 +11,23 @@ import {
   worktreeCommandSchema,
   worktreeHooksSchema,
   type CommandHook,
+  type CommandPortPathConfig,
   type CopyHook,
   type SymlinkHook,
   type WorktreeCommandCatalogConfig,
   type WorktreeCommandConfig,
   type WorktreeCommandInput,
   type WorktreeCommandLifecycleConfig,
+  type WorktreeCommandPortConfig,
   type WorktreeHooksConfig,
   type WorktreePostCreateHook,
 } from './project-config.schema.js';
 
 const commandFields = new Set(['name', 'command', 'cwd', 'ports', 'envFiles', 'env', 'lifecycle']);
+
+const portFields = new Set(['port', 'envVar', 'paths']);
+
+const portPathFields = new Set(['label', 'path']);
 
 const lifecycleEvents = new Set(['postCreate', 'activate', 'deactivate', 'preDelete']);
 
@@ -132,6 +138,7 @@ function normalizeCommandEntry(
   }
 
   assertKnownFields(input, commandFields, options.field);
+  assertRawPortKnownFields(input.ports, `${options.field}.ports`);
   assertRawLifecycleKnownFields(input.lifecycle, `${options.field}.lifecycle`);
 
   const decoded = decode(worktreeCommandSchema, input, options.field);
@@ -141,22 +148,121 @@ function normalizeCommandEntry(
   }
   options.seenNames.add(name);
 
+  const cwd =
+    decoded.cwd === undefined || decoded.cwd === null
+      ? null
+      : requiredSafeRelativePath(decoded.cwd, `${options.field}.cwd`, options.worktreeRootPath);
+  // Normalized once, then reused: the allocated-port collision rule is checked
+  // against the same record the command actually launches with.
+  const env = normalizeCommandEnv(decoded.env, `${options.field}.env`);
+  const envFiles = normalizeCommandEnvFiles(
+    decoded.envFiles,
+    `${options.field}.envFiles`,
+    options.worktreeRootPath,
+  );
+  const ports = normalizeCommandPorts(decoded.ports, env, `${options.field}.ports`);
+
   return {
     name,
     command: decoded.command,
-    cwd:
-      decoded.cwd === undefined || decoded.cwd === null
-        ? null
-        : requiredSafeRelativePath(decoded.cwd, `${options.field}.cwd`, options.worktreeRootPath),
-    env: normalizeCommandEnv(decoded.env, `${options.field}.env`),
-    envFiles: normalizeCommandEnvFiles(
-      decoded.envFiles,
-      `${options.field}.envFiles`,
-      options.worktreeRootPath,
-    ),
-    ports: decoded.ports ?? [],
+    cwd,
+    env,
+    envFiles,
+    ports,
     lifecycle: normalizeLifecycle(decoded.lifecycle, `${options.field}.lifecycle`),
   };
+}
+
+// Allow-lists run against the raw YAML before decode, so an unknown or
+// misshapen port entry fails with its own path rather than as a decode leaf.
+// A number, string, null, or array entry is rejected here — `assertKnownFields`
+// would find no keys on a number and let it through to a vaguer decode error.
+function assertRawPortKnownFields(value: unknown, field: string) {
+  if (value === undefined || value === null || !Array.isArray(value)) {
+    return;
+  }
+  value.forEach((entry, index) => {
+    const entryField = `${field}[${index}]`;
+    if (!isRecord(entry)) {
+      throw new Error(`${entryField} must be an object.`);
+    }
+    assertKnownFields(entry, portFields, entryField);
+    const paths = entry.paths;
+    if (paths === undefined || paths === null || !Array.isArray(paths)) {
+      return;
+    }
+    paths.forEach((path, pathIndex) => {
+      const pathField = `${entryField}.paths[${pathIndex}]`;
+      if (!isRecord(path)) {
+        throw new Error(`${pathField} must be an object.`);
+      }
+      assertKnownFields(path, portPathFields, pathField);
+    });
+  });
+}
+
+// Cross-entry rules the schema cannot express. Each is scoped to one command:
+// there is no cross-command or cross-worktree port bookkeeping.
+function normalizeCommandPorts(
+  input: WorktreeCommandInput['ports'],
+  env: Readonly<Record<string, string>>,
+  field: string,
+): readonly WorktreeCommandPortConfig[] {
+  if (input === undefined) {
+    return [];
+  }
+
+  const seenPorts = new Set<number>();
+  const seenEnvVars = new Set<string>();
+  // Labels become badges, so two identical labels anywhere on one command
+  // would be indistinguishable to the user regardless of which port they sit on.
+  const seenLabels = new Set<string>();
+
+  return input.map((entry, index) => {
+    const entryField = `${field}[${index}]`;
+    if ((entry.port === undefined) === (entry.envVar === undefined)) {
+      throw new Error(`${entryField} must declare exactly one of port or envVar.`);
+    }
+
+    const paths = (entry.paths ?? []).map((path, pathIndex) =>
+      normalizeCommandPortPath(path, seenLabels, `${entryField}.paths[${pathIndex}]`),
+    );
+
+    if (entry.port !== undefined) {
+      if (seenPorts.has(entry.port)) {
+        throw new Error(`${entryField}.port ${entry.port} is declared more than once.`);
+      }
+      seenPorts.add(entry.port);
+      return { kind: 'fixed', port: entry.port, paths };
+    }
+
+    const envVar = entry.envVar as string;
+    if (seenEnvVars.has(envVar)) {
+      throw new Error(`${entryField}.envVar ${envVar} is declared more than once.`);
+    }
+    // A name set in both places is contradictory intent: the allocated value
+    // would silently win. Rejecting is louder than resolving it by precedence.
+    if (Object.hasOwn(env, envVar)) {
+      throw new Error(`${entryField}.envVar collides with env.${envVar}; remove one.`);
+    }
+    seenEnvVars.add(envVar);
+    return { kind: 'allocated', envVar, paths };
+  });
+}
+
+function normalizeCommandPortPath(
+  path: CommandPortPathConfig,
+  seenLabels: Set<string>,
+  field: string,
+): CommandPortPathConfig {
+  if (path.label.trim() !== path.label) {
+    throw new Error(`${field}.label must not have leading or trailing whitespace.`);
+  }
+  if (seenLabels.has(path.label)) {
+    throw new Error(`${field}.label ${path.label} is declared more than once.`);
+  }
+  seenLabels.add(path.label);
+  return { label: path.label, path: path.path };
 }
 
 function assertRawLifecycleKnownFields(value: unknown, field: string) {

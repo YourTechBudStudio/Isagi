@@ -200,11 +200,19 @@ function patchCommandStatus(
   status: CommandStatus,
 ): WorktreeCommandsOutput | undefined {
   if (!data) return data;
+  // Resolved ports belong to an incarnation, and a status-only event cannot
+  // vouch for one. On a restart the intermediate stop is suppressed, so the
+  // cached entries here belong to the *dead* incarnation — carrying them
+  // forward would present a possibly-wrong port as current. Clearing on every
+  // transition leaves the refetch as the only route by which authoritative
+  // endpoint facts enter the cache.
+  //
+  // `[]` and not `null`: the patcher must never be able to write the
+  // authoritative degraded value, or an ordinary launch would flash the
+  // "unavailable for this run" notice during every refetch window.
   const patch = (commands: readonly CommandSummary[]): CommandSummary[] =>
     commands.map((command) =>
-      command.name === commandName
-        ? { ...command, status, ports: status === 'running' ? command.ports : [] }
-        : command,
+      command.name === commandName ? { ...command, status, ports: [] } : command,
     );
   if (data.status === 'configured') {
     return {

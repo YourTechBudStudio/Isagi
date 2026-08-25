@@ -64,6 +64,7 @@ export const workbenchCopy = {
     missing_cwd: 'The configured working directory does not exist.',
     env_invalid: 'The command environment could not be prepared.',
     pty_launch_failed: 'The command could not start a PTY process.',
+    port_allocation_failed: 'A port for this command could not be allocated.',
     runtime_stopped: 'The runtime stopped while this command was running.',
     process_control_failed: "Isagi couldn't stop or verify this command's process.",
   },

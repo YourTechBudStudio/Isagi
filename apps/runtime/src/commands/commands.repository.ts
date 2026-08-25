@@ -7,7 +7,7 @@ import {
   isNull,
   type InferSelectModel,
 } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Effect, Layer, Schema } from 'effect';
 
 import type { CommandRunDiagnosticReason, CommandRunStatus, CommandStatus } from '@isagi/contracts';
 
@@ -17,6 +17,7 @@ import {
   type RuntimeDrizzleDatabase,
 } from '../persistence/index.js';
 import { worktreeCommandRuns, worktreeCommandStates } from '../persistence/schema.js';
+import { resolvedPortsSnapshotSchema, type ResolvedPortEntry } from './commands.ports.js';
 
 type CommandStateRecord = InferSelectModel<typeof worktreeCommandStates>;
 type CommandRunRecord = InferSelectModel<typeof worktreeCommandRuns>;
@@ -27,6 +28,9 @@ export interface CommandStateRow {
   readonly commandName: string;
   readonly status: CommandStatus;
   readonly activePtyProcessId: number | null;
+  // The last successfully established resolution, or null when none has been
+  // recorded or the stored snapshot did not decode.
+  readonly resolvedPorts: readonly ResolvedPortEntry[] | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -83,6 +87,11 @@ export interface CommandRepositoryService {
     readonly commandName: string;
     readonly status: CommandStatus;
     readonly activePtyProcessId?: number | null | undefined;
+    // Omitting this keeps the stored snapshot; an array replaces it. That
+    // asymmetry is what makes the supersession rule hold by construction —
+    // every transition except the launch marker leaves the memory alone
+    // without naming the column at all. No caller writes null.
+    readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
   }) => Effect.Effect<CommandStateRow, DatabaseError>;
   readonly createRun: (input: {
     readonly worktreeId: number;
@@ -327,6 +336,8 @@ export const CommandRepositoryLive = Layer.effect(
                 commandName: input.commandName,
                 status: input.status,
                 activePtyProcessId: input.activePtyProcessId ?? null,
+                resolvedPortsJson:
+                  input.resolvedPorts === undefined ? null : JSON.stringify(input.resolvedPorts),
                 createdAt: now,
                 updatedAt: now,
               })
@@ -342,6 +353,13 @@ export const CommandRepositoryLive = Layer.effect(
                 input.activePtyProcessId === undefined
                   ? existing.activePtyProcessId
                   : input.activePtyProcessId,
+              // An empty array is a meaningful replacement — "this incarnation
+              // declared no ports" — so the branch is on `undefined`, not on
+              // emptiness.
+              resolvedPortsJson:
+                input.resolvedPorts === undefined
+                  ? existing.resolvedPortsJson
+                  : JSON.stringify(input.resolvedPorts),
               updatedAt: now,
             })
             .where(eq(worktreeCommandStates.id, existing.id))
@@ -708,9 +726,28 @@ function commandStateRow(row: CommandStateRecord): CommandStateRow {
     commandName: row.commandName,
     status: row.status,
     activePtyProcessId: row.activePtyProcessId,
+    resolvedPorts: decodeResolvedPorts(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+// Out-of-model stored data degrades to the modeled unknown value instead of
+// failing the read: `null` is exactly what the contract already means by
+// "unknown for this incarnation". The warning carries identity only — the
+// payload is command-derived and adds nothing a support reader needs.
+function decodeResolvedPorts(row: CommandStateRecord): readonly ResolvedPortEntry[] | null {
+  if (row.resolvedPortsJson === null) {
+    return null;
+  }
+  try {
+    return Schema.decodeUnknownSync(resolvedPortsSnapshotSchema)(JSON.parse(row.resolvedPortsJson));
+  } catch {
+    console.warn(
+      `[runtime] Command resolved-port snapshot could not be decoded worktree=${row.worktreeId} command=${row.commandName}`,
+    );
+    return null;
+  }
 }
 
 function commandRunRow(row: CommandRunRecord): CommandRunRow {

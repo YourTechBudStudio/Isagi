@@ -82,7 +82,9 @@ test('each configured command yields one worktree-commands row with a worktree-s
 test('a running row opens focused details without running anything', async () => {
   const { deps, calls } = recorder();
   const [entry] = configuredCommandEntries(
-    ctx({ configuredCommands: [summary('api', 'running', [8080])] }),
+    ctx({
+      configuredCommands: [summary('api', 'running', [{ port: 8080, envVar: null, urls: [] }])],
+    }),
     deps,
   );
 
@@ -90,7 +92,18 @@ test('a running row opens focused details without running anything', async () =>
 
   assert.deepEqual(calls, ['open:api']);
   assert.equal(entry?.tone, 'working');
-  assert.ok(entry?.sub?.includes(':8080'));
+  // No port token yet: the palette stopped echoing the summary's ports with the
+  // contract reset, and Phase 02 rebuilds the token from pathless resolved
+  // entries rather than from whatever the array happens to contain.
+  assert.equal(entry?.sub, paletteCopy.commands.sub.running([]));
+});
+
+test('the running subtitle still formats port tokens it is given', () => {
+  // The formatter survives the reset intact — `:<port>` remains the target
+  // presentation for a resolved pathless entry. Only its data source changed.
+  assert.equal(paletteCopy.commands.sub.running([]), 'open details');
+  assert.equal(paletteCopy.commands.sub.running([8080]), 'open details \u00b7 :8080');
+  assert.equal(paletteCopy.commands.sub.running([8080, 9229]), 'open details \u00b7 :8080 :9229');
 });
 
 test('startable rows run then open the drawer, for resolved running and failed launches', async () => {
@@ -200,7 +213,7 @@ test('no rows without an active worktree', () => {
 function summary(
   name: string,
   status: CommandStatus = 'idle',
-  ports: readonly number[] = [],
+  ports: CommandSummary['ports'] = [],
 ): CommandSummary {
   return { name, status, ports };
 }

@@ -36,6 +36,7 @@ import {
   type CommandFinalizeResult,
   type CommandStateRow,
 } from './commands.repository.js';
+import { buildCommandSummary } from './commands.summary.js';
 import {
   commandActionOutput,
   loadCommandTarget,
@@ -453,7 +454,7 @@ export const CommandServiceLive = Layer.scoped(
         );
         const state = yield* commandRepository.findState(input);
         const result = yield* stopResolvedCommand(input, state, options);
-        return commandActionOutput(target, result.status);
+        return commandActionOutput(target, result.status, state?.resolvedPorts ?? null);
       });
 
     // Stop a command by its durable state alone — no config lookup, no action
@@ -612,11 +613,14 @@ export const CommandServiceLive = Layer.scoped(
           return {
             status: 'configured',
             worktreeId,
-            commands: catalog.config.commands.map((command) => ({
-              name: command.name,
-              status: stateByName.get(command.name)?.status ?? 'idle',
-              ports: stateByName.get(command.name)?.status === 'running' ? [...command.ports] : [],
-            })),
+            commands: catalog.config.commands.map((command) => {
+              const state = stateByName.get(command.name);
+              return buildCommandSummary({
+                name: command.name,
+                status: state?.status ?? 'idle',
+                resolvedPorts: state?.resolvedPorts ?? null,
+              });
+            }),
             removedCommands: commandStatesNeedingAttention(
               states.filter((state) => !configuredNames.has(state.commandName)),
             ),
@@ -716,11 +720,13 @@ function commandStatesNeedingAttention(states: readonly CommandStateRow[]): Comm
       (state) =>
         state.status === 'running' || state.status === 'failed' || state.status === 'suspended',
     )
-    .map((state) => ({
-      name: state.commandName,
-      status: state.status,
-      ports: [],
-    }));
+    .map((state) =>
+      buildCommandSummary({
+        name: state.commandName,
+        status: state.status,
+        resolvedPorts: state.resolvedPorts,
+      }),
+    );
 }
 
 // Runtime-authored diagnostic detail, chosen by why the stop happened: a user

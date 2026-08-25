@@ -69,7 +69,19 @@ test('command change events patch status and invalidate command list and targete
   queryClient.setQueryData(worktreeCommandsQueryKey(10), {
     status: 'configured',
     worktreeId: 10,
-    commands: [{ name: 'old dev', status: 'running', ports: [5173] }],
+    commands: [
+      {
+        name: 'old dev',
+        status: 'running',
+        ports: [
+          {
+            port: 5173,
+            envVar: null,
+            urls: [{ label: 'app', path: '/', url: 'http://localhost:5173/' }],
+          },
+        ],
+      },
+    ],
     removedCommands: [],
   });
   queryClient.setQueryData(commandLogMetadataQueryKey(10, 'old dev'), { latestRun: null });
@@ -195,7 +207,7 @@ function agentSessionChangedEvent() {
   } satisfies RuntimeEvent;
 }
 
-function commandChangedEvent() {
+function commandChangedEvent(status: 'failed' | 'running' = 'failed') {
   return {
     id: 'evt_test_2',
     type: 'command_changed',
@@ -203,7 +215,7 @@ function commandChangedEvent() {
     payload: {
       worktreeId: 10,
       commandName: 'old dev',
-      status: 'failed',
+      status,
     },
   } satisfies RuntimeEvent;
 }
@@ -235,3 +247,44 @@ function surfaceDeletedEvent() {
     },
   } satisfies RuntimeEvent;
 }
+
+/**
+ * A status-only event can never authenticate resolved endpoint facts.
+ *
+ * The restart flow is the case that makes this load-bearing: the intermediate
+ * stop is suppressed, so a `running → running` patch arrives while the cache
+ * still holds the *dead* incarnation's ports. Keeping them would show a URL that
+ * belongs to a process that no longer exists.
+ */
+test('a patch into running discards the previous incarnation resolved ports', () => {
+  queryClient.clear();
+  queryClient.setQueryData(worktreeCommandsQueryKey(10), {
+    status: 'configured',
+    worktreeId: 10,
+    commands: [
+      {
+        name: 'old dev',
+        status: 'running',
+        ports: [
+          {
+            port: 5173,
+            envVar: 'API_PORT',
+            urls: [{ label: 'app', path: '/', url: 'http://localhost:5173/' }],
+          },
+        ],
+      },
+    ],
+    removedCommands: [],
+  });
+
+  handleRuntimeEvent(commandChangedEvent('running'));
+
+  const patched = queryClient.getQueryData(worktreeCommandsQueryKey(10)) as {
+    readonly commands: readonly { readonly status: string; readonly ports: unknown }[];
+  };
+  // Empty, never null: the patcher must not be able to write the authoritative
+  // degraded value, or every ordinary launch would flash the "unavailable for
+  // this run" notice until the refetch lands.
+  assert.deepEqual(patched.commands, [{ name: 'old dev', status: 'running', ports: [] }]);
+  queryClient.clear();
+});

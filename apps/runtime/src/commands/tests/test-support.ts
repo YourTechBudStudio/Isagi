@@ -29,6 +29,7 @@ import {
 import type { PtyProcessRow } from '../../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
 import { registerCommandsApi } from '../api.js';
+import type { ResolvedPortEntry } from '../commands.ports.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
@@ -635,12 +636,17 @@ export function commandState(input: {
   // boot convergence and the deletion audit both read the pointer as one half of
   // the command↔incarnation link union.
   readonly activePtyProcessId?: number | null | undefined;
+  // The remembered resolution. Defaults to null — no launch in Phase 01 writes
+  // a snapshot, so a test asks for one only when it is pinning decode or
+  // projection behavior directly.
+  readonly resolvedPorts?: readonly ResolvedPortEntry[] | null | undefined;
 }): CommandStateRow {
   return {
     id: input.id ?? 1,
     worktreeId: 10,
     commandName: input.commandName,
     status: input.status,
+    resolvedPorts: input.resolvedPorts ?? null,
     activePtyProcessId:
       input.activePtyProcessId !== undefined
         ? input.activePtyProcessId

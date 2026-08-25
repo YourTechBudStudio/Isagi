@@ -89,7 +89,8 @@ start or stop them at four moments in a worktree's life.
 commands:
   - name: dev
     command: pnpm dev
-    ports: [5173]
+    ports:
+      - port: 5173
     lifecycle:
       activate:
         start: true
@@ -103,7 +104,8 @@ commands:
     envFiles: [".env.local"]
     env:
       POSTGRES_PORT: "5432"
-    ports: [5432]
+    ports:
+      - port: 5432
     lifecycle:
       postCreate:
         start: true
@@ -131,8 +133,7 @@ After a runtime restart, Isagi does not automatically start a command with a pri
 
 `db` starts once at creation and keeps running across worktree switches because `deactivate.stop: false` opts out of suspension.
 
-`ports` is metadata. It tells Isagi which ports the command is expected to bind so it can show them;
-it does not allocate, reserve, or remap anything.
+`ports` uses structured entries. Use `port` for a fixed port; numeric entries such as `ports: [5173]` are rejected. The schema below defines the complete entry shape.
 
 Two rules the parser enforces strictly, unlike the rest of this file:
 

@@ -134,7 +134,7 @@ function commandEntry(
       return {
         ...base,
         icon: Activity,
-        sub: paletteCopy.commands.sub.running(command.ports),
+        sub: paletteCopy.commands.sub.running([]),
         // A state tint, not decoration: the same `working` signal the rail and
         // status strip use for a live process.
         tone: 'working',

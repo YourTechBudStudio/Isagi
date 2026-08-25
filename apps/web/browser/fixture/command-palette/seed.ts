@@ -81,10 +81,27 @@ export const FIXTURE_SURFACE_DETAILS: Readonly<Record<number, SurfaceDetail>> = 
  * with a port, an exited row, and a `failed` row that is still ordinary and
  * still startable — plus a fourth so the three-per-group cap is observable.
  */
+/**
+ * Resolved-port fixtures speak the replacement contract: source facts plus the
+ * complete URL the runtime composed. A pathless entry carries an empty `urls`
+ * list — it is a real resolved port with nothing to open.
+ */
+function fixturePort(port: number, urls: readonly (readonly [string, string])[] = []) {
+  return {
+    port,
+    envVar: null,
+    urls: urls.map(([label, path]) => ({ label, path, url: `http://localhost:${port}${path}` })),
+  };
+}
+
 export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>> = {
   [FIXTURE_ORIGIN.worktreeId]: [
     { name: 'dev', status: 'idle', ports: [] },
-    { name: 'api', status: 'running', ports: [8080] },
+    {
+      name: 'api',
+      status: 'running',
+      ports: [fixturePort(8080, [['api', '/']]), fixturePort(9229)],
+    },
     { name: 'typecheck', status: 'exited', ports: [] },
     { name: 'migrate', status: 'failed', ports: [] },
   ],
@@ -104,7 +121,7 @@ export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>
  */
 export const FIXTURE_SUSPENDED_COMMANDS: readonly CommandSummary[] = [
   { name: 'dev', status: 'suspended', ports: [] },
-  { name: 'api', status: 'running', ports: [5173] },
+  { name: 'api', status: 'running', ports: [fixturePort(5173, [['app', '/']])] },
   { name: 'typecheck', status: 'failed', ports: [] },
 ];
 
@@ -116,7 +133,7 @@ export const FIXTURE_REMOVED_SUSPENDED: readonly CommandSummary[] = [
 /** Live runtime state seen through a catalog that could not be parsed at all. */
 export const FIXTURE_MANAGED_SUSPENDED: readonly CommandSummary[] = [
   { name: 'dev', status: 'suspended', ports: [] },
-  { name: 'api', status: 'running', ports: [3000] },
+  { name: 'api', status: 'running', ports: [fixturePort(3000)] },
 ];
 
 /**

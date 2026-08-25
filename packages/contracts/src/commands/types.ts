@@ -37,10 +37,32 @@ export const commandStatusSchema = Schema.Literal(
 // intent and is never a run outcome.
 export const commandRunStatusSchema = Schema.Literal('running', 'exited', 'stopped', 'failed');
 
+// One labelled HTTP URL served by a resolved command port. `path` is the
+// host-independent path the config declared; `url` is the complete URL the
+// runtime composed from it, so no client ever reassembles the formula.
+export const commandPortUrlSchema = Schema.Struct({
+  label: Schema.String.pipe(Schema.minLength(1)),
+  path: Schema.String.pipe(Schema.minLength(1)),
+  url: Schema.String.pipe(Schema.minLength(1)),
+});
+
+// One port a running command incarnation actually received. `envVar` names the
+// variable an allocated port was injected under, and is null for a fixed port.
+// A port with no declared paths carries an empty `urls` list.
+export const commandPortSchema = Schema.Struct({
+  port: Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535)),
+  envVar: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
+  urls: Schema.Array(commandPortUrlSchema),
+});
+
 export const commandSummarySchema = Schema.Struct({
   name: Schema.String,
   status: commandStatusSchema,
-  ports: Schema.Array(Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535))),
+  // Resolved-port metadata, exposed only while the command is running. While
+  // running, an array is this incarnation's authoritative resolution — `[]`
+  // genuinely means it declared no ports — and `null` is honest "unknown for
+  // this incarnation" degradation. While not running it is always `[]`.
+  ports: Schema.NullOr(Schema.Array(commandPortSchema)),
 });
 
 export const commandActionOutputSchema = Schema.Struct({
@@ -53,6 +75,7 @@ export const commandRunDiagnosticReasonSchema = Schema.Literal(
   'missing_cwd',
   'env_invalid',
   'pty_launch_failed',
+  'port_allocation_failed',
   'runtime_stopped',
   'process_control_failed',
 );
@@ -145,6 +168,8 @@ export type WorktreeCommandActionInput = Schema.Schema.Type<
 >;
 export type CommandStatus = Schema.Schema.Type<typeof commandStatusSchema>;
 export type CommandRunStatus = Schema.Schema.Type<typeof commandRunStatusSchema>;
+export type CommandPortUrl = Schema.Schema.Type<typeof commandPortUrlSchema>;
+export type CommandPort = Schema.Schema.Type<typeof commandPortSchema>;
 export type CommandSummary = Schema.Schema.Type<typeof commandSummarySchema>;
 export type CommandActionOutput = Schema.Schema.Type<typeof commandActionOutputSchema>;
 export type CommandRunDiagnosticReason = Schema.Schema.Type<

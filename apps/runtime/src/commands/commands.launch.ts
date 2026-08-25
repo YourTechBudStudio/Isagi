@@ -84,7 +84,12 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
       const target = yield* resolveConfiguredCommand(workspaceRepository, input);
       const current = yield* commandRepository.findState(input);
       if (current?.status === 'running') {
-        return actionOutput(target.command, current.status, target.worktree.id);
+        return actionOutput(
+          target.command,
+          current.status,
+          target.worktree.id,
+          current.resolvedPorts,
+        );
       }
 
       const worktreeId = target.worktree.id;
@@ -257,7 +262,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             ).pipe(Effect.either);
             if (Either.isLeft(acquired)) {
               yield* converge(launchFailure(describeOperationalCause(acquired.left)));
-              return actionOutput(target.command, 'failed', worktreeId);
+              return actionOutput(target.command, 'failed', worktreeId, null);
             }
             const acquiredAllocation = acquired.right;
             allocation = acquiredAllocation;
@@ -276,7 +281,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               // Only when the convergence write also fails does the original
               // fault propagate, leaving the residue boot resolves.
               if (Either.isLeft(converged)) return yield* Effect.fail(link.left);
-              return actionOutput(target.command, 'failed', worktreeId);
+              return actionOutput(target.command, 'failed', worktreeId, null);
             }
             if (!link.right) {
               // The run was created moments ago inside this held lock, so it
@@ -310,7 +315,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             if (terminal) {
               const outcome = terminalCommandOutcomeForPtyRow(terminal, 'launch');
               yield* converge(outcome);
-              return actionOutput(target.command, outcome.runStatus, worktreeId);
+              return actionOutput(target.command, outcome.runStatus, worktreeId, null);
             }
 
             // `running`, or still `starting` because a post-launch persistence
@@ -323,7 +328,9 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               activePtyProcessId: acquiredAllocation.ptyProcessId,
             });
             yield* publishCommandChanged(worktreeId, commandName, 'running');
-            return actionOutput(target.command, 'running', worktreeId);
+            // Phase 04 replaces this with the resolution this launch established.
+            // Until then a launch has resolved nothing, and `null` says so.
+            return actionOutput(target.command, 'running', worktreeId, null);
           }),
         );
       }).pipe(Effect.onInterrupt(() => interruptionFinalizer));
@@ -354,7 +361,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         activePtyProcessId: null,
       });
       yield* publishCommandChanged(target.worktree.id, target.command.name, 'failed');
-      return actionOutput(target.command, 'failed', target.worktree.id);
+      return actionOutput(target.command, 'failed', target.worktree.id, null);
     });
 
   return { runCommand } as const;
