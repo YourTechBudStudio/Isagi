@@ -139,10 +139,48 @@ function recognizeError(value: unknown): RecognizedError | null {
   return null;
 }
 
+// System-call error codes are operating-system enum constants, not payloads,
+// which puts them in the same class as the backend enums and database operation
+// names this module already renders. Carrying one is the difference between
+// "System error EADDRINUSE" and a bare "Error" that tells a support reader
+// nothing about whether a port was taken, a limit was hit, or a permission was
+// refused.
+//
+// Membership is exact, never a pattern. A check like /^E[A-Z]+$/ would happily
+// admit whatever an unvouched value put in its `code` field, which is precisely
+// the leak `knownForeignErrorNames` above exists to prevent. Grow this list only
+// when an observed failure justifies an entry.
+const knownSystemErrorCodes: ReadonlySet<string> = new Set([
+  'EACCES',
+  'EADDRINUSE',
+  'EADDRNOTAVAIL',
+  'EINVAL',
+  'EMFILE',
+  'ENFILE',
+  'ENOTSUP',
+  'EPERM',
+]);
+
 function foreignErrorLabel(value: unknown) {
   if (!(value instanceof Error)) return 'UnknownError';
+  const systemCode = recognizedSystemErrorCode(value);
+  if (systemCode) return `System error ${systemCode}`;
   const name: unknown = Object.getPrototypeOf(value)?.constructor?.name;
   return typeof name === 'string' && knownForeignErrorNames.has(name) ? name : 'Error';
+}
+
+// Reads `code` and nothing else — not `message`, `syscall`, `address`, `path`,
+// or `stack`, each of which can carry a value this codebase did not author.
+//
+// The own *data* descriptor is the only thing consulted. A plain property read
+// would invoke an accessor, which is foreign code running inside the renderer
+// whose whole job is to be trustworthy; and an inherited `code` is not something
+// this value itself declared.
+function recognizedSystemErrorCode(value: Error): string | null {
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'code');
+  if (!descriptor || !('value' in descriptor)) return null;
+  const code: unknown = descriptor.value;
+  return typeof code === 'string' && knownSystemErrorCodes.has(code) ? code : null;
 }
 
 function coordinates(values: Record<string, string | number | undefined>) {

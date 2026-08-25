@@ -204,3 +204,68 @@ test('the cause chain stops at the first foreign link', () => {
   assert.equal(rendered, 'PTY kill error (ptyProcess=801): Error');
   assert.ok(!rendered.includes(SENTINEL));
 });
+
+test('a system error code is carried only from the exact allowlist', () => {
+  // The support value this exists for: "System error EADDRINUSE" tells a reader
+  // a port was taken; a bare "Error" tells them nothing.
+  const inUse = new Error('listen EADDRINUSE: address already in use 127.0.0.1:5173');
+  (inUse as { code?: unknown }).code = 'EADDRINUSE';
+  const rendered = describeOperationalCause(inUse);
+  assert.equal(rendered, 'System error EADDRINUSE');
+  // The message carries an address and a port. Neither may appear.
+  assert.ok(!rendered.includes('5173'));
+  assert.ok(!rendered.includes('127.0.0.1'));
+
+  // An unlisted code is not a code as far as this module is concerned, so the
+  // value falls back to its class label. Membership is exact, never a pattern:
+  // a pattern over `E[A-Z]+` would admit whatever an unvouched value chose.
+  const sentinelCoded = new Error('boom');
+  (sentinelCoded as { code?: unknown }).code = `E${SENTINEL}`;
+  assert.equal(describeOperationalCause(sentinelCoded), 'Error');
+  assert.ok(!describeOperationalCause(sentinelCoded).includes(SENTINEL));
+
+  // A non-string code is ignored rather than stringified.
+  const numericCoded = new Error('boom');
+  (numericCoded as { code?: unknown }).code = 13;
+  assert.equal(describeOperationalCause(numericCoded), 'Error');
+});
+
+test('a system error code is read only from an own data property of a real Error', () => {
+  // An arbitrary object cannot name itself, code or not — the `instanceof`
+  // guard is what stops a plain bag of fields from being treated as an error.
+  assert.equal(describeOperationalCause({ code: 'EADDRINUSE' }), 'UnknownError');
+
+  // An accessor is foreign code, and this renderer must never run foreign code.
+  // A getter that throws would take down the diagnostic path it was called on;
+  // one that returns a value would smuggle it past the allowlist's intent.
+  const accessorBacked = new Error('boom');
+  let invoked = false;
+  Object.defineProperty(accessorBacked, 'code', {
+    get() {
+      invoked = true;
+      throw new Error(SENTINEL);
+    },
+    configurable: true,
+  });
+  assert.equal(describeOperationalCause(accessorBacked), 'Error');
+  assert.equal(invoked, false, 'the renderer must not invoke an accessor on a foreign value');
+
+  // An inherited `code` is not something this value declared about itself.
+  class CodedBase extends Error {}
+  Object.defineProperty(CodedBase.prototype, 'code', {
+    value: 'EADDRINUSE',
+    configurable: true,
+  });
+  assert.equal(describeOperationalCause(new CodedBase('boom')), 'Error');
+});
+
+test('a system error code renders inside a recognized cause chain', () => {
+  // The shape the port probe actually produces once Phase 04 persists it:
+  // an authored prefix, then the OS constant, and nothing else.
+  const bindFailure = new Error('listen EACCES');
+  (bindFailure as { code?: unknown }).code = 'EACCES';
+  assert.equal(
+    describeOperationalCause(new PtyKillError({ cause: bindFailure, ptyProcessId: 801 })),
+    'PTY kill error (ptyProcess=801): System error EACCES',
+  );
+});

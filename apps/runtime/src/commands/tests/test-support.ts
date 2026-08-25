@@ -29,7 +29,11 @@ import {
 import type { PtyProcessRow } from '../../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
 import { registerCommandsApi } from '../api.js';
-import type { ResolvedPortEntry } from '../commands.ports.js';
+import {
+  CommandPortAllocationError,
+  type CommandPortProbeService,
+  type ResolvedPortEntry,
+} from '../commands.ports.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
@@ -1091,4 +1095,68 @@ function fakeCommandPtyLinks(
     }
   }
   return [...seen.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Port probe test support
+// ---------------------------------------------------------------------------
+
+export interface CommandPortProbeCalls {
+  // Ports offered to `probeInactive`, in order. A resolver test proves a
+  // fixed-only command never touched the probe by asserting this stayed empty.
+  readonly probed: number[];
+  // Counted rather than recorded: an OS assignment carries no input, so the
+  // only fact worth pinning is how many times policy asked.
+  readonly assignments: () => number;
+}
+
+/**
+ * A `CommandPortProbeService` that answers from the test's script and records
+ * what policy asked of it.
+ *
+ * Defaults are the boring case: nothing is reusable, and every fresh assignment
+ * hands back a distinct increasing port. A test overrides only the axis it is
+ * about.
+ */
+export function commandPortProbe(
+  overrides: {
+    // Keyed by port so a test can say "51824 is inactive, everything else is
+    // busy" without writing a predicate.
+    readonly inactive?: readonly number[] | undefined;
+    // Consumed in order; running past the end is a test authoring error rather
+    // than a silent fallback to the default sequence.
+    readonly assign?: readonly number[] | undefined;
+    readonly probeFault?: ((port: number) => boolean) | undefined;
+    readonly assignFailure?: string | undefined;
+  } = {},
+): { readonly service: CommandPortProbeService; readonly calls: CommandPortProbeCalls } {
+  const probed: number[] = [];
+  let assignments = 0;
+  const inactive = new Set(overrides.inactive ?? []);
+  const assign = [...(overrides.assign ?? [])];
+
+  const service: CommandPortProbeService = {
+    probeInactive: (port) =>
+      Effect.sync(() => {
+        probed.push(port);
+        // The live adapter folds its own faults to `false`; a stub that models
+        // a fault therefore models it as `false`, not as a raised error.
+        if (overrides.probeFault?.(port)) return false;
+        return inactive.has(port);
+      }),
+    obtainEphemeralPort: Effect.suspend(() => {
+      assignments += 1;
+      if (overrides.assignFailure !== undefined) {
+        return Effect.fail(new CommandPortAllocationError({ detail: overrides.assignFailure }));
+      }
+      if (overrides.assign === undefined) return Effect.succeed(40_000 + assignments);
+      const next = assign.shift();
+      if (next === undefined) {
+        throw new Error('commandPortProbe: the scripted assignment sequence was exhausted.');
+      }
+      return Effect.succeed(next);
+    }),
+  };
+
+  return { service, calls: { probed, assignments: () => assignments } };
 }
