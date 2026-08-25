@@ -333,3 +333,73 @@ test('a running command that declared no ports reports an empty list, not unknow
     fixture.cleanup();
   }
 });
+
+test('a running command keeps its resolved ports after config removes it', async () => {
+  const fixture = createFixture();
+  try {
+    // The config no longer names `dev` at all.
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: other
+    command: pnpm other
+`,
+    );
+
+    const output = await runCommandService(fixture.rootPath, {
+      states: [
+        commandState({
+          commandName: 'dev',
+          status: 'running',
+          resolvedPorts: [
+            { envVar: 'API_PORT', port: 51824, paths: [{ label: 'api', path: '/v1' }] },
+          ],
+        }),
+      ],
+    });
+
+    // The process is still running on 51824 whatever the file says, and the
+    // snapshot is the only thing that could still know that. A config echo could
+    // not have reported anything here at all.
+    assert.deepEqual(output.status === 'configured' ? output.removedCommands : null, [
+      {
+        name: 'dev',
+        status: 'running',
+        ports: [
+          {
+            port: 51824,
+            envVar: 'API_PORT',
+            urls: [{ label: 'api', path: '/v1', url: 'http://localhost:51824/v1' }],
+          },
+        ],
+      },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a managed running command reports its resolved ports when config cannot be parsed', async () => {
+  const fixture = createFixture();
+  try {
+    writeConfig(fixture.rootPath, 'commands: [');
+
+    const output = await runCommandService(fixture.rootPath, {
+      states: [
+        commandState({
+          commandName: 'dev',
+          status: 'running',
+          resolvedPorts: [{ envVar: 'API_PORT', port: 51824, paths: [] }],
+        }),
+      ],
+    });
+
+    // Same argument, harder case: there is no config to echo even in principle.
+    assert.deepEqual(output.status === 'config_error' ? output.managedCommands : null, [
+      { name: 'dev', status: 'running', ports: [{ port: 51824, envVar: 'API_PORT', urls: [] }] },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});

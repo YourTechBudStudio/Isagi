@@ -31,6 +31,7 @@ import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../work
 import { registerCommandsApi } from '../api.js';
 import {
   CommandPortAllocationError,
+  CommandPortProbe,
   type CommandPortProbeService,
   type ResolvedPortEntry,
 } from '../commands.ports.js';
@@ -276,8 +277,20 @@ export interface CommandRepositoryOptions {
         readonly commandName: string;
         readonly status: CommandStateRow['status'];
         readonly activePtyProcessId: number | null;
+        // The snapshot the *call* asked to write, not the row's resulting value.
+        // Present only when the caller named `resolvedPorts`, so a test can tell
+        // the marker (the single writer) apart from every transition that
+        // preserves the column by omission. Reading the materialized row instead
+        // would make every later transition look like a second writer.
+        readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
       }) => void)
     | undefined;
+  // The loopback probe the command service runs endpoint resolution on.
+  // Defaults to a stub that dies on contact, so every launch test whose command
+  // declares no allocated ports proves — globally, without its own assertion —
+  // that the launch performed no socket IO. A test that wants allocation builds
+  // its own `commandPortProbe(...)` and keeps the `calls` recorder.
+  readonly portProbe?: CommandPortProbeService | undefined;
 }
 
 export async function runCommandService(rootPath: string, options: CommandRepositoryOptions = {}) {
@@ -314,6 +327,9 @@ export async function runCommandServiceEffect<A>(
         ),
       ),
       Effect.provide(Layer.succeed(PtyService, ptyService(options.pty))),
+      Effect.provide(
+        Layer.succeed(CommandPortProbe, options.portProbe ?? untouchableCommandPortProbe()),
+      ),
       Effect.provide(Layer.succeed(DataDirectory, makeTestDataDirectory(rootPath))),
       Effect.provide(options.eventBus ?? RuntimeEventBusLive),
       Effect.provide(InternalRuntimeEventBusLive),
@@ -386,6 +402,56 @@ export function commandRepository(
       return Effect.succeed({ run, runCompleted, stateTransitioned, state });
     });
 
+  // Mirrors the real repository's shape exactly: one private writer under two
+  // semantic mutations, so the fake cannot teach a rule the production code does
+  // not have. `resolvedPorts` omitted keeps whatever the row holds; any array —
+  // `[]` included — replaces it.
+  const writeState = (input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly status: CommandStateRow['status'];
+    readonly activePtyProcessId?: number | null | undefined;
+    readonly resolvedPorts: readonly ResolvedPortEntry[] | undefined;
+  }) =>
+    Effect.suspend(() => {
+      const fault = options.transitionFault?.({
+        status: input.status,
+        activePtyProcessId: input.activePtyProcessId ?? null,
+      });
+      if (fault) return Effect.fail(fault);
+      return Effect.sync(() => {
+        options.onTransition?.({
+          commandName: input.commandName,
+          status: input.status,
+          activePtyProcessId: input.activePtyProcessId ?? null,
+          ...(input.resolvedPorts === undefined ? {} : { resolvedPorts: input.resolvedPorts }),
+        });
+        const existing = states.find(
+          (state) =>
+            state.worktreeId === input.worktreeId && state.commandName === input.commandName,
+        );
+        const next = {
+          ...(existing ??
+            commandState({
+              commandName: input.commandName,
+              status: input.status,
+            })),
+          status: input.status,
+          activePtyProcessId: input.activePtyProcessId ?? null,
+          resolvedPorts:
+            input.resolvedPorts === undefined
+              ? (existing?.resolvedPorts ?? null)
+              : input.resolvedPorts,
+        };
+        if (existing) {
+          states.splice(states.indexOf(existing), 1, next);
+        } else {
+          states.push(next);
+        }
+        return next;
+      });
+    });
+
   return {
     listStatesForWorktree: (worktreeId) =>
       Effect.sync(() => {
@@ -421,39 +487,14 @@ export function commandRepository(
       runs.filter((run) => run.status === 'running' && run.ptyProcessId === null),
     ),
     ensureState: () => Effect.die('ensureState is not used'),
-    transitionState: (input) =>
-      Effect.suspend(() => {
-        const fault = options.transitionFault?.({
-          status: input.status,
-          activePtyProcessId: input.activePtyProcessId ?? null,
-        });
-        if (fault) return Effect.fail(fault);
-        return Effect.sync(() => {
-          options.onTransition?.({
-            commandName: input.commandName,
-            status: input.status,
-            activePtyProcessId: input.activePtyProcessId ?? null,
-          });
-          const existing = states.find(
-            (state) =>
-              state.worktreeId === input.worktreeId && state.commandName === input.commandName,
-          );
-          const next = {
-            ...(existing ??
-              commandState({
-                commandName: input.commandName,
-                status: input.status,
-              })),
-            status: input.status,
-            activePtyProcessId: input.activePtyProcessId ?? null,
-          };
-          if (existing) {
-            states.splice(states.indexOf(existing), 1, next);
-          } else {
-            states.push(next);
-          }
-          return next;
-        });
+    transitionState: (input) => writeState({ ...input, resolvedPorts: undefined }),
+    markLaunchInProgress: (input) =>
+      writeState({
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+        status: 'running',
+        activePtyProcessId: null,
+        resolvedPorts: input.resolvedPorts,
       }),
     createRun: (input) =>
       Effect.sync(() => {
@@ -640,9 +681,8 @@ export function commandState(input: {
   // boot convergence and the deletion audit both read the pointer as one half of
   // the command↔incarnation link union.
   readonly activePtyProcessId?: number | null | undefined;
-  // The remembered resolution. Defaults to null — no launch in Phase 01 writes
-  // a snapshot, so a test asks for one only when it is pinning decode or
-  // projection behavior directly.
+  // The remembered resolution a launch may reuse. Defaults to null, which is
+  // what a command that has never successfully launched carries.
   readonly resolvedPorts?: readonly ResolvedPortEntry[] | null | undefined;
 }): CommandStateRow {
   return {
@@ -871,6 +911,8 @@ export interface CommandScenarioRecorder {
     readonly commandName: string;
     readonly status: CommandStateRow['status'];
     readonly activePtyProcessId: number | null;
+    // Present only when the transition call named it — see `onTransition`.
+    readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
   }>;
   readonly published: Array<{ readonly commandName: string; readonly status: string }>;
   readonly logs: string[];
@@ -1159,4 +1201,32 @@ export function commandPortProbe(
   };
 
   return { service, calls: { probed, assignments: () => assignments } };
+}
+
+/**
+ * The service-harness default: a probe that cannot be used, only caught using.
+ *
+ * `commandPortProbe` is permissive because a resolver test is *about* the
+ * probe's answers. A launch test is not: almost every one of them drives a
+ * command that declares no ports, and for those the correct observation is that
+ * the launch never reached a socket at all. Dying makes that a property of the
+ * whole suite instead of an assertion each test has to remember to write.
+ *
+ * The messages are method-specific so an accidental call says which half of the
+ * policy ran — a remembered-port probe, or a fresh assignment.
+ */
+function untouchableCommandPortProbe(): CommandPortProbeService {
+  return {
+    probeInactive: (port) =>
+      Effect.die(
+        new Error(
+          `The port probe was asked whether ${port} is inactive, but this test provided no \`portProbe\`. A launch that resolves allocated ports must supply one.`,
+        ),
+      ),
+    obtainEphemeralPort: Effect.die(
+      new Error(
+        'The port probe was asked for a fresh ephemeral port, but this test provided no `portProbe`. A launch that resolves allocated ports must supply one.',
+      ),
+    ),
+  };
 }

@@ -8,6 +8,7 @@ import { decodeBackendRef } from '../../pty-processes/service/backend-ref.js';
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
 import { describeOperationalCause } from '../commands.diagnostics.js';
 import { CommandError } from '../commands.errors.js';
+import { CommandPortAllocationError } from '../commands.ports.js';
 import {
   commandRun,
   commandState,
@@ -268,4 +269,55 @@ test('a system error code renders inside a recognized cause chain', () => {
     describeOperationalCause(new PtyKillError({ cause: bindFailure, ptyProcessId: 801 })),
     'PTY kill error (ptyProcess=801): System error EACCES',
   );
+});
+
+test('an allocation failure carries only the endpoint name and a rendered cause', async () => {
+  const fixture = createFixture();
+  // A user-authored environment-variable name plus an OS error whose message
+  // would carry the loopback address and port if anything echoed it.
+  const nodeError = Object.assign(
+    new Error(`listen EADDRINUSE: address already in use 127.0.0.1:${SENTINEL}`),
+    {
+      code: 'EADDRINUSE',
+    },
+  );
+  writeConfig(
+    fixture.rootPath,
+    `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - envVar: API_PORT
+`,
+  );
+  try {
+    const scenario = await runCommandScenario(
+      fixture.rootPath,
+      ({ service, recorder }) =>
+        Effect.sync(() => recorder.reset()).pipe(
+          Effect.zipRight(service.run({ worktreeId: 10, commandName: 'dev' }).pipe(Effect.exit)),
+        ),
+      {
+        portProbe: {
+          probeInactive: () => Effect.succeed(false),
+          obtainEphemeralPort: Effect.fail(
+            new CommandPortAllocationError({ detail: describeOperationalCause(nodeError) }),
+          ),
+        },
+      },
+    );
+
+    const detail = scenario.recorder.runs.at(-1)?.diagnosticDetail ?? '';
+    // The envVar is config-authored and the code comes from the fixed allowlist;
+    // between them they say which endpoint failed and why, which is all support
+    // needs.
+    assert.equal(detail, 'Could not allocate a port for API_PORT: System error EADDRINUSE');
+    // The Node message is foreign text. It never reaches the durable diagnostic
+    // or the logs, even though the renderer clearly had it in hand.
+    assert.ok(!detail.includes(SENTINEL));
+    assert.ok(!scenario.recorder.logs.join('\n').includes(SENTINEL));
+  } finally {
+    fixture.cleanup();
+  }
 });

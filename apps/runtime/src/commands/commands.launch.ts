@@ -23,6 +23,11 @@ import {
   type TerminalCommandOutcome,
   type TerminalRunStatus,
 } from './commands.outcomes.js';
+import {
+  portEnvInjections,
+  resolveCommandPorts,
+  type CommandPortProbeService,
+} from './commands.ports.js';
 import type { CommandFinalizeResult, CommandRepositoryService } from './commands.repository.js';
 import { actionOutput, resolveConfiguredCommand, type CommandTarget } from './commands.targets.js';
 import { parseDotenv } from './dotenv.js';
@@ -36,6 +41,10 @@ export interface CommandLauncherDependencies {
   readonly commandRepository: CommandRepositoryService;
   readonly ptyRepository: PtyRepositoryService;
   readonly pty: PtyServiceShape;
+  // The loopback probe the endpoint resolution stage runs on. Injected rather
+  // than imported so lifecycle tests can prove a launch either did or did not
+  // perform socket IO.
+  readonly portProbe: CommandPortProbeService;
   readonly publishCommandChanged: (
     worktreeId: number,
     commandName: string,
@@ -66,6 +75,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
     commandRepository,
     ptyRepository,
     pty,
+    portProbe,
     publishCommandChanged,
     finalizeCommandRunByRun,
   } = deps;
@@ -100,12 +110,48 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         return yield* failedRun(target, 'missing_cwd', target.command.cwd ?? '.');
       }
 
+      // Endpoint resolution, before the marker and before any incarnation
+      // exists. It deliberately precedes environment composition so the stage
+      // order matches the one the architecture fixed. An expected failure here
+      // is an ordinary failed launch: `failedRun` records a completed failed run
+      // carrying the diagnostic, exactly as `missing_cwd` and `env_invalid` do.
+      // `Effect.either` narrows to the resolver's single expected failure — a
+      // defect stays a defect and an interrupt still interrupts, and neither
+      // reaches the marker, so the previous snapshot survives all three.
+      const resolution = yield* resolveCommandPorts({
+        declared: target.command.ports,
+        // The preference is the last successfully established resolution. It is
+        // already in hand from the running check above, so resolution costs no
+        // extra read.
+        remembered: current?.resolvedPorts ?? null,
+        probe: portProbe,
+      }).pipe(Effect.either);
+      if (Either.isLeft(resolution)) {
+        return yield* failedRun(target, 'port_allocation_failed', resolution.left.detail);
+      }
+      const resolved = resolution.right;
+
       const envResult = yield* buildCommandEnv(target.worktree.path, target.command).pipe(
         Effect.either,
       );
       if (Either.isLeft(envResult)) {
         return yield* failedRun(target, 'env_invalid', envResult.left.message);
       }
+
+      // The top of the precedence ladder. The PTY layer supplies the login-shell
+      // baseline below `buildCommandEnv`'s `envFiles`-then-`env` result, and the
+      // allocated values sit above all of it: a command must see the port value
+      // the runtime resolved and injected, whatever a checked-in env file says.
+      // Nothing is reserved — the port is not held between resolution and the
+      // command's own bind — so this is the value the command is asked to take,
+      // not a promise that it is free. A collision with the command's explicit
+      // `env` is impossible (config validation rejects it), so the only value
+      // this can shadow is one from an env file, which is the documented
+      // precedence.
+      const launchEnv: NodeJS.ProcessEnv = {
+        ...envResult.right,
+        ...portEnvInjections(resolved),
+      };
 
       const run = yield* commandRepository.createRun({
         worktreeId,
@@ -229,13 +275,14 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         // pointer yet. It exists before any incarnation does, so boot's
         // running-state scan covers every crash window. It publishes nothing —
         // the handoff below announces the real outcome.
+        // The marker is also the *only* writer of the resolved snapshot, which
+        // makes it the supersession boundary: everything before it preserves the
+        // previous resolution, everything after it belongs to this incarnation.
+        // A command that declares no ports resolves to `[]` and supersedes with
+        // `[]` — there is no "nothing to write, so skip it" case, because
+        // forgetting to forget is how stale memory survives a config edit.
         const marker = yield* commandRepository
-          .transitionState({
-            worktreeId,
-            commandName,
-            status: 'running',
-            activePtyProcessId: null,
-          })
+          .markLaunchInProgress({ worktreeId, commandName, resolvedPorts: resolved })
           .pipe(Effect.either);
         if (Either.isLeft(marker)) {
           return yield* convergeBeforeMarker(
@@ -255,7 +302,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
                 command: shell,
                 args: ['-lc', target.command.command],
                 cwd,
-                envOverrides: envResult.right,
+                envOverrides: launchEnv,
                 shellIntegration: false,
               }),
               (candidate) => candidate.abandon,
@@ -328,9 +375,9 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               activePtyProcessId: acquiredAllocation.ptyProcessId,
             });
             yield* publishCommandChanged(worktreeId, commandName, 'running');
-            // Phase 04 replaces this with the resolution this launch established.
-            // Until then a launch has resolved nothing, and `null` says so.
-            return actionOutput(target.command, 'running', worktreeId, null);
+            // The resolution this launch established, not a re-read: the caller
+            // is told exactly what the process it just started received.
+            return actionOutput(target.command, 'running', worktreeId, resolved);
           }),
         );
       }).pipe(Effect.onInterrupt(() => interruptionFinalizer));

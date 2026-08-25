@@ -13,6 +13,7 @@ import {
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
 import {
+  CommandPortProbeLive,
   CommandRepositoryLive,
   CommandService,
   CommandServiceLive,
@@ -220,6 +221,7 @@ const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(RepositoryLive),
   Layer.provide(PtyServiceLayer),
   Layer.provide(PtyRepositoryLayer),
+  Layer.provide(CommandPortProbeLive),
   Layer.provide(DataDirectoryLive),
 );
 const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(

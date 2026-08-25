@@ -31,6 +31,7 @@ import {
   type CommandStopResult,
   type TerminalRunStatus,
 } from './commands.outcomes.js';
+import { CommandPortProbe } from './commands.ports.js';
 import {
   CommandRepository,
   type CommandFinalizeResult,
@@ -104,6 +105,7 @@ export const CommandServiceLive = Layer.scoped(
     const commandRepository = yield* CommandRepository;
     const ptyRepository = yield* PtyRepository;
     const pty = yield* PtyService;
+    const portProbe = yield* CommandPortProbe;
     const publicEvents = yield* RuntimeEventBus;
     const internalEvents = yield* InternalRuntimeEventBus;
     const locks: CommandLocks = new Map();
@@ -195,6 +197,7 @@ export const CommandServiceLive = Layer.scoped(
       commandRepository,
       ptyRepository,
       pty,
+      portProbe,
       publishCommandChanged,
       finalizeCommandRunByRun,
     });

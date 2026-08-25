@@ -82,16 +82,33 @@ export interface CommandRepositoryService {
     readonly status?: CommandStatus | undefined;
     readonly activePtyProcessId?: number | null | undefined;
   }) => Effect.Effect<CommandStateRow, DatabaseError>;
+  // The general status mutation. It cannot reach `resolved_ports_json` at all:
+  // allocation memory has exactly one writer (`markLaunchInProgress`), and that
+  // rule is enforced here by the interface rather than by convention, so no
+  // recovery, finalizer, or convergence path can erase a command's ports even
+  // by accident.
   readonly transitionState: (input: {
     readonly worktreeId: number;
     readonly commandName: string;
     readonly status: CommandStatus;
     readonly activePtyProcessId?: number | null | undefined;
-    // Omitting this keeps the stored snapshot; an array replaces it. That
-    // asymmetry is what makes the supersession rule hold by construction —
-    // every transition except the launch marker leaves the memory alone
-    // without naming the column at all. No caller writes null.
-    readonly resolvedPorts?: readonly ResolvedPortEntry[] | undefined;
+  }) => Effect.Effect<CommandStateRow, DatabaseError>;
+  /**
+   * The durable launch-in-progress marker, and the sole writer of the resolved
+   * snapshot.
+   *
+   * `status: 'running'` with a null pointer is not a general transition — it is
+   * *the* marker, the point at which a launch becomes recoverable and its
+   * resolution becomes this command's memory. Both facts are fixed internally so
+   * the pair cannot be written apart, and `resolvedPorts` is required so a
+   * launch cannot reach the marker without having decided what its incarnation
+   * received. An empty array is a meaningful value: "this incarnation declared
+   * no ports", which supersedes whatever was remembered before.
+   */
+  readonly markLaunchInProgress: (input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly resolvedPorts: readonly ResolvedPortEntry[];
   }) => Effect.Effect<CommandStateRow, DatabaseError>;
   readonly createRun: (input: {
     readonly worktreeId: number;
@@ -316,57 +333,19 @@ export const CommandRepositoryLive = Layer.effect(
           return commandStateRow(inserted);
         }),
       transitionState: (input) =>
-        database.transaction('transition_worktree_command_state', (db) => {
-          const now = timestamp();
-          const existing = db
-            .select(stateColumns)
-            .from(worktreeCommandStates)
-            .where(
-              and(
-                eq(worktreeCommandStates.worktreeId, input.worktreeId),
-                eq(worktreeCommandStates.commandName, input.commandName),
-              ),
-            )
-            .get();
-          if (!existing) {
-            const inserted = db
-              .insert(worktreeCommandStates)
-              .values({
-                worktreeId: input.worktreeId,
-                commandName: input.commandName,
-                status: input.status,
-                activePtyProcessId: input.activePtyProcessId ?? null,
-                resolvedPortsJson:
-                  input.resolvedPorts === undefined ? null : JSON.stringify(input.resolvedPorts),
-                createdAt: now,
-                updatedAt: now,
-              })
-              .returning(stateColumns)
-              .get();
-            return commandStateRow(inserted);
-          }
-          const updated = db
-            .update(worktreeCommandStates)
-            .set({
-              status: input.status,
-              activePtyProcessId:
-                input.activePtyProcessId === undefined
-                  ? existing.activePtyProcessId
-                  : input.activePtyProcessId,
-              // An empty array is a meaningful replacement — "this incarnation
-              // declared no ports" — so the branch is on `undefined`, not on
-              // emptiness.
-              resolvedPortsJson:
-                input.resolvedPorts === undefined
-                  ? existing.resolvedPortsJson
-                  : JSON.stringify(input.resolvedPorts),
-              updatedAt: now,
-            })
-            .where(eq(worktreeCommandStates.id, existing.id))
-            .returning(stateColumns)
-            .get();
-          return commandStateRow(updated);
-        }),
+        database.transaction('transition_worktree_command_state', (db) =>
+          writeCommandState(db, { ...input, resolvedPorts: undefined }),
+        ),
+      markLaunchInProgress: (input) =>
+        database.transaction('mark_worktree_command_launch_in_progress', (db) =>
+          writeCommandState(db, {
+            worktreeId: input.worktreeId,
+            commandName: input.commandName,
+            status: 'running',
+            activePtyProcessId: null,
+            resolvedPorts: input.resolvedPorts,
+          }),
+        ),
       createRun: (input) =>
         database.use('create_worktree_command_run', (db) => {
           const now = timestamp();
@@ -793,4 +772,70 @@ function distinctCommandPtyLinks(
     }
   }
   return [...seen.values()];
+}
+
+const commandStateColumns = getTableColumns(worktreeCommandStates);
+
+// The shared implementation behind the two semantic mutations above it,
+// `transitionState` and `markLaunchInProgress`. They differ only in whether they
+// are allowed to name the snapshot, which is what keeps the single-writer rule a
+// property of the interface rather than of the call sites.
+function writeCommandState(
+  db: RuntimeDrizzleDatabase,
+  input: {
+    readonly worktreeId: number;
+    readonly commandName: string;
+    readonly status: CommandStatus;
+    readonly activePtyProcessId?: number | null | undefined;
+    readonly resolvedPorts: readonly ResolvedPortEntry[] | undefined;
+  },
+) {
+  const now = timestamp();
+  const existing = db
+    .select(commandStateColumns)
+    .from(worktreeCommandStates)
+    .where(
+      and(
+        eq(worktreeCommandStates.worktreeId, input.worktreeId),
+        eq(worktreeCommandStates.commandName, input.commandName),
+      ),
+    )
+    .get();
+  if (!existing) {
+    const inserted = db
+      .insert(worktreeCommandStates)
+      .values({
+        worktreeId: input.worktreeId,
+        commandName: input.commandName,
+        status: input.status,
+        activePtyProcessId: input.activePtyProcessId ?? null,
+        resolvedPortsJson:
+          input.resolvedPorts === undefined ? null : JSON.stringify(input.resolvedPorts),
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning(commandStateColumns)
+      .get();
+    return commandStateRow(inserted);
+  }
+  const updated = db
+    .update(worktreeCommandStates)
+    .set({
+      status: input.status,
+      activePtyProcessId:
+        input.activePtyProcessId === undefined
+          ? existing.activePtyProcessId
+          : input.activePtyProcessId,
+      // An empty array is a meaningful replacement — "this incarnation declared
+      // no ports" — so the branch is on `undefined`, not on emptiness.
+      resolvedPortsJson:
+        input.resolvedPorts === undefined
+          ? existing.resolvedPortsJson
+          : JSON.stringify(input.resolvedPorts),
+      updatedAt: now,
+    })
+    .where(eq(worktreeCommandStates.id, existing.id))
+    .returning(commandStateColumns)
+    .get();
+  return commandStateRow(updated);
 }

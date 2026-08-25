@@ -634,18 +634,20 @@ const snapshot = [
   { envVar: 'API_PORT', port: 5173, paths: [{ label: 'api', path: '/api' }] },
 ] as const;
 
-test('an omitted resolved-port update preserves the stored snapshot', async () => {
+test('a transition after the marker cannot touch the stored snapshot', async () => {
   const result = await runWithDatabase(
     Effect.gen(function* () {
       const repository = yield* CommandRepository;
       const seeded = yield* seed({ stateStatus: 'running' });
-      yield* repository.transitionState({
+      yield* repository.markLaunchInProgress({
         worktreeId: seeded.worktreeId,
         commandName: seeded.commandName,
-        status: 'running',
         resolvedPorts: snapshot,
       });
-      // A stop, exactly as the stop path writes it: status and pointer only.
+      // A stop, exactly as the stop path writes it — and now the only shape it
+      // *can* write: `transitionState` has no access to the snapshot column at
+      // all, so preservation is a property of the interface rather than of this
+      // caller remembering to omit a field.
       const stopped = yield* repository.transitionState({
         worktreeId: seeded.worktreeId,
         commandName: seeded.commandName,
@@ -660,23 +662,21 @@ test('an omitted resolved-port update preserves the stored snapshot', async () =
   assert.deepEqual(result.resolvedPorts, snapshot);
 });
 
-test('an explicit resolved-port array replaces the stored snapshot, empty included', async () => {
+test('a later marker replaces the stored snapshot, empty included', async () => {
   const result = await runWithDatabase(
     Effect.gen(function* () {
       const repository = yield* CommandRepository;
       const seeded = yield* seed({ stateStatus: 'running' });
-      yield* repository.transitionState({
+      yield* repository.markLaunchInProgress({
         worktreeId: seeded.worktreeId,
         commandName: seeded.commandName,
-        status: 'running',
         resolvedPorts: snapshot,
       });
       // Removing every port declaration and launching again forgets the
       // allocation — but only at the next successful launch, never before.
-      return yield* repository.transitionState({
+      return yield* repository.markLaunchInProgress({
         worktreeId: seeded.worktreeId,
         commandName: seeded.commandName,
-        status: 'running',
         resolvedPorts: [],
       });
     }),
@@ -685,17 +685,16 @@ test('an explicit resolved-port array replaces the stored snapshot, empty includ
   assert.deepEqual(result.resolvedPorts, []);
 });
 
-test('a state row inserted by a transition carries the snapshot it was given', async () => {
+test('a state row inserted by the marker carries the snapshot it was given', async () => {
   // The first launch of a command whose state row does not exist yet takes the
   // insert branch; losing the snapshot there would break memory from launch one.
   const result = await runWithDatabase(
     Effect.gen(function* () {
       const repository = yield* CommandRepository;
       const seeded = yield* seed({ stateStatus: 'idle' });
-      return yield* repository.transitionState({
+      return yield* repository.markLaunchInProgress({
         worktreeId: seeded.worktreeId,
         commandName: 'never seen',
-        status: 'running',
         resolvedPorts: snapshot,
       });
     }),
@@ -744,4 +743,49 @@ test('a malformed stored snapshot decodes to null rather than failing the read',
 
   assert.equal(result?.status, 'running');
   assert.equal(result?.resolvedPorts, null);
+});
+
+test('a resolved snapshot survives closing and reopening the database', async () => {
+  // The other snapshot tests exercise the real column inside one layer lifetime,
+  // which proves keep-versus-replace but not durability: they never close
+  // anything. Allocation memory's whole promise is that it outlives the runtime
+  // process, so this test tears the layer down and builds a second one over the
+  // same files — the closest a unit test gets to restarting Isagi.
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-command-reopen-'));
+  const durableSnapshot = [
+    { envVar: null, port: 5173, paths: [{ label: 'app', path: '/' }] },
+    { envVar: 'API_PORT', port: 51824, paths: [] },
+  ] as const;
+
+  try {
+    const withFreshLayer = <A, E>(
+      build: Effect.Effect<A, E, RuntimeDatabaseService | CommandRepositoryService>,
+    ) => Effect.runPromise(build.pipe(Effect.provide(testLayer(dataRoot, null))));
+
+    const worktreeId = await withFreshLayer(
+      Effect.gen(function* () {
+        const ids = yield* seed({ stateStatus: 'idle' });
+        const repository = yield* CommandRepository;
+        yield* repository.markLaunchInProgress({
+          worktreeId: ids.worktreeId,
+          commandName: ids.commandName,
+          resolvedPorts: durableSnapshot,
+        });
+        return ids.worktreeId;
+      }),
+    );
+
+    // A second, independent layer: new database handle, new repository, same
+    // files on disk.
+    const reopened = await withFreshLayer(
+      Effect.gen(function* () {
+        const repository = yield* CommandRepository;
+        return yield* repository.findState({ worktreeId, commandName: 'dev' });
+      }),
+    );
+
+    assert.deepEqual(reopened?.resolvedPorts, durableSnapshot);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
 });

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Either, Schema } from 'effect';
 
-import { commandSummarySchema } from '@isagi/contracts';
+import { commandRunDiagnosticReasonSchema, commandSummarySchema } from '@isagi/contracts';
 
 /**
  * The wire guard for the resolved-port break.
@@ -38,4 +38,15 @@ test('a structured port summary decodes at the contract boundary', () => {
 
 test('a null port summary decodes as honest unknown degradation', () => {
   assert.ok(Either.isRight(decode({ name: 'dev', status: 'running', ports: null })));
+});
+
+test('the allocation-failure reason crosses the diagnostic contract boundary', () => {
+  // The runtime writes this literal and the web indexes its copy map by it, so a
+  // typo either side is a silent blank notice rather than a type error at the
+  // point of use. Pinning the exact string here is what makes the two ends one
+  // contract.
+  const decodeReason = Schema.decodeUnknownEither(commandRunDiagnosticReasonSchema);
+
+  assert.deepEqual(decodeReason('port_allocation_failed'), Either.right('port_allocation_failed'));
+  assert.ok(Either.isLeft(decodeReason('port_allocation_failure')));
 });
