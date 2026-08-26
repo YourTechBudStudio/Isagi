@@ -64,6 +64,20 @@ test('surface deleted events remove detail cache and clear active surface state'
   queryClient.clear();
 });
 
+/**
+ * The `exact: true` on the command-list invalidation is load-bearing and is
+ * proven here behaviorally rather than by inspecting the options object.
+ *
+ * `commandLogMetadataQueryKey(10, 'other')` is `['worktree', 10, 'commands',
+ * 'log-metadata', 'other']` — a prefix match of the command list's `['worktree',
+ * 10, 'commands']`. Dropping `exact: true` would sweep it, and every other
+ * command's log metadata, into this refetch. The assertion that it stays
+ * uninvalidated is what fails if that happens.
+ *
+ * The refetch itself is the sole route by which authoritative endpoint facts
+ * enter the cache, so invalidating precisely the right key is the client's
+ * obligation here; whether TanStack then refetches an active observer is its own.
+ */
 test('command change events patch status and invalidate command list and targeted metadata', () => {
   queryClient.clear();
   queryClient.setQueryData(worktreeCommandsQueryKey(10), {
