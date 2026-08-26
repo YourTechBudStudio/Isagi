@@ -9,15 +9,48 @@ import { Effect } from 'effect';
 import type { HarnessObservationRecord } from '../projection.js';
 import { parseCodexTranscript, readCodexConversation } from './conversation.js';
 
+test('Codex 0.149.1 transcript projects completed messages and merges assistant output by turn', () => {
+  assert.deepEqual(
+    parseCodexTranscript(
+      transcript([
+        sessionMeta('codex-session-1'),
+        responseItem('user', 'injected bootstrap context'),
+        itemCompleted('Reasoning', [{ type: 'summary_text', text: 'private reasoning' }]),
+        userMessage('one'),
+        agentMessage('working'),
+        responseItem('assistant', 'duplicate working'),
+        agentMessage('first done'),
+        taskComplete('duplicate final answer'),
+        itemCompleted('CommandExecution', [{ type: 'Text', text: 'tool output' }]),
+        userMessage('two'),
+        agentMessage('second done'),
+      ]),
+    ),
+    [
+      { role: 'user', parts: [{ type: 'text', text: 'one' }] },
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: 'working' },
+          { type: 'text', text: 'first done' },
+        ],
+      },
+      { role: 'user', parts: [{ type: 'text', text: 'two' }] },
+      { role: 'assistant', parts: [{ type: 'text', text: 'second done' }] },
+    ],
+  );
+});
+
 test('Codex native transcript applies persisted thread rollback', () => {
   assert.deepEqual(
     parseCodexTranscript(
       transcript([
         sessionMeta('codex-session-1'),
         userMessage('one'),
-        taskComplete('first done'),
+        agentMessage('first done'),
         userMessage('two'),
-        taskComplete('second done'),
+        agentMessage('second working'),
+        agentMessage('second done'),
         rollback(1),
       ]),
     ),
@@ -37,9 +70,9 @@ test('Codex native transcript lookup uses session id and ignores stale hook hist
     transcript([
       sessionMeta('codex-session-1'),
       userMessage('native prompt'),
-      taskComplete('native answer'),
+      agentMessage('native answer'),
       userMessage('undone prompt'),
-      taskComplete('undone answer'),
+      agentMessage('undone answer'),
       rollback(1),
     ]),
     'utf8',
@@ -100,12 +133,20 @@ function sessionMeta(sessionId: string) {
 }
 
 function userMessage(message: string) {
+  return itemCompleted('UserMessage', [{ type: 'text', text: message }]);
+}
+
+function agentMessage(message: string) {
+  return itemCompleted('AgentMessage', [{ type: 'Text', text: message }]);
+}
+
+function itemCompleted(type: string, content: readonly Record<string, unknown>[]) {
   return {
     timestamp: '2026-06-29T20:50:05.540Z',
     type: 'event_msg',
     payload: {
-      type: 'user_message',
-      message,
+      type: 'item_completed',
+      item: { type, content },
     },
   };
 }
@@ -117,6 +158,18 @@ function taskComplete(lastAgentMessage: string) {
     payload: {
       type: 'task_complete',
       last_agent_message: lastAgentMessage,
+    },
+  };
+}
+
+function responseItem(role: string, text: string) {
+  return {
+    timestamp: '2026-06-29T20:50:05.500Z',
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role,
+      content: [{ type: 'input_text', text }],
     },
   };
 }
