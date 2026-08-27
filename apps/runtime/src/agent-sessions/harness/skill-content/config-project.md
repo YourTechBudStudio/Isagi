@@ -82,8 +82,7 @@ carefully after you write it.
 
 ## Commands
 
-`commands` is a catalog of named shell commands for the project. Isagi shows them, runs them, and can
-start or stop them at four moments in a worktree's life.
+`commands` is a catalog of named shell commands for the project. Isagi shows them, runs them, and can start or stop them at four moments in a worktree's life.
 
 ```yaml
 commands:
@@ -91,6 +90,16 @@ commands:
     command: pnpm dev
     ports:
       - port: 5173
+        paths:
+          - label: app
+            path: /
+          - label: docs
+            path: /docs
+      - envVar: API_PORT
+        paths:
+          - label: api
+            path: /api
+      - port: 9229
     lifecycle:
       activate:
         start: true
@@ -104,8 +113,6 @@ commands:
     envFiles: [".env.local"]
     env:
       POSTGRES_PORT: "5432"
-    ports:
-      - port: 5432
     lifecycle:
       postCreate:
         start: true
@@ -113,10 +120,9 @@ commands:
         stop: false
 ```
 
-Commands run in your login shell's environment. On top of that baseline Isagi layers `envFiles[]` in order, then `env`, so a variable you set in `env` wins over the same name in an env file, and both win over whatever your shell exported. Isagi's own runtime controls (`PORT`, `HOST`, and `ISAGI_*`) are never inherited from the runtime process, but setting any of them in `envFiles[]` or `env` works normally — a command configured with `env: { PORT: "5173" }` starts with `PORT=5173`.
+Commands run in your login shell's environment. On top of that baseline Isagi layers `envFiles[]` in order, then `env`, so a variable you set in `env` wins over the same name in an environment file, and both win over whatever your shell exported. Isagi's own runtime controls (`PORT`, `HOST`, and `ISAGI_*`) are never inherited from the runtime process, but setting any of them in `envFiles[]` or `env` works normally — a command configured with `env: { PORT: "5173" }` starts with `PORT=5173`.
 
-The lifecycle defaults are conservative, and they are asymmetric on purpose: Isagi does not start
-things you did not ask it to start, and does stop things when the worktree goes away.
+The lifecycle defaults are conservative, and they are asymmetric on purpose: Isagi does not start things you did not ask it to start, and does stop things when the worktree goes away.
 
 | Event        | Field   | Default |
 | ------------ | ------- | ------- |
@@ -133,14 +139,16 @@ After a runtime restart, Isagi does not automatically start a command with a pri
 
 `db` starts once at creation and keeps running across worktree switches because `deactivate.stop: false` opts out of suspension.
 
-`ports` uses structured entries. Use `port` for a fixed port; numeric entries such as `ports: [5173]` are rejected. The schema below defines the complete entry shape.
+### Ports and HTTP URLs
+
+- Each entry declares exactly one of `port` for a fixed port or `envVar` for a port Isagi allocates at launch. Numeric entries such as `ports: [5173]` are invalid.
+- Optional `paths` entries contain a `label` and `path` and produce `http://localhost:<port><path>` URLs when the client and runtime run on the same machine. Either port variant may omit `paths`; an allocated pathless port still injects its value but produces no URL.
+- An allocated port is injected through its `envVar`, overrides the same key from `envFiles[]`, and cannot collide with explicit `env`. Isagi prefers the previous inactive allocation but does not reserve it.
 
 Two rules the parser enforces strictly, unlike the rest of this file:
 
 - **Command names must be unique**, non-empty, and carry no leading or trailing whitespace.
-- **Unknown fields on a command or a lifecycle entry are rejected.** A misspelled `lifecyle:` or
-  `ports:` fails the parse rather than being ignored. This is deliberate - it is the one place where a
-  typo is loud.
+- **Unknown fields on a command or a lifecycle entry are rejected.** A misspelled `lifecyle:` or `portz:` fails the parse rather than being ignored. This is deliberate - it is the one place where a typo is loud.
 
 ## Schema
 

@@ -12,7 +12,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 | Request | Read |
 | --- | --- |
 | Copying or linking files into new worktrees; running setup after worktree creation | [Project config](references/config-project.md) for `worktrees` |
-| Defining commands and their worktree lifecycle | [Project config](references/config-project.md) for `commands` |
+| Defining commands, their worktree lifecycle, fixed ports, allocated ports, and HTTP URLs | [Project config](references/config-project.md) for `commands` |
 | Selecting the terminal backend | [Global config](references/config-global.md) for `pty` |
 | Configuring terminal history, scrollback, or cache retention | [Global config](references/config-global.md) for `terminal` |
 | Enabling harnesses or their Docs integration | [Global config](references/config-global.md) for `harnesses` |
