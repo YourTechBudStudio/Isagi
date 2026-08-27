@@ -64,9 +64,34 @@ export const workbenchCopy = {
     missing_cwd: 'The configured working directory does not exist.',
     env_invalid: 'The command environment could not be prepared.',
     pty_launch_failed: 'The command could not start a PTY process.',
+    port_allocation_failed: 'A port for this command could not be allocated.',
     runtime_stopped: 'The runtime stopped while this command was running.',
     process_control_failed: "Isagi couldn't stop or verify this command's process.",
   },
+  // Endpoint chrome. Working chrome the user sees on every running command, so
+  // it stays dry and factual — no humour, no toast, no exclamation.
+  commandEndpointsLabel: 'endpoints',
+  commandEndpointsShow: 'Show endpoints',
+  commandEndpointsHide: 'Hide endpoints',
+  /**
+   * The closed toggle's word. It counts URLs when there are URLs to offer, and
+   * falls back to counting ports when there are not — a count of things the user
+   * cannot act on would be a promise the panel does not keep.
+   */
+  commandEndpointsUrlCount: (count: number) => (count === 1 ? '1 url' : `${count} urls`),
+  commandEndpointsPortCount: (count: number) => (count === 1 ? '1 port' : `${count} ports`),
+  commandEndpointsPortsWithoutUrls: (count: number) =>
+    `${count === 1 ? '1 port' : `${count} ports`} · no urls`,
+  commandEndpointsUnknown: 'ports unknown',
+  /** Said of a resolved port that declared no paths — a real port with nothing to open. */
+  commandPortNoPaths: 'no paths declared',
+  commandUrlCopyTitle: (url: string) => `Copy ${url}`,
+  commandUrlCopied: 'copied',
+  commandUrlCopyFailed: 'copy failed',
+  commandPortsUnavailable:
+    'Port metadata is unavailable for this run. It will resolve on the next launch.',
+  commandEndpointsRemoteRuntime:
+    'HTTP URLs are available only when the runtime runs on this machine.',
   commandConfigDiagnosticTitle: 'Command config needs a look.',
   commandConfigDiagnosticBody:
     'Fix .isagi/config.yaml in this worktree, then refresh the command drawer.',

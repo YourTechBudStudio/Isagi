@@ -10,15 +10,16 @@ import {
 import { buildActivationPlan } from '../commands.lifecycle.js';
 import type { CommandStateRow } from '../commands.repository.js';
 import {
+  commandPortProbe,
   commandRun,
   commandState,
   createFixture,
   fakePtyProcessRow,
   runCommandScenario,
-  waitForLog,
-  writeConfig,
   type CommandRepositoryOptions,
   type CommandScenarioRecorder,
+  waitForLog,
+  writeConfig,
 } from './test-support.js';
 
 /**
@@ -59,7 +60,10 @@ async function switchWorktrees(
     readonly nextWorktreeId?: number | null | undefined;
     readonly cause?: 'active_context_changed' | 'startup_restored' | undefined;
     readonly states?: CommandStateRow[] | undefined;
-  } & Pick<CommandRepositoryOptions, 'runs' | 'pty' | 'ptyProcess' | 'afterListStates'>,
+  } & Pick<
+    CommandRepositoryOptions,
+    'runs' | 'pty' | 'ptyProcess' | 'afterListStates' | 'portProbe'
+  >,
 ) {
   const fixture = createFixture();
   writeConfig(fixture.rootPath, input.config);
@@ -90,6 +94,7 @@ async function switchWorktrees(
         ptyProcess: input.ptyProcess ?? fakePtyProcessRow(),
         ...(input.pty ? { pty: input.pty } : {}),
         ...(input.afterListStates ? { afterListStates: input.afterListStates } : {}),
+        ...(input.portProbe ? { portProbe: input.portProbe } : {}),
       },
     );
   } finally {
@@ -575,5 +580,91 @@ test('the activation plan ignores a suspended command the config no longer names
       cause: 'active_context_changed',
     }),
     [],
+  );
+});
+
+test('a resumed command comes back on the port it had', async () => {
+  const probe = commandPortProbe({ inactive: [51_824] });
+  const { recorder } = await switchWorktrees({
+    config: `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - envVar: API_PORT
+`,
+    states: [
+      commandState({
+        commandName: 'dev',
+        status: 'suspended',
+        resolvedPorts: [{ envVar: 'API_PORT', port: 51824, paths: [] }],
+      }),
+    ],
+    portProbe: probe.service,
+  });
+
+  // Resume is an ordinary launch, so allocation stability costs no
+  // resume-specific code: the suspension preserved the snapshot by omission and
+  // the relaunch preferred it. Returning to a worktree therefore does not
+  // reshuffle the addresses the user has open in a browser tab.
+  assert.deepEqual(recorder.launched, ['pnpm dev']);
+  assert.deepEqual(probe.calls.probed, [51_824]);
+  assert.equal(probe.calls.assignments(), 0);
+  assert.deepEqual(
+    recorder.transitions.find((entry) => entry.resolvedPorts !== undefined)?.resolvedPorts,
+    [{ envVar: 'API_PORT', port: 51_824, paths: [] }],
+  );
+});
+
+test('an allocation failure during resume consumes the intent rather than re-arming it', async () => {
+  const config = `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - envVar: API_PORT
+`;
+  const suspended = commandState({
+    commandName: 'dev',
+    status: 'suspended',
+    resolvedPorts: [{ envVar: 'API_PORT', port: 51824, paths: [] }],
+  });
+  // Nothing is reusable and the OS refuses every fresh assignment, which is what
+  // `port_allocation_failed` actually means: not brief contention — the resolver
+  // would have taken a different port for that — but a persistent operational
+  // problem such as descriptor exhaustion or a permissions refusal.
+  const probe = commandPortProbe({ assignFailure: 'System error EMFILE' });
+
+  const first = await switchWorktrees({ config, states: [suspended], portProbe: probe.service });
+
+  const failed = first.recorder.transitions.at(-1);
+  assert.equal(failed?.status, 'failed');
+  assert.equal(first.recorder.runs.at(-1)?.diagnosticReason, 'port_allocation_failed');
+  // The failed state transition is what consumes the intent — the marker was
+  // never reached — and it must not name the snapshot, so the ports the command
+  // had are still its preference for a later manual start.
+  assert.ok(failed !== undefined && !('resolvedPorts' in failed));
+
+  // A second activation with the command now `failed` plans nothing: `failed` is
+  // not `suspended`, so the resume is not re-armed. Presenting a failed
+  // diagnostic under a state meaning "waiting to resume" would assert two
+  // different truths about the same command.
+  const second = await switchWorktrees({
+    config,
+    states: [
+      commandState({
+        commandName: 'dev',
+        status: 'failed',
+        resolvedPorts: suspended.resolvedPorts,
+      }),
+    ],
+    portProbe: probe.service,
+  });
+
+  assert.deepEqual(second.recorder.launched, []);
+  assert.ok(
+    second.recorder.logs.some((line) =>
+      line.includes('Activation completed: executed 0 resume(s)'),
+    ),
   );
 });

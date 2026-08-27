@@ -3,6 +3,7 @@ import { Activity, Play, TriangleAlert } from 'lucide-react';
 import type { CommandActionOutput, CommandSummary, WorktreeCommandsOutput } from '@isagi/contracts';
 
 import { paletteCopy } from '../../copy/index.js';
+import { pathlessCommandPortNumbers } from '../workspace/command-ports.js';
 import { runConfiguredCommandFromPalette } from '../workspace/queries.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import type { ConfiguredCommandsFailureKind, PaletteContext, PaletteEntry } from './types.js';
@@ -134,7 +135,11 @@ function commandEntry(
       return {
         ...base,
         icon: Activity,
-        sub: paletteCopy.commands.sub.running(command.ports),
+        // Only genuinely pathless entries become raw `:{port}` tokens. A port
+        // with paths is already represented by its strip badge and its drawer
+        // row, and repeating it here as a bare number would be a third, less
+        // informative presentation of the same fact.
+        sub: paletteCopy.commands.sub.running(pathlessCommandPortNumbers(command.ports)),
         // A state tint, not decoration: the same `working` signal the rail and
         // status strip use for a live process.
         tone: 'working',

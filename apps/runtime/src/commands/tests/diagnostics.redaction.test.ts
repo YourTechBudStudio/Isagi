@@ -8,6 +8,7 @@ import { decodeBackendRef } from '../../pty-processes/service/backend-ref.js';
 import { PtyKillError, PtyServiceError } from '../../pty-processes/types.js';
 import { describeOperationalCause } from '../commands.diagnostics.js';
 import { CommandError } from '../commands.errors.js';
+import { CommandPortAllocationError } from '../commands.ports.js';
 import {
   commandRun,
   commandState,
@@ -203,4 +204,120 @@ test('the cause chain stops at the first foreign link', () => {
 
   assert.equal(rendered, 'PTY kill error (ptyProcess=801): Error');
   assert.ok(!rendered.includes(SENTINEL));
+});
+
+test('a system error code is carried only from the exact allowlist', () => {
+  // The support value this exists for: "System error EADDRINUSE" tells a reader
+  // a port was taken; a bare "Error" tells them nothing.
+  const inUse = new Error('listen EADDRINUSE: address already in use 127.0.0.1:5173');
+  (inUse as { code?: unknown }).code = 'EADDRINUSE';
+  const rendered = describeOperationalCause(inUse);
+  assert.equal(rendered, 'System error EADDRINUSE');
+  // The message carries an address and a port. Neither may appear.
+  assert.ok(!rendered.includes('5173'));
+  assert.ok(!rendered.includes('127.0.0.1'));
+
+  // An unlisted code is not a code as far as this module is concerned, so the
+  // value falls back to its class label. Membership is exact, never a pattern:
+  // a pattern over `E[A-Z]+` would admit whatever an unvouched value chose.
+  const sentinelCoded = new Error('boom');
+  (sentinelCoded as { code?: unknown }).code = `E${SENTINEL}`;
+  assert.equal(describeOperationalCause(sentinelCoded), 'Error');
+  assert.ok(!describeOperationalCause(sentinelCoded).includes(SENTINEL));
+
+  // A non-string code is ignored rather than stringified.
+  const numericCoded = new Error('boom');
+  (numericCoded as { code?: unknown }).code = 13;
+  assert.equal(describeOperationalCause(numericCoded), 'Error');
+});
+
+test('a system error code is read only from an own data property of a real Error', () => {
+  // An arbitrary object cannot name itself, code or not — the `instanceof`
+  // guard is what stops a plain bag of fields from being treated as an error.
+  assert.equal(describeOperationalCause({ code: 'EADDRINUSE' }), 'UnknownError');
+
+  // An accessor is foreign code, and this renderer must never run foreign code.
+  // A getter that throws would take down the diagnostic path it was called on;
+  // one that returns a value would smuggle it past the allowlist's intent.
+  const accessorBacked = new Error('boom');
+  let invoked = false;
+  Object.defineProperty(accessorBacked, 'code', {
+    get() {
+      invoked = true;
+      throw new Error(SENTINEL);
+    },
+    configurable: true,
+  });
+  assert.equal(describeOperationalCause(accessorBacked), 'Error');
+  assert.equal(invoked, false, 'the renderer must not invoke an accessor on a foreign value');
+
+  // An inherited `code` is not something this value declared about itself.
+  class CodedBase extends Error {}
+  Object.defineProperty(CodedBase.prototype, 'code', {
+    value: 'EADDRINUSE',
+    configurable: true,
+  });
+  assert.equal(describeOperationalCause(new CodedBase('boom')), 'Error');
+});
+
+test('a system error code renders inside a recognized cause chain', () => {
+  // The shape the port probe actually produces once Phase 04 persists it:
+  // an authored prefix, then the OS constant, and nothing else.
+  const bindFailure = new Error('listen EACCES');
+  (bindFailure as { code?: unknown }).code = 'EACCES';
+  assert.equal(
+    describeOperationalCause(new PtyKillError({ cause: bindFailure, ptyProcessId: 801 })),
+    'PTY kill error (ptyProcess=801): System error EACCES',
+  );
+});
+
+test('an allocation failure carries only the endpoint name and a rendered cause', async () => {
+  const fixture = createFixture();
+  // A user-authored environment-variable name plus an OS error whose message
+  // would carry the loopback address and port if anything echoed it.
+  const nodeError = Object.assign(
+    new Error(`listen EADDRINUSE: address already in use 127.0.0.1:${SENTINEL}`),
+    {
+      code: 'EADDRINUSE',
+    },
+  );
+  writeConfig(
+    fixture.rootPath,
+    `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - envVar: API_PORT
+`,
+  );
+  try {
+    const scenario = await runCommandScenario(
+      fixture.rootPath,
+      ({ service, recorder }) =>
+        Effect.sync(() => recorder.reset()).pipe(
+          Effect.zipRight(service.run({ worktreeId: 10, commandName: 'dev' }).pipe(Effect.exit)),
+        ),
+      {
+        portProbe: {
+          probeInactive: () => Effect.succeed(false),
+          obtainEphemeralPort: Effect.fail(
+            new CommandPortAllocationError({ detail: describeOperationalCause(nodeError) }),
+          ),
+        },
+      },
+    );
+
+    const detail = scenario.recorder.runs.at(-1)?.diagnosticDetail ?? '';
+    // The envVar is config-authored and the code comes from the fixed allowlist;
+    // between them they say which endpoint failed and why, which is all support
+    // needs.
+    assert.equal(detail, 'Could not allocate a port for API_PORT: System error EADDRINUSE');
+    // The Node message is foreign text. It never reaches the durable diagnostic
+    // or the logs, even though the renderer clearly had it in hand.
+    assert.ok(!detail.includes(SENTINEL));
+    assert.ok(!scenario.recorder.logs.join('\n').includes(SENTINEL));
+  } finally {
+    fixture.cleanup();
+  }
 });

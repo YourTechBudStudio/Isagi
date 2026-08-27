@@ -50,5 +50,16 @@ export default defineConfig({
       testMatch: /command-palette\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },
     },
+    // Shares the command-palette page, because the endpoint surfaces are the
+    // strip and the drawer that page already mounts. Its own project so the
+    // clipboard permission it needs is not granted to every other spec.
+    {
+      name: 'command-endpoints',
+      testMatch: /command-endpoints\.spec\.ts/,
+      use: {
+        baseURL: `http://127.0.0.1:${fixturePort}/command-palette/`,
+        permissions: ['clipboard-read', 'clipboard-write'],
+      },
+    },
   ],
 });

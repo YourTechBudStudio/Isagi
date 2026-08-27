@@ -3,5 +3,6 @@ export { CommandRepository, CommandRepositoryLive } from './commands.repository.
 export type { CommandRepositoryService } from './commands.repository.js';
 export { CommandError } from './commands.errors.js';
 export type { CommandServiceError } from './commands.errors.js';
+export { CommandPortProbeLive } from './commands.port-probe.js';
 export { CommandService, CommandServiceLive } from './commands.service.js';
 export type { CommandService as CommandServiceShape } from './commands.service.js';

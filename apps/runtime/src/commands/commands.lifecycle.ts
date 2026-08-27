@@ -373,9 +373,13 @@ export function makeCommandLifecycle(deps: CommandLifecycleDependencies) {
       console.info(
         `[runtime] Activation launch command=${entry.commandName} reason=${entry.reason}`,
       );
-      // A failed launch lands in ordinary `failed` diagnostics. The intent was
-      // consumed by the launch's own marker write, so a failed resume does not
-      // re-arm itself for the next activation.
+      // A failed launch lands in ordinary `failed` diagnostics. The intent is
+      // consumed by the *failed state transition* the launch writes — not by the
+      // marker, which a pre-marker failure such as `missing_cwd`, `env_invalid`,
+      // or `port_allocation_failed` never reaches. Either way the command leaves
+      // `suspended`, so a failed resume does not re-arm itself for the next
+      // activation: `suspended` means "waiting to resume", and a command whose
+      // launch failed is not waiting, it is failed and says so.
       yield* runCommand({ worktreeId, commandName: entry.commandName });
       return 'executed' as const;
     });

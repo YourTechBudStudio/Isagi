@@ -187,8 +187,13 @@ test('a running row reads as details, a startable row reads as a launch', async 
   // The distinction has to survive being read quickly: the running row must not
   // contain the launch verb at all.
   await expect(row(page, 'api')).not.toContainText('run command');
-  // Ports are part of the running sub, in the drawer's notation.
-  await expect(row(page, 'api')).toContainText(':8080');
+  // The `:<port>` token is back, and it is built from resolved *pathless*
+  // entries only. `api` resolved 51824 with paths and 9229 without, so the
+  // pathless one earns the token and the pathful one does not: it already has a
+  // strip badge and a drawer row, and a bare number here would be a third, less
+  // informative presentation of the same fact.
+  await expect(row(page, 'api')).toContainText(':9229');
+  await expect(row(page, 'api')).not.toContainText(':51824');
 });
 
 test('running rows carry the working tone and startable rows do not', async ({ page }) => {

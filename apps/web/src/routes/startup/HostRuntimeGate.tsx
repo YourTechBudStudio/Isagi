@@ -18,7 +18,11 @@ export function useHostRuntimeGate() {
     });
   }, [hosted]);
 
+  // `hosted` is returned rather than re-probed by each consumer: the gate's
+  // decision and the workspace's locality must rest on one capability
+  // observation, or the two could disagree about what kind of client this is.
   return {
+    hosted,
     decision: hosted ? hostRuntimeGateDecision(snapshot) : ('pass' as const),
     snapshot,
   };

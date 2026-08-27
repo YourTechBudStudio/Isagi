@@ -191,7 +191,7 @@ test('configured command rows assemble contiguously between workflows and worktr
       workflowDescriptors: [{ ok: true, workflowKey: 'release', manifest: { title: 'Release' } }],
       configuredCommands: [
         { name: 'dev', status: 'idle', ports: [] },
-        { name: 'api', status: 'running', ports: [8080] },
+        { name: 'api', status: 'running', ports: [{ port: 8080, envVar: null, urls: [] }] },
       ],
     }),
   );

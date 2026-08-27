@@ -97,9 +97,11 @@ Examples:
 - active PTYs
 - live logs
 - active agent processes
-- dynamically discovered local URLs
+- resolved local HTTP URLs for running commands
 
 If Isagi or the machine restarts, this state may be gone. Restoration means recreating or reopening the environment, not pretending child processes survived.
+
+Resolved ports and URLs belong to the current running command incarnation. The runtime durably remembers each allocated endpoint's latest port only as a preference for a later launch; that persistence does not keep a process or URL alive and does not reserve the port.
 
 ### Restorable environment/UI state
 

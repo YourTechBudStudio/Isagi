@@ -28,6 +28,10 @@ The wrapper recognizes one exact long-form spelling per flag — `--linux`, `--m
 
 Direct package commands are composable primitives, not replacements for root supervision. A direct desktop launch needs an already running web origin, for example `ISAGI_WEB_URL=http://127.0.0.1:5173 pnpm --filter @isagi/desktop dev`. Plain-browser web development needs an explicit `VITE_ISAGI_RUNTIME_URL`; Electron never uses that value for runtime discovery.
 
+For plain-browser development only, `VITE_ISAGI_RUNTIME_LOCAL=true` asserts that the runtime addressed by `VITE_ISAGI_RUNTIME_URL` runs on the browser's machine. Only the exact literal `true` enables copyable localhost command URLs; an absent value, an empty value, or any other spelling is conservatively non-local. A wrong assertion produces URLs whose `localhost` points at the wrong machine.
+
+When the Electron bridge is present, host ownership always takes precedence and `VITE_ISAGI_RUNTIME_LOCAL` is ignored. A managed runtime is local under the current same-machine process model; an externally owned runtime remains non-local even when its configured URL looks local. Isagi never infers locality by inspecting a URL.
+
 ## Release process
 
 Releasing is one sequence with exactly one manual trigger. Nothing runs when a tag is pushed; the release pipeline starts when a draft GitHub release is published.

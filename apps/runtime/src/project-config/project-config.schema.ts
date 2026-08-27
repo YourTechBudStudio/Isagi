@@ -119,6 +119,50 @@ const tcpPortSchema = Schema.Number.pipe(Schema.int(), Schema.between(1, 65_535)
   description: 'TCP port number from 1 through 65535 associated with this command.',
 });
 
+const envVarNameSchema = nonBlankStringSchema.pipe(
+  Schema.filter((value) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value), {
+    title: 'envVarName',
+    description:
+      'a POSIX shell variable name: letters, digits, and underscores, not starting with a digit',
+  }),
+);
+
+export const commandPortPathSchema = Schema.Struct({
+  label: nonBlankStringSchema.annotations({
+    description:
+      "Short badge label for this URL, unique across all of the command's ports. Must not have leading or trailing whitespace.",
+  }),
+  path: Schema.String.pipe(
+    Schema.filter((value) => value.startsWith('/') && !/[\s?#]/.test(value), {
+      title: 'httpUrlPath',
+      description: 'a URL path starting with "/" and containing no whitespace, query, or fragment',
+    }),
+  ).annotations({
+    description:
+      'URL path served on this port, starting with "/". "/" alone is the root. Resolved URLs are http://localhost:<port><path>.',
+  }),
+}).annotations({
+  description: 'One labelled URL path served by this HTTP port.',
+});
+
+export const commandPortSchema = Schema.Struct({
+  port: Schema.optional(tcpPortSchema).annotations({
+    description:
+      'Fixed command port used exactly as declared. Declare either port or envVar, never both.',
+  }),
+  envVar: Schema.optional(envVarNameSchema).annotations({
+    description:
+      'Marks this command port as runtime-allocated. Isagi picks an inactive port at each launch, prefers the previous allocation, and injects the value into the process environment under this name. Declare either port or envVar, never both.',
+  }),
+  paths: Schema.optional(Schema.Array(commandPortPathSchema)).annotations({
+    description:
+      'Labelled URL paths served on this port. Defaults to an empty list; a pathless port still resolves, and an allocated pathless port still injects its value, but neither produces URLs.',
+  }),
+}).annotations({
+  description:
+    'One port of this command: fixed ({ port }) or runtime-allocated ({ envVar }), with optional labelled HTTP paths.',
+});
+
 const lifecyclePostCreateSchema = Schema.Struct({
   start: Schema.optional(Schema.Boolean).annotations({
     description: 'Start the command after worktree creation. Defaults to false.',
@@ -189,9 +233,9 @@ export const worktreeCommandSchema = Schema.Struct({
   envFiles: Schema.optional(Schema.Array(nonBlankStringSchema)).annotations({
     description: `${worktreeCommandPathDescription} Each file is read as dotenv-style environment input. Defaults to an empty list.`,
   }),
-  ports: Schema.optional(Schema.Array(tcpPortSchema)).annotations({
+  ports: Schema.optional(Schema.Array(commandPortSchema)).annotations({
     description:
-      'TCP ports associated with this command for UI/status metadata. Defaults to an empty list.',
+      'Ports this command uses. Fixed entries use their declared port, allocated entries receive a runtime-chosen port, and optional paths produce labelled HTTP URLs. Defaults to an empty list.',
   }),
   lifecycle: Schema.optional(worktreeCommandLifecycleSchema).annotations({
     description:
@@ -269,13 +313,33 @@ export interface WorktreeCommandCatalogConfig {
   readonly commands: readonly WorktreeCommandConfig[];
 }
 
+export interface CommandPortPathConfig {
+  readonly label: string;
+  readonly path: string;
+}
+
+// The normalized port declaration carries an internal discriminant so every
+// downstream switch is exhaustive. The YAML stays key-presence based: a `type`
+// key is rejected like any other unknown field.
+export type WorktreeCommandPortConfig =
+  | {
+      readonly kind: 'fixed';
+      readonly port: number;
+      readonly paths: readonly CommandPortPathConfig[];
+    }
+  | {
+      readonly kind: 'allocated';
+      readonly envVar: string;
+      readonly paths: readonly CommandPortPathConfig[];
+    };
+
 export interface WorktreeCommandConfig {
   readonly name: string;
   readonly command: string;
   readonly cwd: string | null;
   readonly env: Readonly<Record<string, string>>;
   readonly envFiles: readonly string[];
-  readonly ports: readonly number[];
+  readonly ports: readonly WorktreeCommandPortConfig[];
   readonly lifecycle: WorktreeCommandLifecycleConfig;
 }
 

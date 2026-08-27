@@ -4,6 +4,7 @@ import type { CommandRunStatus, CommandSummary, WorktreeCommandsOutput } from '@
 
 import { AttentionDot } from '../../components/AttentionDot.js';
 import { workbenchCopy } from '../../copy/index.js';
+import { useRuntimeLocality } from '../../lib/runtime/locality.js';
 import {
   commandAffordances,
   commandAttentionState,
@@ -14,6 +15,7 @@ import {
 } from '../../lib/workspace/command-attention.js';
 import { commandLogDisplayState } from '../../lib/workspace/command-log/display.js';
 import { useCommandLogStream } from '../../lib/workspace/command-log/stream.js';
+import { commandEndpointsPresentation } from '../../lib/workspace/command-ports.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import {
   useCommandLogMetadataQuery,
@@ -24,6 +26,7 @@ import {
 } from '../../lib/workspace/queries.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
+import { CommandEndpoints } from './CommandEndpoints.js';
 import { XtermSurface } from './XtermSurface.js';
 
 type CommandListItem = CommandSummary & {
@@ -293,6 +296,10 @@ function CommandDetail({
   const stopCommand = useStopCommandMutation(worktreeId);
   const mutationError = restartCommand.error ?? runCommand.error ?? stopCommand.error;
   const latestRun = logMetadataQuery.data?.latestRun;
+  const locality = useRuntimeLocality();
+  // The separator only earns its place when there is a toggle to separate. A
+  // command that declared no ports keeps exactly the header it has today.
+  const endpointsPresent = commandEndpointsPresentation(command.ports, locality) !== null;
   const { canRun, canStop, canRestart } = commandAffordances(command.status, command.presentation);
   const notice = commandDetailNotice({
     status: command.status,
@@ -315,16 +322,12 @@ function CommandDetail({
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {command.status === 'running' &&
-            command.presentation === 'configured' &&
-            command.ports.map((port) => (
-              <span
-                key={port}
-                className="rounded-md border border-cyan/28 bg-cyan/10 px-1.5 py-px font-mono text-[10.5px] text-cyan"
-              >
-                :{port}
-              </span>
-            ))}
+          {/* Endpoints sit in the header's action cluster but are separated from
+              it by a rule. Restart and Stop act on the process; this reveals
+              information, and an undifferentiated row of grey squares would make
+              the first thing a user tries with it an action on their server. */}
+          <CommandEndpoints commandName={command.name} ports={command.ports} locality={locality} />
+          {endpointsPresent && <span className="h-4 w-px flex-none bg-line/26" />}
           {onRefreshCatalog && (
             <button
               type="button"

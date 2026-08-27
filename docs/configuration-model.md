@@ -85,6 +85,8 @@ This principle matters:
 
 > Isagi starts conservative, but lets power users make environments feel alive.
 
+Commands may declare structured fixed or runtime-allocated ports, with optional labelled HTTP paths for local URL presentation.
+
 If a command is marked persistent but fails because of fixed ports, global files, or other shared resources, Isagi should surface the failure. It should not try to magically fix project-level configuration.
 
 ## Worktree initialization templates

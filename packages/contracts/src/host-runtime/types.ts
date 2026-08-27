@@ -1,5 +1,16 @@
 export const HOST_RUNTIME_STATUS_PROTOCOL_VERSION = 1 as const;
 
+/**
+ * How the desktop host came by the runtime it is talking to.
+ *
+ * `'managed'` means the host launched the runtime process itself, on the machine
+ * the client is running on; co-location is therefore a property of how the
+ * connection was constructed, not something a client has to infer.
+ *
+ * `'external'` means the host attached to a runtime address it was given. That
+ * runtime may well be on the same machine, but nothing here establishes it, so a
+ * client that needs co-location must treat this as "not established".
+ */
 export type HostRuntimeOwnership = 'managed' | 'external';
 
 export type HostRuntimeFailureReason =

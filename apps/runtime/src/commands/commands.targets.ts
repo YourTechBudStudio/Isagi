@@ -6,7 +6,9 @@ import type { WorktreeCommandConfig } from '../project-config/project-config.sch
 import { loadWorktreeCommandCatalog } from '../project-config/project-config.service.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
 import { CommandError, type CommandServiceError } from './commands.errors.js';
+import type { ResolvedPortEntry } from './commands.ports.js';
 import type { CommandRepositoryService } from './commands.repository.js';
+import { buildCommandSummary } from './commands.summary.js';
 
 // Resolving a (worktreeId, commandName) request to the thing it names, and
 // shaping the action result the API returns. Each resolver encodes what its
@@ -21,7 +23,6 @@ export interface CommandTarget {
 export interface ManagedCommandTarget {
   readonly worktree: { readonly id: number; readonly path: string };
   readonly commandName: string;
-  readonly ports: readonly number[];
 }
 
 export function resolveConfiguredCommand(
@@ -104,7 +105,7 @@ export function resolveStoppableCommand(
         (candidate) => candidate.name === input.commandName,
       );
       if (command) {
-        return { worktree: target.worktree, commandName: command.name, ports: command.ports };
+        return { worktree: target.worktree, commandName: command.name };
       }
     }
 
@@ -113,7 +114,7 @@ export function resolveStoppableCommand(
     // it back (`suspended`, which Stop is how the user clears).
     const state = yield* commandRepository.findState(input);
     if (state && (state.status === 'running' || state.status === 'suspended')) {
-      return { worktree: target.worktree, commandName: state.commandName, ports: [] };
+      return { worktree: target.worktree, commandName: state.commandName };
     }
 
     return yield* Effect.fail(
@@ -149,33 +150,30 @@ export function loadCommandTarget(
   });
 }
 
+// Both shapers take the incarnation's resolved facts explicitly rather than
+// reading them back off fresh config: a summary reports what the running process
+// actually got, which a config echo could never promise.
 export function actionOutput(
   command: WorktreeCommandConfig,
   status: CommandStatus,
   worktreeId: number,
+  resolvedPorts: readonly ResolvedPortEntry[] | null,
 ): CommandActionOutput {
   return {
     worktreeId,
     commandName: command.name,
-    summary: {
-      name: command.name,
-      status,
-      ports: status === 'running' ? [...command.ports] : [],
-    },
+    summary: buildCommandSummary({ name: command.name, status, resolvedPorts }),
   };
 }
 
 export function commandActionOutput(
   target: ManagedCommandTarget,
   status: CommandStatus,
+  resolvedPorts: readonly ResolvedPortEntry[] | null,
 ): CommandActionOutput {
   return {
     worktreeId: target.worktree.id,
     commandName: target.commandName,
-    summary: {
-      name: target.commandName,
-      status,
-      ports: status === 'running' ? [...target.ports] : [],
-    },
+    summary: buildCommandSummary({ name: target.commandName, status, resolvedPorts }),
   };
 }

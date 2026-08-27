@@ -11,6 +11,7 @@ import { type CommandRunRow } from '../commands.repository.js';
 import { CommandService } from '../commands.service.js';
 import {
   commandLaunchAllocation,
+  commandPortProbe,
   commandRun,
   commandState,
   createFixture,
@@ -527,6 +528,222 @@ commands:
     // person stopped a process this call never touched.
     assert.equal(output.summary.status, 'running');
     assert.deepEqual(transitioned, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Allocation memory across incarnations
+// ---------------------------------------------------------------------------
+
+/**
+ * Allocation stability, proven through public service operations rather than by
+ * calling the resolver: what matters to a user is that Restart and a resumed
+ * command come back on the addresses they had, and that is a property of the
+ * whole lifecycle, not of the policy function.
+ */
+
+const memoryConfig = `
+commands:
+  - name: dev
+    command: pnpm dev
+    ports:
+      - envVar: API_PORT
+        paths:
+          - label: app
+            path: /
+`;
+
+const previousResolution = [
+  { envVar: 'API_PORT', port: 51824, paths: [{ label: 'app', path: '/' }] },
+] as const;
+
+test('restart re-adopts the same port when the probe finds it free', async () => {
+  const fixture = createFixture();
+  try {
+    writeConfig(fixture.rootPath, memoryConfig);
+    const probe = commandPortProbe({ inactive: [51_824] });
+
+    const output = await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.restart({ worktreeId: 10, commandName: 'dev' }),
+      {
+        states: [
+          commandState({
+            commandName: 'dev',
+            status: 'running',
+            resolvedPorts: previousResolution,
+          }),
+        ],
+        latestRun: commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 }),
+        ptyProcess: fakePtyProcessRow({ id: 902, status: 'running' }),
+        pty: {
+          terminate: () => Effect.succeed('terminated_live' as const),
+          allocateLaunch: () =>
+            Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: fixture.rootPath })),
+        },
+        portProbe: probe.service,
+      },
+    );
+
+    // The stop preserved the snapshot by omission, so the relaunch inside the
+    // same lock still had the preference to prefer.
+    assert.deepEqual(probe.calls.probed, [51_824]);
+    assert.equal(probe.calls.assignments(), 0);
+    assert.deepEqual(output.summary.ports, [
+      {
+        port: 51_824,
+        envVar: 'API_PORT',
+        urls: [{ label: 'app', path: '/', url: 'http://localhost:51824/' }],
+      },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('restart moves to a fresh port when the previous one is taken', async () => {
+  const fixture = createFixture();
+  try {
+    writeConfig(fixture.rootPath, memoryConfig);
+    const probe = commandPortProbe({ assign: [40_777] });
+
+    const output = await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.restart({ worktreeId: 10, commandName: 'dev' }),
+      {
+        states: [
+          commandState({
+            commandName: 'dev',
+            status: 'running',
+            resolvedPorts: previousResolution,
+          }),
+        ],
+        latestRun: commandRun({ commandName: 'dev', status: 'running', ptyProcessId: 123 }),
+        ptyProcess: fakePtyProcessRow({ id: 902, status: 'running' }),
+        pty: {
+          terminate: () => Effect.succeed('terminated_live' as const),
+          allocateLaunch: () =>
+            Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: fixture.rootPath })),
+        },
+        portProbe: probe.service,
+      },
+    );
+
+    // Preference, not guarantee: something else holds 51824 now, so the command
+    // gets a working address rather than a familiar broken one.
+    assert.deepEqual(probe.calls.probed, [51_824]);
+    assert.equal(probe.calls.assignments(), 1);
+    assert.deepEqual(
+      output.summary.ports?.map((port) => port.port),
+      [40_777],
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a command removed from config and re-added under the same name keeps its memory', async () => {
+  const fixture = createFixture();
+  try {
+    // Genuinely remove it: the config names another command entirely, which is
+    // the state of the world after a user comments the entry out.
+    writeConfig(
+      fixture.rootPath,
+      `
+commands:
+  - name: other
+    command: pnpm other
+`,
+    );
+    const probe = commandPortProbe({ inactive: [51_824] });
+
+    const output = await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) =>
+        Effect.gen(function* () {
+          // While removed, the command is still visible as a managed row and
+          // nothing prunes it. This half is what the reuse below depends on: if
+          // a future config reconciliation started deleting state rows for
+          // unnamed commands, the memory would be gone before the re-add.
+          const removed = yield* service.listForWorktree(10);
+          assert.deepEqual(
+            removed.status === 'configured'
+              ? removed.removedCommands.map((command) => command.name)
+              : null,
+            ['dev'],
+          );
+
+          // Re-added under the same name, which is the same allocation identity:
+          // (worktree, command name, envVar).
+          writeConfig(fixture.rootPath, memoryConfig);
+          return yield* service.run({ worktreeId: 10, commandName: 'dev' });
+        }),
+      {
+        states: [
+          commandState({ commandName: 'dev', status: 'failed', resolvedPorts: previousResolution }),
+        ],
+        ptyProcess: fakePtyProcessRow({ id: 902, status: 'running' }),
+        pty: {
+          allocateLaunch: () =>
+            Effect.succeed(commandLaunchAllocation({ ptyProcessId: 902, cwd: fixture.rootPath })),
+        },
+        portProbe: probe.service,
+      },
+    );
+
+    assert.equal(probe.calls.assignments(), 0);
+    assert.deepEqual(
+      output.summary.ports?.map((port) => port.port),
+      [51_824],
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('resolving a pointerless running state preserves the ports it had', async () => {
+  const fixture = createFixture();
+  const transitions: Array<{
+    readonly status: string;
+    readonly resolvedPorts?: readonly unknown[] | undefined;
+  }> = [];
+  try {
+    writeConfig(fixture.rootPath, memoryConfig);
+
+    // A `running` state naming no incarnation and owning no run — the residue a
+    // crash between the launch marker and the PTY link leaves behind. Stop can
+    // only conclude `failed`, which is a manufactured status.
+    await runCommandServiceEffect(
+      fixture.rootPath,
+      (service) => service.stop({ worktreeId: 10, commandName: 'dev' }),
+      {
+        states: [
+          {
+            ...commandState({
+              commandName: 'dev',
+              status: 'running',
+              resolvedPorts: previousResolution,
+            }),
+            activePtyProcessId: null,
+          },
+        ],
+        latestRun: null,
+        onTransition: (input) => transitions.push(input),
+      },
+    );
+
+    // Same rule as boot repair: making the status honest must not also throw
+    // away the allocation the crashed launch had established, because the next
+    // launch's preference is the only thing that brings the command back on the
+    // address the user still has open.
+    const repair = transitions.at(-1);
+    assert.equal(repair?.status, 'failed');
+    assert.ok(
+      repair !== undefined && !('resolvedPorts' in repair),
+      'pointerless-state repair must preserve the resolved snapshot by never naming it',
+    );
   } finally {
     fixture.cleanup();
   }

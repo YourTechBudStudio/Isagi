@@ -365,3 +365,33 @@ test('boot writes exactly what the shutdown event path writes', async () => {
   assert.equal(result.runs[0]?.diagnosticReason, viaEvent.diagnostic?.reason);
   assert.equal(result.runs[0]?.diagnosticDetail, viaEvent.diagnostic?.detail);
 });
+
+test('crash repair makes a command honest without forgetting the ports it had', async () => {
+  // The out-of-model case: a `running` state with no run at all, which boot can
+  // only resolve by marking the command failed.
+  //
+  // This is precisely the "the runtime died mid-launch, give me my ports back"
+  // situation allocation memory exists to serve, so the repair must change the
+  // *status* and nothing else. The assertion is on the transition's shape rather
+  // than on the surviving row: a recovery path that names `resolvedPorts` at all
+  // has become a second writer, whatever value it happens to pass today.
+  const { recorder } = await boot({
+    states: [
+      {
+        ...commandState({
+          commandName: 'dev',
+          status: 'running',
+          resolvedPorts: [{ envVar: 'API_PORT', port: 51824, paths: [] }],
+        }),
+        activePtyProcessId: null,
+      },
+    ],
+  });
+
+  const repair = recorder.transitions.at(-1);
+  assert.equal(repair?.status, 'failed');
+  assert.ok(
+    repair !== undefined && !('resolvedPorts' in repair),
+    'boot repair must preserve the resolved snapshot by never naming it',
+  );
+});

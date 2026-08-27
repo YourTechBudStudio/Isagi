@@ -255,6 +255,45 @@ test('the router selects global config for terminal history and cache retention'
   assert.ok(routed, 'SKILL.md must route terminal history to references/config-global.md');
 });
 
+test('the router selects project config for command ports and HTTP URLs', () => {
+  const router = files.get('SKILL.md') ?? '';
+  const routed = router
+    .split('\n')
+    .some(
+      (line) =>
+        line.includes('fixed ports') &&
+        line.includes('allocated ports') &&
+        line.includes('HTTP URLs') &&
+        line.includes('references/config-project.md'),
+    );
+  assert.ok(routed, 'SKILL.md must route command port and HTTP URL requests to project config');
+});
+
+test('the project config reference documents structured command port behavior', () => {
+  const emitted = files.get('references/config-project.md') ?? '';
+  const heading = '\n### Ports and HTTP URLs\n';
+  const sectionIndex = emitted.indexOf(heading);
+  assert.notEqual(sectionIndex, -1, 'config-project.md lost its command ports section');
+  const sectionStart = sectionIndex + heading.length;
+  const nextHeadingIndex = emitted.indexOf('\n## ', sectionStart);
+  assert.notEqual(nextHeadingIndex, -1, 'command ports must precede another section');
+  const prose = emitted.slice(sectionStart, nextHeadingIndex);
+
+  for (const concept of [
+    /exactly one of `port`.*`envVar`/,
+    /`ports: \[5173\]`.*invalid/,
+    /Optional `paths` entries.*`label`.*`path`/,
+    /Either port variant may omit `paths`/,
+    /allocated pathless port.*injects its value.*no URL/,
+    /`http:\/\/localhost:<port><path>`/,
+    /overrides the same key from `envFiles\[\]`/,
+    /cannot collide with explicit `env`/,
+    /prefers the previous inactive allocation.*does not reserve it/,
+  ]) {
+    assert.match(prose, concept);
+  }
+});
+
 test('the global config reference documents terminal settings durable facts', () => {
   const emitted = files.get('references/config-global.md') ?? '';
   const heading = '\n## Terminal history and cache retention\n';
