@@ -368,6 +368,7 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
   assert.equal(launch.args.includes('--cd'), false);
   assert.deepEqual(launch.args.slice(-2), ['resume', 'codex-session-123']);
   assert.match(launch.args.join(' '), /hooks\.SessionStart/);
+  assert.match(launch.args.join(' '), /startup\|resume\|clear/);
   assert.doesNotMatch(launch.args.join(' '), /hooks\.UserPromptSubmit/);
   assert.doesNotMatch(launch.args.join(' '), /hooks\.Stop/);
   assert.match(launch.args.join(' '), /isagi-codex-hook\.mjs/);

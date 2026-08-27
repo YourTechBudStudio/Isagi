@@ -1,6 +1,10 @@
 import type { AgentHarness } from '@isagi/contracts';
 
-export function commandHookSource(harness: 'claude' | 'codex') {
+export function commandHookSource(
+  harness: 'claude' | 'codex',
+  options: { readonly persistHarnessSessionId?: boolean } = {},
+) {
+  const persistHarnessSessionId = options.persistHarnessSessionId ?? true;
   return String.raw`${writeHarnessMetadataSource()}
 ${appendHarnessEventSource(harness)}
 
@@ -29,7 +33,7 @@ if (!stdin.ok) {
   if (!sessionId || !nativeEvent) {
     console.error("[isagi] Harness observation skipped: malformed hook input.");
   } else {
-    await writeHarnessMetadata(sessionId);
+    if (${JSON.stringify(persistHarnessSessionId)}) await writeHarnessMetadata(sessionId);
     await appendHarnessEvent(sessionId, nativeEvent, safeJsonValue(stdin.input));
   }
 }

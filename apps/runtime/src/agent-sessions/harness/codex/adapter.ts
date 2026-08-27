@@ -68,7 +68,7 @@ export function buildCodexHeadlessLaunch(input: HarnessHeadlessLaunchContext) {
 function codexHookArgs(hookPath: string) {
   const command = `node ${shellQuote(hookPath)}`;
   const hook = `{ type = "command", command = ${tomlString(command)}, timeout = 5, statusMessage = "Recording Codex session" }`;
-  const sessionStartHook = `{ matcher = "startup|resume", hooks = [${hook}] }`;
+  const sessionStartHook = `{ matcher = "startup|resume|clear", hooks = [${hook}] }`;
   return [
     '--enable',
     'hooks',

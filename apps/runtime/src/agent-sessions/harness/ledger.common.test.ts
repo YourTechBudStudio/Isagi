@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { codexHookSource } from './codex/artifacts.js';
 import { commandHookSource } from './ledger.common.js';
 
 test('command hook skips malformed routing input without leaking raw stdin', () => {
@@ -42,6 +43,35 @@ test('command hook persists complete routable native input even when optional fi
     const artifactDirectory = join(root, 'artifacts');
     const line = readFileSync(
       join(artifactDirectory, `${Buffer.from('session-redacted').toString('hex')}.harness.jsonl`),
+      'utf8',
+    ).trim();
+    const record = JSON.parse(line) as { readonly event: unknown };
+    assert.deepEqual(record.event, input);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex command hook records SessionStart without mutating resumable metadata', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-hook-codex-'));
+  try {
+    const script = join(root, 'hook.mjs');
+    writeFileSync(script, codexHookSource(), 'utf8');
+    const input = {
+      session_id: 'side-session-redacted',
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+      transcript_path: null,
+    };
+    const result = runHook(script, root, JSON.stringify(input));
+    assert.equal(result.status, 0);
+    const artifactDirectory = join(root, 'artifacts');
+    assert.equal(existsSync(join(artifactDirectory, 'harness.json')), false);
+    const line = readFileSync(
+      join(
+        artifactDirectory,
+        `${Buffer.from('side-session-redacted').toString('hex')}.harness.jsonl`,
+      ),
       'utf8',
     ).trim();
     const record = JSON.parse(line) as { readonly event: unknown };

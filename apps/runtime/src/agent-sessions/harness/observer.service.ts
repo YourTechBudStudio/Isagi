@@ -6,6 +6,7 @@ import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contrac
 import { RuntimeDatabase } from '../../persistence/index.js';
 import { agentSessions, ptyProcesses } from '../../persistence/schema.js';
 import { InternalRuntimeEventBus, type InternalRuntimeEvent } from '../../runtime-events/index.js';
+import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
 import { type CodexRolloutEntry, type CodexRolloutPath } from './codex/native-artifacts.js';
 import { harnessDefinition } from './definitions.js';
 import {
@@ -265,55 +266,86 @@ export const HarnessLedgerObserverLive = Layer.scoped(
       Effect.gen(function* () {
         const state = stateFor(agentSessionId);
         const harness = harnessByAgent.get(agentSessionId);
-        if (!harness || state.metadata.status !== 'valid') return [];
+        if (!harness) return [];
         const locate = harnessDefinition(harness).observation.locateNativeSources;
         if (!locate) return [];
-        const harnessSessionId = state.metadata.metadata.harnessSessionId;
-        if (!harnessSessionId) return [];
-        if (
-          state.locatedCodexHarnessSessionId === harnessSessionId &&
-          state.rolloutCursors.size > 0
-        ) {
-          return [...state.rolloutCursors.entries()]
-            .filter(([, cursor]) => cursor.harnessSessionId === harnessSessionId)
-            .map(([path, cursor]) => ({
-              path,
-              harnessSessionId: cursor.harnessSessionId,
-            }));
-        }
         const streams = [...state.recordsByHarnessSessionId.entries()] as readonly [
           string,
           readonly HarnessObservationRecord[],
         ][];
-        const sources = [
-          ...(yield* locate({
-            agentSessionId,
-            harnessSessionId,
-            streams,
-            discovery: 'index_only',
-          })),
-        ].filter((source) => sourceIsAvailable(source.path));
-        if (sources.length === 0) {
-          state.codexLocatorMissCount += 1;
-          // Native-tree discovery is the expensive compatibility path. Try it
-          // immediately, then only once per twenty 500 ms polls while the
-          // supported hook/index locators remain unavailable.
-          if (state.codexLocatorMissCount === 1 || state.codexLocatorMissCount % 20 === 0) {
+        const currentHarnessSessionId =
+          state.metadata.status === 'valid' ? state.metadata.metadata.harnessSessionId : null;
+        const activeCandidates = activeCodexStreamCandidates(
+          state.recordsByHarnessSessionId,
+          activePtyByAgent.get(agentSessionId) ?? null,
+        );
+        const candidateIds = new Set([
+          ...activeCandidates.map((candidate) => candidate.harnessSessionId),
+          ...(currentHarnessSessionId ? [currentHarnessSessionId] : []),
+        ]);
+        const unique = new Map<string, CodexRolloutPath>();
+        const confirmedHarnessSessionIds = new Set<string>();
+        for (const harnessSessionId of candidateIds) {
+          const cached = [...state.rolloutCursors.entries()]
+            .filter(([, cursor]) => cursor.harnessSessionId === harnessSessionId)
+            .map(([path]) => ({ path, harnessSessionId }))
+            .filter((source) => sourceIsAvailable(source.path));
+          const candidateStreams = streams.filter(([streamId]) => streamId === harnessSessionId);
+          const sources = [...cached];
+          if (sources.length === 0) {
             sources.push(
               ...(yield* locate({
                 agentSessionId,
                 harnessSessionId,
-                streams,
-                discovery: 'full',
+                streams: candidateStreams,
+                discovery: 'index_only',
               })).filter((source) => sourceIsAvailable(source.path)),
             );
           }
-        } else {
-          state.codexLocatorMissCount = 0;
+          if (sources.length === 0) {
+            const missCount = (state.codexLocatorMissCounts.get(harnessSessionId) ?? 0) + 1;
+            state.codexLocatorMissCounts.set(harnessSessionId, missCount);
+            // Native-tree discovery is the expensive compatibility path. Try
+            // it immediately, then once per twenty 500 ms polls while the
+            // supported hook/index locators remain unavailable.
+            if (missCount === 1 || missCount % 20 === 0) {
+              sources.push(
+                ...(yield* locate({
+                  agentSessionId,
+                  harnessSessionId,
+                  streams: candidateStreams,
+                  discovery: 'full',
+                })).filter((source) => sourceIsAvailable(source.path)),
+              );
+            }
+          }
+          if (sources.length > 0) {
+            confirmedHarnessSessionIds.add(harnessSessionId);
+            state.codexLocatorMissCounts.delete(harnessSessionId);
+          }
+          for (const source of sources) unique.set(source.path, source);
         }
-        const unique = new Map<string, CodexRolloutPath>();
-        for (const source of sources) unique.set(source.path, source);
-        state.locatedCodexHarnessSessionId = harnessSessionId;
+        state.confirmedCodexHarnessSessionIds = confirmedHarnessSessionIds;
+        const primaryHarnessSessionId = selectConfirmedCodexPrimary({
+          candidates: activeCandidates,
+          confirmedHarnessSessionIds,
+          currentHarnessSessionId,
+        });
+        if (primaryHarnessSessionId && primaryHarnessSessionId !== currentHarnessSessionId) {
+          const metadataPath = artifacts.paths({ agentSessionId }).metadataPath;
+          const persisted = yield* sourceOrElse(
+            agentSessionId,
+            metadataPath,
+            'codex_primary_identity_promotion',
+            artifacts
+              .writeHarnessSessionId({ agentSessionId, harnessSessionId: primaryHarnessSessionId })
+              .pipe(Effect.as(true)),
+            false,
+            state.failedOperationKeys,
+            `codex-primary:${metadataPath}`,
+          );
+          if (persisted) state.metadata = yield* artifacts.readMetadata(agentSessionId);
+        }
         if (unique.size === 0) {
           const diagnostic: HarnessLifecycleDiagnostic = {
             code: 'missing_native_artifact',
@@ -346,8 +378,8 @@ export const HarnessLedgerObserverLive = Layer.scoped(
         state.codexRecordsByHarnessSessionId.clear();
         state.nextSeqByHarnessSessionId.clear();
         state.nextCodexSeqByHarnessSessionId.clear();
-        state.locatedCodexHarnessSessionId = null;
-        state.codexLocatorMissCount = 0;
+        state.confirmedCodexHarnessSessionIds.clear();
+        state.codexLocatorMissCounts.clear();
         if (reason === 'source_rebased') state.stickyFailures.clear();
         const directory = artifacts.paths({ agentSessionId }).directory;
         const ledgerPaths = yield* sourceOrElse(
@@ -510,6 +542,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
           markerString(priorMetadata) !== markerString(metadataMarker(state.metadata));
         if (metadataChanged) changed = true;
 
+        const priorCodexResolution = codexResolutionMarker(state);
         for (const source of yield* nativeSources(agentSessionId)) {
           const cursor = state.rolloutCursors.get(source.path);
           if (!cursor) {
@@ -540,6 +573,7 @@ export const HarnessLedgerObserverLive = Layer.scoped(
             changed = true;
           }
         }
+        if (priorCodexResolution !== codexResolutionMarker(state)) changed = true;
 
         if (changed || options.forceRecompute || options.forceSessionChanged) {
           yield* recomputeAndPublish(agentSessionId, {
@@ -837,6 +871,16 @@ function processFactFromEvent(event: InternalRuntimeEvent): ProcessFact | null {
 
 function codexEntryTimestamp(entry: CodexRolloutEntry) {
   return typeof entry.timestamp === 'string' ? entry.timestamp : '';
+}
+
+function codexResolutionMarker(state: AgentObserverState) {
+  return markerString([
+    metadataMarker(state.metadata),
+    [...state.confirmedCodexHarnessSessionIds].toSorted(),
+    [...state.codexLocatorMissCounts.entries()].toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  ]);
 }
 
 function parseObjectLine(line: string): CodexRolloutEntry | null {

@@ -1,5 +1,6 @@
 import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
+import { activeCodexStreamCandidates, selectConfirmedCodexPrimary } from './codex/identity.js';
 import type { CodexRolloutLifecycleRecord } from './codex/lifecycle.js';
 import { harnessDefinition } from './definitions.js';
 import type { AgentSessionHarnessMetadataRead } from './ledger.js';
@@ -48,8 +49,8 @@ export type AgentObserverState = {
   edges: readonly ObservedHarnessTurnEdge[];
   attention: AttentionState;
   projectionMarker: string;
-  locatedCodexHarnessSessionId: string | null;
-  codexLocatorMissCount: number;
+  confirmedCodexHarnessSessionIds: Set<string>;
+  readonly codexLocatorMissCounts: Map<string, number>;
   initialized: boolean;
 };
 
@@ -73,8 +74,8 @@ export function createAgentObserverState(
     edges: [],
     attention: 'idle',
     projectionMarker: '',
-    locatedCodexHarnessSessionId: null,
-    codexLocatorMissCount: 0,
+    confirmedCodexHarnessSessionIds: new Set(),
+    codexLocatorMissCounts: new Map(),
     initialized: false,
   };
 }
@@ -163,11 +164,20 @@ export function projectAgentObserverState(input: {
     attentionByHarnessSessionId.set(harnessSessionId, streamAttention);
   }
 
-  const selectedHarnessSessionId =
-    input.state.metadata.status === 'valid' ? input.state.metadata.metadata.harnessSessionId : null;
-  const attention = selectedHarnessSessionId
-    ? (attentionByHarnessSessionId.get(selectedHarnessSessionId) ?? 'idle')
-    : 'idle';
+  const selectedHarnessSessionId = selectedMetadataHarnessSessionId(input.state.metadata);
+  const attention =
+    input.harness === 'codex'
+      ? codexAttention({
+          recordsByHarnessSessionId,
+          attentionByHarnessSessionId,
+          activePtyProcessId: input.activePtyProcessId,
+          selectedHarnessSessionId,
+          confirmedHarnessSessionIds: input.state.confirmedCodexHarnessSessionIds,
+          locatorMissCounts: input.state.codexLocatorMissCounts,
+        })
+      : selectedHarnessSessionId
+        ? (attentionByHarnessSessionId.get(selectedHarnessSessionId) ?? 'idle')
+        : 'idle';
   const marker = markerString([
     metadataMarker(input.state.metadata),
     input.activePtyProcessId,
@@ -218,6 +228,50 @@ export function metadataMarker(metadata: AgentSessionHarnessMetadataRead) {
 
 export function markerString(value: unknown) {
   return JSON.stringify(value);
+}
+
+const CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS = 2;
+
+function codexAttention(input: {
+  readonly recordsByHarnessSessionId: ReadonlyMap<string, readonly HarnessObservationRecord[]>;
+  readonly attentionByHarnessSessionId: ReadonlyMap<string, AttentionState>;
+  readonly activePtyProcessId: number | null;
+  readonly selectedHarnessSessionId: string | null;
+  readonly confirmedHarnessSessionIds: ReadonlySet<string>;
+  readonly locatorMissCounts: ReadonlyMap<string, number>;
+}): AttentionState {
+  const activeCandidates = activeCodexStreamCandidates(
+    input.recordsByHarnessSessionId,
+    input.activePtyProcessId,
+  );
+  // Attention describes the thread the user is currently talking to, so it must
+  // follow the same primary selection the observer uses to promote resumable
+  // identity. Superseded threads (`/clear`, an in-process thread switch) keep
+  // their history and lifecycle edges, but their terminal state must not keep
+  // the session pinned to `working` or `error`.
+  const primaryHarnessSessionId = selectConfirmedCodexPrimary({
+    candidates: activeCandidates,
+    confirmedHarnessSessionIds: input.confirmedHarnessSessionIds,
+    currentHarnessSessionId: input.selectedHarnessSessionId,
+  });
+  if (primaryHarnessSessionId) {
+    return input.attentionByHarnessSessionId.get(primaryHarnessSessionId) ?? 'idle';
+  }
+  const unresolvedIds = activeCandidates.map((candidate) => candidate.harnessSessionId);
+  if (
+    unresolvedIds.some(
+      (harnessSessionId) =>
+        (input.locatorMissCounts.get(harnessSessionId) ?? 0) >=
+        CODEX_MISSING_NATIVE_ARTIFACT_GRACE_POLLS,
+    )
+  ) {
+    return 'error';
+  }
+  return 'idle';
+}
+
+function selectedMetadataHarnessSessionId(metadata: AgentSessionHarnessMetadataRead) {
+  return metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null;
 }
 
 function activeTurnIsDead(

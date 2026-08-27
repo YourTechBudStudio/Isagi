@@ -4,6 +4,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -414,8 +415,8 @@ test('a live Codex session switch publishes a fully completed first turn', async
           newRollout,
           `${codexEntry('session_meta', 0, { id: 'new-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n${codexEntry('event_msg', 2, { type: 'task_complete', turn_id: 'turn-1' })}\n`,
         );
-        prepareArtifacts(root, 'new-session', [
-          ledgerRecord('codex', 'new-session', 'SessionStart', 0, {
+        prepareLedger(root, 'new-session', [
+          ledgerRecord('codex', 'new-session', 'SessionStart', 3, {
             session_id: 'new-session',
             transcript_path: newRollout,
           }),
@@ -425,7 +426,8 @@ test('a live Codex session switch publishes a fully completed first turn', async
         const published = yield* Effect.all([subscription.take, subscription.take]);
         const edges = yield* observer.getTurnEdges(10);
         yield* subscription.unsubscribe;
-        return { published, edges };
+        const metadata = readHarnessMetadata(root);
+        return { published, edges, metadata };
       }).pipe(Effect.provide(testLayer(root))),
     );
 
@@ -439,6 +441,175 @@ test('a live Codex session switch publishes a fully completed first turn', async
         .map((edge) => edge.type),
       ['turn_started', 'turn_ended'],
     );
+    assert.equal(result.metadata.harnessSessionId, 'new-session');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a superseded Codex thread stops driving attention after a live thread switch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-supersede-working-'));
+  const oldRollout = join(root, 'old-native-rollout.jsonl');
+  const newRollout = join(root, 'new-native-rollout.jsonl');
+  try {
+    await seedActiveAgentSession(root, 'codex');
+    // The old thread is left mid-turn, exactly what `/clear` produces when the
+    // user switches away before the running turn reports a terminal event.
+    writeFileSync(
+      oldRollout,
+      `${codexEntry('session_meta', 0, { id: 'old-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n`,
+    );
+    prepareArtifacts(root, 'old-session', [
+      ledgerRecord('codex', 'old-session', 'SessionStart', 0, {
+        session_id: 'old-session',
+        transcript_path: oldRollout,
+      }),
+    ]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        assert.equal(yield* observer.getAttention(10), 'working');
+
+        writeFileSync(
+          newRollout,
+          `${codexEntry('session_meta', 0, { id: 'new-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-2' })}\n${codexEntry('event_msg', 2, { type: 'task_complete', turn_id: 'turn-2' })}\n`,
+        );
+        prepareLedger(root, 'new-session', [
+          ledgerRecord('codex', 'new-session', 'SessionStart', 3, {
+            session_id: 'new-session',
+            transcript_path: newRollout,
+          }),
+        ]);
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        return {
+          attention: yield* observer.getAttention(10),
+          edges: yield* observer.getTurnEdges(10),
+          metadata: readHarnessMetadata(root),
+        };
+      }).pipe(Effect.provide(testLayer(root))),
+    );
+
+    assert.equal(result.attention, 'waiting');
+    assert.equal(result.metadata.harnessSessionId, 'new-session');
+    // History from the superseded thread is retained, only its attention is dropped.
+    assert.ok(result.edges.some((edge) => edge.harnessSessionId === 'old-session'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a superseded failed Codex thread does not pin the new thread to error', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-supersede-error-'));
+  const oldRollout = join(root, 'old-native-rollout.jsonl');
+  const newRollout = join(root, 'new-native-rollout.jsonl');
+  try {
+    await seedActiveAgentSession(root, 'codex');
+    writeFileSync(
+      oldRollout,
+      `${codexEntry('session_meta', 0, { id: 'failed-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n${codexEntry('event_msg', 2, { type: 'turn_aborted', turn_id: 'turn-1', reason: 'interrupted' })}\n`,
+    );
+    prepareArtifacts(root, 'failed-session', [
+      ledgerRecord('codex', 'failed-session', 'SessionStart', 0, {
+        session_id: 'failed-session',
+        transcript_path: oldRollout,
+      }),
+    ]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        assert.equal(yield* observer.getAttention(10), 'error');
+
+        writeFileSync(
+          newRollout,
+          `${codexEntry('session_meta', 0, { id: 'fresh-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-2' })}\n`,
+        );
+        prepareLedger(root, 'fresh-session', [
+          ledgerRecord('codex', 'fresh-session', 'SessionStart', 3, {
+            session_id: 'fresh-session',
+            transcript_path: newRollout,
+          }),
+        ]);
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        return {
+          attention: yield* observer.getAttention(10),
+          metadata: readHarnessMetadata(root),
+        };
+      }).pipe(Effect.provide(testLayer(root))),
+    );
+
+    assert.equal(result.attention, 'working');
+    assert.equal(result.metadata.harnessSessionId, 'fresh-session');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an ephemeral Codex side session cannot replace the resumable thread or hide waiting', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-side-'));
+  const rollout = join(root, 'main-native-rollout.jsonl');
+  try {
+    await seedActiveAgentSession(root, 'codex');
+    writeFileSync(
+      rollout,
+      `${codexEntry('session_meta', 0, { id: 'main-session' })}\n${codexEntry('event_msg', 1, { type: 'task_started', turn_id: 'turn-1' })}\n${codexEntry('event_msg', 2, { type: 'task_complete', turn_id: 'turn-1' })}\n`,
+    );
+    prepareArtifacts(root, 'main-session', [
+      ledgerRecord('codex', 'main-session', 'SessionStart', 0, {
+        session_id: 'main-session',
+        transcript_path: rollout,
+      }),
+    ]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        assert.equal(yield* observer.getAttention(10), 'waiting');
+
+        // Reproduce the legacy hook race: `/side` wrote its ephemeral id into
+        // resumable metadata even though it has no durable native rollout.
+        prepareArtifacts(root, 'side-session', [
+          ledgerRecord('codex', 'side-session', 'SessionStart', 4, {
+            session_id: 'side-session',
+            source: 'startup',
+            transcript_path: null,
+          }),
+        ]);
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        return {
+          attention: yield* observer.getAttention(10),
+          metadata: readHarnessMetadata(root),
+        };
+      }).pipe(Effect.provide(testLayer(root))),
+    );
+
+    assert.equal(result.attention, 'waiting');
+    assert.equal(result.metadata.harnessSessionId, 'main-session');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex reports degraded attention when no active stream gains a native rollout', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-observer-codex-unresolved-'));
+  try {
+    await seedActiveAgentSession(root, 'codex');
+    prepareArtifacts(root, 'unresolved-session', [
+      ledgerRecord('codex', 'unresolved-session', 'SessionStart', 0, {
+        session_id: 'unresolved-session',
+        transcript_path: null,
+      }),
+    ]);
+    const attention = await Effect.runPromise(
+      Effect.gen(function* () {
+        const observer = yield* HarnessLedgerObserver;
+        assert.equal(yield* observer.getAttention(10), 'idle');
+        yield* pollHarnessLedgerObserverForTest(observer, 10);
+        return yield* observer.getAttention(10);
+      }).pipe(Effect.provide(testLayer(root))),
+    );
+    assert.equal(attention, 'error');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1074,9 +1245,29 @@ function prepareArtifacts(
     })}\n`,
     { mode: 0o600 },
   );
+  return prepareLedger(root, harnessSessionId, records, agentSessionId);
+}
+
+function prepareLedger(
+  root: string,
+  harnessSessionId: string,
+  records: readonly string[],
+  agentSessionId = 10,
+) {
+  const directory = join(root, 'sessions', 'agent-sessions', String(agentSessionId));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, `${Buffer.from(harnessSessionId).toString('hex')}.harness.jsonl`);
   writeFileSync(path, records.map((record) => `${record}\n`).join(''), { mode: 0o600 });
   return path;
+}
+
+function readHarnessMetadata(root: string, agentSessionId = 10) {
+  return JSON.parse(
+    readFileSync(
+      join(root, 'sessions', 'agent-sessions', String(agentSessionId), 'harness.json'),
+      'utf8',
+    ),
+  ) as { readonly harnessSessionId: string | null };
 }
 
 function ledgerRecord(
