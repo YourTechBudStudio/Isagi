@@ -379,3 +379,84 @@ test('backend-session GC skips an adapter that is unavailable', async () => {
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Explicit per-launch backend selection
+// ---------------------------------------------------------------------------
+//
+// `LaunchPtyProcessInput.backend` is the one contract extension a caller whose
+// transport is part of its own correctness needs. The property worth proving is
+// mostly the *negative* one: omitting the field must still follow the configured
+// preference under both configurations, because a regression there would
+// silently re-point every agent and terminal session in the product.
+
+function launchingCatalog(configured: PtyBackendName, launched: PtyBackendName[]) {
+  const recordingLaunch = (name: PtyBackendName) => ({
+    launch: (input: { readonly ptyProcessId: number }) =>
+      Effect.sync(() => {
+        launched.push(name);
+        return {
+          schemaVersion: 1 as const,
+          backend: 'node_pty' as const,
+          ptyProcessId: input.ptyProcessId,
+          pid: 4242,
+        };
+      }),
+  });
+  return fakeBackendCatalog({
+    configured,
+    nodePty: backendStub('node_pty', recordingLaunch('node_pty')),
+    tmux: backendStub('tmux', recordingLaunch('tmux')),
+  });
+}
+
+function launchWith(input: {
+  readonly dataRoot: string;
+  readonly configured: PtyBackendName;
+  readonly backend?: PtyBackendName | undefined;
+}) {
+  const launched: PtyBackendName[] = [];
+  const catalog = launchingCatalog(input.configured, launched);
+  return Effect.gen(function* () {
+    const service = yield* PtyService;
+    const repository = yield* PtyRepository;
+    const metadata = yield* service.launch({
+      command: 'pnpm',
+      args: ['dev'],
+      cwd: '/repo/isagi',
+      ...(input.backend ? { backend: input.backend } : {}),
+    });
+    const row = yield* repository.findProcess(metadata.ptyProcessId);
+    return { launched, row };
+  }).pipe(Effect.provide(serviceLayer(input.dataRoot, catalog)));
+}
+
+for (const configured of ['node_pty', 'tmux'] as const) {
+  test(`a launch with no backend field uses the configured ${configured} adapter`, async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-default-backend-'));
+    try {
+      const result = await Effect.runPromise(launchWith({ dataRoot, configured }));
+      assert.deepEqual(result.launched, [configured]);
+      assert.equal(result.row?.backend, configured);
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test('an explicit node_pty selection wins over a configured tmux backend', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-explicit-backend-'));
+  try {
+    const result = await Effect.runPromise(
+      launchWith({ dataRoot, configured: 'tmux', backend: 'node_pty' }),
+    );
+    assert.deepEqual(result.launched, ['node_pty']);
+    assert.equal(result.row?.backend, 'node_pty');
+    // The property the selection exists for: node-pty retains a log file, so a
+    // bounded startup-output read has something to read.
+    assert.equal(result.row?.logMode, 'backend_file');
+    assert.ok(result.row?.logPath);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

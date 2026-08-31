@@ -8,10 +8,12 @@ import {
   AllowAllHarnessControlPlaneLayer,
   blockedHarnessControlPlaneLayer,
 } from '../../harness-control-plane/test-support.js';
+import { EntityLockLive } from '../../lib/locks/entity-lock.js';
 import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
+import type { PtyProcessRow } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
 import { SessionLifecycleLive } from '../../session-lifecycle/index.js';
-import type { AgentSessionRow, PtyProcessRow } from '../../surfaces/index.js';
+import type { AgentSessionRow } from '../../surfaces/index.js';
 import {
   AgentSessionRepository,
   type AgentSessionRepositoryService,
@@ -316,7 +318,7 @@ function testLayer(input: {
     ),
     Layer.provide(Layer.succeed(PtyService, fakePtyService(input.ptyLaunches))),
     Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses(input.launchInputs))),
-    Layer.provide(SessionLifecycleLive),
+    Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
     Layer.provide(InternalRuntimeEventBusLive),
     Layer.provide(input.controlPlaneLayer ?? AllowAllHarnessControlPlaneLayer),
   );
@@ -356,6 +358,7 @@ function fakePtyService(
 ): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: (input) =>
       Effect.sync(() => {
         ptyLaunches.push({ command: input.command, args: input.args, cwd: input.cwd });

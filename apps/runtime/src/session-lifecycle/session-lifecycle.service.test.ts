@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Either } from 'effect';
+import { Effect, Either, Layer } from 'effect';
 
+import { EntityLockLive } from '../lib/locks/entity-lock.js';
 import { SessionLifecycle, SessionLifecycleLive } from './index.js';
+
+// Restore exclusion is delegated to the shared per-entity lock, so the layer
+// under test needs one. Every test builds its own; nothing here depends on the
+// instance being shared with another domain.
+const lifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
 
 const agentKey = { kind: 'agent_session' as const, sessionId: 10 };
 const otherAgentKey = { kind: 'agent_session' as const, sessionId: 11 };
@@ -20,7 +26,7 @@ test('attach tokens are single use', async () => {
         .consumeAttachToken({ key: agentKey, token: token.token })
         .pipe(Effect.either);
       return { first, second };
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.equal(Either.isRight(result.first), true);
@@ -41,7 +47,7 @@ test('issuing multiple tokens keeps unresolved attach attempts independent', asy
         .consumeAttachToken({ key: agentKey, token: secondToken.token })
         .pipe(Effect.either);
       return { first, second };
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.equal(Either.isRight(result.first), true);
@@ -62,7 +68,7 @@ test('revoking attach tokens invalidates all outstanding tokens for a session', 
         .consumeAttachToken({ key: agentKey, token: secondToken.token })
         .pipe(Effect.either);
       return { first, second };
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.equal(Either.isLeft(result.first), true);
@@ -81,7 +87,7 @@ test('attach tokens expire after five minutes', async () => {
         return yield* lifecycle
           .consumeAttachToken({ key: agentKey, token: token.token })
           .pipe(Effect.either);
-      }).pipe(Effect.provide(SessionLifecycleLive)),
+      }).pipe(Effect.provide(lifecycleLayer)),
     );
 
     assert.equal(Either.isLeft(result), true);
@@ -103,7 +109,7 @@ test('token consumption rejects session mismatches and still consumes the token'
         .consumeAttachToken({ key: agentKey, token: token.token })
         .pipe(Effect.either);
       return { mismatch, retry };
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.equal(Either.isLeft(result.mismatch), true);
@@ -124,7 +130,7 @@ test('superseding an active attachment invokes the moved handle once', async () 
       yield* lifecycle.supersedeAttachment(agentKey);
       yield* lifecycle.supersedeAttachment(agentKey);
       return moved;
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.equal(movedCount, 1);
@@ -146,7 +152,7 @@ test('restore locks serialize work by durable session key only', async () => {
         );
       yield* Effect.all([locked('a'), locked('b')], { concurrency: 'unbounded' });
       return events;
-    }).pipe(Effect.provide(SessionLifecycleLive)),
+    }).pipe(Effect.provide(lifecycleLayer)),
   );
 
   assert.deepEqual(order, ['a:start', 'a:end', 'b:start', 'b:end']);

@@ -15,6 +15,7 @@ import {
   type PtyRepositoryService,
   type PtyServiceShape,
 } from '../../pty-processes/index.js';
+import type { PtyProcessRow } from '../../pty-processes/index.js';
 import type { PtyAttachment } from '../../pty-processes/pty.service.js';
 import { fakePtyAllocation } from '../../pty-processes/test-support.js';
 import type { PtyProcessLaunchMetadata } from '../../pty-processes/types.js';
@@ -26,7 +27,6 @@ import {
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from '../../runtime-events/index.js';
-import type { PtyProcessRow } from '../../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../../workspace/index.js';
 import { registerCommandsApi } from '../api.js';
 import {
@@ -113,6 +113,7 @@ export function fakeCommandLogPtyService(
 ): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({
@@ -817,6 +818,7 @@ export function ptyService(overrides: Partial<PtyServiceShape> = {}): PtyService
   return {
     allocateLaunch:
       overrides.allocateLaunch ?? (() => Effect.die('pty allocateLaunch is not used')),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: overrides.launch ?? (() => Effect.die('launch is not used')),
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
     attach: () => Effect.die('attach is not used'),

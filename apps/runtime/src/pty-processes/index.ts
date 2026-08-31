@@ -19,13 +19,19 @@ export type { PtyService as PtyServiceShape } from './pty.service.js';
 // generic cleanup; it stays PTY-layer vocabulary, exported rather than
 // re-spelled so the two cannot drift.
 export type { DurablePtyTerminationReason } from './service/lifecycle.js';
+export { exitDetail } from './exit-detail.js';
 export type {
   BackendAttachment,
   LaunchBackendSessionInput,
   PtyBackend as PtyBackendShape,
   PtyExit,
   PtyProcessAllocation,
+  PtyProcessRecord,
+  PtyProcessRow,
 } from './types.js';
+// The affirmative-vs-absent kill outcome, exported so a caller that must not
+// clear ownership on an unconfirmed termination can name what it requires.
+export type { PtyTerminateOutcome } from './service/termination.js';
 export {
   PtyKillError,
   PtyResizeError,

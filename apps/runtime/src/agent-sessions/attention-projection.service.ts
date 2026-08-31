@@ -12,9 +12,10 @@ import {
   worktreeSurfaces,
 } from '../persistence/schema.js';
 import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
+import type { PtyProcessRow } from '../pty-processes/index.js';
 import { agentSessionRow } from '../surfaces/row-mappers.js';
 import { deriveAgentSessionState } from '../surfaces/session-status.js';
-import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../surfaces/types.js';
+import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
 import { AgentSessionArtifacts } from './harness/ledger.js';
 import { HarnessLedgerObserver } from './harness/observer.service.js';
 

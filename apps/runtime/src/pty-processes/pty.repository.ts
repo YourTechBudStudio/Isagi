@@ -11,7 +11,7 @@ import {
   worktreeCommandRuns,
   worktreeCommandStates,
 } from '../persistence/schema.js';
-import type { PtyProcessRow } from '../surfaces/index.js';
+import type { PtyProcessRow } from './types.js';
 import { isTerminalPtyProcessStatus } from './types.js';
 import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 

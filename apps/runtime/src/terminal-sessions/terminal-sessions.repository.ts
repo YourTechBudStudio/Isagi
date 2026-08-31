@@ -3,7 +3,8 @@ import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { ptyProcesses, surfacePanes, terminalSessions } from '../persistence/schema.js';
-import type { PtyProcessRow, TerminalSessionRow } from '../surfaces/index.js';
+import type { PtyProcessRow } from '../pty-processes/index.js';
+import type { TerminalSessionRow } from '../surfaces/index.js';
 
 export interface TerminalSessionRepositoryService {
   readonly create: (input: {

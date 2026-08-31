@@ -20,8 +20,6 @@ export type {
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
-  PtyProcessRow,
-  PtyProcessRecord,
   RenameSurfaceOutput,
   SurfaceDeletePaneTarget,
   SurfaceDeleteTarget,

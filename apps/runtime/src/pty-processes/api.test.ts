@@ -17,6 +17,7 @@ import {
   AgentSessionService,
   type AgentSessionServiceShape,
 } from '../agent-sessions/index.js';
+import { EntityLockLive } from '../lib/locks/entity-lock.js';
 import {
   SessionLifecycle,
   SessionLifecycleLive,
@@ -30,6 +31,8 @@ import {
 import { registerPtyApi } from './api.js';
 import { PtyService, type PtyServiceShape } from './index.js';
 import type { PtyAttachment } from './pty.service.js';
+
+const sessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
 
 type OutputSender = (message: PtyStreamOutputMessageSet) => void;
 
@@ -94,7 +97,7 @@ test('PTY websocket API reports unsupported harness adapter failures with stable
         PtyService,
         fakePtyService({ onAttachStarted: () => {}, attachPromise: async () => fakeAttachment() }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -142,7 +145,7 @@ test('PTY websocket API reports invalid harness metadata with stable protocol co
         PtyService,
         fakePtyService({ onAttachStarted: () => {}, attachPromise: async () => fakeAttachment() }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -189,7 +192,7 @@ test('PTY websocket API detaches an attachment that resolves after socket close'
             }),
         }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -247,7 +250,7 @@ test('PTY websocket API preserves session replay before live output ordering', a
             }),
         }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -317,7 +320,7 @@ test('PTY websocket API buffers client input until live attach completes', async
             }),
         }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -373,7 +376,7 @@ test('PTY websocket API supersede detaches the displaced viewer before the repla
           },
         }),
       ),
-      SessionLifecycleLive,
+      sessionLifecycleLayer,
     ),
   );
 
@@ -453,6 +456,7 @@ function fakePtyService(input: {
 }): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () => Effect.die('launch is not used'),
     getAttachmentPlan: () =>
       Effect.succeed({

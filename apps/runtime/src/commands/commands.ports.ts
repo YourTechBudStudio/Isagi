@@ -1,9 +1,11 @@
-import { Context, Data, Effect, Schema } from 'effect';
+import { Context, Data, Effect, Layer, Schema } from 'effect';
 
+import { LoopbackPortProbe } from '../lib/net/loopback-port-probe.js';
 import type {
   CommandPortPathConfig,
   WorktreeCommandPortConfig,
 } from '../project-config/project-config.schema.js';
+import { describeCommandCause } from './commands.diagnostics.js';
 
 // The resolved-port vocabulary shared by persistence, launch, and projection.
 //
@@ -54,7 +56,7 @@ const maxOsAssignReasks = 5;
 
 // The expected failure of resolution. `detail` is runtime-authored and safe to
 // persist and display: it names the endpoint's environment variable (a
-// config-authored identifier) and may embed `describeOperationalCause` output,
+// config-authored identifier) and may embed `describeCommandCause` output,
 // which is the same trust posture `env_invalid` and `pty_launch_failed` take.
 export class CommandPortAllocationError extends Data.TaggedError('CommandPortAllocationError')<{
   readonly detail: string;
@@ -84,6 +86,28 @@ export interface CommandPortProbeService {
 
 export const CommandPortProbe =
   Context.GenericTag<CommandPortProbeService>('isagi/CommandPortProbe');
+
+/**
+ * The commands domain's view of the one socket adapter in the runtime.
+ *
+ * The adapter owns the listener lifecycle and hands back a structured cause;
+ * this layer owns the command vocabulary and is the boundary that decides the
+ * cause is safe to render. It classifies `error.cause` rather than the error
+ * itself on purpose: the shared classifier deliberately does not know
+ * `lib/net`'s type, and naming it there would put a low-level adapter into a
+ * module every domain imports.
+ */
+export const CommandPortProbeLive = Layer.effect(
+  CommandPortProbe,
+  Effect.map(LoopbackPortProbe, (probe) => ({
+    probeInactive: probe.probeInactive,
+    obtainEphemeralPort: probe.obtainEphemeralPort.pipe(
+      Effect.mapError(
+        (error) => new CommandPortAllocationError({ detail: describeCommandCause(error.cause) }),
+      ),
+    ),
+  })),
+);
 
 /**
  * Resolve one command's declared ports into the snapshot its incarnation will

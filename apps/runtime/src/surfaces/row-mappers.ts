@@ -13,10 +13,10 @@ import {
   worktreeEnvironmentStates,
   worktreeSurfaces,
 } from '../persistence/schema.js';
+import type { PtyProcessRow } from '../pty-processes/index.js';
 import type {
   AgentSessionRow,
   EnvironmentFocusRow,
-  PtyProcessRow,
   SurfaceMetadataRow,
   SurfacePaneRow,
   SurfaceRow,

@@ -10,7 +10,6 @@ import {
   InternalRuntimeEventBus,
   type InternalRuntimeEventBusService,
 } from '../runtime-events/index.js';
-import type { PtyProcessRecord } from '../surfaces/index.js';
 import { PtyBackendCatalog, type PtyBackendCatalogService } from './backend.js';
 import { PtyForegroundState, type PtyForegroundStateService } from './foreground-state.js';
 import { PtyRepository, type PtyRepositoryService } from './pty.repository.js';
@@ -35,10 +34,17 @@ import {
   type DurablePtyTerminationReason,
   type PtyReservations,
 } from './service/lifecycle.js';
-import { replayBytesForProcess, replayProcessLog, reportOrphanPtyLogs } from './service/logs.js';
+import {
+  readPtyLogTail,
+  replayBytesForProcess,
+  replayProcessLog,
+  reportOrphanPtyLogs,
+  type PtyLogTail,
+} from './service/logs.js';
 import { makePtyRetryScheduler } from './service/retry.js';
 import { launchEnv, runtimeNamespace } from './service/runtime-namespace.js';
 import { terminatePtyProcess, type PtyTerminateOutcome } from './service/termination.js';
+import type { PtyProcessRecord } from './types.js';
 import {
   PtyKillError,
   PtyResizeError,
@@ -151,6 +157,18 @@ export interface PtyService {
   readonly pin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly unpin: (input: { readonly ptyProcessId: number }) => Effect.Effect<void>;
   readonly isPinned: (input: { readonly ptyProcessId: number }) => Effect.Effect<boolean>;
+  /**
+   * The last `maxBytes` of one incarnation's retained log, read on demand.
+   *
+   * Bounded by the caller because the bound is a product decision, not this
+   * layer's. A row that retains nothing answers `{ excerpt: null }` rather than
+   * failing — "nothing was retained" and "we could not read it" are different
+   * facts, and only the second is worth a retry.
+   */
+  readonly readLogTail: (input: {
+    readonly ptyProcessId: number;
+    readonly maxBytes: number;
+  }) => Effect.Effect<PtyLogTail, DatabaseError | PtyServiceError>;
 }
 
 export const PtyService = Context.GenericTag<PtyService>('isagi/PtyProcessService');
@@ -317,6 +335,31 @@ export const PtyServiceLive = Layer.scoped(
           pinnedPtyProcessIds.delete(input.ptyProcessId);
         }),
       isPinned: (input) => Effect.sync(() => pinnedPtyProcessIds.has(input.ptyProcessId)),
+      readLogTail: (input) =>
+        Effect.gen(function* () {
+          // A caller-side bug, not an operational failure: the only caller
+          // passes a fixed constant. Clamping would hide it, and a tagged
+          // member would widen this channel for a case that cannot occur.
+          if (!Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0) {
+            return yield* Effect.die(
+              new RangeError('maxBytes must be a non-negative safe integer'),
+            );
+          }
+          const session = yield* repository.findProcess(input.ptyProcessId);
+          // A process that never existed is not a process that retained nothing.
+          if (!session) {
+            return yield* new PtyServiceError({
+              code: 'session_not_found',
+              message: `PTY process ${input.ptyProcessId} was not found.`,
+              ptyProcessId: input.ptyProcessId,
+            });
+          }
+          return yield* readPtyLogTail({
+            logPath: session.logPath,
+            logMode: session.logMode,
+            maxBytes: input.maxBytes,
+          });
+        }),
     } satisfies PtyService;
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>

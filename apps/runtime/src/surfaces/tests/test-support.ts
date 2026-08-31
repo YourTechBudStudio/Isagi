@@ -9,6 +9,7 @@ import {
   HarnessLedgerObserverLive,
   type AgentSessionServiceShape,
 } from '../../agent-sessions/index.js';
+import { EntityLockLive } from '../../lib/locks/entity-lock.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
 import {
   agentSessions,
@@ -267,7 +268,7 @@ export function testLayer(
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
   );
-  const sessionLifecycle = SessionLifecycleLive;
+  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
   const surfaceService = SurfaceServiceLive.pipe(
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
@@ -320,6 +321,7 @@ function fakeTerminalSessionService(
 function fakePtyService(overrides: Partial<PtyServiceShape> = {}): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () => Effect.die('pty launch is not used by surface service tests'),
     getAttachmentPlan: () =>
       Effect.die('pty getAttachmentPlan is not used by surface service tests'),

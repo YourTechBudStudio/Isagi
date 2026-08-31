@@ -133,6 +133,7 @@ export const testCommandService = {
 
 export const testPtyService = {
   allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+  readLogTail: () => Effect.die('readLogTail is not used'),
   launch: () => Effect.die('pty launch is not used by workspace tests'),
   getAttachmentPlan: () => Effect.die('pty attachment planning is not used by workspace tests'),
   attach: () => Effect.die('pty attach is not used by workspace tests'),

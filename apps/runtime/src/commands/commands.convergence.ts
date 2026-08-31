@@ -5,7 +5,7 @@ import type { CommandStatus } from '@isagi/contracts';
 import type { DatabaseError } from '../persistence/index.js';
 import type { DurablePtyTerminationReason, PtyServiceShape } from '../pty-processes/index.js';
 import type { PtyRepositoryService } from '../pty-processes/pty.repository.js';
-import { describeOperationalCause } from './commands.diagnostics.js';
+import { describeCommandCause } from './commands.diagnostics.js';
 import {
   runtimeStoppedDiagnosticDetail,
   terminalPtyFactsForRow,
@@ -139,7 +139,7 @@ export function cleanupCommandIncarnations(
       const classified = yield* classifyCleanupFailure(deps.ptyRepository, ptyProcessId);
       failures.push({ ptyProcessId, error: outcome.left, ...classified });
       console.warn(
-        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeOperationalCause(outcome.left)}`,
+        `[runtime] Command incarnation cleanup failed operation=${input.operation} worktree=${input.target.worktreeId} command=${input.target.commandName} ptyProcessId=${ptyProcessId} backend=${classified.backend ?? 'unknown'} classification=${classified.kind} cause=${describeCommandCause(outcome.left)}`,
       );
     }
 
@@ -180,7 +180,7 @@ export function cleanupCommandIncarnations(
       ptyProcessId: survivor.ptyProcessId,
       diagnostic: {
         reason: 'process_control_failed',
-        detail: input.readoptDetail(describeOperationalCause(survivor.error)),
+        detail: input.readoptDetail(describeCommandCause(survivor.error)),
       },
     });
     // Always published, even though the status did not change: the web client's
@@ -247,7 +247,7 @@ export function reconcileCommandsAtBoot(deps: CommandConvergenceDependencies) {
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn(
-              `[runtime] Command boot convergence failed worktree=${entry.target.worktreeId} command=${entry.target.commandName} cause=${describeOperationalCause(error)}`,
+              `[runtime] Command boot convergence failed worktree=${entry.target.worktreeId} command=${entry.target.commandName} cause=${describeCommandCause(error)}`,
             );
           }),
         ),
@@ -317,7 +317,7 @@ function isNonterminalLink(ptyRepository: PtyRepositoryService, link: CommandPty
     Effect.catchAll((error) =>
       Effect.sync(() => {
         console.warn(
-          `[runtime] Command boot could not read a linked incarnation worktree=${link.worktreeId} command=${link.commandName} ptyProcessId=${link.ptyProcessId}; treating it as unresolved cause=${describeOperationalCause(error)}`,
+          `[runtime] Command boot could not read a linked incarnation worktree=${link.worktreeId} command=${link.commandName} ptyProcessId=${link.ptyProcessId}; treating it as unresolved cause=${describeCommandCause(error)}`,
         );
         return true;
       }),
@@ -442,7 +442,7 @@ function sweepLinklessRunningRuns(deps: CommandConvergenceDependencies) {
           Effect.catchAll((error) =>
             Effect.sync(() => {
               console.warn(
-                `[runtime] Command boot run-residue sweep failed worktree=${target.worktreeId} command=${target.commandName} runId=${run.id} cause=${describeOperationalCause(error)}`,
+                `[runtime] Command boot run-residue sweep failed worktree=${target.worktreeId} command=${target.commandName} runId=${run.id} cause=${describeCommandCause(error)}`,
               );
             }),
           ),

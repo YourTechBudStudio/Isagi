@@ -15,7 +15,7 @@ import type {
   PtyServiceShape,
 } from '../pty-processes/index.js';
 import type { WorkspaceRepositoryService } from '../workspace/index.js';
-import { describeOperationalCause } from './commands.diagnostics.js';
+import { describeCommandCause } from './commands.diagnostics.js';
 import {
   terminalCommandOutcomeForPtyRow,
   terminalPtyFactsForRow,
@@ -204,9 +204,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
             // and by boot reconciliation.
             console.warn(
               `[runtime] Command launch could not record its failure diagnostic worktree=${worktreeId} command=${commandName} cause=${
-                Either.isLeft(completed)
-                  ? describeOperationalCause(completed.left)
-                  : 'run row missing'
+                Either.isLeft(completed) ? describeCommandCause(completed.left) : 'run row missing'
               }`,
             );
           }
@@ -253,7 +251,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         Effect.catchAll((error) =>
           Effect.sync(() => {
             console.warn(
-              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeOperationalCause(error)}`,
+              `[runtime] Command launch interruption recovery failed worktree=${worktreeId} command=${commandName} cause=${describeCommandCause(error)}`,
             );
           }),
         ),
@@ -267,7 +265,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Either.isLeft(pruned)) {
           return yield* convergeBeforeMarker(
             pruned.left,
-            `Could not prepare the launch: ${describeOperationalCause(pruned.left)}`,
+            `Could not prepare the launch: ${describeCommandCause(pruned.left)}`,
           );
         }
 
@@ -287,7 +285,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
         if (Either.isLeft(marker)) {
           return yield* convergeBeforeMarker(
             marker.left,
-            `Could not record the launch: ${describeOperationalCause(marker.left)}`,
+            `Could not record the launch: ${describeCommandCause(marker.left)}`,
           );
         }
 
@@ -308,7 +306,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               (candidate) => candidate.abandon,
             ).pipe(Effect.either);
             if (Either.isLeft(acquired)) {
-              yield* converge(launchFailure(describeOperationalCause(acquired.left)));
+              yield* converge(launchFailure(describeCommandCause(acquired.left)));
               return actionOutput(target.command, 'failed', worktreeId, null);
             }
             const acquiredAllocation = acquired.right;
@@ -322,7 +320,7 @@ export function makeCommandLauncher(deps: CommandLauncherDependencies) {
               yield* acquiredAllocation.abandon;
               const converged = yield* converge(
                 launchFailure(
-                  `Could not record the process association; the command was not started: ${describeOperationalCause(link.left)}`,
+                  `Could not record the process association; the command was not started: ${describeCommandCause(link.left)}`,
                 ),
               ).pipe(Effect.either);
               // Only when the convergence write also fails does the original

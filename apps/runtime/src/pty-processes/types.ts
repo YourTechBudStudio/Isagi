@@ -1,6 +1,11 @@
 import { Data, type Effect } from 'effect';
 
-import type { PtyProcessBackend, PtyStreamOutputMessageSet, SessionStatus } from '@isagi/contracts';
+import type {
+  PtyProcessBackend,
+  PtyProcessLogMode,
+  PtyStreamOutputMessageSet,
+  SessionStatus,
+} from '@isagi/contracts';
 
 export type PtyBackendName = PtyProcessBackend;
 export type PtyProcessStatus = SessionStatus;
@@ -35,6 +40,41 @@ export function isTerminalPtyProcessStatus(status: PtyProcessStatus) {
 export function missingStatusReasonForBackend(backend: PtyBackendName): PtyProcessStatusReason {
   return backend === 'node_pty' ? 'runtime_ephemeral_lost' : 'backend_process_missing';
 }
+
+// The durable PTY process row, owned here because the process facts are this
+// domain's (ADR 0005). Read-side composition in `surfaces` joins it onto a
+// session row; it does not own it.
+export interface PtyProcessRow {
+  readonly id: number;
+  readonly backend: PtyProcessBackend;
+  readonly backendRefJson: string;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly argsJson: string;
+  readonly cwd: string;
+  readonly status: PtyProcessStatus;
+  readonly statusReason: PtyProcessStatusReason | null;
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly logMode: PtyProcessLogMode;
+  readonly logPath: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly exitedAt: string | null;
+  readonly lastSeenAt: string | null;
+}
+
+// The PTY process row as the process service consumes it: args/argsJson are
+// optional (some call sites build the record before structured args land) and
+// it may carry the placement context (pane/surface/worktree) resolved at read
+// time. A bare `PtyProcessRow` is the strict persisted shape.
+export type PtyProcessRecord = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
+  readonly args?: readonly string[] | undefined;
+  readonly argsJson?: string | undefined;
+  readonly paneId?: number | undefined;
+  readonly surfaceId?: number | undefined;
+  readonly worktreeId?: number | undefined;
+};
 
 export interface NodePtyBackendRef {
   readonly schemaVersion: 1;
@@ -234,6 +274,13 @@ export interface LaunchPtyProcessInput {
   readonly envForProcess?:
     | ((input: { readonly ptyProcessId: number }) => Effect.Effect<NodeJS.ProcessEnv, never>)
     | undefined;
+  /** Which adapter creates this incarnation. Omitted — the default — keeps the
+   *  existing behaviour exactly: the process-wide configured backend. A caller
+   *  supplies it only when the incarnation's transport is part of its own
+   *  correctness rather than a user preference. Every operation on an *existing*
+   *  row still dispatches through its persisted backend, so ADR 0005's
+   *  disposable-process model is untouched. */
+  readonly backend?: PtyBackendName | undefined;
 }
 
 export type PtyLaunchMode = 'direct' | 'user_shell';

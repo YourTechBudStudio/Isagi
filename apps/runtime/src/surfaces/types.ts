@@ -2,14 +2,16 @@ import type {
   AgentHarness,
   AgentSessionRecoveryAction,
   AgentSessionStatusReason,
-  PtyProcessBackend,
-  PtyProcessLogMode,
   SessionDiagnosticCode,
   SessionStatus,
   SplitPaneDirection,
   SurfaceLayoutNode,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
+
+// Read-side composition only: a session row carries the process the runtime
+// joined onto it. The PTY domain owns the row itself (ADR 0005/0008).
+import type { PtyProcessRow } from '../pty-processes/types.js';
 
 export interface EnvironmentFocusRow {
   readonly worktreeId: number;
@@ -48,46 +50,6 @@ export interface PaneSessionBinding {
   readonly sessionId: number;
   readonly activePtyProcessId: number | null;
 }
-
-export interface PtyProcessRow {
-  readonly id: number;
-  readonly backend: PtyProcessBackend;
-  readonly backendRefJson: string;
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly argsJson: string;
-  readonly cwd: string;
-  readonly status: SessionStatus;
-  readonly statusReason:
-    | 'user_requested'
-    | 'runtime_shutdown'
-    | 'backend_unavailable'
-    | 'backend_process_missing'
-    | 'backend_attach_failed'
-    | 'backend_launch_failed'
-    | 'runtime_ephemeral_lost'
-    | null;
-  readonly exitCode: number | null;
-  readonly signal: string | null;
-  readonly logMode: PtyProcessLogMode;
-  readonly logPath: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly exitedAt: string | null;
-  readonly lastSeenAt: string | null;
-}
-
-// The PTY process row as the process service consumes it: args/argsJson are
-// optional (some call sites build the record before structured args land) and
-// it may carry the placement context (pane/surface/worktree) resolved at read
-// time. A bare `PtyProcessRow` is the strict persisted shape.
-export type PtyProcessRecord = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
-  readonly args?: readonly string[] | undefined;
-  readonly argsJson?: string | undefined;
-  readonly paneId?: number | undefined;
-  readonly surfaceId?: number | undefined;
-  readonly worktreeId?: number | undefined;
-};
 
 export interface AgentSessionRow {
   readonly id: number;

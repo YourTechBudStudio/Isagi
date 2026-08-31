@@ -12,8 +12,9 @@ import {
 import { agentSessions, projects, ptyProcesses, worktrees } from '../../persistence/schema.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyForegroundStateLive } from '../../pty-processes/index.js';
+import type { PtyProcessRow } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
-import type { AgentSessionRow, PtyProcessRow, TerminalSessionRow } from '../../surfaces/types.js';
+import type { AgentSessionRow, TerminalSessionRow } from '../../surfaces/types.js';
 import { AgentSessionAttentionProjectionLive } from '../attention-projection.service.js';
 import { AgentSessionArtifactsLive } from '../harness/ledger.js';
 import { HarnessLedgerObserverLive } from '../harness/observer.service.js';

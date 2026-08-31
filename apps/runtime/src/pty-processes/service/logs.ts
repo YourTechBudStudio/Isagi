@@ -1,14 +1,16 @@
 import { readdirSync, statSync, unlinkSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import process from 'node:process';
+import { StringDecoder } from 'node:string_decoder';
 
 import { Effect } from 'effect';
 
-import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
+import type { PtyProcessLogMode, PtyStreamOutputMessageSet } from '@isagi/contracts';
 
-import type { PtyProcessRecord } from '../../surfaces/index.js';
 import { replayUtf8LogFile } from '../log-replay.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError } from '../types.js';
 
 const orphanLogSampleSize = 5;
@@ -130,6 +132,111 @@ export function cleanupOrphanPtyLogs(
       skippedYoung,
       failed,
     } satisfies OrphanPtyLogCleanupStats;
+  });
+}
+
+// The last `maxBytes` of one retained process log, decoded as UTF-8.
+//
+// Generic on purpose: it knows nothing about who is asking or why. The caller
+// owns the bound and the presentation.
+export interface PtyLogTail {
+  // `null` means nothing was retained — a backend that keeps no file, or a file
+  // that no longer exists. It is a different fact from an empty excerpt, which
+  // means the log exists and has no bytes in it.
+  readonly excerpt: string | null;
+  readonly truncated: boolean;
+  readonly totalBytes: number | null;
+}
+
+const tailChunkBytes = 64 * 1024;
+
+// A UTF-8 continuation byte is `10xxxxxx`. A bounded read can land in the middle
+// of a multi-byte character, and decoding from there would emit a replacement
+// character that the file itself does not contain — a truncation artefact
+// presented as retained output. Advancing is always safe: it only ever drops
+// bytes, never exceeds `maxBytes`, and the excerpt is already marked truncated.
+function isUtf8ContinuationByte(byte: number) {
+  return (byte & 0xc0) === 0x80;
+}
+
+// Node's filesystem errors carry an operating-system constant on `code`. This
+// only *branches* on it — the value is never rendered, and neither the error nor
+// its message reaches a log or a diagnostic — so a plain read is appropriate
+// here, unlike the paranoid own-data-descriptor read the redacting classifier
+// needs.
+function isMissingFile(cause: unknown) {
+  return cause instanceof Error && (cause as { readonly code?: unknown }).code === 'ENOENT';
+}
+
+export function readPtyLogTail(input: {
+  readonly logPath: string | null;
+  readonly logMode: PtyProcessLogMode;
+  readonly maxBytes: number;
+}): Effect.Effect<PtyLogTail, PtyServiceError> {
+  const { logPath, logMode, maxBytes } = input;
+  // Nothing was ever retained for this incarnation. Not a failure: a backend
+  // that keeps no file is a configuration, not a fault.
+  if (logMode !== 'backend_file' || !logPath) {
+    return Effect.succeed({ excerpt: null, truncated: false, totalBytes: null });
+  }
+
+  return Effect.tryPromise({
+    try: async (): Promise<PtyLogTail> => {
+      let file;
+      try {
+        file = await open(logPath, 'r');
+      } catch (cause) {
+        // The row outlived its file: an allocation abandoned before the backend
+        // prepared one, or the orphan-log sweep. Same answer as a backend that
+        // retains nothing.
+        if (isMissingFile(cause)) return { excerpt: null, truncated: false, totalBytes: null };
+        throw cause;
+      }
+      try {
+        const totalBytes = (await file.stat()).size;
+        if (totalBytes === 0) return { excerpt: '', truncated: false, totalBytes: 0 };
+
+        const wanted = Math.min(maxBytes, totalBytes);
+        let offset = totalBytes - wanted;
+        const truncated = offset > 0;
+
+        // Only a bounded start can split a character; a tail that begins at zero
+        // begins at a character boundary by construction.
+        if (truncated) {
+          const lead = Buffer.allocUnsafe(1);
+          while (offset < totalBytes) {
+            const { bytesRead } = await file.read(lead, 0, 1, offset);
+            if (bytesRead <= 0) break;
+            if (!isUtf8ContinuationByte(lead[0] as number)) break;
+            offset += 1;
+          }
+        }
+
+        const buffer = Buffer.allocUnsafe(Math.min(tailChunkBytes, totalBytes - offset));
+        const decoder = new StringDecoder('utf8');
+        let excerpt = '';
+        while (offset < totalBytes) {
+          const toRead = Math.min(buffer.byteLength, totalBytes - offset);
+          const { bytesRead } = await file.read(buffer, 0, toRead, offset);
+          if (bytesRead <= 0) break;
+          offset += bytesRead;
+          excerpt += decoder.write(buffer.subarray(0, bytesRead));
+        }
+        // Any partial character left here is at the physical end of the file, so
+        // the replacement reflects what was retained rather than the bound.
+        excerpt += decoder.end();
+
+        return { excerpt, truncated, totalBytes };
+      } finally {
+        await file.close();
+      }
+    },
+    catch: (cause) =>
+      new PtyServiceError({
+        code: 'log_read_failed',
+        message: 'Could not read this process log.',
+        cause,
+      }),
   });
 }
 

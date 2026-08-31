@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 
 import { Context, Data, Effect, Layer } from 'effect';
 
+import { EntityLock } from '../lib/locks/entity-lock.js';
+
 const attachTokenTtlMs = 5 * 60 * 1000;
 
 export type SessionLifecycleKey =
@@ -53,7 +55,11 @@ export const SessionLifecycle =
 export const SessionLifecycleLive = Layer.scoped(
   SessionLifecycle,
   Effect.gen(function* () {
-    const semaphores = new Map<string, Effect.Semaphore>();
+    // Restore exclusion is the generic per-entity lock, shared with every other
+    // domain that serializes on a durable entity. The attach-token and
+    // attachment state below stays private to sessions: only the mutual
+    // exclusion is common machinery.
+    const locks = yield* EntityLock;
     const tokens = new Map<string, AttachTokenRecord>();
     const tokensBySession = new Map<string, Set<string>>();
     const activeAttachments = new Map<
@@ -63,10 +69,7 @@ export const SessionLifecycleLive = Layer.scoped(
 
     const service: SessionLifecycleService = {
       withRestoreLock: (key, effect) =>
-        Effect.gen(function* () {
-          const semaphore = yield* semaphoreForKey(semaphores, key);
-          return yield* semaphore.withPermits(1)(effect);
-        }),
+        locks.withLock({ kind: key.kind, id: key.sessionId }, () => effect),
       issueAttachToken: (key) =>
         Effect.sync(() => {
           const now = Date.now();
@@ -160,7 +163,6 @@ export const SessionLifecycleLive = Layer.scoped(
 
     return yield* Effect.acquireRelease(Effect.succeed(service), () =>
       Effect.sync(() => {
-        semaphores.clear();
         tokens.clear();
         tokensBySession.clear();
         activeAttachments.clear();
@@ -168,17 +170,6 @@ export const SessionLifecycleLive = Layer.scoped(
     );
   }),
 );
-
-function semaphoreForKey(semaphores: Map<string, Effect.Semaphore>, key: SessionLifecycleKey) {
-  return Effect.gen(function* () {
-    const keyId = sessionKeyId(key);
-    const existing = semaphores.get(keyId);
-    if (existing) return existing;
-    const semaphore = yield* Effect.makeSemaphore(1);
-    semaphores.set(keyId, semaphore);
-    return semaphore;
-  });
-}
 
 function revokeTokensForKey(
   tokens: Map<string, AttachTokenRecord>,

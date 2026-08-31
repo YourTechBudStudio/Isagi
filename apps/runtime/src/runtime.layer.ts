@@ -30,6 +30,8 @@ import {
   type HostInventoryService,
   UserShellLive,
 } from './host-inventory/index.js';
+import { EntityLockLive } from './lib/locks/entity-lock.js';
+import { LoopbackPortProbeLive } from './lib/net/loopback-port-probe.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
 import {
@@ -145,7 +147,13 @@ const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
 const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
 );
-const SessionLifecycleLayer = SessionLifecycleLive;
+// Bound once so every consumer below provides the same layer value, which is
+// what makes "one lock scope" a fact rather than a convention.
+const EntityLockLayer = EntityLockLive;
+// Stateless, unlike the lock: sharing the reference is graph hygiene rather
+// than a correctness property.
+const LoopbackPortProbeLayer = LoopbackPortProbeLive;
+const SessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLayer));
 const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(PtyServiceLayer),
@@ -221,7 +229,7 @@ const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(RepositoryLive),
   Layer.provide(PtyServiceLayer),
   Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive),
+  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
   Layer.provide(DataDirectoryLive),
 );
 const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
