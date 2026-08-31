@@ -14,6 +14,7 @@ import type {
 import {
   derivePaneAttachmentIntent,
   derivePaneView,
+  ptyPaneSession,
   type PaneConnectionSnapshot,
   type PtyPaneSession,
 } from './view.js';
@@ -330,5 +331,63 @@ describe('derivePaneAttachmentIntent', () => {
 
   it('claims neither for an unbound pane', () => {
     assert.deepEqual(derivePaneAttachmentIntent(null, true), { connect: false, mounted: false });
+  });
+});
+
+describe('ptyPaneSession', () => {
+  it('flattens each PTY-backed kind', () => {
+    assert.equal(
+      ptyPaneSession({
+        kind: 'terminal_session',
+        terminalSession: {
+          id: 3,
+          paneId: 1,
+          worktreeId: 1,
+          cwd: '/tmp/worktree',
+          shellCommand: '/bin/zsh',
+          shellArgs: [],
+          statusReason: null,
+          status: 'running',
+          diagnosticCode: null,
+          diagnosticDetail: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          lastSeenAt: null,
+        },
+      })?.kind,
+      'terminal_session',
+    );
+  });
+
+  it('excludes an editor context rather than reading it as a terminal', () => {
+    // An editor owns no PTY attachment, so it has no flattened session for this
+    // domain to return. The pane renders as unbound, which is what an absence of
+    // a PTY session has always meant here.
+    assert.equal(
+      ptyPaneSession({
+        kind: 'editor_context',
+        editorContext: {
+          paneId: 9,
+          id: 4,
+          worktreeId: 1,
+          activePtyProcessId: null,
+          attempt: { state: 'none' },
+          processStatus: null,
+          processDiagnostic: null,
+          processDiagnosticDetail: null,
+          workbenchReadiness: null,
+          readinessDetail: null,
+          endpoint: null,
+          hasDiagnostics: false,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }),
+      null,
+    );
+  });
+
+  it('returns null for an unbound pane', () => {
+    assert.equal(ptyPaneSession(null), null);
   });
 });

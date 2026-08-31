@@ -273,6 +273,18 @@ test('the snapshot launch projection mirrors the enforced decision per harness',
   assert.deepEqual(byHarness.opencode?.launch, { status: 'blocked', reason: 'harness_disabled' });
 });
 
+test('the snapshot projects no editor capability for a runtime that declares none', async () => {
+  // This is a real wire fact every client reads, not merely a compiling field:
+  // the runtime declares no editor capability, so it truthfully reports that
+  // there is no installation to report on.
+  const snapshot = await runControlPlane(
+    policyState('valid', enabledPolicy()),
+    ready(available),
+    (service) => service.snapshot,
+  );
+  assert.deepEqual(snapshot.editorProvisioning, { status: 'not_applicable' });
+});
+
 test('acceptPolicy rejects with control_plane_not_ready before committing when inventory stays pending', async () => {
   let committed = false;
   const config: RuntimeConfigService = {

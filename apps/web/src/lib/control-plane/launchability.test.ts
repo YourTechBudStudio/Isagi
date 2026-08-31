@@ -40,6 +40,7 @@ function snapshot(overrides: Partial<ControlPlaneSnapshot> = {}): ControlPlaneSn
       lastAppliedFingerprint: null,
       lastResult: null,
     },
+    editorProvisioning: { status: 'not_applicable' },
     ...overrides,
   };
 }

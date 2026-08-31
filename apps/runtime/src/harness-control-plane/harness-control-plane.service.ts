@@ -229,6 +229,10 @@ function snapshotOf(
             : ({ status: 'blocked', reason: decision.reason } as const),
       };
     }),
+    // Constant until phase 03 supplies the provisioning service. This runtime
+    // declares no editor capability, so `not_applicable` is the truthful answer
+    // rather than a placeholder: there is no installation to report on.
+    editorProvisioning: { status: 'not_applicable' },
     reconciliation: {
       desiredFingerprint: rec.desiredFingerprint,
       runningFingerprint: rec.runningFingerprint,

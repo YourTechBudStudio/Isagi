@@ -5,6 +5,7 @@ import { QueryClient } from '@tanstack/react-query';
 
 import { terminalSettingsDefaults, type DurableSessionInventory } from '@isagi/contracts';
 
+import { surfaceDetailQueryKey } from '../query-keys.js';
 import { createTerminalPresentationCache } from '../terminal-cache/index.js';
 import type { TerminalPresentationController } from './controller.js';
 import { publishTerminalWorkspaceFact } from './coordinator-events.js';
@@ -44,14 +45,15 @@ function setup(t: TestContext, fetches: ReturnType<typeof deferred<DurableSessio
     onAttachmentEvent: () => {},
   } as TerminalPresentationWorkspace;
   let index = 0;
+  const queryClient = new QueryClient();
   const coordinator = createTerminalWorkspaceCoordinator({
     workspace,
-    queryClient: new QueryClient(),
+    queryClient,
     fetchInventory: () => fetches[index++]!.promise,
   });
   t.after(() => coordinator.dispose());
   coordinator.start();
-  return { cache, coordinator, diagnostics, session };
+  return { cache, coordinator, diagnostics, queryClient, session };
 }
 
 describe('terminal workspace inventory reconciliation', () => {
@@ -135,5 +137,123 @@ describe('terminal workspace inventory reconciliation', () => {
     request.resolve({ sessions: [] });
     await Promise.resolve();
     assert.equal(cache.getSnapshot().entries.length, 1);
+  });
+});
+
+describe('surface projection excludes editor panes', () => {
+  // An editor context is a durable entity of another domain: it owns no PTY
+  // attachment, so this cache must never mint an identity for it, never let one
+  // displace a PTY placement, and never treat one as a reason to drop a PTY
+  // entry. The exclusion is structural, so these assertions guard the boundary
+  // before any editor projection can reach a client.
+  const editorPane = {
+    id: 9,
+    surfaceId: 2,
+    title: 'Editor',
+    sortOrder: 1,
+    session: {
+      kind: 'editor_context',
+      editorContext: {
+        paneId: 9,
+        id: 4,
+        worktreeId: 1,
+        activePtyProcessId: null,
+        attempt: { state: 'none' },
+        processStatus: null,
+        processDiagnostic: null,
+        processDiagnosticDetail: null,
+        workbenchReadiness: null,
+        readinessDetail: null,
+        endpoint: null,
+        hasDiagnostics: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    },
+  } as const;
+
+  const agentPane = {
+    id: placement.paneId,
+    surfaceId: placement.surfaceId,
+    title: 'Agent',
+    sortOrder: 0,
+    session: {
+      kind: 'agent_session',
+      agentSession: {
+        id: identity.sessionId,
+        paneId: placement.paneId,
+        worktreeId: placement.worktreeId,
+        harness: 'pi',
+        cwd: '/tmp/worktree',
+        harnessSessionId: null,
+        statusReason: null,
+        recoveryAction: 'connect_existing',
+        status: 'running',
+        diagnosticCode: null,
+        diagnosticDetail: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: null,
+      },
+    },
+  } as const;
+
+  function publishSurface(queryClient: QueryClient, panes: readonly unknown[]): void {
+    queryClient.setQueryData(surfaceDetailQueryKey(placement.surfaceId), {
+      id: placement.surfaceId,
+      worktreeId: placement.worktreeId,
+      title: 'Surface',
+      layout: { kind: 'leaf', nodeId: 'n1', paneId: placement.paneId, collapsed: false },
+      activePaneId: placement.paneId,
+      panes,
+    });
+  }
+
+  it('registers no identity or placement for an editor pane', async (t) => {
+    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+    const before = cache.getSnapshot().entries.length;
+
+    publishSurface(queryClient, [agentPane, editorPane]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const entries = cache.getSnapshot().entries;
+    // The editor added no entry of its own...
+    assert.equal(entries.length, before);
+    // ...and no entry claims the editor's pane.
+    assert.equal(
+      entries.some((entry) => entry.placement?.paneId === editorPane.id),
+      false,
+    );
+    // ...and its context id was not misread as a PTY session id.
+    assert.equal(
+      entries.some((entry) => entry.identity.sessionId === editorPane.session.editorContext.id),
+      false,
+    );
+  });
+
+  it('leaves a neighbouring PTY placement intact when an editor pane appears', async (t) => {
+    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+
+    publishSurface(queryClient, [agentPane, editorPane]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const entry = cache
+      .getSnapshot()
+      .entries.find((candidate) => candidate.key === 'agent_session:7');
+    assert.ok(entry, 'the agent session entry survives');
+    assert.deepEqual(entry.placement, placement);
+  });
+
+  it('does not unplace a PTY session merely because an editor pane is present', async (t) => {
+    const { cache, queryClient } = setup(t, [deferred<DurableSessionInventory>()]);
+
+    // The agent pane is still in the projection; only the editor is new. A
+    // genuine disappearance still unplaces — that is reconciliation working —
+    // but an editor's presence is not a disappearance.
+    publishSurface(queryClient, [agentPane, editorPane]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(cache.getSnapshot().entries.length, 1);
+    assert.ok(cache.getSnapshot().entries[0]?.placement);
   });
 });

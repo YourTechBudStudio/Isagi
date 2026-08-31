@@ -1,5 +1,7 @@
 import { Schema } from 'effect';
 
+import { editorContextMetadataSchema } from '../editor/types.js';
+import { sessionStatusSchema } from '../processes/types.js';
 import {
   ptyStreamExitMessageSchema,
   ptyStreamOutputMessageSchema,
@@ -11,7 +13,15 @@ import {
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 const nonNegativeIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.nonNegative());
 
-export const paneSessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
+/**
+ * What is in a pane. This is the canonical declaration; `workspace/types.ts`
+ * imports it rather than keeping a second copy.
+ */
+export const paneSessionKindSchema = Schema.Literal(
+  'agent_session',
+  'terminal_session',
+  'editor_context',
+);
 export const surfaceLayoutAxisSchema = Schema.Literal('row', 'column');
 export const surfaceLayoutSizingSchema = Schema.Literal('auto', 'manual');
 
@@ -93,14 +103,6 @@ export const agentSessionRouteParamsSchema = Schema.Struct({
 export const terminalSessionRouteParamsSchema = Schema.Struct({
   terminalSessionId: positiveIntegerSchema,
 });
-
-export const sessionStatusSchema = Schema.Literal(
-  'starting',
-  'running',
-  'exited',
-  'failed',
-  'killed',
-);
 
 export const agentSessionStatusReasonSchema = Schema.Literal(
   'harness_launch_failed',
@@ -202,6 +204,10 @@ export const surfacePaneSessionSchema = Schema.Union(
     kind: Schema.Literal('terminal_session'),
     terminalSession: terminalSessionMetadataSchema,
   }),
+  Schema.Struct({
+    kind: Schema.Literal('editor_context'),
+    editorContext: editorContextMetadataSchema,
+  }),
 );
 
 export const surfacePaneSchema = Schema.Struct({
@@ -233,6 +239,15 @@ export const createSurfaceOutputSchema = Schema.Struct({
   title: Schema.String,
 });
 
+/**
+ * What a caller may ask to be created in a pane, and deliberately narrower than
+ * `paneSessionKindSchema`. An editor context is valid *projected* pane content
+ * but is never generically creatable or claimable: it is a durable per-worktree
+ * entity that the editor domain mints under its own lock, so a generic create,
+ * split, or claim must not be able to bring one into existence. The same
+ * asymmetry holds for `createSurfaceInputSchema`, `splitPaneInputSchema`,
+ * `paneSessionCreateInputSchema`, and the claim schemas below.
+ */
 export const paneSessionSpecSchema = Schema.Union(
   Schema.Struct({
     kind: Schema.Literal('agent_session'),
@@ -396,7 +411,6 @@ export type AgentSessionRouteParams = Schema.Schema.Type<typeof agentSessionRout
 export type TerminalSessionRouteParams = Schema.Schema.Type<
   typeof terminalSessionRouteParamsSchema
 >;
-export type SessionStatus = Schema.Schema.Type<typeof sessionStatusSchema>;
 export type AgentSessionStatusReason = Schema.Schema.Type<typeof agentSessionStatusReasonSchema>;
 export type TerminalSessionStatusReason = Schema.Schema.Type<
   typeof terminalSessionStatusReasonSchema

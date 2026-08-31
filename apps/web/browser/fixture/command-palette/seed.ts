@@ -315,6 +315,7 @@ export const FIXTURE_CONTROL_PLANE: ControlPlaneSnapshot = {
     lastAppliedFingerprint: null,
     lastResult: null,
   },
+  editorProvisioning: { status: 'not_applicable' },
 };
 
 function worktree(

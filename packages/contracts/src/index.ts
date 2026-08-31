@@ -2,6 +2,7 @@ import { agentSessionsEndpoints } from './agent-sessions/api.js';
 import { clientSettingsEndpoint } from './client-settings/api.js';
 import { commandsEndpoints } from './commands/api.js';
 import { controlPlaneEndpoints } from './control-plane/api.js';
+import { editorEndpoints } from './editor/api.js';
 import { healthEndpoint } from './health/api.js';
 import { pathsEndpoints } from './paths/api.js';
 import { projectsEndpoints } from './projects/api.js';
@@ -16,6 +17,7 @@ export const apiEndpoints = {
   commands: commandsEndpoints,
   clientSettings: clientSettingsEndpoint,
   controlPlane: controlPlaneEndpoints,
+  editor: editorEndpoints,
   health: healthEndpoint,
   workspace: workspaceEndpoints,
   projects: projectsEndpoints,
@@ -127,6 +129,11 @@ export {
   surfaceOrderApiErrorSchema,
   surfaceOrderRejectedErrorSchema,
   surfaceOrderRejectionReasonSchema,
+  editorApiErrorSchema,
+  editorDiagnosticsUnavailableErrorSchema,
+  editorLaunchFailedErrorSchema,
+  editorRejectedErrorSchema,
+  editorRejectionReasonSchema,
   surfaceRejectedErrorSchema,
   surfaceRejectionReasonSchema,
   workspaceActiveContextApiErrorSchema,
@@ -175,6 +182,10 @@ export type {
   SessionLaunchRejectionReason,
   SurfaceOrderRejectedError,
   SurfaceOrderRejectionReason,
+  EditorDiagnosticsUnavailableError,
+  EditorLaunchFailedError,
+  EditorRejectedError,
+  EditorRejectionReason,
   SurfaceRejectedError,
   SurfaceRejectionReason,
   WorktreeCommandsRejectedError,
@@ -375,6 +386,7 @@ export {
   attentionStateSchema,
   commandChangedEventSchema,
   durableSessionDeletedEventSchema,
+  editorContextChangedEventSchema,
   workflowRunChangedEventSchema,
   workflowRunClearedEventSchema,
   workflowRunSnapshotEventSchema,
@@ -398,6 +410,7 @@ export type {
   AttentionSourceRemovedEvent,
   AttentionState,
   DurableSessionDeletedEvent,
+  EditorContextChangedEvent,
   TerminalAttentionState,
   RuntimeEvent,
   RuntimeEventBase,
@@ -410,6 +423,47 @@ export type {
   WorkflowRunClearedEvent,
   WorkflowRunSnapshotEvent,
 } from './runtime-events/types.js';
+export { editorEndpoints } from './editor/api.js';
+export {
+  editorAttemptFailureReasonSchema,
+  editorAttemptSchema,
+  editorContextFactsSchema,
+  editorContextMetadataSchema,
+  editorContextRouteParamsSchema,
+  editorDiagnosticsOutputSchema,
+  editorDiagnosticsQuerySchema,
+  editorEndpointSchema,
+  editorProcessDiagnosticSchema,
+  editorProvisioningFailureReasonSchema,
+  editorProvisioningStateSchema,
+  editorWorkbenchReadinessSchema,
+  ensureEditorRuntimeInputSchema,
+  ensureEditorRuntimeOutputSchema,
+  openEditorOutputSchema,
+  openEditorRouteParamsSchema,
+  retryEditorProvisioningOutputSchema,
+} from './editor/types.js';
+export type {
+  EditorAttempt,
+  EditorAttemptFailureReason,
+  EditorContextFacts,
+  EditorContextMetadata,
+  EditorContextRouteParams,
+  EditorDiagnosticsOutput,
+  EditorDiagnosticsQuery,
+  EditorEndpoint,
+  EditorProcessDiagnostic,
+  EditorProvisioningFailureReason,
+  EditorProvisioningState,
+  EditorWorkbenchReadiness,
+  EnsureEditorRuntimeInput,
+  EnsureEditorRuntimeOutput,
+  OpenEditorOutput,
+  OpenEditorRouteParams,
+  RetryEditorProvisioningOutput,
+} from './editor/types.js';
+export { sessionStatusSchema } from './processes/types.js';
+export type { SessionStatus } from './processes/types.js';
 export {
   agentSessionPtyWebSocketEndpoint,
   surfacesEndpoints,
@@ -441,7 +495,6 @@ export {
   renameSurfaceInputSchema,
   renameSurfaceOutputSchema,
   sessionDiagnosticCodeSchema,
-  sessionStatusSchema,
   setSplitWeightsInputSchema,
   setSplitWeightsOutputSchema,
   setWorktreeEnvironmentFocusInputSchema,
@@ -485,7 +538,6 @@ export type {
   RenameSurfaceInput,
   RenameSurfaceOutput,
   SessionDiagnosticCode,
-  SessionStatus,
   SetSplitWeightsInput,
   SetSplitWeightsOutput,
   SetWorktreeEnvironmentFocusInput,
@@ -521,6 +573,7 @@ export {
   setActiveContextInputSchema,
   surfaceSchema,
   workspaceSnapshotSchema,
+  durablePtySessionKindSchema,
   durableSessionIdentitySchema,
   durableSessionInventorySchema,
   worktreeSchema,
@@ -538,6 +591,7 @@ export type {
   SetActiveContextOutput,
   WorkspaceSurfaceMetadata,
   WorkspaceSnapshot,
+  DurablePtySessionKind,
   DurableSessionIdentity,
   DurableSessionInventory,
   Worktree,
