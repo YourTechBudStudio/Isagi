@@ -168,16 +168,17 @@ export function testInstallation(root: string): ResolvedEditorInstallation {
 }
 
 /**
- * Deliberately not under the temporary data root, and this is not a shortcut.
+ * Deliberately not under the temporary data root — the same decision production
+ * makes, for the same reason.
  *
- * A UNIX socket path may not exceed 100 bytes, and on darwin `os.tmpdir()` is
- * itself around 50 of them — so a data root created there plus
- * `editors/code-server/sock/<id>-<token>.sock` genuinely crosses the cap and the
- * launch refuses before allocating, exactly as it should. Every test would then
- * be asserting the refusal rather than the behaviour it came for. `/tmp` exists
- * on both supported platforms and leaves the budget realistic instead of
- * pathological; the refusal itself is covered directly in `launch-spec.test.ts`
- * and `service.ensure.failures.test.ts`.
+ * A UNIX socket path may not exceed 100 bytes, and a data root's depth is
+ * unbounded, so anchoring the socket under it crosses the cap and the launch
+ * refuses before allocating. This helper used to be the only place that knew
+ * that, which is how the shipping path kept a budget the tests had already
+ * routed around; `runtimeSessionSocketDirectory` now owns the decision and this
+ * mirrors it with a root-derived name so tests stay deterministic. The refusal
+ * itself is still covered directly in `launch-spec.test.ts` and
+ * `service.ensure.failures.test.ts`.
  */
 export function testSessionSocketDirectory(root: string) {
   return join('/tmp', basename(root));

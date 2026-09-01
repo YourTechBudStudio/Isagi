@@ -7,6 +7,7 @@ import {
   EditorInstallIoError,
   type EditorInstallIoService,
   type EditorSharedStatePaths,
+  runtimeSessionSocketDirectory,
 } from '../install-io.js';
 import { codeServerManifest } from '../manifest.js';
 
@@ -130,7 +131,9 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
           const paths: EditorSharedStatePaths = {
             userDataPath: join(providerRoot, 'user-data'),
             extensionsPath: join(providerRoot, 'extensions'),
-            sessionSocketDirectory: join(providerRoot, 'sock'),
+            // Mirrors production: the socket directory is anchored outside the
+            // data root, because a data root's depth is unbounded.
+            sessionSocketDirectory: runtimeSessionSocketDirectory(),
             configPath: join(providerRoot, 'config.yaml'),
           };
           mkdirSync(paths.userDataPath, { recursive: true });

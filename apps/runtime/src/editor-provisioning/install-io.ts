@@ -1,9 +1,10 @@
 import { Buffer } from 'node:buffer';
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { createWriteStream } from 'node:fs';
 import { access, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -95,6 +96,30 @@ export interface EditorInstallIoService {
   }) => Effect.Effect<EditorSharedStatePaths, EditorInstallIoError>;
 }
 
+/**
+ * The directory this runtime's session sockets live in.
+ *
+ * Deliberately *not* under the data directory, and this is the one shared path
+ * that is not. A UNIX socket path is capped near 104 bytes by the kernel, and a
+ * data directory's depth is unbounded — Isagi's own worktrees nest under
+ * `data/.isagi/worktrees/<n>/<hash>/`, which alone crosses the cap. Anchoring
+ * here makes the budget depend on the platform's temporary root rather than on
+ * wherever the user keeps their projects.
+ *
+ * Keyed per runtime for two reasons: two Isagi runtimes sharing a data
+ * directory must not contend for one socket path, and a directory this process
+ * created is one no other process is holding open. The token is random rather
+ * than the pid because pids are reused, and a reused pid after a crash would
+ * point a fresh runtime at a predecessor's directory.
+ *
+ * On darwin `tmpdir()` is a per-user private directory already; on Linux it is
+ * world-writable `/tmp`, which is why the directory is created `0700` and named
+ * unpredictably rather than derived from anything an observer could guess.
+ */
+export function runtimeSessionSocketDirectory(): string {
+  return join(tmpdir(), `isagi-editor-${randomBytes(6).toString('hex')}`);
+}
+
 export const EditorInstallIo = Context.GenericTag<EditorInstallIoService>('isagi/EditorInstallIo');
 
 const maxToolOutputBytes = 2_048;
@@ -110,6 +135,11 @@ auth: none
 `;
 
 export function makeEditorInstallIo(): EditorInstallIoService {
+  // Once per runtime, not once per call: every incarnation of every editor
+  // context in this process shares the directory, and a caller that asked
+  // twice must be told the same place both times.
+  const sessionSocketDirectory = runtimeSessionSocketDirectory();
+
   return {
     downloadTo: ({ url, destination }) =>
       Effect.tryPromise({
@@ -181,16 +211,14 @@ export function makeEditorInstallIo(): EditorInstallIoService {
           const paths = {
             userDataPath: join(providerRoot, 'user-data'),
             extensionsPath: join(providerRoot, 'extensions'),
-            // A four-character segment on purpose: UNIX socket paths are capped
-            // near 104 bytes, and the per-incarnation filename is appended to
-            // this directory. Every character spent here is one the launch step
-            // cannot spend on an identifier.
-            sessionSocketDirectory: join(providerRoot, 'sock'),
+            sessionSocketDirectory,
             configPath: join(providerRoot, 'config.yaml'),
           };
           await mkdir(paths.userDataPath, { recursive: true });
           await mkdir(paths.extensionsPath, { recursive: true });
-          await mkdir(paths.sessionSocketDirectory, { recursive: true });
+          // `0700` because on Linux this sits in world-writable `/tmp`; the
+          // sockets inside it are a local control channel for the workbench.
+          await mkdir(paths.sessionSocketDirectory, { recursive: true, mode: 0o700 });
           try {
             // `wx` rather than an exists-check: the write either creates the file
             // or reports that someone else already did, with no window in between.
