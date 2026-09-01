@@ -6,30 +6,80 @@ import { fileURLToPath } from 'node:url';
 
 import { assertAuthorizedIpcSender } from './ipc-security.js';
 
+const mainFrame = { name: 'main' };
+const activeContents = { mainFrame };
+const activeWindow = {
+  isDestroyed: () => false,
+  webContents: activeContents,
+};
+
 test('IPC authorization accepts only the active non-destroyed Isagi window', () => {
-  const activeContents = {};
-  const activeWindow = {
-    isDestroyed: () => false,
-    webContents: activeContents,
-  };
   assert.doesNotThrow(() =>
-    assertAuthorizedIpcSender(activeWindow as never, { sender: activeContents } as never),
+    assertAuthorizedIpcSender(
+      activeWindow as never,
+      {
+        sender: activeContents,
+        senderFrame: mainFrame,
+      } as never,
+    ),
   );
   assert.throws(
-    () => assertAuthorizedIpcSender(activeWindow as never, { sender: {} } as never),
+    () =>
+      assertAuthorizedIpcSender(
+        activeWindow as never,
+        {
+          sender: {},
+          senderFrame: mainFrame,
+        } as never,
+      ),
     /active Isagi window/,
   );
   assert.throws(
     () =>
       assertAuthorizedIpcSender(
         { ...activeWindow, isDestroyed: () => true } as never,
-        { sender: activeContents } as never,
+        { sender: activeContents, senderFrame: mainFrame } as never,
       ),
     /active Isagi window/,
   );
   assert.throws(
-    () => assertAuthorizedIpcSender(undefined, { sender: activeContents } as never),
+    () =>
+      assertAuthorizedIpcSender(undefined, {
+        sender: activeContents,
+        senderFrame: mainFrame,
+      } as never),
     /active Isagi window/,
+  );
+});
+
+/**
+ * The renderer frames a Code Server workbench, so "came from our window" is no
+ * longer the same claim as "came from our document".
+ */
+test('a subframe of the active window is rejected even though its webContents matches', () => {
+  assert.throws(
+    () =>
+      assertAuthorizedIpcSender(
+        activeWindow as never,
+        {
+          sender: activeContents,
+          senderFrame: { name: 'embedded-workbench' },
+        } as never,
+      ),
+    /main Isagi frame/,
+  );
+  // Electron types `senderFrame` as nullable; a sender that cannot prove its
+  // frame has not proven the main frame.
+  assert.throws(
+    () =>
+      assertAuthorizedIpcSender(
+        activeWindow as never,
+        {
+          sender: activeContents,
+          senderFrame: null,
+        } as never,
+      ),
+    /main Isagi frame/,
   );
 });
 

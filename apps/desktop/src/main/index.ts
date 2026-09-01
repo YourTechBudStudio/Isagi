@@ -10,6 +10,15 @@ import { developmentEnvironmentKeys } from '../../../../scripts/dev-supervisor/d
 import { waitForWebServer } from './boot.js';
 import { configureDevelopmentUserData } from './development.js';
 import { assertAuthorizedIpcSender } from './ipc-security.js';
+import {
+  isAllowedRendererNavigation,
+  navigationDenialCoordinate,
+  rendererContentSecurityPolicy,
+  rendererDocumentUrl,
+  rendererHeadersReceivedDecision,
+  rendererRuntimeOrigins,
+  type RendererTarget,
+} from './renderer-policy.js';
 import { destroyRendererForExit, resolveRuntimeUrlForIpc } from './runtime-ipc.js';
 import { createRuntimeLifecycle } from './runtime.js';
 import { DesktopShutdownCoordinator, handleBeforeQuit } from './shutdown.js';
@@ -105,6 +114,10 @@ function createWindowEffect() {
       }`,
     );
 
+    const target = resolveRendererTarget();
+    if (!target)
+      return yield* Effect.fail(new Error('Desktop development requires ISAGI_WEB_URL.'));
+
     const window = new BrowserWindow({
       backgroundColor: '#24273a',
       height: 900,
@@ -123,6 +136,12 @@ function createWindowEffect() {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
+        // Asserted rather than inherited. The renderer frames a Code Server
+        // workbench, so a default flipping later would hand a foreign origin a
+        // Node environment. `webSecurity` is deliberately not named here:
+        // naming it would invite someone to think it is tunable.
+        nodeIntegrationInSubFrames: false,
+        webviewTag: false,
         preload: join(currentDirectory, '../preload/index.js'),
       },
       width: 1280,
@@ -133,8 +152,70 @@ function createWindowEffect() {
     });
     window.once('ready-to-show', () => window.show());
 
+    // Containment precedes both the runtime and the renderer: the first frame
+    // the workbench could ever paint must not be the first one uncontained.
+    installRendererContainment(window, target);
     startRuntime();
-    yield* loadRenderer(window);
+    yield* loadRenderer(window, target);
+  });
+}
+
+function resolveRendererTarget(): RendererTarget | undefined {
+  if (app.isPackaged) {
+    return { mode: 'packaged', indexPath: join(process.resourcesPath, 'web/index.html') };
+  }
+  const webUrl = process.env[developmentEnvironmentKeys.webUrl];
+  return webUrl ? { mode: 'development', devWebUrl: webUrl } : undefined;
+}
+
+/**
+ * Installs the renderer's containment boundary on the window that will host it.
+ *
+ * Electron keeps only the most recent listener for a WebRequest event, so this
+ * hook is the session's single `onHeadersReceived` owner. Nothing else in the
+ * desktop registers one today; anything that wants to must extend this handler
+ * rather than add a second, which would silently displace the policy. The
+ * filter argument is omitted deliberately — an omitted filter matches every
+ * request, which is what keeps packaged `file://` traffic in scope.
+ */
+function installRendererContainment(window: BrowserWindow, target: RendererTarget) {
+  const documentUrl = rendererDocumentUrl(target);
+  const external = rendererRuntimeOrigins({ externalRuntimeUrl: process.env.ISAGI_RUNTIME_URL });
+  if (external.rejected) {
+    console.warn(
+      '[desktop] ISAGI_RUNTIME_URL is not a credential-free HTTP(S) URL; renderer connections stay loopback-only',
+    );
+  }
+  const policy = rendererContentSecurityPolicy({ target, runtimeOrigins: external.origins });
+  const rendererWebContentsId = window.webContents.id;
+
+  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const decision = rendererHeadersReceivedDecision(details, {
+      rendererWebContentsId,
+      rendererDocumentUrl: documentUrl,
+      policy,
+    });
+    // Injected, not enforced: this proves the header was supplied. Whether
+    // Chromium enforced it is established by inspecting the loaded document.
+    if (decision.kind === 'inject') {
+      console.info('[desktop] renderer content security policy injected');
+    }
+    callback(decision.response);
+  });
+
+  window.webContents.on('will-navigate', (details) => {
+    if (isAllowedRendererNavigation({ url: details.url, rendererDocumentUrl: documentUrl })) return;
+    details.preventDefault();
+    // Only a safe coordinate: a denied URL can carry credentials, a path, a
+    // query, a fragment, or `javascript:` source.
+    console.info(
+      `[desktop] denied renderer navigation to ${navigationDenialCoordinate(details.url)}`,
+    );
+  });
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    console.info(`[desktop] denied renderer window open for ${navigationDenialCoordinate(url)}`);
+    return { action: 'deny' };
   });
 }
 
@@ -147,18 +228,19 @@ function startRuntime() {
   return runtimeStartPromise;
 }
 
-function loadRenderer(window: BrowserWindow) {
-  if (app.isPackaged) return loadFile(window, join(process.resourcesPath, 'web/index.html'));
-  const webUrl = process.env[developmentEnvironmentKeys.webUrl];
-  if (!webUrl) return Effect.fail(new Error('Desktop development requires ISAGI_WEB_URL.'));
+/**
+ * Loads the exact URL the containment policy was scoped to. `loadFile` would
+ * do its own path-to-URL conversion, and any disagreement with `pathToFileURL`
+ * would leave the renderer's document response unmatched and the policy
+ * silently uninjected. Loading the compared string removes the question.
+ */
+function loadRenderer(window: BrowserWindow, target: RendererTarget) {
+  const documentUrl = rendererDocumentUrl(target);
+  if (target.mode === 'packaged') return tryPromise(() => window.loadURL(documentUrl));
   return Effect.gen(function* () {
-    yield* waitForWebServer(webUrl);
-    yield* tryPromise(() => window.loadURL(webUrl));
+    yield* waitForWebServer(target.devWebUrl);
+    yield* tryPromise(() => window.loadURL(documentUrl));
   });
-}
-
-function loadFile(window: BrowserWindow, path: string) {
-  return tryPromise(() => window.loadFile(path));
 }
 
 function tryPromise<T>(run: () => Promise<T>) {
