@@ -1,7 +1,9 @@
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
 
+import { controlPlaneQueryKey } from '../../../src/lib/control-plane/queries.js';
+import { queryClient } from '../../../src/lib/query/client.js';
 import { moveBefore } from '../../../src/lib/workspace/rail-order.js';
-import { FIXTURE_SNAPSHOT } from './seed.js';
+import { FIXTURE_CONTROL_PLANE, FIXTURE_SNAPSHOT } from './seed.js';
 
 /**
  * A runtime made of one object and a `fetch` stub.
@@ -27,6 +29,14 @@ export interface RailFixtureControls {
   readonly setWriteDelay: (ms: number) => void;
   /** Current server-side order, for asserting what actually persisted. */
   readonly order: () => string;
+  /**
+   * Flip the runtime's editor capability. The rail reads it through the
+   * production control-plane query, so the fixture invalidates that query the
+   * way a real capability change would.
+   */
+  readonly setEditorAvailable: (available: boolean) => Promise<void>;
+  /** Worktree ids the editor was opened for, in call order. */
+  readonly editorOpens: () => readonly number[];
 }
 
 declare global {
@@ -39,8 +49,10 @@ const RUNTIME_ORIGIN = 'http://rail-fixture.invalid';
 
 export function installFakeRuntime() {
   let snapshot: WorkspaceSnapshot = FIXTURE_SNAPSHOT;
+  let controlPlane: ControlPlaneSnapshot = FIXTURE_CONTROL_PLANE;
   let failNext = false;
   let writeDelay = 0;
+  const editorOpens: number[] = [];
 
   window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
   window.railFixture = {
@@ -51,6 +63,16 @@ export function installFakeRuntime() {
       writeDelay = ms;
     },
     order: () => describe(snapshot),
+    setEditorAvailable: async (available) => {
+      controlPlane = {
+        ...controlPlane,
+        editorProvisioning: available
+          ? { status: 'ready', version: '1.0.0' }
+          : { status: 'not_applicable' },
+      };
+      await queryClient.invalidateQueries({ queryKey: controlPlaneQueryKey });
+    },
+    editorOpens: () => editorOpens,
   };
 
   const realFetch = window.fetch.bind(window);
@@ -66,6 +88,20 @@ export function installFakeRuntime() {
     const path = url.pathname.replace('/api/v1', '');
 
     if (method === 'GET' && path === '/workspace') return success(snapshot);
+    if (method === 'GET' && path === '/control-plane') return success(controlPlane);
+
+    const editor = method === 'POST' ? /^\/worktrees\/(\d+)\/editor$/.exec(path) : null;
+    if (editor) {
+      // Placed for real, exactly as an order write is applied for real: the
+      // refetch that follows the open has to *converge* on a worktree that now
+      // holds an editor surface, or the activation the web layer performs would
+      // be judged against a workspace the runtime never returned.
+      const worktreeId = Number(editor[1]);
+      editorOpens.push(worktreeId);
+      const opened = openEditorFor(snapshot, worktreeId);
+      snapshot = opened.snapshot;
+      return success(opened.placement);
+    }
 
     const order = matchOrderRoute(method, path);
     if (!order) {
@@ -89,6 +125,38 @@ export function installFakeRuntime() {
     const beforeId = body[order.anchorField] ?? null;
     snapshot = order.apply(snapshot, beforeId);
     return success(order.output);
+  };
+}
+
+/**
+ * Place an editor surface on a worktree and answer with the placement, which is
+ * the whole output the operation returns. Ids are derived from the worktree so a
+ * spec can name them, and re-opening returns the same surface — the runtime's
+ * editor context is durable and one per worktree.
+ */
+function openEditorFor(snapshot: WorkspaceSnapshot, worktreeId: number) {
+  const surfaceId = worktreeId * 10 + 9;
+  const paneId = surfaceId * 10 + 1;
+  return {
+    placement: { worktreeId, surfaceId, paneId, editorContextId: surfaceId },
+    snapshot: {
+      ...snapshot,
+      projects: snapshot.projects.map((project) => ({
+        ...project,
+        worktrees: project.worktrees.map((candidate) =>
+          candidate.id === worktreeId &&
+          !candidate.surfaces.some((surface) => surface.id === surfaceId)
+            ? {
+                ...candidate,
+                surfaces: [
+                  ...candidate.surfaces,
+                  { id: surfaceId, title: 'editor', paneKinds: ['editor_context' as const] },
+                ],
+              }
+            : candidate,
+        ),
+      })),
+    },
   };
 }
 
@@ -164,7 +232,10 @@ function matchOrderRoute(method: string, path: string): OrderRoute | null {
           ...owner,
           worktrees: owner.worktrees.map((candidate) =>
             candidate.id === worktreeId
-              ? { ...candidate, surfaces: reorder(candidate.surfaces, surfaceId, beforeId) }
+              ? {
+                  ...candidate,
+                  surfaces: reorder(candidate.surfaces, surfaceId, beforeId),
+                }
               : candidate,
           ),
         })),
@@ -230,7 +301,13 @@ function success(data: unknown) {
 
 function failure(status: number, code: string, message: string, data?: unknown) {
   return json(status, {
-    error: { code, status, message, requestId: 'rail-fixture', ...(data ? { data } : {}) },
+    error: {
+      code,
+      status,
+      message,
+      requestId: 'rail-fixture',
+      ...(data ? { data } : {}),
+    },
   });
 }
 

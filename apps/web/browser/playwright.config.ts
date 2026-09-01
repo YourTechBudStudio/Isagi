@@ -50,6 +50,13 @@ export default defineConfig({
       testMatch: /rail-reorder\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
     },
+    // Shares the rail page: the worktree menu is chrome on the same production
+    // rail, and its own project keeps each spec file matched by exactly one.
+    {
+      name: 'rail-worktree-actions',
+      testMatch: /rail-worktree-actions\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
+    },
     {
       name: 'command-palette',
       testMatch: /command-palette\.spec\.ts/,

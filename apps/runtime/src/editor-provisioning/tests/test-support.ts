@@ -1,4 +1,12 @@
-import { constants as fsConstants, accessSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  constants as fsConstants,
+  accessSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { Effect } from 'effect';
@@ -7,7 +15,6 @@ import {
   EditorInstallIoError,
   type EditorInstallIoService,
   type EditorSharedStatePaths,
-  runtimeSessionSocketDirectory,
 } from '../install-io.js';
 import { codeServerManifest } from '../manifest.js';
 
@@ -35,6 +42,24 @@ export interface InstallIoBehaviour {
 }
 
 /**
+ * Every socket directory this double hands out lives under one root owned by
+ * the test process, removed when it exits. Production releases its directory
+ * through `EditorInstallIoLive`'s scope; the double has no scope to hang a
+ * finalizer on, so the process owns them instead — a test run must not leave
+ * `isagi-editor-*` directories behind any more than a runtime may.
+ */
+let socketDirectoryRoot: string | undefined;
+
+function testSessionSocketDirectory(): string {
+  if (!socketDirectoryRoot) {
+    socketDirectoryRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-test-sockets-'));
+    const root = socketDirectoryRoot;
+    process.on('exit', () => rmSync(root, { recursive: true, force: true }));
+  }
+  return mkdtempSync(join(socketDirectoryRoot, 'runtime-'));
+}
+
+/**
  * A substituted IO seam that still performs the *filesystem* half of its work
  * for real.
  *
@@ -45,6 +70,9 @@ export interface InstallIoBehaviour {
  */
 export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallIoRecorder {
   const calls: string[] = [];
+  // Once per recorder, exactly as production chooses one per runtime: a test
+  // that prepares state twice must see the same directory both times.
+  const sessionSocketDirectory = testSessionSocketDirectory();
   const record = (operation: string) =>
     Effect.zipRight(
       Effect.sync(() => {
@@ -133,7 +161,7 @@ export function recordingInstallIo(behaviour: InstallIoBehaviour = {}): InstallI
             extensionsPath: join(providerRoot, 'extensions'),
             // Mirrors production: the socket directory is anchored outside the
             // data root, because a data root's depth is unbounded.
-            sessionSocketDirectory: runtimeSessionSocketDirectory(),
+            sessionSocketDirectory,
             configPath: join(providerRoot, 'config.yaml'),
           };
           mkdirSync(paths.userDataPath, { recursive: true });

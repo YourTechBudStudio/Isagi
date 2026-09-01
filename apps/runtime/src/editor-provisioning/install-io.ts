@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { createWriteStream } from 'node:fs';
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -150,12 +150,14 @@ auth: none
  */
 const codeServerUserSettings = `${JSON.stringify({ 'chat.disableAIFeatures': true }, null, 2)}\n`;
 
-export function makeEditorInstallIo(): EditorInstallIoService {
-  // Once per runtime, not once per call: every incarnation of every editor
-  // context in this process shares the directory, and a caller that asked
-  // twice must be told the same place both times.
-  const sessionSocketDirectory = runtimeSessionSocketDirectory();
-
+/**
+ * @param sessionSocketDirectory The directory this seam reports and prepares,
+ * chosen once by the caller rather than per call: every incarnation of every
+ * editor context in this process shares it, and a caller that asked twice must
+ * be told the same place both times. Its *lifetime* belongs to the caller too —
+ * see `EditorInstallIoLive`, which is where the runtime's directory is released.
+ */
+export function makeEditorInstallIo(sessionSocketDirectory: string): EditorInstallIoService {
   return {
     downloadTo: ({ url, destination }) =>
       Effect.tryPromise({
@@ -270,9 +272,28 @@ export function makeEditorInstallIo(): EditorInstallIoService {
   };
 }
 
-export const EditorInstallIoLive: Layer.Layer<EditorInstallIoService> = Layer.succeed(
+/**
+ * Scoped, because the session socket directory is a real resource with a real
+ * owner: it lives outside the data directory, so nothing else in Isagi's
+ * shutdown would ever reclaim it, and a runtime that left one behind on every
+ * launch would slowly fill the platform's temporary root with stale sockets.
+ *
+ * The runtime layer builds this once, so the finalizer runs when the runtime
+ * shuts down — after the editor PTYs that hold the sockets open have gone. The
+ * removal is best-effort: a temporary directory that resists deletion is not a
+ * reason to fail a shutdown that has otherwise completed.
+ */
+export const EditorInstallIoLive: Layer.Layer<EditorInstallIoService> = Layer.scoped(
   EditorInstallIo,
-  makeEditorInstallIo(),
+  Effect.gen(function* () {
+    const sessionSocketDirectory = runtimeSessionSocketDirectory();
+    yield* Effect.addFinalizer(() =>
+      Effect.ignore(
+        Effect.tryPromise(() => rm(sessionSocketDirectory, { recursive: true, force: true })),
+      ),
+    );
+    return makeEditorInstallIo(sessionSocketDirectory);
+  }),
 );
 
 // Local to this module: it exists only to carry a status out of the `try` block

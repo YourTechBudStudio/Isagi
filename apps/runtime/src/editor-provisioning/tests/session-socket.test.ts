@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -61,15 +61,12 @@ test('shared editor state creates a private socket directory and reuses it', asy
     `isagi-editors-${Math.random().toString(16).slice(2)}`,
     'editors',
   );
+  // The assertions run *inside* the layer's scope, because the directory only
+  // exists for as long as the runtime that owns it does.
   const run = Effect.gen(function* () {
     const io = yield* EditorInstallIo;
     const first = yield* io.prepareEditorState({ editorsPath });
     const second = yield* io.prepareEditorState({ editorsPath });
-    return { first, second };
-  }).pipe(Effect.provide(EditorInstallIoLive));
-
-  const { first, second } = await Effect.runPromise(run);
-  try {
     // Stable across calls: an installed and a reused resolution both prepare
     // shared state, and they must name the same directory.
     assert.equal(first.sessionSocketDirectory, second.sessionSocketDirectory);
@@ -78,8 +75,39 @@ test('shared editor state creates a private socket directory and reuses it', asy
     assert.equal(statSync(first.sessionSocketDirectory).mode & 0o777, 0o700);
     // The rest of the shared state stays where it was.
     assert.equal(path.dirname(path.dirname(first.userDataPath)), editorsPath);
+  }).pipe(Effect.provide(EditorInstallIoLive));
+
+  try {
+    await Effect.runPromise(run);
   } finally {
-    await rm(first.sessionSocketDirectory, { force: true, recursive: true });
+    await rm(path.dirname(editorsPath), { force: true, recursive: true });
+  }
+});
+
+/**
+ * The directory is the one editor path outside the data directory, so nothing
+ * else in shutdown would ever reclaim it. Without this the runtime left a
+ * `isagi-editor-*` directory — and any stale sockets in it — behind on every
+ * single launch.
+ */
+test('the session socket directory is removed when the runtime shuts down', async () => {
+  const editorsPath = path.join(
+    tmpdir(),
+    `isagi-editors-${Math.random().toString(16).slice(2)}`,
+    'editors',
+  );
+  const run = Effect.gen(function* () {
+    const io = yield* EditorInstallIo;
+    const { sessionSocketDirectory } = yield* io.prepareEditorState({ editorsPath });
+    assert.equal(existsSync(sessionSocketDirectory), true);
+    return sessionSocketDirectory;
+  }).pipe(Effect.provide(EditorInstallIoLive));
+
+  try {
+    const sessionSocketDirectory = await Effect.runPromise(run);
+    // The layer's scope has closed, which is the runtime shutting down.
+    assert.equal(existsSync(sessionSocketDirectory), false);
+  } finally {
     await rm(path.dirname(editorsPath), { force: true, recursive: true });
   }
 });

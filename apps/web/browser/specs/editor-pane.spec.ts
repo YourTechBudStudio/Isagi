@@ -165,9 +165,11 @@ test('a failed diagnostics read stays inside the disclosure', async ({ page }) =
   await pane(page).getByRole('button', { name: 'Show startup output' }).click();
 
   // A failed read of the log says nothing about the editor's own state, so the
-  // pane keeps its own retry and the failure stays where the user opened it.
+  // pane keeps its own recovery action and the failure stays where the user
+  // opened it. This incarnation exited, so that action is `Restart editor`;
+  // `Retry` names a launch that failed, which is the case above.
   await expect(pane(page).getByText(/startup output/i)).toBeVisible();
-  await expect(pane(page).getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expect(pane(page).getByRole('button', { name: 'Restart editor' })).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
