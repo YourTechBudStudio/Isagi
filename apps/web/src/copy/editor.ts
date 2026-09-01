@@ -11,9 +11,10 @@ import type { EditorPaneView, EditorSettledReason } from '../lib/editor/view.js'
 //
 // Every map here is keyed by a contract string union, so a new reason is a
 // compile error rather than a blank surface. Two states are allowed a light
-// touch — `idle` and `unknown`, both genuinely empty surfaces where nothing has
-// gone wrong. Every actual failure is flat and factual, and says what was and
-// was not done. Raw process output is never phrased; it is labelled evidence.
+// touch — `idle`, where nothing has run, and `unknown`, where Isagi cannot
+// confirm the retained editor is usable. Every actual failure is flat and
+// factual, and says what was and was not done. Raw process output is never
+// phrased; it is labelled evidence.
 
 // ---------------------------------------------------------------------------
 // Provisioning
@@ -168,10 +169,10 @@ export const editorCopy = {
   waitingForWorkbench: 'Waiting for the workbench…',
   frameLoading: 'Loading the workbench…',
   unreachable: "The editor is running but isn't answering on its port.",
-  // Nothing failed here — Isagi restarted and is being honest about what it can
-  // no longer vouch for. No red, and the action is a start rather than a retry.
+  // Isagi cannot confirm whether the retained editor is usable. This is
+  // uncertainty rather than failure, so the treatment stays calm.
   unknown:
-    "Isagi restarted and doesn't recognise the process it left here. Nothing is wrong — start it again.",
+    "Isagi can't confirm whether this editor is usable. Restarting replaces its process with a fresh one.",
   action: {
     start: 'Start editor',
     restart: 'Restart editor',

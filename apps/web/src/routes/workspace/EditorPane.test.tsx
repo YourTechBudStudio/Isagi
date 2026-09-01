@@ -149,13 +149,41 @@ describe('EditorPane state rendering', () => {
     assert.doesNotMatch(markup, /border-error\/35/);
   });
 
-  it('starts rather than retries after a restart, and keeps red out of it', () => {
+  it('offers calm restart recovery when editor usability is unknown', () => {
     const markup = render({ ...live, workbenchReadiness: 'unknown' });
 
-    assert.match(markup, /Isagi restarted and doesn&#x27;t recognise the process it left here\./);
-    assert.match(markup, />Start editor</);
+    assert.match(
+      markup,
+      /Isagi can&#x27;t confirm whether this editor is usable\. Restarting replaces its process with a fresh one\./,
+    );
+    assert.match(markup, />Restart editor</);
+    assert.doesNotMatch(markup, />Start editor</);
     assert.doesNotMatch(markup, />Retry</);
     assert.doesNotMatch(markup, /text-error/);
+    assert.doesNotMatch(markup, /border-error/);
+    assert.doesNotMatch(markup, /lucide-rotate-cw/);
+  });
+
+  it('keeps a refused-replacement warning separate from unknown readiness', () => {
+    const markup = render({
+      ...live,
+      workbenchReadiness: 'unknown',
+      attempt: { state: 'failed', reason: 'previous_incarnation_not_stopped', detail: null },
+    });
+
+    const banner = markup.indexOf('The previous editor process wouldn&#x27;t stop');
+    const uncertainty = markup.indexOf(
+      'Isagi can&#x27;t confirm whether this editor is usable. Restarting replaces its process with a fresh one.',
+    );
+    assert.ok(banner >= 0 && uncertainty > banner);
+    assert.match(markup, /border-amber/);
+    assert.match(markup, /lucide-triangle-alert/);
+    assert.match(markup, />Restart editor</);
+    assert.doesNotMatch(markup, />Start editor</);
+    assert.doesNotMatch(markup, />Retry</);
+    assert.doesNotMatch(markup, /text-error/);
+    assert.doesNotMatch(markup, /border-error/);
+    assert.doesNotMatch(markup, /lucide-rotate-cw/);
   });
 
   it("frames every settled detail as the runtime's evidence, never as our voice", () => {
