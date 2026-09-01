@@ -195,6 +195,33 @@ test('the header recedes once the workbench has painted, and returns on hover', 
   await expect(header).not.toHaveCSS('height', '1px');
 });
 
+/**
+ * The regression. `focus-within` on the pane counted the workbench itself, so
+ * the header animated back the instant the user clicked into the editor — the
+ * one moment it is supposed to be gone. Only a real browser can tell: focus is
+ * not a property of markup.
+ *
+ * The wait is load-bearing rather than lazy. `toHaveCSS` retries until it sees
+ * the expected value, so asserting `1px` immediately after focusing passes on
+ * the first poll no matter what — the height animates over `--duration-ui`
+ * (190ms) and has not moved yet. Proving that nothing happens means letting the
+ * transition window elapse first. Verified by restoring `group-focus-within`:
+ * the settled height is 36px and this fails.
+ */
+test('working in the workbench does not bring the header back', async ({ page }) => {
+  const header = section(page).locator('> div').first();
+  await expect(workbench(page).locator('.status')).toBeVisible();
+  await expect(header).toHaveCSS('height', '1px');
+
+  await section(page).locator('iframe').focus();
+  await page.waitForTimeout(700);
+
+  await expect(header).toHaveCSS('height', '1px');
+  // The pointer still reveals it, so the chrome stays reachable.
+  await section(page).hover();
+  await expect(header).not.toHaveCSS('height', '1px');
+});
+
 test('a request-local failure pins the header open over a working workbench', async ({ page }) => {
   // The pane mounts against an editor that is already serving, and its
   // confirming `reuse` fails transiently. A ready pane offers no action of its

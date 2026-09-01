@@ -162,9 +162,16 @@ export function EditorPane({
   const errored = view.kind === 'settled' && view.reason.kind !== 'unknown';
   const locked = actions?.locked ?? false;
   // The workbench is the hero, so once it has actually painted the header steps
-  // out of its way and comes back on hover or focus. Three things pin it open
-  // regardless: a request-local failure, a refused replacement, and a running
-  // delete — none of which the user should have to go looking for.
+  // out of its way and comes back on hover. Three things pin it open regardless:
+  // a request-local failure, a refused replacement, and a running delete — none
+  // of which the user should have to go looking for.
+  //
+  // Deliberately not `focus-within`. The only focusable thing inside this pane
+  // is the workbench itself, so a focus trigger fired exactly when the user
+  // started working in the editor — the one moment the header must be gone. The
+  // collapsed strip holds an icon and two spans; the pane menu is a right-click
+  // and the action cluster is a sibling, so nothing here is reachable by Tab and
+  // nothing is stranded by leaving focus out.
   const receding =
     view.kind === 'ready' && frameLoaded && notice === null && banner === null && !locked;
 
@@ -232,7 +239,7 @@ export function EditorPane({
       <div
         className={
           receding
-            ? 'h-px overflow-hidden bg-line/16 transition-all duration-ui ease-expo group-focus-within:h-9 group-focus-within:bg-transparent group-hover:h-9 group-hover:bg-transparent motion-reduce:transition-none'
+            ? 'h-px overflow-hidden bg-line/16 transition-all duration-ui ease-expo group-hover:h-9 group-hover:bg-transparent motion-reduce:transition-none'
             : ''
         }
       >
