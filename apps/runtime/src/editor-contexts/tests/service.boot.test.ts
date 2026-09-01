@@ -14,7 +14,7 @@ import {
   editorServiceLayer,
   insertWorktree,
   neverSettlingProbe,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('layer construction converges interrupted attempts and publishes one event each', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-editor-boot-'));

@@ -5010,6 +5010,7 @@ function fakeAgentSessionService(): AgentSessionServiceShape {
 
 function fakeSurfaceService(): SurfaceServiceShape {
   return {
+    openEditor: () => Effect.die('openEditor is not used by workflow tests'),
     getSurfaceDetail: (surfaceId) =>
       Effect.succeed({
         id: surfaceId,

@@ -12,7 +12,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('branch 2: a fresh context launches exactly once and lands an owned incarnation', async () => {
   const result = await withEditorService({ options: { probe: neverSettlingProbe } }, (events) =>

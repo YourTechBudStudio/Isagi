@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { PtyRepository } from '../../pty-processes/pty.repository.js';
 import { EditorContextRepository } from '../editor-contexts.repository.js';
 import { EditorContextService, editorDiagnosticsMaxBytes } from '../editor-contexts.service.js';
-import { insertWorktree, neverSettlingProbe, withEditorService } from './test-support.js';
+import { insertWorktree, neverSettlingProbe, withEditorService } from '../test-support.js';
 
 function launched() {
   return Effect.gen(function* () {

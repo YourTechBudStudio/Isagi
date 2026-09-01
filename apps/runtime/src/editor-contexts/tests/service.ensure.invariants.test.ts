@@ -12,7 +12,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('a launch that fails during start keeps its ownership and reports through the process', async () => {
   const result = await withEditorService(

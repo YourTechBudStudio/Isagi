@@ -14,7 +14,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('an affirmative stop clears the pointer, endpoint, and attempt', async () => {
   const result = await withEditorService({ options: { probe: immediateProbe('ready') } }, () =>

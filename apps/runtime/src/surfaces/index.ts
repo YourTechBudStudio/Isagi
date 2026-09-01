@@ -11,12 +11,8 @@ export type {
   SurfaceOrderMoveResult,
   SurfaceRepositoryService,
 } from './surfaces.repository.js';
-export {
-  SurfaceError,
-  SurfaceOrderError,
-  SurfaceService,
-  SurfaceServiceLive,
-} from './surfaces.service.js';
+export { SurfaceError, SurfaceOrderError } from './errors.js';
+export { SurfaceService, SurfaceServiceLive } from './surfaces.service.js';
 export type { SurfaceService as SurfaceServiceShape } from './surfaces.service.js';
 export { insertPaneIntoLayout, layoutContainsPane, prunePaneFromLayout } from './layout.js';
 export type {

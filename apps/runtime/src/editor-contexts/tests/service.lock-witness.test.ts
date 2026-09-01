@@ -6,7 +6,7 @@ import { Effect, Exit } from 'effect';
 import { EntityLock } from '../../lib/locks/entity-lock.js';
 import { EditorContextRepository } from '../editor-contexts.repository.js';
 import { EditorContextService, editorLockKey } from '../editor-contexts.service.js';
-import { insertWorktree, neverSettlingProbe, withEditorService } from './test-support.js';
+import { insertWorktree, neverSettlingProbe, withEditorService } from '../test-support.js';
 
 /**
  * `EntityLockHeld` proves that *a* lock was held, not which one. Since the key

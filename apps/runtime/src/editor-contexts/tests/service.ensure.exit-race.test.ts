@@ -14,7 +14,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 /**
  * The probe is registered *before* `start`, not after, and this is why: `start`

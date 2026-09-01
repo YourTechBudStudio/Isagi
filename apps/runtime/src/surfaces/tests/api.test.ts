@@ -498,6 +498,7 @@ async function withSurfacesApi<A>(
 function fakeSurfaceService(overrides: Partial<SurfaceServiceShape> = {}): SurfaceServiceShape {
   return {
     getSurfaceDetail: () => Effect.succeed(surfaceDetail),
+    openEditor: () => Effect.die('openEditor is not used by surfaces API tests'),
     renameSurface: (input) => Effect.succeed({ surfaceId: input.surfaceId, title: input.title }),
     deleteSurface: (surfaceId) =>
       Effect.succeed({

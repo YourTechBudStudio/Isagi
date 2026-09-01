@@ -16,7 +16,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('every committed attempt transition publishes exactly one normalized change', async () => {
   const changed = await withEditorService({ options: { probe: neverSettlingProbe } }, (events) =>

@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
@@ -10,7 +12,19 @@ import {
   type AgentSessionServiceShape,
 } from '../../agent-sessions/index.js';
 import { EditorContextRepositoryLive } from '../../editor-contexts/index.js';
+import { EditorContextService } from '../../editor-contexts/index.js';
+import type { EditorContextServiceShape } from '../../editor-contexts/index.js';
+import {
+  editorContextServiceLayer,
+  testInstallation,
+  testSessionSocketDirectory,
+} from '../../editor-contexts/test-support.js';
+import {
+  NotApplicableEditorProvisioningLayer,
+  readyEditorProvisioningLayer,
+} from '../../editor-provisioning/test-support.js';
 import { EntityLockLive } from '../../lib/locks/entity-lock.js';
+import { LoopbackPortProbeLive } from '../../lib/net/loopback-port-probe.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
 import {
   agentSessions,
@@ -234,8 +248,24 @@ export function testLayer(
     readonly agentService?: Partial<AgentSessionServiceShape> | undefined;
     readonly terminalService?: Partial<TerminalSessionServiceShape> | undefined;
     readonly ptyService?: Partial<PtyServiceShape> | undefined;
+    /**
+     * Whether the editor is provisioned. `ready` by default so placement tests
+     * exercise the operation rather than its Class C guard; `unavailable` is for
+     * the tests that assert the refusal and its absence of residue.
+     */
+    readonly editorProvisioning?: 'ready' | 'unavailable' | undefined;
+    /**
+     * Wrap the real editor service. Concurrency tests use this to insert a
+     * suspension into the window the per-worktree lock exists to protect:
+     * SQLite is synchronous here, so two forked opens would otherwise never
+     * interleave and the assertion would hold with or without the lock.
+     */
+    readonly decorateEditorService?:
+      | ((inner: EditorContextServiceShape) => EditorContextServiceShape)
+      | undefined;
   } = {},
 ) {
+  mkdirSync(testSessionSocketDirectory(dataRoot), { recursive: true });
   const dataDirectory = makeTestDataDirectory(dataRoot);
 
   const dataDirectoryLayer = Layer.succeed(DataDirectory, dataDirectory);
@@ -269,7 +299,37 @@ export function testLayer(
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
   );
-  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
+  // One lock value, shared by session lifecycle, the editor service, and the
+  // placement path, exactly as `runtime.layer.ts` shares it. Two would make the
+  // per-worktree serialization these tests assert vacuous.
+  const entityLock = EntityLockLive;
+  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(entityLock));
+  // The editor domain owns creating a context; the surfaces repository only
+  // reads and places one. Tests need the former to exercise the latter.
+  const editorRepository = EditorContextRepositoryLive.pipe(Layer.provide(database));
+  // The real service, over this harness's own already-bound dependencies. The
+  // PTY double is the same value `SurfaceServiceLive` receives, so the two
+  // services genuinely observe one process world; `editorServiceLayer` is
+  // deliberately not reused here because it would construct a second database,
+  // bus, lock, and PTY service.
+  const baseEditorService = editorContextServiceLayer({
+    database: editorRepository,
+    workspace: workspaceRepository,
+    pty: ptyService,
+    provisioning:
+      options.editorProvisioning === 'unavailable'
+        ? NotApplicableEditorProvisioningLayer
+        : readyEditorProvisioningLayer(testInstallation(dataRoot)),
+    portProbe: LoopbackPortProbeLive,
+    entityLock,
+    bus: internalRuntimeEventBus,
+  });
+  const decorate = options.decorateEditorService;
+  const editorService = decorate
+    ? Layer.effect(EditorContextService, Effect.map(EditorContextService, decorate)).pipe(
+        Layer.provide(baseEditorService),
+      )
+    : baseEditorService;
   const surfaceService = SurfaceServiceLive.pipe(
     Layer.provide(surfaceRepository),
     Layer.provide(agentService),
@@ -277,12 +337,14 @@ export function testLayer(
     Layer.provide(ptyService),
     Layer.provide(sessionLifecycle),
     Layer.provide(internalRuntimeEventBus),
+    Layer.provide(editorService),
+    Layer.provide(entityLock),
   );
   return Layer.mergeAll(
     database,
-    // The editor domain owns creating a context; the surfaces repository only
-    // reads and places one. Tests need the former to exercise the latter.
-    EditorContextRepositoryLive.pipe(Layer.provide(database)),
+    editorRepository,
+    editorService,
+    entityLock,
     agentSessionArtifacts,
     attentionProjection,
     internalRuntimeEventBus,

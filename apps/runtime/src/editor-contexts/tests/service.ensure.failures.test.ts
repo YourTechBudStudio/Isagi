@@ -6,14 +6,14 @@ import { Effect } from 'effect';
 import { LoopbackPortUnavailable } from '../../lib/net/loopback-port-probe.js';
 import { EditorContextRepository } from '../editor-contexts.repository.js';
 import { EditorContextService } from '../editor-contexts.service.js';
-import type { EditorContextRow } from '../types.js';
 import {
   editorContextChangedIds,
   insertWorktree,
   neverSettlingProbe,
   testInstallation,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
+import type { EditorContextRow } from '../types.js';
 
 /** The recorded reason's detail, asserted to exist by the caller's own case. */
 function failureDetail(row: EditorContextRow | null | undefined): string {

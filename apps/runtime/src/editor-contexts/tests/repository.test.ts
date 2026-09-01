@@ -15,7 +15,7 @@ import {
   insertPtyProcess,
   insertWorktree,
   testLayer,
-} from './test-support.js';
+} from '../test-support.js';
 
 type TestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
 

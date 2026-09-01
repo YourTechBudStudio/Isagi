@@ -206,6 +206,11 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
   Layer.provide(AgentSessionAttentionProjectionLayer),
+  Layer.provide(EditorContextServiceLayer),
+  // The same `EntityLockLayer` value session lifecycle and the editor service
+  // are built on, so placement and the editor's own lifecycle serialize against
+  // each other rather than against two separate maps.
+  Layer.provide(EntityLockLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
 const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
@@ -310,9 +315,12 @@ export type RuntimeServices =
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService
-  // `EntityLockService` is deliberately absent: it is a construction dependency
-  // of two service layers, not something a caller runs through `ManagedRuntime`.
-  // The first consumer that needs to resolve it is the surfaces placement path.
+  // `EntityLockService` is deliberately absent, and stays absent now that the
+  // placement path uses it: it is a construction dependency of
+  // `SessionLifecycle`, `EditorContextService`, and `SurfaceService`, each of
+  // which resolves it once when its layer is built. No effect run through
+  // `ManagedRuntime` requires the tag, so adding it here would widen the runtime
+  // environment for a caller that does not exist.
   | EditorContextServiceShape
   | RuntimeConfigService;
 

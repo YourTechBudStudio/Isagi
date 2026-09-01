@@ -9,7 +9,7 @@ import { Effect, Fiber } from 'effect';
 import type { InternalRuntimeEvent } from '../../runtime-events/index.js';
 import { EditorContextRepository } from '../editor-contexts.repository.js';
 import { EditorContextService } from '../editor-contexts.service.js';
-import { editorServiceLayer, insertWorktree, withEditorService } from './test-support.js';
+import { editorServiceLayer, insertWorktree, withEditorService } from '../test-support.js';
 
 /**
  * The forked probe must be genuinely interruptible. It is forked inside an

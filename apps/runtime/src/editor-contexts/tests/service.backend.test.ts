@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { PtyRepository } from '../../pty-processes/pty.repository.js';
 import { EditorContextRepository } from '../editor-contexts.repository.js';
 import { EditorContextService } from '../editor-contexts.service.js';
-import { insertWorktree, neverSettlingProbe, withEditorService } from './test-support.js';
+import { insertWorktree, neverSettlingProbe, withEditorService } from '../test-support.js';
 
 test('an editor incarnation is node-pty even when tmux is the configured backend', async () => {
   const result = await withEditorService(

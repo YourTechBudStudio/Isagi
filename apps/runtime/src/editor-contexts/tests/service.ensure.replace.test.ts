@@ -14,7 +14,7 @@ import {
   insertWorktree,
   neverSettlingProbe,
   withEditorService,
-} from './test-support.js';
+} from '../test-support.js';
 
 test('replace stops the previous incarnation and launches a new one', async () => {
   const result = await withEditorService({ options: { probe: neverSettlingProbe } }, (events) =>

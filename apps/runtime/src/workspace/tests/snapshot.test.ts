@@ -109,6 +109,7 @@ const testSurfaceService = {
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
   moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
+  openEditor: () => Effect.die('openEditor is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
 
 const testCommandService = {

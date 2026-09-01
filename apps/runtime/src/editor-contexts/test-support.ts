@@ -5,57 +5,57 @@ import { basename, join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 
-import type { ResolvedEditorInstallation } from '../../editor-provisioning/index.js';
-import { readyEditorProvisioningLayer } from '../../editor-provisioning/test-support.js';
-import { UserShell, type UserShellService } from '../../host-inventory/user-shell.service.js';
-import { EntityLockLive, type EntityLockService } from '../../lib/locks/entity-lock.js';
+import type {
+  EditorProvisioningService,
+  ResolvedEditorInstallation,
+} from '../editor-provisioning/index.js';
+import { readyEditorProvisioningLayer } from '../editor-provisioning/test-support.js';
+import { UserShell, type UserShellService } from '../host-inventory/user-shell.service.js';
+import { EntityLockLive, type EntityLockService } from '../lib/locks/entity-lock.js';
 import {
   LoopbackPortProbe,
   LoopbackPortProbeLive,
   type LoopbackPortProbeService,
-} from '../../lib/net/loopback-port-probe.js';
+} from '../lib/net/loopback-port-probe.js';
 import {
   DatabaseError,
   DataDirectory,
   RuntimeDatabase,
   RuntimeDatabaseLive,
   type RuntimeDatabaseService,
-} from '../../persistence/index.js';
-import { editorContexts, ptyProcesses, worktrees } from '../../persistence/schema.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import { PtyBackendCatalog } from '../../pty-processes/backend.js';
-import { PtyForegroundStateLive } from '../../pty-processes/foreground-state.js';
-import {
-  PtyRepositoryLive,
-  type PtyRepositoryService,
-} from '../../pty-processes/pty.repository.js';
+} from '../persistence/index.js';
+import { editorContexts, ptyProcesses, worktrees } from '../persistence/schema.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
+import { PtyBackendCatalog } from '../pty-processes/backend.js';
+import { PtyForegroundStateLive } from '../pty-processes/foreground-state.js';
+import { PtyRepositoryLive, type PtyRepositoryService } from '../pty-processes/pty.repository.js';
 import {
   PtyServiceLive,
   type PtyService as PtyServiceShape,
-} from '../../pty-processes/pty.service.js';
-import { fakeBackendCatalog } from '../../pty-processes/test-support.js';
-import type { PtyBackend, PtyBackendName } from '../../pty-processes/types.js';
+} from '../pty-processes/pty.service.js';
+import { fakeBackendCatalog } from '../pty-processes/test-support.js';
+import type { PtyBackend, PtyBackendName } from '../pty-processes/types.js';
 import type {
   InternalRuntimeEvent,
   InternalRuntimeEventBusService,
-} from '../../runtime-events/index.js';
-import { recordingInternalEventBusLayer } from '../../runtime-events/test-support.js';
+} from '../runtime-events/index.js';
+import { recordingInternalEventBusLayer } from '../runtime-events/test-support.js';
 import {
   WorkspaceRepository,
   WorkspaceRepositoryLive,
   type WorkspaceRepositoryService,
-} from '../../workspace/index.js';
-import type { WorktreeRow } from '../../workspace/types.js';
-import type { EditorContextRepositoryService } from '../editor-contexts.repository.js';
-import { EditorContextRepositoryLive } from '../editor-contexts.repository.js';
+} from '../workspace/index.js';
+import type { WorktreeRow } from '../workspace/types.js';
+import type { EditorContextRepositoryService } from './editor-contexts.repository.js';
+import { EditorContextRepositoryLive } from './editor-contexts.repository.js';
 import {
   EditorContextService,
   makeEditorContextService,
   type EditorContextServiceShape,
   type EditorContextServiceOptions,
   type EditorProbeRunner,
-} from '../editor-contexts.service.js';
-import type { EditorReadinessObservation } from '../types.js';
+} from './editor-contexts.service.js';
+import type { EditorReadinessObservation } from './types.js';
 
 export function testLayer(dataRoot: string) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
@@ -253,6 +253,36 @@ export interface EditorServiceHarnessInput {
 }
 
 /**
+ * The `EditorContextService` layer alone, over dependency layers the caller has
+ * already bound.
+ *
+ * It exists so a neighbouring domain's harness — the surfaces one — can build a
+ * real editor service on *its* database, event bus, entity lock, and PTY double
+ * rather than embedding `editorServiceLayer`, which would silently construct a
+ * second of each and leave the two services observing different worlds.
+ */
+export function editorContextServiceLayer<E>(input: {
+  readonly database: Layer.Layer<EditorContextRepositoryService, E>;
+  readonly workspace: Layer.Layer<WorkspaceRepositoryService, E>;
+  readonly pty: Layer.Layer<PtyServiceShape, E>;
+  readonly provisioning: Layer.Layer<EditorProvisioningService, E>;
+  readonly portProbe: Layer.Layer<LoopbackPortProbeService, E>;
+  readonly entityLock: Layer.Layer<EntityLockService, E>;
+  readonly bus: Layer.Layer<InternalRuntimeEventBusService, E>;
+  readonly options?: EditorContextServiceOptions | undefined;
+}) {
+  return Layer.scoped(EditorContextService, makeEditorContextService(input.options ?? {})).pipe(
+    Layer.provide(input.database),
+    Layer.provide(input.workspace),
+    Layer.provide(input.pty),
+    Layer.provide(input.provisioning),
+    Layer.provide(input.portProbe),
+    Layer.provide(input.entityLock),
+    Layer.provide(input.bus),
+  );
+}
+
+/**
  * The whole editor stack over one temporary data directory, with the internal
  * event bus recorded rather than replaced: the service both publishes and runs a
  * subscriber loop, so it needs the real delivery semantics.
@@ -296,18 +326,16 @@ export function editorServiceLayer(input: EditorServiceHarnessInput) {
   // The same lock value the service is built on, so a test can take the lock the
   // way the placement path will and hand the service a genuine witness.
   const entityLock = EntityLockLive;
-  const service = Layer.scoped(
-    EditorContextService,
-    makeEditorContextService(input.options ?? {}),
-  ).pipe(
-    Layer.provide(editorRepository),
-    Layer.provide(workspace),
-    Layer.provide(pty),
-    Layer.provide(provisioning),
-    Layer.provide(portProbe),
-    Layer.provide(entityLock),
-    Layer.provide(bus),
-  );
+  const service = editorContextServiceLayer({
+    database: editorRepository,
+    workspace,
+    pty,
+    provisioning,
+    portProbe,
+    entityLock,
+    bus,
+    ...(input.options === undefined ? {} : { options: input.options }),
+  });
   return Layer.mergeAll(
     database,
     workspace,
