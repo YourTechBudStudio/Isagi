@@ -143,3 +143,17 @@ export function editorStartIntent(view: EditorPaneView): EditorStartIntent | nul
   if (view.kind === 'settled') return 'replace';
   return null;
 }
+
+/**
+ * A pending ensure owns the prompt only when it is performing the action that
+ * prompt currently offers. In particular, the automatic mount-time `reuse`
+ * must not turn a settled pane's explicit `replace` action into a disabled
+ * "Starting…" button if that background request outlives the runtime.
+ */
+export function editorStartIsPending(
+  view: EditorPaneView,
+  pendingIntent: EditorStartIntent | null,
+): boolean {
+  const offeredIntent = editorStartIntent(view);
+  return offeredIntent !== null && offeredIntent === pendingIntent;
+}

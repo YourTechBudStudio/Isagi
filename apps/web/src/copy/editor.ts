@@ -174,6 +174,7 @@ export const editorCopy = {
     "Isagi restarted and doesn't recognise the process it left here. Nothing is wrong — start it again.",
   action: {
     start: 'Start editor',
+    restart: 'Restart editor',
     retry: 'Retry',
     starting: 'Starting…',
   },

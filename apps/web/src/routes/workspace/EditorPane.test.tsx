@@ -105,6 +105,19 @@ describe('EditorPane state rendering', () => {
     assert.match(markup, /border-error/);
   });
 
+  it('offers an explicit restart when the editor process has stopped', () => {
+    const markup = render({
+      activePtyProcessId: 48120,
+      processStatus: 'killed',
+      processDiagnostic: 'killed',
+      processDiagnosticDetail: 'runtime_shutdown',
+    });
+
+    assert.match(markup, /The editor process was killed\./);
+    assert.match(markup, />Restart editor</);
+    assert.doesNotMatch(markup, />Retry</);
+  });
+
   it("keeps a refused replacement's raw detail out of the sentence that explains it", () => {
     const markup = render({
       ...live,
@@ -254,9 +267,9 @@ describe('EditorPane diagnostics disclosure', () => {
     });
 
     // A log that would not read says nothing about the editor, so the pane's own
-    // Retry must still be the one offered for the editor itself.
+    // restart must still be offered for the editor itself.
     assert.match(markup, /editor_diagnostics_unavailable · request 8f21/);
-    assert.match(markup, />Retry</);
+    assert.match(markup, />Restart editor</);
     assert.match(markup, />Try again</);
     assert.match(markup, /Code Server exited\./);
   });

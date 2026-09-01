@@ -9,6 +9,7 @@ import {
 import {
   editorAttemptBanner,
   editorPaneView,
+  editorStartIsPending,
   type EditorStartIntent,
 } from '../../lib/editor/view.js';
 import { classifyRuntimeFailure } from '../../lib/runtime/classify.js';
@@ -159,7 +160,7 @@ export function EditorPaneContainer({
       hasDiagnostics={editorContext.hasDiagnostics}
       focused={focused}
       onFocus={onFocus}
-      starting={ensure.isPending}
+      starting={ensure.isPending && editorStartIsPending(view, ensure.variables?.intent ?? null)}
       onStart={start}
       diagnostics={diagnostics}
       onToggleDiagnostics={onToggleDiagnostics}

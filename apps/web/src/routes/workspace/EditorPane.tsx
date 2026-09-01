@@ -348,9 +348,15 @@ function EditorPrompt({
   const intent = editorStartIntent(view);
   const failed = view.kind === 'settled' && view.reason.kind !== 'unknown';
   const Glyph = view.kind === 'idle' ? CircleDashed : failed ? TriangleAlert : CircleHelp;
-  // `Retry` names an attempt at something that went wrong. Nothing went wrong
-  // when Isagi merely restarted, so that one starts rather than retries.
-  const label = failed ? editorCopy.action.retry : editorCopy.action.start;
+  // A failed launch is retried; a settled incarnation is replaced. Naming the
+  // latter explicitly keeps the recovery action clear instead of asking the
+  // user to infer that a generic retry means "restart this process".
+  const label =
+    view.kind === 'idle' || (view.kind === 'settled' && view.reason.kind === 'unknown')
+      ? editorCopy.action.start
+      : view.reason.kind === 'attempt_failed'
+        ? editorCopy.action.retry
+        : editorCopy.action.restart;
   const showDiagnostics = view.kind === 'settled' && hasDiagnostics && activePtyProcessId !== null;
   const open = diagnostics.kind !== 'closed';
 

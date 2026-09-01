@@ -3,7 +3,12 @@ import { describe, it } from 'node:test';
 
 import type { EditorContextFacts } from '@isagi/contracts';
 
-import { editorAttemptBanner, editorPaneView, editorStartIntent } from './view.js';
+import {
+  editorAttemptBanner,
+  editorPaneView,
+  editorStartIntent,
+  editorStartIsPending,
+} from './view.js';
 
 const base: EditorContextFacts = {
   id: 7,
@@ -193,5 +198,18 @@ describe('editorStartIntent', () => {
     assert.equal(editorStartIntent({ kind: 'launching' }), null);
     assert.equal(editorStartIntent({ kind: 'waiting_for_workbench' }), null);
     assert.equal(editorStartIntent({ kind: 'ready', url: 'http://127.0.0.1:41287' }), null);
+  });
+
+  it("does not let a pending mount-time reuse claim a settled pane's restart action", () => {
+    const settled = editorPaneView(
+      facts({
+        activePtyProcessId: 48120,
+        processStatus: 'killed',
+        processDiagnostic: 'killed',
+      }),
+    );
+
+    assert.equal(editorStartIsPending(settled, 'reuse'), false);
+    assert.equal(editorStartIsPending(settled, 'replace'), true);
   });
 });
