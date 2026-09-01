@@ -20,6 +20,11 @@ import {
   type CommandServiceShape,
 } from './commands/index.js';
 import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
+import {
+  EditorInstallIoLive,
+  EditorProvisioningLive,
+  type EditorProvisioningService,
+} from './editor-provisioning/index.js';
 import { GitLive } from './git/index.js';
 import {
   HarnessControlPlaneLive,
@@ -89,10 +94,19 @@ const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const HostInventoryLayer = HostInventoryLive;
+// Bound once, like the entity lock: the provisioning attempt, its semaphore, and
+// the resolved installation are per-instance state, so the control plane and the
+// API must observe the same service rather than two independently constructed
+// ones.
+const EditorProvisioningLayer = EditorProvisioningLive.pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(EditorInstallIoLive),
+);
 const HarnessControlPlaneLayer = HarnessControlPlaneLive.pipe(
   Layer.provide(HostInventoryLayer),
   Layer.provide(RuntimeConfigLayer),
   Layer.provide(DataDirectoryLive),
+  Layer.provide(EditorProvisioningLayer),
 );
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
@@ -223,6 +237,7 @@ const ApiServicesLayer = Layer.mergeAll(
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
+  EditorProvisioningLayer,
 );
 const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(CommandRepositoryLayer),
@@ -275,6 +290,7 @@ export type RuntimeServices =
   | WorkflowRunProjectionService
   | HostInventoryService
   | HarnessControlPlaneService
+  | EditorProvisioningService
   | RuntimeConfigService;
 
 const ServicesLayer = Layer.mergeAll(

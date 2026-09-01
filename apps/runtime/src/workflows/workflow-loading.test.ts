@@ -14,6 +14,7 @@ import {
 import { Effect, Either, Layer, Ref } from 'effect';
 
 import { DataDirectory, type IsagiDataDirectory } from '../persistence/index.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { defaultRuntimeConfig, RuntimeConfig } from '../runtime-config/index.js';
 import { scanWorkflowSource } from './discovery.js';
 import { WorkflowLoadError } from './loader.js';
@@ -542,12 +543,5 @@ async function writePackage(root: string, artifactText: string) {
 }
 
 function dataDirectoryPaths(root: string): IsagiDataDirectory {
-  return {
-    root,
-    databasePath: join(root, 'isagi.db'),
-    statePath: join(root, 'state.json'),
-    worktreesPath: join(root, 'worktrees'),
-    sessionsPath: join(root, 'sessions'),
-    workflowsPath: join(root, 'workflows'),
-  };
+  return makeTestDataDirectory(root).paths;
 }

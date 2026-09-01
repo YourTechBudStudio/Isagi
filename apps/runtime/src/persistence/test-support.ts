@@ -19,6 +19,8 @@ export function makeTestDataDirectory(
       worktreesPath: join(root, 'worktrees'),
       sessionsPath: join(root, 'sessions'),
       workflowsPath: join(root, 'workflows'),
+      toolsPath: join(root, 'tools'),
+      editorsPath: join(root, 'editors'),
       ...overrides,
     },
   };

@@ -6,6 +6,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerAgentSessionsApi } from './agent-sessions/index.js';
 import { registerClientSettingsApi } from './client-settings/api.js';
 import { registerCommandsApi } from './commands/index.js';
+import { EditorProvisioning } from './editor-provisioning/index.js';
+import { registerEditorApi } from './editor/index.js';
 import { registerControlPlaneApi } from './harness-control-plane/api.js';
 import { HarnessControlPlane } from './harness-control-plane/index.js';
 import { registerHealthApi } from './health/api.js';
@@ -66,6 +68,7 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       registerSurfacesApi(fastify, runtime);
       registerPtyApi(fastify, runtime);
       registerRuntimeEventsApi(fastify, runtime);
+      registerEditorApi(fastify, runtime);
       registerPathsApi(fastify);
       registerWorkflowApi(fastify, runtime);
 
@@ -78,6 +81,14 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
       yield* runInRuntime(
         runtime,
         Effect.flatMap(HarnessControlPlane, (controlPlane) => controlPlane.start),
+      );
+      // Forks into the layer scope and returns immediately. The host treats a
+      // 15-second readiness deadline as fatal and the pinned Code Server
+      // artifacts are 200–235 MB, so a first-run download must never sit between
+      // this point and the ready line.
+      yield* runInRuntime(
+        runtime,
+        Effect.flatMap(EditorProvisioning, (provisioning) => provisioning.start),
       );
       yield* runInRuntime(runtime, restoreStartupSessions);
 

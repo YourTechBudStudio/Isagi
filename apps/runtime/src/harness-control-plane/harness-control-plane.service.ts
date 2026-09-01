@@ -4,11 +4,13 @@ import type {
   AgentHarness,
   ControlPlaneSnapshot,
   DocsReconciliationResult,
+  EditorProvisioningState,
   HarnessLaunchBlockReason,
   HarnessPolicy,
 } from '@isagi/contracts';
 
 import { supportedHarnesses } from '../agent-sessions/harness/definitions.js';
+import { EditorProvisioning } from '../editor-provisioning/index.js';
 import { HostInventory } from '../host-inventory/index.js';
 import { executableAvailability, type HostInventoryState } from '../host-inventory/types.js';
 import { DataDirectory } from '../persistence/index.js';
@@ -80,6 +82,11 @@ export const HarnessControlPlaneLive = Layer.scoped(
     const inventory = yield* HostInventory;
     const config = yield* RuntimeConfig;
     const directory = yield* DataDirectory;
+    // Composed here because D2 requires one projection of provisioning state, and
+    // the control-plane snapshot is the projection every startup surface already
+    // reads. The edge is one-way: provisioning knows nothing about harnesses,
+    // and nothing about harness launchability depends on it.
+    const editorProvisioning = yield* EditorProvisioning;
     const scope = yield* Effect.scope;
     const reconciliation = yield* Ref.make(initialReconciliation);
     const lock = yield* Effect.makeSemaphore(1);
@@ -136,7 +143,8 @@ export const HarnessControlPlaneLive = Layer.scoped(
         const current = yield* config.get;
         const cached = yield* inventory.getCached;
         const rec = yield* Ref.get(reconciliation);
-        return snapshotOf(current.harnesses, cached, rec);
+        const editor = yield* editorProvisioning.state;
+        return snapshotOf(current.harnesses, cached, rec, editor);
       }),
       refreshInventory: refresh,
       acceptPolicy: (input) =>
@@ -199,6 +207,7 @@ function snapshotOf(
   policyState: RuntimeHarnessPolicyState,
   inventory: HostInventoryState,
   rec: ReconciliationState,
+  editorProvisioning: EditorProvisioningState,
 ): ControlPlaneSnapshot {
   return {
     onboardingComplete: policyState.onboardingComplete,
@@ -229,10 +238,10 @@ function snapshotOf(
             : ({ status: 'blocked', reason: decision.reason } as const),
       };
     }),
-    // Constant until phase 03 supplies the provisioning service. This runtime
-    // declares no editor capability, so `not_applicable` is the truthful answer
-    // rather than a placeholder: there is no installation to report on.
-    editorProvisioning: { status: 'not_applicable' },
+    // Passed through verbatim from the domain that owns the work. On a runtime
+    // that declares no editor capability this is `not_applicable`, which is a
+    // real wire fact rather than a placeholder.
+    editorProvisioning,
     reconciliation: {
       desiredFingerprint: rec.desiredFingerprint,
       runningFingerprint: rec.runningFingerprint,

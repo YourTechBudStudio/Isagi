@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { Effect, Either } from 'effect';
 
 import { DataDirectory, type IsagiDataDirectory } from '../persistence/index.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { disabledHarnessPolicy } from './runtime-config.policy.js';
 import {
   RuntimeConfig,
@@ -15,14 +16,7 @@ import {
   RuntimeConfigLive,
 } from './runtime-config.service.js';
 function paths(root: string): IsagiDataDirectory {
-  return {
-    root,
-    databasePath: resolve(root, 'isagi.db'),
-    statePath: resolve(root, 'state.json'),
-    worktreesPath: resolve(root, 'worktrees'),
-    sessionsPath: resolve(root, 'sessions'),
-    workflowsPath: resolve(root, 'workflows'),
-  };
+  return makeTestDataDirectory(root).paths;
 }
 function program(root: string) {
   return Effect.gen(function* () {
