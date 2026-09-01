@@ -548,3 +548,109 @@ test('runtime client classifies fetch failures as transport errors', async () =>
 function mockFetch(response: Response) {
   return (() => Promise.resolve(response.clone())) as typeof fetch;
 }
+
+// ---------------------------------------------------------------------------
+// Editor
+//
+// Every one of these is a transport shape a type-checker cannot catch: a params
+// object mistaken for a body, a query flattened into params, an argument order
+// reversed. They are asserted here so the mistake fails in this suite rather
+// than as a 404 or an `api_response_encoding_failed` at runtime.
+// ---------------------------------------------------------------------------
+
+const editorContextFacts = {
+  id: 7,
+  worktreeId: 10,
+  activePtyProcessId: null,
+  attempt: { state: 'none' },
+  processStatus: null,
+  processDiagnostic: null,
+  processDiagnosticDetail: null,
+  workbenchReadiness: null,
+  readinessDetail: null,
+  endpoint: null,
+  hasDiagnostics: false,
+  createdAt: '2026-08-31T09:00:00.000Z',
+  updatedAt: '2026-08-31T09:00:00.000Z',
+};
+
+function captureRequest(data: unknown) {
+  const captured: { url: string; method: string | undefined; body: string | null } = {
+    url: '',
+    method: undefined,
+    body: null,
+  };
+  globalThis.fetch = ((input, init) => {
+    captured.url = String(input);
+    captured.method = init?.method;
+    captured.body = typeof init?.body === 'string' ? init.body : null;
+    return Promise.resolve(
+      new Response(JSON.stringify({ data, meta: { requestId: 'req-editor' } }), { status: 200 }),
+    );
+  }) as typeof fetch;
+  return captured;
+}
+
+test('runtime client opens an editor by worktree path parameter, with no body', async () => {
+  const captured = captureRequest({
+    worktreeId: 10,
+    surfaceId: 501,
+    paneId: 601,
+    editorContextId: 7,
+  });
+
+  const output = await Effect.runPromise(createRuntimeClient('http://runtime.test').openEditor(10));
+
+  assert.equal(captured.url, 'http://runtime.test/api/v1/worktrees/10/editor');
+  assert.equal(captured.method, 'POST');
+  // The worktree is the whole input; a body would only invite a second target.
+  assert.equal(captured.body, null);
+  assert.deepEqual(output, { worktreeId: 10, surfaceId: 501, paneId: 601, editorContextId: 7 });
+});
+
+test('runtime client sends the ensure intent as a body, keyed by editor context', async () => {
+  const captured = captureRequest({ editorContext: editorContextFacts });
+
+  await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').ensureEditorRuntime(7, { intent: 'replace' }),
+  );
+
+  assert.equal(captured.url, 'http://runtime.test/api/v1/editor-contexts/7/runtime');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.body ?? 'null'), { intent: 'replace' });
+});
+
+test('runtime client names the incarnation as a query, not a second path parameter', async () => {
+  const captured = captureRequest({
+    editorContextId: 7,
+    ptyProcessId: 48120,
+    excerpt: 'listening on 127.0.0.1:41287',
+    truncated: false,
+    totalBytes: 28,
+  });
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').editorDiagnostics(7, 48120),
+  );
+
+  // Params, then query — the order `ApiEndpointRequestArgs` derives. Reversing
+  // the two arguments would silently produce `/editor-contexts/48120/...`.
+  assert.equal(
+    captured.url,
+    'http://runtime.test/api/v1/editor-contexts/7/diagnostics?ptyProcessId=48120',
+  );
+  assert.equal(captured.method, 'GET');
+  assert.equal(output.ptyProcessId, 48120);
+});
+
+test('runtime client retries provisioning with no arguments at all', async () => {
+  const captured = captureRequest({ provisioning: { status: 'checking', version: '4.135.0' } });
+
+  const output = await Effect.runPromise(
+    createRuntimeClient('http://runtime.test').retryEditorProvisioning(),
+  );
+
+  assert.equal(captured.url, 'http://runtime.test/api/v1/editor/provisioning/retry');
+  assert.equal(captured.method, 'POST');
+  assert.deepEqual(output, { provisioning: { status: 'checking', version: '4.135.0' } });
+});

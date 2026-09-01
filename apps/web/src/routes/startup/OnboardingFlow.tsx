@@ -3,7 +3,7 @@ import { useState } from 'react';
 
 import type { ControlPlaneSnapshot, DocsReconciliationResult } from '@isagi/contracts';
 
-import { onboardingCopy } from '../../copy/index.js';
+import { editorProvisioningCopy, onboardingCopy } from '../../copy/index.js';
 import {
   buildHarnessPolicy,
   docsResultRetryable,
@@ -14,6 +14,8 @@ import {
   controlPlaneQueryKey,
   useAcceptHarnessPolicyMutation,
 } from '../../lib/control-plane/queries.js';
+import { editorProvisioningManifestLine } from '../../lib/editor/provisioning.js';
+import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
 import { RuntimeApiError } from '../../lib/runtime/client.js';
 import { runRuntimeEffect, unwrapRuntimeFailure } from '../../lib/runtime/run.js';
 import {
@@ -58,6 +60,7 @@ export function OnboardingFlow({
   const [superseded, setSuperseded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const retryProvisioning = useRetryEditorProvisioningMutation();
 
   const acceptPolicy = useAcceptHarnessPolicyMutation();
   const queryClient = useQueryClient();
@@ -125,6 +128,26 @@ export function OnboardingFlow({
     setDraft(next);
   };
 
+  // Onboarding hears about a provisioning *failure* only — never the download's
+  // progress. Background work the user did not ask for and cannot steer has no
+  // business interrupting the screen where they are configuring something else.
+  // The line is null for every transient state, which is what makes this safe to
+  // read unconditionally.
+  const provisioningLine = editorProvisioningManifestLine(snapshot.editorProvisioning);
+  const provisioning =
+    provisioningLine !== null && snapshot.editorProvisioning.status === 'failed'
+      ? {
+          line: provisioningLine,
+          retryable: editorProvisioningCopy.retryable[snapshot.editorProvisioning.reason],
+          retrying: retryProvisioning.isPending,
+          // A retry that never reached the runtime leaves the projection exactly
+          // as it was, so the button would look inert. The mutation's own error
+          // is the only record of it.
+          retryError: retryProvisioning.error ? formatRuntimeError(retryProvisioning.error) : null,
+          onRetry: () => retryProvisioning.mutate(),
+        }
+      : null;
+
   const attention = result
     ? {
         result,
@@ -157,6 +180,7 @@ export function OnboardingFlow({
               error={error}
               onSave={() => void save()}
               attention={attention}
+              provisioning={provisioning}
             />
           </>
         ),

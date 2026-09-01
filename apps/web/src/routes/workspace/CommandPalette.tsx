@@ -14,7 +14,7 @@ import {
 } from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';
 import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';
-import { useLaunchableHarnesses } from '../../lib/control-plane/queries.js';
+import { useEditorAvailable, useLaunchableHarnesses } from '../../lib/control-plane/queries.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import { configuredCommandSection } from '../../lib/palette/configured-commands.js';
 import {
@@ -91,10 +91,12 @@ export function CommandPalette() {
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
   const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
   const launchableHarnesses = useLaunchableHarnesses();
+  const editorAvailable = useEditorAvailable();
   const baseCtx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
         launchableHarnesses,
+        editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
       }),
@@ -102,6 +104,7 @@ export function CommandPalette() {
       projects,
       activeWorktreeId,
       launchableHarnesses,
+      editorAvailable,
       activeSurfaceByWorktreeId,
       activePaneBySurfaceId,
     ],
@@ -155,6 +158,7 @@ export function CommandPalette() {
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
         launchableHarnesses,
+        editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
         workflowDescriptors: workflowDescriptors.data?.workflows,
@@ -167,6 +171,7 @@ export function CommandPalette() {
       projects,
       activeWorktreeId,
       launchableHarnesses,
+      editorAvailable,
       activeSurfaceByWorktreeId,
       activePaneBySurfaceId,
       workflowDescriptors.data?.workflows,

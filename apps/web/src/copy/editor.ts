@@ -81,6 +81,14 @@ export const editorProvisioningCopy = {
   retrying: 'Trying again…',
   /** Onboarding's button row already holds a Save; this one has to name itself. */
   manifestRetry: 'Retry download',
+  /**
+   * The retry *request* failed — a dropped connection, or a runtime that refused
+   * it. Distinct from the provisioning failure still on screen, which describes
+   * the download rather than this attempt to restart it.
+   */
+  retryFailed: "The retry didn't go through.",
+  /** The same fact in the manifest's lowercase config-file voice. */
+  manifestRetryFailed: "the retry didn't go through.",
   diagnosticLabel: 'code-server',
 } as const;
 

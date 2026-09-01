@@ -31,12 +31,17 @@ const failed = (
 
 const notice = (
   reason: EditorProvisioningFailureReason,
-  options: { readonly diagnostic?: string | null; readonly retrying?: boolean } = {},
+  options: {
+    readonly diagnostic?: string | null;
+    readonly retrying?: boolean;
+    readonly retryError?: string | null;
+  } = {},
 ): string =>
   renderToStaticMarkup(
     <EditorProvisioningNotice
       state={failed(reason, options.diagnostic ?? null)}
       retrying={options.retrying ?? false}
+      retryError={options.retryError ?? null}
       onRetry={() => undefined}
     />,
   );
@@ -70,6 +75,19 @@ describe('EditorProvisioningNotice', () => {
     assert.match(markup, /disabled=""/);
   });
 
+  it('says so when the retry request itself never landed', () => {
+    // Without this the button resets, the same provisioning failure stays on
+    // screen, and the retry reads as a no-op.
+    const markup = notice('download_failed', { retryError: 'Connection lost.' });
+    assert.match(markup, /The retry didn&#x27;t go through\. · Connection lost\./);
+    // The download's own failure is a separate fact and stays put.
+    assert.match(markup, /download_failed/);
+  });
+
+  it('stays quiet about a retry that has not failed', () => {
+    assert.doesNotMatch(notice('download_failed'), /The retry didn&#x27;t go through/);
+  });
+
   it('frames the runtime diagnostic as evidence beside the reason', () => {
     const markup = notice('integrity_mismatch', { diagnostic: 'expected 9f2c, got 3b70' });
     assert.match(markup, /integrity_mismatch · expected 9f2c, got 3b70/);
@@ -84,7 +102,13 @@ describe('provisioning on the boot surface', () => {
   const boot = (state: EditorProvisioningState, retrying = false): string =>
     renderToStaticMarkup(
       <BootSurface
-        view={{ kind: 'editor_provisioning', state, retrying, onRetry: () => undefined }}
+        view={{
+          kind: 'editor_provisioning',
+          state,
+          retrying,
+          retryError: null,
+          onRetry: () => undefined,
+        }}
       />,
     );
 

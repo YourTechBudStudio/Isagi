@@ -4,6 +4,8 @@ import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
 import { Effect } from 'effect';
 
+import type { CreateSurfaceOutput } from '@isagi/contracts';
+
 import { clearToasts } from '../../toast/index.js';
 import type { WorkspaceData } from '../model.js';
 import {
@@ -87,39 +89,72 @@ test('launch success refetches workspace and selects the new surface locally', a
     activePaneBySurfaceId: {},
   });
 
-  await commitLaunchSessionSuccess(
-    client,
-    {
-      worktreeId: 10,
-      surfaceId: 501,
-      paneId: 601,
-      title: 'Terminal 2',
-    },
-    async () => {
-      events.push(`fetch:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
-      return {
-        projects: [
-          project({
-            id: 1,
-            name: 'fresh',
-            surfaces: [
-              {
-                id: 501,
-                title: 'Terminal 2',
-                paneKinds: ['terminal_session'],
-                attention: 'working',
-              },
-            ],
-          }),
-        ],
-      };
-    },
-  );
+  // A real session caller still hands over its whole `CreateSurfaceOutput`; the
+  // generalized parameter accepts it structurally and reads only the placement.
+  const sessionOutput: CreateSurfaceOutput = {
+    worktreeId: 10,
+    surfaceId: 501,
+    paneId: 601,
+    title: 'Terminal 2',
+  };
+
+  await commitLaunchSessionSuccess(client, sessionOutput, async () => {
+    events.push(`fetch:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
+    return {
+      projects: [
+        project({
+          id: 1,
+          name: 'fresh',
+          surfaces: [
+            {
+              id: 501,
+              title: 'Terminal 2',
+              paneKinds: ['terminal_session'],
+              attention: 'working',
+            },
+          ],
+        }),
+      ],
+    };
+  });
 
   events.push(`select:${useWorkspaceStore.getState().activeSurfaceByWorktreeId[10] ?? 'none'}`);
   assert.deepEqual(events, ['fetch:none', 'select:501']);
   assert.equal(useWorkspaceStore.getState().activePaneBySurfaceId[501], 601);
   assert.equal(client.getQueryData<WorkspaceData>(workspaceQueryKey)?.projects[0]?.name, 'fresh');
+});
+
+test('a bare placement settles and activates, with no title to name the surface', async () => {
+  // Opening an editor answers with placement only. The commit reads exactly the
+  // three fields it always read, so this needs no editor-shaped stand-in.
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: 10_000 } } });
+  client.setQueryData<WorkspaceData>(workspaceQueryKey, {
+    projects: [project({ id: 1, name: 'stale' })],
+  });
+  useWorkspaceStore.setState({
+    selection: emptyWorkspaceSelection,
+    activeSurfaceByWorktreeId: {},
+    activePaneBySurfaceId: {},
+  });
+
+  await commitLaunchSessionSuccess(
+    client,
+    { worktreeId: 10, surfaceId: 777, paneId: 888 },
+    async () => ({
+      projects: [
+        project({
+          id: 1,
+          name: 'fresh',
+          surfaces: [
+            { id: 777, title: 'Editor', paneKinds: ['editor_context'], attention: 'idle' },
+          ],
+        }),
+      ],
+    }),
+  );
+
+  assert.equal(useWorkspaceStore.getState().activeSurfaceByWorktreeId[10], 777);
+  assert.equal(useWorkspaceStore.getState().activePaneBySurfaceId[777], 888);
 });
 
 test('failed agent launch invalidates workspace so persisted empty surfaces can appear', async () => {

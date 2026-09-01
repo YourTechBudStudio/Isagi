@@ -23,26 +23,14 @@ import { Button } from '../../components/Button.js';
 import { ContextMenu } from '../../components/ContextMenu.js';
 import { PaneActionCluster } from '../../components/PaneActionCluster.js';
 import { agentSessionCopy, ptyCopy, type PaneRestorePrompt } from '../../copy/index.js';
-import {
-  handleDispatchedCommandError,
-  useCommandDispatcher,
-} from '../../lib/palette/dispatcher.js';
-import { activatePane, usePaneFocusTarget } from '../../lib/workspace/activation.js';
+import { usePaneFocusTarget } from '../../lib/workspace/activation.js';
 import { attentionForPane, useAttentionStore } from '../../lib/workspace/attention.js';
 import { paneHasSharedActions } from '../../lib/workspace/pane-session/presentation.js';
 import { ptyPaneSession } from '../../lib/workspace/pane-session/view.js';
-import {
-  isDeletePending,
-  paneDeleteKey,
-  showsDeleteSweep,
-  surfaceDeleteKey,
-  useDeleteEntry,
-  usePendingDeleteStore,
-  useRunDelete,
-} from '../../lib/workspace/pending-deletes.js';
 import { paneSessionIcon } from '../../lib/workspace/surface-presentation.js';
 import { BlockedPanePrompt } from './BlockedPanePrompt.js';
 import { PaneTerminal } from './PaneTerminal.js';
+import { usePaneChromeActions } from './usePaneChromeActions.js';
 import { usePaneSession } from './usePaneSession.js';
 
 export function PtyPane({
@@ -56,7 +44,6 @@ export function PtyPane({
   readonly focused: boolean;
   readonly onFocus: () => void;
 }) {
-  const dispatchCommand = useCommandDispatcher();
   const shellRef = useRef<HTMLElement>(null);
   const Icon = paneSessionIcon(pane.session?.kind);
   const session = useMemo(() => ptyPaneSession(pane.session), [pane.session]);
@@ -64,13 +51,11 @@ export function PtyPane({
   const focusShell = useCallback(() => {
     shellRef.current?.focus({ preventScroll: true });
   }, []);
-  const focusPane = useCallback(() => {
-    activatePane({
-      worktreeId: surface.worktreeId,
-      surfaceId: surface.id,
-      paneId: pane.id,
-    });
-  }, [pane.id, surface.id, surface.worktreeId]);
+  const chrome = usePaneChromeActions({
+    worktreeId: surface.worktreeId,
+    surfaceId: surface.id,
+    paneId: pane.id,
+  });
   usePaneFocusTarget({
     surfaceId: surface.id,
     paneId: pane.id,
@@ -102,52 +87,7 @@ export function PtyPane({
     paneAttention,
     autoAttach: focused,
   });
-  // A delete already running against this pane — or against the surface that
-  // owns it — locks every action here. The sweep is drawn once, at whichever
-  // affordance started it; everything else just goes inert.
-  const paneKey = paneDeleteKey(pane.id);
-  const paneDelete = useDeleteEntry(paneKey);
-  const surfaceDelete = useDeleteEntry(surfaceDeleteKey(surface.id));
-  const actionsLocked = isDeletePending(paneDelete) || isDeletePending(surfaceDelete);
-  const clearDelete = usePendingDeleteStore((state) => state.clearDelete);
-  const runDelete = useRunDelete();
-  const paneValues = useMemo(
-    () => ({
-      worktreeId: String(surface.worktreeId),
-      surfaceId: String(surface.id),
-      paneId: String(pane.id),
-    }),
-    [pane.id, surface.id, surface.worktreeId],
-  );
-  const dispatchPaneCommand = useCallback(
-    (commandId: 'split-pane-right' | 'split-pane-down') => {
-      focusPane();
-      void dispatchCommand(commandId, paneValues).catch(handleDispatchedCommandError);
-    },
-    [dispatchCommand, focusPane, paneValues],
-  );
-  const deletePane = useCallback(
-    (origin: 'pane' | 'menu') => {
-      focusPane();
-      runDelete({
-        key: paneKey,
-        origin,
-        commandId: 'delete-active-pane',
-        surfaceId: surface.id,
-        values: paneValues,
-      });
-    },
-    [focusPane, paneKey, paneValues, runDelete, surface.id],
-  );
-  const onSplitRight = useCallback(() => {
-    dispatchPaneCommand('split-pane-right');
-  }, [dispatchPaneCommand]);
-  const onSplitDown = useCallback(() => {
-    dispatchPaneCommand('split-pane-down');
-  }, [dispatchPaneCommand]);
-  const onDelete = useCallback(() => {
-    deletePane('pane');
-  }, [deletePane]);
+  const { locked: actionsLocked, onSplitRight, onSplitDown, onDelete } = chrome;
   const paneMenuItems = useMemo(
     () => [
       { label: 'Split Right', icon: PanelRight, disabled: actionsLocked, onSelect: onSplitRight },
@@ -157,31 +97,28 @@ export function PtyPane({
         icon: Trash2,
         danger: true,
         keepsMenuOpen: true,
-        pending: showsDeleteSweep(paneDelete, 'menu'),
+        pending: chrome.menuDeletePending,
         disabled: actionsLocked,
-        onSelect: () => deletePane('menu'),
+        onSelect: () => onDelete('menu'),
       },
     ],
-    [actionsLocked, deletePane, onSplitDown, onSplitRight, paneDelete],
+    [actionsLocked, chrome.menuDeletePending, onDelete, onSplitDown, onSplitRight],
   );
   const sharedPaneActions = paneHasSharedActions(view.kind);
-  const onDeleteResultDismissed = useCallback(() => {
-    if (paneDelete?.error) clearDelete(paneKey);
-  }, [clearDelete, paneDelete, paneKey]);
   const withPaneMenu = useCallback(
     (children: ReactElement) =>
       sharedPaneActions && paneMenuItems.length > 0 ? (
         <ContextMenu
           items={paneMenuItems}
-          error={paneDelete?.error ?? null}
-          onResultDismissed={onDeleteResultDismissed}
+          error={chrome.deleteError}
+          onResultDismissed={chrome.onDeleteResultDismissed}
         >
           {children}
         </ContextMenu>
       ) : (
         children
       ),
-    [onDeleteResultDismissed, paneDelete, paneMenuItems, sharedPaneActions],
+    [chrome.deleteError, chrome.onDeleteResultDismissed, paneMenuItems, sharedPaneActions],
   );
 
   return (
@@ -234,7 +171,7 @@ export function PtyPane({
       ) : view.kind === 'unsupported' ? (
         withPaneMenu(
           <div className="flex min-h-0 flex-1">
-            <UnsupportedPrompt onDelete={onDelete} disabled={actionsLocked} />
+            <UnsupportedPrompt onDelete={() => onDelete('pane')} disabled={actionsLocked} />
           </div>,
         )
       ) : view.kind === 'moved' ? (
@@ -281,7 +218,7 @@ export function PtyPane({
           <BlockedPanePrompt
             harness={session?.kind === 'agent_session' ? session.harness : null}
             reason={view.reason}
-            onClose={onDelete}
+            onClose={() => onDelete('pane')}
             deletePending={actionsLocked}
           />
         </div>
@@ -329,9 +266,9 @@ export function PtyPane({
         <PaneActionCluster
           onSplitRight={onSplitRight}
           onSplitDown={onSplitDown}
-          onDelete={onDelete}
+          onDelete={() => onDelete('pane')}
           disabled={actionsLocked}
-          deletePending={showsDeleteSweep(paneDelete, 'pane')}
+          deletePending={chrome.clusterDeletePending}
         />
       ) : null}
     </section>

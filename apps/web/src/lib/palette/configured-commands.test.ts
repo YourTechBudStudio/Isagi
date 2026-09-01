@@ -301,6 +301,7 @@ function ctx(options: Partial<PaletteContext> = {}): PaletteContext {
     activeSurface: null,
     activePaneId: null,
     launchableHarnesses: [],
+    editorAvailable: false,
     ...options,
   };
 }

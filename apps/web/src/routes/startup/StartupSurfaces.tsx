@@ -34,6 +34,8 @@ export type BootView =
       kind: 'editor_provisioning';
       state: EditorProvisioningState;
       retrying: boolean;
+      /** The retry request's own failure, which the projection cannot carry. */
+      retryError: string | null;
       onRetry: () => void;
     };
 
@@ -278,6 +280,7 @@ function BootDetail({ view }: { view: BootView }) {
       <EditorProvisioningNotice
         state={view.state}
         retrying={view.retrying}
+        retryError={view.retryError}
         onRetry={view.onRetry}
       />
     ) : null;

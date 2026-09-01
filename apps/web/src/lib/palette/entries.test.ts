@@ -3,7 +3,11 @@ import test from 'node:test';
 
 import { workflowLoadFailureReasonSchema } from '@isagi/contracts';
 
-import { paletteCopy, workflowLoadFailureReasonCopy } from '../../copy/index.js';
+import {
+  paletteCopy,
+  workflowLoadFailureReasonCopy,
+  worktreeActionsCopy,
+} from '../../copy/index.js';
 import { assembleEntries, workflowFailureEntry } from './entries.js';
 import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
 
@@ -239,6 +243,50 @@ test('no worktree-commands rows without an active worktree', () => {
   );
 });
 
+test('open-editor appears only when the worktree, the project, and the runtime all say yes', () => {
+  const openEditor = (options: Partial<PaletteContext>) =>
+    assembleEntries(ctx({ editorAvailable: true, ...options })).find(
+      (candidate) => candidate.id === 'open-editor',
+    );
+
+  const available = openEditor({});
+  assert.ok(available, 'available when every condition holds');
+  assert.deepEqual(available.values, { projectId: '1', worktreeId: '11' });
+  assert.equal(available.group, 'worktree-actions');
+  assert.equal(available.sub, worktreeActionsCopy.openEditorHint);
+
+  // Each condition removed on its own; none of the three is redundant.
+  assert.equal(openEditor({ editorAvailable: false }), undefined, 'runtime says unavailable');
+  assert.equal(openEditor({ activeWorktree: null }), undefined, 'no active worktree');
+  assert.equal(
+    openEditor({
+      activeProject: {
+        id: 1,
+        name: 'isagi',
+        rootPath: '/repo/isagi',
+        glyph: 'IS',
+        accent: 'blue',
+        status: 'missing',
+        missingReason: 'path_not_found',
+        worktrees: [],
+      },
+    }),
+    undefined,
+    'project is disconnected',
+  );
+});
+
+test('the editor row sits with the worktree actions, not inside the session rows', () => {
+  const entries = assembleEntries(ctx({ editorAvailable: true }));
+  const editor = entries.findIndex((candidate) => candidate.id === 'open-editor');
+  const terminal = entries.findIndex((candidate) => candidate.id === 'start-terminal-session');
+
+  assert.ok(editor > terminal, 'assembled after the session rows');
+  assert.equal(entries[editor]?.group, entries[terminal]?.group);
+  // Its own subtitle, not the session loop's "open shell".
+  assert.notEqual(entries[editor]?.sub, entries[terminal]?.sub);
+});
+
 // Error-detail rows define their behavior through `run()`, which returns a
 // synchronous error `CommandOutcome`. This unwraps it and fails loudly if a row
 // is ever wired to launch (void), resolve async, or return a non-error outcome.
@@ -278,6 +326,7 @@ function ctx(options: Partial<PaletteContext> = {}): PaletteContext {
     activeSurface: { id: 42, title: 'Main', paneKinds: [], attention: 'idle' },
     activePaneId: null,
     launchableHarnesses: [],
+    editorAvailable: false,
     ...options,
   };
 }

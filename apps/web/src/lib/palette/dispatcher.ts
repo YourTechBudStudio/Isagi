@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 
 import { toastCopy } from '../../copy/index.js';
-import { useLaunchableHarnesses } from '../control-plane/queries.js';
+import { useEditorAvailable, useLaunchableHarnesses } from '../control-plane/queries.js';
 import { queryClient } from '../query/client.js';
 import { showToast } from '../toast/index.js';
 import { useWorkspace } from '../workspace/hooks.js';
@@ -94,6 +94,9 @@ const emptyPaletteContext: PaletteContext = {
   activeSurface: null,
   activePaneId: null,
   launchableHarnesses: [],
+  // An explicit chrome dispatch names its own target and never asks about
+  // availability; this fallback context exists only to satisfy `run`.
+  editorAvailable: false,
 };
 
 export async function resolveCommandPreflight(
@@ -111,12 +114,14 @@ export function useCommandDispatcher() {
   const { projects, activeWorktreeId, activeSurfaceByWorktreeId } = useWorkspace();
   const activePaneBySurfaceId = useWorkspaceStore((state) => state.activePaneBySurfaceId);
   const launchableHarnesses = useLaunchableHarnesses();
+  const editorAvailable = useEditorAvailable();
   const openPalette = usePaletteStore((state) => state.openPalette);
   const pushRecent = usePaletteStore((state) => state.pushRecent);
   const ctx = useMemo(
     () =>
       buildPaletteContext(projects, activeWorktreeId, {
         launchableHarnesses,
+        editorAvailable,
         activeSurfaceByWorktreeId,
         activePaneBySurfaceId,
       }),
@@ -124,6 +129,7 @@ export function useCommandDispatcher() {
       projects,
       activeWorktreeId,
       launchableHarnesses,
+      editorAvailable,
       activeSurfaceByWorktreeId,
       activePaneBySurfaceId,
     ],

@@ -53,6 +53,13 @@ export interface PaletteContext {
    * could mistake for "nothing available".
    */
   readonly launchableHarnesses: readonly AgentHarness[];
+  /**
+   * Whether the runtime would open an editor right now, read straight from the
+   * control-plane snapshot. Required, never optional, for the same reason as the
+   * harness list above: a missing input must read as "not available", not as a
+   * silent "no facts yet" that an availability check could mistake for a yes.
+   */
+  readonly editorAvailable: boolean;
   readonly workflowDescriptors?: readonly WorkflowDescriptorResult[] | undefined;
   readonly activeSurfaceWorkflowSummary?: WorkflowRunSummary | undefined;
   /**

@@ -44,6 +44,12 @@ export interface PolicyProvisioningFailure {
   readonly line: string;
   readonly retryable: boolean;
   readonly retrying: boolean;
+  /**
+   * The retry *request*'s own failure, if the last one never landed. It is a
+   * separate fact from `line`, which describes the download, so it gets its own
+   * comment rather than replacing that one.
+   */
+  readonly retryError: string | null;
   readonly onRetry: () => void;
 }
 
@@ -231,6 +237,11 @@ export function PolicyForm({
         {provisioning ? (
           <div className="mt-2.5">
             <ManifestComment tone="error">{provisioning.line}</ManifestComment>
+            {provisioning.retryError ? (
+              <ManifestComment tone="error">
+                {editorProvisioningCopy.manifestRetryFailed} {provisioning.retryError}
+              </ManifestComment>
+            ) : null}
           </div>
         ) : null}
       </div>

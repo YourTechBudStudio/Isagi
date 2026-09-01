@@ -27,18 +27,12 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('railFixture');
   expect(bundle).not.toContain('installFakeRuntime');
   expect(bundle).not.toContain('FIXTURE_SNAPSHOT');
-  // The editor gallery drives the production pane and boot surface from authored
-  // facts and frames a stand-in workbench. The components ship; none of the
-  // scaffolding around them may.
-  expect(bundle).not.toContain('data-editor-fixture');
-  expect(bundle).not.toContain('data-pane-fixture');
-  expect(bundle).not.toContain('data-boot-fixture');
-  expect(bundle).not.toContain('EditorGalleryApp');
-  expect(bundle).not.toContain('PANE_FIXTURES');
-  expect(bundle).not.toContain('PROVISIONING_FIXTURES');
+  // The editor harness mounts the production `Surface` behind a fake runtime and
+  // frames a stand-in workbench. The pane ships; the harness around it must not.
+  expect(bundle).not.toContain('data-editor-test-support');
+  expect(bundle).not.toContain('EditorTestSupportApp');
+  expect(bundle).not.toContain('editorTestSupport');
   expect(bundle).not.toContain('workbench.html');
-  expect(bundle).not.toContain('ONBOARDING_SNAPSHOT');
-  expect(bundle).not.toContain('data-onboarding-stage');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {

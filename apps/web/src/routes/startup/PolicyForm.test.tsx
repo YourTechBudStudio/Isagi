@@ -57,6 +57,7 @@ const failure: PolicyProvisioningFailure = {
   line: "the editor download didn't finish. nothing was installed.",
   retryable: true,
   retrying: false,
+  retryError: null,
   onRetry: () => undefined,
 };
 
@@ -94,5 +95,13 @@ describe('PolicyForm provisioning failure', () => {
   it('holds the retry inert while one is running', () => {
     const markup = render({ ...failure, retrying: true });
     assert.match(markup, />Trying again…</);
+  });
+
+  it('reports a retry that never landed as its own comment', () => {
+    // The download's failure and this request's failure are two facts. Without
+    // the second, the button resets and appears to have done nothing.
+    const markup = render({ ...failure, retryError: 'Connection lost.' });
+    assert.match(markup, /# the editor download didn&#x27;t finish\./);
+    assert.match(markup, /# the retry didn&#x27;t go through\. Connection lost\./);
   });
 });

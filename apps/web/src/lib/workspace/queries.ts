@@ -531,9 +531,24 @@ export async function commitOpenWorktreeSuccess(
   // worktree still exists and is selected above.
 }
 
+/**
+ * Where a newly placed pane lives — the least a settle needs to fetch the
+ * snapshot and activate it.
+ *
+ * `CreateSurfaceOutput` is structurally assignable to this, so every session
+ * caller is unchanged. Opening an editor answers with a bare placement and no
+ * title: placement is the operation's answer, and a title would be a second
+ * naming authority over a surface the runtime already named.
+ */
+export interface SurfacePlacement {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  readonly paneId: number;
+}
+
 export async function commitLaunchSessionSuccess(
   client: QueryClient,
-  output: CreateSurfaceOutput,
+  output: SurfacePlacement,
   fetchWorkspaceData: (
     signal?: AbortSignal | undefined,
   ) => Promise<WorkspaceData> = loadWorkspaceData,

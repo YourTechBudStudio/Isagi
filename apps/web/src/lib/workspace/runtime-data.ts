@@ -27,7 +27,12 @@ import type {
   OpenWorktreeInput,
   OpenWorktreeOutput,
   DeleteWorktreePreflightOutput,
+  EditorDiagnosticsOutput,
+  EnsureEditorRuntimeInput,
+  EnsureEditorRuntimeOutput,
+  OpenEditorOutput,
   PathSuggestOutput,
+  RetryEditorProvisioningOutput,
   RenameSurfaceOutput,
   ReconcileWorkspaceInput,
   SetSplitWeightsInput,
@@ -400,6 +405,32 @@ export function acceptHarnessPolicy(
   input: AcceptHarnessPolicyInput,
 ): Effect.Effect<AcceptHarnessPolicyOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.acceptHarnessPolicy(input)));
+}
+
+export function openEditor(worktreeId: number): Effect.Effect<OpenEditorOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.openEditor(worktreeId)));
+}
+
+export function ensureEditorRuntime(
+  editorContextId: number,
+  input: EnsureEditorRuntimeInput,
+): Effect.Effect<EnsureEditorRuntimeOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.ensureEditorRuntime(editorContextId, input)),
+  );
+}
+
+export function editorDiagnostics(
+  editorContextId: number,
+  ptyProcessId: number,
+): Effect.Effect<EditorDiagnosticsOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.editorDiagnostics(editorContextId, ptyProcessId)),
+  );
+}
+
+export function retryEditorProvisioning(): Effect.Effect<RetryEditorProvisioningOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.retryEditorProvisioning()));
 }
 
 function getClient() {
