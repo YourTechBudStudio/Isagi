@@ -43,6 +43,7 @@ export function verifyMacRelease(options) {
       return yield* failWith('macOS release verification requires a native macOS host.');
     }
     const run = options.run ?? runCommand;
+    const verifyLicenseBundle = options.verifyLicenseBundle ?? verifyDesktopLicenseBundle;
     const directory = resolve(options.releaseDirectory);
     const names = releaseNames(options.architecture);
     const inspection = yield* attempt(() => {
@@ -71,7 +72,13 @@ export function verifyMacRelease(options) {
         }).pipe(Effect.ignore),
     );
 
-    const unpacked = yield* verifyApp(unpackedApp, options, run, 'unpacked app');
+    const unpacked = yield* verifyApp(
+      unpackedApp,
+      options,
+      run,
+      verifyLicenseBundle,
+      'unpacked app',
+    );
 
     const zipRoot = resolve(temporaryRoot, 'zip');
     yield* run('mkdir', [zipRoot]);
@@ -80,6 +87,7 @@ export function verifyMacRelease(options) {
       resolve(zipRoot, macReleaseContract.appName),
       options,
       run,
+      verifyLicenseBundle,
       'ZIP app',
     );
 
@@ -102,6 +110,7 @@ export function verifyMacRelease(options) {
             resolve(mountedVolume, macReleaseContract.appName),
             options,
             run,
+            verifyLicenseBundle,
             'DMG app',
           );
         }),
@@ -160,7 +169,7 @@ export function withMountedDmg(options, use) {
   );
 }
 
-function verifyApp(appPath, options, run, label) {
+function verifyApp(appPath, options, run, verifyLicenseBundle, label) {
   return Effect.gen(function* () {
     const bundle = yield* attempt(() => {
       assertDirectory(appPath, label);
@@ -210,7 +219,7 @@ function verifyApp(appPath, options, run, label) {
     }
 
     const licenseBundle = yield* attempt(() =>
-      verifyDesktopLicenseBundle(resolve(appPath, 'Contents/Resources'), label),
+      verifyLicenseBundle(resolve(appPath, 'Contents/Resources'), label),
     );
     const runtimeRoot = resolve(appPath, 'Contents/Resources/runtime');
     const nativePayloads = yield* attempt(() => {

@@ -15,7 +15,6 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
-import { desktopLicenseBundle } from './desktop-license-bundle.mjs';
 import {
   classifyCommandFailure,
   parseCodesignDetails,
@@ -223,6 +222,7 @@ test('macOS verifier drives the complete app, ZIP, and DMG command contract thro
         expectedTeamId: 'TEAM123456',
         expectedVersion: '1.2.3',
         releaseDirectory: fixture.release,
+        verifyLicenseBundle: () => ({ fileCount: 0, totalBytes: 0 }),
         run: (command, args) =>
           Effect.sync(() => {
             commands.push([command, ...args]);
@@ -233,7 +233,7 @@ test('macOS verifier drives the complete app, ZIP, and DMG command contract thro
     );
     assert.equal(result.architecture, 'arm64');
     assert.equal(result.artifactCount, 4);
-    assert.equal(result.licenseFileCount, desktopLicenseBundle.files.length);
+    assert.equal(result.licenseFileCount, 0);
     assert.equal(result.nativePayloadCount >= 4, true);
     for (const expected of [
       ['ditto', '-x', '-k'],
@@ -343,11 +343,6 @@ function createApp(app) {
     resolve(resources, 'app-update.yml'),
     'provider: github\nowner: YourTechBudStudio\nrepo: Isagi\n',
   );
-  const licenses = resolve(resources, desktopLicenseBundle.directoryName);
-  mkdirSync(licenses);
-  for (const file of desktopLicenseBundle.files) {
-    copyFileSync(file.sourcePath, resolve(licenses, file.name));
-  }
 }
 
 function fakeCommand(fixture, command, args) {
