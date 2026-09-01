@@ -161,18 +161,19 @@ export function EditorPane({
 
   const errored = view.kind === 'settled' && view.reason.kind !== 'unknown';
   const locked = actions?.locked ?? false;
-  // The workbench is the hero, so once it has actually painted the header steps
-  // out of its way and comes back on hover. Three things pin it open regardless:
-  // a request-local failure, a refused replacement, and a running delete — none
-  // of which the user should have to go looking for.
+  // Once the probe has settled ready *and* the document has actually painted,
+  // the workbench owns the pane outright and Isagi's header is done: it is not
+  // hidden pending a gesture, it is gone. Three things still pin it — a
+  // request-local failure, a refused replacement, and a running delete — none of
+  // which the user should have to go looking for.
   //
-  // Deliberately not `focus-within`. The only focusable thing inside this pane
-  // is the workbench itself, so a focus trigger fired exactly when the user
-  // started working in the editor — the one moment the header must be gone. The
-  // collapsed strip holds an icon and two spans; the pane menu is a right-click
-  // and the action cluster is a sibling, so nothing here is reachable by Tab and
-  // nothing is stranded by leaving focus out.
-  const receding =
+  // There is deliberately no reveal trigger. Hover and focus both made the
+  // header flicker in and out while the user was working, which is noise rather
+  // than an affordance, and focus was worse than noise: the only focusable thing
+  // in this pane is the workbench, so it fired at exactly the wrong moment.
+  // Right-click inside a live workbench belongs to VS Code, and `PaneActionCluster`
+  // — a sibling of this header, not a child — keeps split and delete reachable.
+  const workbenchOwnsPane =
     view.kind === 'ready' && frameLoaded && notice === null && banner === null && !locked;
 
   const header = (
@@ -236,15 +237,7 @@ export function EditorPane({
         errored ? 'border-error/35' : focused ? 'border-blue/40' : 'border-line/20'
       }`}
     >
-      <div
-        className={
-          receding
-            ? 'h-px overflow-hidden bg-line/16 transition-all duration-ui ease-expo group-hover:h-9 group-hover:bg-transparent motion-reduce:transition-none'
-            : ''
-        }
-      >
-        {withPaneMenu(header)}
-      </div>
+      {workbenchOwnsPane ? null : withPaneMenu(header)}
 
       {notice ? (
         <p className="border-b border-error/16 bg-error/5 px-3 py-1.5 font-mono text-[10.5px] leading-relaxed text-error">

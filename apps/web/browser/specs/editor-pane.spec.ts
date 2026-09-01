@@ -18,6 +18,9 @@ import { expect, test, type Page } from '@playwright/test';
 const pane = (page: Page) => page.getByRole('region', { name: 'isagi · feat/embedded-editor' });
 const section = (page: Page) => page.locator('section[aria-label="isagi · feat/embedded-editor"]');
 const workbench = (page: Page) => page.frameLocator('iframe');
+/** The pane header, identified by the one thing only it renders: the title. */
+const header = (page: Page) =>
+  section(page).getByText('isagi · feat/embedded-editor', { exact: true });
 const activePaneId = (page: Page) => page.locator('[data-active-pane-id]');
 
 const PANE_ID = 77;
@@ -181,45 +184,58 @@ test('the workbench frame loads and hands over from its cover', async ({ page })
   await expect(pane(page).getByText('Loading the workbench…')).toHaveCount(0);
 });
 
-test('the header recedes once the workbench has painted, and returns on hover', async ({
-  page,
-}) => {
-  const header = section(page).locator('> div').first();
+test('the header is gone once the workbench has painted', async ({ page }) => {
   await expect(workbench(page).locator('.status')).toBeVisible();
 
-  // At rest the workbench owns the pane: the header is a hairline. This is only
-  // observable as a computed height, in a real layout.
-  await expect(header).toHaveCSS('height', '1px');
-
-  await section(page).hover();
-  await expect(header).not.toHaveCSS('height', '1px');
+  // Not collapsed pending a gesture — absent. The pane is the workbench.
+  await expect(header(page)).toHaveCount(0);
 });
 
 /**
- * The regression. `focus-within` on the pane counted the workbench itself, so
- * the header animated back the instant the user clicked into the editor — the
- * one moment it is supposed to be gone. Only a real browser can tell: focus is
- * not a property of markup.
+ * The header has no reveal trigger, and that is the point rather than an
+ * omission. Hover and focus both made it flicker in and out while the user was
+ * working; focus was worse, because the only focusable thing in this pane is
+ * the workbench, so it fired at exactly the wrong moment.
  *
- * The wait is load-bearing rather than lazy. `toHaveCSS` retries until it sees
- * the expected value, so asserting `1px` immediately after focusing passes on
- * the first poll no matter what — the height animates over `--duration-ui`
- * (190ms) and has not moved yet. Proving that nothing happens means letting the
- * transition window elapse first. Verified by restoring `group-focus-within`:
- * the settled height is 36px and this fails.
+ * Markup cannot answer this: whether a pointer or a focus event resurrects an
+ * element is a property of a live layout, not of a rendered string.
  */
-test('working in the workbench does not bring the header back', async ({ page }) => {
-  const header = section(page).locator('> div').first();
+test('neither the pointer nor the workbench brings the header back', async ({ page }) => {
   await expect(workbench(page).locator('.status')).toBeVisible();
-  await expect(header).toHaveCSS('height', '1px');
+  await expect(header(page)).toHaveCount(0);
+
+  await section(page).hover();
+  await expect(header(page)).toHaveCount(0);
 
   await section(page).locator('iframe').focus();
-  await page.waitForTimeout(700);
+  await expect(header(page)).toHaveCount(0);
+});
 
-  await expect(header).toHaveCSS('height', '1px');
-  // The pointer still reveals it, so the chrome stays reachable.
+/**
+ * The actions the removed header used to carry a right-click menu for. They
+ * live on `PaneActionCluster`, a sibling of the header, so removing the header
+ * cost the context menu and nothing else.
+ */
+test('split and delete stay reachable with no header', async ({ page }) => {
+  await expect(workbench(page).locator('.status')).toBeVisible();
+  await expect(header(page)).toHaveCount(0);
+
+  for (const name of ['Split pane right', 'Split pane down', 'Delete pane'])
+    await expect(section(page).getByRole('button', { name })).toBeEnabled();
+
+  // The cluster reveals by opacity, which `toBeVisible` does not read — an
+  // assertion on visibility alone would pass without ever hovering. Its own
+  // computed opacity is the only honest signal that the pointer summons it.
+  const clusterOpacity = () =>
+    section(page)
+      .getByRole('button', { name: 'Delete pane' })
+      .evaluate((el) => getComputedStyle(el.parentElement as HTMLElement).opacity);
+
+  await page.mouse.move(0, 0);
+  expect(await clusterOpacity()).toBe('0');
+
   await section(page).hover();
-  await expect(header).not.toHaveCSS('height', '1px');
+  await expect.poll(clusterOpacity).toBe('1');
 });
 
 test('a request-local failure pins the header open over a working workbench', async ({ page }) => {
@@ -227,14 +243,15 @@ test('a request-local failure pins the header open over a working workbench', as
   // confirming `reuse` fails transiently. A ready pane offers no action of its
   // own, so this — not a button — is how the two facts come to coexist.
   await page.goto('./?ready=1&failFirstEnsure=database');
-  const header = section(page).locator('> div').first();
   await expect(workbench(page).locator('.status')).toBeVisible();
 
   await expect(pane(page).getByText(/local database didn't cooperate/i)).toBeVisible();
-  // The workbench has painted, so the header would otherwise have receded. A
-  // fact the user must not have to hover to discover pins it open instead.
+  // The workbench has painted, so the header would otherwise be gone. A fact the
+  // user must not have to go looking for pins it there instead — with the
+  // pointer parked well away from the pane, so nothing but the failure is
+  // holding it.
   await page.mouse.move(0, 0);
-  await expect(header).not.toHaveCSS('height', '1px');
+  await expect(header(page)).toBeVisible();
 });
 
 test('entering the workbench activates its pane, by pointer and by keyboard', async ({ page }) => {
