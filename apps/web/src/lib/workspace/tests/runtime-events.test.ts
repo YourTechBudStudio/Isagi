@@ -28,6 +28,22 @@ test('runtime session change events invalidate workspace and targeted surface qu
   queryClient.clear();
 });
 
+test('an editor status change invalidates its surface detail and nothing else', () => {
+  queryClient.clear();
+  queryClient.setQueryData(workspaceQueryKey, { projects: [] });
+  queryClient.setQueryData(surfaceDetailQueryKey(3), { id: 3 });
+  queryClient.setQueryData(surfaceDetailQueryKey(99), { id: 99 });
+
+  handleRuntimeEvent(editorContextChangedEvent());
+
+  assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(3))?.isInvalidated, true);
+  assert.equal(queryClient.getQueryState(surfaceDetailQueryKey(99))?.isInvalidated, false);
+  // Unlike the session cases: an editor status change alters nothing the
+  // workspace snapshot carries. Placement still travels as `surface_changed`.
+  assert.equal(queryClient.getQueryState(workspaceQueryKey)?.isInvalidated, false);
+  queryClient.clear();
+});
+
 test('surface pane delete events invalidate detail and clear matching active pane', () => {
   queryClient.clear();
   queryClient.setQueryData(workspaceQueryKey, { projects: [] });
@@ -202,6 +218,15 @@ function workflowSummaryFixture(
     surfaceId: 3,
     ...overrides,
   };
+}
+
+function editorContextChangedEvent() {
+  return {
+    id: 'evt_test_editor',
+    type: 'editor_context_changed',
+    occurredAt: '2026-06-12T00:00:00.000Z',
+    payload: { editorContextId: 7, worktreeId: 2, surfaceId: 3, paneId: 4 },
+  } satisfies RuntimeEvent;
 }
 
 function agentSessionChangedEvent() {

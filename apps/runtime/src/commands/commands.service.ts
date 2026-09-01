@@ -19,7 +19,7 @@ import {
   reconcileCommandsAtBoot,
   type CommandConvergenceDependencies,
 } from './commands.convergence.js';
-import { describeOperationalCause } from './commands.diagnostics.js';
+import { describeCommandCause } from './commands.diagnostics.js';
 import { CommandError, type CommandServiceError } from './commands.errors.js';
 import { makeCommandLauncher } from './commands.launch.js';
 import { makeCommandLifecycle } from './commands.lifecycle.js';
@@ -381,7 +381,7 @@ export const CommandServiceLive = Layer.scoped(
             ptyProcessId,
             detail: processControlFailureDetail(
               options.cause,
-              describeOperationalCause(terminate.left),
+              describeCommandCause(terminate.left),
             ),
           }).pipe(
             // The repair failing is the error the caller will see, so the
@@ -390,7 +390,7 @@ export const CommandServiceLive = Layer.scoped(
             Effect.tapError(() =>
               Effect.sync(() => {
                 console.warn(
-                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeOperationalCause(terminate.left)}`,
+                  `[runtime] Command stop could not record its process-control failure worktree=${input.worktreeId} command=${input.commandName}; original termination failure: ${describeCommandCause(terminate.left)}`,
                 );
               }),
             ),
@@ -538,7 +538,7 @@ export const CommandServiceLive = Layer.scoped(
       Effect.catchAll((error) =>
         Effect.sync(() => {
           console.warn(
-            `[runtime] Command boot convergence failed cause=${describeOperationalCause(error)}`,
+            `[runtime] Command boot convergence failed cause=${describeCommandCause(error)}`,
           );
         }),
       ),
@@ -556,7 +556,7 @@ export const CommandServiceLive = Layer.scoped(
     const logEventError = (error: unknown) =>
       Effect.sync(() => {
         console.warn(
-          `[runtime] Command process event reconciliation failed cause=${describeOperationalCause(error)}`,
+          `[runtime] Command process event reconciliation failed cause=${describeCommandCause(error)}`,
         );
       });
     yield* Effect.forkScoped(

@@ -1,7 +1,9 @@
 import { Schema } from 'effect';
 
+import { editorAttemptFailureReasonSchema } from '../editor/types.js';
 import { harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
 import { workflowLoadFailureReasonSchema } from '../workflows/types.js';
+import { apiInfrastructureErrorSchema } from './responses.js';
 
 export const projectPathRejectionReasonSchema = Schema.Literal(
   'path_not_found',
@@ -48,6 +50,19 @@ export const workspaceReconcileRejectionReasonSchema = Schema.Literal(
 );
 
 export const projectOperationRejectionReasonSchema = Schema.Literal('command_cleanup_failed');
+
+export const editorRejectionReasonSchema = Schema.Literal(
+  'worktree_not_found',
+  'editor_context_not_found',
+  // This runtime declares no editor capability.
+  'editor_unsupported_runtime',
+  // Provisioning has not reached `ready`.
+  'editor_unavailable',
+  // A retry arrived while one was already running.
+  'editor_provisioning_busy',
+  // The incarnation a read named is no longer the context's current one.
+  'editor_incarnation_superseded',
+);
 
 export const surfaceRejectionReasonSchema = Schema.Literal(
   'surface_not_found',
@@ -457,6 +472,73 @@ export const surfaceApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+/**
+ * Request-boundary refusals: the operation was not attempted. Presented by the
+ * caller that made the request, never folded into the editor's own projection.
+ */
+export const editorRejectedErrorSchema = Schema.Struct({
+  code: Schema.Literal('editor_rejected'),
+  status: Schema.Literal(400),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: editorRejectionReasonSchema,
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    editorContextId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+    diagnostic: Schema.optional(Schema.String),
+  }),
+});
+
+/**
+ * The attempt ran, was persisted on the context, and failed. The request is
+ * well-formed and the target is valid, so this is not a 400; the caller's
+ * correct response is to re-read the context, so it is a 409. The reason is the
+ * same union the durable attempt record carries, which is what keeps the wire
+ * and the row from drifting.
+ */
+export const editorLaunchFailedErrorSchema = Schema.Struct({
+  code: Schema.Literal('editor_launch_failed'),
+  status: Schema.Literal(409),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({
+    reason: editorAttemptFailureReasonSchema,
+    editorContextId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    detail: Schema.optional(Schema.String),
+  }),
+});
+
+/**
+ * The startup output exists but could not be read. Deliberately not folded into
+ * a successful empty excerpt: "there is nothing to show" and "we could not look"
+ * are different answers, and only one of them is worth a retry.
+ */
+export const editorDiagnosticsUnavailableErrorSchema = Schema.Struct({
+  code: Schema.Literal('editor_diagnostics_unavailable'),
+  status: Schema.Literal(500),
+  message: Schema.String,
+  requestId: Schema.String,
+  data: Schema.Struct({ detail: Schema.String }),
+});
+
+/**
+ * One union serves all four editor endpoints, the way `surfaceApiErrorSchema`
+ * already serves the surfaces routes. It must cover its mapper exactly: the
+ * route helper validates every error whose code does not begin with `api_`
+ * against the endpoint's schema, and a miss reaches the client as an encoding
+ * failure — turning a diagnosable fault into an undiagnosable one. Opening an
+ * editor composes a surfaces operation, so a surfaces rejection can reach this
+ * boundary and is composed rather than re-spelled.
+ */
+export const editorApiErrorSchema = Schema.Union(
+  apiInfrastructureErrorSchema,
+  editorRejectedErrorSchema,
+  editorLaunchFailedErrorSchema,
+  editorDiagnosticsUnavailableErrorSchema,
+  surfaceRejectedErrorSchema,
+  runtimeDatabaseFailedErrorSchema,
+);
+
 export const worktreeEnvironmentFocusApiErrorSchema = Schema.Union(
   worktreeEnvironmentFocusRejectedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
@@ -559,6 +641,7 @@ export type WorkspaceReconcileRejectionReason = Schema.Schema.Type<
   typeof workspaceReconcileRejectionReasonSchema
 >;
 export type SurfaceRejectionReason = Schema.Schema.Type<typeof surfaceRejectionReasonSchema>;
+export type EditorRejectionReason = Schema.Schema.Type<typeof editorRejectionReasonSchema>;
 export type WorktreeEnvironmentFocusRejectionReason = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRejectionReasonSchema
 >;
@@ -609,6 +692,11 @@ export type WorkspaceReconcileRejectedError = Schema.Schema.Type<
   typeof workspaceReconcileRejectedErrorSchema
 >;
 export type SurfaceRejectedError = Schema.Schema.Type<typeof surfaceRejectedErrorSchema>;
+export type EditorRejectedError = Schema.Schema.Type<typeof editorRejectedErrorSchema>;
+export type EditorLaunchFailedError = Schema.Schema.Type<typeof editorLaunchFailedErrorSchema>;
+export type EditorDiagnosticsUnavailableError = Schema.Schema.Type<
+  typeof editorDiagnosticsUnavailableErrorSchema
+>;
 export type WorktreeEnvironmentFocusRejectedError = Schema.Schema.Type<
   typeof worktreeEnvironmentFocusRejectedErrorSchema
 >;

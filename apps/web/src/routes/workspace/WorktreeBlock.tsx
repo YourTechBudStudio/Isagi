@@ -1,4 +1,4 @@
-import { Bot, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
+import { Bot, Code, Pencil, SquareTerminal, Trash2 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 
 import { AttentionDot } from '../../components/AttentionDot.js';
@@ -24,6 +24,7 @@ import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js'
 import type { Worktree, Surface } from '../../lib/workspace/types.js';
 import { useRailDragLayer } from './rail-drag-context.js';
 import { RailOrderNotice } from './RailOrderNotice.js';
+import { worktreeMenuCommandIds, type WorktreeMenuCommandId } from './worktree-menu.js';
 
 /**
  * One worktree in the rail. When active it expands to show its surfaces as
@@ -41,6 +42,7 @@ import { RailOrderNotice } from './RailOrderNotice.js';
 export function WorktreeBlock({
   projectId,
   worktree,
+  editorAvailable,
   active,
   activeSurfaceId,
   onSelectWorktree,
@@ -48,6 +50,7 @@ export function WorktreeBlock({
 }: {
   projectId: number;
   worktree: Worktree;
+  editorAvailable: boolean;
   active: boolean;
   activeSurfaceId: number | null;
   onSelectWorktree: (worktreeId: number) => void;
@@ -57,9 +60,7 @@ export function WorktreeBlock({
   const rail = useRailDragLayer();
   const surfaceScope: RailOrderScope = { kind: 'surfaces', worktreeId: worktree.id };
 
-  const dispatchWorktreeCommand = (
-    commandId: 'start-terminal-session' | 'start-agent-session' | 'delete-active-worktree',
-  ) => {
+  const dispatchWorktreeCommand = (commandId: WorktreeMenuCommandId) => {
     // Selecting makes the clicked row active in the rail; it does not retarget the
     // command. The command resolves its target from the explicit ids below, which
     // win over the dispatcher's (still-active-worktree) context on this same tick.
@@ -70,26 +71,14 @@ export function WorktreeBlock({
     }).catch(handleDispatchedCommandError);
   };
 
-  const menuItems: ContextMenuItem[] = [
-    {
-      label: worktreeActionsCopy.menu.startTerminal,
-      icon: SquareTerminal,
-      onSelect: () => dispatchWorktreeCommand('start-terminal-session'),
-    },
-    {
-      label: worktreeActionsCopy.menu.startAgent,
-      icon: Bot,
-      onSelect: () => dispatchWorktreeCommand('start-agent-session'),
-    },
-  ];
-  if (!worktree.isRoot) {
-    menuItems.push({
-      label: worktreeActionsCopy.menu.delete,
-      icon: Trash2,
-      danger: true,
-      onSelect: () => dispatchWorktreeCommand('delete-active-worktree'),
-    });
-  }
+  const menuItems: ContextMenuItem[] = worktreeMenuCommandIds({
+    editorAvailable,
+    isRoot: worktree.isRoot,
+  }).map((commandId) => ({
+    ...worktreeMenuItemPresentation[commandId],
+    ...(commandId === 'delete-active-worktree' ? { danger: true } : {}),
+    onSelect: () => dispatchWorktreeCommand(commandId),
+  }));
 
   return (
     <div className={worktree.parked ? 'opacity-55 hover:opacity-80' : ''}>
@@ -167,6 +156,25 @@ export function WorktreeBlock({
     </div>
   );
 }
+
+const worktreeMenuItemPresentation = {
+  'start-terminal-session': {
+    label: worktreeActionsCopy.menu.startTerminal,
+    icon: SquareTerminal,
+  },
+  'start-agent-session': {
+    label: worktreeActionsCopy.menu.startAgent,
+    icon: Bot,
+  },
+  'open-editor': {
+    label: worktreeActionsCopy.openEditor,
+    icon: Code,
+  },
+  'delete-active-worktree': {
+    label: worktreeActionsCopy.menu.delete,
+    icon: Trash2,
+  },
+} as const satisfies Record<WorktreeMenuCommandId, Pick<ContextMenuItem, 'label' | 'icon'>>;
 
 function SurfaceRow({
   worktreeId,

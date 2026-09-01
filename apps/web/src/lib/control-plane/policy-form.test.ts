@@ -61,6 +61,7 @@ function snapshotWith(
       lastAppliedFingerprint: null,
       lastResult: null,
     },
+    editorProvisioning: { status: 'not_applicable' },
   };
 }
 

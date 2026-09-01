@@ -18,6 +18,7 @@ export function buildPaletteContext(
   activeWorktreeId: number | null,
   options: {
     readonly launchableHarnesses: readonly AgentHarness[];
+    readonly editorAvailable: boolean;
     readonly activeSurfaceByWorktreeId?: Readonly<Record<number, number>>;
     readonly activePaneBySurfaceId?: Readonly<Record<number, number>>;
     readonly workflowDescriptors?: PaletteContext['workflowDescriptors'];
@@ -50,6 +51,7 @@ export function buildPaletteContext(
       ? (options.activePaneBySurfaceId?.[activeSurface.id] ?? null)
       : null,
     launchableHarnesses: options.launchableHarnesses,
+    editorAvailable: options.editorAvailable,
     workflowDescriptors: options.workflowDescriptors,
     activeSurfaceWorkflowSummary: options.activeSurfaceWorkflowSummary,
     workflowFailure: options.workflowFailure,

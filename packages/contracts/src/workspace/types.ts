@@ -1,9 +1,10 @@
 import { Schema } from 'effect';
 
+import { paneSessionKindSchema } from '../surfaces/types.js';
+
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const projectStatusSchema = Schema.Literal('present', 'missing');
-export const paneSessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
 export const surfaceSchema = Schema.Struct({
   id: positiveIntegerSchema,
   title: Schema.String,
@@ -68,8 +69,21 @@ export const workspaceSnapshotSchema = Schema.Struct({
   projects: Schema.Array(projectSchema),
 });
 
+/**
+ * A durable session that owns a process incarnation the client attaches to.
+ * Deliberately narrower than `paneSessionKindSchema` and deliberately not
+ * derived from it: this vocabulary types the durable session inventory, the
+ * deletion identity, attach identity, and the web's terminal presentation
+ * cache. An editor context is a durable entity of a different domain — its
+ * continuity is the context itself, while its process incarnations are
+ * replaceable — so it owns no attach token and no terminal cache entry.
+ * Widening this literal would silently expand `durable_session_deleted` and the
+ * cache's identity to a kind neither can service.
+ */
+export const durablePtySessionKindSchema = Schema.Literal('agent_session', 'terminal_session');
+
 export const durableSessionIdentitySchema = Schema.Struct({
-  kind: paneSessionKindSchema,
+  kind: durablePtySessionKindSchema,
   sessionId: positiveIntegerSchema,
   worktreeId: positiveIntegerSchema,
 });
@@ -129,6 +143,7 @@ export const reconcileWorkspaceOutputSchema = Schema.Struct({
 
 export type ProjectStatus = Schema.Schema.Type<typeof projectStatusSchema>;
 export type WorkspaceSnapshot = Schema.Schema.Type<typeof workspaceSnapshotSchema>;
+export type DurablePtySessionKind = Schema.Schema.Type<typeof durablePtySessionKindSchema>;
 export type DurableSessionIdentity = Schema.Schema.Type<typeof durableSessionIdentitySchema>;
 export type DurableSessionInventory = Schema.Schema.Type<typeof durableSessionInventorySchema>;
 export type SetActiveContextInput = Schema.Schema.Type<typeof setActiveContextInputSchema>;

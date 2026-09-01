@@ -27,6 +27,12 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('railFixture');
   expect(bundle).not.toContain('installFakeRuntime');
   expect(bundle).not.toContain('FIXTURE_SNAPSHOT');
+  // The editor harness mounts the production `Surface` behind a fake runtime and
+  // frames a stand-in workbench. The pane ships; the harness around it must not.
+  expect(bundle).not.toContain('data-editor-test-support');
+  expect(bundle).not.toContain('EditorTestSupportApp');
+  expect(bundle).not.toContain('editorTestSupport');
+  expect(bundle).not.toContain('workbench.html');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {

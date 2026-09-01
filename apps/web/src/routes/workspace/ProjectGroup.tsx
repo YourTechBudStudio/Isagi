@@ -29,12 +29,14 @@ import { WorktreeBlock, WorktreeRowBody } from './WorktreeBlock.js';
  */
 export function ProjectGroup({
   project,
+  editorAvailable,
   activeWorktreeId,
   onSelectWorktree,
   activeSurfaceByWorktreeId,
   onSelectSurface,
 }: {
   project: PresentProject;
+  editorAvailable: boolean;
   activeWorktreeId: number | null;
   onSelectWorktree: (projectId: number, worktreeId: number) => void;
   activeSurfaceByWorktreeId: Readonly<Record<number, number>>;
@@ -98,6 +100,7 @@ export function ProjectGroup({
                   <WorktreeBlock
                     projectId={project.id}
                     worktree={worktree}
+                    editorAvailable={editorAvailable}
                     active={worktree.id === activeWorktreeId}
                     activeSurfaceId={
                       activeSurfaceByWorktreeId[worktree.id] ?? worktree.activeSurfaceId

@@ -20,6 +20,7 @@ import {
 } from '../agent-sessions/index.js';
 import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { AllowAllHarnessControlPlaneLayer } from '../harness-control-plane/test-support.js';
+import { EntityLockLive } from '../lib/locks/entity-lock.js';
 import {
   DataDirectory,
   DatabaseError,
@@ -239,6 +240,7 @@ function realRestoreLayer(
     PtyService,
     Effect.map(RuntimeDatabase, (database) => fakeRealRestorePtyService(database, launches)),
   ).pipe(Layer.provide(databaseLayer));
+  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
   const harnessRegistry = Layer.succeed(
     HarnessAdapterRegistry,
     fakeHarnessRegistry(harnessLaunches),
@@ -248,13 +250,13 @@ function realRestoreLayer(
     Layer.provide(agentRepository),
     Layer.provide(pty),
     Layer.provide(harnessRegistry),
-    Layer.provide(SessionLifecycleLive),
+    Layer.provide(sessionLifecycle),
     Layer.provide(InternalRuntimeEventBusLive),
   );
   const terminalService = TerminalSessionServiceLive.pipe(
     Layer.provide(terminalRepository),
     Layer.provide(pty),
-    Layer.provide(SessionLifecycleLive),
+    Layer.provide(sessionLifecycle),
     Layer.provide(InternalRuntimeEventBusLive),
   );
   return StartupSessionRestoreLayer.pipe(
@@ -480,6 +482,7 @@ function fakeRealRestorePtyService(
 ): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: (input) =>
       Effect.gen(function* () {
         launches.push(input);
@@ -551,6 +554,7 @@ function fakeSurfaceRepository(
     listPanesForSurface: () => Effect.die('listPanesForSurface is not used'),
     listAgentSessionsForPanes: () => Effect.die('listAgentSessionsForPanes is not used'),
     listTerminalSessionsForPanes: () => Effect.die('listTerminalSessionsForPanes is not used'),
+    listEditorContextsForPanes: () => Effect.die('listEditorContextsForPanes is not used'),
     findPaneForSession: () => Effect.die('findPaneForSession is not used'),
     findSurfaceDeleteTarget: () => Effect.die('findSurfaceDeleteTarget is not used'),
     renameSurface: () => Effect.die('renameSurface is not used'),

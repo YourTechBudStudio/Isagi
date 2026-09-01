@@ -3,9 +3,9 @@ import { unlinkSync } from 'node:fs';
 import { Effect, Either } from 'effect';
 
 import { diagnosticPhase, logDiagnosticEvent } from '../../diagnostics/phase.js';
-import type { PtyProcessRow } from '../../surfaces/index.js';
 import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyProcessRow } from '../types.js';
 import type { PtyBackend, PtyBackendGcFinding, PtyBackendGcSession } from '../types.js';
 import { decodeBackendRef } from './backend-ref.js';
 import type { PtyLaunchReservations } from './lifecycle.js';

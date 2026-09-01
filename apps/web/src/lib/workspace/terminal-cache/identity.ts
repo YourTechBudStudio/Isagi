@@ -1,7 +1,12 @@
-import type { PaneSessionKind } from '@isagi/contracts';
+import type { DurablePtySessionKind } from '@isagi/contracts';
 
 export interface TerminalSessionIdentity {
-  readonly kind: PaneSessionKind;
+  /**
+   * The narrow durable-session vocabulary, not the wider pane-content kind. This
+   * cache keys live PTY attachments, so it can only ever describe a session that
+   * owns a process the client attaches to.
+   */
+  readonly kind: DurablePtySessionKind;
   readonly sessionId: number;
 }
 

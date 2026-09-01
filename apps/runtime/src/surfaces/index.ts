@@ -2,16 +2,17 @@ export { registerSurfacesApi } from './api.js';
 export {
   SurfaceRepository,
   SurfaceRepositoryLive,
+  SurfaceRepositoryInitialSessionRejected,
   SurfaceRepositoryWorktreeMissing,
   duplicateSafeTitle,
 } from './surfaces.repository.js';
-export type { SurfaceOrderMoveResult, SurfaceRepositoryService } from './surfaces.repository.js';
-export {
-  SurfaceError,
-  SurfaceOrderError,
-  SurfaceService,
-  SurfaceServiceLive,
-} from './surfaces.service.js';
+export type {
+  InitialSessionRejectionReason,
+  SurfaceOrderMoveResult,
+  SurfaceRepositoryService,
+} from './surfaces.repository.js';
+export { SurfaceError, SurfaceOrderError } from './errors.js';
+export { SurfaceService, SurfaceServiceLive } from './surfaces.service.js';
 export type { SurfaceService as SurfaceServiceShape } from './surfaces.service.js';
 export { insertPaneIntoLayout, layoutContainsPane, prunePaneFromLayout } from './layout.js';
 export type {
@@ -20,8 +21,6 @@ export type {
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
-  PtyProcessRow,
-  PtyProcessRecord,
   RenameSurfaceOutput,
   SurfaceDeletePaneTarget,
   SurfaceDeleteTarget,

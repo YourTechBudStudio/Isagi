@@ -1,24 +1,18 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { DataDirectory, type IsagiDataDirectory } from './data-directory.service.js';
+import { DataDirectory } from './data-directory.service.js';
 import { StateFile, StateFileLive, stateFromActiveContext } from './state-file.service.js';
+import { makeTestDataDirectory } from './test-support.js';
 
 test('malformed state file recovery is logged and stays out of the returned state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-state-'));
-  const paths = {
-    root,
-    databasePath: resolve(root, 'isagi.db'),
-    statePath: resolve(root, 'state.json'),
-    worktreesPath: resolve(root, 'worktrees'),
-    sessionsPath: resolve(root, 'sessions'),
-    workflowsPath: resolve(root, 'workflows'),
-  } satisfies IsagiDataDirectory;
+  const paths = makeTestDataDirectory(root).paths;
   writeFileSync(paths.statePath, '{ not json', 'utf8');
 
   const warnings: unknown[] = [];
@@ -53,14 +47,7 @@ test('malformed state file recovery is logged and stays out of the returned stat
 
 test('active context writes keep the highest revision durable', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-state-'));
-  const paths = {
-    root,
-    databasePath: resolve(root, 'isagi.db'),
-    statePath: resolve(root, 'state.json'),
-    worktreesPath: resolve(root, 'worktrees'),
-    sessionsPath: resolve(root, 'sessions'),
-    workflowsPath: resolve(root, 'workflows'),
-  } satisfies IsagiDataDirectory;
+  const paths = makeTestDataDirectory(root).paths;
 
   try {
     const state = await Effect.runPromise(

@@ -1,0 +1,27 @@
+{
+  "manifestVersion": 1,
+  "version": "4.135.0",
+  "artifacts": {
+    "darwin-arm64": {
+      "url": "https://github.com/coder/code-server/releases/download/v4.135.0/code-server-4.135.0-macos-arm64.tar.gz",
+      "sha256": "30e8c2fcf3cb7d125c06401ed7f24ff0609634b7ee01f259a52c7d462b90bd4e",
+      "archive": "tar_gz",
+      "stripComponents": 1,
+      "executablePath": "bin/code-server"
+    },
+    "darwin-x64": {
+      "url": "https://github.com/coder/code-server/releases/download/v4.135.0/code-server-4.135.0-macos-amd64.tar.gz",
+      "sha256": "71738fb5bd886bca3d792d819bfdaa4698b27569d69c494c538a9ec1c0d6bb5b",
+      "archive": "tar_gz",
+      "stripComponents": 1,
+      "executablePath": "bin/code-server"
+    },
+    "linux-x64": {
+      "url": "https://github.com/coder/code-server/releases/download/v4.135.0/code-server-4.135.0-linux-amd64.tar.gz",
+      "sha256": "300ef4e37e469e6368a4673c6a623e1c9ba8a34f42b394fb49c431a8900bc7d1",
+      "archive": "tar_gz",
+      "stripComponents": 1,
+      "executablePath": "bin/code-server"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
 
 /**
  * The workspace the fixture's fake runtime serves.
@@ -72,6 +72,28 @@ export const FIXTURE_SNAPSHOT: WorkspaceSnapshot = {
       worktrees: [],
     },
   ],
+};
+
+/**
+ * A settled control plane whose editor provisioning is `ready`, which is the one
+ * fact `editorAvailable` reads. Inventory is `ready` too, so the production query
+ * never starts its one-second startup poll behind the rail.
+ */
+export const FIXTURE_CONTROL_PLANE: ControlPlaneSnapshot = {
+  onboardingComplete: true,
+  configStatus: 'valid',
+  configDiagnostic: null,
+  policyRevision: 'rail-fixture-policy',
+  inventory: { status: 'ready', generation: 1, environment: 'trusted' },
+  harnesses: [],
+  reconciliation: {
+    desiredFingerprint: null,
+    runningFingerprint: null,
+    lastCompletedFingerprint: null,
+    lastAppliedFingerprint: null,
+    lastResult: null,
+  },
+  editorProvisioning: { status: 'ready', version: '1.0.0' },
 };
 
 /** The worktree the fixture opens expanded — the only one showing a surface list. */

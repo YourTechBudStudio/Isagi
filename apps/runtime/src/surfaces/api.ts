@@ -7,7 +7,8 @@ import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { SurfaceError, SurfaceOrderError, SurfaceService } from './surfaces.service.js';
+import { SurfaceError, SurfaceOrderError } from './errors.js';
+import { SurfaceService } from './surfaces.service.js';
 
 const runWithRuntime =
   (runtime: ManagedRuntime.ManagedRuntime<RuntimeServices, unknown>) =>

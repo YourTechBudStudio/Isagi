@@ -143,6 +143,15 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
         queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
       });
       break;
+    case 'editor_context_changed':
+      // Surface detail only, unlike the session cases above. An editor status
+      // change alters nothing the workspace snapshot carries — not `paneKinds`,
+      // not titles, not `activeSurfaceId`. Placement changes still arrive as
+      // `surface_changed`, which invalidates both.
+      void queryClient.invalidateQueries({
+        queryKey: surfaceDetailQueryKey(event.payload.surfaceId),
+      });
+      break;
     case 'surface_changed':
       handleSurfaceChangedEvent(event);
       break;

@@ -1,9 +1,9 @@
 import { Effect, Either } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
-import type { PtyProcessRecord } from '../../surfaces/index.js';
 import type { PtyBackendCatalogService } from '../backend.js';
 import type { PtyRepositoryService } from '../pty.repository.js';
+import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError, PtyTerminationInProgressError } from '../types.js';
 import type { ActiveAttachment } from './attachments.js';
 import { detachActiveAttachment } from './attachments.js';

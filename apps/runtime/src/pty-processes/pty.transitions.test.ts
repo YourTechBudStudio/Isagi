@@ -8,10 +8,10 @@ import { Effect, Layer } from 'effect';
 
 import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../runtime-events/index.js';
+import {
+  publishOnlyRecordingEventBus,
+  type RecordingEventBus,
+} from '../runtime-events/test-support.js';
 import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from './pty.repository.js';
 import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './service/events.js';
 
@@ -20,18 +20,6 @@ import { transitionProcessAndPublish, transitionProcessByIdAndPublish } from './
 // write is *observably* a no-op — no lifecycle event, and the caller receives the
 // fact that actually stands rather than the one it asked for.
 
-function recordingEventBus() {
-  const events: InternalRuntimeEvent[] = [];
-  const service: InternalRuntimeEventBusService = {
-    publish: (event) =>
-      Effect.sync(() => {
-        events.push(event);
-      }),
-    subscribe: () => Effect.die('transition tests do not subscribe'),
-  };
-  return { events, service };
-}
-
 function repositoryLayer(dataRoot: string) {
   const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
@@ -39,10 +27,10 @@ function repositoryLayer(dataRoot: string) {
 }
 
 function withRepository<A, E>(
-  body: (bus: ReturnType<typeof recordingEventBus>) => Effect.Effect<A, E, PtyRepositoryService>,
+  body: (bus: RecordingEventBus) => Effect.Effect<A, E, PtyRepositoryService>,
 ) {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-transitions-'));
-  const bus = recordingEventBus();
+  const bus = publishOnlyRecordingEventBus('transition tests do not subscribe');
   return Effect.runPromise(
     Effect.scoped(body(bus).pipe(Effect.provide(repositoryLayer(dataRoot)))),
   ).finally(() => {

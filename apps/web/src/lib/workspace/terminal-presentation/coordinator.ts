@@ -188,6 +188,10 @@ export function createTerminalWorkspaceCoordinator(input: {
     >();
     for (const pane of surface.panes) {
       if (!pane.session) continue;
+      // This cache holds PTY attachments. An editor context is a durable entity
+      // of another domain with no attachment to place, so it contributes no
+      // identity here; it must not be folded into the terminal vocabulary.
+      if (pane.session.kind === 'editor_context') continue;
       const identity =
         pane.session.kind === 'agent_session'
           ? { kind: 'agent_session' as const, sessionId: pane.session.agentSession.id }

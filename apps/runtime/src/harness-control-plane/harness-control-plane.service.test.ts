@@ -8,9 +8,15 @@ import { Deferred, Effect, Fiber, Layer, Option, Ref } from 'effect';
 
 import { terminalSettingsDefaults } from '@isagi/contracts';
 
+import type { EditorProvisioningService } from '../editor-provisioning/index.js';
+import {
+  NotApplicableEditorProvisioningLayer,
+  editorProvisioningStateLayer,
+} from '../editor-provisioning/test-support.js';
 import { HostInventory, type HostInventoryService } from '../host-inventory/index.js';
 import type { ExecutableProbeResult, HostInventoryState } from '../host-inventory/types.js';
 import { DataDirectory, type IsagiDataDirectory } from '../persistence/index.js';
+import { makeTestDataDirectory } from '../persistence/test-support.js';
 import {
   harnessPolicyRevision,
   RuntimeConfig,
@@ -144,6 +150,7 @@ test('start does not complete until initial host inventory is ready', async () =
         } satisfies RuntimeConfigService),
       ),
       Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),
+      Layer.provide(NotApplicableEditorProvisioningLayer),
     );
 
     const completedBeforeInventory = await Effect.runPromise(
@@ -273,6 +280,54 @@ test('the snapshot launch projection mirrors the enforced decision per harness',
   assert.deepEqual(byHarness.opencode?.launch, { status: 'blocked', reason: 'harness_disabled' });
 });
 
+test('the snapshot projects no editor capability for a runtime that declares none', async () => {
+  // This is a real wire fact every client reads, not merely a compiling field:
+  // the runtime declares no editor capability, so it truthfully reports that
+  // there is no installation to report on.
+  const snapshot = await runControlPlane(
+    policyState('valid', enabledPolicy()),
+    ready(available),
+    (service) => service.snapshot,
+  );
+  assert.deepEqual(snapshot.editorProvisioning, { status: 'not_applicable' });
+});
+
+test('the snapshot carries the provisioning state verbatim, whatever it is', async () => {
+  // The control plane composes this dimension; it does not interpret it. A
+  // projection that summarised, defaulted, or reordered the state would put a
+  // second opinion about provisioning on the wire.
+  const states = [
+    { status: 'checking', version: '4.135.0' },
+    { status: 'downloading', version: '4.135.0' },
+    { status: 'ready', version: '4.135.0' },
+    {
+      status: 'failed',
+      version: '4.135.0',
+      reason: 'integrity_mismatch',
+      diagnostic: 'checksum mismatch',
+    },
+  ] as const;
+
+  for (const state of states) {
+    const snapshot = await runControlPlane(
+      policyState('valid', enabledPolicy()),
+      ready(available),
+      (service) => service.snapshot,
+      resolve(tmpdir(), 'isagi-control-plane-editor-projection'),
+      editorProvisioningStateLayer(state),
+    );
+    assert.deepEqual(snapshot.editorProvisioning, state);
+    // Harness launchability is computed from policy and inventory alone, so a
+    // failed or in-flight editor install must never block a harness.
+    const byHarness = Object.fromEntries(snapshot.harnesses.map((e) => [e.harness, e]));
+    assert.deepEqual(
+      byHarness.pi?.launch,
+      { status: 'launchable' },
+      `launchable under ${state.status}`,
+    );
+  }
+});
+
 test('acceptPolicy rejects with control_plane_not_ready before committing when inventory stays pending', async () => {
   let committed = false;
   const config: RuntimeConfigService = {
@@ -300,6 +355,7 @@ test('acceptPolicy rejects with control_plane_not_ready before committing when i
         paths: dataPaths(resolve(tmpdir(), 'isagi-control-plane-not-ready')),
       }),
     ),
+    Layer.provide(NotApplicableEditorProvisioningLayer),
   );
   const result = await Effect.runPromise(
     Effect.scoped(
@@ -323,13 +379,14 @@ function runControlPlane<A>(
   initialInventory: HostInventoryState,
   use: (service: import('./index.js').HarnessControlPlaneService) => Effect.Effect<A, unknown>,
   root = resolve(tmpdir(), 'isagi-control-plane-test'),
+  provisioning = NotApplicableEditorProvisioningLayer,
 ) {
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const service = yield* HarnessControlPlane;
         return yield* use(service);
-      }).pipe(Effect.provide(controlPlaneLayer(state, initialInventory, root))),
+      }).pipe(Effect.provide(controlPlaneLayer(state, initialInventory, root, provisioning))),
     ),
   );
 }
@@ -338,6 +395,7 @@ function controlPlaneLayer(
   state: RuntimeHarnessPolicyState,
   initialInventory: HostInventoryState,
   root: string,
+  provisioning: Layer.Layer<EditorProvisioningService> = NotApplicableEditorProvisioningLayer,
 ) {
   const config: RuntimeConfigService = {
     get: Effect.succeed({
@@ -373,6 +431,7 @@ function controlPlaneLayer(
     Layer.provide(inventory),
     Layer.provide(Layer.succeed(RuntimeConfig, config)),
     Layer.provide(Layer.succeed(DataDirectory, { paths: dataPaths(root) })),
+    Layer.provide(provisioning),
   );
 }
 
@@ -412,12 +471,5 @@ function ready(
 }
 
 function dataPaths(root: string): IsagiDataDirectory {
-  return {
-    root,
-    databasePath: resolve(root, 'isagi.db'),
-    statePath: resolve(root, 'state.json'),
-    worktreesPath: resolve(root, 'worktrees'),
-    sessionsPath: resolve(root, 'sessions'),
-    workflowsPath: resolve(root, 'workflows'),
-  };
+  return makeTestDataDirectory(root).paths;
 }

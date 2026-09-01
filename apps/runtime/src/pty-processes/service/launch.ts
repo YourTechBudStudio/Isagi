@@ -256,9 +256,13 @@ function prepareLaunch(
       env: processEnvironment,
     });
     // The only read of the launch preference in the whole flow: a new
-    // incarnation is created by the configured adapter, while every operation
-    // on an existing one dispatches through its persisted backend.
-    const backend = deps.catalog.configured;
+    // incarnation is created by the configured adapter unless the caller named
+    // one, while every operation on an existing one dispatches through its
+    // persisted backend. An explicit selection resolves through the same
+    // catalog, which already rejects an unknown name loudly.
+    const backend = input.backend
+      ? deps.catalog.forBackend(input.backend)
+      : deps.catalog.configured;
     const backendMetadata = backendMetadataForLaunch(
       backend,
       { ptyProcessId, logPath: null },

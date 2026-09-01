@@ -2,14 +2,17 @@ import type {
   AgentHarness,
   AgentSessionRecoveryAction,
   AgentSessionStatusReason,
-  PtyProcessBackend,
-  PtyProcessLogMode,
+  PaneSessionKind,
   SessionDiagnosticCode,
   SessionStatus,
   SplitPaneDirection,
   SurfaceLayoutNode,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
+
+// Read-side composition only: a session row carries the process the runtime
+// joined onto it. The PTY domain owns the row itself (ADR 0005/0008).
+import type { PtyProcessRow } from '../pty-processes/types.js';
 
 export interface EnvironmentFocusRow {
   readonly worktreeId: number;
@@ -21,7 +24,7 @@ export interface SurfaceMetadataRow {
   readonly id: number;
   readonly worktreeId: number;
   readonly title: string;
-  readonly paneKinds: readonly ('agent_session' | 'terminal_session')[];
+  readonly paneKinds: readonly PaneSessionKind[];
   readonly sortOrder: number;
 }
 
@@ -36,58 +39,25 @@ export interface SurfacePaneRow {
   readonly surfaceId: number;
   readonly title: string;
   readonly sortOrder: number;
-  readonly sessionKind: 'agent_session' | 'terminal_session' | null;
+  readonly sessionKind: PaneSessionKind | null;
   readonly sessionId: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
+/**
+ * Deliberately NOT `PaneSessionKind`. This is the inventory of pane-bound
+ * sessions that own a PTY incarnation the runtime relaunches and collects, and
+ * an editor context is not one of them: its incarnation is recreated on demand,
+ * not eagerly at boot. Widening this literal would silently enroll editors in
+ * session restore and session GC. That exclusion is story #8's to revisit.
+ */
 export interface PaneSessionBinding {
   readonly paneId: number;
   readonly sessionKind: 'agent_session' | 'terminal_session';
   readonly sessionId: number;
   readonly activePtyProcessId: number | null;
 }
-
-export interface PtyProcessRow {
-  readonly id: number;
-  readonly backend: PtyProcessBackend;
-  readonly backendRefJson: string;
-  readonly command: string;
-  readonly args: readonly string[];
-  readonly argsJson: string;
-  readonly cwd: string;
-  readonly status: SessionStatus;
-  readonly statusReason:
-    | 'user_requested'
-    | 'runtime_shutdown'
-    | 'backend_unavailable'
-    | 'backend_process_missing'
-    | 'backend_attach_failed'
-    | 'backend_launch_failed'
-    | 'runtime_ephemeral_lost'
-    | null;
-  readonly exitCode: number | null;
-  readonly signal: string | null;
-  readonly logMode: PtyProcessLogMode;
-  readonly logPath: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly exitedAt: string | null;
-  readonly lastSeenAt: string | null;
-}
-
-// The PTY process row as the process service consumes it: args/argsJson are
-// optional (some call sites build the record before structured args land) and
-// it may carry the placement context (pane/surface/worktree) resolved at read
-// time. A bare `PtyProcessRow` is the strict persisted shape.
-export type PtyProcessRecord = Omit<PtyProcessRow, 'args' | 'argsJson'> & {
-  readonly args?: readonly string[] | undefined;
-  readonly argsJson?: string | undefined;
-  readonly paneId?: number | undefined;
-  readonly surfaceId?: number | undefined;
-  readonly worktreeId?: number | undefined;
-};
 
 export interface AgentSessionRow {
   readonly id: number;
@@ -135,6 +105,19 @@ export interface DerivedTerminalSessionState {
 export interface CreateSinglePaneSurfaceInput {
   readonly worktreeId: number;
   readonly titleBase: string;
+  /**
+   * A durable entity created before the surface and bound to the new pane
+   * inside the same transaction, so surface, pane, binding, and focus commit
+   * together and no sessionless pane is ever observable.
+   *
+   * Only the editor path supplies it. Agent and terminal creation keeps its
+   * existing two-step ordering; repairing that is not this seam's job. The
+   * single-member union is deliberate: it names the one kind that may be bound
+   * this way, so no generic caller can reach transactional placement.
+   */
+  readonly initialSession?:
+    | { readonly kind: 'editor_context'; readonly sessionId: number }
+    | undefined;
 }
 
 export interface CreateSinglePaneSurfaceOutput {

@@ -15,7 +15,7 @@ import type {
   CommandCleanupResult,
   CommandTarget,
 } from './commands.convergence.js';
-import { describeOperationalCause } from './commands.diagnostics.js';
+import { describeCommandCause } from './commands.diagnostics.js';
 import { CommandError, type CommandServiceError } from './commands.errors.js';
 import type { CommandStopCause, CommandStopResult } from './commands.outcomes.js';
 import type { CommandRepositoryService, CommandStateRow } from './commands.repository.js';
@@ -470,7 +470,7 @@ function logLifecycleError(operation: string) {
   return (error: unknown) =>
     Effect.sync(() => {
       console.warn(
-        `[runtime] Command lifecycle ${operation} failed cause=${describeOperationalCause(error)}`,
+        `[runtime] Command lifecycle ${operation} failed cause=${describeCommandCause(error)}`,
       );
     });
 }

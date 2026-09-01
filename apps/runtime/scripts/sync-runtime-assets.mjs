@@ -37,6 +37,14 @@ function syncAssets(assetRoot) {
     resolve(assetRoot, 'config-schemas', 'project-config.schema.ts'),
   );
 
+  // The Code Server release pin. Copied verbatim so the shipped runtime reads
+  // exactly the bytes the repository reviewed; a drift test asserts the two are
+  // identical.
+  copyFile(
+    resolve(runtimeRoot, 'src', 'editor-provisioning', 'code-server.manifest.json'),
+    resolve(assetRoot, 'code-server.manifest.json'),
+  );
+
   const skillContentRoot = resolve(
     runtimeRoot,
     'src',

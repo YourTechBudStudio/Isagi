@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import { deriveStartupGate } from '../../lib/control-plane/launchability.js';
 import { useControlPlaneQuery } from '../../lib/control-plane/queries.js';
+import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
 import { DURATION, EASE_EXPO } from '../../lib/motion.js';
 import { RuntimeLocalityContext, deriveRuntimeLocality } from '../../lib/runtime/locality.js';
 import { formatRuntimeError } from '../../lib/workspace/runtime-data.js';
@@ -37,6 +38,7 @@ import { BootSurface, type BootView } from './StartupSurfaces.js';
 export function StartupGate() {
   const host = useHostRuntimeGate();
   const query = useControlPlaneQuery({ enabled: hostRuntimeAllowsQueries(host.decision) });
+  const retryProvisioning = useRetryEditorProvisioningMutation();
   const [onboardingHeld, setOnboardingHeld] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
@@ -79,7 +81,21 @@ export function StartupGate() {
       ? { kind: 'environment_pending' }
       : gate?.kind === 'config_invalid'
         ? { kind: 'config_invalid', diagnostic: gate.diagnostic }
-        : null; // 'ready' — onboarding is handled above.
+        : gate?.kind === 'editor_provisioning'
+          ? {
+              kind: 'editor_provisioning',
+              state: gate.state,
+              retrying: retryProvisioning.isPending,
+              // The retry request can fail on its own — dropped connection, or a
+              // runtime refusal such as `editor_provisioning_busy`. Nothing in
+              // the projection records that, so the mutation carries it back to
+              // the button that started it.
+              retryError: retryProvisioning.error
+                ? formatRuntimeError(retryProvisioning.error)
+                : null,
+              onRetry: () => retryProvisioning.mutate(),
+            }
+          : null; // 'ready' — onboarding is handled above.
 
   if (view) {
     return <BootSurface view={view} />;

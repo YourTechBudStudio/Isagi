@@ -13,6 +13,7 @@ const ctx: PaletteContext = {
   activeSurface: null,
   activePaneId: null,
   launchableHarnesses: [],
+  editorAvailable: false,
 };
 
 test('opens into search and tracks query', () => {

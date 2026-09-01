@@ -13,6 +13,7 @@ test('palette context carries active surface and frontend active pane target', (
 
   const ctx = buildPaletteContext(projects, 10, {
     launchableHarnesses: [],
+    editorAvailable: false,
     activeSurfaceByWorktreeId: { 10: surfaceB.id },
     activePaneBySurfaceId: { [surfaceB.id]: 501 },
   });
@@ -29,6 +30,7 @@ test('palette context ignores stale active surface overrides', () => {
 
   const ctx = buildPaletteContext(projects, 10, {
     launchableHarnesses: [],
+    editorAvailable: false,
     activeSurfaceByWorktreeId: { 10: 999 },
     activePaneBySurfaceId: { [surfaceA.id]: 501 },
   });
@@ -43,6 +45,7 @@ test('configured command fields thread through buildPaletteContext', () => {
 
   const ctx = buildPaletteContext(projects, 10, {
     launchableHarnesses: [],
+    editorAvailable: false,
     configuredCommands: commands,
     configuredCommandsFailure: 'unavailable',
   });
@@ -54,6 +57,7 @@ test('configured command fields thread through buildPaletteContext', () => {
 test('omitted configured command options leave both context fields undefined', () => {
   const ctx = buildPaletteContext([project({ surfaces: [], activeSurfaceId: null })], 10, {
     launchableHarnesses: [],
+    editorAvailable: false,
   });
 
   assert.equal(ctx.configuredCommands, undefined);

@@ -39,12 +39,9 @@ import {
 import { StateFile, stateFromActiveContext } from '../persistence/state-file.service.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
+import type { PtyProcessRecord } from '../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
-import {
-  SurfaceService,
-  type PtyProcessRecord,
-  type SurfaceServiceShape,
-} from '../surfaces/index.js';
+import { SurfaceService, type SurfaceServiceShape } from '../surfaces/index.js';
 import { WorkspaceRepository, type WorkspaceRepositoryService } from '../workspace/index.js';
 import {
   chooseSpawnSplit,
@@ -5013,6 +5010,7 @@ function fakeAgentSessionService(): AgentSessionServiceShape {
 
 function fakeSurfaceService(): SurfaceServiceShape {
   return {
+    openEditor: () => Effect.die('openEditor is not used by workflow tests'),
     getSurfaceDetail: (surfaceId) =>
       Effect.succeed({
         id: surfaceId,
@@ -5066,6 +5064,7 @@ function fakeSurfaceService(): SurfaceServiceShape {
 function fakePtyService(): PtyServiceShape {
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () => Effect.die('pty launch is not used'),
     getAttachmentPlan: () => Effect.die('pty getAttachmentPlan is not used'),
     attach: () => Effect.die('pty attach is not used'),

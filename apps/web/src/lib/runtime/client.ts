@@ -20,7 +20,12 @@ import {
   type AcceptHarnessPolicyInput,
   type AcceptHarnessPolicyOutput,
   type ControlPlaneSnapshot,
+  type EditorDiagnosticsOutput,
+  type EnsureEditorRuntimeInput,
+  type EnsureEditorRuntimeOutput,
+  type OpenEditorOutput,
   type RefreshInventoryOutput,
+  type RetryEditorProvisioningOutput,
   type CreateSurfaceInput,
   type CreateSurfaceOutput,
   type DeleteWorktreeInput,
@@ -360,6 +365,27 @@ export interface RuntimeClient {
     AcceptHarnessPolicyOutput,
     RuntimeEndpointError<typeof apiEndpoints.controlPlane.acceptPolicy>
   >;
+  readonly openEditor: (
+    worktreeId: number,
+  ) => Effect.Effect<OpenEditorOutput, RuntimeEndpointError<typeof apiEndpoints.editor.open>>;
+  readonly ensureEditorRuntime: (
+    editorContextId: number,
+    input: EnsureEditorRuntimeInput,
+  ) => Effect.Effect<
+    EnsureEditorRuntimeOutput,
+    RuntimeEndpointError<typeof apiEndpoints.editor.ensureRuntime>
+  >;
+  readonly editorDiagnostics: (
+    editorContextId: number,
+    ptyProcessId: number,
+  ) => Effect.Effect<
+    EditorDiagnosticsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.editor.diagnostics>
+  >;
+  readonly retryEditorProvisioning: () => Effect.Effect<
+    RetryEditorProvisioningOutput,
+    RuntimeEndpointError<typeof apiEndpoints.editor.retryProvisioning>
+  >;
 }
 
 export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
@@ -473,6 +499,15 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
     refreshInventory: () => request(apiEndpoints.controlPlane.refreshInventory),
     acceptHarnessPolicy: (input) => request(apiEndpoints.controlPlane.acceptPolicy, input),
+    openEditor: (worktreeId) => request(apiEndpoints.editor.open, { worktreeId }),
+    ensureEditorRuntime: (editorContextId, input) =>
+      request(apiEndpoints.editor.ensureRuntime, { editorContextId }, input),
+    // Params, then query — the argument order `ApiEndpointRequestArgs` derives for
+    // a params+query endpoint, the same shape `fetchCommandLogMetadata` uses. The
+    // incarnation is named because the durable context outlives its incarnations.
+    editorDiagnostics: (editorContextId, ptyProcessId) =>
+      request(apiEndpoints.editor.diagnostics, { editorContextId }, { ptyProcessId }),
+    retryEditorProvisioning: () => request(apiEndpoints.editor.retryProvisioning),
   };
 }
 

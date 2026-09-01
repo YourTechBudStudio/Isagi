@@ -34,6 +34,7 @@ test('delete-active-pane preflight falls back to the first pane when no active p
     {
       projects: [],
       launchableHarnesses: [],
+      editorAvailable: false,
       activeProject: null,
       activeWorktree: {
         id: 10,
@@ -75,6 +76,7 @@ test('rename-active-surface validation surfaces inline copy', async () => {
       {
         projects: [],
         launchableHarnesses: [],
+        editorAvailable: false,
         activeProject: null,
         activeWorktree: null,
         activeSurface: {
@@ -110,6 +112,7 @@ test('delete-active-pane preflight runs directly for a running fallback pane', a
     {
       projects: [],
       launchableHarnesses: [],
+      editorAvailable: false,
       activeProject: null,
       activeWorktree: {
         id: 10,
@@ -152,6 +155,7 @@ test('delete-active-surface preflight runs directly without loading session stat
     {
       projects: [],
       launchableHarnesses: [],
+      editorAvailable: false,
       activeProject: null,
       activeWorktree: {
         id: 10,

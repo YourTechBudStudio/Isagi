@@ -78,6 +78,7 @@ const testSurfaceRepository = {
   listPanesForSurface: () => Effect.succeed([]),
   listAgentSessionsForPanes: () => Effect.succeed([]),
   listTerminalSessionsForPanes: () => Effect.succeed([]),
+  listEditorContextsForPanes: () => Effect.succeed([]),
   listPaneSessionBindings: Effect.succeed([]),
   findPaneForSession: () => Effect.succeed(null),
   findSurfaceDeleteTarget: () => Effect.succeed(null),
@@ -108,6 +109,7 @@ const testSurfaceService = {
   createSinglePaneSurface: () => Effect.die('surface creation is not used by workspace tests'),
   setWorktreeEnvironmentFocus: () => Effect.die('surface focus is not used by workspace tests'),
   moveSurfaceOrder: () => Effect.die('surface reorder is not used by workspace tests'),
+  openEditor: () => Effect.die('openEditor is not used by workspace tests'),
 } satisfies SurfaceServiceShape;
 
 const testCommandService = {
@@ -123,6 +125,7 @@ const testCommandService = {
 
 const testPtyService = {
   allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+  readLogTail: () => Effect.die('readLogTail is not used'),
   launch: () => Effect.die('pty launch is not used by workspace snapshot tests'),
   getAttachmentPlan: () =>
     Effect.die('pty attachment planning is not used by workspace snapshot tests'),

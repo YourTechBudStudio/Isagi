@@ -6,11 +6,11 @@ import type {
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
 
+import { exitDetail } from '../pty-processes/exit-detail.js';
 import type {
   AgentSessionRow,
   DerivedAgentSessionState,
   DerivedTerminalSessionState,
-  PtyProcessRow,
   TerminalSessionRow,
 } from './types.js';
 
@@ -207,11 +207,4 @@ function terminalState(
   diagnosticDetail: string | null,
 ): DerivedTerminalSessionState {
   return { status, statusReason, diagnosticCode, diagnosticDetail };
-}
-
-function exitDetail(process: PtyProcessRow) {
-  if (process.exitCode !== null) return `PTY process exited with code ${process.exitCode}.`;
-  if (process.signal) return `PTY process stopped by ${process.signal}.`;
-  if (process.statusReason) return `PTY process status reason: ${process.statusReason}.`;
-  return null;
 }

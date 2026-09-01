@@ -2,7 +2,7 @@ import { join } from 'node:path';
 
 import { Effect, Schema } from 'effect';
 
-import type { PtyProcessRecord } from '../../surfaces/index.js';
+import type { PtyProcessRecord } from '../types.js';
 import { PtyServiceError, type BackendSessionRef, type PtyBackend } from '../types.js';
 
 const nodePtyBackendRefSchema = Schema.Struct({

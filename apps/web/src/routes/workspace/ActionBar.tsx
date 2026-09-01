@@ -2,21 +2,54 @@ import { Bot, Code, Maximize2, ScanSearch, SquareChevronRight, SquareTerminal } 
 import { Fragment, useEffect, useState } from 'react';
 
 import { Tooltip } from '../../components/Tooltip.js';
+import { worktreeActionsCopy } from '../../copy/index.js';
+import { useEditorAvailable } from '../../lib/control-plane/queries.js';
 import type { IconType } from '../../lib/icon.js';
+import {
+  handleDispatchedCommandError,
+  useCommandDispatcher,
+} from '../../lib/palette/dispatcher.js';
 import { useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 
-interface MockWorktreeAction {
+/** What the bar knows about the runtime when it decides which rows to offer. */
+interface ActionCapabilities {
+  readonly editorAvailable: boolean;
+}
+
+interface WorktreeActionBase {
   readonly id: string;
   readonly label: string;
   readonly icon: IconType;
   readonly accent?: boolean;
-  readonly mocked?: boolean;
-  readonly run: (worktreeId: number) => void;
+  /**
+   * Rows without a predicate are always offered. A row that only makes sense
+   * under some runtime state answers for itself here, so availability is a
+   * typed field rather than an id the render path has to recognise.
+   */
+  readonly visible?: (capabilities: ActionCapabilities) => boolean;
 }
 
-const mockWorktreeActions: readonly MockWorktreeAction[] = [
+/**
+ * The two kinds of row, kept apart in the type so neither can be half-built: a
+ * `callback` row runs a plain function, a `command` row dispatches a palette
+ * command (which a module-scoped function cannot do, because dispatching needs
+ * hooks). Execution reads the discriminant instead of comparing ids, so a new
+ * row cannot silently do nothing by omitting its behaviour.
+ */
+type WorktreeAction = WorktreeActionBase &
+  (
+    | {
+        readonly kind: 'callback';
+        readonly mocked?: boolean;
+        readonly run: (worktreeId: number) => void;
+      }
+    | { readonly kind: 'command'; readonly commandId: string }
+  );
+
+const worktreeActions: readonly WorktreeAction[] = [
   {
+    kind: 'callback',
     id: 'new-agent',
     label: 'New agent',
     icon: Bot,
@@ -24,6 +57,7 @@ const mockWorktreeActions: readonly MockWorktreeAction[] = [
     run: logMockAction('New agent'),
   },
   {
+    kind: 'callback',
     id: 'new-terminal',
     label: 'New terminal',
     icon: SquareTerminal,
@@ -31,13 +65,17 @@ const mockWorktreeActions: readonly MockWorktreeAction[] = [
     run: logMockAction('New terminal'),
   },
   {
-    id: 'open-code',
-    label: 'Open code-server',
+    // Real, not mocked: it dispatches the palette command from the component,
+    // with an explicit worktree, exactly as the palette row does.
+    kind: 'command',
+    id: 'open-editor',
+    commandId: 'open-editor',
+    label: worktreeActionsCopy.openEditor,
     icon: Code,
-    mocked: true,
-    run: logMockAction('Open code-server'),
+    visible: (capabilities) => capabilities.editorAvailable,
   },
   {
+    kind: 'callback',
     id: 'ai-review',
     label: 'AI review',
     icon: ScanSearch,
@@ -46,6 +84,7 @@ const mockWorktreeActions: readonly MockWorktreeAction[] = [
     run: logMockAction('AI review'),
   },
   {
+    kind: 'callback',
     id: 'open-commands',
     label: 'Open commands',
     icon: SquareChevronRight,
@@ -56,13 +95,24 @@ const mockWorktreeActions: readonly MockWorktreeAction[] = [
 const dividerBefore = new Set(['ai-review', 'open-commands']);
 
 /**
- * The action bar — a mocked, self-contained cluster of high-frequency worktree
- * verbs. The backend does not run these actions yet; keeping the mock data here
- * avoids leaking placeholder actions into the runtime-backed workspace model.
+ * The action bar — a cluster of high-frequency worktree verbs.
+ *
+ * Most rows are still labelled mocks. `Open editor` is not: it dispatches the
+ * real palette command with an explicit worktree, and it is **hidden** when the
+ * runtime says the editor is unavailable.
+ *
+ * Hiding is the only client-side gate on this path: an explicit dispatch carries
+ * values, so `dispatchCommandEntry` resolves the command through
+ * `workbenchActionCommands` and never consults `available`. It is not a
+ * capability boundary — the runtime's own `requireAvailable` refusal is the
+ * authoritative backstop, and this row's absence is about not offering a button
+ * that cannot work, not about preventing the call.
  */
 export function ActionBar() {
   const worktree = useActiveWorktree();
   const setZen = useWorkspaceStore((state) => state.setZen);
+  const dispatchCommand = useCommandDispatcher();
+  const editorAvailable = useEditorAvailable();
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,21 +128,32 @@ export function ActionBar() {
     return null;
   }
 
+  const visibleActions = worktreeActions.filter(
+    (action) => action.visible?.({ editorAvailable }) ?? true,
+  );
+
+  const run = (action: WorktreeAction) => {
+    if (action.kind === 'command') {
+      // The compact button has no inline failure surface of its own, so a
+      // refusal goes to the shared dispatch handler.
+      void dispatchCommand(action.commandId, { worktreeId: String(worktree.id) }).catch(
+        handleDispatchedCommandError,
+      );
+      return;
+    }
+    action.run(worktree.id);
+    if (action.mocked) {
+      setNotice(`${action.label} is mocked for now.`);
+    }
+  };
+
   return (
     <>
       <div className="absolute top-3 right-3 z-10 flex items-center gap-0.5 rounded-xl border border-line/24 bg-elevated/65 p-1 shadow-soft backdrop-blur-md">
-        {mockWorktreeActions.map((action) => (
+        {visibleActions.map((action) => (
           <Fragment key={action.id}>
             {dividerBefore.has(action.id) && <span className="mx-0.5 h-4 w-px bg-line/25" />}
-            <ActionButton
-              action={action}
-              onRun={() => {
-                action.run(worktree.id);
-                if (action.mocked) {
-                  setNotice(`${action.label} is mocked for now.`);
-                }
-              }}
-            />
+            <ActionButton action={action} onRun={() => run(action)} />
           </Fragment>
         ))}
         <span className="mx-0.5 h-4 w-px bg-line/25" />
@@ -116,11 +177,13 @@ export function ActionBar() {
   );
 }
 
-function ActionButton({ action, onRun }: { action: MockWorktreeAction; onRun: () => void }) {
+function ActionButton({ action, onRun }: { action: WorktreeAction; onRun: () => void }) {
   const Icon = action.icon;
 
+  const mocked = action.kind === 'callback' && action.mocked === true;
+
   return (
-    <Tooltip label={action.mocked ? `${action.label} — mocked` : action.label}>
+    <Tooltip label={mocked ? `${action.label} — mocked` : action.label}>
       <button
         type="button"
         onClick={onRun}

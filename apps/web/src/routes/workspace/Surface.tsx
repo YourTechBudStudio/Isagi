@@ -6,6 +6,7 @@ import { surfaceSummaryIcon } from '../../lib/workspace/surface-presentation.js'
 import type { Surface as WorkspaceSurface } from '../../lib/workspace/types.js';
 import { workflowPresentationStatus } from '../../lib/workspace/workflow-derive.js';
 import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
+import { EditorPaneContainer } from './EditorPaneContainer.js';
 import { PtyPane } from './PtyPane.js';
 import { SurfaceFrameState } from './SurfaceFrameState.js';
 import { SurfaceLayout } from './SurfaceLayout.js';
@@ -36,9 +37,21 @@ export function Surface({ surface }: { surface: WorkspaceSurface }) {
     <div className="relative h-full min-h-0 min-w-0">
       <SurfaceLayout
         detail={detail.data}
-        renderPane={({ pane, focused, onFocus }) => (
-          <PtyPane pane={pane} surface={detail.data} focused={focused} onFocus={onFocus} />
-        )}
+        // The kind dispatch happens here, before `PtyPane`, so an editor pane
+        // never reaches PTY attach or terminal-presentation code at all.
+        renderPane={({ pane, focused, onFocus }) =>
+          pane.session?.kind === 'editor_context' ? (
+            <EditorPaneContainer
+              pane={pane}
+              editorContext={pane.session.editorContext}
+              surface={detail.data}
+              focused={focused}
+              onFocus={onFocus}
+            />
+          ) : (
+            <PtyPane pane={pane} surface={detail.data} focused={focused} onFocus={onFocus} />
+          )
+        }
       />
       <AnimatePresence initial={false}>
         {workflowStatus ? (

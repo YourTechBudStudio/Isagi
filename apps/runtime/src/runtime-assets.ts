@@ -16,6 +16,13 @@ export const configSchemaReferenceSources = {
   'project-config.schema.ts': readTextAsset('config-schemas/project-config.schema.ts'),
 } as const;
 
+/**
+ * The Code Server release pin, as shipped bytes. Read at module load because a
+ * malformed or missing manifest is a build defect rather than an operational
+ * condition — see `editor-provisioning/manifest.ts`.
+ */
+export const codeServerManifestSource = readTextAsset('code-server.manifest.json');
+
 export const isagiDocsContentSources = {
   'SKILL.md': readTextAsset('isagi-docs/SKILL.md'),
   'config-global.md': readTextAsset('isagi-docs/config-global.md'),

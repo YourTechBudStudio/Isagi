@@ -54,6 +54,17 @@ export type InternalRuntimeEvent =
       readonly terminalSessionId: number;
     }
   | {
+      // Identity only, deliberately. Every material transition of a durable
+      // editor context normalizes to this one event — attempt changes, the
+      // incarnation handoff, probe settlement, and the incarnation's terminal
+      // PTY events alike — so a client that did not make the request still
+      // learns that something changed and re-reads. Placement is not carried
+      // because the editor domain does not know it; the projection layer adds
+      // it when it turns this into a public event.
+      readonly type: 'editor_context_changed';
+      readonly editorContextId: number;
+    }
+  | {
       readonly type: 'surface_changed';
       readonly payload: SurfaceChangedPayload;
     }

@@ -177,7 +177,10 @@ function splitPaneCommand(input: {
       const pane = Number.isInteger(explicitPaneId)
         ? (detail.panes.find((candidate) => candidate.id === explicitPaneId) ?? null)
         : resolveCommandPane(detail, ctx.activePaneId);
-      if (!pane?.session) {
+      // This command duplicates the source pane's session kind, which only the
+      // PTY-backed kinds have. An editor context is not duplicable that way, so
+      // it is excluded here rather than falling through to the terminal branch.
+      if (!pane?.session || pane.session.kind === 'editor_context') {
         return { mode: 'unavailable' };
       }
       const nextValues = {

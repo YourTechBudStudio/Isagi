@@ -5,7 +5,7 @@ import test from 'node:test';
 
 import { Cause, Deferred, Effect, Exit, Fiber } from 'effect';
 
-import { makeCommandPortProbe } from '../commands.port-probe.js';
+import { LoopbackPortUnavailable, makeLoopbackPortProbe } from './loopback-port-probe.js';
 
 /**
  * The live adapter, against real loopback sockets.
@@ -24,7 +24,7 @@ import { makeCommandPortProbe } from '../commands.port-probe.js';
  * the listener ever having existed.
  */
 
-const probe = makeCommandPortProbe();
+const probe = makeLoopbackPortProbe();
 
 function occupy(): Promise<{ port: number; release: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
@@ -136,7 +136,7 @@ test(
       // close with a live connection attached. Without socket ownership,
       // `server.close()` would wait on that connection for as long as its owner
       // chose to keep it.
-      const held = makeCommandPortProbe({
+      const held = makeLoopbackPortProbe({
         afterListening: (bound) => connectHeldClient(bound, connected, clients),
       });
 
@@ -166,7 +166,7 @@ test('an interruption while the listener is bound leaves no listener behind', as
       // Never completed. Holding `use` open is the entire point: it guarantees
       // the interruption lands on an acquired listener.
       const proceed = yield* Deferred.make<void>();
-      const barriered = makeCommandPortProbe({
+      const barriered = makeLoopbackPortProbe({
         afterListening: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(listening, undefined);
@@ -185,6 +185,56 @@ test('an interruption while the listener is bound leaves no listener behind', as
 
   assert.ok(Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause));
   // Release ran, and it ran to completion — no grace period, no retry.
+  await assertImmediatelyRebindable(port);
+});
+
+test('an interruption before the listener is acquired leaves no listener behind', async () => {
+  const occupied = await occupy();
+  const port = occupied.port;
+  await occupied.release();
+
+  // The window that looks like a leak: the bind has landed but acquisition has
+  // not completed, so `acquireUseRelease` does not own the listener yet. It is
+  // safe because acquire runs uninterruptibly — the interrupt is deferred until
+  // acquisition finishes and is then taken inside `use`, where release is
+  // installed. This test is what makes that a checked property rather than a
+  // reading of the framework, and holding the resume is what makes the window a
+  // deterministic state rather than a microsecond-wide race.
+  let acquisitionHeld: () => void;
+  const held = new Promise<void>((resolve) => {
+    acquisitionHeld = resolve;
+  });
+  let releaseAcquisition: () => void;
+  const proceed = new Promise<void>((resolve) => {
+    releaseAcquisition = resolve;
+  });
+  const barriered = makeLoopbackPortProbe({
+    holdAcquisition: () => {
+      acquisitionHeld();
+      return proceed;
+    },
+  });
+
+  const exit = await Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.fork(barriered.probeInactive(port));
+      yield* Effect.promise(() => held);
+      // Raised from a fiber of its own, and that is the deferral made visible:
+      // `Fiber.interrupt` waits for the target to finish interrupting, and the
+      // target cannot even observe the interrupt until its uninterruptible
+      // acquire completes. Awaiting it here before releasing the hold would
+      // deadlock the test — which is the same fact the assertion below states.
+      const interrupting = yield* Effect.fork(Fiber.interrupt(fiber));
+      yield* Effect.sync(() => releaseAcquisition());
+      return yield* Fiber.join(interrupting);
+    }),
+  );
+
+  await drain();
+
+  assert.ok(Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause));
+  // The listener existed, was never handed to a live fiber, and is still gone:
+  // release ran on the deferred interruption.
   await assertImmediatelyRebindable(port);
 });
 
@@ -211,7 +261,7 @@ test(
           // Never completed: `use` stays open so the interrupt below lands on a
           // listener that is bound *and* has already accepted a connection.
           const proceed = yield* Deferred.make<void>();
-          const barriered = makeCommandPortProbe({
+          const barriered = makeLoopbackPortProbe({
             afterListening: (bound) =>
               Effect.gen(function* () {
                 yield* connectHeldClient(bound, connected, clients);
@@ -278,4 +328,52 @@ test('repeated probes do not accumulate server handles', async () => {
     afterMany <= afterFew,
     `server handles grew with iteration count: baseline=${baseline} afterFew=${afterFew} afterMany=${afterMany}`,
   );
+});
+
+test('a close failure is logged with the port and never with its cause', async () => {
+  // The redaction boundary, stated as a resource claim: this module holds no
+  // classifier and must never hand foreign text to `console`, which stringifies
+  // whatever it is given. The cause still reaches consumers on the tagged
+  // failure; it just never reaches a log line from here.
+  const SENTINEL = 'SUPERSECRETTOKEN12345';
+  const occupied = await occupy();
+  const port = occupied.port;
+  await occupied.release();
+
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  // Joined the way the runtime's own log capture does, so a cause passed as a
+  // second argument would be caught rather than silently ignored here.
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(' '));
+  };
+
+  let bound: number | null = null;
+  try {
+    const failing = makeLoopbackPortProbe({
+      afterListening: (listening) =>
+        Effect.sync(() => {
+          bound = listening;
+        }),
+      // The real close still runs, so the listener is released either way; only
+      // its reported outcome is substituted.
+      closeListener: ({ close }) =>
+        close.pipe(
+          Effect.zipRight(Effect.fail(new LoopbackPortUnavailable({ cause: new Error(SENTINEL) }))),
+        ),
+    });
+
+    // A close failure means the port may still be held, so it is not offered.
+    const inactive = await Effect.runPromise(failing.probeInactive(port));
+    assert.equal(inactive, false);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const logged = warnings.join('\n');
+  assert.ok(logged.includes('could not close its listener'), 'the warning branch must have run');
+  assert.ok(bound !== null && logged.includes(`port=${String(bound)}`));
+  assert.ok(!logged.includes(SENTINEL), 'a foreign cause must never reach a log line');
+  // Release ran to completion despite the substituted failure.
+  await assertImmediatelyRebindable(port);
 });

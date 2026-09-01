@@ -1,10 +1,10 @@
 import { Schema } from 'effect';
 
 import { commandStatusSchema } from '../commands/types.js';
+import { sessionStatusSchema } from '../processes/types.js';
 import {
   agentSessionStatusReasonSchema,
   sessionDiagnosticCodeSchema,
-  sessionStatusSchema,
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
 import { workflowRunSummarySchema } from '../workflows/types.js';
@@ -61,6 +61,7 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'workflow_run_changed',
   'workflow_run_cleared',
   'durable_session_deleted',
+  'editor_context_changed',
 );
 
 export const runtimeEventInputTypeSchema = Schema.Literal(
@@ -175,6 +176,26 @@ export const durableSessionDeletedEventSchema = Schema.Struct({
   payload: durableSessionIdentitySchema,
 });
 
+/**
+ * Identity and placement only. The event says "this editor changed, and here is
+ * where it lives"; the client re-reads the authoritative projection out of
+ * surface detail, exactly as it already does for the session-changed events,
+ * whose status it likewise ignores. A status-bearing payload would force the
+ * projection layer to depend on the editor service's in-memory state, or add a
+ * second publisher, to carry fields no consumer reads.
+ */
+export const editorContextChangedEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('editor_context_changed'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: Schema.Struct({
+    editorContextId: positiveIntegerSchema,
+    worktreeId: positiveIntegerSchema,
+    surfaceId: positiveIntegerSchema,
+    paneId: positiveIntegerSchema,
+  }),
+});
+
 export const workflowRunSnapshotEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
   type: Schema.Literal('workflow_run_snapshot'),
@@ -214,6 +235,7 @@ export const runtimeEventSchema = Schema.Union(
   workflowRunChangedEventSchema,
   workflowRunClearedEventSchema,
   durableSessionDeletedEventSchema,
+  editorContextChangedEventSchema,
 );
 
 export type AttentionState = Schema.Schema.Type<typeof attentionStateSchema>;
@@ -244,3 +266,4 @@ export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;
 export type DurableSessionDeletedEvent = Schema.Schema.Type<
   typeof durableSessionDeletedEventSchema
 >;
+export type EditorContextChangedEvent = Schema.Schema.Type<typeof editorContextChangedEventSchema>;

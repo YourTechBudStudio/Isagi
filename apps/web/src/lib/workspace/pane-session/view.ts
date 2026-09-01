@@ -109,6 +109,12 @@ export function ptyPaneSession(session: SurfacePane['session']): PtyPaneSession 
   if (session.kind === 'agent_session') {
     return { kind: 'agent_session', ...session.agentSession };
   }
+  // An editor context is not a PTY-backed session: it owns no attachment, no
+  // attach token, and no terminal view. It is excluded from this domain rather
+  // than approximated by one.
+  if (session.kind === 'editor_context') {
+    return null;
+  }
   return { kind: 'terminal_session', ...session.terminalSession };
 }
 

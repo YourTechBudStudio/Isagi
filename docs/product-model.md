@@ -67,10 +67,12 @@ Initial/foundation surface kinds:
 - agent surface - a visible agent work surface; it contains one or more agent session panes
 - terminal surface - an interactive shell/PTY surface
 - browser surface - a preview or browser context
-- editor surface - an editor/code-server context
+- editor surface - a pane for the worktree's durable editor context
 - artifact surface - files, Markdown, diffs, review artifacts, or similar user-visible outputs
 
 Commands are not surfaces by default, though a command may produce a URL or artifact that opens a surface.
+
+An editor context belongs to the worktree environment, not to a particular Code Server process. Opening the editor places or focuses that durable context, while the runtime starts a replaceable Code Server process on demand and owns its readiness. If launch or readiness fails, the editor surface remains visible with retry and diagnostics instead of losing the context.
 
 A panel may live inside the main window or in a secondary work surface.
 

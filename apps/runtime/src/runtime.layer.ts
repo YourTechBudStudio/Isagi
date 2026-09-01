@@ -20,6 +20,16 @@ import {
   type CommandServiceShape,
 } from './commands/index.js';
 import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
+import {
+  EditorContextRepositoryLive,
+  EditorContextServiceLive,
+  type EditorContextServiceShape,
+} from './editor-contexts/index.js';
+import {
+  EditorInstallIoLive,
+  EditorProvisioningLive,
+  type EditorProvisioningService,
+} from './editor-provisioning/index.js';
 import { GitLive } from './git/index.js';
 import {
   HarnessControlPlaneLive,
@@ -30,6 +40,8 @@ import {
   type HostInventoryService,
   UserShellLive,
 } from './host-inventory/index.js';
+import { EntityLockLive } from './lib/locks/entity-lock.js';
+import { LoopbackPortProbeLive } from './lib/net/loopback-port-probe.js';
 import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
 import {
@@ -87,10 +99,19 @@ const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const HostInventoryLayer = HostInventoryLive;
+// Bound once, like the entity lock: the provisioning attempt, its semaphore, and
+// the resolved installation are per-instance state, so the control plane and the
+// API must observe the same service rather than two independently constructed
+// ones.
+const EditorProvisioningLayer = EditorProvisioningLive.pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(EditorInstallIoLive),
+);
 const HarnessControlPlaneLayer = HarnessControlPlaneLive.pipe(
   Layer.provide(HostInventoryLayer),
   Layer.provide(RuntimeConfigLayer),
   Layer.provide(DataDirectoryLive),
+  Layer.provide(EditorProvisioningLayer),
 );
 const RepositoryLive = WorkspaceRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const AgentSessionArtifactsLayer = AgentSessionArtifactsLive.pipe(Layer.provide(DataDirectoryLive));
@@ -145,7 +166,26 @@ const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
 const TerminalSessionRepositoryLayer = TerminalSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
 );
-const SessionLifecycleLayer = SessionLifecycleLive;
+// Bound once so every consumer below provides the same layer value, which is
+// what makes "one lock scope" a fact rather than a convention.
+const EntityLockLayer = EntityLockLive;
+// Stateless, unlike the lock: sharing the reference is graph hygiene rather
+// than a correctness property.
+const LoopbackPortProbeLayer = LoopbackPortProbeLive;
+const SessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLayer));
+const EditorContextRepositoryLayer = EditorContextRepositoryLive.pipe(Layer.provide(DatabaseLive));
+// Scoped: constructing it converges interrupted boot attempts, forks the single
+// interpreter of editor PTY events, and takes ownership of the probe fibers. It
+// is provided the same `EntityLockLayer` value as session lifecycle, which is
+// what makes "one lock scope per worktree" true across both domains.
+const EditorContextServiceLayer = EditorContextServiceLive.pipe(
+  Layer.provide(EditorContextRepositoryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(EditorProvisioningLayer),
+  Layer.provide(LoopbackPortProbeLayer),
+  Layer.provide(EntityLockLayer),
+);
 const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(PtyServiceLayer),
@@ -166,6 +206,11 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(PtyServiceLayer),
   Layer.provide(SessionLifecycleLayer),
   Layer.provide(AgentSessionAttentionProjectionLayer),
+  Layer.provide(EditorContextServiceLayer),
+  // The same `EntityLockLayer` value session lifecycle and the editor service
+  // are built on, so placement and the editor's own lifecycle serialize against
+  // each other rather than against two separate maps.
+  Layer.provide(EntityLockLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
 const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
@@ -215,13 +260,15 @@ const ApiServicesLayer = Layer.mergeAll(
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
+  EditorProvisioningLayer,
+  EditorContextServiceLayer,
 );
 const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(CommandRepositoryLayer),
   Layer.provide(RepositoryLive),
   Layer.provide(PtyServiceLayer),
   Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive),
+  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
   Layer.provide(DataDirectoryLive),
 );
 const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
@@ -267,6 +314,14 @@ export type RuntimeServices =
   | WorkflowRunProjectionService
   | HostInventoryService
   | HarnessControlPlaneService
+  | EditorProvisioningService
+  // `EntityLockService` is deliberately absent, and stays absent now that the
+  // placement path uses it: it is a construction dependency of
+  // `SessionLifecycle`, `EditorContextService`, and `SurfaceService`, each of
+  // which resolves it once when its layer is built. No effect run through
+  // `ManagedRuntime` requires the tag, so adding it here would widen the runtime
+  // environment for a caller that does not exist.
+  | EditorContextServiceShape
   | RuntimeConfigService;
 
 const ServicesLayer = Layer.mergeAll(

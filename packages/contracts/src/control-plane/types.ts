@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { editorProvisioningStateSchema } from '../editor/types.js';
 import { agentHarnessSchema, harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
 
 export const harnessPolicyEntrySchema = Schema.Struct({
@@ -86,6 +87,7 @@ export const controlPlaneSnapshotSchema = Schema.Struct({
   ),
   harnesses: Schema.Array(harnessControlPlaneEntrySchema),
   reconciliation: reconciliationStatusSchema,
+  editorProvisioning: editorProvisioningStateSchema,
 });
 export const acceptHarnessPolicyInputSchema = Schema.Struct({
   expectedPolicyRevision: Schema.String,

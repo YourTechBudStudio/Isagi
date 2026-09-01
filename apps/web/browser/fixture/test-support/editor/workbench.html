@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>editor.ts — isagi</title>
+    <style>
+      /* A stand-in for the Code Server workbench. It exists so the pane frames a
+         real cross-document load — the cover, the handover, and the receding
+         header are the things under review, and none of them can be judged
+         against a div pretending to be an iframe. */
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: #1e2030;
+        color: #a5adcb;
+        font:
+          12px/1.6 'Fira Code',
+          ui-monospace,
+          SFMono-Regular,
+          monospace;
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 10px;
+        background: #181926;
+        border-bottom: 1px solid rgb(91 96 120 / 18%);
+        font-size: 11px;
+        color: #8087a2;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #494d64;
+      }
+      .main {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .activity {
+        width: 34px;
+        background: #181926;
+        border-right: 1px solid rgb(91 96 120 / 14%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 13px;
+        padding-top: 10px;
+      }
+      .activity i {
+        width: 14px;
+        height: 14px;
+        border-radius: 3px;
+        background: #494d64;
+      }
+      .activity i:first-child {
+        background: #8aadf4;
+      }
+      .tree {
+        width: 128px;
+        background: #1c1e2e;
+        border-right: 1px solid rgb(91 96 120 / 14%);
+        padding: 9px 9px;
+        font-size: 10.5px;
+        line-height: 2;
+        color: #7d82a0;
+      }
+      .tree .sel {
+        display: block;
+        margin: 0 -4px;
+        padding: 0 4px;
+        border-radius: 4px;
+        color: #cad3f5;
+        background: rgb(138 173 244 / 10%);
+      }
+      .code {
+        flex: 1;
+        padding: 9px 12px;
+        overflow: auto;
+        font-size: 11px;
+        line-height: 1.9;
+      }
+      .c {
+        color: #6e738d;
+      }
+      .k {
+        color: #c6a0f6;
+      }
+      .s {
+        color: #a6da95;
+      }
+      .f {
+        color: #8aadf4;
+      }
+      .status {
+        display: flex;
+        gap: 12px;
+        padding: 3px 10px;
+        background: #8aadf4;
+        color: #181926;
+        font-size: 10px;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="title">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span
+      ><span>editor.ts — isagi</span>
+    </div>
+    <div class="main">
+      <div class="activity"><i></i><i></i><i></i><i></i></div>
+      <div class="tree">
+        ▾ src<br />&nbsp;&nbsp;▾ editor<br /><span class="sel"
+          >&nbsp;&nbsp;&nbsp;&nbsp;view.ts</span
+        >
+        &nbsp;&nbsp;&nbsp;&nbsp;queries.ts<br />&nbsp;&nbsp;▸ copy<br />&nbsp;&nbsp;styles.css
+      </div>
+      <div class="code">
+        <span class="c">// the pane's pure state machine</span>
+        <span class="k">export function</span> <span class="f">editorPaneView</span>( context:
+        EditorContextFacts, ): EditorPaneView { <span class="k">if</span> (context.attempt.state ===
+        <span class="s">'failed'</span> &amp;&amp; context.processStatus ===
+        <span class="k">null</span>) <span class="k">return</span> settled(context.attempt);
+        <span class="k">if</span> (context.attempt.state === <span class="s">'in_progress'</span>)
+        <span class="k">return</span> { kind: <span class="s">'launching'</span> };
+        <span class="k">return</span> { kind: <span class="s">'idle'</span> }; }
+      </div>
+    </div>
+    <div class="status"><span>feat/embedded-editor</span><span>TypeScript</span></div>
+  </body>
+</html>

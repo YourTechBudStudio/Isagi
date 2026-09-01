@@ -1,9 +1,14 @@
 import { ArrowRight, TriangleAlert, Workflow } from 'lucide-react';
 
-import { paletteCopy, workflowLoadFailureReasonCopy } from '../../copy/index.js';
+import {
+  paletteCopy,
+  workflowLoadFailureReasonCopy,
+  worktreeActionsCopy,
+} from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
+import { editorActionCommands } from './commands/editor-actions.js';
 import { sessionActionCommands } from './commands/session-actions.js';
 import { surfaceActionCommands } from './commands/surface-actions.js';
 import { worktreeActionCommands } from './commands/worktree-actions.js';
@@ -125,6 +130,9 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
     const activeSessionCommands = sessionActionCommands.filter(
       (command) => command.available?.(ctx) ?? true,
     );
+    const activeEditorCommands = editorActionCommands.filter(
+      (command) => command.available?.(ctx) ?? true,
+    );
 
     for (const command of activeWorktreeCommands) {
       const values = {
@@ -180,6 +188,26 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         values,
         run: () => command.run(values, ctx),
         sub: command.id === 'start-agent-session' ? 'choose a harness' : 'open shell',
+      });
+    }
+
+    // Its own loop rather than a fourth branch inside the session one: an editor
+    // context is not a session, and the two lists have different subtitles for
+    // reasons that will keep diverging.
+    for (const command of activeEditorCommands) {
+      const values = {
+        projectId: String(worktree.projectId),
+        worktreeId: String(worktree.id),
+      };
+      entries.push({
+        id: command.id,
+        label: command.label,
+        icon: command.icon,
+        group: command.group,
+        command,
+        values,
+        run: () => command.run(values, ctx),
+        sub: worktreeActionsCopy.openEditorHint,
       });
     }
 

@@ -41,8 +41,20 @@ export default defineConfig({
       use: { baseURL: `http://127.0.0.1:${fixturePort}/update/` },
     },
     {
+      name: 'editor-pane',
+      testMatch: /editor-pane\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/test-support/editor/` },
+    },
+    {
       name: 'rail-reorder',
       testMatch: /rail-reorder\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
+    },
+    // Shares the rail page: the worktree menu is chrome on the same production
+    // rail, and its own project keeps each spec file matched by exactly one.
+    {
+      name: 'rail-worktree-actions',
+      testMatch: /rail-worktree-actions\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
     },
     {

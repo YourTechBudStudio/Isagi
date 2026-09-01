@@ -146,10 +146,14 @@ export const surfaceActionsCopy = {
 // pick, delete confirm); the immediate terminal action carries none.
 const startTerminalLabel = 'Start terminal';
 const startAgentSessionLabel = 'Start agent session';
+const openEditorLabel = 'Open editor';
 
 export const worktreeActionsCopy = {
   startTerminal: startTerminalLabel,
   startAgentSession: startAgentSessionLabel,
+  openEditor: openEditorLabel,
+  /** The palette row's second line: what "editor" actually means here. */
+  openEditorHint: 'open in code-server',
   menu: {
     startTerminal: startTerminalLabel,
     startAgent: `${startAgentSessionLabel}…`,

@@ -8,7 +8,7 @@ import type {
 } from '@isagi/contracts';
 
 import { Button } from '../../components/Button.js';
-import { docsResultCopy, onboardingCopy } from '../../copy/index.js';
+import { docsResultCopy, editorProvisioningCopy, onboardingCopy } from '../../copy/index.js';
 import {
   setDocsIntent,
   setEnabled,
@@ -29,6 +29,29 @@ import {
 // the leader and failure reasons land as `#` comments under their lines. The
 // lines stay togglable; the owner clears the annotations on any edit, which
 // returns the manifest to a clean save.
+
+/**
+ * A provisioning failure, said in the manifest's own voice.
+ *
+ * Onboarding reports the *failure* only, never the download's progress: work the
+ * user did not ask for and cannot steer does not get to interrupt setup. And it
+ * says so through the machinery already here — a `#` comment and a button in the
+ * existing row — rather than introducing a second kind of surface on a screen
+ * that is deliberately one config file.
+ */
+export interface PolicyProvisioningFailure {
+  /** Lowercase manifest phrasing; the component adds the leading `#`. */
+  readonly line: string;
+  readonly retryable: boolean;
+  readonly retrying: boolean;
+  /**
+   * The retry *request*'s own failure, if the last one never landed. It is a
+   * separate fact from `line`, which describes the download, so it gets its own
+   * comment rather than replacing that one.
+   */
+  readonly retryError: string | null;
+  readonly onRetry: () => void;
+}
 
 /** A needs-attention reconciliation layered onto the manifest after a save. */
 export interface PolicyAttention {
@@ -78,6 +101,7 @@ export function PolicyForm({
   error,
   onSave,
   attention = null,
+  provisioning = null,
 }: {
   snapshot: ControlPlaneSnapshot;
   draft: PolicyDraft;
@@ -86,6 +110,7 @@ export function PolicyForm({
   error: string | null;
   onSave: () => void;
   attention?: PolicyAttention | null;
+  provisioning?: PolicyProvisioningFailure | null;
 }) {
   const manifestRef = useRef<HTMLDivElement | null>(null);
   const busy = saving || (attention?.retrying ?? false);
@@ -209,9 +234,33 @@ export function PolicyForm({
             <ManifestComment tone="error">{error}</ManifestComment>
           </div>
         ) : null}
+        {provisioning ? (
+          <div className="mt-2.5">
+            <ManifestComment tone="error">{provisioning.line}</ManifestComment>
+            {provisioning.retryError ? (
+              <ManifestComment tone="error">
+                {editorProvisioningCopy.manifestRetryFailed} {provisioning.retryError}
+              </ManifestComment>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-5 flex justify-center gap-2.5">
+        {provisioning?.retryable ? (
+          // Named for what it retries: the row it joins already holds a Save or a
+          // reconciliation Retry, and "Try again" beside either would be a riddle.
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy || provisioning.retrying}
+            onClick={provisioning.onRetry}
+          >
+            {provisioning.retrying
+              ? editorProvisioningCopy.retrying
+              : editorProvisioningCopy.manifestRetry}
+          </Button>
+        ) : null}
         {attention ? (
           <>
             {attention.retryable ? (

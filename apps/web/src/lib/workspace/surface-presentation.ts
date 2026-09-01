@@ -1,4 +1,4 @@
-import { Bot, CircleDashed, SquareTerminal } from 'lucide-react';
+import { Bot, CircleDashed, Code, SquareTerminal } from 'lucide-react';
 
 import type { IconType } from '../icon.js';
 import type { PaneSessionKind } from './types.js';
@@ -7,6 +7,7 @@ import type { PaneSessionKind } from './types.js';
 export const SURFACE_PRESENTATION = {
   agent_session: { icon: Bot },
   terminal_session: { icon: SquareTerminal },
+  editor_context: { icon: Code },
 } satisfies Record<PaneSessionKind, { icon: IconType }>;
 
 export const SESSIONLESS_SURFACE_ICON = CircleDashed;

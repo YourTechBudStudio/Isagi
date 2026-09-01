@@ -30,6 +30,7 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
   let nextPtyProcessId = firstPtyProcessId;
   return {
     allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
+    readLogTail: () => Effect.die('readLogTail is not used'),
     launch: () =>
       Effect.sync(() => {
         onLaunch?.();

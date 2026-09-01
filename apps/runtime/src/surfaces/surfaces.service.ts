@@ -1,8 +1,9 @@
-import { Context, Data, Effect, Layer, Schema } from 'effect';
+import { Context, Effect, Layer, Schema } from 'effect';
 
 import type {
   CreateSurfaceOutput,
   DeleteSurfaceOutput,
+  OpenEditorOutput,
   PaneSessionClaimInput,
   PaneSessionClaimOutput,
   PaneSessionCreateInput,
@@ -14,6 +15,7 @@ import type {
   SetWorktreeEnvironmentFocusInput,
   SplitPaneInput,
   SurfaceDetail,
+  SurfaceChangedEvent,
   SurfaceLayoutNode,
   SurfaceOrderRejectionReason,
   WorktreeEnvironmentFocusOutput,
@@ -23,7 +25,17 @@ import { surfaceLayoutNodeSchema } from '@isagi/contracts';
 import { displayNameForHarness } from '../agent-sessions/harness/display.js';
 import { HarnessAdapterError } from '../agent-sessions/harness/types.js';
 import { AgentSessionError, AgentSessionService } from '../agent-sessions/index.js';
+import {
+  deriveEditorContextFacts,
+  editorLockKey,
+  EditorContextService,
+  type EditorContextRow,
+  type EditorContextServiceShape,
+  type EditorReadinessObservation,
+  type EditorUnavailable,
+} from '../editor-contexts/index.js';
 import type { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
+import { EntityLock, type EntityLockHeld } from '../lib/locks/entity-lock.js';
 import type { DatabaseError } from '../persistence/index.js';
 import {
   activePtyProcessIdsForSessions,
@@ -32,49 +44,26 @@ import {
   type PtyServiceShape,
 } from '../pty-processes/index.js';
 import type { PtyLaunchError } from '../pty-processes/pty.service.js';
-import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import { TerminalSessionError, TerminalSessionService } from '../terminal-sessions/index.js';
-import { planSurfacePaneDelete } from './delete-plan.js';
+import { planSurfacePaneDelete, type SurfacePaneDeletePlan } from './delete-plan.js';
+import { SurfaceError, SurfaceOrderError } from './errors.js';
 import { setNodeWeights } from './layout.js';
+import { openEditor } from './open-editor.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
 import type {
   AgentSessionRow,
   CreateSinglePaneSurfaceInput,
   CreateSinglePaneSurfaceOutput,
+  SurfaceDeleteTarget,
   SurfacePaneRow,
   TerminalSessionRow,
 } from './types.js';
-
-export class SurfaceError extends Data.TaggedError('SurfaceError')<{
-  readonly code:
-    | 'surface_not_found'
-    | 'worktree_not_found'
-    | 'pane_not_found'
-    | 'session_not_found'
-    | 'session_worktree_mismatch'
-    | 'invalid_surface_title'
-    | 'layout_node_stale';
-  readonly message: string;
-  readonly worktreeId?: number | undefined;
-  readonly surfaceId?: number | undefined;
-  readonly paneId?: number | undefined;
-  readonly sessionId?: number | undefined;
-}> {}
-
-/**
- * Kept separate from `SurfaceError` because `surfaceRejectionReason` ends in a
- * catch-all default: a reorder reason added to that union and left unmapped
- * would surface as `surface_not_found`. This one maps straight through.
- */
-export class SurfaceOrderError extends Data.TaggedError('SurfaceOrderError')<{
-  readonly reason: SurfaceOrderRejectionReason;
-  readonly message: string;
-  readonly worktreeId: number;
-  readonly surfaceId: number;
-  readonly beforeSurfaceId?: number | undefined;
-}> {}
 
 export type SurfaceServiceError = DatabaseError | SurfaceError;
 
@@ -93,6 +82,13 @@ export interface SurfaceService {
   readonly getSurfaceDetail: (
     surfaceId: number,
   ) => Effect.Effect<SurfaceDetail, SurfaceServiceError>;
+  /**
+   * Idempotent placement of the worktree's one durable editor context. Starts no
+   * process: the pane's `ensureRuntime` call is the on-demand half.
+   */
+  readonly openEditor: (input: {
+    readonly worktreeId: number;
+  }) => Effect.Effect<OpenEditorOutput, SurfaceServiceError | EditorUnavailable>;
   readonly renameSurface: (input: {
     readonly surfaceId: number;
     readonly title: string;
@@ -149,6 +145,11 @@ export const SurfaceServiceLive = Layer.effect(
     const pty = yield* PtyService;
     const lifecycle = yield* SessionLifecycle;
     const eventBus = yield* InternalRuntimeEventBus;
+    const editors = yield* EditorContextService;
+    // The same module-scoped lock value `SessionLifecycle` and
+    // `EditorContextService` are built on, so placement and the editor's own
+    // lifecycle genuinely serialize against each other.
+    const entityLock = yield* EntityLock;
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -164,10 +165,19 @@ export const SurfaceServiceLive = Layer.effect(
             );
           const panes = yield* repository.listPanesForSurface(surface.id);
           const paneIds = panes.map((pane) => pane.id);
-          const [agentSessions, terminalSessions] = yield* Effect.all([
+          const [agentSessions, terminalSessions, editorContexts] = yield* Effect.all([
             repository.listAgentSessionsForPanes(paneIds),
             repository.listTerminalSessionsForPanes(paneIds),
+            repository.listEditorContextsForPanes(paneIds),
           ]);
+          // Readiness is the editor service's in-memory half of the projection:
+          // it belongs to the current incarnation and is deliberately not
+          // persisted, so it is composed here rather than joined in SQL.
+          const readiness = yield* editors.readinessFor(
+            editorContexts.flatMap((row) =>
+              row.activePtyProcessId ? [row.activePtyProcessId] : [],
+            ),
+          );
           const focus = yield* repository.findEnvironmentFocus(surface.worktreeId);
           const activePaneId = activePaneForSurface(surface.id, panes, focus);
           return {
@@ -181,10 +191,14 @@ export const SurfaceServiceLive = Layer.effect(
               surfaceId: pane.surfaceId,
               title: pane.title,
               sortOrder: pane.sortOrder,
-              session: sessionForPane(agentSessions, terminalSessions, pane),
+              session: sessionForPane(
+                { agentSessions, terminalSessions, editorContexts, readiness },
+                pane,
+              ),
             })),
           } satisfies SurfaceDetail;
         }),
+      openEditor: (input) => openEditor({ repository, editors, entityLock, eventBus }, input),
       renameSurface: (input) =>
         Effect.gen(function* () {
           const title = yield* validateSurfaceTitle(input.title);
@@ -208,78 +222,45 @@ export const SurfaceServiceLive = Layer.effect(
       deleteSurface: (surfaceId) =>
         Effect.gen(function* () {
           const target = yield* loadDeleteTarget(repository, surfaceId);
-          const sessions = yield* sessionsForPaneIds(
-            repository,
-            target.panes.map(({ pane }) => pane.id),
+          const deps = { repository, pty, eventBus, editors };
+          // Deleting this surface removes every one of its panes, so the whole
+          // capture is what the lock decision inspects.
+          if (editorContextIdsOfPanes(target.panes.map(({ pane }) => pane)).length === 0)
+            return yield* deleteWholeSurface(deps, target, null);
+          return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
+            Effect.gen(function* () {
+              const fresh = yield* loadDeleteTargetOrNull(repository, surfaceId);
+              if (!fresh) return emptyDeleteOutput;
+              return yield* deleteWholeSurface(deps, fresh, held);
+            }),
           );
-          const deleted = yield* repository.deleteSurface(target);
-          yield* terminateDeletedPanePtys(pty, sessions);
-          yield* publishDeletedPaneSessionChanges(
-            eventBus,
-            target.panes.map(({ pane }) => pane),
-          );
-          yield* publishSurfaceChanged(eventBus, {
-            worktreeId: target.surface.worktreeId,
-            surfaceId: target.surface.id,
-            change: 'deleted',
-            deletedPaneIds: [...deleted.deletedPaneIds],
-          });
-          return {
-            deletedSurfaceId: deleted.deletedSurfaceId,
-            deletedPaneIds: [...deleted.deletedPaneIds],
-          } satisfies DeleteSurfaceOutput;
         }),
       deleteSurfacePane: (input) =>
         Effect.gen(function* () {
-          const target = yield* loadDeleteTarget(repository, input.surfaceId).pipe(
-            Effect.catchTag('SurfaceError', (error) => {
-              if (error.code === 'surface_not_found') return Effect.succeed(null);
-              return Effect.fail(error);
+          const target = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+          if (!target) return emptyDeleteOutput;
+          if (!target.panes.some(({ pane }) => pane.id === input.paneId)) return emptyDeleteOutput;
+          const plan = planSurfacePaneDelete(target, input.paneId);
+          const deps = { repository, pty, eventBus, editors };
+          // The lock decision inspects the panes the plan will actually delete,
+          // not whether the surface happens to hold an editor. Deleting an
+          // unrelated terminal pane from a surface that also holds one keeps the
+          // fast path; only a plan that escalates into removing the editor pane
+          // needs the lock.
+          if (editorContextIdsOfPanes(panesForPlan(target, plan)).length === 0)
+            return yield* deletePlannedPanes(deps, target, plan, input.paneId, null);
+          return yield* entityLock.withLock(editorLockKey(target.surface.worktreeId), (held) =>
+            Effect.gen(function* () {
+              const fresh = yield* loadDeleteTargetOrNull(repository, input.surfaceId);
+              if (!fresh) return emptyDeleteOutput;
+              if (!fresh.panes.some(({ pane }) => pane.id === input.paneId))
+                return emptyDeleteOutput;
+              // Re-planned, never reused: another pane deletion may have
+              // changed the layout or escalated what this plan removes.
+              const freshPlan = planSurfacePaneDelete(fresh, input.paneId);
+              return yield* deletePlannedPanes(deps, fresh, freshPlan, input.paneId, held);
             }),
           );
-          if (!target) {
-            return { deletedSurfaceId: null, deletedPaneIds: [] } satisfies DeleteSurfaceOutput;
-          }
-          const paneTarget = target.panes.find(({ pane }) => pane.id === input.paneId);
-          if (!paneTarget) {
-            return { deletedSurfaceId: null, deletedPaneIds: [] } satisfies DeleteSurfaceOutput;
-          }
-          const plan = planSurfacePaneDelete(target, input.paneId);
-          const sessions = yield* sessionsForPaneIds(repository, plan.deletedPaneIds);
-          const deleted = yield* repository.deleteSurfacePane({ target, plan });
-          if (deleted.deletedPaneIds.length === 0 && deleted.deletedSurfaceId === null) {
-            // A delete plan was built from a pane that existed at load time, yet the
-            // repository removed nothing. This is not the idempotent "already gone"
-            // case (handled above) — it is a concurrent deletion racing this one, so
-            // leave a breadcrumb to distinguish it from a genuine repository miss.
-            console.warn(
-              '[runtime] Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
-              {
-                surfaceId: input.surfaceId,
-                paneId: input.paneId,
-                plannedDeletedPaneIds: plan.deletedPaneIds,
-              },
-            );
-            return {
-              deletedSurfaceId: null,
-              deletedPaneIds: [],
-            } satisfies DeleteSurfaceOutput;
-          }
-          yield* terminateDeletedPanePtys(pty, sessions);
-          const deletedPanes = target.panes
-            .map(({ pane }) => pane)
-            .filter((pane) => deleted.deletedPaneIds.includes(pane.id));
-          yield* publishDeletedPaneSessionChanges(eventBus, deletedPanes);
-          yield* publishSurfaceChanged(eventBus, {
-            worktreeId: target.surface.worktreeId,
-            surfaceId: target.surface.id,
-            change: deleted.deletedSurfaceId === target.surface.id ? 'deleted' : 'pane_deleted',
-            deletedPaneIds: [...deleted.deletedPaneIds],
-          });
-          return {
-            deletedSurfaceId: deleted.deletedSurfaceId,
-            deletedPaneIds: [...deleted.deletedPaneIds],
-          } satisfies DeleteSurfaceOutput;
         }),
       createSurface: (input) =>
         Effect.gen(function* () {
@@ -801,6 +782,175 @@ function activePaneForSurface(
   return panes.some((pane) => pane.id === focus.activePaneId) ? focus.activePaneId : null;
 }
 
+const emptyDeleteOutput = {
+  deletedSurfaceId: null,
+  deletedPaneIds: [],
+} satisfies DeleteSurfaceOutput;
+
+interface SurfaceDeleteDependencies {
+  readonly repository: SurfaceRepositoryService;
+  readonly pty: PtyServiceShape;
+  readonly eventBus: InternalRuntimeEventBusService;
+  readonly editors: EditorContextServiceShape;
+}
+
+function loadDeleteTargetOrNull(repository: SurfaceRepositoryService, surfaceId: number) {
+  return loadDeleteTarget(repository, surfaceId).pipe(
+    Effect.catchTag('SurfaceError', (error) =>
+      error.code === 'surface_not_found' ? Effect.succeed(null) : Effect.fail(error),
+    ),
+  );
+}
+
+function editorContextIdsOfPanes(panes: readonly SurfacePaneRow[]) {
+  return panes.flatMap((pane) =>
+    pane.sessionKind === 'editor_context' && pane.sessionId !== null ? [pane.sessionId] : [],
+  );
+}
+
+function panesForPlan(target: SurfaceDeleteTarget, plan: SurfacePaneDeletePlan) {
+  return target.panes
+    .map(({ pane }) => pane)
+    .filter((pane) => plan.deletedPaneIds.includes(pane.id));
+}
+
+/**
+ * `deleteSurface`'s body once its target is final. The caller decides whether
+ * that target was read under the editor lock; `held` is present exactly when it
+ * was, which is what makes releasing an incarnation without the lock
+ * unrepresentable rather than merely discouraged.
+ */
+function deleteWholeSurface(
+  deps: SurfaceDeleteDependencies,
+  target: SurfaceDeleteTarget,
+  held: EntityLockHeld | null,
+) {
+  return Effect.gen(function* () {
+    const panes = target.panes.map(({ pane }) => pane);
+    const sessions = yield* sessionsForPaneIds(
+      deps.repository,
+      panes.map((pane) => pane.id),
+    );
+    const deleted = yield* deps.repository.deleteSurface(target);
+    yield* finishSurfaceDelete(deps, {
+      sessions,
+      deletedPanes: panes,
+      editorContextIds: editorContextIdsOfPanes(panes),
+      held,
+      surfaceChanged: {
+        worktreeId: target.surface.worktreeId,
+        surfaceId: target.surface.id,
+        change: 'deleted',
+        deletedPaneIds: [...deleted.deletedPaneIds],
+      },
+    });
+    return {
+      deletedSurfaceId: deleted.deletedSurfaceId,
+      deletedPaneIds: [...deleted.deletedPaneIds],
+    } satisfies DeleteSurfaceOutput;
+  });
+}
+
+/** `deleteSurfacePane`'s body once its target and plan are final. */
+function deletePlannedPanes(
+  deps: SurfaceDeleteDependencies,
+  target: SurfaceDeleteTarget,
+  plan: SurfacePaneDeletePlan,
+  requestedPaneId: number,
+  held: EntityLockHeld | null,
+) {
+  return Effect.gen(function* () {
+    const sessions = yield* sessionsForPaneIds(deps.repository, plan.deletedPaneIds);
+    const deleted = yield* deps.repository.deleteSurfacePane({ target, plan });
+    if (deleted.deletedPaneIds.length === 0 && deleted.deletedSurfaceId === null) {
+      // A delete plan was built from a pane that existed at load time, yet the
+      // repository removed nothing. This is not the idempotent "already gone"
+      // case (handled by the caller) — it is a concurrent deletion racing this
+      // one, so leave a breadcrumb to distinguish it from a genuine repository
+      // miss. Nothing committed, so nothing is published.
+      console.warn(
+        '[runtime] Surface pane delete planned a removal but the repository deleted nothing; treating as already gone',
+        {
+          surfaceId: target.surface.id,
+          paneId: requestedPaneId,
+          plannedDeletedPaneIds: plan.deletedPaneIds,
+        },
+      );
+      return emptyDeleteOutput;
+    }
+    const deletedPanes = target.panes
+      .map(({ pane }) => pane)
+      .filter((pane) => deleted.deletedPaneIds.includes(pane.id));
+    yield* finishSurfaceDelete(deps, {
+      sessions,
+      deletedPanes,
+      editorContextIds: editorContextIdsOfPanes(deletedPanes),
+      held,
+      surfaceChanged: {
+        worktreeId: target.surface.worktreeId,
+        surfaceId: target.surface.id,
+        change: deleted.deletedSurfaceId === target.surface.id ? 'deleted' : 'pane_deleted',
+        deletedPaneIds: [...deleted.deletedPaneIds],
+      },
+    });
+    return {
+      deletedSurfaceId: deleted.deletedSurfaceId,
+      deletedPaneIds: [...deleted.deletedPaneIds],
+    } satisfies DeleteSurfaceOutput;
+  });
+}
+
+/**
+ * Everything after the placement removal has committed.
+ *
+ * The publications are installed with `ensuring` rather than sequenced after the
+ * cleanup because `releaseIncarnation` can still fail with a `DatabaseError`
+ * once the rows are gone. Without this, a client would receive neither a
+ * successful response nor the invalidation event, and would keep rendering a
+ * surface the database has already deleted. The failure is re-raised after the
+ * publication rather than absorbed: durable cleanup did not settle as intended,
+ * and reporting success would hide that.
+ */
+function finishSurfaceDelete(
+  deps: SurfaceDeleteDependencies,
+  args: {
+    readonly sessions: {
+      readonly agents: readonly AgentSessionRow[];
+      readonly terminals: readonly TerminalSessionRow[];
+    };
+    readonly deletedPanes: readonly SurfacePaneRow[];
+    readonly editorContextIds: readonly number[];
+    readonly held: EntityLockHeld | null;
+    readonly surfaceChanged: SurfaceChangedEvent['payload'];
+  },
+) {
+  const cleanup = Effect.gen(function* () {
+    // Agents and terminals only. An editor is never routed through this helper:
+    // it is best-effort inside a `catchAll`, and clearing an editor's ownership
+    // requires the affirmative outcome that discards.
+    yield* terminateDeletedPanePtys(deps.pty, args.sessions);
+    const { held } = args;
+    if (!held) return;
+    for (const editorContextId of args.editorContextIds) {
+      // Read through the surfaces repository, by the surfaces layer: handing the
+      // editor domain a pane read to answer a question about itself would
+      // reopen the cycle the one-way dependency exists to prevent.
+      const placement = yield* deps.repository.findPaneForSession({
+        sessionKind: 'editor_context',
+        sessionId: editorContextId,
+      });
+      // Re-placed or bound elsewhere while we held the lock: never terminate.
+      if (placement) continue;
+      yield* deps.editors.releaseIncarnation({ held, editorContextId });
+    }
+  });
+  const publications = Effect.gen(function* () {
+    yield* publishDeletedPaneSessionChanges(deps.eventBus, args.deletedPanes);
+    yield* publishSurfaceChanged(deps.eventBus, args.surfaceChanged);
+  });
+  return cleanup.pipe(Effect.ensuring(publications));
+}
+
 function sessionsForPaneIds(repository: SurfaceRepositoryService, paneIds: readonly number[]) {
   return Effect.all({
     agents: repository.listAgentSessionsForPanes(paneIds),
@@ -849,33 +999,47 @@ function publishReplacedPaneSessionChange(
   pane: SurfacePaneRow,
   next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
 ) {
-  if (
-    !pane.sessionKind ||
-    !pane.sessionId ||
-    (pane.sessionKind === next.kind && pane.sessionId === next.sessionId)
-  ) {
+  const kind = pane.sessionKind;
+  if (!kind || !pane.sessionId || (kind === next.kind && pane.sessionId === next.sessionId)) {
     return Effect.void;
   }
-  return publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId);
+  return publishSessionChanged(eventBus, kind, pane.sessionId);
 }
 
+/**
+ * The normalized "this pane's session changed" publication, total over all three
+ * pane kinds.
+ *
+ * Totality is the point. While this narrowed to the two PTY-backed kinds, an
+ * editor pane silently published nothing, so a second client watching a surface
+ * whose editor changed would never re-read. The editor's event carries identity
+ * only; the projection layer adds placement.
+ */
 function publishSessionChanged(
   eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
-  sessionKind: 'agent_session' | 'terminal_session',
+  sessionKind: NonNullable<SurfacePaneRow['sessionKind']>,
   sessionId: number,
 ) {
-  return eventBus.publish(
-    sessionKind === 'agent_session'
-      ? { type: 'agent_session_changed', agentSessionId: sessionId }
-      : { type: 'terminal_session_changed', terminalSessionId: sessionId },
-  );
+  switch (sessionKind) {
+    case 'agent_session':
+      return eventBus.publish({ type: 'agent_session_changed', agentSessionId: sessionId });
+    case 'terminal_session':
+      return eventBus.publish({ type: 'terminal_session_changed', terminalSessionId: sessionId });
+    case 'editor_context':
+      return eventBus.publish({ type: 'editor_context_changed', editorContextId: sessionId });
+  }
 }
 
 function sessionForPane(
-  agentSessions: readonly AgentSessionRow[],
-  terminalSessions: readonly TerminalSessionRow[],
+  sources: {
+    readonly agentSessions: readonly AgentSessionRow[];
+    readonly terminalSessions: readonly TerminalSessionRow[];
+    readonly editorContexts: readonly EditorContextRow[];
+    readonly readiness: ReadonlyMap<number, EditorReadinessObservation>;
+  },
   pane: SurfacePaneRow,
 ): SurfaceDetail['panes'][number]['session'] {
+  const { agentSessions, terminalSessions, editorContexts, readiness } = sources;
   if (pane.sessionKind === 'agent_session' && pane.sessionId !== null) {
     const agent = agentSessions.find((candidate) => candidate.id === pane.sessionId);
     if (!agent) return null;
@@ -920,6 +1084,25 @@ function sessionForPane(
         createdAt: terminal.createdAt,
         updatedAt: terminal.updatedAt,
         lastSeenAt: null,
+      },
+    };
+  }
+  if (pane.sessionKind === 'editor_context' && pane.sessionId !== null) {
+    const context = editorContexts.find((candidate) => candidate.id === pane.sessionId);
+    if (!context) return null;
+    // Adding `paneId` here is why the contract splits the editor's own facts
+    // from this pane-bound metadata: the surfaces layer is the only one that
+    // knows placement, and the editor domain is forbidden from reading it.
+    return {
+      kind: 'editor_context',
+      editorContext: {
+        paneId: pane.id,
+        ...deriveEditorContextFacts(
+          context,
+          context.activePtyProcessId === null
+            ? undefined
+            : readiness.get(context.activePtyProcessId),
+        ),
       },
     };
   }

@@ -13,6 +13,7 @@ const ctx: PaletteContext = {
   activeSurface: null,
   activePaneId: null,
   launchableHarnesses: [],
+  editorAvailable: false,
 };
 
 test('dispatcher immediate command run pushes recent after success', async () => {

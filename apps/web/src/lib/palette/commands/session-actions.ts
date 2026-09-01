@@ -6,7 +6,8 @@ import {
   startAgentSessionFromPalette,
   startTerminalSessionFromPalette,
 } from '../../workspace/queries.js';
-import type { ArgSpec, ArgValues, PaletteCommand, PaletteContext } from '../types.js';
+import type { ArgSpec, PaletteCommand } from '../types.js';
+import { worktreeIdFromValues } from './worktree-target.js';
 
 export const harnessSelectArg: Extract<ArgSpec, { readonly kind: 'select' }> = {
   kind: 'select',
@@ -67,11 +68,3 @@ export const sessionActionCommands: readonly PaletteCommand[] = [
   startTerminalSessionCommand,
   startAgentSessionCommand,
 ];
-
-function worktreeIdFromValues(values: ArgValues, ctx: PaletteContext): number | null {
-  const worktreeId = Number(values.worktreeId);
-  if (Number.isInteger(worktreeId)) {
-    return worktreeId;
-  }
-  return ctx.activeWorktree?.id ?? null;
-}

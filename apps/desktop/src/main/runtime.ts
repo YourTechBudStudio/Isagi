@@ -10,8 +10,8 @@ import {
   developmentPaths,
 } from '../../../../scripts/dev-supervisor/dev-protocol.mjs';
 import { waitForRuntimeHealth } from './boot.js';
-import { sanitizeManagedRuntimeEnvironment } from './development-environment.js';
 import { resolveDevelopmentRoot } from './development.js';
+import { managedRuntimeSpawnEnvironment } from './managed-runtime-environment.js';
 import { managedRuntimeAllowedOrigins } from './runtime-origin.js';
 import {
   createRuntimeLogSink,
@@ -82,14 +82,11 @@ function prepareManagedRuntime(): RuntimeSpawnSpecification {
       !app.isPackaged && process.env[developmentEnvironmentKeys.processOwner] === '1'
         ? 'external'
         : 'self',
-    env: {
-      ...sanitizeManagedRuntimeEnvironment(process.env),
-      ELECTRON_RUN_AS_NODE: '1',
-      HOST: '127.0.0.1',
-      PORT: '0',
-      ISAGI_ALLOWED_ORIGINS: allowedOrigins,
-      ...(dataDirectory ? { ISAGI_DATA_DIR: dataDirectory } : {}),
-    },
+    env: managedRuntimeSpawnEnvironment({
+      inherited: process.env,
+      allowedOrigins,
+      dataDirectory,
+    }),
   };
 }
 
