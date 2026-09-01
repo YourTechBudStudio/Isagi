@@ -8,6 +8,15 @@ export {
   workspaceBootCopy,
 } from './workspace.js';
 export {
+  editorAttemptFailureCopy,
+  editorCopy,
+  editorPaneStatusCopy,
+  editorProcessDiagnosticCopy,
+  editorProvisioningCopy,
+  editorSettledCopy,
+  editorSettledStatusLabel,
+} from './editor.js';
+export {
   apiErrorDiagnostic,
   endpointDiagnostic,
   ptySocketErrorCopy,

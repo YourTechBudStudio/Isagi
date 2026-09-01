@@ -1,10 +1,13 @@
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import type { ReactNode } from 'react';
 
+import type { EditorProvisioningState } from '@isagi/contracts';
+
 import { Button } from '../../components/Button.js';
-import { startupCopy } from '../../copy/index.js';
+import { editorProvisioningCopy, startupCopy } from '../../copy/index.js';
 import { canQuit, requestQuit } from '../../lib/desktop-bridge.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
+import { EditorProvisioningNotice } from './EditorProvisioningNotice.js';
 
 // The startup gate is one continuous boot surface, not a family of screens: the
 // mark, a progress track, and one line of status share a single centered column,
@@ -24,7 +27,15 @@ export type BootView =
   // First-run setup, mounted as the third boot beat. The owner (OnboardingFlow)
   // supplies the unfolded content and drives `live` (a save or retry is running),
   // the whisper, and `stepKey` (form vs results) so step changes crossfade.
-  | { kind: 'setup'; live: boolean; whisper: string | null; stepKey: string; children: ReactNode };
+  | { kind: 'setup'; live: boolean; whisper: string | null; stepKey: string; children: ReactNode }
+  // The last boot beat: Code Server has to be on disk before the workspace can
+  // offer an editor. Transient states are a status line; only a failure unfolds.
+  | {
+      kind: 'editor_provisioning';
+      state: EditorProvisioningState;
+      retrying: boolean;
+      onRetry: () => void;
+    };
 
 type BootKind = BootView['kind'];
 type TrackTone = 'running' | 'blocked' | 'error';
@@ -42,6 +53,8 @@ const FILL: Record<BootKind, number> = {
   opening: 100,
   runtime_unreachable: 25,
   config_invalid: 50,
+  // After setup, before opening: the track shows where boot actually is.
+  editor_provisioning: 88,
 };
 
 // Views that compact the mark and unfold content below the track.
@@ -51,6 +64,21 @@ const COMPACT_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_inval
 // diagnostics have room to read. Loading states and onboarding (`setup`) keep the
 // calm narrow column.
 const WIDE_KINDS: readonly BootKind[] = ['runtime_unreachable', 'config_invalid'];
+
+// Provisioning is the one kind whose layout depends on its state rather than
+// only on its kind: a failure carries a diagnostic and unfolds like the other
+// blockers, while everything transient stays the calm narrow status line.
+function unfoldsDetail(view: BootView): boolean {
+  return view.kind === 'editor_provisioning'
+    ? view.state.status === 'failed'
+    : COMPACT_KINDS.includes(view.kind);
+}
+
+function needsWideColumn(view: BootView): boolean {
+  return view.kind === 'editor_provisioning'
+    ? view.state.status === 'failed'
+    : WIDE_KINDS.includes(view.kind);
+}
 
 function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
   switch (view.kind) {
@@ -69,6 +97,11 @@ function trackTone(view: BootView): { tone: TrackTone; live: boolean } {
       return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
     case 'config_invalid':
       return { tone: 'blocked', live: false };
+    // A retry puts the track back to running and live, the same shape
+    // `runtime_unreachable` uses; anything not yet failed is still working.
+    case 'editor_provisioning':
+      if (view.state.status !== 'failed') return { tone: 'running', live: true };
+      return view.retrying ? { tone: 'running', live: true } : { tone: 'error', live: false };
   }
 }
 
@@ -76,6 +109,13 @@ function statusText(view: BootView): string | null {
   if (view.kind === 'connecting') return startupCopy.connecting.status;
   if (view.kind === 'environment_pending') return startupCopy.environmentPending.status;
   if (view.kind === 'opening') return startupCopy.opening.status;
+  if (view.kind === 'editor_provisioning' && view.state.status !== 'failed') {
+    // `ready` and `not_applicable` never reach the boot surface — the gate falls
+    // straight through both — so only the transient phases have a line here.
+    return view.state.status === 'not_applicable' || view.state.status === 'ready'
+      ? null
+      : editorProvisioningCopy.status[view.state.status];
+  }
   return null;
 }
 
@@ -233,6 +273,15 @@ function BootDetail({ view }: { view: BootView }) {
       </>
     );
   }
+  if (view.kind === 'editor_provisioning') {
+    return view.state.status === 'failed' ? (
+      <EditorProvisioningNotice
+        state={view.state}
+        retrying={view.retrying}
+        onRetry={view.onRetry}
+      />
+    ) : null;
+  }
   if (view.kind === 'runtime_unreachable') {
     return (
       <>
@@ -257,8 +306,8 @@ function BootDetail({ view }: { view: BootView }) {
  * compacts, the track advances or freezes, and detail unfolds, all in place.
  */
 export function BootSurface({ view }: { view: BootView }) {
-  const compact = COMPACT_KINDS.includes(view.kind);
-  const wide = WIDE_KINDS.includes(view.kind);
+  const compact = unfoldsDetail(view);
+  const wide = needsWideColumn(view);
   const { tone, live } = trackTone(view);
   const status = statusText(view);
   const whisper = whisperText(view);

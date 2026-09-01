@@ -3,12 +3,15 @@ import { Schema } from 'effect';
 import { workflowRejectedErrorSchema } from '@isagi/contracts';
 import type {
   ApiError,
+  EditorAttemptFailureReason,
+  EditorRejectionReason,
   ProjectOrderRejectionReason,
   PtyWebSocketErrorCode,
   SurfaceOrderRejectionReason,
   WorktreeOrderRejectionReason,
 } from '@isagi/contracts';
 
+import { editorAttemptFailureCopy } from './editor.js';
 import { workflowLoadFailureReasonCopyOrFallback } from './workflows.js';
 
 // User-facing copy for runtime failures. The runtime and contracts emit stable
@@ -227,6 +230,26 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
     }),
+  },
+  editor_rejected: {
+    summary: "Couldn't open the editor.",
+    byReason: byReason<EditorRejectionReason>({
+      worktree_not_found: worktreeGone,
+      editor_context_not_found: "That editor isn't here anymore.",
+      editor_unsupported_runtime: "This runtime doesn't provide an editor.",
+      editor_unavailable: "The editor isn't installed yet.",
+      editor_provisioning_busy: 'The editor download is already retrying.',
+      editor_incarnation_superseded: 'That editor process has already been replaced.',
+    }),
+  },
+  editor_launch_failed: {
+    summary: "The editor didn't start.",
+    // Built from the pane's own map so a launch failure reads identically
+    // whether it arrives as this response or is read back from the projection.
+    byReason: byReason<EditorAttemptFailureReason>(editorAttemptFailureCopy),
+  },
+  editor_diagnostics_unavailable: {
+    summary: "Couldn't read the editor's startup output.",
   },
   git_command_failed: {
     summary: "A Git command didn't go through.",
