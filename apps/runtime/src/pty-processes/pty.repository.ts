@@ -6,6 +6,7 @@ import { Context, Effect, Layer } from 'effect';
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import {
   agentSessions,
+  editorContexts,
   ptyProcesses,
   terminalSessions,
   worktreeCommandRuns,
@@ -148,6 +149,15 @@ export const PtyRepositoryLive = Layer.effect(
             ...db
               .select({ activePtyProcessId: worktreeCommandStates.activePtyProcessId })
               .from(worktreeCommandStates)
+              .all(),
+            // Editor incarnations are owned by their durable context, which is
+            // not a pane session and therefore appears in none of the tables
+            // above. Without this term the GC classifies every live editor
+            // process as an orphan and kills it past the retention window —
+            // intermittently, and with no diagnostic pointing back here.
+            ...db
+              .select({ activePtyProcessId: editorContexts.activePtyProcessId })
+              .from(editorContexts)
               .all(),
           ].flatMap((row) => (row.activePtyProcessId ? [row.activePtyProcessId] : [])),
         );

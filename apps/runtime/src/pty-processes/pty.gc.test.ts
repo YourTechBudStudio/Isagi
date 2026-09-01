@@ -13,7 +13,13 @@ import {
   RuntimeDatabaseLive,
   type RuntimeDatabaseService,
 } from '../persistence/index.js';
-import { projects, ptyProcesses, worktreeCommandStates, worktrees } from '../persistence/schema.js';
+import {
+  editorContexts,
+  projects,
+  ptyProcesses,
+  worktreeCommandStates,
+  worktrees,
+} from '../persistence/schema.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { PtyRepository, PtyRepositoryLive } from './pty.repository.js';
 import { collectPtyGarbage } from './service/gc.js';
@@ -611,6 +617,113 @@ test('PTY GC keeps PTY rows referenced only by a running command state', async (
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('PTY ownership excludes a process referenced by an editor context', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-orphan-editor-owned-'));
+  try {
+    const orphanIds = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const database = yield* RuntimeDatabase;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'editor.ptylog'),
+          updatedAt: oldIso(),
+        });
+        // An editor context is not a pane session, so it appears in none of the
+        // other four ownership tables. If this term is missing the GC reaps a
+        // live editor.
+        yield* seedEditorContextReference(database, process.id);
+
+        const orphans = yield* repository.listOrphanProcesses;
+        return orphans.map((row) => row.id);
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(orphanIds, []);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('PTY ownership still orphans a process whose editor handoff never committed', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-pty-orphan-editor-unhanded-'));
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* PtyRepository;
+        const database = yield* RuntimeDatabase;
+        const sessionsPath = join(dataRoot, 'sessions');
+        mkdirSync(sessionsPath, { recursive: true });
+        const process = yield* insertPtyProcess({
+          status: 'running',
+          logPath: join(sessionsPath, 'unhanded.ptylog'),
+          updatedAt: oldIso(),
+        });
+        // The editor context exists but holds no pointer, which is exactly the
+        // residue a crash between allocation and handoff leaves behind. The
+        // widening above must not over-match and disable this cleanup.
+        yield* seedEditorContextReference(database, null);
+
+        const orphans = yield* repository.listOrphanProcesses;
+        return { orphanIds: orphans.map((row) => row.id), processId: process.id };
+      }).pipe(Effect.provide(testLayer(dataRoot))),
+    );
+
+    assert.deepEqual(output.orphanIds, [output.processId]);
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+function seedEditorContextReference(database: RuntimeDatabaseService, ptyProcessId: number | null) {
+  return database.use('seed_editor_context_reference_for_gc_test', (db) => {
+    const now = '2026-06-18T00:00:00.000Z';
+    const project = db
+      .insert(projects)
+      .values({
+        name: 'isagi',
+        rootPath: `/repo/isagi-editor-${ptyProcessId ?? 'none'}`,
+        status: 'present',
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: now,
+      })
+      .returning({ id: projects.id })
+      .get();
+    const worktree = db
+      .insert(worktrees)
+      .values({
+        projectId: project.id,
+        path: `/repo/isagi-editor-${ptyProcessId ?? 'none'}/wt`,
+        branch: 'main',
+        head: 'abcdef0',
+        createdAt: now,
+        updatedAt: now,
+        firstSeenAt: now,
+        lastSeenAt: now,
+      })
+      .returning({ id: worktrees.id })
+      .get();
+    db.insert(editorContexts)
+      .values({
+        worktreeId: worktree.id,
+        activePtyProcessId: ptyProcessId,
+        endpointHost: ptyProcessId === null ? null : '127.0.0.1',
+        endpointPort: ptyProcessId === null ? null : 41_287,
+        sessionSocketPath: ptyProcessId === null ? null : '/tmp/sock/1-abc123.sock',
+        attemptState: 'none',
+        attemptReason: null,
+        attemptDetail: null,
+        attemptStartedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+  });
+}
 
 function seedCommandStateReference(database: RuntimeDatabaseService, ptyProcessId: number) {
   return database.use('seed_command_state_reference_for_gc_test', (db) => {

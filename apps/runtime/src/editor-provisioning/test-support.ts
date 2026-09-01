@@ -7,6 +7,7 @@ import {
   EditorUnavailable,
   type EditorProvisioningService,
 } from './editor-provisioning.service.js';
+import type { ResolvedEditorInstallation } from './install.js';
 
 /**
  * A provisioning service pinned to one state, for consumers that compose the
@@ -30,3 +31,23 @@ export function editorProvisioningStateLayer(state: EditorProvisioningState) {
 export const NotApplicableEditorProvisioningLayer = editorProvisioningStateLayer({
   status: 'not_applicable',
 });
+
+/**
+ * A provisioning service that is genuinely ready, with an explicit resolved
+ * installation.
+ *
+ * Distinct from `editorProvisioningStateLayer({ status: 'ready' })`, whose
+ * `requireReady` fails by construction: that helper is for consumers that only
+ * compose the projection, and this one is for consumers that actually launch.
+ */
+export function readyEditorProvisioningLayer(installation: ResolvedEditorInstallation) {
+  return Layer.succeed(EditorProvisioning, {
+    start: Effect.void,
+    state: Effect.succeed({
+      status: 'ready',
+      version: installation.version,
+    } satisfies EditorProvisioningState),
+    retry: Effect.die('retry is not used by this test'),
+    requireReady: Effect.succeed(installation),
+  } satisfies EditorProvisioningService);
+}

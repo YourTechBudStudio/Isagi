@@ -835,10 +835,11 @@ function publishDeletedPaneSessionChanges(
   panes: readonly SurfacePaneRow[],
 ) {
   return Effect.all(
-    panes.flatMap((pane) => {
-      const kind = ptyBackedPaneSessionKind(pane.sessionKind);
-      return kind && pane.sessionId ? [publishSessionChanged(eventBus, kind, pane.sessionId)] : [];
-    }),
+    panes.flatMap((pane) =>
+      pane.sessionKind && pane.sessionId
+        ? [publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId)]
+        : [],
+    ),
     { discard: true },
   );
 }
@@ -848,7 +849,7 @@ function publishReplacedPaneSessionChange(
   pane: SurfacePaneRow,
   next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
 ) {
-  const kind = ptyBackedPaneSessionKind(pane.sessionKind);
+  const kind = pane.sessionKind;
   if (!kind || !pane.sessionId || (kind === next.kind && pane.sessionId === next.sessionId)) {
     return Effect.void;
   }
@@ -856,30 +857,27 @@ function publishReplacedPaneSessionChange(
 }
 
 /**
- * Narrows a pane's kind to the two that this module can publish a change for.
+ * The normalized "this pane's session changed" publication, total over all three
+ * pane kinds.
  *
- * An editor pane yields `null` today because the internal
- * `editor_context_changed` event has no publisher yet — the editor service owns
- * it, and editor deletion cleanup is a later phase. No editor pane can exist
- * yet, so nothing observable is dropped; when the editor domain lands, these
- * call sites become total over three kinds rather than narrowing to two.
+ * Totality is the point. While this narrowed to the two PTY-backed kinds, an
+ * editor pane silently published nothing, so a second client watching a surface
+ * whose editor changed would never re-read. The editor's event carries identity
+ * only; the projection layer adds placement.
  */
-function ptyBackedPaneSessionKind(
-  kind: SurfacePaneRow['sessionKind'],
-): 'agent_session' | 'terminal_session' | null {
-  return kind === 'agent_session' || kind === 'terminal_session' ? kind : null;
-}
-
 function publishSessionChanged(
   eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
-  sessionKind: 'agent_session' | 'terminal_session',
+  sessionKind: NonNullable<SurfacePaneRow['sessionKind']>,
   sessionId: number,
 ) {
-  return eventBus.publish(
-    sessionKind === 'agent_session'
-      ? { type: 'agent_session_changed', agentSessionId: sessionId }
-      : { type: 'terminal_session_changed', terminalSessionId: sessionId },
-  );
+  switch (sessionKind) {
+    case 'agent_session':
+      return eventBus.publish({ type: 'agent_session_changed', agentSessionId: sessionId });
+    case 'terminal_session':
+      return eventBus.publish({ type: 'terminal_session_changed', terminalSessionId: sessionId });
+    case 'editor_context':
+      return eventBus.publish({ type: 'editor_context_changed', editorContextId: sessionId });
+  }
 }
 
 function sessionForPane(

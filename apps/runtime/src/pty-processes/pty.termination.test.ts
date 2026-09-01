@@ -8,10 +8,10 @@ import { Effect, Either, Fiber, Layer } from 'effect';
 
 import { DatabaseError, DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../runtime-events/index.js';
+import {
+  publishOnlyRecordingEventBus,
+  type RecordingEventBus,
+} from '../runtime-events/test-support.js';
 import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from './pty.repository.js';
 import { reconcilePersistedProcesses } from './pty.service.js';
 import type { ActiveAttachment } from './service/attachments.js';
@@ -28,18 +28,6 @@ import {
 // The attempt-honest outcome table. A stop cause may bind only to an affirmative
 // kill, so the distinction these tests defend is: what did *this* attempt do, as
 // opposed to what the row happens to say afterwards.
-
-function recordingEventBus() {
-  const events: InternalRuntimeEvent[] = [];
-  const service: InternalRuntimeEventBusService = {
-    publish: (event) =>
-      Effect.sync(() => {
-        events.push(event);
-      }),
-    subscribe: () => Effect.die('termination tests do not subscribe'),
-  };
-  return { events, service };
-}
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
   return {
@@ -68,7 +56,7 @@ function catalogWith(nodePty: PtyBackendShape) {
 
 interface Harness {
   readonly repository: PtyRepositoryService;
-  readonly bus: ReturnType<typeof recordingEventBus>;
+  readonly bus: RecordingEventBus;
   readonly terminations: PtyTerminations;
   readonly retry: ReturnType<typeof manualPtyRetryScheduler>;
   readonly activeAttachments: Map<number, ActiveAttachment>;
@@ -93,7 +81,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
         yield* repository.transitionProcess({ ptyProcessId, status: 'running' });
         return yield* body({
           repository,
-          bus: recordingEventBus(),
+          bus: publishOnlyRecordingEventBus('termination tests do not subscribe'),
           terminations: new Map(),
           retry: manualPtyRetryScheduler(),
           activeAttachments: new Map(),

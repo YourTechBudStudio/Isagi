@@ -8,10 +8,10 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer } from 'effect';
 
 import { DatabaseError, DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
-import type {
-  InternalRuntimeEvent,
-  InternalRuntimeEventBusService,
-} from '../runtime-events/index.js';
+import {
+  publishOnlyRecordingEventBus,
+  type RecordingEventBus,
+} from '../runtime-events/test-support.js';
 import { PtyRepository, PtyRepositoryLive, type PtyRepositoryService } from './pty.repository.js';
 import { reconcilePersistedProcesses } from './pty.service.js';
 import { collectPtyGarbage } from './service/gc.js';
@@ -28,18 +28,6 @@ import {
 // The allocation-to-process window. Everything here defends one property: from
 // the instant a row exists until a launch resolves, exactly one owner is
 // responsible for it, and no generic observer may assign it an outcome.
-
-function recordingEventBus() {
-  const events: InternalRuntimeEvent[] = [];
-  const service: InternalRuntimeEventBusService = {
-    publish: (event) =>
-      Effect.sync(() => {
-        events.push(event);
-      }),
-    subscribe: () => Effect.die('launch allocation tests do not subscribe'),
-  };
-  return { events, service };
-}
 
 function backendStub(name: PtyBackendName, overrides: Partial<PtyBackendShape> = {}) {
   return {
@@ -74,7 +62,7 @@ function catalogWith(nodePty: PtyBackendShape) {
 
 interface Harness {
   readonly repository: PtyRepositoryService;
-  readonly bus: ReturnType<typeof recordingEventBus>;
+  readonly bus: RecordingEventBus;
   readonly reservations: PtyReservations;
   readonly sessionsPath: string;
   readonly dependencies: (
@@ -97,7 +85,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
     Effect.scoped(
       Effect.gen(function* () {
         const repository = yield* PtyRepository;
-        const bus = recordingEventBus();
+        const bus = publishOnlyRecordingEventBus('launch allocation tests do not subscribe');
         const reservations: PtyReservations = { terminations: new Map(), launches: new Map() };
         return yield* body({
           repository,

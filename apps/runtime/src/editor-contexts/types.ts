@@ -1,4 +1,7 @@
-import type { EditorAttemptFailureReason } from '@isagi/contracts';
+import type {
+  EditorContextFacts as ContractEditorContextFacts,
+  EditorAttemptFailureReason,
+} from '@isagi/contracts';
 
 // Read-side composition only: the editor context carries the process the
 // runtime joined onto its pointer. The PTY domain owns the row itself
@@ -56,3 +59,26 @@ export interface EditorIncarnationHandoff {
   readonly endpointPort: number;
   readonly sessionSocketPath: string;
 }
+
+/**
+ * What this runtime *observed* about a live workbench.
+ *
+ * Deliberately in memory only, and keyed by PTY process id rather than by
+ * context id: a durable context outlives its incarnations, so an observation
+ * stored against the context could be read back against a different process
+ * than the one it describes. Persisting it would be worse still — a readiness
+ * fact from a previous runtime describes a process that no longer exists.
+ */
+export interface EditorReadinessObservation {
+  readonly ptyProcessId: number;
+  readonly state: 'pending' | 'ready' | 'unreachable';
+  readonly detail: string | null;
+  readonly observedAt: string;
+}
+
+/**
+ * The contract's `editorContextFactsSchema` type under the runtime's own name,
+ * so the service signature reads in domain terms. The runtime never defines a
+ * parallel shape for it: the contract is the single declaration.
+ */
+export type EditorContextFacts = ContractEditorContextFacts;

@@ -21,6 +21,11 @@ import {
 } from './commands/index.js';
 import { EventLoopWatchdogLive } from './diagnostics/event-loop-watchdog.js';
 import {
+  EditorContextRepositoryLive,
+  EditorContextServiceLive,
+  type EditorContextServiceShape,
+} from './editor-contexts/index.js';
+import {
   EditorInstallIoLive,
   EditorProvisioningLive,
   type EditorProvisioningService,
@@ -168,6 +173,19 @@ const EntityLockLayer = EntityLockLive;
 // than a correctness property.
 const LoopbackPortProbeLayer = LoopbackPortProbeLive;
 const SessionLifecycleLayer = SessionLifecycleLive.pipe(Layer.provide(EntityLockLayer));
+const EditorContextRepositoryLayer = EditorContextRepositoryLive.pipe(Layer.provide(DatabaseLive));
+// Scoped: constructing it converges interrupted boot attempts, forks the single
+// interpreter of editor PTY events, and takes ownership of the probe fibers. It
+// is provided the same `EntityLockLayer` value as session lifecycle, which is
+// what makes "one lock scope per worktree" true across both domains.
+const EditorContextServiceLayer = EditorContextServiceLive.pipe(
+  Layer.provide(EditorContextRepositoryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(EditorProvisioningLayer),
+  Layer.provide(LoopbackPortProbeLayer),
+  Layer.provide(EntityLockLayer),
+);
 const AgentSessionServiceLayer = AgentSessionServiceLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
   Layer.provide(PtyServiceLayer),
@@ -238,6 +256,7 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionLifecycleLayer,
   SessionGcLayer,
   EditorProvisioningLayer,
+  EditorContextServiceLayer,
 );
 const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(CommandRepositoryLayer),
@@ -291,6 +310,10 @@ export type RuntimeServices =
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService
+  // `EntityLockService` is deliberately absent: it is a construction dependency
+  // of two service layers, not something a caller runs through `ManagedRuntime`.
+  // The first consumer that needs to resolve it is the surfaces placement path.
+  | EditorContextServiceShape
   | RuntimeConfigService;
 
 const ServicesLayer = Layer.mergeAll(
