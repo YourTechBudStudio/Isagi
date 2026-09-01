@@ -134,6 +134,22 @@ const codeServerConfig = `# Managed by Isagi. Launch flags are authoritative; th
 auth: none
 `;
 
+/**
+ * The editor settings Isagi seeds on first setup, and never again.
+ *
+ * `chat.disableAIFeatures` is VS Code's own master switch for the chat stack
+ * bundled into this Code Server build — the workbench sets it itself when the
+ * builtin chat extension is disabled. Isagi turns it off by default because an
+ * embedded editor opened from a coding agent should not arrive with a second,
+ * unrelated assistant already running in it.
+ *
+ * A default, not a policy. It is written with `wx`, so the moment this file
+ * exists it belongs to the user: they can turn the feature back on in the
+ * workbench and no later launch will argue. Rewriting it on every start would
+ * both override that choice and destroy every other setting they had added.
+ */
+const codeServerUserSettings = `${JSON.stringify({ 'chat.disableAIFeatures': true }, null, 2)}\n`;
+
 export function makeEditorInstallIo(): EditorInstallIoService {
   // Once per runtime, not once per call: every incarnation of every editor
   // context in this process shares the directory, and a caller that asked
@@ -215,6 +231,9 @@ export function makeEditorInstallIo(): EditorInstallIoService {
             configPath: join(providerRoot, 'config.yaml'),
           };
           await mkdir(paths.userDataPath, { recursive: true });
+          // VS Code finds this through `--user-data-dir`, so the path is not on
+          // `EditorSharedStatePaths`: nothing outside this function needs it.
+          await mkdir(join(paths.userDataPath, 'User'), { recursive: true });
           await mkdir(paths.extensionsPath, { recursive: true });
           // `0700` because on Linux this sits in world-writable `/tmp`; the
           // sockets inside it are a local control channel for the workbench.
@@ -223,6 +242,18 @@ export function makeEditorInstallIo(): EditorInstallIoService {
             // `wx` rather than an exists-check: the write either creates the file
             // or reports that someone else already did, with no window in between.
             await writeFile(paths.configPath, codeServerConfig, { encoding: 'utf8', flag: 'wx' });
+          } catch (cause) {
+            if (!isExistingFile(cause)) throw cause;
+          }
+          try {
+            await writeFile(
+              join(paths.userDataPath, 'User', 'settings.json'),
+              codeServerUserSettings,
+              {
+                encoding: 'utf8',
+                flag: 'wx',
+              },
+            );
           } catch (cause) {
             if (!isExistingFile(cause)) throw cause;
           }
