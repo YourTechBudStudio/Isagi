@@ -3,7 +3,7 @@ import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import { ptyProcesses, surfacePanes, terminalSessions } from '../persistence/schema.js';
-import type { PtyProcessRow } from '../pty-processes/index.js';
+import { ptyProcessRow } from '../pty-processes/index.js';
 import type { TerminalSessionRow } from '../surfaces/index.js';
 
 export interface TerminalSessionRepositoryService {
@@ -124,28 +124,6 @@ function terminalSessionRow(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     activePtyProcess: process ? ptyProcessRow(process) : null,
-  };
-}
-
-function ptyProcessRow(row: typeof ptyProcesses.$inferSelect): PtyProcessRow {
-  return {
-    id: row.id,
-    backend: row.backend,
-    backendRefJson: row.backendRefJson,
-    command: row.command,
-    args: decodeArgs(row.argsJson),
-    argsJson: row.argsJson,
-    cwd: row.cwd,
-    status: row.status,
-    statusReason: row.statusReason,
-    exitCode: row.exitCode,
-    signal: row.signal,
-    logMode: row.logMode,
-    logPath: row.logPath,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    exitedAt: row.exitedAt,
-    lastSeenAt: row.lastSeenAt,
   };
 }
 

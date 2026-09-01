@@ -1,6 +1,6 @@
 import { appendFileSync } from 'node:fs';
 
-import { eq, getTableColumns, inArray, type InferSelectModel } from 'drizzle-orm';
+import { eq, getTableColumns, inArray } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
@@ -11,11 +11,9 @@ import {
   worktreeCommandRuns,
   worktreeCommandStates,
 } from '../persistence/schema.js';
-import type { PtyProcessRow } from './types.js';
+import { ptyProcessRow } from './row-mapper.js';
 import { isTerminalPtyProcessStatus } from './types.js';
-import type { PtyProcessStatus, PtyProcessStatusReason } from './types.js';
-
-type PtyProcessTableRow = InferSelectModel<typeof ptyProcesses>;
+import type { PtyProcessRow, PtyProcessStatus, PtyProcessStatusReason } from './types.js';
 
 export interface PtyRepositoryService {
   readonly createProcessMetadata: (input: {
@@ -246,39 +244,6 @@ export class MissingLaunchWorktree extends Error {
 export function appendLog(path: string, data: string) {
   appendFileSync(path, data, 'utf8');
   return Buffer.byteLength(data, 'utf8');
-}
-
-function ptyProcessRow(row: PtyProcessTableRow): PtyProcessRow {
-  return {
-    id: row.id,
-    backend: row.backend,
-    backendRefJson: row.backendRefJson,
-    command: row.command,
-    args: decodeArgs(row.argsJson),
-    argsJson: row.argsJson,
-    cwd: row.cwd,
-    status: row.status,
-    statusReason: row.statusReason,
-    exitCode: row.exitCode,
-    signal: row.signal,
-    logMode: row.logMode,
-    logPath: row.logPath,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    exitedAt: row.exitedAt,
-    lastSeenAt: row.lastSeenAt,
-  };
-}
-
-function decodeArgs(json: string) {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function timestamp() {

@@ -13,7 +13,7 @@ import {
   worktreeEnvironmentStates,
   worktreeSurfaces,
 } from '../persistence/schema.js';
-import type { PtyProcessRow } from '../pty-processes/index.js';
+import { ptyProcessRow } from '../pty-processes/index.js';
 import type {
   AgentSessionRow,
   EnvironmentFocusRow,
@@ -62,29 +62,6 @@ export function paneRow(row: SurfacePaneRecord): SurfacePaneRow {
   };
 }
 
-function ptyProcessRow(row: PtyProcessRecord | null): PtyProcessRow | null {
-  if (!row) return null;
-  return {
-    id: row.id,
-    backend: row.backend,
-    backendRefJson: row.backendRefJson,
-    command: row.command,
-    args: decodeArgs(row.argsJson),
-    argsJson: row.argsJson,
-    cwd: row.cwd,
-    status: row.status,
-    statusReason: row.statusReason,
-    exitCode: row.exitCode,
-    signal: row.signal,
-    logMode: row.logMode,
-    logPath: row.logPath,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    exitedAt: row.exitedAt,
-    lastSeenAt: row.lastSeenAt,
-  };
-}
-
 export function agentSessionRow(
   artifacts: AgentSessionArtifactsService,
   row: AgentSessionRecord,
@@ -102,7 +79,7 @@ export function agentSessionRow(
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastSeenAt: row.lastSeenAt,
-      activePtyProcess: ptyProcessRow(process),
+      activePtyProcess: process ? ptyProcessRow(process) : null,
     };
   });
 }
@@ -144,7 +121,7 @@ export function terminalSessionRow(
     activePtyProcessId: row.activePtyProcessId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    activePtyProcess: ptyProcessRow(process),
+    activePtyProcess: process ? ptyProcessRow(process) : null,
   };
 }
 

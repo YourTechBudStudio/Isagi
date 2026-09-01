@@ -9,6 +9,7 @@ import {
   HarnessLedgerObserverLive,
   type AgentSessionServiceShape,
 } from '../../agent-sessions/index.js';
+import { EditorContextRepositoryLive } from '../../editor-contexts/index.js';
 import { EntityLockLive } from '../../lib/locks/entity-lock.js';
 import { DataDirectory, RuntimeDatabase, RuntimeDatabaseLive } from '../../persistence/index.js';
 import {
@@ -279,6 +280,9 @@ export function testLayer(
   );
   return Layer.mergeAll(
     database,
+    // The editor domain owns creating a context; the surfaces repository only
+    // reads and places one. Tests need the former to exercise the latter.
+    EditorContextRepositoryLive.pipe(Layer.provide(database)),
     agentSessionArtifacts,
     attentionProjection,
     internalRuntimeEventBus,

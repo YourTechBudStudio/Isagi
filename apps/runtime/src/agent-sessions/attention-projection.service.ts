@@ -11,8 +11,12 @@ import {
   terminalSessions,
   worktreeSurfaces,
 } from '../persistence/schema.js';
-import { PtyForegroundState, type PtyForegroundStateService } from '../pty-processes/index.js';
-import type { PtyProcessRow } from '../pty-processes/index.js';
+import {
+  PtyForegroundState,
+  ptyProcessRow,
+  type PtyForegroundStateService,
+  type PtyProcessRow,
+} from '../pty-processes/index.js';
 import { agentSessionRow } from '../surfaces/row-mappers.js';
 import { deriveAgentSessionState } from '../surfaces/session-status.js';
 import type { AgentSessionRow, TerminalSessionRow } from '../surfaces/types.js';
@@ -173,28 +177,6 @@ function terminalSessionRow(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     activePtyProcess: process ? ptyProcessRow(process) : null,
-  };
-}
-
-function ptyProcessRow(row: typeof ptyProcesses.$inferSelect): PtyProcessRow {
-  return {
-    id: row.id,
-    backend: row.backend,
-    backendRefJson: row.backendRefJson,
-    command: row.command,
-    args: decodeArgs(row.argsJson),
-    argsJson: row.argsJson,
-    cwd: row.cwd,
-    status: row.status,
-    statusReason: row.statusReason,
-    exitCode: row.exitCode,
-    signal: row.signal,
-    logMode: row.logMode,
-    logPath: row.logPath,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    exitedAt: row.exitedAt,
-    lastSeenAt: row.lastSeenAt,
   };
 }
 

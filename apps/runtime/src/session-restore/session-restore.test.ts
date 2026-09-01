@@ -554,6 +554,7 @@ function fakeSurfaceRepository(
     listPanesForSurface: () => Effect.die('listPanesForSurface is not used'),
     listAgentSessionsForPanes: () => Effect.die('listAgentSessionsForPanes is not used'),
     listTerminalSessionsForPanes: () => Effect.die('listTerminalSessionsForPanes is not used'),
+    listEditorContextsForPanes: () => Effect.die('listEditorContextsForPanes is not used'),
     findPaneForSession: () => Effect.die('findPaneForSession is not used'),
     findSurfaceDeleteTarget: () => Effect.die('findSurfaceDeleteTarget is not used'),
     renameSurface: () => Effect.die('renameSurface is not used'),

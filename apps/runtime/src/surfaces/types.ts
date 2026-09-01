@@ -2,6 +2,7 @@ import type {
   AgentHarness,
   AgentSessionRecoveryAction,
   AgentSessionStatusReason,
+  PaneSessionKind,
   SessionDiagnosticCode,
   SessionStatus,
   SplitPaneDirection,
@@ -23,7 +24,7 @@ export interface SurfaceMetadataRow {
   readonly id: number;
   readonly worktreeId: number;
   readonly title: string;
-  readonly paneKinds: readonly ('agent_session' | 'terminal_session')[];
+  readonly paneKinds: readonly PaneSessionKind[];
   readonly sortOrder: number;
 }
 
@@ -38,12 +39,19 @@ export interface SurfacePaneRow {
   readonly surfaceId: number;
   readonly title: string;
   readonly sortOrder: number;
-  readonly sessionKind: 'agent_session' | 'terminal_session' | null;
+  readonly sessionKind: PaneSessionKind | null;
   readonly sessionId: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
+/**
+ * Deliberately NOT `PaneSessionKind`. This is the inventory of pane-bound
+ * sessions that own a PTY incarnation the runtime relaunches and collects, and
+ * an editor context is not one of them: its incarnation is recreated on demand,
+ * not eagerly at boot. Widening this literal would silently enroll editors in
+ * session restore and session GC. That exclusion is story #8's to revisit.
+ */
 export interface PaneSessionBinding {
   readonly paneId: number;
   readonly sessionKind: 'agent_session' | 'terminal_session';
@@ -97,6 +105,19 @@ export interface DerivedTerminalSessionState {
 export interface CreateSinglePaneSurfaceInput {
   readonly worktreeId: number;
   readonly titleBase: string;
+  /**
+   * A durable entity created before the surface and bound to the new pane
+   * inside the same transaction, so surface, pane, binding, and focus commit
+   * together and no sessionless pane is ever observable.
+   *
+   * Only the editor path supplies it. Agent and terminal creation keeps its
+   * existing two-step ordering; repairing that is not this seam's job. The
+   * single-member union is deliberate: it names the one kind that may be bound
+   * this way, so no generic caller can reach transactional placement.
+   */
+  readonly initialSession?:
+    | { readonly kind: 'editor_context'; readonly sessionId: number }
+    | undefined;
 }
 
 export interface CreateSinglePaneSurfaceOutput {

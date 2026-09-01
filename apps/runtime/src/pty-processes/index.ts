@@ -20,6 +20,9 @@ export type { PtyService as PtyServiceShape } from './pty.service.js';
 // re-spelled so the two cannot drift.
 export type { DurablePtyTerminationReason } from './service/lifecycle.js';
 export { exitDetail } from './exit-detail.js';
+// The single `pty_processes` row decoder. Every domain that joins a process
+// onto its own durable entity reads it through here (ADR 0005/0008).
+export { ptyProcessRow } from './row-mapper.js';
 export type {
   BackendAttachment,
   LaunchBackendSessionInput,

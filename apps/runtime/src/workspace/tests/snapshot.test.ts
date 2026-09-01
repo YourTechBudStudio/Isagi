@@ -78,6 +78,7 @@ const testSurfaceRepository = {
   listPanesForSurface: () => Effect.succeed([]),
   listAgentSessionsForPanes: () => Effect.succeed([]),
   listTerminalSessionsForPanes: () => Effect.succeed([]),
+  listEditorContextsForPanes: () => Effect.succeed([]),
   listPaneSessionBindings: Effect.succeed([]),
   findPaneForSession: () => Effect.succeed(null),
   findSurfaceDeleteTarget: () => Effect.succeed(null),

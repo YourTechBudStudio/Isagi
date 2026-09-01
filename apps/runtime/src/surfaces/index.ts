@@ -2,10 +2,15 @@ export { registerSurfacesApi } from './api.js';
 export {
   SurfaceRepository,
   SurfaceRepositoryLive,
+  SurfaceRepositoryInitialSessionRejected,
   SurfaceRepositoryWorktreeMissing,
   duplicateSafeTitle,
 } from './surfaces.repository.js';
-export type { SurfaceOrderMoveResult, SurfaceRepositoryService } from './surfaces.repository.js';
+export type {
+  InitialSessionRejectionReason,
+  SurfaceOrderMoveResult,
+  SurfaceRepositoryService,
+} from './surfaces.repository.js';
 export {
   SurfaceError,
   SurfaceOrderError,

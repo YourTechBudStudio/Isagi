@@ -835,11 +835,10 @@ function publishDeletedPaneSessionChanges(
   panes: readonly SurfacePaneRow[],
 ) {
   return Effect.all(
-    panes.flatMap((pane) =>
-      pane.sessionKind && pane.sessionId
-        ? [publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId)]
-        : [],
-    ),
+    panes.flatMap((pane) => {
+      const kind = ptyBackedPaneSessionKind(pane.sessionKind);
+      return kind && pane.sessionId ? [publishSessionChanged(eventBus, kind, pane.sessionId)] : [];
+    }),
     { discard: true },
   );
 }
@@ -849,14 +848,26 @@ function publishReplacedPaneSessionChange(
   pane: SurfacePaneRow,
   next: { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
 ) {
-  if (
-    !pane.sessionKind ||
-    !pane.sessionId ||
-    (pane.sessionKind === next.kind && pane.sessionId === next.sessionId)
-  ) {
+  const kind = ptyBackedPaneSessionKind(pane.sessionKind);
+  if (!kind || !pane.sessionId || (kind === next.kind && pane.sessionId === next.sessionId)) {
     return Effect.void;
   }
-  return publishSessionChanged(eventBus, pane.sessionKind, pane.sessionId);
+  return publishSessionChanged(eventBus, kind, pane.sessionId);
+}
+
+/**
+ * Narrows a pane's kind to the two that this module can publish a change for.
+ *
+ * An editor pane yields `null` today because the internal
+ * `editor_context_changed` event has no publisher yet — the editor service owns
+ * it, and editor deletion cleanup is a later phase. No editor pane can exist
+ * yet, so nothing observable is dropped; when the editor domain lands, these
+ * call sites become total over three kinds rather than narrowing to two.
+ */
+function ptyBackedPaneSessionKind(
+  kind: SurfacePaneRow['sessionKind'],
+): 'agent_session' | 'terminal_session' | null {
+  return kind === 'agent_session' || kind === 'terminal_session' ? kind : null;
 }
 
 function publishSessionChanged(

@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from 'effect';
 
 import {
   surfaceLayoutNodeSchema,
+  type PaneSessionKind,
   type SurfaceLayoutNode,
   type SurfaceOrderRejectionReason,
 } from '@isagi/contracts';
@@ -11,6 +12,7 @@ import {
   AgentSessionArtifacts,
   type AgentSessionArtifactsService,
 } from '../agent-sessions/harness/ledger.js';
+import { editorContextRow, type EditorContextRow } from '../editor-contexts/index.js';
 import { compactedRankChanges, moveBefore } from '../lib/sibling-order.js';
 import {
   DatabaseError,
@@ -19,6 +21,7 @@ import {
 } from '../persistence/index.js';
 import {
   agentSessions,
+  editorContexts,
   ptyProcesses,
   surfacePanes,
   terminalSessions,
@@ -73,9 +76,17 @@ export interface SurfaceRepositoryService {
   readonly listTerminalSessionsForPanes: (
     paneIds: readonly number[],
   ) => Effect.Effect<TerminalSessionRow[], DatabaseError>;
+  /**
+   * Read composition for editor panes, shaped exactly like its terminal
+   * sibling. The editor domain owns the row and its decoder; this joins it onto
+   * panes for projection and never mutates it.
+   */
+  readonly listEditorContextsForPanes: (
+    paneIds: readonly number[],
+  ) => Effect.Effect<EditorContextRow[], DatabaseError>;
   readonly listPaneSessionBindings: Effect.Effect<PaneSessionBinding[], DatabaseError>;
   readonly findPaneForSession: (input: {
-    readonly sessionKind: 'agent_session' | 'terminal_session';
+    readonly sessionKind: PaneSessionKind;
     readonly sessionId: number;
   }) => Effect.Effect<
     { readonly worktreeId: number; readonly surfaceId: number; readonly paneId: number } | null,
@@ -136,6 +147,31 @@ export type SurfaceOrderMoveResult =
 export class SurfaceRepositoryWorktreeMissing extends Error {
   constructor(readonly worktreeId: number) {
     super(`Worktree ${worktreeId} was not found.`);
+  }
+}
+
+/**
+ * Why a transactional placement was refused. All three mean a caller reached
+ * this seam with a durable entity it had no business binding here, which the
+ * per-worktree editor lock plus a placement check before the call makes
+ * unreachable — so it is an integrity defect, never a user-facing error.
+ *
+ * `foreign_worktree` is the one worth spelling out: binding another worktree's
+ * editor context onto this surface would let a surface in one worktree project
+ * and later operate on a different worktree's durable editor.
+ */
+export type InitialSessionRejectionReason = 'missing' | 'foreign_worktree' | 'already_placed';
+
+export class SurfaceRepositoryInitialSessionRejected extends Error {
+  constructor(
+    readonly worktreeId: number,
+    readonly sessionId: number | null,
+    readonly reason: InitialSessionRejectionReason,
+  ) {
+    super(
+      `Editor context ${sessionId ?? 'unknown'} cannot be placed in worktree ${worktreeId}: ${reason}.`,
+    );
+    this.name = 'SurfaceRepositoryInitialSessionRejected';
   }
 }
 
@@ -210,6 +246,8 @@ export const SurfaceRepositoryLive = Layer.effect(
         listAgentSessionsForPanes(artifacts, database, ptyColumns, paneIds),
       listTerminalSessionsForPanes: (paneIds) =>
         listTerminalSessionsForPanes(database, ptyColumns, paneIds),
+      listEditorContextsForPanes: (paneIds) =>
+        listEditorContextsForPanes(database, ptyColumns, paneIds),
       listPaneSessionBindings: listPaneSessionBindings(database),
       findPaneForSession: (input) =>
         database.use('find_pane_for_session', (db) => {
@@ -293,37 +331,61 @@ export const SurfaceRepositoryLive = Layer.effect(
           return { deletedSurfaceId: null, deletedPaneIds: [deletedPaneId] };
         }),
       createSinglePaneSurface: (input) =>
-        database.transaction('create_single_pane_surface', (db) => {
-          const worktree = db
-            .select()
-            .from(worktrees)
-            .where(eq(worktrees.id, input.worktreeId))
-            .get();
-          if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
-          const surface = createSinglePaneSurfaceRows(db, input);
-          const now = timestamp();
-          const focus = db
-            .select({ id: worktreeEnvironmentStates.id })
-            .from(worktreeEnvironmentStates)
-            .where(eq(worktreeEnvironmentStates.worktreeId, input.worktreeId))
-            .get();
-          const focusValues = {
-            activeSurfaceId: surface.surfaceId,
-            activePaneId: surface.paneId,
-            updatedAt: now,
-          };
-          if (focus) {
-            db.update(worktreeEnvironmentStates)
-              .set(focusValues)
-              .where(eq(worktreeEnvironmentStates.id, focus.id))
-              .run();
-          } else {
-            db.insert(worktreeEnvironmentStates)
-              .values({ worktreeId: input.worktreeId, ...focusValues, createdAt: now })
-              .run();
-          }
-          return { ...surface, cwd: worktree.path };
-        }),
+        database
+          .transaction('create_single_pane_surface', (db) => {
+            const worktree = db
+              .select()
+              .from(worktrees)
+              .where(eq(worktrees.id, input.worktreeId))
+              .get();
+            if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
+            const rejection = input.initialSession
+              ? rejectInitialSession(db, input.worktreeId, input.initialSession)
+              : null;
+            // Checked before anything is inserted, so a rejection leaves no
+            // surface, pane, layout, or focus residue behind.
+            if (rejection) return { status: 'rejected' as const, reason: rejection };
+            const surface = createSinglePaneSurfaceRows(db, input);
+            const now = timestamp();
+            const focus = db
+              .select({ id: worktreeEnvironmentStates.id })
+              .from(worktreeEnvironmentStates)
+              .where(eq(worktreeEnvironmentStates.worktreeId, input.worktreeId))
+              .get();
+            const focusValues = {
+              activeSurfaceId: surface.surfaceId,
+              activePaneId: surface.paneId,
+              updatedAt: now,
+            };
+            if (focus) {
+              db.update(worktreeEnvironmentStates)
+                .set(focusValues)
+                .where(eq(worktreeEnvironmentStates.id, focus.id))
+                .run();
+            } else {
+              db.insert(worktreeEnvironmentStates)
+                .values({ worktreeId: input.worktreeId, ...focusValues, createdAt: now })
+                .run();
+            }
+            return { status: 'created' as const, output: { ...surface, cwd: worktree.path } };
+          })
+          .pipe(
+            Effect.flatMap((result) =>
+              result.status === 'created'
+                ? Effect.succeed(result.output)
+                : // Converted to a defect out here rather than thrown inside the
+                  // transaction: `database.transaction` wraps its body in
+                  // `Effect.try`, so a throw would be laundered into a
+                  // `DatabaseError` and reported as an ordinary database fault.
+                  Effect.die(
+                    new SurfaceRepositoryInitialSessionRejected(
+                      input.worktreeId,
+                      input.initialSession?.sessionId ?? null,
+                      result.reason,
+                    ),
+                  ),
+            ),
+          ),
       splitSurfacePane: (input) =>
         database.transaction('split_surface_pane', (db) => {
           const surface = db
@@ -563,7 +625,7 @@ function listWorkspaceSurfaceMetadata(database: RuntimeDatabaseService) {
     const surfaces = new Map<
       number,
       Omit<SurfaceMetadataRow, 'paneKinds'> & {
-        readonly paneKinds: ('agent_session' | 'terminal_session')[];
+        readonly paneKinds: PaneSessionKind[];
       }
     >();
     for (const row of rows) {
@@ -607,6 +669,35 @@ function listTerminalSessionsForPanes(
   });
 }
 
+function listEditorContextsForPanes(
+  database: RuntimeDatabaseService,
+  ptyColumns: ReturnType<typeof getTableColumns<typeof ptyProcesses>>,
+  paneIds: readonly number[],
+) {
+  if (paneIds.length === 0) return Effect.succeed<EditorContextRow[]>([]);
+  return database
+    .use('list_editor_contexts_for_panes', (db) =>
+      db
+        .select({ context: editorContexts, process: ptyColumns })
+        .from(surfacePanes)
+        .innerJoin(editorContexts, eq(surfacePanes.sessionId, editorContexts.id))
+        .leftJoin(ptyProcesses, eq(editorContexts.activePtyProcessId, ptyProcesses.id))
+        .where(
+          and(
+            inArray(surfacePanes.id, [...paneIds]),
+            eq(surfacePanes.sessionKind, 'editor_context'),
+          ),
+        )
+        .all(),
+    )
+    .pipe(
+      // Decoded outside `database.use` so an impossible persisted row stays a
+      // defect instead of being laundered into `DatabaseError`. The sibling
+      // readers above map inside `use` because their rows carry no invariants.
+      Effect.map((rows) => rows.map((row) => editorContextRow(row.context, row.process))),
+    );
+}
+
 function listPaneSessionBindings(database: RuntimeDatabaseService) {
   return database.use('list_pane_session_bindings', (db) =>
     db
@@ -635,6 +726,11 @@ function listPaneSessionBindings(database: RuntimeDatabaseService) {
       .where(and(isNotNull(surfacePanes.sessionKind), isNotNull(surfacePanes.sessionId)))
       .orderBy(surfacePanes.id)
       .all()
+      // Emits only the two PTY-backed kinds, and that omission is structural
+      // rather than an oversight: this inventory feeds boot-eager relaunch and
+      // session GC, and an editor context's incarnation is recreated on demand,
+      // not restored. Widening the pane-kind enum deliberately does not widen
+      // this. Whether editors ever join it is story #8's call.
       .flatMap((row): PaneSessionBinding[] => {
         if (row.sessionKind === 'agent_session' && row.sessionId !== null) {
           return [
@@ -667,6 +763,37 @@ export function duplicateSafeTitle(titleBase: string, existingTitles: readonly s
   let suffix = 2;
   while (used.has(`${titleBase} ${suffix}`)) suffix += 1;
   return `${titleBase} ${suffix}`;
+}
+
+/**
+ * The three facts that must hold before a durable entity may be bound to a new
+ * pane: it exists, it belongs to the worktree the surface is being created in,
+ * and nothing else has placed it. Returns the violated rule, or `null` when the
+ * binding is sound.
+ */
+function rejectInitialSession(
+  db: RuntimeDatabaseConnection,
+  worktreeId: number,
+  initialSession: NonNullable<CreateSinglePaneSurfaceInput['initialSession']>,
+): InitialSessionRejectionReason | null {
+  const context = db
+    .select({ worktreeId: editorContexts.worktreeId })
+    .from(editorContexts)
+    .where(eq(editorContexts.id, initialSession.sessionId))
+    .get();
+  if (!context) return 'missing';
+  if (context.worktreeId !== worktreeId) return 'foreign_worktree';
+  const placement = db
+    .select({ id: surfacePanes.id })
+    .from(surfacePanes)
+    .where(
+      and(
+        eq(surfacePanes.sessionKind, initialSession.kind),
+        eq(surfacePanes.sessionId, initialSession.sessionId),
+      ),
+    )
+    .get();
+  return placement ? 'already_placed' : null;
 }
 
 function createSinglePaneSurfaceRows(
@@ -703,8 +830,10 @@ function createSinglePaneSurfaceRows(
       surfaceId: surface.id,
       title,
       sortOrder: 0,
-      sessionKind: null,
-      sessionId: null,
+      // Written here rather than by a follow-up update, so the pane is never
+      // observable without its binding.
+      sessionKind: input.initialSession?.kind ?? null,
+      sessionId: input.initialSession?.sessionId ?? null,
       createdAt: now,
       updatedAt: now,
     })
