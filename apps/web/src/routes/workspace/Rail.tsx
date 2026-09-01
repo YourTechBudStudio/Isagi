@@ -3,6 +3,7 @@ import { AnimatePresence, LayoutGroup, motion } from 'motion/react';
 
 import { Button } from '../../components/Button.js';
 import { Overline } from '../../components/Overline.js';
+import { useEditorAvailable } from '../../lib/control-plane/queries.js';
 import { surfaceTransition } from '../../lib/motion.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
 import { modKey } from '../../lib/platform.js';
@@ -67,6 +68,7 @@ function RailBody() {
     selectSurface,
     activeSurfaceByWorktreeId,
   } = useWorkspace();
+  const editorAvailable = useEditorAvailable();
   const openPalette = usePaletteStore((state) => state.openPalette);
   const rail = useRailDragLayer();
   // One switch for every project wrapper, including the disconnected ones: a
@@ -138,6 +140,7 @@ function RailBody() {
                     <div style={rail.reflowStyle(projectsScope, project.id)}>
                       <ProjectGroup
                         project={project}
+                        editorAvailable={editorAvailable}
                         activeWorktreeId={activeWorktreeId}
                         onSelectWorktree={selectWorktree}
                         activeSurfaceByWorktreeId={activeSurfaceByWorktreeId}
