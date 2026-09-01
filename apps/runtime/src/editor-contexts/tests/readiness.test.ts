@@ -254,8 +254,9 @@ test('the default request refuses to follow a redirect off the allocated origin'
       Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
   );
 
-  // Readiness is a statement about *this* origin, so a 3xx is simply not a 2xx.
-  assert.deepEqual(outcome, { kind: 'http_status', status: 302 });
+  // Readiness is a statement about *this* origin. Naming the refusal is what
+  // separates it from an ordinary bad status the workbench happened to return.
+  assert.deepEqual(outcome, { kind: 'redirected_away' });
 });
 
 test('the default request rejects a 2xx that is not HTML', async () => {
@@ -326,4 +327,63 @@ test('the default request reports an unreachable origin as no response', async (
   );
 
   assert.deepEqual(outcome, { kind: 'no_response' });
+});
+
+/**
+ * The regression. Code Server answers `GET /` with a same-origin 302 to
+ * `?folder=…` whenever a folder was given on the command line and the query
+ * carries none — which every Isagi launch does. A probe that would not follow it
+ * reported `unreachable` after 60s for a workbench that was serving correctly,
+ * because the pane's iframe follows the redirect like any browser.
+ */
+test('the default request follows Code Server’s own same-origin redirect', async () => {
+  const outcome = await withServer(
+    (path) =>
+      path.includes('folder=')
+        ? {
+            status: 200,
+            contentType: 'text/html',
+            chunks: [`<html>${EDITOR_WORKBENCH_MARKER}</html>`],
+          }
+        : { status: 302, location: '/?folder=%2Fsome%2Fworktree', chunks: [] },
+    (origin) =>
+      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+  );
+
+  assert.deepEqual(outcome, { kind: 'ok' });
+});
+
+test('a relative redirect target resolves against the origin rather than escaping it', async () => {
+  const outcome = await withServer(
+    (path) =>
+      path === '/healthz'
+        ? { status: 302, location: 'healthz/', chunks: [] }
+        : { status: 200, contentType: 'text/plain', chunks: ['ok'] },
+    (origin) =>
+      Effect.runPromise(
+        defaultEditorProbeRequest({ url: `${origin}/healthz`, requireMarker: false }),
+      ),
+  );
+
+  assert.deepEqual(outcome, { kind: 'ok' });
+});
+
+test('a redirect loop settles on the status rather than walking forever', async () => {
+  const outcome = await withServer(
+    () => ({ status: 307, location: '/again', chunks: [] }),
+    (origin) =>
+      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+  );
+
+  assert.deepEqual(outcome, { kind: 'http_status', status: 307 });
+});
+
+test('a 3xx with no Location is reported as the status it is', async () => {
+  const outcome = await withServer(
+    () => ({ status: 303, chunks: [] }),
+    (origin) =>
+      Effect.runPromise(defaultEditorProbeRequest({ url: `${origin}/`, requireMarker: true })),
+  );
+
+  assert.deepEqual(outcome, { kind: 'http_status', status: 303 });
 });

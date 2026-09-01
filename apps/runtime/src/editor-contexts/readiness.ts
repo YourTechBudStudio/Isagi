@@ -49,6 +49,8 @@ export type EditorProbeOutcome =
   | { readonly kind: 'ok' }
   | { readonly kind: 'http_status'; readonly status: number }
   | { readonly kind: 'not_html' }
+  /** A 3xx whose `Location` left the origin this runtime allocated and bound. */
+  | { readonly kind: 'redirected_away' }
   | { readonly kind: 'marker_absent' }
   | { readonly kind: 'timed_out' }
   | { readonly kind: 'no_response' };
@@ -184,6 +186,8 @@ function describeOutcome(outcome: EditorProbeOutcome): string {
       return `http ${outcome.status}`;
     case 'not_html':
       return 'not html';
+    case 'redirected_away':
+      return 'redirected off its own origin';
     case 'marker_absent':
       return 'marker absent';
     // Our own timer, so naming it precisely is a fact we own rather than one
@@ -199,11 +203,26 @@ function describeOutcome(outcome: EditorProbeOutcome): string {
 }
 
 /**
+ * The maximum redirects the probe will follow. Code Server needs exactly one;
+ * the bound exists so a misconfigured workbench cannot turn readiness into an
+ * unbounded walk inside a request that already has its own timeout.
+ */
+const maxProbeRedirects = 3;
+
+/**
  * The real HTTP probe.
  *
- * `redirect: 'manual'` because readiness is a statement about the origin we
- * allocated. Following a redirect could satisfy the check from somewhere else
- * entirely; a 3xx simply fails the 2xx test and is reported as the status it is.
+ * `redirect: 'manual'` because readiness is a statement about the origin this
+ * runtime allocated and bound, and a followed redirect could otherwise satisfy
+ * the check from somewhere else entirely. Redirects are then followed by hand,
+ * but only while they stay on that origin — a `Location` that leaves it settles
+ * as `redirected_away` rather than being chased.
+ *
+ * Following at all is required, not a convenience. Code Server answers `GET /`
+ * with a same-origin 302 to `?folder=…` whenever a folder was given on the
+ * command line and the query carries none, which every Isagi launch does. The
+ * pane's iframe follows that redirect like any browser, so a probe that refused
+ * to would report `unreachable` for a workbench the user can see working.
  *
  * The body is never accumulated and never retained. Stage 2 searches the
  * decoded stream with a rolling overlap so a marker split across chunks still
@@ -212,23 +231,50 @@ function describeOutcome(outcome: EditorProbeOutcome): string {
 export const defaultEditorProbeRequest: EditorProbeRequest = ({ url, requireMarker }) =>
   Effect.tryPromise({
     try: async (signal): Promise<EditorProbeOutcome> => {
-      const response = await fetch(url, { signal, redirect: 'manual' });
-      if (response.status < 200 || response.status >= 300) {
-        await discardBody(response);
-        return { kind: 'http_status', status: response.status };
+      const allocatedOrigin = new URL(url).origin;
+      let target = url;
+
+      for (let hop = 0; ; hop += 1) {
+        const response = await fetch(target, { signal, redirect: 'manual' });
+
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          await discardBody(response);
+          if (!location || hop >= maxProbeRedirects) {
+            return { kind: 'http_status', status: response.status };
+          }
+          let next;
+          try {
+            next = new URL(location, target);
+          } catch {
+            // An unparseable `Location` is the server's answer being unusable,
+            // not a transport fault; the status is the honest report.
+            return { kind: 'http_status', status: response.status };
+          }
+          // The whole point of `manual`: readiness may only ever be satisfied by
+          // the origin this runtime bound.
+          if (next.origin !== allocatedOrigin) return { kind: 'redirected_away' };
+          target = next.href;
+          continue;
+        }
+
+        if (response.status < 200 || response.status >= 300) {
+          await discardBody(response);
+          return { kind: 'http_status', status: response.status };
+        }
+        if (!requireMarker) {
+          await discardBody(response);
+          return { kind: 'ok' };
+        }
+        const contentType = response.headers.get('content-type');
+        if (!contentType?.toLowerCase().includes('text/html')) {
+          await discardBody(response);
+          // The header value itself is never rendered; that it was not HTML is the
+          // whole fact.
+          return { kind: 'not_html' };
+        }
+        return (await bodyContainsMarker(response)) ? { kind: 'ok' } : { kind: 'marker_absent' };
       }
-      if (!requireMarker) {
-        await discardBody(response);
-        return { kind: 'ok' };
-      }
-      const contentType = response.headers.get('content-type');
-      if (!contentType?.toLowerCase().includes('text/html')) {
-        await discardBody(response);
-        // The header value itself is never rendered; that it was not HTML is the
-        // whole fact.
-        return { kind: 'not_html' };
-      }
-      return (await bodyContainsMarker(response)) ? { kind: 'ok' } : { kind: 'marker_absent' };
     },
     // The rejection is never inspected. `fetch` rejects with a foreign error
     // whose cause carries platform detail, and reading either would make this a
