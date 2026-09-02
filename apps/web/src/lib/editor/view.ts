@@ -32,7 +32,7 @@ export type EditorSettledReason =
   | { readonly kind: 'attempt_failed'; readonly reason: EditorAttemptFailureReason }
   | { readonly kind: 'process'; readonly diagnostic: EditorProcessDiagnostic }
   | { readonly kind: 'unreachable' }
-  /** An incarnation this runtime never observed — a restart, not a failure. */
+  /** A live pointer with no current readiness observation: uncertainty, not failure. */
   | { readonly kind: 'unknown' };
 
 /**

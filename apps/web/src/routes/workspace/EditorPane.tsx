@@ -352,7 +352,7 @@ function EditorPrompt({
   // latter explicitly keeps the recovery action clear instead of asking the
   // user to infer that a generic retry means "restart this process".
   const label =
-    view.kind === 'idle' || (view.kind === 'settled' && view.reason.kind === 'unknown')
+    view.kind === 'idle'
       ? editorCopy.action.start
       : view.reason.kind === 'attempt_failed'
         ? editorCopy.action.retry
