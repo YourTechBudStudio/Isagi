@@ -1,6 +1,6 @@
 {
   "name": "@isagi/runtime-stage-dependencies",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "External dependency boundary for the staged Isagi runtime.",
   "dependencies": {
