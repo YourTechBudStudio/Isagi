@@ -27,7 +27,6 @@ Isagi is a desktop app for resumable worktree-based development environments. El
 - It is possible that the user doesn't know or remember the code and current architecutre. So always include relevant explaination to bring the user to the same level of understanding as you. Use simple language for this to keep cognitive burden low.
 - Never hard-wrap prose in Markdown files. Keep each paragraph and list item on one source line.
 - After code changes, run `pnpm check`. Each package has its own `check` command. Use `pnpm fix` to fix formatting issues.
-- Do not run the `engineering-guidance-review` subagent when debugging, create mockups or just helping the user brainstorm.
 - Never start long running processes like servers or run `pnpm run dev` or `pnpm run start`. Instead suggest the user to run those commands instead.
 - Don't run state-changing Git commands unless the user explicitly asks; read-only Git (diffs, status, commit history, etc.) is allowed.
 - We haven't launched yet, so prefer bold refactors for better maitainability and correctness over backwards compatibility.
