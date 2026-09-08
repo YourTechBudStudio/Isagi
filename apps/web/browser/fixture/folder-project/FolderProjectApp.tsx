@@ -1,24 +1,22 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Unlink } from 'lucide-react';
-import { AnimatePresence } from 'motion/react';
 import { useEffect, useState } from 'react';
-
-import type { ProjectKind } from '@isagi/contracts';
 
 import { EmptyState } from '../../../src/components/EmptyState.js';
 import { MonoAside } from '../../../src/components/MonoAside.js';
 import { canvasCopy, missingProjectCopy } from '../../../src/copy/index.js';
+import { usePaletteStore } from '../../../src/lib/palette/store.js';
 import { queryClient } from '../../../src/lib/query/client.js';
 import { ToastProvider } from '../../../src/lib/toast/index.js';
 import { useWorkspace, useWorkspaceSelectionSync } from '../../../src/lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
-import type { MissingProject, PresentProject } from '../../../src/lib/workspace/types.js';
-import { PalettePreview } from './PalettePreview.js';
-import { RailPreview } from './RailPreview.js';
+import type { MissingProject } from '../../../src/lib/workspace/types.js';
+import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
+import { Rail } from '../../../src/routes/workspace/Rail.js';
+import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
 import { RecoveryActions } from './RecoveryActions.js';
 import { ScenarioBar } from './ScenarioBar.js';
 import { DEFAULT_SCENARIO, scenarioById, type ScenarioId } from './seed.js';
-import { StatusStripPreview } from './StatusStripPreview.js';
 
 /**
  * The folder-project fixture: full workspace chrome — rail, canvas, status strip
@@ -35,9 +33,15 @@ import { StatusStripPreview } from './StatusStripPreview.js';
  * survives its completion is a claim about `reconcileSelection`, and a fixture
  * that reimplemented selection would be testing its own reimplementation.
  *
- * What is prototyped — and owed back — is presentation only: the rail rows, the
- * strip's branch tag, the two palette commands, and the recovery panel. Each of
- * those files says which phase repays it.
+ * Presentation is no longer prototyped. Phase 07 replaced the rail, status strip
+ * and palette forks with the production `Rail`, `StatusStrip` and
+ * `CommandPalette`, so what this page shows about those three surfaces is what
+ * the app shows. The fake runtime answers the endpoints they ask for — the
+ * command catalog, surface detail and workflow descriptors — with explicit,
+ * valid, empty answers rather than suppressed errors.
+ *
+ * The recovery panel is still a prototype, and is the last one. `RecoveryActions`
+ * and `useRecheckPrototype` say which phase repays them.
  */
 export function FolderProjectApp() {
   return (
@@ -59,19 +63,13 @@ function FolderProjectBody() {
   // way back to the missing state short of a page reload — and the missing state
   // is the one worth looking at repeatedly.
   const [scenario, setScenario] = useState({ id: DEFAULT_SCENARIO as ScenarioId, run: 0 });
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [ready, setReady] = useState(false);
+  // The production palette owns its own open state, its own cmd+k handling and
+  // its own Escape. Nothing here duplicates them.
+  const openPalette = usePaletteStore((state) => state.openPalette);
 
   useWorkspaceSelectionSync();
-  const {
-    projects,
-    activeWorktree,
-    activeMissingProject,
-    activeWorktreeId,
-    selectedProjectId,
-    selectWorktree,
-    selectMissingProject,
-  } = useWorkspace();
+  const { activeWorktree, activeMissingProject } = useWorkspace();
 
   // Each scenario opens where its claim lives — a folder environment, or the
   // canvas recovery state. One owner for the whole reset: this effect returns
@@ -106,31 +104,6 @@ function FolderProjectBody() {
     };
   }, [scenario]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setPaletteOpen((open) => !open);
-        return;
-      }
-      // Only when the palette owns the press. The recovery panel's own Escape
-      // handler captures before this one, so an armed removal still backs out
-      // rather than closing something behind it.
-      if (event.key === 'Escape' && paletteOpen) setPaletteOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [paletteOpen]);
-
-  const presentProjects = projects.filter(
-    (project): project is PresentProject => project.status === 'present',
-  );
-  const missingProjects = projects.filter(
-    (project): project is MissingProject => project.status === 'missing',
-  );
-  const activeProjectKind: ProjectKind | null =
-    projects.find((project) => project.id === selectedProjectId)?.kind ?? null;
-
   return (
     <div
       data-fixture-shell
@@ -139,20 +112,14 @@ function FolderProjectBody() {
       <ScenarioBar
         scenarioId={scenario.id}
         onScenarioChange={(id) => setScenario((previous) => ({ id, run: previous.run + 1 }))}
-        onOpenPalette={() => setPaletteOpen(true)}
+        onOpenPalette={() => openPalette()}
       />
 
       <div className="relative grid min-h-0 grid-cols-[236px_1fr]">
-        {ready && (
-          <RailPreview
-            presentProjects={presentProjects}
-            missingProjects={missingProjects}
-            activeWorktreeId={activeWorktreeId}
-            selectedProjectId={selectedProjectId}
-            onSelectWorktree={selectWorktree}
-            onSelectMissingProject={selectMissingProject}
-          />
-        )}
+        {/* The production rail, with its drag engine, context menus, update
+            footer and order notices intact — the parts phase 06's prototype
+            deliberately left out and therefore could say nothing about. */}
+        {ready && <Rail />}
 
         <div className="grid min-h-0 grid-rows-[1fr_auto]">
           <div className="relative min-h-0 overflow-hidden">
@@ -176,14 +143,16 @@ function FolderProjectBody() {
             )}
           </div>
 
-          <StatusStripPreview worktree={activeWorktree} projectKind={activeProjectKind} />
+          {/* The production strip, wrapped only so a spec can scope to it. The
+              strip has no test hook of its own and must not gain one; this
+              wrapper is fixture code, matching the command-palette fixture's
+              own `data-fixture-strip`. */}
+          <div data-fixture-strip>
+            <StatusStrip />
+          </div>
         </div>
 
-        <AnimatePresence>
-          {paletteOpen && (
-            <PalettePreview projects={projects} onClose={() => setPaletteOpen(false)} />
-          )}
-        </AnimatePresence>
+        <CommandPalette />
       </div>
     </div>
   );

@@ -31,11 +31,10 @@ import type { ControlPlaneSnapshot, WorkspaceSnapshot } from '@isagi/contracts';
  * Mirrors `FOLDER_ENVIRONMENT_TITLE` in
  * `apps/runtime/src/workspace/workspace.snapshot.ts`, which is where the real
  * value lives — the title arrives from the runtime, so this constant exists only
- * because the fixture builds its own snapshots. It is a constant and not a
- * switch on purpose: the name is fixed by the product, not chosen per workspace.
- *
- * The runtime still says `default`. Changing it to match is phase 07's, along
- * with its snapshot test and the reviewed artifacts that name `default`.
+ * because the fixture builds its own snapshots and the web package does not
+ * depend on the runtime package. It is no longer a stand-in for a value the
+ * runtime disagreed with: phase 07 changed the runtime constant to match, so
+ * these two now state the same product fact in the two places that need it.
  */
 export const FOLDER_ENVIRONMENT_TITLE = 'folder';
 

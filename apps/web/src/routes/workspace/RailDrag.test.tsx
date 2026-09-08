@@ -60,7 +60,14 @@ describe('drag preview bodies', () => {
     const markup = renderToStaticMarkup(<WorktreeRowBody worktree={worktree} active={false} />);
 
     assert.match(markup, /rail drag reordering/);
-    assert.match(markup, /feat\/rail-drag/);
+    // Title over path. The Git ref left the row subtitle in phase 07 — the row
+    // title already names the branch — so the preview must not reintroduce it.
+    assert.match(markup, /\/work\/\.isagi\/wt\/rail-drag/);
+    // The absence is asserted through the separator the old treatment used to
+    // append the ref with, not by forbidding the branch string: a directory
+    // path may legitimately contain the branch's own text, and a test that
+    // banned it outright would fail on a perfectly correct row.
+    assert.doesNotMatch(markup, / · /);
     assert.doesNotMatch(markup, /<button/);
   });
 

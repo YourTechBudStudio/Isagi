@@ -188,9 +188,9 @@ test('workspace snapshots serialize worktrees for present projects', () => {
 /**
  * A folder project's one environment is named by the product, not derived from
  * Git. The Git projections below it are asserted in the same test so a change
- * that made every environment `default` could not pass.
+ * that made every environment `folder` could not pass.
  */
-test('a folder project titles its single environment default and fabricates no Git facts', () => {
+test('a folder project titles its single environment folder and fabricates no Git facts', () => {
   const folder = { ...project, id: 2, name: 'notes', kind: 'folder' as const, rootPath: '/notes' };
   const environment = {
     ...worktreeBase,
@@ -205,7 +205,7 @@ test('a folder project titles its single environment default and fabricates no G
 
   const projected = snapshot.projects[0]?.worktrees[0];
   assert.equal(projected?.title, FOLDER_ENVIRONMENT_TITLE);
-  assert.equal(projected?.title, 'default');
+  assert.equal(projected?.title, 'folder');
   assert.equal(projected?.branch, null);
   assert.equal(projected?.head, null);
   assert.equal(projected?.isRoot, true);

@@ -6,6 +6,7 @@ import {
   worktreeActionsCopy,
 } from '../../copy/index.js';
 import { activateSurface, restoreActivePaneFocus } from '../workspace/activation.js';
+import { compactHomePath } from '../workspace/selectors.js';
 import { useWorkspaceStore } from '../workspace/store.js';
 import { surfaceSummaryIcon } from '../workspace/surface-presentation.js';
 import { editorActionCommands } from './commands/editor-actions.js';
@@ -233,7 +234,13 @@ export function assembleEntries(ctx: PaletteContext): PaletteEntry[] {
         label: candidate.title,
         icon: ArrowRight,
         group: 'switch-worktree',
-        sub: `${project.name} · ${candidate.branch ?? 'detached'}`,
+        // The project, then the environment's path — never a ref. This list
+        // names *environments*, and a folder environment has no branch, so the
+        // old `?? 'detached'` fallback stated something false about it. The path
+        // also tells apart identically titled environments, which several
+        // folder projects produce by construction, and avoids reprinting a Git
+        // branch that is already this row's own label.
+        sub: `${project.name} · ${compactHomePath(candidate.path)}`,
         run: () => {
           useWorkspaceStore.getState().selectWorktree(project.id, candidate.id);
           restoreActivePaneFocus();

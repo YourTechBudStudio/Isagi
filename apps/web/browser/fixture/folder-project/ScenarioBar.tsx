@@ -90,16 +90,6 @@ export function ScenarioBar({
             </Chip>
           ))}
         </Group>
-
-        <Group label="compare">
-          <Chip
-            active={variants.showCurrent}
-            data-variant="show-current"
-            onClick={() => variants.set({ showCurrent: !variants.showCurrent })}
-          >
-            today&apos;s treatment
-          </Chip>
-        </Group>
       </div>
 
       <p className="font-mono text-[10.5px] text-fg-subtle opacity-55">{`// ${scenario.claim}`}</p>

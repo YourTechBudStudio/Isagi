@@ -3,6 +3,12 @@ import path from 'node:path';
 
 import { expect, test } from '@playwright/test';
 
+/**
+ * Targeted leak detection, not a proof of bundle purity. Each string below names
+ * a specific piece of fixture or harness code that exists today and must not
+ * reach a shipped build; a marker whose source has been deleted is removed from
+ * the list rather than kept as a comforting no-op.
+ */
 test('production bundle excludes browser fixture and deleted gallery markers', async () => {
   const root = path.resolve(import.meta.dirname, '../../dist');
   const files = await collectFiles(root);
@@ -33,12 +39,16 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('EditorTestSupportApp');
   expect(bundle).not.toContain('editorTestSupport');
   expect(bundle).not.toContain('workbench.html');
-  // The folder-project fixture prototypes presentation and recovery that phases
-  // 07 and 08 land for real. Until then none of it may reach a shipped build.
+  // The folder-project fixture now mounts the production rail, status strip and
+  // palette, so their markup is expected in a shipped build. What must not ship
+  // is the shell around them and the recovery prototype phase 08 lands for real.
+  //
+  // `data-worktree-subtitle` was dropped from this list in phase 07 along with
+  // the rail prototype that emitted it: once the only code that could have
+  // leaked a marker is deleted, asserting its absence tests nothing.
   expect(bundle).not.toContain('FolderProjectApp');
   expect(bundle).not.toContain('folderProjectFixture');
   expect(bundle).not.toContain('useRecheckPrototype');
-  expect(bundle).not.toContain('data-worktree-subtitle');
   expect(bundle).not.toContain('data-scenario');
 });
 

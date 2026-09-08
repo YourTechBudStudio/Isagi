@@ -164,6 +164,51 @@ export function installFakeRuntime() {
       return success({ findings: [] as readonly ReconciliationFinding[] });
     }
 
+    // Everything below exists because the production components mounted on this
+    // page ask for it. Each answer is an explicit, valid, *honest* one — an
+    // empty catalog rather than a suppressed error — so the surfaces render the
+    // state they would render against a real runtime with nothing configured.
+
+    // The status strip's command region. `configured` with no commands is what a
+    // worktree that configures none genuinely returns, and is what makes the
+    // strip read "Nothing running here yet." beside the ref tag under test.
+    const commandsMatch = /^\/worktrees\/(\d+)\/commands$/.exec(path);
+    if (method === 'GET' && commandsMatch) {
+      return success({
+        status: 'configured',
+        worktreeId: Number(commandsMatch[1]),
+        commands: [],
+        removedCommands: [],
+      });
+    }
+
+    // The palette reads the active surface's detail to build a workflow launch
+    // context. One pane, no session: enough to be a valid surface, nothing that
+    // would put a live process on a page that has no runtime behind it.
+    const surfaceMatch = /^\/surfaces\/(\d+)$/.exec(path);
+    const surfaceWorktreeId = surfaceMatch
+      ? worktreeIdForSurface(snapshot, Number(surfaceMatch[1]))
+      : null;
+    if (method === 'GET' && surfaceMatch && surfaceWorktreeId !== null) {
+      const surfaceId = Number(surfaceMatch[1]);
+      const paneId = surfaceId * 100 + 1;
+      return success({
+        id: surfaceId,
+        worktreeId: surfaceWorktreeId,
+        title: 'agent',
+        layout: { kind: 'leaf', nodeId: `pane-${paneId}`, paneId, collapsed: false },
+        activePaneId: paneId,
+        panes: [{ id: paneId, surfaceId, title: 'agent', sortOrder: 0, session: null }],
+      });
+    }
+
+    // No workflows are discoverable here. An empty list is a real answer; a 404
+    // would have put a discovery-failure row in the palette next to the two
+    // commands this page exists to look at.
+    if (method === 'POST' && path === '/workflows/descriptors') {
+      return success({ workflows: [] });
+    }
+
     return json(404, {
       error: {
         code: 'api_route_not_found',
@@ -221,4 +266,22 @@ function json(status: number, body: unknown) {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Which worktree a surface belongs to, read from the snapshot the page is
+ * currently serving rather than recomputed from an id convention, so a surface
+ * detail can never disagree with the workspace the rail is rendering.
+ */
+function worktreeIdForSurface(snapshot: WorkspaceSnapshot, surfaceId: number): number | null {
+  for (const project of snapshot.projects) {
+    if (project.status !== 'present') continue;
+    for (const worktree of project.worktrees) {
+      if (worktree.surfaces.some((surface) => surface.id === surfaceId)) return worktree.id;
+    }
+  }
+  // Falls through to the 404 below rather than inventing a worktree id. A
+  // surface the current snapshot does not contain is a genuine miss, and saying
+  // so beats emitting a detail that would fail its own contract decode.
+  return null;
 }

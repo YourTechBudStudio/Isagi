@@ -13,7 +13,7 @@ import {
   type CommandPresentation,
 } from '../../lib/workspace/command-attention.js';
 import { commandBadgeId, commandStripEndpoints } from '../../lib/workspace/command-ports.js';
-import { useActiveWorktree } from '../../lib/workspace/hooks.js';
+import { useActiveProjectKind, useActiveWorktree } from '../../lib/workspace/hooks.js';
 import { useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
 import { branchLabel } from '../../lib/workspace/selectors.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
@@ -38,6 +38,7 @@ type CommandChipItem = CommandSummary & {
  */
 export function StatusStrip() {
   const worktree = useActiveWorktree();
+  const projectKind = useActiveProjectKind();
   const openDrawer = useWorkspaceStore((state) => state.openDrawer);
   const commandsQuery = useWorktreeCommandsQuery(worktree?.id ?? null);
   const locality = useRuntimeLocality();
@@ -113,9 +114,12 @@ export function StatusStrip() {
         </button>
       )}
 
-      {worktree && (
+      {/* The kind is resolved before the label is formatted, never guessed. An
+          unknown kind shows nothing rather than falling through to Git
+          formatting, which would put `detached` on a folder environment. */}
+      {worktree && projectKind && branchLabel(worktree, projectKind) && (
         <span className="ml-auto flex-none font-mono text-[11.5px] text-green">
-          {branchLabel(worktree)}
+          {branchLabel(worktree, projectKind)}
         </span>
       )}
 

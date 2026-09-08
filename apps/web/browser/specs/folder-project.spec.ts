@@ -3,30 +3,75 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * The folder-project fixture: presentation, availability, and same-path recovery.
  *
- * These assert the claims the mock is supposed to make, so that a later visual
- * refinement cannot quietly drop one of them. They are not a substitute for
- * looking at the page — the design questions the fixture exists to answer are
- * decided by a human — but "the word `detached` never reaches a folder" and "a
- * failed check never reports the folder absent" are facts, and facts belong here.
+ * Since phase 07 the rail, the status strip and the palette on this page are the
+ * *production* components, so what these assert about them is what the app does.
+ * Locators are therefore production ones — roles, accessible names, `aria-current`,
+ * and the drag attributes the rail genuinely ships — never fixture-only hooks
+ * planted in production markup. The two exceptions are the scenario bar, which is
+ * fixture chrome, and `[data-fixture-strip]`, a wrapper that only scopes to the
+ * strip because the strip has no hook of its own and must not gain one.
  *
- * Scenario and variant switching goes through the on-screen chips rather than
+ * Every absence assertion is paired with a positive control that the surface it
+ * is about actually rendered. An empty locator is otherwise indistinguishable
+ * from a passing test.
+ *
+ * Scenario and outcome switching goes through the on-screen chips rather than
  * through `window.folderProjectFixture`, because those chips are the same path a
  * human uses; the fixture handle is reserved for the things no click can express.
  */
 
-const subtitle = (page: Page, worktreeId: number) =>
-  page.locator(`[data-worktree-subtitle="${worktreeId}"]`);
+/** The palette's scrim and panel, as the production tree renders them. */
+const PALETTE = 'div.fixed.inset-0.z-50 > div[tabindex="-1"]';
+
+const strip = (page: Page) => page.locator('[data-fixture-strip]');
+
+/**
+ * The status strip's ref tag, located by the production treatment that *is* the
+ * tag — the green mono span the strip renders only when there is a ref to name.
+ * Asserting on the element rather than on its text means "no tag" cannot be
+ * confused with "a tag whose text I failed to guess".
+ */
+const refTag = (page: Page) => strip(page).locator('span.text-green');
+const palette = (page: Page) => page.locator(PALETTE);
+
+/** A palette row by its visible label. */
+const paletteRow = (page: Page, label: string) =>
+  page.locator(`${PALETTE} button`).filter({ has: page.locator(`span:text-is("${label}")`) });
+
+/** A project's slice of the rail, by the drag key the production rail emits. */
+const projectGroup = (page: Page, projectId: number) =>
+  page.locator(`[data-drag-source="projects#${projectId}"]`);
+
+/** A project's worktree list, which is also its reorder scope. */
+const worktreeScope = (page: Page, projectId: number) =>
+  page.locator(`[data-drag-scope="worktrees:${projectId}"]`);
+
+/**
+ * A project's root environment row — the pinned one, which is the only row a
+ * folder project has. `data-drag-pinned` is what makes it immovable in
+ * production, so locating by it also asserts that it still is.
+ */
+const rootRow = (page: Page, projectId: number) =>
+  worktreeScope(page, projectId).locator('[data-drag-pinned]').getByRole('button').first();
+
+/** A non-root worktree row, by the drag key the production rail emits. */
+const worktreeRow = (page: Page, projectId: number, worktreeId: number) =>
+  page
+    .locator(`[data-drag-source="worktrees:${projectId}#${worktreeId}"]`)
+    .getByRole('button')
+    .first();
 
 async function scenario(page: Page, id: string) {
   await page.locator(`[data-scenario="${id}"]`).click();
 }
 
-async function variant(page: Page, id: string) {
-  await page.locator(`[data-variant="${id}"]`).click();
-}
-
 async function outcome(page: Page, id: string) {
   await page.locator(`[data-outcome="${id}"]`).click();
+}
+
+async function openPalette(page: Page) {
+  await page.keyboard.press('Meta+k');
+  await expect(palette(page)).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -38,11 +83,12 @@ test.describe('honest presentation', () => {
   test('a folder environment is titled folder and subtitled with its path', async ({ page }) => {
     await scenario(page, 'present-folder');
 
-    await expect(page.locator('[data-worktree-row="401"]')).toContainText('folder');
-    await expect(subtitle(page, 401)).toHaveText('~/Documents/notes');
+    const row = rootRow(page, 40);
+    await expect(row).toContainText('folder');
+    await expect(row).toContainText('~/Documents/notes');
     // The word `detached` is what a folder used to inherit from `gitRef`, and
     // it was false: nothing is detached, because nothing was ever attached.
-    await expect(subtitle(page, 401)).not.toContainText('detached');
+    await expect(row).not.toContainText('detached');
   });
 
   test('a Git subtitle is the path alone, with no ref repeated after it', async ({ page }) => {
@@ -50,15 +96,17 @@ test.describe('honest presentation', () => {
 
     // `worktreeTitle` returns the branch when there is one, so the row already
     // names it. Appending it again after the path printed the same string twice.
-    await expect(page.locator('[data-worktree-row="102"]')).toContainText('feat/folders');
-    await expect(subtitle(page, 102)).toHaveText('~/work/.isagi/wt/folder-projects');
-    await expect(subtitle(page, 102)).not.toContainText('feat/folders');
+    const row = worktreeRow(page, 10, 102);
+    await expect(row).toContainText('feat/folders');
+    await expect(row).toContainText('~/work/.isagi/wt/folder-projects');
+    // Exactly once, which is the whole claim.
+    expect((await row.innerText()).match(/feat\/folders/g)).toHaveLength(1);
   });
 
   test('the branch still reaches the status strip for a Git environment', async ({ page }) => {
     await scenario(page, 'git-branch');
     // Removed from the row, kept where it is load-bearing rather than repeated.
-    await expect(page.locator('[data-branch-tag]')).toHaveText('feat/folders');
+    await expect(refTag(page)).toHaveText('feat/folders');
   });
 
   test('a detached Git worktree names its commit in the strip once selected', async ({ page }) => {
@@ -66,25 +114,31 @@ test.describe('honest presentation', () => {
 
     // The narrow cost of dropping the ref from rows: a branchless worktree
     // titles itself from its basename, so its commit is not in the row at all.
-    await expect(page.locator('[data-worktree-row="202"]')).toContainText('bisect');
-    await expect(subtitle(page, 202)).toHaveText('~/work/.toph/wt/bisect');
+    const row = worktreeRow(page, 20, 202);
+    await expect(row).toContainText('bisect');
+    await expect(row).toContainText('~/work/.toph/wt/bisect');
+    await expect(row).not.toContainText('9f2c1ab');
     // It is not lost from the app, though — the strip still names it.
-    await expect(page.locator('[data-branch-tag]')).toHaveText('9f2c1ab');
+    await expect(refTag(page)).toHaveText('9f2c1ab');
   });
 
-  test('the status strip carries no branch tag for a folder environment', async ({ page }) => {
-    await scenario(page, 'present-folder');
-    await expect(page.locator('[data-branch-tag]')).toHaveCount(0);
-  });
+  test('the status strip carries no ref tag for a folder environment', async ({ page }) => {
+    // Positive control: the same locator finds exactly one tag for a Git
+    // environment, so its absence below is a rendering decision rather than a
+    // selector that matches nothing anywhere.
+    await scenario(page, 'git-branch');
+    await expect(refTag(page)).toHaveCount(1);
 
-  test("today's treatment reproduces the decoration being removed", async ({ page }) => {
     await scenario(page, 'present-folder');
-    await variant(page, 'show-current');
-
-    // The "before". If this ever stops saying `detached`, the fixture has lost
-    // its ability to show what the change is for.
-    await expect(subtitle(page, 401)).toHaveText('~/Documents/notes · detached');
-    await expect(page.locator('[data-branch-tag]')).toHaveText('detached');
+    await expect(strip(page)).toBeVisible();
+    // The production strip's own words. The deleted prototype invented
+    // "Nothing running here yet." here; `workbenchCopy.noCommandsRunning` is
+    // what the app actually says, which is the point of mounting the real one.
+    await expect(strip(page)).toContainText('// no commands running');
+    await expect(refTag(page)).toHaveCount(0);
+    // The word a folder used to inherit from `gitRef`, which was false rather
+    // than merely unhelpful.
+    await expect(strip(page)).not.toContainText('detached');
   });
 
   test('every folder environment reads the same, and its project header names it', async ({
@@ -95,12 +149,31 @@ test.describe('honest presentation', () => {
     // Three folder projects, three identically titled environments. The title is
     // a constant, so the row's own identity comes from its path and from the
     // project header above it.
-    await expect(page.locator('[data-worktree-row="401"]')).toContainText('folder');
-    await expect(page.locator('[data-worktree-row="501"]')).toContainText('folder');
-    await expect(subtitle(page, 401)).toHaveText('~/Documents/notes');
-    await expect(subtitle(page, 501)).toHaveText('~/scratch');
-    await expect(page.locator('[data-project-header="40"]')).toContainText('notes');
-    await expect(page.locator('[data-project-header="50"]')).toContainText('scratch');
+    await expect(rootRow(page, 40)).toContainText('folder');
+    await expect(rootRow(page, 50)).toContainText('folder');
+    await expect(rootRow(page, 40)).toContainText('~/Documents/notes');
+    await expect(rootRow(page, 50)).toContainText('~/scratch');
+    await expect(projectGroup(page, 40).locator('[data-project-header]')).toContainText('notes');
+    await expect(projectGroup(page, 50).locator('[data-project-header]')).toContainText('scratch');
+  });
+
+  test('the switcher lists a folder environment by path and activates it', async ({ page }) => {
+    await scenario(page, 'mixed');
+    // Start somewhere else, so activation is an observable change.
+    await worktreeRow(page, 10, 103).click();
+    await expect(worktreeRow(page, 10, 103)).toHaveAttribute('aria-current', 'true');
+
+    await openPalette(page);
+    const switchRow = paletteRow(page, 'folder');
+    await expect(switchRow).toBeVisible();
+    // The reason filtering `open-worktree` to Git costs no navigation: this
+    // group is kind-blind, and it names the path rather than a fictitious ref.
+    await expect(switchRow).toContainText('~/Documents/notes');
+    await expect(switchRow).not.toContainText('detached');
+
+    await switchRow.click();
+    await expect(palette(page)).toHaveCount(0);
+    await expect(rootRow(page, 40)).toHaveAttribute('aria-current', 'true');
   });
 });
 
@@ -121,7 +194,7 @@ test.describe('scenario switching', () => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'restores');
     await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-worktree-row="401"]')).toBeVisible();
+    await expect(rootRow(page, 40)).toBeVisible();
 
     await scenario(page, 'missing-folder');
     await expect(page.locator('[data-recheck]')).toBeVisible();
@@ -187,7 +260,7 @@ test.describe('scenario switching', () => {
     // restore writes into the fresh snapshot and this project quietly comes
     // back, leaving a "reset" scenario in a state the reset never produced.
     await expect(page.locator('[data-recheck]')).toBeVisible();
-    await expect(page.locator('[data-worktree-row="401"]')).toHaveCount(0);
+    await expect(rootRow(page, 40)).toHaveCount(0);
     await expect(page.locator('[data-verdict]')).toHaveCount(0);
   });
 
@@ -214,26 +287,55 @@ test.describe('scenario switching', () => {
 test.describe('availability', () => {
   test('only a Git project offers Open worktree in the rail', async ({ page }) => {
     await scenario(page, 'mixed');
-    await expect(page.locator('[data-open-worktree="10"]')).toHaveCount(1);
-    await expect(page.locator('[data-open-worktree="40"]')).toHaveCount(0);
+
+    // Positive control: both project groups are on screen, so the missing
+    // affordance below is a filtered one and not an unrendered rail.
+    await expect(projectGroup(page, 10)).toBeVisible();
+    await expect(projectGroup(page, 40)).toBeVisible();
+
+    await expect(projectGroup(page, 10).getByTitle('Open worktree')).toHaveCount(1);
+    await expect(projectGroup(page, 40).getByTitle('Open worktree')).toHaveCount(0);
   });
 
-  test('the palette omits folder projects from both commands', async ({ page }) => {
+  test('the palette omits folder projects from Open worktree', async ({ page }) => {
     await scenario(page, 'mixed');
-    await page.locator('[data-scenario="mixed"]').press('Meta+k');
+    await openPalette(page);
 
-    await expect(page.locator('[data-command-option="open-worktree:10"]')).toHaveCount(1);
-    await expect(page.locator('[data-command-option="open-worktree:40"]')).toHaveCount(0);
+    await paletteRow(page, 'Open worktree').click();
+    // The project step lists its targets. Matched on the option's own label
+    // span rather than on any text in the panel: a project's row prints its
+    // name *and* its path, so a loose text match resolves to two elements.
+    // The Git project is offered, which proves the step rendered at all; the
+    // folder project is not.
+    await expect(palette(page).locator('span:text-is("isagi")')).toBeVisible();
+    await expect(palette(page).locator('span:text-is("notes")')).toHaveCount(0);
   });
 
-  test('Open worktree goes unavailable in an all-folder workspace', async ({ page }) => {
+  test('Open worktree is not offered at all in an all-folder workspace', async ({ page }) => {
     await scenario(page, 'all-folder');
-    await page.locator('[data-scenario="all-folder"]').press('Meta+k');
+    await openPalette(page);
 
-    await expect(page.locator('[data-command-unavailable="open-worktree"]')).toBeVisible();
+    // Positive control: the palette is open and offering other commands, so the
+    // absence below is this command being unavailable rather than an empty list.
+    await expect(paletteRow(page, 'Add project')).toBeVisible();
+    await expect(paletteRow(page, 'Open worktree')).toHaveCount(0);
   });
 
-  test('a missing Git project keeps relocation; a missing folder does not', async ({ page }) => {
+  test('relocation is offered for a missing Git project and never for a missing folder', async ({
+    page,
+  }) => {
+    await scenario(page, 'missing-git');
+    await openPalette(page);
+    await expect(paletteRow(page, 'Set project path')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await scenario(page, 'missing-folder');
+    await openPalette(page);
+    await expect(paletteRow(page, 'Add project')).toBeVisible();
+    await expect(paletteRow(page, 'Set project path')).toHaveCount(0);
+  });
+
+  test('the recovery action matches the kind, in the canvas', async ({ page }) => {
     await scenario(page, 'missing-git');
     await expect(page.locator('[data-relocate]')).toBeVisible();
     await expect(page.locator('[data-recheck]')).toHaveCount(0);
@@ -241,6 +343,35 @@ test.describe('availability', () => {
     await scenario(page, 'missing-folder');
     await expect(page.locator('[data-recheck]')).toBeVisible();
     await expect(page.locator('[data-relocate]')).toHaveCount(0);
+  });
+
+  test('a folder environment is pinned and offers no delete', async ({ page }) => {
+    // `mixed`, not `present-folder`, so the Git control below is a real one: a
+    // workspace with no Git project would make the comparison trivially zero,
+    // which is the empty-locator trap this suite is meant to avoid.
+    await scenario(page, 'mixed');
+
+    // Pinned: it registers no drag source, so it contributes no insertion
+    // boundary and nothing can be dropped above it.
+    //
+    // Scoped to the *worktree* keys on purpose. The selected environment
+    // expands its surface list inside this same container, and surfaces are a
+    // reorder scope of their own — so a bare `[data-drag-source]` here matches
+    // a surface row and says nothing about the worktree being pinned.
+    await expect(worktreeScope(page, 40).locator('[data-drag-pinned]')).toHaveCount(1);
+    await expect(page.locator('[data-drag-source^="worktrees:40#"]')).toHaveCount(0);
+    // Positive control: the Git project in this same workspace registers a
+    // source for each of its two non-root worktrees, so the prefix genuinely
+    // matches rows and the zero above is a fact about the folder project.
+    await expect(page.locator('[data-drag-source^="worktrees:10#"]')).toHaveCount(2);
+
+    await rootRow(page, 40).click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    // The ordinary actions are still offered; only delete is absent, and it is
+    // absent because the row is root — not because of a second kind rule.
+    await expect(menu.getByRole('menuitem', { name: /terminal/i })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: /Delete/i })).toHaveCount(0);
   });
 });
 
@@ -318,7 +449,7 @@ test.describe('same-path recovery', () => {
 
     // Same project, same environment identity, back on the canvas — which is why
     // the action never has to touch selection.
-    await expect(page.locator('[data-worktree-row="401"]')).toBeVisible();
+    await expect(rootRow(page, 40)).toBeVisible();
     await expect(page.locator('[data-recheck]')).toHaveCount(0);
   });
 
@@ -331,18 +462,18 @@ test.describe('same-path recovery', () => {
 
     // Move to the other project's worktree mid-flight. Production selection
     // reconciliation must leave this alone when the fresh snapshot lands.
-    await page.locator('[data-worktree-row="102"]').click();
-    await expect(page.locator('[data-worktree-row="102"]')).toHaveAttribute('aria-current', 'true');
+    await worktreeRow(page, 10, 102).click();
+    await expect(worktreeRow(page, 10, 102)).toHaveAttribute('aria-current', 'true');
 
-    await expect(page.locator('[data-worktree-row="401"]')).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator('[data-worktree-row="102"]')).toHaveAttribute('aria-current', 'true');
+    await expect(rootRow(page, 40)).toBeVisible({ timeout: 5_000 });
+    await expect(worktreeRow(page, 10, 102)).toHaveAttribute('aria-current', 'true');
   });
 
   test('a restore is silent: the canvas swap is the entire feedback', async ({ page }) => {
     await outcome(page, 'restores');
     await page.locator('[data-recheck]').click();
 
-    await expect(page.locator('[data-worktree-row="401"]')).toBeVisible();
+    await expect(rootRow(page, 40)).toBeVisible();
     // No banner, no toast, no lingering verdict. Every outcome of this action
     // stays at the surface that started it, and the one that removes that
     // surface says nothing at all.
@@ -397,8 +528,8 @@ test.describe('keyboard access', () => {
 
   test('rail rows take focus and select without a pointer', async ({ page }) => {
     await scenario(page, 'mixed');
-    await page.locator('[data-worktree-row="103"]').focus();
+    await worktreeRow(page, 10, 103).focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('[data-worktree-row="103"]')).toHaveAttribute('aria-current', 'true');
+    await expect(worktreeRow(page, 10, 103)).toHaveAttribute('aria-current', 'true');
   });
 });

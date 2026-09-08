@@ -97,7 +97,7 @@ describe('registering an ordinary folder', () => {
 
     const environment = project.worktrees[0];
     assert.ok(environment);
-    assert.equal(environment.title, 'default');
+    assert.equal(environment.title, 'folder');
     assert.equal(environment.path, path);
     assert.equal(environment.branch, null);
     assert.equal(environment.head, null);

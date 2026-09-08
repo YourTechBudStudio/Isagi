@@ -10,7 +10,7 @@ import type { EnvironmentFocusRow, ProjectRow, SurfaceMetadataRow, WorktreeRow }
  * Git facts to derive a title from, and the directory's own basename is already
  * the project name directly above it in the rail.
  */
-export const FOLDER_ENVIRONMENT_TITLE = 'default';
+export const FOLDER_ENVIRONMENT_TITLE = 'folder';
 
 export function buildWorkspaceSnapshot(
   projects: readonly ProjectRow[],

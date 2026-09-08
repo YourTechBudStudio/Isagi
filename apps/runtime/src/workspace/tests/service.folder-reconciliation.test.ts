@@ -252,7 +252,7 @@ describe('a folder project through its whole presence lifecycle', () => {
         assert.deepEqual(yield* step('after git init', 'present'), []);
 
         const restored = yield* service.get;
-        assert.equal(restored.projects[0]?.worktrees[0]?.title, 'default');
+        assert.equal(restored.projects[0]?.worktrees[0]?.title, 'folder');
         assert.equal(restored.projects[0]?.worktrees[0]?.branch, null);
       }),
     );

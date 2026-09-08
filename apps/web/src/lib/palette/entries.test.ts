@@ -288,6 +288,91 @@ test('the editor row sits with the worktree actions, not inside the session rows
   assert.notEqual(entries[editor]?.sub, entries[terminal]?.sub);
 });
 
+/**
+ * The switcher is the palette's kind-blind route between environments, and the
+ * reason filtering `open-worktree` to Git costs no navigation.
+ */
+test('switch-worktree lists every kind and names the path, never a ref', () => {
+  const entries = assembleEntries(
+    ctx({
+      activeWorktree: null,
+      activeSurface: null,
+      projects: [
+        {
+          id: 1,
+          name: 'isagi',
+          rootPath: '/repo/isagi',
+          kind: 'git',
+          glyph: 'IS',
+          accent: 'blue',
+          status: 'present',
+          worktrees: [
+            switchable({
+              id: 11,
+              projectId: 1,
+              title: 'feat/folders',
+              path: '/repo/isagi-feat',
+              branch: 'feat/folders',
+            }),
+          ],
+        },
+        {
+          id: 40,
+          name: 'notes',
+          rootPath: '/notes',
+          kind: 'folder',
+          glyph: 'NO',
+          accent: 'green',
+          status: 'present',
+          worktrees: [switchable({ id: 401, projectId: 40, title: 'folder', path: '/notes' })],
+        },
+      ],
+    }),
+  );
+
+  const rows = entries.filter((entry) => entry.group === 'switch-worktree');
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    ['worktree:11', 'worktree:401'],
+    'both kinds are reachable from the switcher',
+  );
+
+  // A folder environment has no ref, and used to be described as `detached`.
+  assert.equal(rows[1]?.label, 'folder');
+  assert.equal(rows[1]?.sub, 'notes · /notes');
+
+  // A Git row names the path too, rather than reprinting the branch it is
+  // already labelled with.
+  assert.equal(rows[0]?.label, 'feat/folders');
+  assert.equal(rows[0]?.sub, 'isagi · /repo/isagi-feat');
+  assert.equal(
+    rows.some((row) => row.sub?.includes('detached')),
+    false,
+  );
+});
+
+function switchable(input: {
+  readonly id: number;
+  readonly projectId: number;
+  readonly title: string;
+  readonly path: string;
+  readonly branch?: string;
+}) {
+  return {
+    id: input.id,
+    projectId: input.projectId,
+    title: input.title,
+    path: input.path,
+    branch: input.branch ?? null,
+    head: null,
+    isRoot: true,
+    attention: 'idle' as const,
+    parked: false,
+    surfaces: [],
+    activeSurfaceId: null,
+  };
+}
+
 // Error-detail rows define their behavior through `run()`, which returns a
 // synchronous error `CommandOutcome`. This unwraps it and fails loudly if a row
 // is ever wired to launch (void), resolve async, or return a non-error outcome.
