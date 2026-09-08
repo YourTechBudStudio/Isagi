@@ -73,6 +73,9 @@ function discoveryGit(projectRoot: string, record: string[]): GitService {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
         const command = args.join(' ');
+        if (command.endsWith('rev-parse --is-bare-repository')) {
+          return { stdout: 'false\n', stderr: '' };
+        }
         if (command.endsWith('rev-parse --show-toplevel')) {
           return { stdout: `${projectRoot}\n`, stderr: '' };
         }

@@ -420,6 +420,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
           args,
           cause: new Error('Git failed'),
           cwd: options.cwd,
+          failure: { kind: 'exited', exitCode: 128 },
           stderr: 'fatal: not a git repository',
         }),
       ),
