@@ -19,3 +19,6 @@ apps/web/test-results/
 data/.isagi/
 scratch
 TODO.md
+
+# Disposable web prototypes; excluded from maintained fixture entries.
+apps/web/browser/playground/

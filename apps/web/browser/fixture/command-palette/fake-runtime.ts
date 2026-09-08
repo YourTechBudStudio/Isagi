@@ -2,10 +2,13 @@ import type {
   CommandLogMetadataLatestRun,
   CommandStatus,
   CommandSummary,
+  ProjectPathRejectionReason,
   WorkflowCommandManifestDto,
+  WorkspaceSnapshot,
   WorktreeCommandsOutput,
 } from '@isagi/contracts';
 
+import { createResponseGate, FIXTURE_PATH_TREE, suggestFromTree } from './path-world.js';
 import {
   FIXTURE_CATALOG,
   FIXTURE_CONTROL_FAILED_RUN,
@@ -18,24 +21,8 @@ import {
 } from './seed.js';
 
 /**
- * A runtime made of one mutable object and a `fetch` stub.
- *
- * The fixture mounts the production `CommandPalette` and `WorkbenchDrawer`, so
- * the production query observer, the production runtime client and its decoding,
- * the real run helper, and the real invalidation all execute. The only thing
- * replaced is the process at the other end of the wire.
- *
- * It applies runs for real. `POST .../commands/run` marks the command `running`
- * in this state, so the catalog read that follows *converges* on the transition
- * instead of reporting the old status and hiding a broken invalidation. Server
- * state observed after the fact is the proof a mutation happened; a recorded
- * request alone would only prove the client spoke.
- *
- * Tests steer it through `window.commandPaletteFixture` rather than through
- * on-screen controls: the palette and the drawer should be the only things on
- * this page. These are the runtime's half of that object; the fixture app owns
- * the global and merges its own store-side controls in, so there is exactly one
- * publisher.
+ * In-memory runtime behind production components, clients, and query observers.
+ * The fixture app publishes these controls on window.commandPaletteFixture.
  */
 export interface CommandPaletteRuntimeControls {
   /** Replace a worktree's catalog with a valid `configured` read. */
@@ -70,7 +57,7 @@ export interface CommandPaletteRuntimeControls {
   readonly setWorkflows: (titles: readonly string[]) => void;
   /** Reject the next run, so the palette's inline failure can be observed. */
   readonly failNextRun: () => void;
-  /** Hold every run open for `ms`, widening the in-flight window. */
+  /** Delay command responses; path/project ordering uses the response gates instead. */
   readonly setRunDelay: (ms: number) => void;
   /** Catalog reads served, in total or for one worktree. */
   readonly commandsFetchCount: (worktreeId?: number) => number;
@@ -95,6 +82,101 @@ export interface CommandPaletteRuntimeControls {
     readonly worktreeId: number;
     readonly commandName: string;
   }[];
+
+  // Request arrival, mutation, and client acknowledgement are separate observations.
+
+  /** Replace the fake directory world. Paths are in runtime spelling; see {@link ./path-world}. */
+  readonly setPathTree: (paths: readonly string[]) => void;
+  /**
+   * Hold suggestion responses instead of answering them.
+   *
+   * A held suggestion captures its result at arrival, so releasing it delivers what
+   * the tree said *then*. That is what makes a reversed-response test meaningful:
+   * the stale answer it means to exercise cannot be quietly recomputed into the
+   * fresh one.
+   */
+  readonly holdPathSuggestions: (held: boolean) => void;
+  /** Deliver one held suggestion by request id; `releasePathSuggestions()` delivers all. */
+  readonly releasePathSuggestion: (id: number) => void;
+  readonly releasePathSuggestions: () => void;
+  /** Fail the next suggestion request at the transport level. */
+  readonly failNextSuggestion: () => void;
+  /** Ordered suggestion requests the endpoint received. */
+  readonly pathSuggestionRequests: () => readonly PathSuggestionRequestRecord[];
+
+  /**
+   * Reject the next add or relocate with a structured `project_path_rejected`.
+   * A rejected request applies no mutation and inserts nothing.
+   */
+  readonly rejectNextProject: (reason: ProjectPathRejectionReason) => void;
+  /**
+   * Hold project mutation responses. The mutation is still applied at arrival — the
+   * client is waiting for an acknowledgement of something that has already happened,
+   * which is exactly the busy window a real slow runtime produces.
+   */
+  readonly holdProjectMutations: (held: boolean) => void;
+  readonly releaseProjectMutation: (id: number) => void;
+  readonly releaseProjectMutations: () => void;
+  /** Ordered add requests, each carrying what it actually did. */
+  readonly projectAddRequests: () => readonly ProjectAddRequestRecord[];
+  /** Ordered relocate requests, kept apart from adds because they target a project. */
+  readonly projectRelocateRequests: () => readonly ProjectRelocateRequestRecord[];
+  /** The fixture runtime's current project list — the server-owned mutation record. */
+  readonly fixtureProjects: () => readonly FixtureProject[];
+  /**
+   * How many workspace reads the endpoint has served.
+   *
+   * Reading {@link fixtureProjects} alone proves the fixture changed, not that the
+   * client ever went back and looked. Counting the reads is what makes an
+   * invalidation that stopped happening observable.
+   */
+  readonly workspaceFetchCount: () => number;
+}
+
+export interface PathSuggestionRequestRecord {
+  readonly id: number;
+  readonly input: string;
+  readonly limit: number | undefined;
+}
+
+/**
+ * What an add request actually did, named rather than inferred from a flag.
+ *
+ * A boolean cannot carry this. Reuse answers *successfully* and leaves the project
+ * list *untouched*, so "did it succeed" and "did the world change" are different
+ * questions with different answers. Collapsing them made exactly-once assertions
+ * read as though they counted insertions when they counted successful responses.
+ */
+export type ProjectAddOutcome =
+  /** Validation refused it: no mutation, nothing inserted. */
+  | 'rejected'
+  /** A new project was inserted. */
+  | 'inserted'
+  /** The root was already registered: its id came back and nothing was inserted. */
+  | 'reused';
+
+export interface ProjectAddRequestRecord {
+  readonly id: number;
+  readonly path: string;
+  readonly outcome: ProjectAddOutcome;
+  /** The project it resolved to, or `null` when rejected. */
+  readonly projectId: number | null;
+}
+
+export type ProjectRelocateOutcome = 'rejected' | 'relocated' | 'project_not_found';
+
+export interface ProjectRelocateRequestRecord {
+  readonly id: number;
+  readonly projectId: number;
+  readonly path: string;
+  readonly outcome: ProjectRelocateOutcome;
+}
+
+export interface FixtureProject {
+  readonly id: number;
+  readonly name: string;
+  readonly rootPath: string;
+  readonly status: 'present' | 'missing';
 }
 
 /**
@@ -129,6 +211,25 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
   let catalogUnavailable = false;
   let failNextRun = false;
   let runDelay = 0;
+
+  // Deep-copied, never the shared seed: two page loads in one browser session must
+  // not inherit each other's registrations, and a spec that inserts a project must
+  // not change what the next spec starts from.
+  const projects: FixtureMutableProject[] = structuredClone(
+    FIXTURE_SNAPSHOT.projects,
+  ) as FixtureMutableProject[];
+  let pathTree = FIXTURE_PATH_TREE;
+  let failNextSuggestion = false;
+  let rejectNextProjectReason: ProjectPathRejectionReason | null = null;
+  let nextRequestId = 1;
+  let nextProjectId = Math.max(0, ...projects.map((project) => project.id)) + 1;
+  let nextWorktreeId = 9000;
+  const suggestionGate = createResponseGate();
+  const mutationGate = createResponseGate();
+  const suggestionRequests: PathSuggestionRequestRecord[] = [];
+  let workspaceFetches = 0;
+  const addRequests: ProjectAddRequestRecord[] = [];
+  const relocateRequests: ProjectRelocateRequestRecord[] = [];
 
   window.isagi = { getRuntimeUrl: () => Promise.resolve(RUNTIME_ORIGIN) };
   const controls: CommandPaletteRuntimeControls = {
@@ -209,7 +310,54 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     },
     runRequests: () => [...runs],
     actionRequests: () => [...actions],
+
+    setPathTree: (paths) => {
+      pathTree = [...paths];
+    },
+    holdPathSuggestions: (held) => {
+      suggestionGate.hold(held);
+    },
+    releasePathSuggestion: (id) => {
+      suggestionGate.release(id);
+    },
+    releasePathSuggestions: () => {
+      suggestionGate.releaseAll();
+    },
+    failNextSuggestion: () => {
+      failNextSuggestion = true;
+    },
+    pathSuggestionRequests: () => [...suggestionRequests],
+
+    rejectNextProject: (reason) => {
+      rejectNextProjectReason = reason;
+    },
+    holdProjectMutations: (held) => {
+      mutationGate.hold(held);
+    },
+    releaseProjectMutation: (id) => {
+      mutationGate.release(id);
+    },
+    releaseProjectMutations: () => {
+      mutationGate.releaseAll();
+    },
+    projectAddRequests: () => [...addRequests],
+    projectRelocateRequests: () => [...relocateRequests],
+    workspaceFetchCount: () => workspaceFetches,
+    fixtureProjects: () =>
+      projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        rootPath: project.rootPath,
+        status: project.status,
+      })),
   };
+
+  /** One-shot, and shared by add and relocate: whichever mutation comes next is rejected. */
+  function takeProjectRejection(): ProjectPathRejectionReason | null {
+    const reason = rejectNextProjectReason;
+    rejectNextProjectReason = null;
+    return reason;
+  }
 
   const realFetch = window.fetch.bind(window);
 
@@ -223,8 +371,120 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
     const method = init?.method ?? 'GET';
     const path = url.pathname.replace('/api/v1', '');
 
-    if (method === 'GET' && path === '/workspace') return success(FIXTURE_SNAPSHOT);
+    // Served from the mutable list, so a workspace read *after* a registration
+    // converges on it. Palette closure alone would only prove the client stopped
+    // waiting, not that anything was registered.
+    if (method === 'GET' && path === '/workspace') {
+      workspaceFetches += 1;
+      return success({ projects });
+    }
     if (method === 'GET' && path === '/control-plane') return success(FIXTURE_CONTROL_PLANE);
+
+    // A successful add schedules this through `commitAddProjectSuccess`. Without
+    // the route the fixture's deliberate no-route branch would log an error on
+    // every successful registration and the reconcile would report a failure the
+    // app never had. The fixture has nothing to reconcile, so: no findings.
+    if (method === 'POST' && path === '/workspace/reconcile') return success({ findings: [] });
+
+    if (method === 'POST' && path === '/paths/suggestions') {
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        input?: string;
+        limit?: number;
+      };
+      const id = nextRequestId++;
+      // Named apart from the fetch stub's own `input` parameter, which is the URL.
+      const suggestionInput = body.input ?? '';
+      suggestionRequests.push({ id, input: suggestionInput, limit: body.limit });
+
+      // The response is decided here, at arrival, and the gate only delays its
+      // delivery. A later `setPathTree` therefore cannot rewrite an answer that has
+      // already been given — which is the whole point when a test is proving that a
+      // stale response cannot overwrite a fresher one.
+      if (failNextSuggestion) {
+        failNextSuggestion = false;
+        return suggestionGate.arrive(id, () =>
+          failure(500, 'runtime_state_file_failed', 'The fixture runtime cannot list paths.', {
+            operation: 'paths.suggestions',
+          }),
+        );
+      }
+      const output = suggestFromTree(pathTree, suggestionInput, body.limit);
+      return suggestionGate.arrive(id, () => success(output));
+    }
+
+    if (method === 'POST' && path === '/projects') {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string };
+      const id = nextRequestId++;
+      const requestedPath = body.path ?? '';
+
+      const rejection = takeProjectRejection();
+      if (rejection) {
+        addRequests.push({ id, path: requestedPath, outcome: 'rejected', projectId: null });
+        return mutationGate.arrive(id, () => projectPathRejection(rejection, requestedPath));
+      }
+
+      // Applied now, acknowledged later. Reuse is a real runtime behaviour and is
+      // modelled as one: an already-registered root answers with its existing id
+      // and inserts nothing, so a duplicate submission is invisible in the project
+      // list and visible only in this request log.
+      const existing = projects.find((project) => project.rootPath === requestedPath);
+      const projectId = existing?.id ?? nextProjectId++;
+      if (!existing) {
+        projects.push(registeredProject(projectId, requestedPath, nextWorktreeId++));
+      }
+      addRequests.push({
+        id,
+        path: requestedPath,
+        outcome: existing ? 'reused' : 'inserted',
+        projectId,
+      });
+      return mutationGate.arrive(id, () =>
+        success({ projectId, alreadyExisted: existing !== undefined }),
+      );
+    }
+
+    const relocate = /^\/projects\/(\d+)\/relocate$/.exec(path);
+    if (method === 'POST' && relocate) {
+      const projectId = Number(relocate[1]);
+      const body = JSON.parse(String(init?.body ?? '{}')) as { path?: string };
+      const id = nextRequestId++;
+      const requestedPath = body.path ?? '';
+
+      const rejection = takeProjectRejection();
+      if (rejection) {
+        relocateRequests.push({ id, projectId, path: requestedPath, outcome: 'rejected' });
+        return mutationGate.arrive(id, () => projectPathRejection(rejection, requestedPath));
+      }
+
+      // Relocation moves an existing project. Inserting one here instead would let
+      // a spec pass while the palette registered a *new* project under the guise of
+      // fixing a missing one — the exact confusion this route exists to rule out.
+      const index = projects.findIndex((project) => project.id === projectId);
+      if (index === -1) {
+        relocateRequests.push({
+          id,
+          projectId,
+          path: requestedPath,
+          outcome: 'project_not_found',
+        });
+        return mutationGate.arrive(id, () =>
+          failure(400, 'project_relocation_rejected', 'No such project in the fixture.', {
+            reason: 'project_not_found',
+            projectId,
+          }),
+        );
+      }
+      const current = projects[index]!;
+      projects[index] = {
+        id: current.id,
+        name: current.name,
+        rootPath: requestedPath,
+        status: 'present',
+        worktrees: current.worktrees,
+      };
+      relocateRequests.push({ id, projectId, path: requestedPath, outcome: 'relocated' });
+      return mutationGate.arrive(id, () => success({ projectId, findings: [] }));
+    }
     if (method === 'POST' && path === '/workflows/descriptors') {
       return success({ workflows: workflows.map((entry) => ({ ok: true, ...entry })) });
     }
@@ -299,11 +559,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
       });
     }
 
-    // Stop and restart converge the same way a run does. Stop is the affordance
-    // this phase widened: on a suspended command it clears the resume intent and
-    // the command becomes an ordinary `stopped`, with no process involved. A
-    // fixture that only recorded the request would prove the client spoke and
-    // nothing about whether the drawer then tells the truth.
+    // Apply status changes so subsequent reads expose the mutation to the client.
     const action = /^\/worktrees\/(\d+)\/commands\/(stop|restart)$/.exec(path);
     if (method === 'POST' && action) {
       const worktreeId = Number(action[1]);
@@ -337,6 +593,57 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
 
 /** The worktree the controls address unless told otherwise: the one the fixture opens on. */
 const FIXTURE_DEFAULT_WORKTREE = 12;
+
+/** The snapshot's project variant, mutable so registration and relocation can change it. */
+type FixtureMutableProject = WorkspaceSnapshot['projects'][number];
+
+/**
+ * A newly registered project, as the runtime would report it on the next read: the
+ * last path segment for a name, and a root worktree, because a project with no
+ * worktrees at all is not a shape the workspace ever produces.
+ */
+function registeredProject(
+  projectId: number,
+  rootPath: string,
+  worktreeId: number,
+): FixtureMutableProject {
+  return {
+    id: projectId,
+    name: rootPath.split('/').filter(Boolean).at(-1) ?? rootPath,
+    rootPath,
+    status: 'present',
+    worktrees: [
+      {
+        id: worktreeId,
+        projectId,
+        title: 'main',
+        path: rootPath,
+        branch: 'main',
+        head: 'abc1234',
+        isRoot: true,
+        parked: false,
+        surfaces: [],
+        activeSurfaceId: null,
+      },
+    ],
+  };
+}
+
+/**
+ * The real 400 the runtime returns when `validateProjectRoot` refuses a path. The
+ * web decodes this into its own copy from `apps/web/src/copy/errors.ts`; the
+ * fixture supplies only the code and reason, never a user-facing sentence.
+ *
+ * A fake rejection proves the *frontend's* handling of one. It proves nothing about
+ * when or in what order the runtime actually validates — that lives in
+ * `WorkspaceService.registerProject` and its own tests.
+ */
+function projectPathRejection(reason: ProjectPathRejectionReason, path: string) {
+  return failure(400, 'project_path_rejected', 'The fixture runtime refused this path.', {
+    reason,
+    path,
+  });
+}
 
 function configured(
   worktreeId: number,

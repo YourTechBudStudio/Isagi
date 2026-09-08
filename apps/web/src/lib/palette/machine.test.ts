@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { Plus } from 'lucide-react';
 
-import { initialPaletteState, paletteReducer } from './machine.js';
+import { initialPaletteState, paletteReducer, type PaletteState } from './machine.js';
 import type { PaletteCommand, PaletteContext, PaletteEntry } from './types.js';
 
 const ctx: PaletteContext = {
@@ -476,3 +476,506 @@ function fakeEntry(command: PaletteCommand | null): PaletteEntry {
     run: () => undefined,
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Story #39 — path interaction. The machine is the sole owner of the
+ * highlight, and Enter's meaning is derived from it rather than stored.
+ * ------------------------------------------------------------------ */
+
+const pathCommand = fakeCommand({
+  args: [{ kind: 'path', key: 'path', label: 'Project path' }],
+});
+const pathSpec = pathCommand.args?.[0];
+
+/** A path step with `suggestions` loaded and settled against `query`. */
+function pathStepAt(
+  query: string,
+  suggestions: readonly { label: string; path: string }[],
+): PaletteState {
+  let state = paletteReducer(initialPaletteState, {
+    type: 'autostart',
+    entryId: 'fake',
+    command: pathCommand,
+    ctx,
+    values: {},
+  });
+  if (query !== '') {
+    state = paletteReducer(state, { type: 'query-changed', query, spec: pathSpec });
+  }
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: state.stepData.attemptId,
+    suggestions,
+  });
+  return drainEffects(state);
+}
+
+/** Consume every queued effect, as the component does after each render. */
+function drainEffects(state: PaletteState): PaletteState {
+  return paletteReducer(state, {
+    type: 'effects-consumed',
+    ids: state.effects.map((effect) => effect.id),
+  });
+}
+
+function pathData(state: PaletteState) {
+  assert.equal(state.kind, 'step');
+  assert.equal(state.stepData.kind, 'path');
+  if (state.kind !== 'step' || state.stepData.kind !== 'path') throw new Error('not a path step');
+  return state.stepData;
+}
+
+const rows = [
+  { label: 'isagi', path: '/repo/isagi' },
+  { label: 'isagi-web', path: '/repo/isagi-web' },
+];
+
+test('path navigation moves the highlight and enqueues nothing', () => {
+  let state = pathStepAt('/repo/', rows);
+  assert.equal(pathData(state).highlightedIndex, null);
+
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+  assert.deepEqual(state.effects, []);
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/');
+  assert.equal(state.kind === 'step' ? state.runAttemptId : 'x', null);
+
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 1);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0, 'wraps forward');
+  state = paletteReducer(state, { type: 'path-navigate', delta: -1 });
+  assert.equal(pathData(state).highlightedIndex, 1, 'wraps backward');
+  assert.deepEqual(state.effects, [], 'no navigation ever requested anything');
+});
+
+test('backward navigation from no highlight enters at the last row', () => {
+  const state = paletteReducer(pathStepAt('/repo/', rows), { type: 'path-navigate', delta: -1 });
+  assert.equal(pathData(state).highlightedIndex, 1);
+});
+
+test('a single-row list wraps onto itself and stays an explicit highlight', () => {
+  let state = pathStepAt('/repo/', [rows[0]!]);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+  // The move is a no-op, so the reducer returns the identical state rather than
+  // re-rendering the panel — but the highlight stays set.
+  const again = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(again, state);
+  assert.equal(pathData(again).highlightedIndex, 0);
+});
+
+test('navigation over a stale or empty list is inert', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'query-changed', query: '/repo/is', spec: pathSpec });
+  state = drainEffects(state);
+  assert.equal(pathData(state).suggestionsQuery, '/repo/', 'rows are retained but stale');
+
+  const navigated = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(navigated, state);
+  assert.equal(pathData(navigated).highlightedIndex, null);
+
+  const empty = paletteReducer(pathStepAt('/repo/', []), { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(empty).highlightedIndex, null);
+});
+
+test('consuming queued effects preserves an explicit highlight', () => {
+  // Navigation enqueues nothing, so an `effects-consumed` event is not guaranteed
+  // to arrive alongside it — but one from an earlier request may still land here.
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'query-changed', query: '/repo/i', spec: pathSpec });
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: pathData(state).attemptId,
+    suggestions: rows,
+  });
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+
+  state = drainEffects(state);
+  assert.equal(pathData(state).highlightedIndex, 0, 'unrelated lifecycle events do not clear it');
+});
+
+test('a replacement result clears the highlight even at identical length', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+
+  state = paletteReducer(state, { type: 'query-changed', query: '/repo/i', spec: pathSpec });
+  assert.equal(pathData(state).highlightedIndex, null, 'the edit already cleared it');
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: pathData(state).attemptId,
+    // Same row count, different directories: an index must never re-attach.
+    suggestions: [
+      { label: 'isagi', path: '/repo/isagi' },
+      { label: 'isagi-docs', path: '/repo/isagi-docs' },
+    ],
+  });
+  assert.equal(pathData(state).highlightedIndex, null);
+});
+
+test('a late result for a superseded attempt cannot disturb an active highlight', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'query-changed', query: '/repo/i', spec: pathSpec });
+  const liveAttempt = pathData(state).attemptId;
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: liveAttempt,
+    suggestions: rows,
+  });
+  state = drainEffects(state);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+
+  const staleSuccess = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: liveAttempt - 1,
+    suggestions: [{ label: 'gone', path: '/repo/gone' }],
+  });
+  assert.equal(staleSuccess, state);
+  assert.equal(pathData(staleSuccess).highlightedIndex, 0);
+
+  const staleFailure = paletteReducer(state, {
+    type: 'paths-failed',
+    attemptId: liveAttempt - 1,
+    error: 'unreachable',
+  });
+  assert.equal(staleFailure, state);
+  assert.equal(pathData(staleFailure).error, null);
+});
+
+test('a matching listing failure clears the highlight and keeps the buffer', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, {
+    type: 'paths-failed',
+    attemptId: pathData(state).attemptId,
+    error: 'unreachable',
+  });
+  assert.equal(pathData(state).highlightedIndex, null);
+  assert.equal(pathData(state).error, 'unreachable');
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/');
+});
+
+test('Enter over a highlight accepts it, requests children, and runs nothing', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/isagi');
+  assert.equal(pathData(state).highlightedIndex, null);
+  assert.equal(state.kind === 'step' ? state.runAttemptId : 'x', null);
+  assert.equal(state.effects.length, 1);
+  assert.equal(state.effects[0]?.kind, 'suggestPaths');
+  assert.equal(
+    state.effects[0]?.kind === 'suggestPaths' ? state.effects[0].query : null,
+    '/repo/isagi',
+  );
+  // Rows stay visible and stale under the new buffer, as an edit would leave them.
+  assert.deepEqual(pathData(state).suggestions, rows);
+  assert.equal(pathData(state).suggestionsQuery, '/repo/');
+});
+
+test('the next Enter submits the accepted path exactly once', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = drainEffects(paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx }));
+
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  const runs = state.effects.filter((effect) => effect.kind === 'run');
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0]?.kind === 'run' ? runs[0].values : null, { path: '/repo/isagi' });
+  assert.notEqual(state.kind === 'step' ? state.runAttemptId : null, null);
+});
+
+test('Enter over a highlight equal to the buffer accepts without a second request', () => {
+  // Deliberately asymmetric with a click: navigating onto a row is still
+  // browsing, so Enter fills first and the Enter after it submits.
+  let state = pathStepAt('/repo/isagi', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+
+  assert.equal(pathData(state).highlightedIndex, null);
+  assert.deepEqual(state.effects, [], 'no identical request is reissued');
+  assert.equal(state.kind === 'step' ? state.runAttemptId : 'x', null);
+
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(state.effects.filter((effect) => effect.kind === 'run').length, 1);
+});
+
+test('navigating after an acceptance makes Enter accept again, even onto the same path', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = drainEffects(paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx }));
+  // Children arrive for the accepted folder, unhighlighted.
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: pathData(state).attemptId,
+    suggestions: [{ label: 'isagi', path: '/repo/isagi' }],
+  });
+  state = drainEffects(state);
+
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(state.kind === 'step' ? state.runAttemptId : 'x', null, 'accepted, not submitted');
+  assert.equal(state.effects.filter((effect) => effect.kind === 'run').length, 0);
+});
+
+test('editing after an acceptance retargets Enter at the typed value', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = drainEffects(paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx }));
+
+  state = paletteReducer(state, { type: 'query-changed', query: '/elsewhere', spec: pathSpec });
+  state = drainEffects(state);
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+
+  const runs = state.effects.filter((effect) => effect.kind === 'run');
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0]?.kind === 'run' ? runs[0].values : null, { path: '/elsewhere' });
+});
+
+test('a typed directory submits itself even once its children are listed', () => {
+  // The AC7 defect this story removes: arriving children used to auto-highlight,
+  // so Enter selected the first child instead of the folder that was typed.
+  let state = pathStepAt('/repo/isagi/', [{ label: 'apps', path: '/repo/isagi/apps' }]);
+  assert.equal(pathData(state).highlightedIndex, null);
+
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  const runs = state.effects.filter((effect) => effect.kind === 'run');
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0]?.kind === 'run' ? runs[0].values : null, { path: '/repo/isagi/' });
+});
+
+test('typed submission works while a listing is in flight or has failed', () => {
+  for (const settle of ['loading', 'failed'] as const) {
+    let state = pathStepAt('/repo/', rows);
+    state = paletteReducer(state, { type: 'query-changed', query: '/repo/isagi', spec: pathSpec });
+    if (settle === 'failed') {
+      state = paletteReducer(state, {
+        type: 'paths-failed',
+        attemptId: pathData(state).attemptId,
+        error: 'unreachable',
+      });
+    }
+    state = drainEffects(state);
+
+    state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+    const runs = state.effects.filter((effect) => effect.kind === 'run');
+    assert.equal(runs.length, 1, `${settle}: suggestions are advisory, not a gate`);
+    assert.deepEqual(runs[0]?.kind === 'run' ? runs[0].values : null, { path: '/repo/isagi' });
+  }
+});
+
+test('Enter on an empty buffer does nothing', () => {
+  const state = pathStepAt('', []);
+  const after = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(after, state);
+  assert.deepEqual(after.effects, []);
+});
+
+test('descent adopts the highlighted folder with exactly one separator', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-descend' });
+
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/isagi/');
+  assert.equal(pathData(state).highlightedIndex, null);
+  assert.equal(state.effects.length, 1);
+  assert.equal(
+    state.effects[0]?.kind === 'suggestPaths' ? state.effects[0].query : null,
+    '/repo/isagi/',
+  );
+});
+
+test('descent onto a path the buffer already holds issues no second request', () => {
+  // Root `/` and a buffer already typed with its trailing slash both land here;
+  // the equality branch handles them without a root-specific rule.
+  for (const [query, path] of [
+    ['/', '/'],
+    ['~/work/', '~/work'],
+  ] as const) {
+    let state = pathStepAt(query, [{ label: 'self', path }]);
+    state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+    state = paletteReducer(state, { type: 'path-descend' });
+
+    assert.equal(state.kind === 'step' ? state.query : null, query);
+    assert.equal(pathData(state).highlightedIndex, null);
+    assert.deepEqual(state.effects, []);
+  }
+});
+
+test('descent without a highlight is inert', () => {
+  const state = pathStepAt('/repo/', rows);
+  assert.equal(paletteReducer(state, { type: 'path-descend' }), state);
+});
+
+test('a click on a differing row accepts it; a click on an equal row submits', () => {
+  let state = pathStepAt('/repo/', rows);
+  const accepted = paletteReducer(state, {
+    type: 'path-pick',
+    index: 0,
+    command: pathCommand,
+    ctx,
+  });
+  assert.equal(accepted.kind === 'step' ? accepted.query : null, '/repo/isagi');
+  assert.equal(accepted.effects.filter((effect) => effect.kind === 'run').length, 0);
+
+  // No prior acceptance needed: equality is between path strings.
+  state = pathStepAt('/repo/isagi', rows);
+  const submitted = paletteReducer(state, {
+    type: 'path-pick',
+    index: 0,
+    command: pathCommand,
+    ctx,
+  });
+  const runs = submitted.effects.filter((effect) => effect.kind === 'run');
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0]?.kind === 'run' ? runs[0].values : null, { path: '/repo/isagi' });
+});
+
+test('clicks on stale and out-of-range rows do nothing', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = drainEffects(
+    paletteReducer(state, { type: 'query-changed', query: '/repo/i', spec: pathSpec }),
+  );
+  assert.equal(
+    paletteReducer(state, { type: 'path-pick', index: 0, command: pathCommand, ctx }),
+    state,
+  );
+
+  const fresh = pathStepAt('/repo/', rows);
+  for (const index of [-1, 2]) {
+    assert.equal(
+      paletteReducer(fresh, { type: 'path-pick', index, command: pathCommand, ctx }),
+      fresh,
+    );
+  }
+});
+
+test('a click ignores an unrelated highlight and acts on the clicked row', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-pick', index: 1, command: pathCommand, ctx });
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/isagi-web');
+  assert.equal(pathData(state).highlightedIndex, null);
+});
+
+test('acceptance that moves the buffer clears a previous submission rejection', () => {
+  // The rejection described the path that was submitted; once a different path is
+  // in the buffer it is describing something the user is no longer looking at.
+  let state = pathStepAt('/repo/notes', rows);
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  const runAttempt = state.kind === 'step' ? state.runAttemptId : null;
+  assert.notEqual(runAttempt, null);
+  state = paletteReducer(state, {
+    type: 'run-failed',
+    attemptId: runAttempt!,
+    error: 'Not a Git repository root',
+  });
+  state = drainEffects(state);
+  assert.equal(state.kind === 'step' ? state.inlineError : null, 'Not a Git repository root');
+
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(
+    state.kind === 'step' ? state.inlineError : null,
+    'Not a Git repository root',
+    'navigation alone changes nothing the rejection described',
+  );
+
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(state.kind === 'step' ? state.query : null, '/repo/isagi');
+  assert.equal(state.kind === 'step' ? state.inlineError : null, null);
+});
+
+test('acceptance of an equal path preserves both error channels', () => {
+  // It starts no new request, so neither the listing error nor the rejection has
+  // been superseded by anything.
+  let state = pathStepAt('/repo/isagi', rows);
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  const runAttempt = state.kind === 'step' ? state.runAttemptId : null;
+  state = paletteReducer(state, {
+    type: 'run-failed',
+    attemptId: runAttempt!,
+    error: 'Not a Git repository root',
+  });
+  state = paletteReducer(state, {
+    type: 'paths-failed',
+    attemptId: pathData(state).attemptId,
+    error: 'unreachable',
+  });
+  state = drainEffects(state);
+
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, null, 'a failed listing has no selectable rows');
+
+  // Restore rows so an equal-path acceptance is reachable, then accept.
+  state = paletteReducer(state, {
+    type: 'paths-loaded',
+    attemptId: pathData(state).attemptId,
+    suggestions: rows,
+  });
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(state.kind === 'step' ? state.inlineError : null, 'Not a Git repository root');
+});
+
+test('acceptance that moves the buffer supersedes a listing error too', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  assert.equal(pathData(state).error, null);
+  assert.equal(pathData(state).loading, true);
+});
+
+test('every path action is inert while a command run holds the palette', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  state = drainEffects(state);
+  const highlighted = state;
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  state = paletteReducer(state, { type: 'path-enter', command: pathCommand, ctx });
+  state = drainEffects(state);
+  assert.notEqual(state.kind === 'step' ? state.runAttemptId : null, null, 'busy');
+
+  for (const event of [
+    { type: 'path-navigate', delta: 1 },
+    { type: 'path-descend' },
+    { type: 'path-enter', command: pathCommand, ctx },
+    { type: 'path-pick', index: 0, command: pathCommand, ctx },
+  ] as const) {
+    assert.equal(paletteReducer(state, event), state, `${event.type} must not act while busy`);
+  }
+  assert.notEqual(highlighted, state);
+});
+
+test('leaving the path step discards its selection entirely', () => {
+  let state = pathStepAt('/repo/', rows);
+  state = paletteReducer(state, { type: 'path-navigate', delta: 1 });
+  assert.equal(pathData(state).highlightedIndex, 0);
+
+  // `back` out of the only argument rebuilds the palette as a search view; there
+  // is no path state left to carry a highlight.
+  const backed = paletteReducer(state, { type: 'back', command: pathCommand, ctx });
+  assert.equal(backed.kind, 'search');
+  // These two facts are what make the palette's composed snap key on return
+  // identical to the one it held before the step was entered, which is why the
+  // hook — having written nothing while the machine owned the highlight —
+  // retains its previous numeric index instead of snapping. Recorded as a
+  // deliberate, bounded consequence; the hook half is verified in the browser.
+  assert.equal(backed.kind === 'search' ? backed.query : null, '');
+  assert.equal(backed.kind === 'search' ? backed.viewKey : null, 'recent');
+
+  // Re-entering builds a fresh step rather than restoring anything.
+  const reentered = pathStepAt('/repo/', rows);
+  assert.equal(pathData(reentered).highlightedIndex, null);
+});
+
+test('path actions are ignored outside a path step', () => {
+  const search = paletteReducer(initialPaletteState, { type: 'opened' });
+  assert.equal(paletteReducer(search, { type: 'path-navigate', delta: 1 }), search);
+  assert.equal(paletteReducer(search, { type: 'path-enter', command: pathCommand, ctx }), search);
+});

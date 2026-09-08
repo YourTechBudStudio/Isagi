@@ -8,7 +8,7 @@ import type { RestartActivity } from '../../../src/routes/workspace/RestartConfi
  * without Electron.
  */
 export const INSTALLED_VERSION = '0.4.2';
-export const NEXT_VERSION = '0.4.3';
+const NEXT_VERSION = '0.4.3';
 
 export interface FixtureStateOption {
   readonly id: string;
@@ -64,7 +64,7 @@ export const STATE_OPTIONS: readonly FixtureStateOption[] = [
  */
 export const RESTART_LATENCY_MS = 400;
 
-export interface FixtureActivityOption {
+interface FixtureActivityOption {
   readonly id: string;
   readonly label: string;
   readonly activity: RestartActivity | null;

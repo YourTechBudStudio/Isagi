@@ -1,6 +1,8 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
+import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+
 import { queryClient } from '../../../src/lib/query/client.js';
 import { RuntimeLocalityContext, type RuntimeLocality } from '../../../src/lib/runtime/locality.js';
 import { registerPaneFocusTarget } from '../../../src/lib/workspace/activation.js';
@@ -9,38 +11,34 @@ import { emptyWorkspaceSelection, useWorkspaceStore } from '../../../src/lib/wor
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
 import { WorkbenchDrawer } from '../../../src/routes/workspace/WorkbenchDrawer.js';
+import {
+  WorkflowInputFlow,
+  type WorkflowInputAnswers,
+} from '../../../src/routes/workspace/WorkflowInputFlow.js';
 import type { CommandPaletteRuntimeControls } from './fake-runtime.js';
 import { FIXTURE_ORIGIN, FIXTURE_PANES } from './seed.js';
 
-/**
- * The command-palette fixture: the production `CommandPalette` and
- * `WorkbenchDrawer`, with a fake runtime behind them (see {@link ./fake-runtime}).
- *
- * Phase 01's forked palette shell, its hardcoded catalog, and its `run:`/`open:`
- * recording are gone. Anything that could still be toggled here would be a second
- * definition of how the palette behaves, and the whole point of this page is that
- * the seams between the palette, the drawer, the focus router, and the query
- * observer only exist when the real components are mounted together.
- *
- * What the page adds is the one thing the app cannot otherwise offer: registered
- * pane focus targets that count their invocations, so "the drawer kept focus" and
- * "the pane got focus back" are observable facts rather than the absence of
- * evidence.
- */
+/** Production workbench components with observable pane focus and simulated runtime controls. */
 export function CommandPaletteFixtureApp({
   runtime,
 }: {
   readonly runtime: CommandPaletteRuntimeControls;
 }) {
   const [ready, setReady] = useState(false);
-  // Locality is a client-side capability, not something the runtime serves, so
-  // it is steered here rather than through the fake runtime. Phase 05 derives
-  // the production value; until then the fixture is the only place a `local`
-  // value exists at all.
+  // Locality is a client capability, so the app owns this control.
   const [locality, setLocality] = useState<RuntimeLocality>('local');
   // Counted through a ref so the stand-in focus closures stay stable and a
   // re-render cannot lose a count that a queued animation frame just recorded.
   const paneFocusCounts = useRef<Record<number, number>>({});
+
+  // Mount shared-input regression cases on demand to avoid competing focus targets.
+  const [workflowQuestions, setWorkflowQuestions] = useState<
+    readonly WorkflowQuestionSpecDto[] | null
+  >(null);
+  const workflowEvents = useRef<{
+    submissions: WorkflowInputAnswers[];
+    backCount: number;
+  }>({ submissions: [], backCount: 0 });
 
   useEffect(() => {
     // Both sides of a worktree switch are seeded, not just the one the page
@@ -75,6 +73,12 @@ export function CommandPaletteFixtureApp({
       // fixture standing in for the invalidation a real mutation would cause.
       refetchCommands: (worktreeId = FIXTURE_ORIGIN.worktreeId) =>
         queryClient.invalidateQueries({ queryKey: worktreeCommandsQueryKey(worktreeId) }),
+      mountWorkflowQuestions: (questions) => {
+        workflowEvents.current = { submissions: [], backCount: 0 };
+        setWorkflowQuestions(questions);
+      },
+      workflowSubmissions: () => [...workflowEvents.current.submissions],
+      workflowBackCount: () => workflowEvents.current.backCount,
     };
     return () => {
       delete window.commandPaletteFixture;
@@ -104,6 +108,23 @@ export function CommandPaletteFixtureApp({
               <div data-fixture-strip className="absolute inset-x-0 bottom-0 z-10">
                 <StatusStrip />
               </div>
+              {workflowQuestions && (
+                <div
+                  data-fixture-workflow
+                  className="absolute inset-x-0 top-0 z-20 mx-auto mt-10 max-w-xl rounded-md border border-line bg-elevated"
+                >
+                  <WorkflowInputFlow
+                    questions={workflowQuestions}
+                    autoFocus
+                    onSubmit={(answers) => {
+                      workflowEvents.current.submissions.push(answers);
+                    }}
+                    onBack={() => {
+                      workflowEvents.current.backCount += 1;
+                    }}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -165,6 +186,17 @@ declare global {
       readonly setLocality: (locality: RuntimeLocality) => void;
       /** Force the always-mounted strip to re-read a catalog changed behind it. */
       readonly refetchCommands: (worktreeId?: number) => Promise<void>;
+      /**
+       * Mount the production `WorkflowInputFlow` over this page with the given
+       * questions, and reset its recorded events. Absent until called, so the
+       * palette is the only keyboard surface for every other spec — mount it with
+       * the palette closed.
+       */
+      readonly mountWorkflowQuestions: (questions: readonly WorkflowQuestionSpecDto[]) => void;
+      /** Answer sets the mounted workflow has submitted, in order. */
+      readonly workflowSubmissions: () => readonly WorkflowInputAnswers[];
+      /** How many times it asked to go back from its first step. */
+      readonly workflowBackCount: () => number;
     };
   }
 }

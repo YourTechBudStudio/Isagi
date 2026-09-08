@@ -32,18 +32,12 @@ export interface EditorRuntimeControls {
   }[];
   /** Replace the projected editor facts and let the next surface read converge. */
   readonly setEditor: (patch: Partial<EditorContextMetadata>) => void;
-  /** Hold every ensure open for `ms`, widening the in-flight window. */
-  readonly setEnsureDelay: (ms: number) => void;
   /**
    * Refuse the next ensure. `launch` produces `editor_launch_failed`, which the
    * runtime has already recorded on the context; anything else is a transient
    * client-side fact with no home in the projection.
    */
   readonly failNextEnsure: (kind: 'launch' | 'database') => void;
-  /** Refuse the next diagnostics read. */
-  readonly failNextDiagnostics: () => void;
-  /** What the ensure applies to the projection when it succeeds. */
-  readonly setEnsureResult: (patch: Partial<EditorContextMetadata>) => void;
 }
 
 const RUNTIME_ORIGIN = 'http://editor-test-support.invalid';
@@ -62,11 +56,11 @@ export const PANE_ID = 77;
  * nothing — no PTY transport is needed to stand a second pane up.
  */
 export const NEIGHBOUR_PANE_ID = 78;
-export const EDITOR_CONTEXT_ID = 7;
+const EDITOR_CONTEXT_ID = 7;
 /** Served by the fixture's own dev server, so the frame is a real cross-document load. */
-export const WORKBENCH_URL = '/test-support/editor/workbench.html';
+const WORKBENCH_URL = '/test-support/editor/workbench.html';
 
-export const IDLE_EDITOR: EditorContextMetadata = {
+const IDLE_EDITOR: EditorContextMetadata = {
   paneId: PANE_ID,
   id: EDITOR_CONTEXT_ID,
   worktreeId: WORKTREE_ID,
@@ -83,7 +77,7 @@ export const IDLE_EDITOR: EditorContextMetadata = {
   updatedAt: '2026-08-31T09:00:00.000Z',
 };
 
-export const READY_EDITOR: Partial<EditorContextMetadata> = {
+const READY_EDITOR: Partial<EditorContextMetadata> = {
   activePtyProcessId: 48120,
   processStatus: 'running',
   workbenchReadiness: 'ready',
@@ -91,7 +85,7 @@ export const READY_EDITOR: Partial<EditorContextMetadata> = {
 };
 
 /** An incarnation that started, produced output, and died. */
-export const SETTLED_EDITOR: Partial<EditorContextMetadata> = {
+const SETTLED_EDITOR: Partial<EditorContextMetadata> = {
   activePtyProcessId: 48120,
   processStatus: 'exited',
   processDiagnostic: 'exited',
@@ -131,8 +125,8 @@ export function installFakeRuntime(): EditorRuntimeControls {
   let editor: EditorContextMetadata = seed.ready
     ? { ...IDLE_EDITOR, ...READY_EDITOR }
     : IDLE_EDITOR;
-  let ensureResult: Partial<EditorContextMetadata> = seed.settled ? SETTLED_EDITOR : READY_EDITOR;
-  let ensureDelay = seed.ensureDelay;
+  const ensureResult: Partial<EditorContextMetadata> = seed.settled ? SETTLED_EDITOR : READY_EDITOR;
+  const ensureDelay = seed.ensureDelay;
   let failEnsure: 'launch' | 'database' | null = seed.failFirstEnsure;
   let failDiagnostics = seed.failFirstDiagnostics;
   const ensureRequests: { editorContextId: number; intent: string }[] = [];
@@ -146,17 +140,8 @@ export function installFakeRuntime(): EditorRuntimeControls {
     setEditor: (patch) => {
       editor = { ...editor, ...patch };
     },
-    setEnsureDelay: (ms) => {
-      ensureDelay = ms;
-    },
     failNextEnsure: (kind) => {
       failEnsure = kind;
-    },
-    failNextDiagnostics: () => {
-      failDiagnostics = true;
-    },
-    setEnsureResult: (patch) => {
-      ensureResult = patch;
     },
   };
 

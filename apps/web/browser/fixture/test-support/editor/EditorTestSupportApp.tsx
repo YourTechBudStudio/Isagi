@@ -40,10 +40,6 @@ export function EditorTestSupportApp({ runtime }: { readonly runtime: EditorRunt
   useEffect(() => {
     window.editorTestSupport = {
       ...runtime,
-      // Store-side, so it lives here rather than in the fake runtime: there is
-      // exactly one publisher of this object, following the command-palette
-      // harness.
-      clearActivePane: () => useWorkspaceStore.setState({ activePaneBySurfaceId: {} }),
       // Production reconciles a change it did not initiate through the
       // `editor_context_changed` event, which invalidates surface detail. This
       // harness has no event socket, so the invalidation is asked for directly.
@@ -117,12 +113,6 @@ function Harness() {
 declare global {
   interface Window {
     editorTestSupport?: EditorRuntimeControls & {
-      /**
-       * Put the store back to "no pane chosen". A real browser focuses the
-       * loaded frame, which is itself one of the activation paths under test,
-       * so an assertion needs a cleared starting point to be a transition.
-       */
-      readonly clearActivePane: () => void;
       /** Stand in for the `editor_context_changed` event's invalidation. */
       readonly refetchSurface: () => Promise<void>;
     };

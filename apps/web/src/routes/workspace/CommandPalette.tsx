@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useCallback, useMemo, useRef, useReducer, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 
 import type { WorkflowStartContext } from '@isagi/contracts';
 
@@ -10,6 +10,7 @@ import {
   inputFlowHasTextInput,
   inputFlowSelectableLength,
   withSelectedIndex,
+  type InputFlowPathAria,
   type InputFlowScreen,
 } from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';
@@ -73,7 +74,9 @@ function inputFlowDefaultIndex(spec: ArgSpec | null, screen: InputFlowScreen) {
   if (screen.kind === 'text') {
     return null;
   }
-  if (screen.kind === 'path' && screen.stale) {
+  if (screen.kind === 'path') {
+    // Path screens have no automatic highlight: the machine sets one only when
+    // the user explicitly navigates, so Enter means "use what I typed" until then.
     return null;
   }
   return inputFlowSelectableLength(screen) > 0 ? 0 : null;
@@ -337,8 +340,10 @@ export function CommandPalette() {
       }
     }
     if (machine.kind === 'step' && command && spec) {
-      // The highlight index is owned by the selection hook (wired below) and
-      // injected at render via `withSelectedIndex`; the shape is selection-free.
+      // The shape is selection-free; the live index is injected at render via
+      // `withSelectedIndex`. Who owns that index depends on the screen: the
+      // palette machine for path steps, the selection hook (wired below) for
+      // every other one.
       return {
         kind: 'input-flow' as const,
         screen: commandStepToInputFlowScreen({
@@ -547,32 +552,6 @@ export function CommandPalette() {
     }
   };
 
-  const acceptPath = () => {
-    if (view.kind !== 'input-flow' || view.screen.kind !== 'path') {
-      return;
-    }
-    // Shell-style: Enter fills the input with the highlighted directory rather
-    // than submitting. Press it again (buffer unchanged since the fill) to
-    // commit, or type "/" to drill into the filled path and keep navigating.
-    if (
-      machine.kind === 'step' &&
-      view.screen.value &&
-      view.screen.value === machine.lastFilledPath
-    ) {
-      acceptValue(view.screen.value, view.screen.value);
-      return;
-    }
-    const index = selectedIndexRef.current;
-    const highlighted = index === null ? undefined : view.screen.suggestions[index];
-    if (!view.screen.stale && highlighted && highlighted.path !== view.screen.value) {
-      send({ type: 'fill-path', path: highlighted.path });
-      return;
-    }
-    if (view.screen.value) {
-      acceptValue(view.screen.value, view.screen.value);
-    }
-  };
-
   const activate = () => {
     if (running) {
       return;
@@ -592,7 +571,9 @@ export function CommandPalette() {
         acceptOption(option);
       }
     } else if (view.kind === 'input-flow' && view.screen.kind === 'path') {
-      acceptPath();
+      // The reducer resolves accept-vs-submit against the state the keystroke
+      // actually lands on, so a stale render can never decide the action.
+      if (command) send({ type: 'path-enter', command, ctx });
     } else if (view.kind === 'input-flow' && view.screen.kind === 'review') {
       const choice = index === null ? undefined : view.screen.content?.choices[index];
       if (choice) {
@@ -612,21 +593,14 @@ export function CommandPalette() {
     send({ type: 'back', command: command ?? undefined, ctx });
   };
 
-  // Tab fills the buffer with the highlighted directory without submitting, so
-  // Enter afterwards commits it. Path-step only.
-  const fillPath = () => {
-    if (view.kind !== 'input-flow' || view.screen.kind !== 'path' || view.screen.stale) {
-      return;
-    }
-    const index = selectedIndexRef.current;
-    const highlighted = index === null ? undefined : view.screen.suggestions[index];
-    if (highlighted) {
-      send({ type: 'fill-path', path: highlighted.path });
-    }
-  };
+  const pathScreen = view.kind === 'input-flow' && view.screen.kind === 'path' ? view.screen : null;
+  const pathStepData =
+    machine.kind === 'step' && machine.stepData.kind === 'path' ? machine.stepData : null;
 
   // One selection engine for every navigable view (command list, input-flow
   // step, outcome actions). The workflow form drives its own copy of this hook.
+  // Path screens hand it the machine's highlight instead, so the hook holds no
+  // second index — but the call itself stays unconditional.
   const selection = useKeyboardSelection({
     length: selectableLength,
     snapKey: viewKey,
@@ -635,12 +609,41 @@ export function CommandPalette() {
     capabilities: {
       back: !running && view.kind !== 'workflow-form',
       backOnEmptyQuery: !running && command != null && view.kind !== 'workflow-form',
-      fill: !running && view.kind === 'input-flow' && view.screen.kind === 'path',
+      cycle: !running && pathScreen !== null,
+      separator: !running && pathScreen !== null,
     },
-    handlers: { onAccept: activate, onBack: back, onFill: fillPath },
+    handlers: {
+      onAccept: activate,
+      onBack: back,
+      onDescend: () => send({ type: 'path-descend' }),
+    },
+    ...(pathScreen && pathStepData
+      ? {
+          selection: {
+            index: pathStepData.highlightedIndex,
+            move: (delta: number) => send({ type: 'path-navigate', delta }),
+          },
+        }
+      : {}),
   });
   selectedIndexRef.current = selection.selectedIndex;
   const sel = selection.selectedIndex;
+
+  // The path screen's combobox/listbox ids. Minted here — unconditionally, so
+  // the hook rules hold — because a pure screen projection cannot create React
+  // ids, and both siblings must derive their relationship from the same `sel`.
+  const pathAriaBaseId = useId();
+  const pathAria: InputFlowPathAria | undefined = pathScreen
+    ? {
+        listId: `${pathAriaBaseId}-list`,
+        hintId: `${pathAriaBaseId}-hint`,
+        // Omitted whenever nothing is highlighted, which includes every stale
+        // window and every state after an edit, acceptance, or descent.
+        ...(sel !== null && !pathScreen.stale
+          ? { activeOptionId: `${pathAriaBaseId}-list-${sel}` }
+          : {}),
+      }
+    : undefined;
 
   const crumbs =
     command && machine.kind === 'step'
@@ -741,6 +744,7 @@ export function CommandPalette() {
               ) : view.kind === 'input-flow' ? (
                 <InputFlowControl
                   screen={view.screen}
+                  pathAria={pathAria}
                   autoFocus
                   onQueryChange={(nextQuery) => {
                     send({
@@ -791,14 +795,15 @@ export function CommandPalette() {
               ) : view.kind === 'input-flow' ? (
                 <InputFlowBody
                   screen={withSelectedIndex(view.screen, sel)}
+                  pathAria={pathAria}
                   onPick={(index) => {
                     if (view.screen.kind === 'select' || view.screen.kind === 'combo') {
                       const option = view.screen.options[index];
                       if (option) acceptOption(option);
                     } else if (view.screen.kind === 'path') {
-                      if (view.screen.stale) return;
-                      const suggestion = view.screen.suggestions[index];
-                      if (suggestion) acceptValue(suggestion.path, suggestion.path);
+                      // Accept-vs-submit is a path-text comparison the reducer
+                      // owns; the row index is all the component knows.
+                      if (command) send({ type: 'path-pick', index, command, ctx });
                     } else if (view.screen.kind === 'review') {
                       const choice = view.screen.content?.choices[index];
                       if (choice) acceptReviewChoice(choice);
@@ -835,6 +840,14 @@ export function CommandPalette() {
             </motion.div>
 
             <Tip
+              {...(pathScreen
+                ? {
+                    enterHint:
+                      pathScreen.enterIntent === 'accept'
+                        ? paletteCopy.tips.fill
+                        : paletteCopy.tips.use,
+                  }
+                : {})}
               mode={
                 running
                   ? 'running'

@@ -32,7 +32,7 @@ export const FIXTURE_ORIGIN = {
   surfaceId: 121,
   paneId: 1211,
 } as const;
-export const FIXTURE_DESTINATION = {
+const FIXTURE_DESTINATION = {
   projectId: 1,
   worktreeId: 13,
   surfaceId: 131,
@@ -77,17 +77,7 @@ export const FIXTURE_SURFACE_DETAILS: Readonly<Record<number, SurfaceDetail>> = 
   [FIXTURE_DESTINATION.surfaceId]: surfaceDetail(FIXTURE_DESTINATION),
 };
 
-/**
- * The catalog each worktree starts with. The origin carries one of every
- * presentation the phase-01 review approved — a startable row, a running row
- * with a port, an exited row, and a `failed` row that is still ordinary and
- * still startable — plus a fourth so the three-per-group cap is observable.
- */
-/**
- * Resolved-port fixtures speak the replacement contract: source facts plus the
- * complete URL the runtime composed. A pathless entry carries an empty `urls`
- * list — it is a real resolved port with nothing to open.
- */
+/** Runtime-composed URLs; a pathless resolved port has no URLs to open. */
 function fixturePort(
   port: number,
   urls: readonly (readonly [string, string])[] = [],
@@ -128,17 +118,7 @@ export const FIXTURE_CATALOG: Readonly<Record<number, readonly CommandSummary[]>
   [FIXTURE_DESTINATION.worktreeId]: [{ name: 'worker', status: 'idle', ports: [] }],
 };
 
-/**
- * The suspension review scenarios, applied by a test rather than served by
- * default — the catalog above is what the phase-01 palette assertions are
- * pinned to, and widening it would move counts those tests own.
- *
- * `dev` is the case a human is asked to judge first: a configured command that
- * was suspended by leaving the worktree and is still suspended after a runtime
- * restart, so nothing will start it without the user. `api` is degraded rather
- * than suspended — Isagi tried to stop it and could not — which is the one state
- * where a running command still owes the user an explanation.
- */
+/** Opt-in suspended and degraded command states; keep the default catalog stable. */
 export const FIXTURE_SUSPENDED_COMMANDS: readonly CommandSummary[] = [
   { name: 'dev', status: 'suspended', ports: [] },
   { name: 'api', status: 'running', ports: [fixturePort(5173, [['app', '/']])] },
@@ -279,12 +259,7 @@ export const FIXTURE_DENSE_PORTS: readonly CommandSummary[] = [
   },
 ];
 
-/**
- * The latest run behind `api` in the suspension scenarios: the stop attempt that
- * failed. The command is truthfully still `running`, and `process_control_failed`
- * is the reason the drawer has to voice — before this phase it had nowhere to
- * appear on a PTY-linked run at all.
- */
+/** Failed stop diagnostic for an API command that is still running. */
 export const FIXTURE_CONTROL_FAILED_RUN: CommandLogMetadataLatestRun = {
   id: 41,
   startedAt: '2026-08-19T10:41:02.000Z',
