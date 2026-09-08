@@ -2,6 +2,18 @@ import { defineConfig } from '@playwright/test';
 
 const fixturePort = 41_731;
 
+/**
+ * Run against a server somebody else started, at the same base URL.
+ *
+ * The default remains a self-starting `webServer`, which is what ordinary
+ * repository usage wants. This escape hatch exists for environments where the
+ * agent running the tests may not start a long-lived process: a human starts
+ * `node browser/fixture-server.mjs 41731` from `apps/web`, and the run attaches
+ * to it. Nothing else changes — same port, same base URLs, same projects — so a
+ * spec cannot behave differently depending on who started the server.
+ */
+const externalServer = process.env.ISAGI_BROWSER_EXTERNAL_SERVER === '1';
+
 export default defineConfig({
   testDir: './specs',
   outputDir: '../test-results',
@@ -15,12 +27,16 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: `node fixture-server.mjs ${fixturePort}`,
-    url: `http://127.0.0.1:${fixturePort}`,
-    reuseExistingServer: false,
-    timeout: 30_000,
-  },
+  ...(externalServer
+    ? {}
+    : {
+        webServer: {
+          command: `node fixture-server.mjs ${fixturePort}`,
+          url: `http://127.0.0.1:${fixturePort}`,
+          reuseExistingServer: false,
+          timeout: 30_000,
+        },
+      }),
   // The fixture bundle is multi-entry, so each project points at the page its
   // specs belong to. Without the `testMatch` filters every spec would run under
   // every project — the terminal specs twice over on the update page, and back.
@@ -56,6 +72,11 @@ export default defineConfig({
       name: 'rail-worktree-actions',
       testMatch: /rail-worktree-actions\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
+    },
+    {
+      name: 'folder-project',
+      testMatch: /folder-project\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/folder-project/` },
     },
     {
       name: 'command-palette',

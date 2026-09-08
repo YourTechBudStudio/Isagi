@@ -33,6 +33,13 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('EditorTestSupportApp');
   expect(bundle).not.toContain('editorTestSupport');
   expect(bundle).not.toContain('workbench.html');
+  // The folder-project fixture prototypes presentation and recovery that phases
+  // 07 and 08 land for real. Until then none of it may reach a shipped build.
+  expect(bundle).not.toContain('FolderProjectApp');
+  expect(bundle).not.toContain('folderProjectFixture');
+  expect(bundle).not.toContain('useRecheckPrototype');
+  expect(bundle).not.toContain('data-worktree-subtitle');
+  expect(bundle).not.toContain('data-scenario');
 });
 
 async function collectFiles(directory: string): Promise<string[]> {

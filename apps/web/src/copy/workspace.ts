@@ -47,6 +47,22 @@ export const missingProjectCopy = {
     title: 'Remove this project?',
     body: 'Isagi forgets it. Files on disk are left alone.',
   },
+  /**
+   * The folder-project recovery action. A folder project cannot be relocated,
+   * so the only honest move is to look again at the same path.
+   *
+   * Three states, three lines \u2014 and `failed` is deliberately not a variant of
+   * `stillMissing`. A check that could not be completed establishes nothing, so
+   * the surface must never report a negative answer on evidence it does not
+   * have. Working chrome, so no humour: the dry deadpan register the design
+   * system reserves for edge surfaces belongs to `aside`, not here.
+   */
+  recheck: {
+    action: 'Check again',
+    pending: 'Checking\u2026',
+    stillMissing: 'Still not there.',
+    failed: "Couldn't finish that check.",
+  },
 } as const;
 
 export const ptyCopy = {

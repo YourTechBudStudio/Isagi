@@ -7,8 +7,9 @@ import { defineConfig } from 'vite';
 /**
  * The fixture bundle is multi-entry: `/` is the terminal harness, `/update/` is
  * the update-surface gallery, `/rail-reorder/` is the rail drag playground, and
- * `/command-palette/` is the configured-commands palette section, and
- * `/test-support/editor/` is the editor-pane harness. Each entry is an isolated
+ * `/command-palette/` is the configured-commands palette section,
+ * `/folder-project/` is the folder-project presentation and recovery playground,
+ * and `/test-support/editor/` is the editor-pane harness. Each entry is an isolated
  * page built from the production sources, so nothing here reaches the shipped app
  * bundle.
  */
@@ -29,6 +30,7 @@ export default defineConfig({
         update: entry('./fixture/update/index.html'),
         railReorder: entry('./fixture/rail-reorder/index.html'),
         commandPalette: entry('./fixture/command-palette/index.html'),
+        folderProject: entry('./fixture/folder-project/index.html'),
         editorTestSupport: entry('./fixture/test-support/editor/index.html'),
         // The stand-in workbench the editor pane frames, emitted so the iframe
         // has a real document to load.
