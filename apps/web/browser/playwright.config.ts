@@ -5,6 +5,18 @@ if (!Number.isSafeInteger(fixturePort) || fixturePort < 1 || fixturePort > 65_53
   throw new RangeError('ISAGI_BROWSER_FIXTURE_PORT must be an integer from 1 to 65535');
 }
 
+/**
+ * Run against a server somebody else started, at the same base URL.
+ *
+ * The default remains a self-starting `webServer`, which is what ordinary
+ * repository usage wants. This escape hatch exists for environments where the
+ * agent running the tests may not start a long-lived process: a human starts
+ * `node browser/fixture-server.mjs 41731` from `apps/web`, and the run attaches
+ * to it. Nothing else changes — same port, same base URLs, same projects — so a
+ * spec cannot behave differently depending on who started the server.
+ */
+const externalServer = process.env.ISAGI_BROWSER_EXTERNAL_SERVER === '1';
+
 export default defineConfig({
   testDir: './specs',
   outputDir: '../test-results',
@@ -18,12 +30,16 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: `node fixture-server.mjs ${fixturePort}`,
-    url: `http://127.0.0.1:${fixturePort}`,
-    reuseExistingServer: false,
-    timeout: 30_000,
-  },
+  ...(externalServer
+    ? {}
+    : {
+        webServer: {
+          command: `node fixture-server.mjs ${fixturePort}`,
+          url: `http://127.0.0.1:${fixturePort}`,
+          reuseExistingServer: false,
+          timeout: 30_000,
+        },
+      }),
   // The fixture bundle is multi-entry, so each project points at the page its
   // specs belong to. Without the `testMatch` filters every spec would run under
   // every project — the terminal specs twice over on the update page, and back.
@@ -63,6 +79,11 @@ export default defineConfig({
     // Both palette spec files share this page and this project. The alternation is
     // anchored so each file is matched exactly once and `command-endpoints.spec.ts`
     // — which needs a clipboard permission the rest should not have — keeps its own.
+    {
+      name: 'folder-project',
+      testMatch: /folder-project\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/folder-project/` },
+    },
     {
       name: 'command-palette',
       testMatch: /command-palette(-path)?\.spec\.ts/,

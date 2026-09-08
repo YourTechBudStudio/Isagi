@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from 'effect';
 
 import type {
   DurableSessionInventory,
+  ProjectKind,
   ProjectOrderRejectionReason,
   WorktreeOrderRejectionReason,
 } from '@isagi/contracts';
@@ -90,10 +91,16 @@ export interface WorkspaceRepositoryService {
   readonly readWorktreeDeleteDiagnostics: (
     worktreeId: number,
   ) => Effect.Effect<WorktreeDeleteDiagnostics, DatabaseError>;
-  readonly insertProject: (input: {
+  /**
+   * Creates a project and, for a folder project, its sole environment as one
+   * durable unit. The caller supplies the classified kind; the repository never
+   * infers or defaults it.
+   */
+  readonly createProject: (input: {
     readonly name: string;
     readonly rootPath: string;
-  }) => Effect.Effect<number, DatabaseError>;
+    readonly kind: ProjectKind;
+  }) => Effect.Effect<ProjectRow, DatabaseError>;
   readonly listProjects: Effect.Effect<ProjectRow[], DatabaseError>;
   readonly listWorktrees: Effect.Effect<WorktreeRow[], DatabaseError>;
   readonly reconcileProjectWorktrees: (input: {
@@ -276,16 +283,20 @@ export const WorkspaceRepositoryLive = Layer.effect(
             ),
           } satisfies WorktreeDeleteDiagnostics;
         }),
-      insertProject: (input) =>
-        // A transaction, not a plain read/write pair: the appended rank is read
-        // from the same present-project set the insert then joins.
-        database.transaction('insert_project', (db) => {
+      createProject: (input) =>
+        // One transaction for the whole registration unit: the appended rank is
+        // read from the same present-project set the insert then joins, and a
+        // folder project's sole environment is created with it. The transaction
+        // is what makes this atomic — a successful registration can therefore
+        // never expose a folder project with no environment.
+        database.transaction('create_project', (db) => {
           const now = timestamp();
           const row = db
             .insert(projects)
             .values({
               name: input.name,
               rootPath: input.rootPath,
+              kind: input.kind,
               status: 'present',
               sortOrder: nextPresentProjectOrder(db),
               createdAt: now,
@@ -293,9 +304,32 @@ export const WorkspaceRepositoryLive = Layer.effect(
               lastSeenAt: now,
               missingReason: null,
             })
-            .returning({ id: projects.id })
+            .returning()
             .get();
-          return row.id;
+
+          if (input.kind === 'folder') {
+            // The runtime owns this environment: no branch, no head, and a path
+            // equal to the project root so the existing derived `isRoot` holds.
+            // It is never rediscovered and never pruned, so it is inserted
+            // directly rather than through Git worktree reconciliation, which
+            // upserts, prunes, and refreshes presence for externally discovered
+            // membership.
+            db.insert(worktrees)
+              .values({
+                projectId: row.id,
+                path: input.rootPath,
+                branch: null,
+                head: null,
+                sortOrder: nextProjectWorktreeOrder(db, row.id),
+                createdAt: now,
+                updatedAt: now,
+                firstSeenAt: now,
+                lastSeenAt: now,
+              })
+              .run();
+          }
+
+          return projectRow(row);
         }),
       listProjects: database.use<ProjectRow[]>('list_projects', (db) =>
         db
@@ -513,12 +547,23 @@ function moveProjectWorktreeOrderInTransaction(
   },
 ): WorktreeOrderMoveResult {
   const project = db
-    .select({ id: projects.id, status: projects.status, rootPath: projects.rootPath })
+    .select({
+      id: projects.id,
+      status: projects.status,
+      kind: projects.kind,
+      rootPath: projects.rootPath,
+    })
     .from(projects)
     .where(eq(projects.id, input.projectId))
     .get();
   if (!project) return { status: 'rejected', reason: 'project_not_found' };
   if (project.status !== 'present') return { status: 'rejected', reason: 'project_not_present' };
+  // Eligibility is validated here rather than in the service because this
+  // function is the sole owner of reorder validation. A folder project's single
+  // environment is not an ordered checkout list, so the refusal precedes the
+  // worktree lookup: kind is why the operation is unavailable, regardless of
+  // which worktree was named.
+  if (project.kind !== 'git') return { status: 'rejected', reason: 'worktrees_not_supported' };
 
   const source = db
     .select({ id: worktrees.id, projectId: worktrees.projectId, path: worktrees.path })
@@ -644,6 +689,7 @@ function projectRow(row: ProjectRecord): ProjectRow {
     id: row.id,
     name: row.name,
     rootPath: row.rootPath,
+    kind: row.kind,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

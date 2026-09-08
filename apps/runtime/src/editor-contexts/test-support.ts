@@ -70,9 +70,10 @@ export function testLayer(dataRoot: string) {
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
     const workspace = yield* WorkspaceRepository;
-    const projectId = yield* workspace.insertProject({
+    const { id: projectId } = yield* workspace.createProject({
       name: 'isagi',
       rootPath,
+      kind: 'git',
     });
     yield* workspace.reconcileProjectWorktrees({
       projectId,

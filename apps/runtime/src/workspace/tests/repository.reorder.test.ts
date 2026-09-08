@@ -1,25 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Layer } from 'effect';
+import { Effect } from 'effect';
 
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../../persistence/index.js';
+import { RuntimeDatabase } from '../../persistence/index.js';
 import { projects, worktrees } from '../../persistence/schema.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import {
-  WorkspaceRepository,
-  WorkspaceRepositoryLive,
-  type WorkspaceRepositoryService,
-} from '../workspace.repository.js';
+import { WorkspaceRepository } from '../workspace.repository.js';
+import { runWithDatabase } from './repository-test-support.js';
 
 /**
  * Reorder mutations validate and rewrite ranks inside one transaction, and the
@@ -30,29 +18,14 @@ import {
  * that half-applied a move would still look correct if we only checked the code.
  */
 
-function testLayer(dataRoot: string) {
-  const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
-  const repository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
-  return Layer.mergeAll(database, repository);
-}
-
-function runWithDatabase<A, E>(
-  name: string,
-  build: Effect.Effect<A, E, RuntimeDatabaseService | WorkspaceRepositoryService>,
-) {
-  const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
-  return Effect.runPromise(build.pipe(Effect.provide(testLayer(dataRoot)))).finally(() => {
-    rmSync(dataRoot, { recursive: true, force: true });
-  });
-}
-
 function insertProjects(names: readonly string[]) {
   return Effect.gen(function* () {
     const repository = yield* WorkspaceRepository;
     const ids: number[] = [];
     for (const name of names) {
-      ids.push(yield* repository.insertProject({ name, rootPath: `/repo/${name}` }));
+      ids.push(
+        (yield* repository.createProject({ name, rootPath: `/repo/${name}`, kind: 'git' })).id,
+      );
     }
     return ids;
   });
@@ -127,7 +100,7 @@ function insertProjectWithWorktrees(name: string, linkedNames: readonly string[]
   return Effect.gen(function* () {
     const repository = yield* WorkspaceRepository;
     const rootPath = `/repo/${name}`;
-    const projectId = yield* repository.insertProject({ name, rootPath });
+    const { id: projectId } = yield* repository.createProject({ name, rootPath, kind: 'git' });
     yield* repository.reconcileProjectWorktrees({
       projectId,
       discovered: [
@@ -590,9 +563,10 @@ test('a project with no root checkout treats every worktree as reorderable', asy
     'reorder-worktree-rootless',
     Effect.gen(function* () {
       const repository = yield* WorkspaceRepository;
-      const projectId = yield* repository.insertProject({
+      const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
+        kind: 'git',
       });
       // Stale or externally damaged state: nothing sits at the project root.
       yield* repository.reconcileProjectWorktrees({
@@ -610,6 +584,108 @@ test('a project with no root checkout treats every worktree as reorderable', asy
       });
       assert.deepEqual(moved, { status: 'moved' });
       return yield* listProjectWorktreeIds(projectId);
+    }),
+  );
+
+  assert.deepEqual(ids, [2, 1]);
+});
+
+/**
+ * Folder projects own exactly one runtime-created environment, so reorder is not
+ * an operation they have. The check lives here rather than in the service
+ * because this transaction is the documented sole owner of reorder validation.
+ */
+function insertFolderProject(name: string) {
+  return Effect.gen(function* () {
+    const repository = yield* WorkspaceRepository;
+    const rootPath = `/repo/${name}`;
+    const { id: projectId } = yield* repository.createProject({ name, rootPath, kind: 'folder' });
+    const owned = (yield* repository.listWorktrees).filter(
+      (worktree) => worktree.projectId === projectId,
+    );
+    assert.equal(owned.length, 1);
+    return { projectId, environmentId: owned[0]!.id };
+  });
+}
+
+test('worktree reorder reports unsupported kind rather than the root guard for a folder', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-root',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  // Not `root_worktree_fixed`: the environment does sit at the project root, but
+  // "this project has no ordered worktrees" is the more accurate reason.
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'worktrees_not_supported' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('worktree reorder reports unsupported kind ahead of an unknown folder target', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-unknown-target',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId + 999,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  // Not `worktree_not_found`: the operation is unavailable for this project
+  // regardless of which worktree was named, so kind precedes the lookup.
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'worktrees_not_supported' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('worktree reorder reports presence before kind for a missing folder project', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-missing',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      yield* repository.setProjectStatus({ id: folder.projectId, status: 'missing' });
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'project_not_present' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('project reorder stays available for folder projects', async () => {
+  const ids = await runWithDatabase(
+    'reorder-project-folder-available',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const first = yield* insertFolderProject('notes');
+      const second = yield* insertFolderProject('scratch');
+      const moved = yield* repository.moveProjectOrder({
+        projectId: second.projectId,
+        beforeProjectId: first.projectId,
+      });
+      assert.deepEqual(moved, { status: 'moved' });
+      return yield* listProjectIds();
     }),
   );
 

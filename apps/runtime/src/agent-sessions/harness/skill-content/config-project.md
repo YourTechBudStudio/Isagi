@@ -1,6 +1,6 @@
 # Project config
 
-Worktree hooks and commands, committed with the repository.
+Commands for Git and folder projects, plus worktree setup hooks for Git projects.
 
 ## The file
 
@@ -8,20 +8,13 @@ Worktree hooks and commands, committed with the repository.
 .isagi/config.yaml
 ```
 
-in the root of the user's repository. It is committed, so it applies to everyone who clones the
-project.
+in the project root, optionally committed in Git projects. Edits take effect without a restart. Changing Git worktree hooks prompts for trust again on the next creation; warn the user.
 
-Isagi re-reads this file on every operation that needs it. **Hook and command edits take effect
-immediately** - no restart. The one thing an edit to hooks does trigger is the trust prompt: Isagi
-hashes hook content and asks the user to approve it, so any change, including reordering or
-whitespace, means the user is asked again the next time they create a worktree. Warn them.
+For folder projects, configure ordinary commands normally. Worktree setup hooks and command `postCreate` do not apply; do not configure them for folder setup.
 
 ## Two roots, and which one a path is relative to
 
-Isagi creates a worktree for each branch the user works on. The **project root** is the original
-checkout. The **worktree root** is the new directory Isagi just created. Hooks exist to carry things
-from the first into the second, so the two ends of a hook are relative to different roots. Getting
-this backwards is the single most common mistake in this file.
+The **project root** is the registered directory; the **worktree root** is the target checkout. For folder projects, both are the same directory.
 
 | Field                                               | Relative to   |
 | --------------------------------------------------- | ------------- |
@@ -31,20 +24,14 @@ this backwards is the single most common mistake in this file.
 | `commands[].cwd`                                    | Worktree root |
 | `commands[].envFiles[]`                             | Worktree root |
 
-Absolute paths, and relative paths that climb out of their root, are always rejected - but not always
-at the same moment. A bad `commands[].cwd` or `envFiles[]` entry fails as soon as Isagi reads the
-command catalog. A bad hook path fails later, when the hook actually runs during worktree creation.
-So a hooks config that parses is not yet a hooks config that works, and the same is true of a hook
-`timeout` whose grammar is only checked at execution.
+Paths must stay relative to their listed root. Command paths are validated when config loads; hook paths and timeout syntax are validated when hooks run.
 
 ## Worktree hooks
 
-`worktrees.hooks.postCreate` runs in order, once, right after Isagi creates a worktree. Three kinds:
+Git-only `worktrees.hooks.postCreate` hooks run in order after new checkout creation, when trusted and enabled. Three kinds:
 
-- **`copy`** duplicates files from the project root into the worktree. Use it for files a worktree
-  needs its own copy of - `.env` files it will mutate, local caches.
-- **`symlink`** links the worktree at a path in the project root. Use it for large, shared,
-  read-mostly things - `node_modules`, model weights, build caches.
+- **`copy`** duplicates files from the project root into the worktree. Use it for files a worktree needs its own copy of - `.env` files it will mutate, local caches.
+- **`symlink`** links the worktree at a path in the project root. Use it for large, shared, read-mostly things - `node_modules`, model weights, build caches.
 - **`command`** runs a shell command in the worktree. Use it for installs, migrations, codegen.
 
 ```yaml
@@ -74,15 +61,13 @@ worktrees:
           CI: "1"
 ```
 
-`timeout` accepts values like `500ms`, `30s`, `10m`, `1h`, and defaults to `10m`. A hook that exceeds
-its timeout is terminated.
+`timeout` accepts values like `500ms`, `30s`, `10m`, `1h`, and defaults to `10m`. A hook that exceeds its timeout is terminated.
 
-Hooks tolerate extra fields: a misspelled `overwirte:` is ignored, not rejected. Read hook YAML back
-carefully after you write it.
+Hooks tolerate extra fields: a misspelled `overwirte:` is ignored, not rejected. Read hook YAML back carefully after you write it.
 
 ## Commands
 
-`commands` is a catalog of named shell commands for the project. Isagi shows them, runs them, and can start or stop them at four moments in a worktree's life.
+`commands` defines named shell commands for Git and folder environments.
 
 ```yaml
 commands:
@@ -122,8 +107,6 @@ commands:
 
 Commands run in your login shell's environment. On top of that baseline Isagi layers `envFiles[]` in order, then `env`, so a variable you set in `env` wins over the same name in an environment file, and both win over whatever your shell exported. Isagi's own runtime controls (`PORT`, `HOST`, and `ISAGI_*`) are never inherited from the runtime process, but setting any of them in `envFiles[]` or `env` works normally — a command configured with `env: { PORT: "5173" }` starts with `PORT=5173`.
 
-The lifecycle defaults are conservative, and they are asymmetric on purpose: Isagi does not start things you did not ask it to start, and does stop things when the worktree goes away.
-
 | Event        | Field   | Default |
 | ------------ | ------- | ------- |
 | `postCreate` | `start` | `false` |
@@ -131,13 +114,10 @@ The lifecycle defaults are conservative, and they are asymmetric on purpose: Isa
 | `deactivate` | `stop`  | `true`  |
 | `preDelete`  | `stop`  | `true`  |
 
-With the defaults above, a running command is stopped when you leave its worktree and recorded as suspended. When you return through a user-driven worktree activation, Isagi starts a new process incarnation for it. Resume preserves command intent, not the operating-system process.
-
-`activate.start: true` gives `dev` first-start automation: on activation it starts only when it has no prior outcome. It does not revive a command that exited, failed, or was explicitly stopped. Explicitly stopping a suspended command also clears its resume intent.
-
-After a runtime restart, Isagi does not automatically start a command with a prior outcome. A suspended command waits for manual Run or until the user returns to the worktree through a later user-driven activation.
-
-`db` starts once at creation and keeps running across worktree switches because `deactivate.stop: false` opts out of suspension.
+- `postCreate`: Git checkout creation only, after setup succeeds or is skipped; never registration or recovery.
+- `activate.start`: first-start automation only; does not revive exited, failed, or explicitly stopped commands.
+- `deactivate.stop`: suspends running commands on leaving. They resume on a user-driven return, not runtime restart; manual Stop clears resume intent.
+- `preDelete.stop: false` does not keep commands running after project removal.
 
 ### Ports and HTTP URLs
 

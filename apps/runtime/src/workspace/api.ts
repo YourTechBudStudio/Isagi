@@ -1,7 +1,7 @@
 import { Effect, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError } from '@isagi/contracts';
+import { apiEndpoints, type ApiError, type WorktreeSetupRejectionReason } from '@isagi/contracts';
 
 import { GitCommandError, ProjectPathValidationError } from '../git/index.js';
 import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
@@ -211,6 +211,7 @@ function relocationRejectionReason(error: WorkspaceError) {
     case 'project_not_missing':
     case 'project_path_already_registered':
     case 'command_cleanup_failed':
+    case 'relocation_not_supported':
       return error.code;
     default:
       return 'project_not_found';
@@ -244,6 +245,7 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'setup_trust_required':
     case 'setup_trust_mismatch':
     case 'command_cleanup_failed':
+    case 'worktrees_not_supported':
       return error.code;
     default:
       return 'project_not_found';
@@ -260,6 +262,23 @@ function worktreeDeleteRejectionReason(error: WorkspaceError) {
     case 'root_worktree_not_found':
     case 'command_cleanup_failed':
     case 'pty_teardown_failed':
+    case 'worktrees_not_supported':
+      return error.code;
+    default:
+      return 'project_not_found';
+  }
+}
+
+/**
+ * The `WorkspaceError` codes both setup endpoints can produce before their
+ * service reaches `WorktreeSetupService`. Shared so the two paths cannot drift,
+ * and a switch rather than a chain of ternaries so the next reason is added in
+ * one obvious place.
+ */
+function worktreeSetupProjectRejectionReason(error: WorkspaceError): WorktreeSetupRejectionReason {
+  switch (error.code) {
+    case 'project_not_present':
+    case 'worktrees_not_supported':
       return error.code;
     default:
       return 'project_not_found';
@@ -444,8 +463,7 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
         message: error.message,
         requestId: context.requestId,
         data: {
-          reason:
-            error.code === 'project_not_present' ? 'project_not_present' : 'project_not_found',
+          reason: worktreeSetupProjectRejectionReason(error),
           ...(error.projectId ? { projectId: error.projectId } : {}),
         },
       };

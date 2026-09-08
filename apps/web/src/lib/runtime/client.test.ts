@@ -29,6 +29,7 @@ const project = {
   id: 1,
   name: 'isagi',
   rootPath: '/repo/isagi',
+  kind: 'git',
   status: 'present',
   worktrees: [
     {

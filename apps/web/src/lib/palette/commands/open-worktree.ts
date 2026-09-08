@@ -6,7 +6,7 @@ import type {
   WorktreeSetupTrustInput,
 } from '@isagi/contracts';
 
-import { worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
+import { paletteCopy, worktreeCreateCopy, worktreeSetupReviewCopy } from '../../../copy/index.js';
 import { runRuntimeEffect } from '../../runtime/run.js';
 import { restoreActivePaneFocus } from '../../workspace/activation.js';
 import { openWorktreeFromPalette } from '../../workspace/queries.js';
@@ -50,14 +50,14 @@ export const openWorktreeCommand: PaletteCommand = {
   icon: GitBranch,
   group: 'global',
   running: worktreeCreateCopy.running,
-  available: (ctx) => presentProjects(ctx.projects).length > 0,
+  available: (ctx) => eligibleProjects(ctx.projects).length > 0,
   args: [
     {
       kind: 'select',
       key: 'projectId',
       label: 'Project',
       options: (ctx) =>
-        presentProjects(ctx.projects).map((project) => ({
+        eligibleProjects(ctx.projects).map((project) => ({
           value: String(project.id),
           label: project.name,
           hint: project.rootPath,
@@ -74,7 +74,7 @@ export const openWorktreeCommand: PaletteCommand = {
       finishOnAccept: (_value, payload) => isExistingWorktreePayload(payload),
       options: async (ctx, values): Promise<readonly Option<WorktreeStepPayload>[]> => {
         const projectId = Number(values.projectId);
-        const project = presentProjects(ctx.projects).find(
+        const project = eligibleProjects(ctx.projects).find(
           (candidate) => candidate.id === projectId,
         );
         if (!project) {
@@ -124,7 +124,7 @@ export const openWorktreeCommand: PaletteCommand = {
       skip: (_ctx, _values, payloads) => isExistingBranchPayload(payloads.branch),
       options: async (ctx, values): Promise<readonly Option<BaseRefPayload>[]> => {
         const projectId = Number(values.projectId);
-        const project = presentProjects(ctx.projects).find(
+        const project = eligibleProjects(ctx.projects).find(
           (candidate) => candidate.id === projectId,
         );
         if (!project) {
@@ -221,15 +221,26 @@ export const openWorktreeCommand: PaletteCommand = {
     },
   ],
   run: async (values, ctx, payloads) => {
+    // Selection-only, so the runtime never sees it and cannot refuse it. The
+    // payload is re-checked against the latest client-observed workspace — the
+    // project must still be present and Git, and the worktree must still be one
+    // of its members — because the options that produced this payload were
+    // assembled earlier and the workspace may have moved since.
     const selected = payloads?.branch;
     if (isExistingWorktreePayload(selected)) {
+      const target = eligibleProjects(ctx.projects).find(
+        (candidate) => candidate.id === selected.projectId,
+      );
+      if (!target?.worktrees.some((candidate) => candidate.id === selected.worktreeId)) {
+        return targetUnavailable();
+      }
       useWorkspaceStore.getState().selectWorktree(selected.projectId, selected.worktreeId);
       restoreActivePaneFocus();
       return;
     }
 
     const projectId = Number(values.projectId);
-    const project = presentProjects(ctx.projects).find((candidate) => candidate.id === projectId);
+    const project = eligibleProjects(ctx.projects).find((candidate) => candidate.id === projectId);
     const worktree = project?.worktrees.find(
       (candidate) => candidate.branch === values.branch || String(candidate.id) === values.branch,
     );
@@ -239,7 +250,15 @@ export const openWorktreeCommand: PaletteCommand = {
       return;
     }
 
-    if (!project || !values.branch) {
+    // An absent or ineligible project is a changed workspace, and says so.
+    if (!project) {
+      return targetUnavailable();
+    }
+
+    // An empty branch is not a changed workspace — it is missing input, and
+    // borrowing the unavailable wording for it would explain it falsely. The
+    // wizard's own step owns that case; this stays silent, as it always has.
+    if (!values.branch) {
       return;
     }
 
@@ -283,8 +302,41 @@ function outcomeForOpenWorktree(output: OpenWorktreeOutput): CommandOutcome | vo
   };
 }
 
-function presentProjects(projects: readonly Project[]) {
-  return projects.filter((project) => project.status === 'present');
+/**
+ * The projects this command can act on: present *Git* projects.
+ *
+ * A folder project owns exactly one environment and the runtime refuses to make
+ * another, so listing one here would be an invitation to a refusal. One helper
+ * covers availability, the project options, and every later lookup, so they
+ * cannot drift apart into a command that offers a target it will not accept.
+ *
+ * Switching *to* a folder environment is unaffected: the palette's
+ * `switch-worktree` group enumerates every worktree of every project regardless
+ * of kind, so nothing here removes a navigation route.
+ */
+function eligibleProjects(projects: readonly Project[]) {
+  return projects.filter((project) => project.status === 'present' && project.kind === 'git');
+}
+
+/**
+ * The target named when the wizard opened is no longer one this command can act
+ * on — its project has gone missing, or its worktree has been deleted, since the
+ * options were assembled. Reuses the palette's existing wording for exactly this
+ * situation rather than inventing command-specific copy, and keeps the report in
+ * the palette where the user started the action (ADR 0004).
+ *
+ * Kind is immutable, so a project cannot *become* ineligible by kind while the
+ * palette is open; that half of the check guards a forced or replayed payload,
+ * not a live transition.
+ */
+function targetUnavailable(): CommandOutcome {
+  return {
+    kind: 'error',
+    content: {
+      title: paletteCopy.outcome.commandUnavailableTitle,
+      body: paletteCopy.outcome.commandUnavailableBody,
+    },
+  };
 }
 
 function worktreeOptionLabel(worktree: Worktree) {

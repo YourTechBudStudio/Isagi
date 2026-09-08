@@ -4,6 +4,14 @@ import type { Project, Worktree, WorkspaceSnapshot } from '@isagi/contracts';
 
 import type { EnvironmentFocusRow, ProjectRow, SurfaceMetadataRow, WorktreeRow } from './types.js';
 
+/**
+ * The name of the single environment a folder project owns. Fixed by the
+ * product rather than user-authored, and not a branch: a folder project has no
+ * Git facts to derive a title from, and the directory's own basename is already
+ * the project name directly above it in the rail.
+ */
+export const FOLDER_ENVIRONMENT_TITLE = 'folder';
+
 export function buildWorkspaceSnapshot(
   projects: readonly ProjectRow[],
   worktrees: readonly WorktreeRow[],
@@ -27,6 +35,7 @@ export function buildProjectSnapshot(
     id: project.id,
     name: project.name,
     rootPath: project.rootPath,
+    kind: project.kind,
     worktrees:
       project.status === 'present'
         ? rootWorktreeFirst(
@@ -86,7 +95,7 @@ function buildWorktreeSnapshot(
   return {
     id: worktree.id,
     projectId: worktree.projectId,
-    title: worktreeTitle(worktree),
+    title: worktreeTitle(project, worktree),
     path: worktree.path,
     branch: worktree.branch,
     head: worktree.head,
@@ -103,7 +112,10 @@ function buildWorktreeSnapshot(
   };
 }
 
-function worktreeTitle(worktree: WorktreeRow) {
+function worktreeTitle(project: ProjectRow, worktree: WorktreeRow) {
+  if (project.kind === 'folder') {
+    return FOLDER_ENVIRONMENT_TITLE;
+  }
   if (worktree.branch) {
     return worktree.branch;
   }

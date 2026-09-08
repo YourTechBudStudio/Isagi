@@ -41,7 +41,7 @@ import {
   type WorkspaceRepositoryService,
 } from '../workspace.repository.js';
 import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
-import { buildWorkspaceSnapshot } from '../workspace.snapshot.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>
@@ -155,6 +155,7 @@ const project: ProjectRow = {
   id: 1,
   name: 'Isagi',
   rootPath: '/repo/isagi',
+  kind: 'git',
   status: 'present',
   createdAt: '2026-06-04T00:00:00.000Z',
   updatedAt: '2026-06-04T00:00:00.000Z',
@@ -184,6 +185,68 @@ test('workspace snapshots serialize worktrees for present projects', () => {
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 
+/**
+ * A folder project's one environment is named by the product, not derived from
+ * Git. The Git projections below it are asserted in the same test so a change
+ * that made every environment `folder` could not pass.
+ */
+test('a folder project titles its single environment folder and fabricates no Git facts', () => {
+  const folder = { ...project, id: 2, name: 'notes', kind: 'folder' as const, rootPath: '/notes' };
+  const environment = {
+    ...worktreeBase,
+    id: 20,
+    projectId: folder.id,
+    path: '/notes',
+    branch: null,
+    head: null,
+  } satisfies WorktreeRow;
+
+  const snapshot = buildWorkspaceSnapshot([folder, project], [environment, worktreeBase]);
+
+  const projected = snapshot.projects[0]?.worktrees[0];
+  assert.equal(projected?.title, FOLDER_ENVIRONMENT_TITLE);
+  assert.equal(projected?.title, 'folder');
+  assert.equal(projected?.branch, null);
+  assert.equal(projected?.head, null);
+  assert.equal(projected?.isRoot, true);
+  // Unchanged for Git: the branch still names the environment.
+  assert.equal(snapshot.projects[1]?.worktrees[0]?.title, 'main');
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+/**
+ * Hiding and deleting are different things. A missing folder project projects no
+ * environments, but nothing in this phase removes the durable row — the caller
+ * still holds it, and phase 08's recovery depends on it still being there.
+ */
+test('a missing folder project hides its environment without the row disappearing', () => {
+  const folder = {
+    ...project,
+    id: 2,
+    name: 'notes',
+    kind: 'folder' as const,
+    rootPath: '/notes',
+    status: 'missing' as const,
+    missingReason: 'Project path not found: /notes',
+  };
+  const environment = {
+    ...worktreeBase,
+    id: 20,
+    projectId: folder.id,
+    path: '/notes',
+    branch: null,
+    head: null,
+  } satisfies WorktreeRow;
+  const rows = [environment];
+
+  const snapshot = buildWorkspaceSnapshot([folder], rows);
+
+  assert.equal(snapshot.projects[0]?.status, 'missing');
+  assert.deepEqual(snapshot.projects[0]?.worktrees, []);
+  assert.deepEqual(rows, [environment]);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
 test('workspace snapshots pin the derived root first without resorting the other worktrees', () => {
   const feature = { ...worktreeBase, id: 11, path: '/repo/isagi-feature', branch: 'feature/one' };
   const chore = { ...worktreeBase, id: 12, path: '/repo/isagi-chore', branch: 'chore/two' };
@@ -198,6 +261,82 @@ test('workspace snapshots pin the derived root first without resorting the other
   );
   assert.equal(snapshot.projects[0]?.worktrees[0]?.isRoot, true);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+/**
+ * Project kind is a required wire fact on every project, of either kind and in
+ * either status. These assert the production builder actually projects it and
+ * that the shared schema rejects a snapshot that omits it or spells it wrong —
+ * the runtime and the web ship together, so an absent kind is a broken build,
+ * never something a client should tolerate.
+ */
+test('workspace snapshots carry project kind for both kinds in both statuses', () => {
+  const folder = {
+    ...project,
+    id: 2,
+    name: 'notes',
+    rootPath: '/work/notes',
+    kind: 'folder',
+  } satisfies ProjectRow;
+  const folderEnvironment = {
+    ...worktreeBase,
+    id: 20,
+    projectId: folder.id,
+    path: folder.rootPath,
+    branch: null,
+    head: null,
+  } satisfies WorktreeRow;
+  const missingFolder = {
+    ...folder,
+    id: 3,
+    status: 'missing',
+    missingReason: 'The folder is not on disk.',
+  } satisfies ProjectRow;
+  const missingGit = {
+    ...project,
+    id: 4,
+    status: 'missing',
+    missingReason: 'The repository is not on disk.',
+  } satisfies ProjectRow;
+
+  const snapshot = buildWorkspaceSnapshot(
+    [project, folder, missingFolder, missingGit],
+    [worktreeBase, folderEnvironment],
+  );
+
+  assert.deepEqual(
+    snapshot.projects.map((candidate) => [candidate.status, candidate.kind]),
+    [
+      ['present', 'git'],
+      ['present', 'folder'],
+      ['missing', 'folder'],
+      ['missing', 'git'],
+    ],
+  );
+  // A folder environment is an ordinary branchless row whose path is the project
+  // root, so the existing derived root-ness applies to it unchanged.
+  assert.equal(snapshot.projects[1]?.worktrees[0]?.isRoot, true);
+  assert.equal(snapshot.projects[1]?.worktrees[0]?.branch, null);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+test('the workspace snapshot schema rejects a project whose kind is absent or unknown', () => {
+  const valid = buildWorkspaceSnapshot([project], [worktreeBase]);
+  // Guards the two negative cases below from passing for some unrelated reason.
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(valid));
+
+  const [encoded] = valid.projects;
+  assert.ok(encoded);
+  const { kind: _omitted, ...withoutKind } = encoded;
+
+  assert.throws(() =>
+    Schema.decodeUnknownSync(workspaceSnapshotSchema)({ projects: [withoutKind] }),
+  );
+  assert.throws(() =>
+    Schema.decodeUnknownSync(workspaceSnapshotSchema)({
+      projects: [{ ...withoutKind, kind: 'repository' }],
+    }),
+  );
 });
 
 test('workspace snapshots preserve worktree order when no worktree is the project root', () => {
@@ -310,7 +449,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         terminalSessionCount: 0,
         terminalSessionActivePtyProcessIds: [],
       }),
-    insertProject: () => Effect.succeed(project.id),
+    createProject: () => Effect.succeed(project),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
     reconcileProjectWorktrees: () =>
@@ -343,6 +482,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
           args,
           cause: new Error('Git failed'),
           cwd: options.cwd,
+          failure: { kind: 'exited', exitCode: 128 },
           stderr: 'fatal: not a git repository',
         }),
       ),

@@ -4933,6 +4933,7 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
               id: 1,
               name: 'Test Project',
               rootPath: '/tmp/isagi-test-project',
+              kind: 'git',
               status: 'present',
               createdAt: '2026-06-18T00:00:00.000Z',
               updatedAt: '2026-06-18T00:00:00.000Z',
@@ -4962,7 +4963,7 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
     deleteWorktree: () => Effect.die('workspace deleteWorktree is not used'),
     readWorktreeDeleteDiagnostics: () =>
       Effect.die('workspace readWorktreeDeleteDiagnostics is not used'),
-    insertProject: () => Effect.die('workspace insertProject is not used'),
+    createProject: () => Effect.die('workspace createProject is not used'),
     listProjects: Effect.die('workspace listProjects is not used'),
     listWorktrees: Effect.succeed([
       {

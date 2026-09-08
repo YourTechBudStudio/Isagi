@@ -14,6 +14,15 @@ export const projects = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     name: text('name').notNull(),
     rootPath: text('root_path').notNull(),
+    // How this project's environments are maintained. Assigned once at
+    // registration and never rewritten: reconciliation, restart, relocation and
+    // recovery all read it and none of them reclassifies. The SQL default exists
+    // so the upgrade can backfill historical rows, every one of which has
+    // Git-validated provenance. Keep it: dropping it later would make
+    // drizzle-kit emit a table rebuild to remove the constraint.
+    kind: text('kind', { enum: ['git', 'folder'] })
+      .notNull()
+      .default('git'),
     status: text('status', { enum: ['present', 'missing'] }).notNull(),
     // Durable display rank among present sibling projects. Meaningless while a
     // project is missing: restoration always appends. See the rail reordering

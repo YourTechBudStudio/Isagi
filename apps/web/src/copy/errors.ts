@@ -6,9 +6,14 @@ import type {
   EditorAttemptFailureReason,
   EditorRejectionReason,
   ProjectOrderRejectionReason,
+  ProjectPathRejectionReason,
+  ProjectRelocationRejectionReason,
   PtyWebSocketErrorCode,
   SurfaceOrderRejectionReason,
+  WorktreeDeleteRejectionReason,
+  WorktreeOperationRejectionReason,
   WorktreeOrderRejectionReason,
+  WorktreeSetupRejectionReason,
 } from '@isagi/contracts';
 
 import { editorAttemptFailureCopy } from './editor.js';
@@ -27,6 +32,9 @@ const surfaceGone = "That surface isn't here anymore.";
 const orderNotSaved = "Couldn't save that order.";
 const setupConfigInvalid = "This project's .isagi setup config is malformed.";
 const setupTrustMismatch = 'The setup hooks changed since you last trusted them.';
+// A folder project maintains its own single environment, so every checkout
+// management family refuses with the same fact.
+const folderProjectNoWorktrees = 'This project is a plain folder, so it has no worktrees.';
 const harnessLaunchBlockCopy = {
   onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
   config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
@@ -62,16 +70,24 @@ function byReason<Reason extends string>(
 const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   project_path_rejected: {
     summary: "Isagi can't use that path.",
-    byReason: {
+    byReason: byReason<ProjectPathRejectionReason>({
       path_not_found: "There's nothing at that path.",
       not_directory: "That path isn't a folder.",
       not_git_repository: "That folder isn't a Git repository.",
       not_repository_root: "That's inside a repo, but not its root. Point Isagi at the top.",
       linked_worktree_checkout:
         "That's a linked worktree, not the main checkout. Use the repo root.",
+      bare_repository: "That's a bare Git repository — there's no working tree to open.",
+      git_unavailable: "Isagi couldn't run Git to check that folder.",
+      git_metadata_unreadable:
+        "There's Git data at or above that folder, but Git won't read it. Fix or remove it, then try again.",
+      git_metadata_indeterminate:
+        "Isagi couldn't inspect that folder or the ones above it, so it can't tell whether Git is involved.",
       permission_denied: "Isagi isn't allowed to read that path.",
-      git_command_failed: "Git couldn't read that repository.",
-    },
+      // Reworded: the probe was inconclusive, so this must not assert that the
+      // path is a repository at all.
+      git_command_failed: "Git couldn't tell Isagi what that folder is.",
+    }),
   },
   workspace_active_context_rejected: {
     summary: "Couldn't switch to that worktree.",
@@ -83,14 +99,15 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   },
   worktree_branch_list_rejected: {
     summary: "Couldn't list branches for that project.",
-    byReason: {
+    byReason: byReason<WorktreeOperationRejectionReason>({
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
-    },
+      worktrees_not_supported: folderProjectNoWorktrees,
+    }),
   },
   worktree_open_rejected: {
     summary: "Couldn't open that worktree.",
-    byReason: {
+    byReason: byReason<WorktreeOperationRejectionReason>({
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
       branch_not_found: "Git doesn't have that branch.",
@@ -104,29 +121,32 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       setup_config_invalid: setupConfigInvalid,
       setup_trust_required: 'These setup hooks need your OK before they can run.',
       setup_trust_mismatch: setupTrustMismatch,
-    },
+      worktrees_not_supported: folderProjectNoWorktrees,
+    }),
   },
   worktree_setup_rejected: {
     summary: "Couldn't run setup for that worktree.",
-    byReason: {
+    byReason: byReason<WorktreeSetupRejectionReason>({
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
       setup_not_configured: 'This project has no setup hooks to run.',
       setup_config_invalid: setupConfigInvalid,
       setup_trust_mismatch: setupTrustMismatch,
-    },
+      worktrees_not_supported: folderProjectNoWorktrees,
+    }),
   },
   worktree_delete_rejected: {
     summary: "Couldn't delete that worktree.",
-    byReason: {
+    byReason: byReason<WorktreeDeleteRejectionReason>({
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
       worktree_not_found: worktreeGone,
       root_worktree_not_deletable: 'The root worktree cannot be deleted.',
       dirty_checkout_requires_force: 'That checkout has changes. Confirm checkout removal first.',
       root_worktree_not_found: "Couldn't find the root checkout to select afterward.",
+      worktrees_not_supported: folderProjectNoWorktrees,
       pty_teardown_failed: "Couldn't stop active sessions in that worktree.",
-    },
+    }),
   },
   workspace_reconcile_rejected: {
     summary: "Couldn't refresh that project.",
@@ -192,11 +212,13 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   },
   project_relocation_rejected: {
     summary: "Couldn't move that project.",
-    byReason: {
+    byReason: byReason<ProjectRelocationRejectionReason>({
       project_not_found: projectGone,
       project_not_missing: "That project isn't missing — there's nothing to relocate.",
       project_path_already_registered: 'Another project already lives at that path.',
-    },
+      relocation_not_supported:
+        "Isagi can't move a folder project. Put the folder back, or remove it and add the new location.",
+    }),
   },
   // Sibling reorder refusals. Most of the runtime's reasons describe a client
   // that asked for something the rail cannot express — a cross-project move, or
@@ -222,6 +244,7 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_found: projectGone,
       project_not_present: projectFilesGone,
       worktree_not_found: worktreeGone,
+      worktrees_not_supported: folderProjectNoWorktrees,
     }),
   },
   surface_order_rejected: {

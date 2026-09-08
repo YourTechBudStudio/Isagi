@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 
+import type { ProjectKind } from '@isagi/contracts';
+
 import { toastCopy } from '../../copy/index.js';
 import { showToast } from '../toast/index.js';
 import { activateSurface, restoreActivePaneFocus } from './activation.js';
@@ -183,6 +185,29 @@ export function useActiveWorktree(): Worktree | null {
   );
   const selection = useWorkspaceStore((state) => state.selection);
   return findWorktree(projects, activeWorktreeId(selection));
+}
+
+/**
+ * The selected project's kind, or `null` when no project is selected or the
+ * workspace has not produced one yet.
+ *
+ * Reads the raw workspace query rather than the attention-decorated projection
+ * next door, because kind carries no attention state and decorating a projection
+ * to answer an immutable question would be work with no cause.
+ *
+ * `null` is not the same claim as `'folder'`, even though both suppress the ref
+ * tag. It means "no kind is known right now" — a transient or unexpected state
+ * rather than a proven-impossible one — and callers must treat it as a reason to
+ * show nothing, never as a reason to fall back to Git formatting.
+ */
+export function useActiveProjectKind(): ProjectKind | null {
+  const workspace = useWorkspaceQuery();
+  const selection = useWorkspaceStore((state) => state.selection);
+  const projectId = selectedProjectId(selection);
+  if (projectId === null) {
+    return null;
+  }
+  return workspace.data?.projects.find((project) => project.id === projectId)?.kind ?? null;
 }
 
 export function workspaceSelectionIsEmpty(selection: WorkspaceSelection) {

@@ -40,6 +40,7 @@ const snapshot = {
       id: 1,
       name: 'isagi',
       rootPath: '/repo/isagi',
+      kind: 'git',
       status: 'present',
       worktrees: [
         {
@@ -88,6 +89,7 @@ const snapshot = {
       id: 2,
       name: 'atlas',
       rootPath: '/repo/atlas',
+      kind: 'git',
       status: 'present',
       worktrees: [],
     },

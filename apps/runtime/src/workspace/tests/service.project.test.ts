@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import test from 'node:test';
 
 import { Effect } from 'effect';
@@ -138,6 +138,9 @@ test('project relocation restores the same project id and reconciles discovered 
     run: (args: readonly string[]) =>
       Effect.sync(() => {
         const command = args.join(' ');
+        if (command.endsWith('rev-parse --is-bare-repository')) {
+          return { stdout: 'false\n', stderr: '' };
+        }
         if (command.endsWith('rev-parse --show-toplevel')) {
           return { stdout: `${projectRoot}\n`, stderr: '' };
         }
@@ -190,6 +193,92 @@ test('project relocation restores the same project id and reconciles discovered 
         },
       ],
     });
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('registering a new project reconciles the created row without a follow-up lookup', async () => {
+  const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-registered-project-')));
+  mkdirSync(join(projectRoot, '.git'));
+  const created: ProjectRow = { ...project, id: 42, rootPath: projectRoot };
+  let createInput: { name: string; rootPath: string; kind: string } | null = null;
+  let reconciledProjectId: number | null = null;
+  const repository = {
+    ...repositoryWith({ project: null, worktree: null }),
+    // The point of the assertion: registration must reconcile the row
+    // `createProject` returned. Re-reading it would be an extra query whose
+    // null case silently skipped reconciliation.
+    findProject: () => Effect.die('registration must not re-read the project it just created'),
+    findProjectByRootPath: () => Effect.succeed(null),
+    createProject: (input) =>
+      Effect.sync(() => {
+        createInput = { ...input };
+        return created;
+      }),
+    reconcileProjectWorktrees: (input) =>
+      Effect.sync(() => {
+        reconciledProjectId = input.projectId;
+        return { added: [], missing: [] };
+      }),
+  } satisfies WorkspaceRepositoryService;
+  const registrationGit = {
+    run: (args: readonly string[]) =>
+      Effect.sync(() => {
+        const command = args.join(' ');
+        if (command.endsWith('rev-parse --is-bare-repository')) {
+          return { stdout: 'false\n', stderr: '' };
+        }
+        if (command.endsWith('rev-parse --show-toplevel')) {
+          return { stdout: `${projectRoot}\n`, stderr: '' };
+        }
+        if (command.endsWith('rev-parse --git-common-dir')) {
+          return { stdout: '.git\n', stderr: '' };
+        }
+        if (command.endsWith('worktree list --porcelain')) {
+          return {
+            stdout: `worktree ${projectRoot}\nHEAD abc123456789\nbranch refs/heads/main\n`,
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      }),
+  } satisfies GitService;
+
+  try {
+    const output = await Effect.runPromise(
+      Effect.gen(function* () {
+        const workspace = yield* WorkspaceService;
+        return yield* workspace.registerProject({ path: projectRoot });
+      }).pipe(
+        Effect.provide(WorkspaceServiceLive),
+        Effect.provideService(CommandService, testCommandService),
+        Effect.provideService(PtyService, testPtyService),
+        Effect.provideService(InternalRuntimeEventBus, testInternalEvents),
+        Effect.provideService(WorkspaceRepository, repository),
+        Effect.provideService(SurfaceRepository, testSurfaceRepository),
+        Effect.provideService(SurfaceService, testSurfaceService),
+        Effect.provideService(
+          StateFile,
+          stateFileWithWriteCounter(() => {}),
+        ),
+        Effect.provideService(Git, registrationGit),
+        Effect.provideService(DataDirectory, testDataDirectory),
+        Effect.provideService(WorktreeSetupService, testWorktreeSetup),
+        Effect.provideService(WorktreeSetupRepository, testWorktreeSetupRepository),
+      ),
+    );
+
+    // A validated Git root is still registered as a Git project; classification
+    // arrives in phase 05.
+    assert.deepEqual(createInput, {
+      name: basename(projectRoot),
+      rootPath: projectRoot,
+      kind: 'git',
+    });
+    assert.equal(reconciledProjectId, created.id);
+    // The add response stays minimal: no snapshot, no reconciliation findings.
+    assert.deepEqual(output, { projectId: created.id, alreadyExisted: false });
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

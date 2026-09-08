@@ -178,6 +178,7 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
             args,
             cause: new Error('invalid branch'),
             cwd: options.cwd,
+            failure: { kind: 'exited', exitCode: 1 },
             stderr: 'fatal: invalid branch name',
           }),
         );

@@ -2,6 +2,7 @@ import { FolderSymlink } from 'lucide-react';
 
 import { paletteCopy } from '../../../copy/index.js';
 import { relocateProjectPath } from '../../workspace/queries.js';
+import type { Project } from '../../workspace/types.js';
 import type { PaletteCommand } from '../types.js';
 
 export const relocateProjectCommand: PaletteCommand = {
@@ -9,20 +10,18 @@ export const relocateProjectCommand: PaletteCommand = {
   label: 'Set project path',
   icon: FolderSymlink,
   group: 'global',
-  available: (ctx) => ctx.projects.some((project) => project.status === 'missing'),
+  available: (ctx) => relocatableProjects(ctx.projects).length > 0,
   args: [
     {
       kind: 'select',
       key: 'projectId',
       label: 'Missing project',
       options: (ctx) =>
-        ctx.projects
-          .filter((project) => project.status === 'missing')
-          .map((project) => ({
-            value: String(project.id),
-            label: project.name,
-            hint: project.rootPath,
-          })),
+        relocatableProjects(ctx.projects).map((project) => ({
+          value: String(project.id),
+          label: project.name,
+          hint: project.rootPath,
+        })),
     },
     {
       kind: 'path',
@@ -40,3 +39,13 @@ export const relocateProjectCommand: PaletteCommand = {
     return undefined;
   },
 };
+
+/**
+ * Missing *Git* projects. A folder project cannot be relocated at all — the
+ * runtime refuses the request before it even checks whether the project is
+ * missing — so offering one here would promise something the runtime declines.
+ * Recovering a missing folder happens at the same path instead.
+ */
+function relocatableProjects(projects: readonly Project[]) {
+  return projects.filter((project) => project.status === 'missing' && project.kind === 'git');
+}

@@ -879,7 +879,7 @@ export function repository(rootPath: string): WorkspaceRepositoryService {
         terminalSessionCount: 0,
         terminalSessionActivePtyProcessIds: [],
       }),
-    insertProject: () => Effect.succeed(1),
+    createProject: () => Effect.die('workspace createProject is not used by command tests'),
     listProjects: Effect.succeed([]),
     listWorktrees: Effect.succeed([]),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),

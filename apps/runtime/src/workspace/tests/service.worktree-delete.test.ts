@@ -466,6 +466,7 @@ test('delete worktree reports safe branch deletion failure as partial success', 
             args,
             cause: new Error('branch not merged'),
             cwd: undefined,
+            failure: { kind: 'exited', exitCode: 1 },
             stderr: 'error: The branch is not fully merged.',
           }),
         );

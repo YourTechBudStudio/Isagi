@@ -23,15 +23,15 @@ Examples:
 
 ### Project
 
-A registered repository-level container.
+A registered folder, Git or not. Isagi automatically classifies a new registration as a Git project or a folder project and remembers that kind. Running `git init` inside a registered folder project does not convert it.
 
-A project owns project-specific defaults such as commands, worktree initialization behavior, preferred harness presets, and default surfaces.
+A project owns project-specific defaults such as commands, preferred harness presets, and default surfaces. Git projects also support worktree initialization behavior.
 
 ### Worktree
 
 The primary continuity unit in Isagi.
 
-A worktree represents a concrete place where work happens. It is backed by a branch and a checkout. The main/root checkout is treated as a first-class worktree for product purposes, even though Git distinguishes it from additional worktrees.
+A worktree represents a concrete place where work happens. In a Git project, it represents a checkout with a branch or detached HEAD. The main/root checkout is treated as a first-class worktree for product purposes, even though Git distinguishes it from additional worktrees. A folder project uses the same continuity unit at the registered folder itself, with no branch or commit.
 
 A worktree may have an associated environment with:
 
@@ -116,9 +116,15 @@ This is a product model, not a required database schema. User-facing navigation 
 
 ## Root/main worktree behavior
 
-The main/root checkout should appear as a first-class worktree in Isagi.
+In a Git project, the main/root checkout appears as a first-class worktree in Isagi.
 
 It is special only because it is the root checkout and should not be closed or deleted from Isagi like an additional worktree might be. Otherwise, it should participate in the same environment model.
+
+### Folder projects
+
+A folder project has one durable, branchless environment at the registered directory, with the fixed title `folder`. It uses the normal tools and remembered state, but cannot create, reorder, or independently delete worktrees or run worktree setup hooks.
+
+Missing folders retain their environment for recovery at the same path. Folder relocation and conversion are unsupported. Project removal leaves the folder contents intact but discards remembered state and session continuity.
 
 ## Worktree continuity behavior
 
@@ -137,7 +143,7 @@ That may include:
 
 ### New worktree
 
-When the user creates a new worktree, Isagi creates or reuses a branch and creates a separate worktree checkout for it.
+New worktree creation is available only in Git projects. When the user creates a new worktree, Isagi creates or reuses a branch and creates a separate worktree checkout for it.
 
 If the named branch does not exist, Isagi should create it. If the branch already has an existing worktree, Isagi should switch to that worktree rather than creating a duplicate. Isagi should not allow two worktrees in one project to represent the same checked-out branch.
 

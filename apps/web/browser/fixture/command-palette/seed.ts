@@ -48,6 +48,7 @@ export const FIXTURE_SNAPSHOT: WorkspaceSnapshot = {
       id: 1,
       name: 'isagi',
       rootPath: '/work/isagi',
+      kind: 'git',
       status: 'present',
       worktrees: [
         worktree(11, 'main', 'main', { isRoot: true }),
@@ -63,6 +64,7 @@ export const FIXTURE_SNAPSHOT: WorkspaceSnapshot = {
       id: 8,
       name: 'archive-2025',
       rootPath: '/work/archive-2025',
+      kind: 'git',
       status: 'missing',
       missingReason: 'The project directory is not on disk.',
       worktrees: [],

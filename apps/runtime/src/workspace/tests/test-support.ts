@@ -1,6 +1,7 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import { Effect } from 'effect';
 
@@ -27,6 +28,7 @@ export const project: ProjectRow = {
   id: 1,
   name: 'Isagi',
   rootPath: '/repo/isagi',
+  kind: 'git',
   status: 'present',
   createdAt: '2026-06-04T00:00:00.000Z',
   updatedAt: '2026-06-04T00:00:00.000Z',
@@ -229,7 +231,7 @@ export function repositoryWith(input: {
         terminalSessionCount: 0,
         terminalSessionActivePtyProcessIds: [],
       }),
-    insertProject: () => Effect.succeed(project.id),
+    createProject: () => Effect.succeed(project),
     listProjects: Effect.succeed(input.project ? [input.project] : []),
     listWorktrees: Effect.succeed(input.worktree ? [input.worktree] : []),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
@@ -289,7 +291,7 @@ export function repositoryWithWorktrees(input: {
         terminalSessionCount: 0,
         terminalSessionActivePtyProcessIds: [],
       }),
-    insertProject: () => Effect.succeed(input.project.id),
+    createProject: () => Effect.succeed(input.project),
     listProjects: Effect.succeed([input.project]),
     listWorktrees: Effect.succeed([...input.worktrees]),
     reconcileProjectWorktrees: () => Effect.succeed({ added: [], missing: [] }),
@@ -342,4 +344,34 @@ export function stateFileWithWriteCounter(
         return state;
       }),
   };
+}
+
+/**
+ * Every path beneath `root`, relative and sorted, with directories marked and
+ * files carried by content hash.
+ *
+ * The instrument for "Isagi did not touch the user's folder": a created `.git`,
+ * a copied template, a stray lock file, a truncated file or a rewritten one all
+ * show up as a diff of two of these, rather than as whichever single check
+ * someone thought to write.
+ */
+export function directoryTree(root: string): string[] {
+  const entries: string[] = [];
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const absolute = join(directory, entry.name);
+      const relativePath = relative(root, absolute);
+      if (entry.isDirectory()) {
+        entries.push(`d ${relativePath}`);
+        walk(absolute);
+      } else {
+        const digest = createHash('sha256').update(readFileSync(absolute)).digest('hex');
+        entries.push(`f ${relativePath} ${digest}`);
+      }
+    }
+  };
+  walk(root);
+  return entries;
 }

@@ -51,17 +51,23 @@ export function ProjectGroup({
       <ProjectHeaderBody
         project={project}
         action={
-          // Nested controls keep their own press semantics: the drag engine
-          // refuses to start a gesture from anything inside `data-no-drag`.
-          <button
-            type="button"
-            data-no-drag
-            title="Open worktree"
-            onClick={() => openPalette('open-worktree', { projectId: String(project.id) })}
-            className="ml-auto grid size-5 place-items-center rounded-md text-fg-subtle opacity-0 transition group-hover/group:opacity-100 hover:bg-blue/15 hover:text-blue"
-          >
-            <Plus size={14} />
-          </button>
+          // Git projects only. A folder project owns exactly one environment and
+          // the runtime refuses to make another, so offering the `+` here would
+          // be an invitation to a refusal. The web filters for honesty, not for
+          // enforcement — a forced call is still refused by the runtime.
+          project.kind !== 'git' ? undefined : (
+            // Nested controls keep their own press semantics: the drag engine
+            // refuses to start a gesture from anything inside `data-no-drag`.
+            <button
+              type="button"
+              data-no-drag
+              title="Open worktree"
+              onClick={() => openPalette('open-worktree', { projectId: String(project.id) })}
+              className="ml-auto grid size-5 place-items-center rounded-md text-fg-subtle opacity-0 transition group-hover/group:opacity-100 hover:bg-blue/15 hover:text-blue"
+            >
+              <Plus size={14} />
+            </button>
+          )
         }
       />
 

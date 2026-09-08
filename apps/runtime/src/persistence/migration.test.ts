@@ -7,7 +7,9 @@ import test from 'node:test';
 import BetterSqlite from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { Effect, Layer } from 'effect';
+import { Effect, Layer, Schema } from 'effect';
+
+import { workspaceSnapshotSchema } from '@isagi/contracts';
 
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../workspace/workspace.repository.js';
 import { buildWorkspaceSnapshot } from '../workspace/workspace.snapshot.js';
@@ -38,6 +40,14 @@ const PRE_WORKFLOW_CONTROL_TAGS = [
   ...HISTORICAL_TAGS,
   '0002_daily_thor_girl',
   '0003_peaceful_squirrel_girl',
+] as const;
+
+/** The migration set as it stood before project kind was introduced. */
+const PRE_PROJECT_KIND_TAGS = [
+  ...PRE_WORKFLOW_CONTROL_TAGS,
+  '0004_mixed_synch',
+  '0005_tiny_jackal',
+  '0006_stale_the_hood',
 ] as const;
 
 interface JournalEntry {
@@ -125,27 +135,32 @@ const SEEDED_SURFACES = [
 
 /**
  * Tables whose historical contents must survive the upgrade, mapped to the
- * columns `0002` adds. Everything not listed here has to come back unchanged —
- * note that `worktree_surfaces.sort_order` predates `0002` and so is *not*
- * excused from the comparison.
+ * columns added between the pre-`0002` baseline and the current migration head.
+ * Everything not listed here has to come back unchanged — note that
+ * `worktree_surfaces.sort_order` predates `0002` and so is *not* excused from
+ * the comparison. `projects.kind` arrives later, in `0007`, but this case
+ * migrates all the way to head, so it is excused here too; the dedicated
+ * pre-kind case below is what actually asserts its backfilled value.
  */
 const ADDED_COLUMNS = {
-  projects: ['sort_order'],
+  projects: ['sort_order', 'kind'],
   worktrees: ['sort_order'],
   worktree_surfaces: [],
 } as const satisfies Record<string, readonly string[]>;
 
-type PreservedTable = keyof typeof ADDED_COLUMNS;
 type RawRow = Record<string, unknown>;
 
 /**
  * Reads every column of every row, dropping the columns the migration adds so
  * the same shape is comparable on both sides of the upgrade.
  */
-function readHistoricalRows(client: BetterSqlite.Database) {
-  const snapshot = {} as Record<PreservedTable, RawRow[]>;
-  for (const table of Object.keys(ADDED_COLUMNS) as PreservedTable[]) {
-    const added: readonly string[] = ADDED_COLUMNS[table];
+function readHistoricalRows<Table extends string>(
+  client: BetterSqlite.Database,
+  addedColumns: Record<Table, readonly string[]>,
+) {
+  const snapshot = {} as Record<Table, RawRow[]>;
+  for (const table of Object.keys(addedColumns) as Table[]) {
+    const added: readonly string[] = addedColumns[table];
     const rows = client.prepare(`SELECT * FROM ${table} ORDER BY id`).all() as RawRow[];
     snapshot[table] = rows.map((row) =>
       Object.fromEntries(Object.entries(row).filter(([column]) => !added.includes(column))),
@@ -189,7 +204,7 @@ function seedPreOrderDatabase(databasePath: string, migrationsFolder: string) {
     );
     for (const surface of SEEDED_SURFACES) insertSurface.run(surface);
 
-    return readHistoricalRows(client);
+    return readHistoricalRows(client, ADDED_COLUMNS);
   } finally {
     client.close();
   }
@@ -244,7 +259,7 @@ test('the rail-order migration upgrades a pre-0002 database without losing data'
     // fails here rather than passing as "the right number of rows".
     const reopened = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
     try {
-      assert.deepEqual(readHistoricalRows(reopened), seeded);
+      assert.deepEqual(readHistoricalRows(reopened, ADDED_COLUMNS), seeded);
     } finally {
       reopened.close();
     }
@@ -338,6 +353,144 @@ test('the workflow control revision migration preserves existing runs', async ()
     assert.equal(run.controlRevision, 0);
     assert.equal(run.createdAt, '2026-08-16T00:00:00.000Z');
     assert.equal(run.updatedAt, '2026-08-16T00:00:00.000Z');
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Proves the project-kind migration (`0007`) upgrades a database created before
+ * it existed. Same shape as the rail-order case above: build a genuine pre-kind
+ * database from the committed artifacts, seed it with raw SQL, then open the
+ * production database layer over the same file and let the real migration run.
+ *
+ * The seed keeps the worktree → surface → pane chain because every
+ * worktree-dependent table cascades from `worktrees`. An additive
+ * `ALTER TABLE projects ADD COLUMN` cannot touch those tables, so the failure
+ * actually worth excluding is a `projects` rebuild that dropped and recreated
+ * rows and took the cascade with it. That failure is visible here. Seeding the
+ * session, command and workflow tables would re-prove the same cascade at much
+ * greater cost, so this case deliberately stops at panes.
+ */
+const PRE_KIND_ADDED_COLUMNS = {
+  projects: ['kind'],
+  worktrees: [],
+  worktree_surfaces: [],
+  surface_panes: [],
+} as const satisfies Record<string, readonly string[]>;
+
+function seedPreKindDatabase(databasePath: string, migrationsFolder: string) {
+  const client = new BetterSqlite(databasePath);
+  try {
+    client.pragma('foreign_keys = ON');
+    migrate(drizzle(client), { migrationsFolder });
+
+    assert.equal(
+      hasColumn(client, 'projects', 'kind'),
+      false,
+      'Expected the historical schema to predate projects.kind.',
+    );
+
+    // Deliberately non-default sort orders and distinct timestamps, so a rebuild
+    // that restamped or re-ranked anything is visible rather than coincidental.
+    const insertProject = client.prepare(
+      `INSERT INTO projects (name, root_path, status, sort_order, created_at, updated_at, last_seen_at, missing_reason)
+       VALUES (@name, @root_path, @status, @sort_order, @created_at, @updated_at, @last_seen_at, @missing_reason)`,
+    );
+    for (const [index, project] of SEEDED_PROJECTS.entries()) {
+      insertProject.run({ ...project, sort_order: (SEEDED_PROJECTS.length - index) * 10 });
+    }
+
+    const insertWorktree = client.prepare(
+      `INSERT INTO worktrees (project_id, path, branch, head, sort_order, created_at, updated_at, first_seen_at, last_seen_at)
+       VALUES (@project_id, @path, @branch, @head, @sort_order, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL)`,
+    );
+    for (const [index, worktree] of SEEDED_WORKTREES.entries()) {
+      insertWorktree.run({ ...worktree, sort_order: index * 5 });
+    }
+
+    const insertSurface = client.prepare(
+      `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+       VALUES (@worktree_id, @title, '{}', @sort_order, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    );
+    for (const surface of SEEDED_SURFACES) insertSurface.run(surface);
+
+    // The cascade tail: if a `projects` rebuild took its worktrees with it,
+    // these vanish too.
+    const insertPane = client.prepare(
+      `INSERT INTO surface_panes (surface_id, title, sort_order, session_kind, session_id, created_at, updated_at)
+       VALUES (@surface_id, @title, @sort_order, NULL, NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    );
+    for (let index = 0; index < SEEDED_SURFACES.length; index += 1) {
+      insertPane.run({ surface_id: index + 1, title: `pane-${index + 1}`, sort_order: index });
+    }
+
+    return readHistoricalRows(client, PRE_KIND_ADDED_COLUMNS);
+  } finally {
+    client.close();
+  }
+}
+
+test('the project-kind migration upgrades a pre-kind database and backfills git', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-project-kind-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+
+  try {
+    const seeded = seedPreKindDatabase(
+      dataDirectory.paths.databasePath,
+      historicalMigrationsFolder(dataRoot, PRE_PROJECT_KIND_TAGS),
+    );
+
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    const upgraded = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repository = yield* WorkspaceRepository;
+        return {
+          projects: yield* repository.listProjects,
+          snapshot: buildWorkspaceSnapshot(
+            yield* repository.listProjects,
+            yield* repository.listWorktrees,
+          ),
+        };
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(database, WorkspaceRepositoryLive.pipe(Layer.provide(database))),
+        ),
+      ),
+    );
+
+    // Every historical row and column, minus only `kind`, read back out of the
+    // upgraded file. A rebuild that regenerated an id, restamped a timestamp, or
+    // cascaded the worktree/surface/pane chain away fails here.
+    const reopened = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      assert.deepEqual(readHistoricalRows(reopened, PRE_KIND_ADDED_COLUMNS), seeded);
+    } finally {
+      reopened.close();
+    }
+    // Guards the comparison above against passing vacuously on empty tables.
+    assert.equal(seeded.projects.length, SEEDED_PROJECTS.length);
+    assert.equal(seeded.worktrees.length, SEEDED_WORKTREES.length);
+    assert.equal(seeded.worktree_surfaces.length, SEEDED_SURFACES.length);
+    assert.equal(seeded.surface_panes.length, SEEDED_SURFACES.length);
+
+    // Historical rows have Git-validated provenance, so every one of them —
+    // including the missing project, which is not reinterpreted as a folder —
+    // comes back as `git`.
+    assert.deepEqual(
+      upgraded.projects.map((project) => [project.status, project.kind]),
+      [
+        ['present', 'git'],
+        ['present', 'git'],
+        ['missing', 'git'],
+      ],
+    );
+
+    // The upgraded rows still compose a snapshot the shared contract accepts,
+    // which is what the web will decode after this migration runs.
+    assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(upgraded.snapshot));
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

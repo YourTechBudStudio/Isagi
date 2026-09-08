@@ -1,6 +1,6 @@
 ---
 name: isagi-docs
-description: Use only when the user asks to configure Isagi, create, modify, review, or verify an Isagi workflow, or understand or use an Isagi-specific feature such as worktree hooks, commands, PTY backends, terminal history, scrollback, cache retention, harness policy, or workflow discovery. Do not use for ordinary development work merely because it runs inside Isagi.
+description: Use only when the user asks to configure Isagi, create, modify, review, or verify an Isagi workflow, or understand or use an Isagi-specific feature such as folder projects, worktree hooks, commands, PTY backends, terminal history, scrollback, cache retention, harness policy, or workflow discovery. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
 # Configure Isagi
@@ -11,8 +11,8 @@ Read only the reference that matches the request. Do not load unrelated referenc
 
 | Request | Read |
 | --- | --- |
-| Copying or linking files into new worktrees; running setup after worktree creation | [Project config](references/config-project.md) for `worktrees` |
-| Defining commands, their worktree lifecycle, fixed ports, allocated ports, and HTTP URLs | [Project config](references/config-project.md) for `commands` |
+| Copying or linking files into new Git worktrees; running setup after worktree creation | [Project config](references/config-project.md) for `worktrees` |
+| Configuring commands in Git or folder projects: lifecycle, fixed ports, allocated ports, and HTTP URLs | [Project config](references/config-project.md) for `commands` |
 | Selecting the terminal backend | [Global config](references/config-global.md) for `pty` |
 | Configuring terminal history, scrollback, or cache retention | [Global config](references/config-global.md) for `terminal` |
 | Enabling harnesses or their Docs integration | [Global config](references/config-global.md) for `harnesses` |
@@ -22,7 +22,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 ## Boundaries
 
 - When the user requests a change, make the in-scope change without adding a separate proposal step.
-- Warn the user that editing `worktrees.hooks` causes Isagi to ask them to trust the hooks again.
+- For Git projects, warn the user that editing `worktrees.hooks` causes Isagi to ask them to trust the hooks again.
 - Finish workflow authoring by running the workflow package's `build` script followed by its `verify` script. A workflow is not complete until both succeed in that order.
 - Do not invent configuration keys. If a requested surface is not represented above or in the authoritative schemas, say that Isagi does not configure it today.
 
@@ -31,7 +31,7 @@ Read only the reference that matches the request. Do not load unrelated referenc
 | Path | Scope |
 | --- | --- |
 | `{{DATA_ROOT}}/config.yaml` | Runtime configuration shared by every project |
-| `.isagi/config.yaml` | Project configuration committed with the repository |
+| `.isagi/config.yaml` | Project configuration at the project root |
 | `{{DATA_ROOT}}/workflows/<key>/` | Globally discovered workflow package |
 | `.isagi/workflows/<key>/` | Project-discovered workflow package |
 

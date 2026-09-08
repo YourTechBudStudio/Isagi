@@ -93,6 +93,7 @@ function project(input: {
     id: input.id,
     name: input.name,
     rootPath: `/repo/${input.name}`,
+    kind: 'git' as const,
     glyph: input.name.slice(0, 2).toUpperCase(),
     accent: 'blue' as const,
   };

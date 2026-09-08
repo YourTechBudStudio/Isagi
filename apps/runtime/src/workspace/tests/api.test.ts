@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { Effect, Layer, ManagedRuntime } from 'effect';
-import Fastify from 'fastify';
+import { Effect, Layer } from 'effect';
+import type Fastify from 'fastify';
 
 import type { DeleteWorktreeOutput, WorkspaceSnapshot } from '@isagi/contracts';
 
 import { DatabaseError } from '../../persistence/index.js';
-import { registerWorkspaceApi } from '../api.js';
 import {
   ProjectOrderError,
   WorkspaceError,
@@ -15,6 +14,7 @@ import {
   WorktreeOrderError,
   type WorkspaceServiceShape,
 } from '../index.js';
+import { withWorkspaceApi as withWorkspaceApiLayer } from './api-test-support.js';
 
 test('durable session inventory route returns the complete identity set', async () => {
   const sessions = [
@@ -445,20 +445,11 @@ for (const route of commandCleanupGatedRoutes) {
   });
 }
 
-async function withWorkspaceApi<A>(
+function withWorkspaceApi<A>(
   service: WorkspaceServiceShape,
   run: (fastify: Fastify.FastifyInstance) => Promise<A>,
 ) {
-  const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(Layer.succeed(WorkspaceService, service));
-  try {
-    registerWorkspaceApi(fastify, runtime as never);
-    await fastify.ready();
-    return await run(fastify);
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
+  return withWorkspaceApiLayer(Layer.succeed(WorkspaceService, service), run);
 }
 
 function fakeWorkspaceService(

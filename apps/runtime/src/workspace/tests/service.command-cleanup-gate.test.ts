@@ -34,9 +34,10 @@ import {
 /**
  * Command cleanup gates more than an explicit worktree delete.
  *
- * `cleanupBeforeWorktreePrune` runs inside `reconcileProjectWithGit`, which is
- * reached by `openWorktree`, project registration, and workspace reconciliation
- * as well. The propagation route is not new — prune already stopped running
+ * `cleanupBeforeWorktreePrune` runs inside `reconcileGitProject`, reached
+ * through the `reconcileProject` dispatcher from `openWorktree`, project
+ * registration, and workspace reconciliation as well. The folder branch never
+ * prunes, so it never reaches this gate. The propagation route is not new — prune already stopped running
  * commands and already mapped a failure to `command_cleanup_failed` — but the
  * audit widened *when* it fires: a historical, terminal link whose backend
  * absence cannot be verified now blocks these flows too.
@@ -73,6 +74,9 @@ function discoveryGit(projectRoot: string, record: string[]): GitService {
     run: (args: readonly string[]) =>
       Effect.sync(() => {
         const command = args.join(' ');
+        if (command.endsWith('rev-parse --is-bare-repository')) {
+          return { stdout: 'false\n', stderr: '' };
+        }
         if (command.endsWith('rev-parse --show-toplevel')) {
           return { stdout: `${projectRoot}\n`, stderr: '' };
         }
