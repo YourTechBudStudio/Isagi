@@ -94,7 +94,9 @@ export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
     | 'pty_teardown_failed'
     | 'setup_config_invalid'
     | 'setup_trust_required'
-    | 'setup_trust_mismatch';
+    | 'setup_trust_mismatch'
+    | 'worktrees_not_supported'
+    | 'relocation_not_supported';
   readonly message: string;
   readonly branch?: string | undefined;
   readonly conflictingProjectId?: number | undefined;
@@ -276,6 +278,7 @@ export const WorkspaceServiceLive = Layer.effect(
       listProjectBranches: (input) =>
         Effect.gen(function* () {
           const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
           yield* ensureProjectPathAvailable(repository, project);
           const branches = yield* listLocalBranches(project.rootPath).pipe(
             Effect.provideService(Git, git),
@@ -297,12 +300,14 @@ export const WorkspaceServiceLive = Layer.effect(
       preflightWorktreeSetup: (input) =>
         Effect.gen(function* () {
           const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
           yield* ensureProjectPathAvailable(repository, project);
           return yield* worktreeSetup.preflight(project);
         }),
       trustWorktreeSetup: (input) =>
         Effect.gen(function* () {
           const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
           yield* ensureProjectPathAvailable(repository, project);
           return yield* worktreeSetup.updateTrust({ project, request: input.request });
         }),
@@ -312,6 +317,7 @@ export const WorkspaceServiceLive = Layer.effect(
           { projectId: input.projectId, branch: input.request.branch.trim() },
           Effect.gen(function* () {
             const project = yield* requirePresentProject(repository, input.projectId);
+            yield* requireGitProject(project);
             const branch = input.request.branch.trim();
             const context = {
               projectId: project.id,
@@ -483,6 +489,7 @@ export const WorkspaceServiceLive = Layer.effect(
       preflightDeleteWorktree: (input) =>
         Effect.gen(function* () {
           const project = yield* requirePresentProject(repository, input.projectId);
+          yield* requireGitProject(project);
           yield* ensureProjectPathAvailable(repository, project);
           const worktree = yield* requireProjectWorktree(repository, {
             projectId: project.id,
@@ -509,6 +516,7 @@ export const WorkspaceServiceLive = Layer.effect(
           },
           Effect.gen(function* () {
             const project = yield* requirePresentProject(repository, input.projectId);
+            yield* requireGitProject(project);
             yield* ensureProjectPathAvailable(repository, project);
             const worktree = yield* requireProjectWorktree(repository, {
               projectId: project.id,
@@ -644,6 +652,19 @@ export const WorkspaceServiceLive = Layer.effect(
       relocateProject: (input) =>
         Effect.gen(function* () {
           const project = yield* requireProject(repository, input.projectId);
+          // Kind is the more fundamental fact, so this precedes the missing
+          // check: a folder project is told relocation is unsupported whether
+          // it is present or missing. A folder project recovers at its own path
+          // through reconciliation, never by being pointed somewhere else.
+          if (project.kind !== 'git') {
+            return yield* Effect.fail(
+              new WorkspaceError({
+                code: 'relocation_not_supported',
+                message: `Project ${input.projectId} is a folder project and cannot be relocated.`,
+                projectId: input.projectId,
+              }),
+            );
+          }
           if (project.status !== 'missing') {
             return yield* Effect.fail(
               new WorkspaceError({
@@ -815,9 +836,6 @@ function worktreeOrderMessage(reason: WorktreeOrderRejectionReason) {
       return 'The insertion anchor belongs to a different project.';
     case 'before_root_worktree_fixed':
       return 'Nothing can be placed above the root worktree.';
-    // Unreachable until the management eligibility guard lands: no caller can
-    // produce this reason yet. The case exists so the switch stays exhaustive
-    // over the contract union rather than falling off the end.
     case 'worktrees_not_supported':
       return 'This project maintains its own single environment, so it has no worktrees to order.';
   }
@@ -887,6 +905,30 @@ function requirePresentProject(repository: WorkspaceRepositoryService, projectId
     }
     return project;
   });
+}
+
+/**
+ * Worktree management is a Git-project capability. A folder project owns exactly
+ * one runtime-created environment, so creating, discovering, removing or
+ * reordering checkouts — and reading or writing the trust that governs their
+ * setup hooks — has nothing to operate on. Refused before any Git call, presence
+ * write, config read, trust write, process cleanup or row mutation.
+ *
+ * Deliberately separate from `requirePresentProject`, which reads persisted
+ * status. The filesystem probe that can durably demote a project to `missing`
+ * is `ensureProjectPathAvailable`, and this guard sits between the two so an
+ * unsupported request never reaches it.
+ */
+function requireGitProject(project: ProjectRow) {
+  return project.kind === 'git'
+    ? Effect.succeed(project)
+    : Effect.fail(
+        new WorkspaceError({
+          code: 'worktrees_not_supported',
+          message: `Project ${project.id} is a folder project and does not support worktrees.`,
+          projectId: project.id,
+        }),
+      );
 }
 
 function isRootWorktree(project: ProjectRow, worktree: WorktreeRow) {

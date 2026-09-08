@@ -547,12 +547,23 @@ function moveProjectWorktreeOrderInTransaction(
   },
 ): WorktreeOrderMoveResult {
   const project = db
-    .select({ id: projects.id, status: projects.status, rootPath: projects.rootPath })
+    .select({
+      id: projects.id,
+      status: projects.status,
+      kind: projects.kind,
+      rootPath: projects.rootPath,
+    })
     .from(projects)
     .where(eq(projects.id, input.projectId))
     .get();
   if (!project) return { status: 'rejected', reason: 'project_not_found' };
   if (project.status !== 'present') return { status: 'rejected', reason: 'project_not_present' };
+  // Eligibility is validated here rather than in the service because this
+  // function is the sole owner of reorder validation. A folder project's single
+  // environment is not an ordered checkout list, so the refusal precedes the
+  // worktree lookup: kind is why the operation is unavailable, regardless of
+  // which worktree was named.
+  if (project.kind !== 'git') return { status: 'rejected', reason: 'worktrees_not_supported' };
 
   const source = db
     .select({ id: worktrees.id, projectId: worktrees.projectId, path: worktrees.path })

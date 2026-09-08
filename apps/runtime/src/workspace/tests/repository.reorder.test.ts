@@ -589,3 +589,105 @@ test('a project with no root checkout treats every worktree as reorderable', asy
 
   assert.deepEqual(ids, [2, 1]);
 });
+
+/**
+ * Folder projects own exactly one runtime-created environment, so reorder is not
+ * an operation they have. The check lives here rather than in the service
+ * because this transaction is the documented sole owner of reorder validation.
+ */
+function insertFolderProject(name: string) {
+  return Effect.gen(function* () {
+    const repository = yield* WorkspaceRepository;
+    const rootPath = `/repo/${name}`;
+    const { id: projectId } = yield* repository.createProject({ name, rootPath, kind: 'folder' });
+    const owned = (yield* repository.listWorktrees).filter(
+      (worktree) => worktree.projectId === projectId,
+    );
+    assert.equal(owned.length, 1);
+    return { projectId, environmentId: owned[0]!.id };
+  });
+}
+
+test('worktree reorder reports unsupported kind rather than the root guard for a folder', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-root',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  // Not `root_worktree_fixed`: the environment does sit at the project root, but
+  // "this project has no ordered worktrees" is the more accurate reason.
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'worktrees_not_supported' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('worktree reorder reports unsupported kind ahead of an unknown folder target', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-unknown-target',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId + 999,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  // Not `worktree_not_found`: the operation is unavailable for this project
+  // regardless of which worktree was named, so kind precedes the lookup.
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'worktrees_not_supported' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('worktree reorder reports presence before kind for a missing folder project', async () => {
+  const result = await runWithDatabase(
+    'reorder-worktree-folder-missing',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const folder = yield* insertFolderProject('notes');
+      yield* repository.setProjectStatus({ id: folder.projectId, status: 'missing' });
+      const before = yield* readWorktreeRanks();
+      const rejected = yield* repository.moveProjectWorktreeOrder({
+        projectId: folder.projectId,
+        worktreeId: folder.environmentId,
+        beforeWorktreeId: null,
+      });
+      return { rejected, before, after: yield* readWorktreeRanks() };
+    }),
+  );
+
+  assert.deepEqual(result.rejected, { status: 'rejected', reason: 'project_not_present' });
+  assert.deepEqual(result.after, result.before);
+});
+
+test('project reorder stays available for folder projects', async () => {
+  const ids = await runWithDatabase(
+    'reorder-project-folder-available',
+    Effect.gen(function* () {
+      const repository = yield* WorkspaceRepository;
+      const first = yield* insertFolderProject('notes');
+      const second = yield* insertFolderProject('scratch');
+      const moved = yield* repository.moveProjectOrder({
+        projectId: second.projectId,
+        beforeProjectId: first.projectId,
+      });
+      assert.deepEqual(moved, { status: 'moved' });
+      return yield* listProjectIds();
+    }),
+  );
+
+  assert.deepEqual(ids, [2, 1]);
+});
