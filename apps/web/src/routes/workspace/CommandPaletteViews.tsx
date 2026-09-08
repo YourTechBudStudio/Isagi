@@ -1,7 +1,5 @@
 import { Plus } from 'lucide-react';
 
-import type { PathSuggestion } from '@isagi/contracts';
-
 import { Overline } from '../../components/Overline.js';
 import { paletteCopy } from '../../copy/index.js';
 import { GROUP_LABELS } from '../../lib/palette/groups.js';
@@ -184,76 +182,6 @@ export function TextStep({
           {value}
         </p>
       )}
-    </div>
-  );
-}
-
-export function PathOptions({
-  suggestions,
-  value,
-  loading,
-  stale,
-  error,
-  sel,
-  onPick,
-}: {
-  suggestions: readonly PathSuggestion[];
-  value: string;
-  loading: boolean;
-  stale: boolean;
-  error: string | null;
-  sel: number | null;
-  onPick: (index: number) => void;
-}) {
-  if (error) {
-    return <p className="wrap-break-word px-3 py-4 font-mono text-[12px] text-error">{error}</p>;
-  }
-
-  if (suggestions.length === 0) {
-    return (
-      <div className="px-3 py-4" aria-busy={loading}>
-        <p className="font-mono text-[11px] text-fg-subtle">
-          {loading
-            ? paletteCopy.pathStep.searching
-            : value
-              ? paletteCopy.pathStep.addPath
-              : paletteCopy.pathStep.typeRepositoryRoot}
-        </p>
-        {value && (
-          <p className="mt-2 rounded-sm border border-line/22 bg-white/6 px-3 py-2 font-mono text-[13px] text-fg">
-            {value}
-          </p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div aria-busy={loading}>
-      {suggestions.map((suggestion, index) => (
-        <button
-          type="button"
-          key={suggestion.path}
-          disabled={stale}
-          onClick={() => onPick(index)}
-          className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo ${
-            stale ? 'opacity-55' : index === sel ? 'bg-white/8' : 'hover:bg-white/4'
-          }`}
-        >
-          <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-            {!stale && index === sel ? '●' : '○'}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13.5px] text-fg">{suggestion.label}</span>
-            <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
-              {suggestion.path}
-            </span>
-          </span>
-          {suggestion.hidden && (
-            <span className="font-mono text-[10.5px] text-fg-subtle">hidden</span>
-          )}
-        </button>
-      ))}
     </div>
   );
 }
@@ -475,7 +403,14 @@ function TipKey({ children, hint }: { children: string; hint: string }) {
   );
 }
 
-export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' | 'running' }) {
+export function Tip({
+  mode,
+  enterHint,
+}: {
+  mode: 'list' | 'wizard' | 'path' | 'outcome' | 'running';
+  /** Path mode only: what Enter currently does, derived from the screen. */
+  enterHint?: string | undefined;
+}) {
   return (
     <div className="flex items-center gap-3 border-t border-line/14 px-4 py-2.5 font-mono text-[11px] text-fg-subtle">
       {mode === 'running' ? (
@@ -488,9 +423,8 @@ export function Tip({ mode }: { mode: 'list' | 'wizard' | 'path' | 'outcome' | '
         </>
       ) : mode === 'path' ? (
         <>
-          <TipKey hint={paletteCopy.tips.cycle}>↑↓</TipKey>
-          <TipKey hint={paletteCopy.tips.fill}>tab</TipKey>
-          <TipKey hint={paletteCopy.tips.fillOrAdd}>↵</TipKey>
+          <TipKey hint={paletteCopy.tips.cycle}>↑↓ tab</TipKey>
+          <TipKey hint={enterHint ?? paletteCopy.tips.use}>↵</TipKey>
           <TipKey hint={paletteCopy.tips.back}>esc</TipKey>
           <span className="ml-auto opacity-70">{paletteCopy.pathStep.goDeeper}</span>
         </>

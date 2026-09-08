@@ -13,6 +13,19 @@ export interface InputFlowPathSuggestion {
   readonly hidden?: boolean | undefined;
 }
 
+/**
+ * DOM wiring for the path screen's combobox/listbox relationship. The palette
+ * mints these ids (a pure screen projection cannot) and passes the same group to
+ * both the header control and the body, so the input's active descendant and the
+ * body's selected row are always the same row. Path screens only.
+ */
+export interface InputFlowPathAria {
+  readonly listId: string;
+  readonly hintId: string;
+  /** Absent whenever nothing is highlighted — including every stale window. */
+  readonly activeOptionId?: string | undefined;
+}
+
 export interface InputFlowReviewChoice<Payload = unknown> {
   readonly value: string;
   readonly label: string;
@@ -88,6 +101,12 @@ export type InputFlowScreen =
       readonly placeholder?: string | undefined;
       readonly loading: boolean;
       readonly stale: boolean;
+      /**
+       * What the next Enter does, derived once from the path policy so the hint
+       * and the tip strip cannot disagree with the reducer. A local literal
+       * union: presentation depends on nothing above it.
+       */
+      readonly enterIntent: 'accept' | 'submit' | 'none';
       readonly error?: string | null | undefined;
     }
   | {
