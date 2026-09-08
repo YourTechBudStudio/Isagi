@@ -62,6 +62,17 @@ export default defineConfig({
       testMatch: /command-palette\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },
     },
+    // Story #39, phase 02. Shares the command-palette page's bundle but not its
+    // app: `?pathPreview=1` renders the temporary path preview instead, with no
+    // fake runtime behind it. Its own project because the `command-palette`
+    // project matches only `command-palette.spec.ts`, so without this entry the
+    // spec would be built, shipped and silently never run. Phase 03 deletes this
+    // project with the preview and its spec.
+    {
+      name: 'path-preview',
+      testMatch: /path-completion-preview\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/?pathPreview=1` },
+    },
     // Shares the command-palette page, because the endpoint surfaces are the
     // strip and the drawer that page already mounts. Its own project so the
     // clipboard permission it needs is not granted to every other spec.
