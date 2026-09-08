@@ -1,15 +1,8 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-/**
- * Cyclic highlight movement over a list of `length` rows. A `null` current index
- * means "no highlight" — arrowing into it lands on the first row (down) or last
- * row (up).
- */
-export function moveIndex(current: number | null, delta: number, length: number): number | null {
-  if (length === 0) return null;
-  if (current === null) return delta < 0 ? length - 1 : 0;
-  return (current + delta + length) % length;
-}
+import { moveIndex } from '../lib/keyboard-selection.js';
+
+export { moveIndex };
 
 /**
  * Where the highlight rests when a view's shape changes. With an empty query,
