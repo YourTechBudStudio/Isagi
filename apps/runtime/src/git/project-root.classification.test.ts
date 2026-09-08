@@ -254,14 +254,24 @@ describe('normalizeExistingDirectory rejects unusable paths before any Git work'
     assert.equal(typedFailure(exit).code, 'not_directory');
   });
 
-  test('an unreadable path reports path_not_found, not permission_denied', async (t) => {
-    // Pinning behavior that is easy to misread as a bug in the extraction, and
-    // is neither: `validateDirectory` was carried over verbatim, and its
-    // `existsSync` guard runs first. `existsSync` swallows EACCES and answers
-    // `false`, so a genuine permission failure is reported as a missing path and
-    // the `permission_denied` branch below it is unreachable except through a
-    // race. Recorded in decisions.md rather than changed here, because the
-    // reviewed design specifies this helper as behaviorally unchanged.
+  test('a path below a regular file keeps its path_not_found reason', async () => {
+    // `stat` reports ENOTDIR here, where the removed `existsSync` guard reported
+    // `false`. Both produce `path_not_found`; this pins that the correction did
+    // not quietly move this case to the catch-all branch.
+    const file = join(workspace.root, 'not-a-parent.txt');
+    writeFileSync(file, 'regular file\n');
+    const exit = await Effect.runPromiseExit(normalizeExistingDirectory(join(file, 'child')));
+    assert.equal(typedFailure(exit).code, 'path_not_found');
+  });
+
+  test('an unreadable path reports permission_denied, not path_not_found', async (t) => {
+    // The correction phase 02 recorded and phase 05 made. `validateDirectory`
+    // used to run `existsSync` first, which answers `false` for a stat it is not
+    // allowed to perform, so this path was reported as missing and the
+    // `permission_denied` reason was unreachable. `stat` now decides alone.
+    //
+    // The fixture reproduces the denial through an unreadable parent, which is
+    // one way to make `stat` fail with EACCES rather than the only one.
     const parent = join(workspace.root, 'unreadable-input');
     const candidate = join(parent, 'child');
     mkdirSync(candidate, { recursive: true });
@@ -279,7 +289,7 @@ describe('normalizeExistingDirectory rejects unusable paths before any Git work'
         return;
       }
       const exit = await Effect.runPromiseExit(normalizeExistingDirectory(candidate));
-      assert.equal(typedFailure(exit).code, 'path_not_found');
+      assert.equal(typedFailure(exit).code, 'permission_denied');
     } finally {
       chmodSync(parent, 0o700);
       rmSync(parent, { recursive: true, force: true });

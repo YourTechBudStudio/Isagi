@@ -41,7 +41,7 @@ import {
   type WorkspaceRepositoryService,
 } from '../workspace.repository.js';
 import { WorkspaceService, WorkspaceServiceLive } from '../workspace.service.js';
-import { buildWorkspaceSnapshot } from '../workspace.snapshot.js';
+import { buildWorkspaceSnapshot, FOLDER_ENVIRONMENT_TITLE } from '../workspace.snapshot.js';
 
 const testWorktreeSetup = {
   preflight: (candidate: ProjectRow) =>
@@ -182,6 +182,68 @@ test('workspace snapshots serialize worktrees for present projects', () => {
 
   assert.equal(snapshot.projects[0]?.worktrees[0]?.id, worktreeBase.id);
   assert.equal('commands' in snapshot.projects[0]!.worktrees[0]!, false);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+/**
+ * A folder project's one environment is named by the product, not derived from
+ * Git. The Git projections below it are asserted in the same test so a change
+ * that made every environment `default` could not pass.
+ */
+test('a folder project titles its single environment default and fabricates no Git facts', () => {
+  const folder = { ...project, id: 2, name: 'notes', kind: 'folder' as const, rootPath: '/notes' };
+  const environment = {
+    ...worktreeBase,
+    id: 20,
+    projectId: folder.id,
+    path: '/notes',
+    branch: null,
+    head: null,
+  } satisfies WorktreeRow;
+
+  const snapshot = buildWorkspaceSnapshot([folder, project], [environment, worktreeBase]);
+
+  const projected = snapshot.projects[0]?.worktrees[0];
+  assert.equal(projected?.title, FOLDER_ENVIRONMENT_TITLE);
+  assert.equal(projected?.title, 'default');
+  assert.equal(projected?.branch, null);
+  assert.equal(projected?.head, null);
+  assert.equal(projected?.isRoot, true);
+  // Unchanged for Git: the branch still names the environment.
+  assert.equal(snapshot.projects[1]?.worktrees[0]?.title, 'main');
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
+});
+
+/**
+ * Hiding and deleting are different things. A missing folder project projects no
+ * environments, but nothing in this phase removes the durable row — the caller
+ * still holds it, and phase 08's recovery depends on it still being there.
+ */
+test('a missing folder project hides its environment without the row disappearing', () => {
+  const folder = {
+    ...project,
+    id: 2,
+    name: 'notes',
+    kind: 'folder' as const,
+    rootPath: '/notes',
+    status: 'missing' as const,
+    missingReason: 'Project path not found: /notes',
+  };
+  const environment = {
+    ...worktreeBase,
+    id: 20,
+    projectId: folder.id,
+    path: '/notes',
+    branch: null,
+    head: null,
+  } satisfies WorktreeRow;
+  const rows = [environment];
+
+  const snapshot = buildWorkspaceSnapshot([folder], rows);
+
+  assert.equal(snapshot.projects[0]?.status, 'missing');
+  assert.deepEqual(snapshot.projects[0]?.worktrees, []);
+  assert.deepEqual(rows, [environment]);
   assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 });
 

@@ -4,6 +4,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { Data, Effect } from 'effect';
 
+import { isPermissionError } from '../lib/fs-errors.js';
 import { normalizeHomePath } from '../paths/path.utils.js';
 import { gitMetadataOnPath } from './git-metadata.js';
 import { Git, type GitCommandError } from './git.command.js';
@@ -263,16 +264,17 @@ function rejectLinkedWorktree(
   });
 }
 
+/**
+ * `stat` alone decides, because it is the only call that can tell the three
+ * answers apart. An `existsSync` pre-check used to run first and swallowed
+ * `EACCES` as `false`, so a folder Isagi was not allowed to read was reported as
+ * a path that did not exist and the `permission_denied` reason below was
+ * unreachable. `ENOENT` and `ENOTDIR` keep the wording that guard produced, so
+ * the only user-visible change is that a refused stat now says so.
+ */
 function validateDirectory(path: string) {
   return Effect.try({
     try: () => {
-      if (!existsSync(path)) {
-        throw new ProjectPathValidationError({
-          code: 'path_not_found',
-          message: `Path not found: ${path}`,
-          path,
-        });
-      }
       const stat = statSync(path);
       if (!stat.isDirectory()) {
         throw new ProjectPathValidationError({
@@ -294,6 +296,14 @@ function validateDirectory(path: string) {
           path,
         });
       }
+      if (isAbsentPathError(error)) {
+        return new ProjectPathValidationError({
+          code: 'path_not_found',
+          cause: error,
+          message: `Path not found: ${path}`,
+          path,
+        });
+      }
       return new ProjectPathValidationError({
         code: 'path_not_found',
         cause: error,
@@ -302,6 +312,19 @@ function validateDirectory(path: string) {
       });
     },
   });
+}
+
+/**
+ * The two errno values the removed `existsSync` guard answered `false` for:
+ * nothing at the path, and a path whose parent component is not a directory.
+ * Both kept their `path_not_found` reason and wording.
+ */
+function isAbsentPathError(error: unknown) {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return false;
+  }
+  const code = (error as { readonly code?: unknown }).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 /**
@@ -322,14 +345,4 @@ export function normalizeProjectPath(input: string) {
   } catch {
     return resolve(expanded);
   }
-}
-
-function isPermissionError(error: unknown) {
-  return (
-    error &&
-    typeof error === 'object' &&
-    'code' in error &&
-    ((error as { code?: unknown }).code === 'EACCES' ||
-      (error as { code?: unknown }).code === 'EPERM')
-  );
 }

@@ -36,13 +36,16 @@ import { CommandService } from '../commands/index.js';
 import { diagnosticPhase, logDiagnosticEvent } from '../diagnostics/phase.js';
 import {
   branchPathHash,
+  classifyProjectRoot,
   Git,
   type GitCommandError,
   listGitWorktrees,
   listLocalBranches,
+  normalizeExistingDirectory,
   type ProjectPathValidationError,
   validateProjectRoot,
 } from '../git/index.js';
+import { isPermissionError } from '../lib/fs-errors.js';
 import {
   DataDirectory,
   type DatabaseError,
@@ -336,7 +339,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
             yield* ensureProjectPathAvailable(repository, project);
             yield* validateBranchName(git, project, branch);
-            yield* reconcileProjectWithGit(repository, commands, project).pipe(
+            yield* reconcileProject(repository, commands, project).pipe(
               Effect.provideService(Git, git),
             );
             const existing = yield* repository.findProjectWorktreeByBranch({
@@ -412,9 +415,7 @@ export const WorkspaceServiceLive = Layer.effect(
             yield* diagnosticPhase(
               'workspace.open_worktree.reconcile_after_git_add',
               checkoutContext,
-              reconcileProjectWithGit(repository, commands, project).pipe(
-                Effect.provideService(Git, git),
-              ),
+              reconcileProject(repository, commands, project).pipe(Effect.provideService(Git, git)),
             );
             const created = yield* repository.findProjectWorktreeByBranch({
               projectId: project.id,
@@ -627,23 +628,34 @@ export const WorkspaceServiceLive = Layer.effect(
         ),
       registerProject: (input) =>
         Effect.gen(function* () {
-          const projectRoot = yield* validateProjectRoot(input.path).pipe(
-            Effect.provideService(Git, git),
-          );
-          const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
+          // Canonicalize first, then look for an existing registration, and only
+          // classify a path that has none. Stored kind wins: a folder project
+          // someone has since run `git init` inside comes back as the same
+          // folder project with the same id, and re-adding a registered Git
+          // project whose Git has broken returns its id and lets reconciliation
+          // report it missing, rather than refusing the add outright.
+          const root = yield* normalizeExistingDirectory(input.path);
+          const existing = yield* repository.findProjectByRootPath(root.rootPath);
+          // Classification is the only thing that can reject a new path, and it
+          // runs before the single write on this path, so a refused or
+          // inconclusive answer leaves no project and no environment behind.
           // `createProject` returns the row it inserted, so there is no
           // follow-up lookup that could come back null and silently skip
-          // reconciliation. Kind is stated here because `validateProjectRoot`
-          // accepted a supported Git root; classification arrives in phase 05.
+          // reconciliation.
           const project =
             existing ??
-            (yield* repository.createProject({
-              name: projectRoot.name,
-              rootPath: projectRoot.rootPath,
-              kind: 'git',
-            }));
+            (yield* classifyProjectRoot(root).pipe(
+              Effect.provideService(Git, git),
+              Effect.flatMap((classified) =>
+                repository.createProject({
+                  name: classified.name,
+                  rootPath: classified.rootPath,
+                  kind: classified.kind,
+                }),
+              ),
+            ));
 
-          yield* reconcileProjectWithGit(repository, commands, project).pipe(
+          yield* reconcileProject(repository, commands, project).pipe(
             Effect.provideService(Git, git),
           );
 
@@ -719,7 +731,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
           for (const project of projects) {
             findings.push(
-              ...(yield* reconcileProjectWithGit(repository, commands, project).pipe(
+              ...(yield* reconcileProject(repository, commands, project).pipe(
                 Effect.provideService(Git, git),
               )),
             );
@@ -976,17 +988,47 @@ function gitBranchDeleteDiagnostic(error: GitCommandError) {
 
 function ensureProjectPathAvailable(repository: WorkspaceRepositoryService, project: ProjectRow) {
   return Effect.gen(function* () {
-    if (pathIsDirectory(project.rootPath)) {
+    const availability = directoryAvailability(project.rootPath);
+    if (availability.available) {
       return;
     }
 
     yield* repository.setProjectStatus({
       id: project.id,
-      missingReason: `Project path not found: ${project.rootPath}`,
+      missingReason: availability.reason,
       status: 'missing',
     });
     return yield* Effect.fail(projectNotPresent(project.id));
   });
+}
+
+type DirectoryAvailability =
+  | { readonly available: true }
+  | { readonly available: false; readonly reason: string };
+
+/**
+ * Presence with a diagnosable cause, shared by both reconciliation branches and
+ * by `ensureProjectPathAvailable` so the three cannot describe the same folder
+ * differently. "Not there", "not a folder any more" and "could not be read" are
+ * different answers, only some of them are the user's to fix, and the string
+ * lands verbatim on the missing-project canvas.
+ *
+ * A successful stat establishes that something is there and that it is a
+ * directory. It does not establish that the directory can be listed, that Git
+ * can work inside it, or that it is the same physical directory as yesterday —
+ * `stat` follows symlinks, exactly as the `pathIsDirectory` it replaces did.
+ */
+function directoryAvailability(path: string): DirectoryAvailability {
+  try {
+    return statSync(path).isDirectory()
+      ? { available: true }
+      : { available: false, reason: `Project path is no longer a folder: ${path}` };
+  } catch (error) {
+    if (isPermissionError(error)) {
+      return { available: false, reason: `Isagi cannot read the project folder: ${path}` };
+    }
+    return { available: false, reason: `Project path not found: ${path}` };
+  }
 }
 
 function projectNotPresent(projectId: number) {
@@ -1111,7 +1153,60 @@ function validateActiveContextPersistenceTarget(
   });
 }
 
-function reconcileProjectWithGit(
+/**
+ * How a project's durable rows are brought back in line with the world depends
+ * on who owns its environments. A Git project is reconciled *against Git*,
+ * which discovers its membership. A folder project owns exactly one environment
+ * that the runtime created alongside the project itself, so there is nothing to
+ * discover and nothing to prune — only whether the directory is still there.
+ */
+function reconcileProject(
+  repository: WorkspaceRepositoryService,
+  commands: import('../commands/index.js').CommandServiceShape,
+  project: ProjectRow,
+) {
+  return project.kind === 'folder'
+    ? reconcileFolderProject(repository, project)
+    : reconcileGitProject(repository, commands, project);
+}
+
+/**
+ * Presence, and nothing else. It reads no worktree rows, runs no Git, emits no
+ * worktree findings and never calls command cleanup, because every one of those
+ * identifies membership by path — which would hand filesystem discovery
+ * authority over an environment the runtime owns.
+ *
+ * There is deliberately no repair step for a missing singleton: creation is
+ * atomic and no supported path deletes the row, so a reconciler able to
+ * recreate it could only ever paper over database corruption, which the
+ * architecture puts out of scope.
+ */
+function reconcileFolderProject(repository: WorkspaceRepositoryService, project: ProjectRow) {
+  return Effect.gen(function* () {
+    const findings: ReconciliationFinding[] = [];
+    const availability = directoryAvailability(project.rootPath);
+
+    if (!availability.available) {
+      if (project.status !== 'missing') {
+        findings.push({ kind: 'project_missing', projectId: project.id, path: project.rootPath });
+      }
+      yield* repository.setProjectStatus({
+        id: project.id,
+        missingReason: availability.reason,
+        status: 'missing',
+      });
+      return findings;
+    }
+
+    if (project.status === 'missing') {
+      findings.push({ kind: 'project_restored', projectId: project.id, path: project.rootPath });
+    }
+    yield* repository.setProjectStatus({ id: project.id, status: 'present' });
+    return findings;
+  });
+}
+
+function reconcileGitProject(
   repository: WorkspaceRepositoryService,
   commands: import('../commands/index.js').CommandServiceShape,
   project: ProjectRow,
@@ -1119,13 +1214,14 @@ function reconcileProjectWithGit(
   return Effect.gen(function* () {
     const findings: ReconciliationFinding[] = [];
 
-    if (!pathIsDirectory(project.rootPath)) {
+    const availability = directoryAvailability(project.rootPath);
+    if (!availability.available) {
       if (project.status !== 'missing') {
         findings.push({ kind: 'project_missing', projectId: project.id, path: project.rootPath });
       }
       yield* repository.setProjectStatus({
         id: project.id,
-        missingReason: `Project path not found: ${project.rootPath}`,
+        missingReason: availability.reason,
         status: 'missing',
       });
       return findings;
