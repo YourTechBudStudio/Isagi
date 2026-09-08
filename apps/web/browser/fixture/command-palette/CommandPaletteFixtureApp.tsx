@@ -18,42 +18,20 @@ import {
 import type { CommandPaletteRuntimeControls } from './fake-runtime.js';
 import { FIXTURE_ORIGIN, FIXTURE_PANES } from './seed.js';
 
-/**
- * The command-palette fixture: the production `CommandPalette` and
- * `WorkbenchDrawer`, with a fake runtime behind them (see {@link ./fake-runtime}).
- *
- * Phase 01's forked palette shell, its hardcoded catalog, and its `run:`/`open:`
- * recording are gone. Anything that could still be toggled here would be a second
- * definition of how the palette behaves, and the whole point of this page is that
- * the seams between the palette, the drawer, the focus router, and the query
- * observer only exist when the real components are mounted together.
- *
- * What the page adds is the one thing the app cannot otherwise offer: registered
- * pane focus targets that count their invocations, so "the drawer kept focus" and
- * "the pane got focus back" are observable facts rather than the absence of
- * evidence.
- */
+/** Production workbench components with observable pane focus and simulated runtime controls. */
 export function CommandPaletteFixtureApp({
   runtime,
 }: {
   readonly runtime: CommandPaletteRuntimeControls;
 }) {
   const [ready, setReady] = useState(false);
-  // Locality is a client-side capability, not something the runtime serves, so
-  // it is steered here rather than through the fake runtime. Phase 05 derives
-  // the production value; until then the fixture is the only place a `local`
-  // value exists at all.
+  // Locality is a client capability, so the app owns this control.
   const [locality, setLocality] = useState<RuntimeLocality>('local');
   // Counted through a ref so the stand-in focus closures stay stable and a
   // re-render cannot lose a count that a queued animation frame just recorded.
   const paneFocusCounts = useRef<Record<number, number>>({});
 
-  // The shared-consumer seam. `WorkflowInputFlow` routes its keys through the same
-  // `useKeyboardSelection` the palette does, so the guards this story added to that
-  // hook — composition, key repeat, Tab, "/" — reach it too. It is absent until a
-  // spec mounts it: this page's contract is that the palette and the drawer are the
-  // only things on screen, and a second always-mounted keyboard surface would make
-  // every existing focus assertion here ambiguous.
+  // Mount shared-input regression cases on demand to avoid competing focus targets.
   const [workflowQuestions, setWorkflowQuestions] = useState<
     readonly WorkflowQuestionSpecDto[] | null
   >(null);

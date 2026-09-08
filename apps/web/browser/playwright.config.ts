@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-const fixturePort = 41_731;
+const fixturePort = Number(process.env.ISAGI_BROWSER_FIXTURE_PORT ?? 41_731);
+if (!Number.isSafeInteger(fixturePort) || fixturePort < 1 || fixturePort > 65_535) {
+  throw new RangeError('ISAGI_BROWSER_FIXTURE_PORT must be an integer from 1 to 65535');
+}
 
 export default defineConfig({
   testDir: './specs',

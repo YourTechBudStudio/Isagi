@@ -1,42 +1,9 @@
 import type { PathSuggestOutput } from '@isagi/contracts';
 
 /**
- * The fake filesystem the command-palette fixture answers `POST /paths/suggestions`
- * from, and the response gate that decides *when* an answer is delivered.
- *
- * ## What this is not
- *
- * It is deliberately dumb. It does no symlink resolution, no chunking, no collator
- * work, no permission modelling, and no home expansion. It is a flat list of
- * directory paths spelled exactly the way a runtime would spell them — `~/…` under
- * the runtime's home, absolute everywhere else — matched with plain string
- * operations.
- *
- * That is the point. The web layer treats suggestion strings as opaque
- * runtime-owned text, so the fixture's job is to hand back plausible runtime
- * spellings and record what it was asked, nothing more. Real listing behaviour —
- * scope, ordering exactness, hidden-name rules, symlinks, permissions, event-loop
- * yielding — is proved against a real filesystem in
- * `apps/runtime/src/paths/path.suggestions.test.ts`. Nothing here is evidence about
- * any of that, and a browser test must never be written as though it were.
- *
- * The one behaviour it does mirror faithfully is *input parsing*, because that is
- * the half the frontend's descent and trailing-separator rules are built on: a
- * trailing separator lists children, anything else filters the last segment against
- * its parent's children.
- */
-
-/**
- * Directory paths, in runtime spelling. Home descendants carry the tilde; anything
- * else is absolute — including `/srv/deploy`, which exists so an outside-home
- * payload can be asserted verbatim (phase 04 removed the home confinement that once
- * made such a path unreachable).
- *
- * The shape is chosen for what the scenarios need rather than for realism:
- * `~/work` has enough children to cycle through and wrap around, `~/solo` has
- * exactly one child so a single-row wrap is observable, `~/empty` has none, and
- * `~/work/isagi` has children so a typed trailing-slash buffer has something to
- * load underneath it.
+ * Runtime-spelled directory strings for browser interactions. Filesystem behavior
+ * belongs in apps/runtime/src/paths/path.suggestions.test.ts.
+ * Includes multiple, single, empty, nested, hidden, and outside-home cases.
  */
 export const FIXTURE_PATH_TREE: readonly string[] = [
   '~/work',
@@ -57,7 +24,7 @@ export const FIXTURE_PATH_TREE: readonly string[] = [
 ];
 
 /** How `parseSuggestionInput` split an input into "list this" and "starting with this". */
-export interface ParsedSuggestionInput {
+interface ParsedSuggestionInput {
   readonly basePath: string;
   readonly filter: string;
 }
@@ -71,7 +38,7 @@ export interface ParsedSuggestionInput {
  * in runtime spelling, and normalising here would quietly hide a frontend that had
  * started rewriting paths it is supposed to pass through untouched.
  */
-export function parseSuggestionInput(input: string): ParsedSuggestionInput {
+function parseSuggestionInput(input: string): ParsedSuggestionInput {
   const trimmed = input.trim();
   if (trimmed === '' || trimmed === '~' || trimmed === '~/') {
     return { basePath: '~', filter: '' };
@@ -133,7 +100,7 @@ interface HeldResponse {
   readonly deliver: () => void;
 }
 
-export interface ResponseGate {
+interface ResponseGate {
   /** Arm or disarm holding. Requests that arrive while armed wait for a release. */
   readonly hold: (held: boolean) => void;
   /**
@@ -149,25 +116,11 @@ export interface ResponseGate {
   readonly release: (id: number) => void;
   /** Deliver every held response, oldest first. */
   readonly releaseAll: () => void;
-  /** Request ids currently waiting, in arrival order. */
-  readonly heldIds: () => readonly number[];
 }
 
 /**
- * Deterministic response scheduling: a request either answers immediately or waits
- * until the test releases it by id.
- *
- * Ids rather than queue positions, because a queue shrinks as it drains and an index
- * into it silently retargets. This replaces the timer-based control the plan
- * originally proposed for these routes — a delay can only *probably* reverse two
- * responses, while a gate does it by construction. The fixture's older
- * `setRunDelay`, which existing command specs depend on, is deliberately left alone;
- * see the note beside it in `fake-runtime.ts`.
- *
- * This removes timing coordination from ordering assertions. It does not make
- * browser tests flake-free in general, and it does not remove the production 80 ms
- * suggestion debounce — a spec still has to observe a request before it can release
- * one.
+ * Release by stable request ID to control response ordering. Observe arrival after
+ * the production debounce before releasing. Disarming does not drain held responses.
  */
 export function createResponseGate(): ResponseGate {
   let held = false;
@@ -197,6 +150,5 @@ export function createResponseGate(): ResponseGate {
         entry.deliver();
       }
     },
-    heldIds: () => [...waiting.keys()],
   };
 }

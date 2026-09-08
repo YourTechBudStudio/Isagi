@@ -21,24 +21,8 @@ import {
 } from './seed.js';
 
 /**
- * A runtime made of one mutable object and a `fetch` stub.
- *
- * The fixture mounts the production `CommandPalette` and `WorkbenchDrawer`, so
- * the production query observer, the production runtime client and its decoding,
- * the real run helper, and the real invalidation all execute. The only thing
- * replaced is the process at the other end of the wire.
- *
- * It applies runs for real. `POST .../commands/run` marks the command `running`
- * in this state, so the catalog read that follows *converges* on the transition
- * instead of reporting the old status and hiding a broken invalidation. Server
- * state observed after the fact is the proof a mutation happened; a recorded
- * request alone would only prove the client spoke.
- *
- * Tests steer it through `window.commandPaletteFixture` rather than through
- * on-screen controls: the palette and the drawer should be the only things on
- * this page. These are the runtime's half of that object; the fixture app owns
- * the global and merges its own store-side controls in, so there is exactly one
- * publisher.
+ * In-memory runtime behind production components, clients, and query observers.
+ * The fixture app publishes these controls on window.commandPaletteFixture.
  */
 export interface CommandPaletteRuntimeControls {
   /** Replace a worktree's catalog with a valid `configured` read. */
@@ -73,17 +57,7 @@ export interface CommandPaletteRuntimeControls {
   readonly setWorkflows: (titles: readonly string[]) => void;
   /** Reject the next run, so the palette's inline failure can be observed. */
   readonly failNextRun: () => void;
-  /**
-   * Hold every run open for `ms`, widening the in-flight window.
-   *
-   * This is a timer, and the newer path/project routes deliberately do not use one
-   * — they use the deterministic gate in {@link ./path-world}. Two scheduling
-   * vocabularies in one fixture is a real seam to be aware of, and it is an accepted
-   * boundary rather than debt: this control has existing consumers in
-   * `command-palette.spec.ts`, and rewriting passing specs outside this story's
-   * subject to unify the mechanism would risk a regression for tidiness. New routes
-   * must use the gate; do not add a second delay control.
-   */
+  /** Delay command responses; path/project ordering uses the response gates instead. */
   readonly setRunDelay: (ms: number) => void;
   /** Catalog reads served, in total or for one worktree. */
   readonly commandsFetchCount: (worktreeId?: number) => number;
@@ -109,13 +83,7 @@ export interface CommandPaletteRuntimeControls {
     readonly commandName: string;
   }[];
 
-  // --- Path completion and project registration -----------------------------
-  //
-  // Three facts are kept apart on purpose, because the path story's assertions
-  // turn on the difference between them: a request *arrived*, the fixture world
-  // *changed*, and the client *learned*. A held response separates the second
-  // from the third, so "one project exists" and "one request was sent" are
-  // independent observations and neither can stand in for the other.
+  // Request arrival, mutation, and client acknowledgement are separate observations.
 
   /** Replace the fake directory world. Paths are in runtime spelling; see {@link ./path-world}. */
   readonly setPathTree: (paths: readonly string[]) => void;
@@ -591,11 +559,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
       });
     }
 
-    // Stop and restart converge the same way a run does. Stop is the affordance
-    // this phase widened: on a suspended command it clears the resume intent and
-    // the command becomes an ordinary `stopped`, with no process involved. A
-    // fixture that only recorded the request would prove the client spoke and
-    // nothing about whether the drawer then tells the truth.
+    // Apply status changes so subsequent reads expose the mutation to the client.
     const action = /^\/worktrees\/(\d+)\/commands\/(stop|restart)$/.exec(path);
     if (method === 'POST' && action) {
       const worktreeId = Number(action[1]);
