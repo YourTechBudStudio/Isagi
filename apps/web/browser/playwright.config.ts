@@ -57,9 +57,12 @@ export default defineConfig({
       testMatch: /rail-worktree-actions\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
     },
+    // Both palette spec files share this page and this project. The alternation is
+    // anchored so each file is matched exactly once and `command-endpoints.spec.ts`
+    // — which needs a clipboard permission the rest should not have — keeps its own.
     {
       name: 'command-palette',
-      testMatch: /command-palette\.spec\.ts/,
+      testMatch: /command-palette(-path)?\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },
     },
     // Shares the command-palette page, because the endpoint surfaces are the
