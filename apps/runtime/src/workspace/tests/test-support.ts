@@ -1,6 +1,7 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 import { Effect } from 'effect';
 
@@ -343,4 +344,34 @@ export function stateFileWithWriteCounter(
         return state;
       }),
   };
+}
+
+/**
+ * Every path beneath `root`, relative and sorted, with directories marked and
+ * files carried by content hash.
+ *
+ * The instrument for "Isagi did not touch the user's folder": a created `.git`,
+ * a copied template, a stray lock file, a truncated file or a rewritten one all
+ * show up as a diff of two of these, rather than as whichever single check
+ * someone thought to write.
+ */
+export function directoryTree(root: string): string[] {
+  const entries: string[] = [];
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const absolute = join(directory, entry.name);
+      const relativePath = relative(root, absolute);
+      if (entry.isDirectory()) {
+        entries.push(`d ${relativePath}`);
+        walk(absolute);
+      } else {
+        const digest = createHash('sha256').update(readFileSync(absolute)).digest('hex');
+        entries.push(`f ${relativePath} ${digest}`);
+      }
+    }
+  };
+  walk(root);
+  return entries;
 }

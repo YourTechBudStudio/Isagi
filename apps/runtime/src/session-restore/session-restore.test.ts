@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,24 +10,12 @@ import { Effect, Layer } from 'effect';
 import {
   AgentSessionError,
   AgentSessionArtifacts,
-  AgentSessionArtifactsLive,
-  AgentSessionRepositoryLive,
   AgentSessionService,
-  AgentSessionServiceLive,
   type AgentSessionServiceShape,
-  HarnessAdapterRegistry,
-  type HarnessAdapterRegistryService,
 } from '../agent-sessions/index.js';
+import { createFixtureWorkspace } from '../git/tests/fixtures.js';
 import { HarnessLaunchBlocked } from '../harness-control-plane/index.js';
-import { AllowAllHarnessControlPlaneLayer } from '../harness-control-plane/test-support.js';
-import { EntityLockLive } from '../lib/locks/entity-lock.js';
-import {
-  DataDirectory,
-  DatabaseError,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../persistence/index.js';
+import { DatabaseError, RuntimeDatabase } from '../persistence/index.js';
 import {
   agentSessions,
   projects,
@@ -37,25 +25,29 @@ import {
   worktrees,
   worktreeSurfaces,
 } from '../persistence/schema.js';
-import { makeTestDataDirectory } from '../persistence/test-support.js';
-import { PtyService, type PtyServiceShape } from '../pty-processes/index.js';
 import type { LaunchPtyProcessInput } from '../pty-processes/types.js';
-import { InternalRuntimeEventBusLive } from '../runtime-events/index.js';
-import { SessionLifecycleLive } from '../session-lifecycle/index.js';
+import { SurfaceService } from '../surfaces/index.js';
 import {
   SurfaceRepository,
-  SurfaceRepositoryLive,
   type SurfaceRepositoryService,
 } from '../surfaces/surfaces.repository.js';
 import type { PaneSessionBinding } from '../surfaces/types.js';
 import {
   TerminalSessionService,
   TerminalSessionError,
-  TerminalSessionRepositoryLive,
-  TerminalSessionServiceLive,
   type TerminalSessionServiceShape,
 } from '../terminal-sessions/index.js';
+import { liveWorkspaceLayer } from '../workspace/tests/live-workspace-support.js';
+import { WorkspaceRepository } from '../workspace/workspace.repository.js';
+import { WorkspaceService } from '../workspace/workspace.service.js';
 import { StartupSessionRestoreLayer } from './session-restore.js';
+import {
+  captureStartupLogs,
+  type HarnessLaunchRecord,
+  realRestoreLayer,
+  realSessionCreationLayer,
+  sessionDataLayer,
+} from './test-support.js';
 
 test('startup session restore ensures every pane-bound session and isolates failures', async () => {
   const calls: string[] = [];
@@ -169,25 +161,29 @@ test('startup session restore does not fail boot when binding discovery fails', 
 
 test('startup session restore uses real services to restore pane-bound sessions only', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-startup-session-restore-'));
-  const launches: LaunchPtyProcessInput[] = [];
-  const harnessLaunches: Array<{
-    readonly agentSessionId: number;
-    readonly latest: string | null;
-  }> = [];
+  const ptyLaunches: LaunchPtyProcessInput[] = [];
+  const harnessLaunches: HarnessLaunchRecord[] = [];
+  // This suite asserts specific process identifiers, so it pins them rather
+  // than taking the shared counter. `pi` and `bash` are the two commands its
+  // fixture launches.
+  const world = {
+    ptyLaunches,
+    harnessLaunches,
+    allocatePtyProcessId: (input: LaunchPtyProcessInput) => (input.command === 'pi' ? 101 : 201),
+  };
   try {
-    await Effect.runPromise(seedRestoreIntegrationRows.pipe(Effect.provide(seedLayer(dataRoot))));
+    await Effect.runPromise(
+      seedRestoreIntegrationRows.pipe(Effect.provide(sessionDataLayer(dataRoot))),
+    );
 
     await captureStartupLogs(() =>
       Effect.runPromise(
-        Effect.void.pipe(
-          Effect.provide(realRestoreLayer(dataRoot, launches, harnessLaunches)),
-          Effect.scoped,
-        ),
+        Effect.void.pipe(Effect.provide(realRestoreLayer(dataRoot, world)), Effect.scoped),
       ),
     );
 
     const state = await Effect.runPromise(
-      readRestoreIntegrationState.pipe(Effect.provide(seedLayer(dataRoot))),
+      readRestoreIntegrationState.pipe(Effect.provide(sessionDataLayer(dataRoot))),
     );
 
     assert.deepEqual(
@@ -195,7 +191,7 @@ test('startup session restore uses real services to restore pane-bound sessions 
       [10],
     );
     assert.equal(harnessLaunches[0]?.latest, null);
-    assert.deepEqual(launches.map((launch) => launch.command).sort(), ['bash', 'pi']);
+    assert.deepEqual(ptyLaunches.map((launch) => launch.command).sort(), ['bash', 'pi']);
     assert.equal(state.restorableAgentActivePtyProcessId, 101);
     assert.equal(state.restorableTerminalActivePtyProcessId, 201);
     assert.equal(state.missingMetadataAgentActivePtyProcessId, 42);
@@ -216,53 +212,6 @@ function restoreLayer(input: {
     Layer.provide(
       Layer.succeed(TerminalSessionService, fakeTerminalService(input.terminalService)),
     ),
-  );
-}
-
-function realRestoreLayer(
-  dataRoot: string,
-  launches: LaunchPtyProcessInput[],
-  harnessLaunches: Array<{ readonly agentSessionId: number; readonly latest: string | null }>,
-) {
-  const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const databaseLayer = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directory));
-  const surfaceRepository = SurfaceRepositoryLive.pipe(
-    Layer.provide(databaseLayer),
-    Layer.provide(artifacts),
-  );
-  const agentRepository = AgentSessionRepositoryLive.pipe(
-    Layer.provide(databaseLayer),
-    Layer.provide(artifacts),
-  );
-  const terminalRepository = TerminalSessionRepositoryLive.pipe(Layer.provide(databaseLayer));
-  const pty = Layer.effect(
-    PtyService,
-    Effect.map(RuntimeDatabase, (database) => fakeRealRestorePtyService(database, launches)),
-  ).pipe(Layer.provide(databaseLayer));
-  const sessionLifecycle = SessionLifecycleLive.pipe(Layer.provide(EntityLockLive));
-  const harnessRegistry = Layer.succeed(
-    HarnessAdapterRegistry,
-    fakeHarnessRegistry(harnessLaunches),
-  );
-  const agentService = AgentSessionServiceLive.pipe(
-    Layer.provide(AllowAllHarnessControlPlaneLayer),
-    Layer.provide(agentRepository),
-    Layer.provide(pty),
-    Layer.provide(harnessRegistry),
-    Layer.provide(sessionLifecycle),
-    Layer.provide(InternalRuntimeEventBusLive),
-  );
-  const terminalService = TerminalSessionServiceLive.pipe(
-    Layer.provide(terminalRepository),
-    Layer.provide(pty),
-    Layer.provide(sessionLifecycle),
-    Layer.provide(InternalRuntimeEventBusLive),
-  );
-  return StartupSessionRestoreLayer.pipe(
-    Layer.provide(surfaceRepository),
-    Layer.provide(agentService),
-    Layer.provide(terminalService),
   );
 }
 
@@ -449,95 +398,6 @@ const readRestoreIntegrationState = Effect.gen(function* () {
   });
 });
 
-function seedLayer(dataRoot: string) {
-  const directory = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
-  const artifacts = AgentSessionArtifactsLive.pipe(Layer.provide(directory));
-  return Layer.mergeAll(database, artifacts);
-}
-
-function fakeHarnessRegistry(
-  launches: Array<{ readonly agentSessionId: number; readonly latest: string | null }>,
-): HarnessAdapterRegistryService {
-  return {
-    buildLaunch: (input) =>
-      Effect.sync(() => {
-        launches.push({
-          agentSessionId: input.agentSessionId,
-          latest: input.latestHarnessSessionId,
-        });
-        return {
-          command: 'pi',
-          args: input.latestHarnessSessionId ? ['--session', input.latestHarnessSessionId] : [],
-          cwd: input.cwd,
-        };
-      }),
-    buildHeadlessLaunch: () => Effect.die('headless launch is not used'),
-  } satisfies HarnessAdapterRegistryService;
-}
-
-function fakeRealRestorePtyService(
-  database: RuntimeDatabaseService,
-  launches: LaunchPtyProcessInput[],
-): PtyServiceShape {
-  return {
-    allocateLaunch: () => Effect.die('pty allocateLaunch is not used'),
-    readLogTail: () => Effect.die('readLogTail is not used'),
-    launch: (input) =>
-      Effect.gen(function* () {
-        launches.push(input);
-        const ptyProcessId = input.command === 'pi' ? 101 : 201;
-        const now = '2026-07-08T00:00:01.000Z';
-        yield* database.use('test_insert_launched_pty_process', (db) => {
-          db.insert(ptyProcesses)
-            .values({
-              id: ptyProcessId,
-              backend: 'node_pty',
-              backendRefJson: JSON.stringify({
-                schemaVersion: 1,
-                backend: 'node_pty',
-                ptyProcessId,
-                pid: null,
-              }),
-              command: input.command,
-              argsJson: JSON.stringify(input.args),
-              cwd: input.cwd,
-              status: 'running',
-              statusReason: null,
-              exitCode: null,
-              signal: null,
-              logMode: 'none',
-              logPath: null,
-              createdAt: now,
-              updatedAt: now,
-              exitedAt: null,
-              lastSeenAt: now,
-            })
-            .run();
-        });
-        return {
-          ptyProcessId,
-          command: input.command,
-          args: input.args,
-          cwd: input.cwd,
-          logPath: null,
-        };
-      }),
-    getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
-    attach: () => Effect.die('attach is not used'),
-    replay: () => Effect.die('replay is not used'),
-    write: () => Effect.die('write is not used'),
-    writeInput: () => Effect.die('writeInput is not used'),
-    resize: () => Effect.die('resize is not used'),
-    kill: () => Effect.die('kill is not used'),
-    terminate: () => Effect.succeed('terminated_live' as const),
-    pin: () => Effect.void,
-    unpin: () => Effect.void,
-    cleanupProcess: () => Effect.die('pty cleanupProcess is not used'),
-    isPinned: () => Effect.succeed(false),
-  } satisfies PtyServiceShape;
-}
-
 function fakeSurfaceRepository(
   bindings: readonly PaneSessionBinding[] | DatabaseError,
 ): SurfaceRepositoryService {
@@ -610,20 +470,263 @@ function terminalBinding(input: {
   return { ...input, sessionKind: 'terminal_session' };
 }
 
-async function captureStartupLogs(run: () => Promise<void>) {
-  const info = console.info;
-  const warn = console.warn;
-  const captured = {
-    info: [] as unknown[][],
-    warn: [] as unknown[][],
-  };
-  console.info = (...args: unknown[]) => captured.info.push(args);
-  console.warn = (...args: unknown[]) => captured.warn.push(args);
+/**
+ * The same question as the suite above, asked of a project that has no Git to
+ * fall back on, and asked through the services that actually own the work.
+ *
+ * Every row here is produced by the API that owns it: the project by
+ * `registerProject`, the surfaces and panes by `SurfaceService`, the sessions by
+ * `createPaneSession`. That matters for one specific reason — `createPaneSession`
+ * resolves a session's `cwd` from `findWorktreePath(worktreeId)`. Seeding those
+ * rows by hand would write the folder path the test already knew and prove
+ * nothing about it reaching the session. Here the path has to travel.
+ *
+ * The PTY backend and the harness adapter are fake. Nothing below establishes
+ * that a real shell ran, that a real harness emitted the recorded identity, or
+ * that a real harness would resume from it.
+ */
+test('a folder project keeps its sessions, paths, and resume identity across a restart, with new process incarnations', async () => {
+  const fixtures = createFixtureWorkspace('folder-session-continuity');
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-folder-session-continuity-'));
+  const projectPath = fixtures.directory('notes');
+  writeFileSync(join(projectPath, 'notes.md'), '# notes\n');
+
+  // Deterministic, and deliberately not derivable from anything the runtime
+  // could reconstruct: if it reaches the adapter, it was stored and read back.
+  const harnessSessionId = 'harness-session-6f2ac91b';
+
   try {
-    await run();
-    return captured;
+    // ── Stage 1: register the folder ────────────────────────────────────────
+    const registered = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const repository = yield* WorkspaceRepository;
+        const added = yield* service.registerProject({ path: projectPath });
+        const worktree = (yield* repository.listWorktrees).find(
+          (row) => row.projectId === added.projectId,
+        );
+        if (!worktree) throw new Error('Expected the folder project to own an environment.');
+        return { projectId: added.projectId, worktreeId: worktree.id };
+      }).pipe(Effect.provide(liveWorkspaceLayer(dataRoot, {}))),
+    );
+
+    // ── Stage 2: create surfaces, panes, and pane-bound sessions ────────────
+    const creationWorld = {
+      ptyLaunches: [] as LaunchPtyProcessInput[],
+      harnessLaunches: [] as HarnessLaunchRecord[],
+    };
+    const created = await Effect.runPromise(
+      Effect.gen(function* () {
+        const surfaces = yield* SurfaceService;
+        const agents = yield* AgentSessionService;
+        const terminals = yield* TerminalSessionService;
+        const artifacts = yield* AgentSessionArtifacts;
+
+        const agentSurface = yield* surfaces.createSinglePaneSurface({
+          worktreeId: registered.worktreeId,
+          titleBase: 'Agent',
+        });
+        const agentBound = yield* surfaces.createPaneSession({
+          worktreeId: registered.worktreeId,
+          create: { kind: 'agent_session', paneId: agentSurface.paneId, harness: 'pi' },
+        });
+        const terminalSurface = yield* surfaces.createSinglePaneSurface({
+          worktreeId: registered.worktreeId,
+          titleBase: 'Terminal',
+        });
+        const terminalBound = yield* surfaces.createPaneSession({
+          worktreeId: registered.worktreeId,
+          create: { kind: 'terminal_session', paneId: terminalSurface.paneId },
+        });
+        if (agentBound.session.kind !== 'agent_session') throw new Error('Expected an agent pane.');
+        if (terminalBound.session.kind !== 'terminal_session')
+          throw new Error('Expected a terminal pane.');
+        const agentSessionId = agentBound.session.agentSessionId;
+        const terminalSessionId = terminalBound.session.terminalSessionId;
+
+        // The processes running before the shutdown.
+        const agentPtyProcessId = yield* agents.ensureActivePtyProcess(agentSessionId);
+        const terminalPtyProcessId = yield* terminals.ensureActivePtyProcess(terminalSessionId);
+
+        // The identity a harness would have been observed emitting, written
+        // through the API that owns it rather than into the file behind it.
+        yield* artifacts.writeHarnessSessionId({ agentSessionId, harnessSessionId });
+
+        return {
+          agentSurfaceId: agentSurface.surfaceId,
+          agentPaneId: agentSurface.paneId,
+          terminalSurfaceId: terminalSurface.surfaceId,
+          terminalPaneId: terminalSurface.paneId,
+          agentSessionId,
+          terminalSessionId,
+          agentPtyProcessId,
+          terminalPtyProcessId,
+        };
+      }).pipe(Effect.provide(realSessionCreationLayer(dataRoot, creationWorld))),
+    );
+
+    // The path travelled from the registered folder into both session rows.
+    assert.deepEqual(
+      creationWorld.ptyLaunches.map((launch) => launch.cwd),
+      [projectPath, projectPath],
+    );
+
+    // ── Stage 3: reopen and read what persisted ─────────────────────────────
+    const before = await Effect.runPromise(
+      readFolderSessionState(created.agentSessionId, created.terminalSessionId).pipe(
+        Effect.provide(sessionDataLayer(dataRoot)),
+      ),
+    );
+    assert.equal(before.agent?.cwd, projectPath);
+    assert.equal(before.terminal?.cwd, projectPath);
+    assert.equal(before.agent?.activePtyProcessId, created.agentPtyProcessId);
+    assert.equal(before.terminal?.activePtyProcessId, created.terminalPtyProcessId);
+    assert.equal(before.harnessSessionId, harnessSessionId);
+
+    // ── Stage 4: restart ────────────────────────────────────────────────────
+    const restartWorld = {
+      ptyLaunches: [] as LaunchPtyProcessInput[],
+      harnessLaunches: [] as HarnessLaunchRecord[],
+    };
+    const restartLogs = await captureStartupLogs(() =>
+      Effect.runPromise(
+        Effect.void.pipe(Effect.provide(realRestoreLayer(dataRoot, restartWorld)), Effect.scoped),
+      ),
+    );
+
+    // Restore's own report, asserted before anything downstream of it. Restore
+    // isolates a failing pane and carries on, so without this a broken fixture
+    // reads as "the process was not replaced" — which is also what a genuine
+    // continuity regression looks like. The two are only distinguishable here.
+    assert.deepEqual(restartLogs.warn, []);
+    assert.deepEqual(restartLogs.info.at(-1)?.[1], {
+      attempted: 2,
+      relaunched: 2,
+      reused: 0,
+      skippedUnrecoverable: 0,
+      failed: 0,
+    });
+
+    // ── Stage 5: reopen again and compare ───────────────────────────────────
+    const after = await Effect.runPromise(
+      readFolderSessionState(created.agentSessionId, created.terminalSessionId).pipe(
+        Effect.provide(sessionDataLayer(dataRoot)),
+      ),
+    );
+
+    // Durable identity is unchanged: same sessions, same environment, same
+    // panes, same folder cwd.
+    assert.equal(after.agent?.id, created.agentSessionId);
+    assert.equal(after.terminal?.id, created.terminalSessionId);
+    assert.equal(after.agent?.worktreeId, registered.worktreeId);
+    assert.equal(after.terminal?.worktreeId, registered.worktreeId);
+    assert.equal(after.agent?.cwd, projectPath);
+    assert.equal(after.terminal?.cwd, projectPath);
+    // Each pane is asserted with the surface it hangs off, so a pane that
+    // survived while its surface association moved would fail here rather than
+    // read as intact.
+    assert.deepEqual(after.panes, [
+      {
+        paneId: created.agentPaneId,
+        surfaceId: created.agentSurfaceId,
+        sessionKind: 'agent_session',
+        sessionId: created.agentSessionId,
+      },
+      {
+        paneId: created.terminalPaneId,
+        surfaceId: created.terminalSurfaceId,
+        sessionKind: 'terminal_session',
+        sessionId: created.terminalSessionId,
+      },
+    ]);
+    // And the surfaces themselves are the two that were created, still on the
+    // folder's environment.
+    assert.deepEqual(after.surfaceIds, [
+      { id: created.agentSurfaceId, worktreeId: registered.worktreeId },
+      { id: created.terminalSurfaceId, worktreeId: registered.worktreeId },
+    ]);
+    assert.equal(after.harnessSessionId, harnessSessionId);
+
+    // The processes are new. Asserted as "different, and backed by a row that
+    // exists" rather than against a literal identifier, because which number
+    // the backend hands out is not a durable fact.
+    assert.notEqual(after.agent?.activePtyProcessId, created.agentPtyProcessId);
+    assert.notEqual(after.terminal?.activePtyProcessId, created.terminalPtyProcessId);
+    assert.equal(after.agentProcess?.status, 'running');
+    assert.equal(after.agentProcess?.cwd, projectPath);
+    assert.equal(after.terminalProcess?.status, 'running');
+    assert.equal(after.terminalProcess?.cwd, projectPath);
+
+    // Restore launched exactly these two, in the folder.
+    assert.equal(restartWorld.ptyLaunches.length, 2);
+    assert.deepEqual(
+      restartWorld.ptyLaunches.map((launch) => launch.cwd),
+      [projectPath, projectPath],
+    );
+
+    // The stored identity reached the adapter and its resume arguments. This is
+    // propagation of an observation Isagi stored — not evidence that a harness
+    // emitted it, nor that resuming from it would succeed.
+    assert.deepEqual(restartWorld.harnessLaunches, [
+      {
+        agentSessionId: created.agentSessionId,
+        latest: harnessSessionId,
+        cwd: projectPath,
+        args: ['--session', harnessSessionId],
+      },
+    ]);
   } finally {
-    console.info = info;
-    console.warn = warn;
+    rmSync(dataRoot, { recursive: true, force: true });
+    fixtures.cleanup();
   }
+});
+
+/** Durable session facts, read outside any service, in their own connection. */
+function readFolderSessionState(agentSessionId: number, terminalSessionId: number) {
+  return Effect.gen(function* () {
+    const database = yield* RuntimeDatabase;
+    const artifacts = yield* AgentSessionArtifacts;
+    const metadata = yield* artifacts.readMetadata(agentSessionId);
+    const rows = yield* database.use('test_read_folder_session_state', (db) => {
+      const agent = db
+        .select()
+        .from(agentSessions)
+        .where(eq(agentSessions.id, agentSessionId))
+        .get();
+      const terminal = db
+        .select()
+        .from(terminalSessions)
+        .where(eq(terminalSessions.id, terminalSessionId))
+        .get();
+      const processFor = (id: number | null) =>
+        id === null
+          ? null
+          : (db.select().from(ptyProcesses).where(eq(ptyProcesses.id, id)).get() ?? null);
+      return {
+        agent: agent ?? null,
+        terminal: terminal ?? null,
+        agentProcess: processFor(agent?.activePtyProcessId ?? null),
+        terminalProcess: processFor(terminal?.activePtyProcessId ?? null),
+        panes: db
+          .select({
+            paneId: surfacePanes.id,
+            surfaceId: surfacePanes.surfaceId,
+            sessionKind: surfacePanes.sessionKind,
+            sessionId: surfacePanes.sessionId,
+          })
+          .from(surfacePanes)
+          .orderBy(surfacePanes.id)
+          .all(),
+        surfaceIds: db
+          .select({ id: worktreeSurfaces.id, worktreeId: worktreeSurfaces.worktreeId })
+          .from(worktreeSurfaces)
+          .orderBy(worktreeSurfaces.id)
+          .all(),
+      };
+    });
+    return {
+      ...rows,
+      harnessSessionId: metadata.status === 'valid' ? metadata.metadata.harnessSessionId : null,
+    };
+  });
 }

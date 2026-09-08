@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test, { after as afterAll, describe } from 'node:test';
 
 import { Effect, Schema } from 'effect';
@@ -11,34 +11,12 @@ import { createFixtureWorkspace, removeTree } from '../../git/tests/fixtures.js'
 import { WorkspaceRepository } from '../workspace.repository.js';
 import { WorkspaceError, WorkspaceService } from '../workspace.service.js';
 import { runWithLiveWorkspace } from './live-workspace-support.js';
+import { directoryTree } from './test-support.js';
 
 const workspace = createFixtureWorkspace('folder-registration');
 afterAll(() => {
   workspace.cleanup();
 });
-
-/**
- * Every path beneath `root`, relative and sorted, with directories marked. The
- * instrument for "Isagi did not write anything into the user's folder": a
- * created `.git`, a copied template or a stray lock file all show up as a diff
- * of two of these rather than as a single hand-picked `existsSync` check.
- */
-function treeOf(root: string): string[] {
-  const entries: string[] = [];
-  const walk = (directory: string) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const absolute = join(directory, entry.name);
-      entries.push(`${entry.isDirectory() ? 'd' : 'f'} ${relative(root, absolute)}`);
-      if (entry.isDirectory()) {
-        walk(absolute);
-      }
-    }
-  };
-  walk(root);
-  return entries;
-}
 
 function ordinaryFolder(name: string) {
   const path = workspace.directory(name);
@@ -68,7 +46,7 @@ const readRows = Effect.gen(function* () {
 describe('registering an ordinary folder', () => {
   test('creates one folder project owning a single default environment', async () => {
     const path = ordinaryFolder('plain-project');
-    const before = treeOf(path);
+    const before = directoryTree(path);
 
     const registered = await runWithLiveWorkspace(
       'folder-register',
@@ -106,7 +84,7 @@ describe('registering an ordinary folder', () => {
     assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(snapshot));
 
     // Registration is a read of the folder and a write to the database.
-    assert.deepEqual(treeOf(path), before);
+    assert.deepEqual(directoryTree(path), before);
     assert.equal(existsSync(join(path, '.git')), false);
   });
 

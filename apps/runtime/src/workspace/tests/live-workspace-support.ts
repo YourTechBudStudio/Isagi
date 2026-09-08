@@ -14,7 +14,10 @@ import {
 } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import { PtyService } from '../../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../../runtime-events/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../../runtime-events/index.js';
 import { SurfaceRepository } from '../../surfaces/index.js';
 import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
 import {
@@ -54,6 +57,12 @@ export interface LiveWorkspaceOptions {
    * regression should name itself rather than slip past a counter.
    */
   readonly commands?: Partial<CommandServiceShape> | undefined;
+  /**
+   * Replaces the silent event bus. Deletion tests need the published events and
+   * their order relative to the database cascade; everything else is happy not
+   * to look.
+   */
+  readonly internalEvents?: InternalRuntimeEventBusService | undefined;
 }
 
 const baseCommands = {
@@ -96,12 +105,16 @@ export function runWithLiveWorkspace<A, E>(
 }
 
 /**
+ * The workspace graph as a layer, for callers that own the data directory
+ * themselves — a test spanning several scopes over one directory cannot use
+ * `runWithLiveWorkspace`, which allocates and removes its own.
+ *
  * One graph, built once. `database` and `repository` are held as values and
  * referenced wherever they are needed rather than re-piped, so the whole test
  * observes a single SQLite connection — two constructions would silently give
  * the service and the assertions different databases.
  */
-function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
+export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
   const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const realRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
@@ -123,7 +136,7 @@ function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
         dataDirectoryLayer,
         Layer.succeed(CommandService, { ...baseCommands, ...options.commands }),
         Layer.succeed(PtyService, testPtyService),
-        Layer.succeed(InternalRuntimeEventBus, testInternalEvents),
+        Layer.succeed(InternalRuntimeEventBus, options.internalEvents ?? testInternalEvents),
         Layer.succeed(SurfaceRepository, testSurfaceRepository),
         Layer.succeed(
           StateFile,
