@@ -1,6 +1,6 @@
 export const ANSI_FIXTURE_SEED = 0x15a61;
-export const ANSI_CHUNK_BYTES = 64 * 1024;
-export const MAX_ENCODED_INPUT_BYTES = 256 * 1024 * 1024;
+const ANSI_CHUNK_BYTES = 64 * 1024;
+const MAX_ENCODED_INPUT_BYTES = 256 * 1024 * 1024;
 
 export type AnsiRecipe = 'shell' | 'codex' | 'claude' | 'pi' | 'opencode';
 

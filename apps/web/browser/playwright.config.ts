@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
-const fixturePort = 41_731;
+const fixturePort = Number(process.env.ISAGI_BROWSER_FIXTURE_PORT ?? 41_731);
+if (!Number.isSafeInteger(fixturePort) || fixturePort < 1 || fixturePort > 65_535) {
+  throw new RangeError('ISAGI_BROWSER_FIXTURE_PORT must be an integer from 1 to 65535');
+}
 
 export default defineConfig({
   testDir: './specs',
@@ -57,9 +60,12 @@ export default defineConfig({
       testMatch: /rail-worktree-actions\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/rail-reorder/` },
     },
+    // Both palette spec files share this page and this project. The alternation is
+    // anchored so each file is matched exactly once and `command-endpoints.spec.ts`
+    // — which needs a clipboard permission the rest should not have — keeps its own.
     {
       name: 'command-palette',
-      testMatch: /command-palette\.spec\.ts/,
+      testMatch: /command-palette(-path)?\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },
     },
     // Shares the command-palette page, because the endpoint surfaces are the

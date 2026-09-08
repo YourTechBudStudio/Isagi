@@ -2,10 +2,12 @@ import type { InputFlowScreen } from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';
 import type { StepData } from './machine.js';
 import { computeStepOptions } from './model.js';
+import { nextPathIntent, pathSuggestionsAreStale } from './path-step.js';
 import type { ArgSpec } from './types.js';
 
-// Builds the selection-free shape of a step's screen. The live highlight index
-// is owned by `useKeyboardSelection` and injected at render via `withSelectedIndex`.
+// Builds the selection-free shape of a step's screen. The live highlight index is
+// injected at render via `withSelectedIndex`, from whichever owner the screen has:
+// the palette machine on path steps, `useKeyboardSelection` on all the others.
 export function commandStepToInputFlowScreen({
   spec,
   stepData,
@@ -25,6 +27,9 @@ export function commandStepToInputFlowScreen({
   }
 
   if (spec.kind === 'path' && stepData.kind === 'path') {
+    // Freshness and the next Enter action both come from the one path policy the
+    // reducer uses, so what the panel says and what Enter does share a source.
+    const view = { query, stepData };
     return {
       kind: 'path',
       label: spec.label,
@@ -32,7 +37,8 @@ export function commandStepToInputFlowScreen({
       suggestions: stepData.suggestions,
       selectedIndex: null,
       loading: stepData.loading,
-      stale: stepData.suggestionsQuery !== query,
+      stale: pathSuggestionsAreStale(view),
+      enterIntent: nextPathIntent(view).kind,
       error: stepData.error,
       placeholder: spec.placeholder,
     };

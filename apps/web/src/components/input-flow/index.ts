@@ -16,6 +16,7 @@ export {
   withSelectedIndex,
   type InputFlowScreen,
   type InputFlowOption,
+  type InputFlowPathAria,
   type InputFlowPathSuggestion,
   type InputFlowReviewChoice,
   type InputFlowReviewContent,

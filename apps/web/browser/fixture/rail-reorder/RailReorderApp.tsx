@@ -6,17 +6,7 @@ import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
 import { Rail } from '../../../src/routes/workspace/Rail.js';
 import { FIXTURE_ACTIVE } from './seed.js';
 
-/**
- * The rail reorder fixture: the production `Rail`, at production width, with a
- * fake runtime behind it (see {@link ./fake-runtime}).
- *
- * There is nothing else on the page on purpose. Phase 01's variant controls and
- * its forked copy of the rail are gone — the chosen treatment now lives in the
- * real components, and anything that could still be toggled here would be a
- * second definition of how the rail behaves. What survives is the one thing the
- * app cannot otherwise offer: a browser, a pointer, and a runtime that can be
- * told to be slow or to say no.
- */
+/** Production rail with simulated runtime responses for pointer and recovery tests. */
 export function RailReorderApp() {
   const [ready, setReady] = useState(false);
 

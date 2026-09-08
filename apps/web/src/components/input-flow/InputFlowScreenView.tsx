@@ -5,7 +5,9 @@ import { paletteCopy } from '../../copy/index.js';
 import {
   inputFlowHasTextInput,
   inputFlowQueryControl,
+  inputFlowSelectableLength,
   type InputFlowOption,
+  type InputFlowPathAria,
   type InputFlowReviewChoice,
   type InputFlowScreen,
 } from './types.js';
@@ -28,6 +30,8 @@ export interface InputFlowControlProps {
   readonly inputClassName?: string | undefined;
   readonly labelClassName?: string | undefined;
   readonly onQueryChange?: ((query: string) => void) | undefined;
+  /** Path screens only; omitted everywhere else, leaving the markup unchanged. */
+  readonly pathAria?: InputFlowPathAria | undefined;
 }
 
 export interface InputFlowBodyProps {
@@ -36,6 +40,8 @@ export interface InputFlowBodyProps {
   readonly onPick?: ((index: number) => void) | undefined;
   readonly onToggle?: (() => void) | undefined;
   readonly onAccept: () => void;
+  /** Path screens only; omitted everywhere else, leaving the markup unchanged. */
+  readonly pathAria?: InputFlowPathAria | undefined;
 }
 
 export function InputFlowScreenView({
@@ -90,6 +96,7 @@ export function InputFlowControl({
   inputClassName = 'min-w-30 flex-1 bg-transparent font-sans text-[15px] text-fg outline-none placeholder:text-fg-subtle',
   labelClassName = 'min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg-subtle',
   onQueryChange,
+  pathAria,
 }: InputFlowControlProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const queryControl = inputFlowQueryControl(screen);
@@ -99,6 +106,24 @@ export function InputFlowControl({
   }, [autoFocus, queryControl?.kind]);
 
   if (queryControl) {
+    // Focus stays here while Tab and the arrows move a highlight in the list
+    // below, and Enter's meaning follows that highlight — which is a combobox.
+    // `screen.label` names it: it is the string the body renders as a visual
+    // label but associates with nothing.
+    const comboboxProps =
+      screen.kind === 'path' && pathAria
+        ? {
+            role: 'combobox' as const,
+            'aria-autocomplete': 'list' as const,
+            'aria-expanded': inputFlowSelectableLength(screen) > 0,
+            'aria-controls': pathAria.listId,
+            'aria-describedby': pathAria.hintId,
+            'aria-label': screen.label,
+            ...(pathAria.activeOptionId
+              ? { 'aria-activedescendant': pathAria.activeOptionId }
+              : {}),
+          }
+        : {};
     return (
       <input
         ref={inputRef}
@@ -108,6 +133,7 @@ export function InputFlowControl({
         onChange={(event) => onQueryChange?.(event.target.value)}
         placeholder={queryControl.placeholder}
         className={inputClassName}
+        {...comboboxProps}
       />
     );
   }
@@ -121,6 +147,7 @@ export function InputFlowBody({
   onPick,
   onToggle,
   onAccept,
+  pathAria,
 }: InputFlowBodyProps) {
   if (screen.kind === 'text') {
     return <TextBody screen={screen} />;
@@ -147,7 +174,7 @@ export function InputFlowBody({
     return <ConfirmScreen screen={screen} disabled={disabled} onToggle={onToggle} />;
   }
   if (screen.kind === 'path') {
-    return <PathBody screen={screen} disabled={disabled} onPick={onPick} />;
+    return <PathBody screen={screen} disabled={disabled} onPick={onPick} pathAria={pathAria} />;
   }
   return <ReviewScreen screen={screen} disabled={disabled} onPick={onPick} />;
 }
@@ -289,57 +316,95 @@ function PathBody({
   screen,
   disabled,
   onPick,
+  pathAria,
 }: {
   readonly screen: Extract<InputFlowScreen, { kind: 'path' }>;
   readonly disabled: boolean;
   readonly onPick?: ((index: number) => void) | undefined;
+  readonly pathAria?: InputFlowPathAria | undefined;
 }) {
-  if (screen.error) {
-    return (
-      <p className="wrap-break-word px-3 py-4 font-mono text-[12px] text-error">{screen.error}</p>
-    );
-  }
+  const hint =
+    screen.enterIntent === 'accept'
+      ? paletteCopy.pathStep.fillHighlighted
+      : screen.enterIntent === 'submit'
+        ? paletteCopy.pathStep.usePath
+        : paletteCopy.pathStep.typeRepositoryRoot;
 
   return (
-    <div aria-busy={screen.loading}>
+    <div>
       <div className="px-3 py-2">
         <FieldLabel label={screen.label} />
-        <p className="font-mono text-[11px] text-fg-subtle">
-          {screen.loading
-            ? paletteCopy.pathStep.searching
-            : screen.value
-              ? paletteCopy.pathStep.addPath
-              : paletteCopy.pathStep.typeRepositoryRoot}
+        {/* The hint survives searching and a listing failure. The window between
+            accepting a folder and its children arriving is exactly where the
+            second Enter happens, and after a transport error a deliberate typed
+            submission is still available — so the sentence describing Enter has
+            to stay on screen in both. Loading is a second fact, not a
+            replacement. It is not a live region: the active descendant already
+            announces each move, and this changes on every keystroke. */}
+        <p id={pathAria?.hintId} className="font-mono text-[11px] text-fg-subtle">
+          {hint}
+          {screen.loading && (
+            <span className="opacity-70"> · {paletteCopy.pathStep.searching}</span>
+          )}
         </p>
       </div>
-      {screen.suggestions.map((suggestion, index) => (
-        <button
-          type="button"
-          key={suggestion.path}
-          disabled={disabled || screen.stale}
-          onClick={() => onPick?.(index)}
-          className={`flex w-full items-center gap-3 rounded-sm px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed ${
-            screen.stale
-              ? 'opacity-55'
-              : index === screen.selectedIndex
-                ? 'bg-white/8'
-                : 'hover:bg-white/4'
-          }`}
-        >
-          <span className="w-4 text-center font-mono text-[12px] text-fg-subtle">
-            {!screen.stale && index === screen.selectedIndex ? '●' : '○'}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13.5px] text-fg">{suggestion.label}</span>
-            <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
-              {suggestion.path}
-            </span>
-          </span>
-          {suggestion.hidden && (
-            <span className="font-mono text-[10.5px] text-fg-subtle">hidden</span>
-          )}
-        </button>
-      ))}
+      {screen.error && (
+        <p className="wrap-break-word px-3 py-4 font-mono text-[12px] text-error">{screen.error}</p>
+      )}
+      {/* Rendered even when empty or failed, because the input's `aria-controls`
+          points here unconditionally and must always resolve. A listing error
+          replaces the rows, not the element that owns the relationship. The
+          error itself stays a sibling rather than a child: a `listbox` may only
+          contain options, so prose inside it would be out of spec. */}
+      <div role={pathAria ? 'listbox' : undefined} id={pathAria?.listId} aria-busy={screen.loading}>
+        {screen.error
+          ? null
+          : screen.suggestions.map((suggestion, index) => {
+              const selected = !screen.stale && index === screen.selectedIndex;
+              return (
+                <button
+                  type="button"
+                  key={suggestion.path}
+                  id={pathAria ? `${pathAria.listId}-${index}` : undefined}
+                  role={pathAria ? 'option' : undefined}
+                  aria-selected={pathAria ? selected : undefined}
+                  disabled={disabled || screen.stale}
+                  // Keeps focus in the input: a differing-row click fills the
+                  // buffer and expects the next keystroke to land there.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onPick?.(index)}
+                  // A painted left border, not an inset shadow — a shadow follows
+                  // the row's radius and lands as a soft stub. Every row carries
+                  // the border transparently so moving the highlight cannot shift
+                  // row contents sideways, and the left corners stay square.
+                  className={`flex w-full items-center gap-3 rounded-r-sm border-l-2 px-3 py-2.25 text-left transition duration-micro ease-expo disabled:cursor-not-allowed ${
+                    screen.stale
+                      ? 'border-transparent opacity-55'
+                      : selected
+                        ? 'border-blue bg-blue/10'
+                        : 'border-transparent hover:bg-white/4'
+                  }`}
+                >
+                  <span
+                    className={`w-4 text-center font-mono text-[12px] ${
+                      selected ? 'text-blue' : 'text-fg-subtle'
+                    }`}
+                  >
+                    {selected ? '●' : '○'}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13.5px] text-fg">{suggestion.label}</span>
+                    <span className="block truncate font-mono text-[10.5px] text-fg-subtle">
+                      {suggestion.path}
+                    </span>
+                  </span>
+                  {suggestion.hidden && (
+                    <span className="font-mono text-[10.5px] text-fg-subtle">hidden</span>
+                  )}
+                </button>
+              );
+            })}
+      </div>
     </div>
   );
 }

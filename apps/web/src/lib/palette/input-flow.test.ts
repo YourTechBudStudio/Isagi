@@ -57,24 +57,100 @@ test('command review args adapt to shared input-flow review screens', () => {
   assert.equal(inputFlowSelectableLength(screen), 1);
 });
 
+function pathStep(
+  overrides: Partial<Extract<StepData, { kind: 'path' }>> = {},
+): Extract<StepData, { kind: 'path' }> {
+  return {
+    kind: 'path',
+    suggestions: [{ label: 'repo', path: '/repo' }],
+    suggestionsQuery: '/repo',
+    loading: false,
+    error: null,
+    attemptId: 1,
+    highlightedIndex: null,
+    ...overrides,
+  };
+}
+
+const pathSpec: ArgSpec = { kind: 'path', key: 'path', label: 'Path' };
+
 test('stale command path screens are not selectable', () => {
-  const spec: ArgSpec = { kind: 'path', key: 'path', label: 'Path' };
   const screen = commandStepToInputFlowScreen({
-    spec,
-    stepData: {
-      kind: 'path',
-      suggestions: [{ label: 'repo', path: '/repo' }],
-      suggestionsQuery: '/old',
-      loading: true,
-      error: null,
-      attemptId: 1,
-    },
+    spec: pathSpec,
+    stepData: pathStep({ suggestionsQuery: '/old', loading: true }),
     query: '/repo',
   });
 
   assert.equal(screen.kind, 'path');
   assert.equal(screen.stale, true);
   assert.equal(inputFlowSelectableLength(screen), 0);
+});
+
+test('the path screen never carries a highlight of its own', () => {
+  // Selection is injected at render by `withSelectedIndex`; the projection is
+  // selection-free so there is exactly one place the machine's index enters.
+  const screen = commandStepToInputFlowScreen({
+    spec: pathSpec,
+    stepData: pathStep({ highlightedIndex: 0 }),
+    query: '/repo',
+  });
+
+  assert.equal(screen.kind, 'path');
+  assert.equal(screen.selectedIndex, null);
+});
+
+test('enterIntent is accept when a fresh highlight resolves', () => {
+  const screen = commandStepToInputFlowScreen({
+    spec: pathSpec,
+    stepData: pathStep({ highlightedIndex: 0 }),
+    query: '/repo',
+  });
+
+  assert.equal(screen.kind, 'path');
+  assert.equal(screen.enterIntent, 'accept');
+});
+
+test('enterIntent is accept even when the highlighted path equals the buffer', () => {
+  // Deliberate: navigating onto a row is still browsing, so Enter fills it and a
+  // second Enter submits. The click rule differs and submits immediately.
+  // Freshness compares the raw query — the identity the request was issued under
+  // — while the buffer the user sees and submits is trimmed, so the rows here are
+  // fresh against '/repo ' and the equal path is '/repo'.
+  const screen = commandStepToInputFlowScreen({
+    spec: pathSpec,
+    stepData: pathStep({ suggestionsQuery: '/repo ', highlightedIndex: 0 }),
+    query: '/repo ',
+  });
+
+  assert.equal(screen.kind, 'path');
+  assert.equal(screen.stale, false);
+  assert.equal(screen.value, '/repo');
+  assert.equal(screen.enterIntent, 'accept');
+});
+
+test('enterIntent is submit with no highlight and a non-empty buffer', () => {
+  for (const stepData of [
+    pathStep(),
+    pathStep({ loading: true }),
+    pathStep({ suggestions: [], error: 'unreachable' }),
+    // A stale result cannot be acted on, so Enter still targets what was typed.
+    pathStep({ suggestionsQuery: '/old', highlightedIndex: 0 }),
+  ]) {
+    const screen = commandStepToInputFlowScreen({ spec: pathSpec, stepData, query: '/repo' });
+    assert.equal(screen.kind, 'path');
+    assert.equal(screen.enterIntent, 'submit');
+  }
+});
+
+test('enterIntent is none for an empty buffer', () => {
+  const screen = commandStepToInputFlowScreen({
+    spec: pathSpec,
+    stepData: pathStep({ suggestions: [], suggestionsQuery: '' }),
+    query: '   ',
+  });
+
+  assert.equal(screen.kind, 'path');
+  assert.equal(screen.enterIntent, 'none');
 });
 
 function optionStep(

@@ -1,4 +1,16 @@
 import { firstUnfilledStep, labelForValue, nextVisibleStep, prevVisibleStep } from './model.js';
+import {
+  highlightedPathSuggestion,
+  movedPathHighlight,
+  nextPathIntent,
+  pathBufferValue,
+  pathPickIntent,
+  withPathSeparator,
+  type PathIntent,
+  type PathStepData,
+  type PathStepView,
+  type PathSuggestionLike,
+} from './path-step.js';
 import type {
   ArgPayloads,
   ArgSpec,
@@ -29,23 +41,15 @@ export type StepData =
       readonly error: string | null;
       readonly attemptId: number;
     }
-  | {
-      readonly kind: 'path';
-      readonly suggestions: readonly PathSuggestionLike[];
-      readonly suggestionsQuery: string;
-      readonly loading: boolean;
-      readonly error: string | null;
-      readonly attemptId: number;
-    }
+  | PathStepData
   | {
       readonly kind: 'text';
     };
 
-export interface PathSuggestionLike {
-  readonly label: string;
-  readonly path: string;
-  readonly hidden?: boolean | undefined;
-}
+// The path step's shape and every rule that reads it live in `path-step.ts`; the
+// machine owns the state, not the policy. Re-exported so existing importers of
+// the suggestion shape keep one entry point.
+export type { PathStepData, PathSuggestionLike };
 
 export interface PaletteFlow {
   readonly entryId: string;
@@ -133,7 +137,6 @@ type StepStateBody = {
   readonly stepData: StepData;
   readonly inlineError: string | null;
   readonly runAttemptId: number | null;
-  readonly lastFilledPath: string | null;
   readonly viewKey: string;
 };
 
@@ -219,9 +222,18 @@ export type PaletteEvent =
       readonly ctx: PaletteContext;
       readonly choice: ReviewChoice;
     }
+  | { readonly type: 'path-navigate'; readonly delta: number }
+  | { readonly type: 'path-descend' }
   | {
-      readonly type: 'fill-path';
-      readonly path: string;
+      readonly type: 'path-enter';
+      readonly command: PaletteCommand;
+      readonly ctx: PaletteContext;
+    }
+  | {
+      readonly type: 'path-pick';
+      readonly index: number;
+      readonly command: PaletteCommand;
+      readonly ctx: PaletteContext;
     }
   | {
       readonly type: 'back';
@@ -317,8 +329,19 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
         event.choice.payload,
       );
 
-    case 'fill-path':
-      return fillPath(state, event.path);
+    case 'path-navigate':
+      return pathNavigate(state, event.delta);
+
+    case 'path-descend':
+      return pathDescend(state);
+
+    case 'path-enter':
+      return pathIntentEvent(state, event.command, event.ctx, nextPathIntent);
+
+    case 'path-pick':
+      return pathIntentEvent(state, event.command, event.ctx, (view) =>
+        pathPickIntent(view, event.index),
+      );
 
     case 'back':
       return back(state, event.command, event.ctx);
@@ -549,7 +572,6 @@ function enterStep(
       stepData,
       inlineError,
       runAttemptId: null,
-      lastFilledPath: null,
       viewKey: `wizard-${flow.stepIndex}`,
     },
   );
@@ -613,6 +635,7 @@ function makeStepData(
         loading: true,
         error: null,
         attemptId,
+        highlightedIndex: null,
       },
       effect: { kind: 'suggestPaths', attemptId, query },
       nextAttemptId,
@@ -632,7 +655,7 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
   }
 
   if (spec?.kind !== 'path') {
-    return { ...state, query, inlineError: null, lastFilledPath: null };
+    return { ...state, query, inlineError: null };
   }
 
   const { attemptId, nextAttemptId } = nextAttempt(state);
@@ -643,7 +666,6 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
     ...state,
     query,
     inlineError: null,
-    lastFilledPath: null,
     nextAttemptId,
     stepData: {
       kind: 'path' as const,
@@ -652,6 +674,9 @@ function queryChanged(state: PaletteState, query: string, spec: ArgSpec | undefi
       loading: true,
       error: null,
       attemptId,
+      // An edit invalidates the result the highlight pointed into, so the index
+      // can never be re-attached to a different directory.
+      highlightedIndex: null,
     },
   };
   return enqueue(next, { kind: 'suggestPaths', attemptId, query });
@@ -702,26 +727,111 @@ function acceptValue(
   return enterStep(state, nextFlow, args[nextStepIndex], '', null);
 }
 
-function fillPath(state: PaletteState, path: string): PaletteState {
-  if (state.kind !== 'step' || state.stepData.kind !== 'path') {
-    return state;
+type StepState = Extract<PaletteState, { readonly kind: 'step' }>;
+
+/**
+ * The path step as the pure policy reads it, or `null` when this state has no
+ * live path interaction. Busy states are excluded here rather than at each call
+ * site, so no path key or click can act while a command run holds the palette.
+ */
+function pathStepView(state: PaletteState): PathStepView | null {
+  if (state.kind !== 'step' || state.stepData.kind !== 'path' || isBusy(state)) {
+    return null;
+  }
+  return { query: state.query, stepData: state.stepData };
+}
+
+/**
+ * Fill the buffer with `path`, drop the highlight, and request completion when the
+ * buffer actually moved. The previous rows and their query are retained, so they
+ * stay visible and stale while the new request is in flight — the same shape
+ * `queryChanged` produces.
+ *
+ * An acceptance whose text equals the buffer clears the highlight and stops: it
+ * starts no request, so it also has no reason to discard either error channel.
+ * A changed buffer supersedes both — the listing error belonged to the previous
+ * request, and the inline rejection described the previously submitted path.
+ */
+function pathAccept(state: StepState, view: PathStepView, path: string): PaletteState {
+  const cleared = { ...view.stepData, highlightedIndex: null };
+  if (path === pathBufferValue(view.query)) {
+    return { ...state, stepData: cleared };
   }
   const { attemptId, nextAttemptId } = nextAttempt(state);
-  const next = {
+  const next: PaletteState = {
     ...state,
     query: path,
-    lastFilledPath: path,
+    inlineError: null,
     nextAttemptId,
-    stepData: {
-      kind: 'path' as const,
-      suggestions: state.stepData.suggestions,
-      suggestionsQuery: state.stepData.suggestionsQuery,
-      loading: true,
-      error: null,
-      attemptId,
-    },
+    stepData: { ...cleared, loading: true, error: null, attemptId },
   };
   return enqueue(next, { kind: 'suggestPaths', attemptId, query: path });
+}
+
+function applyPathIntent(
+  state: StepState,
+  view: PathStepView,
+  intent: PathIntent,
+  command: PaletteCommand,
+  ctx: PaletteContext,
+): PaletteState {
+  if (intent.kind === 'accept') {
+    return pathAccept(state, view, intent.path);
+  }
+  if (intent.kind === 'submit') {
+    return acceptValue(state, command, ctx, intent.value, intent.value, undefined);
+  }
+  return state;
+}
+
+/**
+ * Explicit navigation moves the highlight and nothing else: no query, no request,
+ * no command run. A move that lands where it already was returns the identical
+ * state so a no-op keystroke does not re-render the panel.
+ */
+function pathNavigate(state: PaletteState, delta: number): PaletteState {
+  const view = pathStepView(state);
+  if (!view || state.kind !== 'step') {
+    return state;
+  }
+  const highlightedIndex = movedPathHighlight(view, delta);
+  if (highlightedIndex === view.stepData.highlightedIndex) {
+    return state;
+  }
+  return { ...state, stepData: { ...view.stepData, highlightedIndex } };
+}
+
+/**
+ * `/` over a fresh highlight: adopt that directory with exactly one terminal
+ * separator, which makes the runtime parser list its children. When the separated
+ * path already equals the buffer — filesystem root, or a buffer the user already
+ * typed with the trailing slash — `pathAccept`'s equality branch simply drops the
+ * highlight without another identical request.
+ */
+function pathDescend(state: PaletteState): PaletteState {
+  const view = pathStepView(state);
+  if (!view || state.kind !== 'step') {
+    return state;
+  }
+  const highlighted = highlightedPathSuggestion(view);
+  if (highlighted === null) {
+    return state;
+  }
+  return pathAccept(state, view, withPathSeparator(highlighted.path));
+}
+
+/** Enter and row clicks share one shape: resolve an intent, then apply it. */
+function pathIntentEvent(
+  state: PaletteState,
+  command: PaletteCommand,
+  ctx: PaletteContext,
+  resolve: (view: PathStepView) => PathIntent,
+): PaletteState {
+  const view = pathStepView(state);
+  if (!view || state.kind !== 'step') {
+    return state;
+  }
+  return applyPathIntent(state, view, resolve(view), command, ctx);
 }
 
 function back(
@@ -958,6 +1068,9 @@ function updatePaths(
       suggestionsQuery: state.query,
       loading: false,
       error: input.error,
+      // Results never establish a highlight: the rows are a new generation, and
+      // an arriving list must not decide what the next Enter does.
+      highlightedIndex: null,
     },
   };
 }

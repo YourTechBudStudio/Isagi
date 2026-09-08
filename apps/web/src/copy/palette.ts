@@ -15,7 +15,8 @@ export const paletteCopy = {
     typeThenUse: 'Type a value, then press enter.',
   },
   pathStep: {
-    addPath: 'Press enter to add this path:',
+    fillHighlighted: 'Press enter to fill the highlighted folder.',
+    usePath: 'Press enter to use this path.',
     typeRepositoryRoot: 'Type a repository root path.',
     searching: 'Searching…',
     goDeeper: '/ to go deeper',
@@ -116,7 +117,7 @@ export const paletteCopy = {
   tips: {
     cycle: 'cycle',
     fill: 'fill',
-    fillOrAdd: 'fill/add',
+    use: 'use',
     back: 'back',
     select: 'select',
     move: 'move',
