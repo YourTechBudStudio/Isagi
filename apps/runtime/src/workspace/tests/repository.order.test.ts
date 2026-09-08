@@ -1,25 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
 import { eq } from 'drizzle-orm';
-import { Effect, Layer } from 'effect';
+import { Effect } from 'effect';
 
-import {
-  DataDirectory,
-  RuntimeDatabase,
-  RuntimeDatabaseLive,
-  type RuntimeDatabaseService,
-} from '../../persistence/index.js';
+import { RuntimeDatabase } from '../../persistence/index.js';
 import { projects, worktrees } from '../../persistence/schema.js';
-import { makeTestDataDirectory } from '../../persistence/test-support.js';
-import {
-  WorkspaceRepository,
-  WorkspaceRepositoryLive,
-  type WorkspaceRepositoryService,
-} from '../workspace.repository.js';
+import { WorkspaceRepository } from '../workspace.repository.js';
+import { runWithDatabase } from './repository-test-support.js';
 
 /**
  * Sibling order is established in SQL and the rank never leaves the repository,
@@ -27,24 +15,6 @@ import {
  * tests substitute a fake repository and therefore cannot observe ordering,
  * tie-breaking, or the transactional append rules exercised here.
  */
-
-function testLayer(dataRoot: string) {
-  const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
-  const repository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
-  return Layer.mergeAll(database, repository);
-}
-
-/** Runs `build` against a throwaway database rooted in its own temp directory. */
-function runWithDatabase<A, E>(
-  name: string,
-  build: Effect.Effect<A, E, RuntimeDatabaseService | WorkspaceRepositoryService>,
-) {
-  const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
-  return Effect.runPromise(build.pipe(Effect.provide(testLayer(dataRoot)))).finally(() => {
-    rmSync(dataRoot, { recursive: true, force: true });
-  });
-}
 
 /** Forces stored ranks, standing in for migrated rows and for scrambled order. */
 function setProjectRank(projectId: number, sortOrder: number) {
@@ -104,7 +74,9 @@ function insertProjects(names: readonly string[]) {
     const repository = yield* WorkspaceRepository;
     const ids: number[] = [];
     for (const name of names) {
-      ids.push(yield* repository.insertProject({ name, rootPath: `/repo/${name}` }));
+      ids.push(
+        (yield* repository.createProject({ name, rootPath: `/repo/${name}`, kind: 'git' })).id,
+      );
     }
     return ids;
   });
@@ -281,9 +253,10 @@ test('newly discovered worktrees append in discovery order and consume no rank w
     'worktree-append',
     Effect.gen(function* () {
       const repository = yield* WorkspaceRepository;
-      const projectId = yield* repository.insertProject({
+      const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
+        kind: 'git',
       });
       const discovered = [
         { path: '/repo/isagi', branch: 'main', head: 'aaa1111' },
@@ -318,9 +291,10 @@ test('reconciliation cannot reclaim ownership of a reordered worktree list', asy
     'worktree-reconcile-preserves-order',
     Effect.gen(function* () {
       const repository = yield* WorkspaceRepository;
-      const projectId = yield* repository.insertProject({
+      const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
+        kind: 'git',
       });
       const discovered = [
         { path: '/repo/isagi', branch: 'main', head: 'aaa1111' },
@@ -380,9 +354,10 @@ test('worktree order honors explicit ranks and falls back to identifiers when ti
     'worktree-ranks',
     Effect.gen(function* () {
       const repository = yield* WorkspaceRepository;
-      const projectId = yield* repository.insertProject({
+      const { id: projectId } = yield* repository.createProject({
         name: 'isagi',
         rootPath: '/repo/isagi',
+        kind: 'git',
       });
       yield* repository.reconcileProjectWorktrees({
         projectId,
@@ -418,8 +393,16 @@ test('worktree order is grouped by project', async () => {
     'worktree-project-grouping',
     Effect.gen(function* () {
       const repository = yield* WorkspaceRepository;
-      const first = yield* repository.insertProject({ name: 'alpha', rootPath: '/repo/alpha' });
-      const second = yield* repository.insertProject({ name: 'bravo', rootPath: '/repo/bravo' });
+      const { id: first } = yield* repository.createProject({
+        name: 'alpha',
+        rootPath: '/repo/alpha',
+        kind: 'git',
+      });
+      const { id: second } = yield* repository.createProject({
+        name: 'bravo',
+        rootPath: '/repo/bravo',
+        kind: 'git',
+      });
       yield* repository.reconcileProjectWorktrees({
         projectId: second,
         discovered: [{ path: '/repo/bravo', branch: 'main', head: 'bbb2222' }],

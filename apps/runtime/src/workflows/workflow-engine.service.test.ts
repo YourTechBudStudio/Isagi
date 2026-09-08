@@ -4963,7 +4963,7 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
     deleteWorktree: () => Effect.die('workspace deleteWorktree is not used'),
     readWorktreeDeleteDiagnostics: () =>
       Effect.die('workspace readWorktreeDeleteDiagnostics is not used'),
-    insertProject: () => Effect.die('workspace insertProject is not used'),
+    createProject: () => Effect.die('workspace createProject is not used'),
     listProjects: Effect.die('workspace listProjects is not used'),
     listWorktrees: Effect.succeed([
       {

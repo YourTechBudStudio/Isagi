@@ -51,7 +51,11 @@ import { SurfaceRepositoryLive, SurfaceServiceLive } from '../index.js';
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
     const workspaceRepository = yield* WorkspaceRepository;
-    const projectId = yield* workspaceRepository.insertProject({ name: 'isagi', rootPath });
+    const { id: projectId } = yield* workspaceRepository.createProject({
+      name: 'isagi',
+      rootPath,
+      kind: 'git',
+    });
     yield* workspaceRepository.reconcileProjectWorktrees({
       projectId,
       discovered: [{ path: rootPath, branch: 'main', head: 'abcdef0' }],

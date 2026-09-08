@@ -623,22 +623,23 @@ export const WorkspaceServiceLive = Layer.effect(
             Effect.provideService(Git, git),
           );
           const existing = yield* repository.findProjectByRootPath(projectRoot.rootPath);
-          const alreadyExisted = Boolean(existing);
-          const projectId =
-            existing?.id ??
-            (yield* repository.insertProject({
+          // `createProject` returns the row it inserted, so there is no
+          // follow-up lookup that could come back null and silently skip
+          // reconciliation. Kind is stated here because `validateProjectRoot`
+          // accepted a supported Git root; classification arrives in phase 05.
+          const project =
+            existing ??
+            (yield* repository.createProject({
               name: projectRoot.name,
               rootPath: projectRoot.rootPath,
+              kind: 'git',
             }));
-          const project = existing ?? (yield* repository.findProject(projectId));
 
-          if (project) {
-            yield* reconcileProjectWithGit(repository, commands, project).pipe(
-              Effect.provideService(Git, git),
-            );
-          }
+          yield* reconcileProjectWithGit(repository, commands, project).pipe(
+            Effect.provideService(Git, git),
+          );
 
-          return { projectId, alreadyExisted };
+          return { projectId: project.id, alreadyExisted: Boolean(existing) };
         }),
       relocateProject: (input) =>
         Effect.gen(function* () {

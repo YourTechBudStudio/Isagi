@@ -59,7 +59,9 @@ test('project, worktree, and surface order survive closing and reopening the dat
 
         const projectIds: number[] = [];
         for (const name of ['alpha', 'beta', 'gamma', 'delta']) {
-          projectIds.push(yield* repository.insertProject({ name, rootPath: `/repo/${name}` }));
+          projectIds.push(
+            (yield* repository.createProject({ name, rootPath: `/repo/${name}`, kind: 'git' })).id,
+          );
         }
         const [alpha, , gamma, delta] = projectIds as [number, number, number, number];
 

@@ -387,7 +387,7 @@ test('workspace reads known rows without reconciling Git state', async () => {
         terminalSessionCount: 0,
         terminalSessionActivePtyProcessIds: [],
       }),
-    insertProject: () => Effect.succeed(project.id),
+    createProject: () => Effect.succeed(project),
     listProjects: Effect.sync(() => [currentProject]),
     listWorktrees: Effect.succeed([...worktrees]),
     reconcileProjectWorktrees: () =>
