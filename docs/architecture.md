@@ -59,9 +59,13 @@ Benefits:
 
 Isagi should not over-own facts that already have a better source of truth.
 
-In particular, Git should remain the source of truth for repository and worktree facts where possible. Isagi can remember projects, preferences, layout, and environment state, but it should rediscover real worktree state from Git instead of trusting stale app records blindly.
+For Git projects, Git remains the source of truth for checkout membership, branches, and HEAD. Isagi remembers projects, preferences, layout, and environment state, and reconciles its checkout records against Git.
 
-Users may create, move, or delete worktrees outside Isagi. The runtime should reconcile against those external facts rather than assuming Isagi is the only actor changing a repository.
+Users may create, move, or delete Git worktrees outside Isagi. The runtime reconciles against those external facts rather than assuming Isagi is the only actor changing a repository.
+
+For folder projects, the runtime owns one durable environment at the registered directory, including while the folder is missing. Reconciliation checks directory presence without Git and preserves the environment for same-path recovery. Both project kinds share the same tools and session model.
+
+Project kind is determined at registration and remains fixed. New registration requires Git; unsupported or inconclusive classification is refused rather than treated as an ordinary folder.
 
 ## State categories
 
@@ -76,15 +80,15 @@ Examples:
 - project default worktree initialization behavior
 - user preferences
 
-### Rediscoverable repository state
+### Rediscoverable repository and filesystem state
 
 Facts that should be read from Git or the filesystem where possible.
 
 Examples:
 
-- worktrees
-- branches
-- repository paths
+- Git-project checkout membership and paths
+- Git branches and HEAD
+- folder directory presence
 - file existence
 
 ### Runtime process state
@@ -116,6 +120,10 @@ Examples:
 - open surfaces
 - remembered artifact paths
 - command history needed for restoration
+
+## Runtime/client and data upgrades
+
+Use matching runtime/client builds and forward-only database upgrades. Historical projects remain Git projects, including missing ones; clients do not infer missing project kinds, and older code cannot safely use folder-project data.
 
 ## Integration posture
 
