@@ -45,6 +45,7 @@ export type ScenarioId =
   | 'git-detached'
   | 'mixed'
   | 'all-folder'
+  | 'two-missing'
   | 'missing-git';
 
 export interface Scenario {
@@ -107,6 +108,13 @@ export const SCENARIOS: readonly Scenario[] = [
     claim: 'No Git at all. Identical environment titles, told apart by path and project header.',
     snapshot: { projects: [notesFolder(), scratchFolder(), designFolder()] },
     opens: { kind: 'worktree', projectId: 50, worktreeId: 501 },
+  },
+  {
+    id: 'two-missing',
+    label: 'Two missing',
+    claim: 'Switching between missing projects: neither one inherits the other recovery state.',
+    snapshot: { projects: [missingNotesFolder(), missingIsagiGit()] },
+    opens: { kind: 'missingProject', projectId: 40 },
   },
   {
     id: 'missing-git',

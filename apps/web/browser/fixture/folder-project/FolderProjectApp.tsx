@@ -1,20 +1,18 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { Unlink } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { EmptyState } from '../../../src/components/EmptyState.js';
 import { MonoAside } from '../../../src/components/MonoAside.js';
-import { canvasCopy, missingProjectCopy } from '../../../src/copy/index.js';
+import { canvasCopy } from '../../../src/copy/index.js';
 import { usePaletteStore } from '../../../src/lib/palette/store.js';
 import { queryClient } from '../../../src/lib/query/client.js';
 import { ToastProvider } from '../../../src/lib/toast/index.js';
 import { useWorkspace, useWorkspaceSelectionSync } from '../../../src/lib/workspace/hooks.js';
 import { useWorkspaceStore } from '../../../src/lib/workspace/store.js';
-import type { MissingProject } from '../../../src/lib/workspace/types.js';
+import { Canvas } from '../../../src/routes/workspace/Canvas.js';
 import { CommandPalette } from '../../../src/routes/workspace/CommandPalette.js';
 import { Rail } from '../../../src/routes/workspace/Rail.js';
 import { StatusStrip } from '../../../src/routes/workspace/StatusStrip.js';
-import { RecoveryActions } from './RecoveryActions.js';
 import { ScenarioBar } from './ScenarioBar.js';
 import { DEFAULT_SCENARIO, scenarioById, type ScenarioId } from './seed.js';
 
@@ -33,15 +31,14 @@ import { DEFAULT_SCENARIO, scenarioById, type ScenarioId } from './seed.js';
  * survives its completion is a claim about `reconcileSelection`, and a fixture
  * that reimplemented selection would be testing its own reimplementation.
  *
- * Presentation is no longer prototyped. Phase 07 replaced the rail, status strip
+ * Nothing here is prototyped any more. Phase 07 replaced the rail, status strip
  * and palette forks with the production `Rail`, `StatusStrip` and
- * `CommandPalette`, so what this page shows about those three surfaces is what
- * the app shows. The fake runtime answers the endpoints they ask for — the
- * command catalog, surface detail and workflow descriptors — with explicit,
- * valid, empty answers rather than suppressed errors.
- *
- * The recovery panel is still a prototype, and is the last one. `RecoveryActions`
- * and `useRecheckPrototype` say which phase repays them.
+ * `CommandPalette`; phase 08 replaced the last one, the recovery panel, with the
+ * production `MissingProjectState` and its real recheck mutation. What this page
+ * shows is what the app shows. The fake runtime answers the endpoints those
+ * surfaces ask for — the command catalog, surface detail and workflow
+ * descriptors — with explicit, valid, empty answers rather than suppressed
+ * errors.
  */
 export function FolderProjectApp() {
   return (
@@ -124,14 +121,20 @@ function FolderProjectBody() {
         <div className="grid min-h-0 grid-rows-[1fr_auto]">
           <div className="relative min-h-0 overflow-hidden">
             {activeMissingProject ? (
-              // Keyed on the run token so a scenario click genuinely resets
-              // this surface. Its recovery mutation and its armed-removal state
-              // are component-local, and re-selecting a *still missing* project
-              // does not unmount it — so without the key a settled "Still not
-              // there" verdict, or a half-armed confirmation, would survive a
-              // reset that claims to clear the page and be read as belonging to
-              // the run that follows it.
-              <MissingProjectPreview key={scenario.run} project={activeMissingProject} />
+              // The production `Canvas` owns the missing-project branch, and with
+              // it the identity key that keeps one project's recovery state off
+              // another's. Rendering `MissingProjectState` here with a key of the
+              // fixture's own would supply that isolation locally and hide an
+              // unkeyed production path — the page would look correct because of
+              // code that does not ship.
+              //
+              // The wrapper below is keyed on the run token only, so a scenario
+              // click still genuinely resets the surface: the recovery mutation
+              // and the armed-removal state are component-local, and re-selecting
+              // a *still missing* project does not unmount them.
+              <div key={scenario.run} className="h-full">
+                <Canvas />
+              </div>
             ) : activeWorktree ? (
               <EnvironmentPreview title={activeWorktree.title} path={activeWorktree.path} />
             ) : (
@@ -155,38 +158,6 @@ function FolderProjectBody() {
         <CommandPalette />
       </div>
     </div>
-  );
-}
-
-/**
- * The canvas state for a project Isagi can't reach. Composed from the production
- * `EmptyState` with the production copy, because the recovery actions have to be
- * judged in the room they actually get rather than on their own.
- */
-function MissingProjectPreview({ project }: { project: MissingProject }) {
-  return (
-    <EmptyState
-      halo="error"
-      wide
-      eyebrow={missingProjectCopy.eyebrow}
-      icon={
-        <div className="grid size-14 place-items-center rounded-2xl border border-error/30 bg-error/8 text-error shadow-soft">
-          <Unlink size={26} strokeWidth={1.6} />
-        </div>
-      }
-      title={missingProjectCopy.title}
-      body={
-        <>
-          {missingProjectCopy.bodyPrefix}{' '}
-          <span className="rounded-md bg-black/25 px-1.5 py-0.5 font-mono text-[13px] text-fg">
-            {project.rootPath}
-          </span>{' '}
-          {missingProjectCopy.bodySuffix(project)}
-        </>
-      }
-      actions={<RecoveryActions project={project} />}
-      aside={missingProjectCopy.aside}
-    />
   );
 }
 

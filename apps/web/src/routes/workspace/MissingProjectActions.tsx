@@ -5,7 +5,11 @@ import { Button } from '../../components/Button.js';
 import { missingProjectCopy } from '../../copy/index.js';
 import { uiTransition } from '../../lib/motion.js';
 import { usePaletteStore } from '../../lib/palette/store.js';
-import { formatRuntimeError, useDeleteProjectMutation } from '../../lib/workspace/queries.js';
+import {
+  formatRuntimeError,
+  useDeleteProjectMutation,
+  useRecheckProjectMutation,
+} from '../../lib/workspace/queries.js';
 import type { MissingProject } from '../../lib/workspace/types.js';
 
 type ConfirmState = 'idle' | 'confirming';
@@ -24,12 +28,25 @@ const swap = {
  * the whole action row for an inset confirm panel within the canvas state that
  * already has the room. Cancel (or Esc) swaps back; the destructive button only
  * commits on a second, deliberate click.
+ *
+ * The first action depends on the project's kind, and this is the clearest place
+ * in the product to see what that kind decides. A Git project can be pointed
+ * somewhere else, so it keeps **Set new path…**. A folder project cannot be
+ * relocated at all — the runtime refuses the request before it even checks
+ * whether the project is missing — so the only honest move is to look again at
+ * the same path with **Check again**.
+ *
+ * This component is mounted keyed on the project id (see `Canvas`), so none of
+ * the interaction state below — an armed removal, a settled verdict, a failed
+ * check — can follow the user from one missing project to another.
  */
 export function MissingProjectActions({ project }: { project: MissingProject }) {
   const openPalette = usePaletteStore((state) => state.openPalette);
   const paletteOpen = usePaletteStore((state) => state.open);
   const deleteProject = useDeleteProjectMutation();
+  const recheck = useRecheckProjectMutation();
   const [state, setState] = useState<ConfirmState>('idle');
+  const isFolder = project.kind === 'folder';
 
   // Esc belongs to the topmost surface. The palette may be opened while this
   // confirmation is armed, so let it handle Esc first; otherwise consume Esc
@@ -66,34 +83,113 @@ export function MissingProjectActions({ project }: { project: MissingProject }) 
     setState('idle');
   };
 
+  // Cleared *before* the attempt rather than when it resolves: a previous
+  // verdict must never sit under a check that is currently running and might
+  // disagree with it.
+  const startRecheck = () => {
+    recheck.reset();
+    recheck.mutate(project.id);
+  };
+
   return (
-    <AnimatePresence initial={false} mode="wait">
-      {state === 'idle' ? (
-        <motion.div key="idle" className="flex gap-2.5" {...swap}>
-          <Button
-            onClick={() => openPalette('relocate-project', { projectId: String(project.id) })}
-          >
-            Set new path…
-          </Button>
-          <Button
-            variant="secondary"
-            className="hover:border-error/35 hover:text-fg"
-            onClick={armConfirmation}
-          >
-            Remove project
-          </Button>
-        </motion.div>
-      ) : (
-        <motion.div key="confirm" className="w-96 max-w-full" {...swap}>
-          <ConfirmPanel
-            pending={deleteProject.isPending}
-            error={deleteProject.isError ? formatRuntimeError(deleteProject.error) : null}
-            onCancel={cancelConfirmation}
-            onConfirm={() => deleteProject.mutate(project.id)}
-          />
-        </motion.div>
+    <div className="flex flex-col items-center gap-3">
+      <AnimatePresence initial={false} mode="wait">
+        {state === 'idle' ? (
+          <motion.div key="idle" className="flex gap-2.5" {...swap}>
+            {isFolder ? (
+              <Button disabled={recheck.isPending} onClick={startRecheck}>
+                {recheck.isPending
+                  ? missingProjectCopy.recheck.pending
+                  : missingProjectCopy.recheck.action}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => openPalette('relocate-project', { projectId: String(project.id) })}
+              >
+                Set new path…
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              className="hover:border-error/35 hover:text-fg"
+              onClick={armConfirmation}
+            >
+              Remove project
+            </Button>
+          </motion.div>
+        ) : (
+          <motion.div key="confirm" className="w-96 max-w-full" {...swap}>
+            <ConfirmPanel
+              pending={deleteProject.isPending}
+              error={deleteProject.isError ? formatRuntimeError(deleteProject.error) : null}
+              onCancel={cancelConfirmation}
+              onConfirm={() => deleteProject.mutate(project.id)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {state === 'idle' && isFolder && (
+        <RecheckVerdict
+          pending={recheck.isPending}
+          stillMissing={recheck.data?.status === 'still_unavailable'}
+          error={recheck.isError ? formatRuntimeError(recheck.error) : null}
+        />
       )}
-    </AnimatePresence>
+    </div>
+  );
+}
+
+/**
+ * What the last check established, under the action row that started it
+ * (ADR 0004).
+ *
+ * There is no `restored` case here on purpose. A restored folder produces a
+ * refreshed snapshot in which the project is present, the canvas swaps to its
+ * environment, and this whole surface unmounts — so a "restored" branch would be
+ * unreachable code promising a state the app can never paint. The swap is the
+ * acknowledgement.
+ *
+ * A failure is never folded into the still-missing line. The read that would
+ * have established an absence is exactly the thing that did not happen, so the
+ * two are different roles as well as different sentences: confirmed
+ * unavailability is ordinary `status` feedback, while a check that could not be
+ * completed is an `alert`. The headline and the runtime diagnostic share one
+ * region so assistive tech announces the failure once, not twice.
+ */
+function RecheckVerdict({
+  pending,
+  stillMissing,
+  error,
+}: {
+  readonly pending: boolean;
+  readonly stillMissing: boolean;
+  readonly error: string | null;
+}) {
+  if (pending || (!error && !stillMissing)) {
+    return null;
+  }
+
+  if (error) {
+    return (
+      <motion.p
+        {...swap}
+        role="alert"
+        className="max-w-[46ch] text-[12.5px] leading-snug text-error"
+      >
+        {missingProjectCopy.recheck.failed} <span className="text-fg-subtle">{error}</span>
+      </motion.p>
+    );
+  }
+
+  return (
+    <motion.p
+      {...swap}
+      role="status"
+      className="max-w-[46ch] text-[12.5px] leading-snug text-fg-muted"
+    >
+      {missingProjectCopy.recheck.stillMissing}
+    </motion.p>
   );
 }
 

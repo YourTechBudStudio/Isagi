@@ -39,16 +39,16 @@ test('production bundle excludes browser fixture and deleted gallery markers', a
   expect(bundle).not.toContain('EditorTestSupportApp');
   expect(bundle).not.toContain('editorTestSupport');
   expect(bundle).not.toContain('workbench.html');
-  // The folder-project fixture now mounts the production rail, status strip and
-  // palette, so their markup is expected in a shipped build. What must not ship
-  // is the shell around them and the recovery prototype phase 08 lands for real.
+  // The folder-project fixture now mounts the production rail, status strip,
+  // palette and missing-project surface, so their markup is expected in a
+  // shipped build. What must not ship is the shell around them.
   //
   // `data-worktree-subtitle` was dropped from this list in phase 07 along with
-  // the rail prototype that emitted it: once the only code that could have
-  // leaked a marker is deleted, asserting its absence tests nothing.
+  // the rail prototype that emitted it, and `useRecheckPrototype` in phase 08
+  // along with the recovery prototype: once the only code that could have leaked
+  // a marker is deleted, asserting its absence tests nothing.
   expect(bundle).not.toContain('FolderProjectApp');
   expect(bundle).not.toContain('folderProjectFixture');
-  expect(bundle).not.toContain('useRecheckPrototype');
   expect(bundle).not.toContain('data-scenario');
 });
 

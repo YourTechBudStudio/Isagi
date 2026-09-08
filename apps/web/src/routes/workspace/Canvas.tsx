@@ -18,7 +18,12 @@ import { Surface } from './Surface.js';
 export function Canvas() {
   const { activeWorktree, activeMissingProject, activeSurface } = useWorkspace();
   if (activeMissingProject) {
-    return <MissingProjectState project={activeMissingProject} />;
+    // Keyed on the project, because everything the recovery surface holds is
+    // about *that* project: an armed removal confirmation, a settled recheck
+    // verdict, a failed check. Selecting a different missing project re-renders
+    // this component rather than unmounting it, so without the key one
+    // project's answer would sit under another project's actions.
+    return <MissingProjectState key={activeMissingProject.id} project={activeMissingProject} />;
   }
 
   if (!activeWorktree) {

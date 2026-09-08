@@ -54,6 +54,46 @@ const worktreeScope = (page: Page, projectId: number) =>
 const rootRow = (page: Page, projectId: number) =>
   worktreeScope(page, projectId).locator('[data-drag-pinned]').getByRole('button').first();
 
+/**
+ * The recovery actions, located by the production buttons the canvas renders.
+ *
+ * Phase 08 removed this page's last prototype, so the five `data-*` hooks the
+ * recovery panel used are gone with it: these are ordinary accessible buttons
+ * now, and naming them by their accessible name asserts the copy a user reads at
+ * the same time. The recheck button's name changes while a check is running,
+ * which is why it matches either form — the pending label is part of the control,
+ * not a different control.
+ */
+const recheckButton = (page: Page) =>
+  page.getByRole('button', { name: /^(Check again|Checking…)$/ });
+const relocateButton = (page: Page) => page.getByRole('button', { name: 'Set new path…' });
+const removeButton = (page: Page) => page.getByRole('button', { name: 'Remove project' });
+const confirmPanel = (page: Page) => page.getByRole('button', { name: 'Remove from Isagi' });
+
+/**
+ * The two verdicts, by role *and* text.
+ *
+ * Role alone is not enough to identify them: the rail's update footer and its
+ * order notice are `status` regions, and a toast is a `status` or an `alert`, so
+ * a bare `getByRole('status')` on this page can match something that has nothing
+ * to do with recovery. The text is what makes each locator name one verdict, and
+ * the roles are what assert the split — confirmed unavailability is ordinary
+ * feedback, a check that could not be completed is an alert.
+ */
+const stillMissing = (page: Page) =>
+  page.getByRole('status').filter({ hasText: 'Still not there.' });
+const checkFailed = (page: Page) =>
+  page.getByRole('alert').filter({ hasText: "Couldn't finish that check." });
+
+/** Either verdict, for the assertions that require the surface to be showing none. */
+const anyVerdict = (page: Page) =>
+  page
+    .locator('[role="status"], [role="alert"]')
+    .filter({ hasText: /Still not there\.|Couldn't finish that check\./ });
+
+/** Any toast, by the dismiss control every toast card renders. */
+const toasts = (page: Page) => page.getByRole('button', { name: 'Dismiss notification' });
+
 /** A non-root worktree row, by the drag key the production rail emits. */
 const worktreeRow = (page: Page, projectId: number, worktreeId: number) =>
   page
@@ -187,17 +227,17 @@ test.describe('scenario switching', () => {
     // and the recovery surface would never appear.
     await scenario(page, 'git-branch');
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-recheck]')).toBeVisible();
+    await expect(recheckButton(page)).toBeVisible();
   });
 
   test('re-clicking the current scenario resets a folder that was restored', async ({ page }) => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'restores');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
     await expect(rootRow(page, 40)).toBeVisible();
 
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-recheck]')).toBeVisible();
+    await expect(recheckButton(page)).toBeVisible();
   });
 
   // The restore case above passes for the wrong reason: its canvas swap unmounts
@@ -209,14 +249,14 @@ test.describe('scenario switching', () => {
   }) => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'stays_missing');
-    await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-verdict="still-missing"]')).toBeVisible();
+    await recheckButton(page).click();
+    await expect(stillMissing(page)).toBeVisible();
 
     await scenario(page, 'missing-folder');
     // A verdict belonging to the previous run must not be read as belonging to
     // this one.
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
-    await expect(page.locator('[data-recheck]')).toBeEnabled();
+    await expect(anyVerdict(page)).toHaveCount(0);
+    await expect(recheckButton(page)).toBeEnabled();
   });
 
   test('re-clicking the current scenario clears a settled failure and an armed removal', async ({
@@ -224,18 +264,18 @@ test.describe('scenario switching', () => {
   }) => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'reconcile_fails');
-    await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-verdict="failed"]')).toBeVisible();
+    await recheckButton(page).click();
+    await expect(checkFailed(page)).toBeVisible();
 
-    await page.locator('[data-remove-project]').click();
-    await expect(page.locator('[data-confirm-panel]')).toBeVisible();
+    await removeButton(page).click();
+    await expect(confirmPanel(page)).toBeVisible();
 
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
+    await expect(anyVerdict(page)).toHaveCount(0);
     // The confirmation is component-local too, and a half-armed destructive
     // action surviving a reset is worse than a stale verdict.
-    await expect(page.locator('[data-confirm-panel]')).toHaveCount(0);
-    await expect(page.locator('[data-recheck]')).toBeVisible();
+    await expect(confirmPanel(page)).toHaveCount(0);
+    await expect(recheckButton(page)).toBeVisible();
   });
 
   test('a reset is not overtaken by a recheck that was already in flight', async ({ page }) => {
@@ -243,13 +283,13 @@ test.describe('scenario switching', () => {
     await page.locator('[data-latency="900"]').click();
     await outcome(page, 'restores');
 
-    await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-recheck]')).toBeDisabled();
+    await recheckButton(page).click();
+    await expect(recheckButton(page)).toBeDisabled();
 
     // Reset while that restore is still in its first stage. Remounting the
     // surface clears what is on screen, but the request itself keeps going.
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-recheck]')).toBeEnabled();
+    await expect(recheckButton(page)).toBeEnabled();
 
     // Past both stages of the superseded request. A fixed wait, deliberately:
     // the assertion is that something never happens, so there is no state to
@@ -259,16 +299,16 @@ test.describe('scenario switching', () => {
     // The reset run is still missing. Without the generation guard the old
     // restore writes into the fresh snapshot and this project quietly comes
     // back, leaving a "reset" scenario in a state the reset never produced.
-    await expect(page.locator('[data-recheck]')).toBeVisible();
+    await expect(recheckButton(page)).toBeVisible();
     await expect(rootRow(page, 40)).toHaveCount(0);
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
+    await expect(anyVerdict(page)).toHaveCount(0);
   });
 
   test('a verdict does not survive a round trip through another scenario', async ({ page }) => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'stays_missing');
-    await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-verdict="still-missing"]')).toBeVisible();
+    await recheckButton(page).click();
+    await expect(stillMissing(page)).toBeVisible();
 
     // Out to a missing *Git* project and back. Every scenario here opens on a
     // missing project, so the recovery surface never unmounts on its own along
@@ -276,11 +316,11 @@ test.describe('scenario switching', () => {
     // the Git stop would pass without any reset at all, because a Git project
     // renders no verdict slot to leak into.
     await scenario(page, 'missing-git');
-    await expect(page.locator('[data-relocate]')).toBeVisible();
+    await expect(relocateButton(page)).toBeVisible();
 
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-recheck]')).toBeVisible();
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
+    await expect(recheckButton(page)).toBeVisible();
+    await expect(anyVerdict(page)).toHaveCount(0);
   });
 });
 
@@ -337,12 +377,12 @@ test.describe('availability', () => {
 
   test('the recovery action matches the kind, in the canvas', async ({ page }) => {
     await scenario(page, 'missing-git');
-    await expect(page.locator('[data-relocate]')).toBeVisible();
-    await expect(page.locator('[data-recheck]')).toHaveCount(0);
+    await expect(relocateButton(page)).toBeVisible();
+    await expect(recheckButton(page)).toHaveCount(0);
 
     await scenario(page, 'missing-folder');
-    await expect(page.locator('[data-recheck]')).toBeVisible();
-    await expect(page.locator('[data-relocate]')).toHaveCount(0);
+    await expect(recheckButton(page)).toBeVisible();
+    await expect(relocateButton(page)).toHaveCount(0);
   });
 
   test('a folder environment is pinned and offers no delete', async ({ page }) => {
@@ -382,53 +422,53 @@ test.describe('same-path recovery', () => {
 
   test('a confirmed-unavailable check says so and leaves the button armed', async ({ page }) => {
     await outcome(page, 'stays_missing');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
-    await expect(page.locator('[data-verdict="still-missing"]')).toHaveText('Still not there.');
-    await expect(page.locator('[data-recheck]')).toBeEnabled();
+    await expect(stillMissing(page)).toHaveText('Still not there.');
+    await expect(recheckButton(page)).toBeEnabled();
   });
 
   test('a failed reconcile reports the failure and never the absence', async ({ page }) => {
     await outcome(page, 'reconcile_fails');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
-    const verdict = page.locator('[data-verdict="failed"]');
+    const verdict = checkFailed(page);
     await expect(verdict).toContainText("Couldn't finish that check.");
     // The whole point of the two-outcome split: a check that did not complete
     // must not assert a fact the read never established.
     await expect(verdict).not.toContainText('Still not there');
-    await expect(page.locator('[data-verdict="still-missing"]')).toHaveCount(0);
+    await expect(stillMissing(page)).toHaveCount(0);
   });
 
   test('a failed snapshot read after a successful reconcile also reports failure', async ({
     page,
   }) => {
     await outcome(page, 'snapshot_fails');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
-    await expect(page.locator('[data-verdict="failed"]')).toBeVisible();
-    await expect(page.locator('[data-verdict="still-missing"]')).toHaveCount(0);
+    await expect(checkFailed(page)).toBeVisible();
+    await expect(stillMissing(page)).toHaveCount(0);
   });
 
   test('a previous verdict is cleared before the next check, not after it', async ({ page }) => {
     await outcome(page, 'stays_missing');
-    await page.locator('[data-recheck]').click();
-    await expect(page.locator('[data-verdict="still-missing"]')).toBeVisible();
+    await recheckButton(page).click();
+    await expect(stillMissing(page)).toBeVisible();
 
     await page.locator('[data-latency="900"]').click();
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
     // While the new check runs, the old answer is gone rather than sitting under
     // a request that might contradict it.
-    await expect(page.locator('[data-recheck]')).toHaveText('Checking…');
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
+    await expect(recheckButton(page)).toHaveText('Checking…');
+    await expect(anyVerdict(page)).toHaveCount(0);
   });
 
   test('the button is disabled while a check is in flight', async ({ page }) => {
     await page.locator('[data-latency="900"]').click();
     await outcome(page, 'stays_missing');
 
-    const button = page.locator('[data-recheck]');
+    const button = recheckButton(page);
     await button.click();
     await expect(button).toBeDisabled();
 
@@ -438,19 +478,19 @@ test.describe('same-path recovery', () => {
     // show that a second check is genuinely refused rather than merely delayed.
     await button.dispatchEvent('click');
 
-    await expect(page.locator('[data-verdict="still-missing"]')).toBeVisible({ timeout: 5_000 });
+    await expect(stillMissing(page)).toBeVisible({ timeout: 5_000 });
     const calls = await page.evaluate(() => window.folderProjectFixture?.reconcileCalls().length);
     expect(calls).toBe(1);
   });
 
   test('a restored folder swaps the canvas to the same environment', async ({ page }) => {
     await outcome(page, 'restores');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
     // Same project, same environment identity, back on the canvas — which is why
     // the action never has to touch selection.
     await expect(rootRow(page, 40)).toBeVisible();
-    await expect(page.locator('[data-recheck]')).toHaveCount(0);
+    await expect(recheckButton(page)).toHaveCount(0);
   });
 
   test('a selection made while the check is in flight survives its completion', async ({
@@ -458,7 +498,7 @@ test.describe('same-path recovery', () => {
   }) => {
     await page.locator('[data-latency="900"]').click();
     await outcome(page, 'restores');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
     // Move to the other project's worktree mid-flight. Production selection
     // reconciliation must leave this alone when the fresh snapshot lands.
@@ -471,14 +511,103 @@ test.describe('same-path recovery', () => {
 
   test('a restore is silent: the canvas swap is the entire feedback', async ({ page }) => {
     await outcome(page, 'restores');
-    await page.locator('[data-recheck]').click();
+    await recheckButton(page).click();
 
     await expect(rootRow(page, 40)).toBeVisible();
     // No banner, no toast, no lingering verdict. Every outcome of this action
     // stays at the surface that started it, and the one that removes that
     // surface says nothing at all.
-    await expect(page.locator('[data-verdict]')).toHaveCount(0);
-    await expect(page.locator('[role="status"]')).toHaveCount(0);
+    await expect(anyVerdict(page)).toHaveCount(0);
+    await expect(toasts(page)).toHaveCount(0);
+  });
+});
+
+/**
+ * Everything the recovery surface holds is about *one* project: an armed
+ * removal, a settled verdict, a failed check. Production keys the surface on the
+ * project id (`Canvas`), and these are the cases that key exists for.
+ *
+ * The fixture renders the production `Canvas` for this branch precisely so these
+ * tests exercise that key rather than one of the fixture's own.
+ */
+test.describe('recovery state is scoped to one project', () => {
+  /**
+   * A disconnected project's rail row.
+   *
+   * Scoped to the rail deliberately. Playwright matches an accessible name by
+   * substring, and the recovery canvas has a `Remove from Isagi` button, so an
+   * unscoped `name: 'isagi'` matches that too — which is how the first run of
+   * this suite failed. The rail is where these rows live, so scoping to it is
+   * both the fix and the more honest claim.
+   */
+  const missingRow = (page: Page, name: string) =>
+    page.locator('aside').getByRole('button', { name });
+
+  test.beforeEach(async ({ page }) => {
+    await scenario(page, 'two-missing');
+  });
+
+  test('a settled verdict does not follow the user to another missing project', async ({
+    page,
+  }) => {
+    await outcome(page, 'stays_missing');
+    await recheckButton(page).click();
+    await expect(stillMissing(page)).toBeVisible();
+
+    await missingRow(page, 'isagi').click();
+    // Positive control first: the Git recovery surface really rendered, so the
+    // absence below is about the verdict and not about an empty page.
+    await expect(relocateButton(page)).toBeVisible();
+    await expect(anyVerdict(page)).toHaveCount(0);
+
+    await missingRow(page, 'notes').click();
+    await expect(recheckButton(page)).toBeVisible();
+    // The return leg is what bites: a Git project renders no verdict slot to
+    // leak into, so stopping at the assertion above would pass without any
+    // isolation at all.
+    await expect(anyVerdict(page)).toHaveCount(0);
+  });
+
+  test('an armed removal does not follow the user to another missing project', async ({ page }) => {
+    await removeButton(page).click();
+    await expect(confirmPanel(page)).toBeVisible();
+
+    await missingRow(page, 'isagi').click();
+    await expect(relocateButton(page)).toBeVisible();
+    // A half-armed destructive action arriving over a project the user never
+    // armed it for is worse than a stale verdict.
+    await expect(confirmPanel(page)).toHaveCount(0);
+
+    await missingRow(page, 'notes').click();
+    await expect(recheckButton(page)).toBeVisible();
+    await expect(confirmPanel(page)).toHaveCount(0);
+  });
+
+  test('a check that lands after the user leaves does not surface on their return', async ({
+    page,
+  }) => {
+    await page.locator('[data-latency="900"]').click();
+    await outcome(page, 'stays_missing');
+    await recheckButton(page).click();
+    await expect(recheckButton(page)).toBeDisabled();
+
+    // Leaving unmounts the panel. It does not cancel the operation: the reconcile
+    // and the refresh carry on and update the shared workspace facts, and only
+    // the panel's local verdict is dropped.
+    await missingRow(page, 'isagi').click();
+    await expect(relocateButton(page)).toBeVisible();
+
+    // Past both stages of the check that is still running. A fixed wait,
+    // deliberately: the assertion is that something never appears, so there is
+    // no state to wait *for*.
+    await page.waitForTimeout(2_500);
+
+    await missingRow(page, 'notes').click();
+    // Back on an idle action rather than on a verdict from a check the user
+    // walked away from.
+    await expect(recheckButton(page)).toBeEnabled();
+    await expect(recheckButton(page)).toHaveText('Check again');
+    await expect(anyVerdict(page)).toHaveCount(0);
   });
 });
 
@@ -488,24 +617,24 @@ test.describe('removal, unchanged', () => {
   });
 
   test('removal still confirms in place, and Cancel backs out', async ({ page }) => {
-    await page.locator('[data-remove-project]').click();
-    await expect(page.locator('[data-confirm-panel]')).toBeVisible();
+    await removeButton(page).click();
+    await expect(confirmPanel(page)).toBeVisible();
 
     await page.getByRole('button', { name: 'Cancel' }).click();
-    await expect(page.locator('[data-confirm-panel]')).toHaveCount(0);
-    await expect(page.locator('[data-recheck]')).toBeVisible();
+    await expect(confirmPanel(page)).toHaveCount(0);
+    await expect(recheckButton(page)).toBeVisible();
   });
 
   test('Escape backs out of an armed confirmation', async ({ page }) => {
-    await page.locator('[data-remove-project]').click();
-    await expect(page.locator('[data-confirm-panel]')).toBeVisible();
+    await removeButton(page).click();
+    await expect(confirmPanel(page)).toBeVisible();
 
     await page.keyboard.press('Escape');
-    await expect(page.locator('[data-confirm-panel]')).toHaveCount(0);
+    await expect(confirmPanel(page)).toHaveCount(0);
   });
 
   test('Cancel takes focus, so Enter cannot fire the destructive action', async ({ page }) => {
-    await page.locator('[data-remove-project]').click();
+    await removeButton(page).click();
     await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
   });
 });
@@ -517,19 +646,30 @@ test.describe('keyboard access', () => {
     await scenario(page, 'missing-folder');
     await outcome(page, 'stays_missing');
 
-    await page.locator('[data-recheck]').focus();
-    await expect(page.locator('[data-recheck]')).toBeFocused();
+    await recheckButton(page).focus();
+    await expect(recheckButton(page)).toBeFocused();
     await page.keyboard.press('Enter');
-    await expect(page.locator('[data-verdict="still-missing"]')).toBeVisible();
+    await expect(stillMissing(page)).toBeVisible();
 
     await page.keyboard.press('Tab');
-    await expect(page.locator('[data-remove-project]')).toBeFocused();
+    await expect(removeButton(page)).toBeFocused();
   });
 
   test('rail rows take focus and select without a pointer', async ({ page }) => {
     await scenario(page, 'mixed');
-    await worktreeRow(page, 10, 103).focus();
+
+    // Focus is asserted before Enter is pressed, rather than assumed to have
+    // stuck. `focus()` waits only for the element to be attached, and the rail's
+    // rows travel under Motion layout animation while a scenario settles — so a
+    // press sent immediately can land after the focused node has been replaced,
+    // and select nothing. Retrying on `toBeFocused` waits for the row that is
+    // actually going to receive the key.
+    const row = worktreeRow(page, 10, 103);
+    await expect(row).toBeVisible();
+    await row.focus();
+    await expect(row).toBeFocused();
+
     await page.keyboard.press('Enter');
-    await expect(worktreeRow(page, 10, 103)).toHaveAttribute('aria-current', 'true');
+    await expect(row).toHaveAttribute('aria-current', 'true');
   });
 });

@@ -63,6 +63,7 @@ import {
   retryWorkflow,
   relocateProject,
   pauseWorkflow,
+  reconcileWorkspace,
   resumeWorkflow,
   setSplitWeights,
   splitPane,
@@ -330,6 +331,117 @@ export function useDeleteProjectMutation() {
       }
       return commitDeleteProjectSuccess(client);
     },
+  });
+}
+
+/**
+ * What a same-path recheck established about one project.
+ *
+ * There is deliberately no `failed` member. A check that could not be completed
+ * produces *no* result at all — the operation rejects — so the surface can never
+ * report an absence on evidence it does not have. The three outcomes the user
+ * must be able to tell apart (restored, confirmed still unavailable, and "we
+ * could not find out") are therefore distinct by construction rather than
+ * inferred from a flag.
+ *
+ * `projectId` names the operation's target. It stays independent of whichever
+ * project the UI happens to be showing when the answer arrives.
+ */
+export type ProjectRecheckResult =
+  | { readonly status: 'restored'; readonly projectId: number }
+  | { readonly status: 'still_unavailable'; readonly projectId: number };
+
+/**
+ * Look again at a folder project's own path, and answer with what a *fresh*
+ * snapshot says.
+ *
+ * A folder project cannot be relocated, so the only honest recovery is to
+ * reconcile the project the user is looking at and then read the workspace
+ * back. Three properties make the answer trustworthy, and all three are easy to
+ * lose:
+ *
+ * 1. **The refresh is an awaited read that can fail.** `invalidateQueries` is
+ *    not one — it wraps each refetch in `catch(noop)` unless `throwOnError` is
+ *    set — so a reconcile that restored the folder followed by a failed read
+ *    would resolve successfully against stale missing-project data and be
+ *    reported as "Still not there". `fetchQuery` throws, so that outcome reaches
+ *    the caller as a rejection instead.
+ * 2. **The read cannot be an older one.** `fetchQuery` alone is not enough:
+ *    `Query.fetch` returns the in-flight retryer promise when a fetch is already
+ *    running, and `staleTime` has no say over that. The workspace query refetches
+ *    on window focus and after active-context persistence, so a read started
+ *    *before* the reconcile committed is an ordinary thing to have in flight
+ *    when this runs — and being handed it would produce exactly the false
+ *    negative point 1 exists to prevent. Cancelling first leaves the query idle
+ *    so the fetch below is genuinely new. The cancel is `exact` because
+ *    `workspaceQueryKey` is a prefix of `activeContextQueryKey`, and a fuzzy
+ *    match would abort an unrelated live request.
+ * 3. **The findings are not evidence.** An empty findings list is returned both
+ *    when nothing changed and when the project was already present, so
+ *    `reconcile` discards its result and is typed to return nothing. The verdict
+ *    comes from the snapshot.
+ *
+ * The guarantee this buys is *causal*, not durable: the read began after the
+ * reconcile completed, so it reflects that reconcile's work. It does not promise
+ * the folder is still there by the time the user reads the answer.
+ *
+ * Selection is never written here. A restored project reaches its environment
+ * through the ordinary refreshed-snapshot path (`useWorkspaceSelectionSync` →
+ * `reconcileSelection`), which is what keeps a newer selection made while this
+ * was in flight from being overwritten.
+ */
+export async function runProjectRecheck(input: {
+  readonly client: QueryClient;
+  readonly projectId: number;
+  readonly reconcile?: (projectId: number) => Promise<void>;
+  readonly fetchWorkspaceData?: (signal?: AbortSignal | undefined) => Promise<WorkspaceData>;
+}): Promise<ProjectRecheckResult> {
+  const { client, projectId } = input;
+  const reconcile = input.reconcile ?? reconcileProjectPresence;
+  const fetchWorkspaceData = input.fetchWorkspaceData ?? loadWorkspaceData;
+
+  await reconcile(projectId);
+
+  await client.cancelQueries({ queryKey: workspaceQueryKey, exact: true });
+  const data = await client.fetchQuery({
+    queryKey: workspaceQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceData(signal),
+    staleTime: 0,
+  });
+
+  publishTerminalWorkspaceFact({ type: 'durable_inventory_refresh_requested' });
+
+  const project = data.projects.find((candidate) => candidate.id === projectId);
+  return project && project.status !== 'missing'
+    ? { status: 'restored', projectId }
+    : { status: 'still_unavailable', projectId };
+}
+
+/**
+ * The default reconcile step. Returns nothing on purpose: the findings this
+ * discards are not evidence of presence, and a `void` result means the operation
+ * above cannot derive its verdict from them even by accident. Findings remain
+ * available to the callers that legitimately consume them, such as
+ * {@link commitRelocateProjectSuccess}.
+ */
+async function reconcileProjectPresence(projectId: number): Promise<void> {
+  await runRuntimeEffect(reconcileWorkspace({ projectId }));
+}
+
+/**
+ * The same-path recovery action for a missing folder project. A thin delegate:
+ * both stages live inside `mutationFn`, so either one failing leaves the
+ * mutation in `isError` with no verdict.
+ *
+ * Findings are deliberately not routed to toasts. This is a user action, so its
+ * result belongs at the surface that started it (ADR 0004);
+ * `scheduleWorkspaceReconcile`'s passive feedback stays the policy for
+ * background reconciliation only.
+ */
+export function useRecheckProjectMutation() {
+  const client = useQueryClient();
+  return useMutation<ProjectRecheckResult, Error, number>({
+    mutationFn: (projectId) => runProjectRecheck({ client, projectId }),
   });
 }
 
