@@ -814,6 +814,11 @@ function worktreeOrderMessage(reason: WorktreeOrderRejectionReason) {
       return 'The insertion anchor belongs to a different project.';
     case 'before_root_worktree_fixed':
       return 'Nothing can be placed above the root worktree.';
+    // Unreachable until the management eligibility guard lands: no caller can
+    // produce this reason yet. The case exists so the switch stays exhaustive
+    // over the contract union rather than falling off the end.
+    case 'worktrees_not_supported':
+      return 'This project maintains its own single environment, so it has no worktrees to order.';
   }
 }
 

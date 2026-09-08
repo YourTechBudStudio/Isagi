@@ -48,6 +48,7 @@ const project = {
   id: 1,
   name: 'isagi',
   rootPath: '/work/isagi',
+  kind: 'git',
   status: 'present',
   glyph: 'IS',
   accent: 'blue',

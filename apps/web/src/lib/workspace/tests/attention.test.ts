@@ -311,6 +311,7 @@ function projectFixture(): Project {
     id: 1,
     name: 'isagi',
     rootPath: '/repo/isagi',
+    kind: 'git',
     status: 'present',
     glyph: 'I',
     accent: 'blue',

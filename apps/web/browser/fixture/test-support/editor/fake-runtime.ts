@@ -299,6 +299,7 @@ function workspaceSnapshot(): WorkspaceSnapshot {
         id: 1,
         name: 'isagi',
         rootPath: '/work/isagi',
+        kind: 'git',
         status: 'present',
         worktrees: [
           {

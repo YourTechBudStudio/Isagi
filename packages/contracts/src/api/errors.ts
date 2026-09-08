@@ -11,7 +11,17 @@ export const projectPathRejectionReasonSchema = Schema.Literal(
   'not_git_repository',
   'not_repository_root',
   'linked_worktree_checkout',
+  // Unsupported Git layout: there is no working tree to open.
+  'bare_repository',
+  // The git executable could not be launched at all.
+  'git_unavailable',
+  // Git data exists at or above the path, but Git refuses to read it.
+  'git_metadata_unreadable',
+  // The path or one of its ancestors could not be inspected, so whether Git is
+  // involved is unknown. Distinct from a negative answer on purpose.
+  'git_metadata_indeterminate',
   'permission_denied',
+  // Inconclusive probe: git ran and failed in a way that cannot be interpreted.
   'git_command_failed',
 );
 
@@ -117,6 +127,10 @@ export const projectRelocationRejectionReasonSchema = Schema.Literal(
   'project_not_found',
   'project_not_missing',
   'project_path_already_registered',
+  // A folder project's path is fixed: its kind is immutable, and a replacement
+  // path would need a policy for Git-bearing directories that this story does
+  // not define. Recovery is restoring the directory where it was registered.
+  'relocation_not_supported',
   'command_cleanup_failed',
 );
 
@@ -134,6 +148,13 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
   'setup_config_invalid',
   'setup_trust_required',
   'setup_trust_mismatch',
+  /**
+   * The project maintains its own single environment, so there are no checkouts
+   * to manage. Spelled as what is refused rather than which kind was seen, so a
+   * future third project kind reuses it without a rename, and it reads correctly
+   * in each of the four management families that carry it.
+   */
+  'worktrees_not_supported',
   'command_cleanup_failed',
 );
 
@@ -143,6 +164,8 @@ export const worktreeSetupRejectionReasonSchema = Schema.Literal(
   'setup_not_configured',
   'setup_config_invalid',
   'setup_trust_mismatch',
+  // See `worktreeOperationRejectionReasonSchema`.
+  'worktrees_not_supported',
 );
 
 export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
@@ -152,6 +175,8 @@ export const worktreeDeleteRejectionReasonSchema = Schema.Literal(
   'root_worktree_not_deletable',
   'dirty_checkout_requires_force',
   'root_worktree_not_found',
+  // See `worktreeOperationRejectionReasonSchema`.
+  'worktrees_not_supported',
   'command_cleanup_failed',
   'pty_teardown_failed',
 );
@@ -180,6 +205,8 @@ export const worktreeOrderRejectionReasonSchema = Schema.Literal(
   'before_worktree_not_found',
   'before_worktree_project_mismatch',
   'before_root_worktree_fixed',
+  // See `worktreeOperationRejectionReasonSchema`.
+  'worktrees_not_supported',
 );
 
 export const surfaceOrderRejectionReasonSchema = Schema.Literal(

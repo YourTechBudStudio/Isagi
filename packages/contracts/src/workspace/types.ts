@@ -5,6 +5,14 @@ import { paneSessionKindSchema } from '../surfaces/types.js';
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const projectStatusSchema = Schema.Literal('present', 'missing');
+
+/**
+ * How a project's environments are maintained. A `git` project discovers its
+ * checkouts from Git; a `folder` project owns exactly one runtime-maintained
+ * environment at its registered directory. Assigned once at registration and
+ * never rewritten, so every consumer can treat it as a stable project fact.
+ */
+export const projectKindSchema = Schema.Literal('git', 'folder');
 export const surfaceSchema = Schema.Struct({
   id: positiveIntegerSchema,
   title: Schema.String,
@@ -28,6 +36,9 @@ const projectBaseFields = {
   id: positiveIntegerSchema,
   name: Schema.String,
   rootPath: Schema.String,
+  // Required on both members: a missing project keeps its kind, which is what
+  // lets a recovery surface offer the right action without guessing.
+  kind: projectKindSchema,
   worktrees: Schema.Array(worktreeSchema),
 } as const;
 
@@ -142,6 +153,7 @@ export const reconcileWorkspaceOutputSchema = Schema.Struct({
 });
 
 export type ProjectStatus = Schema.Schema.Type<typeof projectStatusSchema>;
+export type ProjectKind = Schema.Schema.Type<typeof projectKindSchema>;
 export type WorkspaceSnapshot = Schema.Schema.Type<typeof workspaceSnapshotSchema>;
 export type DurablePtySessionKind = Schema.Schema.Type<typeof durablePtySessionKindSchema>;
 export type DurableSessionIdentity = Schema.Schema.Type<typeof durableSessionIdentitySchema>;

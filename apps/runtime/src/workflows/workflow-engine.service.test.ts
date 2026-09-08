@@ -4933,6 +4933,7 @@ function fakeWorkspaceRepository(): WorkspaceRepositoryService {
               id: 1,
               name: 'Test Project',
               rootPath: '/tmp/isagi-test-project',
+              kind: 'git',
               status: 'present',
               createdAt: '2026-06-18T00:00:00.000Z',
               updatedAt: '2026-06-18T00:00:00.000Z',

@@ -286,6 +286,12 @@ export const WorkspaceRepositoryLive = Layer.effect(
             .values({
               name: input.name,
               rootPath: input.rootPath,
+              // Every caller reaches here only after `validateProjectRoot`
+              // accepted a supported Git root, so the kind is known rather than
+              // defaulted. Written explicitly so the provenance is visible at
+              // the write site; phase 03 replaces this API with one that takes
+              // the classification as an argument.
+              kind: 'git',
               status: 'present',
               sortOrder: nextPresentProjectOrder(db),
               createdAt: now,
@@ -644,6 +650,7 @@ function projectRow(row: ProjectRecord): ProjectRow {
     id: row.id,
     name: row.name,
     rootPath: row.rootPath,
+    kind: row.kind,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

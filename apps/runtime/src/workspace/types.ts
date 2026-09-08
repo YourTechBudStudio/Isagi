@@ -1,4 +1,4 @@
-import type { WorkspaceSnapshot } from '@isagi/contracts';
+import type { ProjectKind, WorkspaceSnapshot } from '@isagi/contracts';
 
 import type { EnvironmentFocusRow, SurfaceMetadataRow } from '../surfaces/index.js';
 
@@ -10,6 +10,7 @@ export interface ProjectRow {
   readonly id: number;
   readonly name: string;
   readonly rootPath: string;
+  readonly kind: ProjectKind;
   readonly status: ProjectStatus;
   readonly createdAt: string;
   readonly updatedAt: string;

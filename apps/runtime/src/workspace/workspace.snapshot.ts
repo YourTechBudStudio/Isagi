@@ -27,6 +27,7 @@ export function buildProjectSnapshot(
     id: project.id,
     name: project.name,
     rootPath: project.rootPath,
+    kind: project.kind,
     worktrees:
       project.status === 'present'
         ? rootWorktreeFirst(

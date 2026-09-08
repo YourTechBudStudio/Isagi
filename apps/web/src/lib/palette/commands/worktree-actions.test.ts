@@ -140,6 +140,7 @@ function workspaceSnapshot(): WorkspaceSnapshot {
         id: 1,
         name: 'isagi',
         rootPath: '/repo/isagi',
+        kind: 'git',
         status: 'present',
         worktrees: [
           {
@@ -173,6 +174,7 @@ function ctx(input: {
       id: projectId,
       name: 'isagi',
       rootPath: '/repo/isagi',
+      kind: 'git',
       glyph: 'IS',
       accent: 'blue',
       status: 'present',

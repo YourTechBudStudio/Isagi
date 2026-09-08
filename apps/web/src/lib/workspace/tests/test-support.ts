@@ -1,3 +1,5 @@
+import type { ProjectKind } from '@isagi/contracts';
+
 import type { WorkspaceData } from '../model.js';
 import type { Project, Surface, Worktree } from '../types.js';
 
@@ -40,11 +42,14 @@ export function project(input: {
   /** Replaces the default single root worktree outright. */
   readonly worktrees?: readonly Worktree[];
   readonly status?: 'present' | 'missing';
+  /** Defaults to a Git project; folder fixtures pass this explicitly. */
+  readonly kind?: ProjectKind;
 }): Project {
   const base = {
     id: input.id,
     name: input.name,
     rootPath: `/repo/${input.name}`,
+    kind: input.kind ?? 'git',
     glyph: input.name.slice(0, 2).toUpperCase(),
     accent: 'blue' as const,
     worktrees: input.worktrees ?? [
