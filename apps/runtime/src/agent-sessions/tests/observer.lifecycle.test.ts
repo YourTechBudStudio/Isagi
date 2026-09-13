@@ -122,6 +122,115 @@ test('Claude background Stop stays active and empty Stop publishes the paired te
   }
 });
 
+for (const withPromptIds of [true, false]) {
+  test(
+    `Claude interrupted prompts and process replacement agree in live polling and replay (prompt IDs: ${withPromptIds})`,
+    { timeout: 10_000 },
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), 'isagi-observer-claude-recovery-'));
+      try {
+        await seedActiveAgentSession(root, 'claude');
+        const path = prepareArtifacts(root, 'claude-session', []);
+        const live = await Effect.runPromise(
+          Effect.gen(function* () {
+            const observer = yield* HarnessLedgerObserver;
+            const database = yield* RuntimeDatabase;
+            const bus = yield* InternalRuntimeEventBus;
+            const changes = yield* bus.subscribe({ types: ['agent_session_changed'] });
+            const append = (
+              event: string,
+              seq: number,
+              payload: Record<string, unknown>,
+              pty = 20,
+            ) =>
+              appendFileSync(
+                path,
+                `${ledgerRecord(
+                  'claude',
+                  'claude-session',
+                  event,
+                  seq,
+                  withPromptIds ? payload : { ...payload, prompt_id: undefined },
+                  10,
+                  pty,
+                )}\n`,
+              );
+
+            append('UserPromptSubmit', 0, { prompt_id: 'first', prompt: 'First request' });
+            append('PreToolUse', 1, {
+              prompt_id: 'first',
+              tool_name: 'AskUserQuestion',
+              tool_use_id: 'question-1',
+            });
+            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* changes.take;
+            assert.equal(yield* observer.getAttention(10), 'waiting');
+
+            // Graph Workflows: another prompt arrives without a question completion.
+            append('UserPromptSubmit', 2, { prompt_id: 'second', prompt: 'Do this instead' });
+            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* changes.take;
+            assert.equal(yield* observer.getAttention(10), 'working');
+
+            // Raphael: the process is replaced while the old turn is still open.
+            yield* insertReplacementPty(database, { agentSessionId: 10, ptyProcessId: 21 });
+            yield* bus.publish({
+              type: 'agent_session_active_process_changed',
+              agentSessionId: 10,
+              ptyProcessId: 21,
+            });
+            yield* changes.take;
+            assert.equal(yield* observer.getAttention(10), 'error');
+            append('UserPromptSubmit', 3, { prompt_id: 'resumed' }, 21);
+            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* changes.take;
+            assert.equal(yield* observer.getAttention(10), 'working');
+
+            // A late old-process prompt must not take back ownership.
+            append('UserPromptSubmit', 4, { prompt_id: 'late-old-process' });
+            append(
+              'Stop',
+              5,
+              {
+                prompt_id: 'resumed',
+                background_tasks: [{ id: 'artifact-updates', type: 'monitor', status: 'running' }],
+              },
+              21,
+            );
+            yield* pollHarnessLedgerObserverForTest(observer, 10);
+            yield* changes.take;
+            assert.equal(yield* observer.getAttention(10), 'waiting');
+            const edges = yield* observer.getTurnEdges(10);
+            yield* changes.unsubscribe;
+            return edges;
+          }).pipe(Effect.provide(testLayer(root))),
+        );
+        assert.deepEqual(
+          live.map((edge) => [edge.type, edge.seq, 'reason' in edge ? edge.reason : null]),
+          [
+            ['turn_started', 0, null],
+            ['turn_failed', 0, 'new_start_supersedes'],
+            ['turn_started', 2, null],
+            ['turn_failed', 2, 'session_died'],
+            ['turn_started', 3, null],
+            ['turn_ended', 3, null],
+          ],
+        );
+        const replay = await Effect.runPromise(
+          Effect.gen(function* () {
+            const observer = yield* HarnessLedgerObserver;
+            assert.equal(yield* observer.getAttention(10), 'waiting');
+            return yield* observer.getTurnEdges(10);
+          }).pipe(Effect.provide(testLayer(root))),
+        );
+        assert.deepEqual(replay, live);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+}
+
 test('Claude AskUserQuestion changes attention without closing the active turn', async () => {
   const root = mkdtempSync(join(tmpdir(), 'isagi-observer-claude-question-'));
   try {

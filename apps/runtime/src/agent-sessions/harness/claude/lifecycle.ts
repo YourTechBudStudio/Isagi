@@ -10,24 +10,60 @@ export function reduceClaudeLifecycle(
   const diagnostics: HarnessLifecycleDiagnostic[] = [];
   const pendingQuestions = new Set<string>();
   const completedQuestions = new Set<string>();
+  const seenPrompts = new Set<string>();
+  const activePrompts = new Set<string>();
 
   for (const record of records) {
     if (record.harness !== 'claude') continue;
+    const payload = object(record.event);
+    const promptKey =
+      typeof payload.prompt_id === 'string' && payload.prompt_id
+        ? `${record.ptyProcessId}:${payload.prompt_id}`
+        : null;
     if (record.nativeEvent === 'UserPromptSubmit') {
+      if (promptKey && seenPrompts.has(promptKey)) continue;
+      const replacedProcess =
+        activeTurn &&
+        activeTurn.ptyProcessId !== null &&
+        record.ptyProcessId !== null &&
+        activeTurn.ptyProcessId !== record.ptyProcessId;
+      // Background results are submitted as prompts inside the same logical
+      // turn. A distinct user prompt supersedes interrupted work: Claude does
+      // not emit Stop for user interrupts. UserPromptSubmit is still a start
+      // on older Claude versions without prompt_id; IDs add correlation and
+      // deduplication, not the authority to start a turn.
+      const backgroundResult =
+        typeof payload.prompt === 'string' &&
+        payload.prompt.trimStart().startsWith('<task-notification>');
+      if (activeTurn && (replacedProcess || !backgroundResult)) {
+        terminalEdges.push({
+          type: 'turn_failed',
+          harnessSessionId: '',
+          seq: activeTurn.seq,
+          // Match the observer's session_died edge so replay and live polling
+          // retain the same failure identity across a process replacement.
+          recordedAt: replacedProcess ? activeTurn.recordedAt : record.recordedAt,
+          reason: replacedProcess ? 'session_died' : 'new_start_supersedes',
+        });
+        activeTurn = null;
+      }
       if (!activeTurn) {
         pendingQuestions.clear();
         completedQuestions.clear();
+        activePrompts.clear();
         activeTurn = start(record);
       }
-      // Claude delivers completed background-agent results as another
-      // UserPromptSubmit inside the same user-visible turn. Preserve the
-      // original opening sequence until native Stop evidence says the whole
-      // turn is terminal.
+      if (promptKey) {
+        seenPrompts.add(promptKey);
+        activePrompts.add(promptKey);
+      }
       attention = pendingQuestions.size > 0 ? 'waiting' : 'working';
       continue;
     }
+    // Late question/Stop hooks from superseded prompts must not change the
+    // current turn. Continuation prompts remain members of that same turn.
+    if (promptKey && activePrompts.size > 0 && !activePrompts.has(promptKey)) continue;
     if (isQuestionHookEvent(record.nativeEvent)) {
-      const payload = object(record.event);
       if (payload.tool_name !== 'AskUserQuestion' || !activeTurn) continue;
       const toolUseId = payload.tool_use_id;
       if (typeof toolUseId !== 'string' || !toolUseId) {
@@ -67,7 +103,14 @@ export function reduceClaudeLifecycle(
         });
       }
       if (!activeTurn) continue;
-      if (parsed.backgroundTasks === null || parsed.backgroundTasks.length > 0) continue;
+      // Monitors (for example artifact live updates) stay registered while
+      // Claude is waiting. Only these known passive tasks are excluded; unknown
+      // task types still conservatively count as outstanding work.
+      if (
+        parsed.backgroundTasks === null ||
+        parsed.backgroundTasks.some((task) => object(task).type !== 'monitor')
+      )
+        continue;
       terminalEdges.push({
         type: 'turn_ended',
         harnessSessionId: '',
@@ -120,8 +163,6 @@ function stopFields(value: unknown) {
   const backgroundTasks = payload.background_tasks;
   const malformed: string[] = [];
   if (!Array.isArray(backgroundTasks)) malformed.push('background_tasks');
-  if ('session_crons' in payload && !Array.isArray(payload.session_crons))
-    malformed.push('session_crons');
   if ('stop_hook_active' in payload && typeof payload.stop_hook_active !== 'boolean') {
     malformed.push('stop_hook_active');
   }

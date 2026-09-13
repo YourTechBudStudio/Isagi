@@ -106,7 +106,7 @@ test('Claude preserves question correlation across continuation prompts and clea
   const continued = reduceClaudeLifecycle([
     record('UserPromptSubmit', 0),
     question('PreToolUse', 1, 'question-1'),
-    record('UserPromptSubmit', 2),
+    record('UserPromptSubmit', 2, { prompt: '<task-notification>result</task-notification>' }),
     question('PostToolUse', 3, 'question-1'),
   ]);
   assert.equal(continued.activeTurn?.seq, 0);
@@ -116,7 +116,7 @@ test('Claude preserves question correlation across continuation prompts and clea
   const stillWaiting = reduceClaudeLifecycle([
     record('UserPromptSubmit', 0),
     question('PreToolUse', 1, 'question-1'),
-    record('UserPromptSubmit', 2),
+    record('UserPromptSubmit', 2, { prompt: '<task-notification>result</task-notification>' }),
   ]);
   assert.equal(stillWaiting.activeTurn?.seq, 0);
   assert.equal(stillWaiting.attention, 'waiting');
@@ -139,6 +139,141 @@ test('Claude preserves question correlation across continuation prompts and clea
   assert.equal(failed.activeTurn, null);
   assert.equal(failed.attention, 'error');
   assert.equal(failed.terminalEdges[0]?.type, 'turn_failed');
+});
+
+test('Claude new prompt retires an interrupted question and ignores late hooks from that prompt', () => {
+  // Redacted Graph Workflows sequence: AskUserQuestion had no completion hook
+  // before another user prompt arrived.
+  const records = [
+    record('UserPromptSubmit', 0, { prompt_id: 'old' }),
+    record('PreToolUse', 1, {
+      prompt_id: 'old',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'question-1',
+    }),
+    record('UserPromptSubmit', 2, { prompt_id: 'new' }),
+  ];
+  const resumed = reduceClaudeLifecycle(records);
+  assert.equal(resumed.attention, 'working');
+  assert.equal(resumed.activeTurn?.seq, 2);
+  assert.deepEqual(resumed.terminalEdges, [
+    {
+      type: 'turn_failed',
+      harnessSessionId: '',
+      seq: 0,
+      recordedAt: time(2),
+      reason: 'new_start_supersedes',
+    },
+  ]);
+
+  const late = reduceClaudeLifecycle([
+    ...records,
+    record('UserPromptSubmit', 3, { prompt_id: 'old' }),
+    record('PreToolUse', 4, {
+      prompt_id: 'old',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'question-2',
+    }),
+    record('Stop', 5, { prompt_id: 'old', background_tasks: [] }),
+    record('StopFailure', 6, { prompt_id: 'old' }),
+  ]);
+  assert.deepEqual(late, resumed);
+  const ended = reduceClaudeLifecycle([
+    ...records,
+    record('Stop', 3, { prompt_id: 'new', background_tasks: [] }),
+    record('UserPromptSubmit', 4, { prompt_id: 'new' }),
+  ]);
+  assert.equal(ended.attention, 'waiting');
+  assert.equal(ended.activeTurn, null);
+  assert.equal(ended.terminalEdges.at(-1)?.seq, 2);
+});
+
+test('Claude identified background continuation preserves the turn and its pending question', () => {
+  const records = [
+    record('UserPromptSubmit', 0, { prompt_id: 'user' }),
+    record('PreToolUse', 1, {
+      prompt_id: 'user',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'question-1',
+    }),
+    record('UserPromptSubmit', 2, {
+      prompt_id: 'background',
+      prompt: '<task-notification>redacted</task-notification>',
+    }),
+  ];
+  const continued = reduceClaudeLifecycle(records);
+  assert.equal(continued.activeTurn?.seq, 0);
+  assert.equal(continued.attention, 'waiting');
+  assert.deepEqual(continued.terminalEdges, []);
+  const answered = reduceClaudeLifecycle([
+    ...records,
+    record('PostToolUse', 3, {
+      prompt_id: 'user',
+      tool_name: 'AskUserQuestion',
+      tool_use_id: 'question-1',
+    }),
+    record('Stop', 4, { prompt_id: 'background', background_tasks: [] }),
+  ]);
+  assert.equal(answered.activeTurn, null);
+  assert.equal(answered.terminalEdges[0]?.seq, 0);
+});
+
+test('Claude same-process interruption retires the question without prompt IDs', () => {
+  const lifecycle = reduceClaudeLifecycle([
+    record('UserPromptSubmit', 0, { prompt: 'First request' }),
+    question('PreToolUse', 1, 'old-question'),
+    record('UserPromptSubmit', 2, { prompt: 'Do this instead' }),
+  ]);
+  assert.equal(lifecycle.attention, 'working');
+  assert.equal(lifecycle.activeTurn?.seq, 2);
+  assert.deepEqual(lifecycle.terminalEdges, [
+    {
+      type: 'turn_failed',
+      harnessSessionId: '',
+      seq: 0,
+      recordedAt: time(2),
+      reason: 'new_start_supersedes',
+    },
+  ]);
+});
+
+test('Claude replacement process opens its own turn even without prompt IDs', () => {
+  const lifecycle = reduceClaudeLifecycle([
+    record('UserPromptSubmit', 0),
+    question('PreToolUse', 1, 'old-question'),
+    { ...record('UserPromptSubmit', 2), ptyProcessId: 21 },
+  ]);
+  assert.equal(lifecycle.attention, 'working');
+  assert.equal(lifecycle.activeTurn?.ptyProcessId, 21);
+  assert.equal(lifecycle.activeTurn?.seq, 2);
+  assert.deepEqual(lifecycle.terminalEdges, [
+    {
+      type: 'turn_failed',
+      harnessSessionId: '',
+      seq: 0,
+      recordedAt: time(0),
+      reason: 'session_died',
+    },
+  ]);
+});
+
+test('Claude Stop ignores passive monitors but retains genuine or unknown background work', () => {
+  const monitor = { id: 'monitor-1', type: 'monitor', status: 'running' };
+  const ended = reduceClaudeLifecycle([
+    record('UserPromptSubmit', 0),
+    record('Stop', 1, { background_tasks: [monitor] }),
+  ]);
+  assert.equal(ended.attention, 'waiting');
+  assert.equal(ended.activeTurn, null);
+  assert.equal(ended.terminalEdges[0]?.type, 'turn_ended');
+  for (const task of [{ type: 'subagent' }, { type: 'shell' }, { type: 'future-type' }, {}]) {
+    const working = reduceClaudeLifecycle([
+      record('UserPromptSubmit', 0),
+      record('Stop', 1, { background_tasks: [monitor, task] }),
+    ]);
+    assert.equal(working.attention, 'working');
+    assert.equal(working.activeTurn?.seq, 0);
+  }
 });
 
 test('Claude tolerates malformed optional fields without changing raw event routing', () => {
