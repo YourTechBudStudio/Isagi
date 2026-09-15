@@ -16,26 +16,50 @@ import {
   type HashInput,
   type WorkflowBuildManifest,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+import {
+  describeCapabilities,
+  describeWorkflowModule,
+  hashDescriptor,
+  type StructureDiagnostic,
+  type WorkflowStructureDescriptor,
+} from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Data, Effect } from 'effect';
 
 import type { WorkflowLoadFailureReason } from '@isagi/contracts';
 
-import type { WorkflowDefinition } from './types.js';
+import type { GraphDefinition, WorkflowDefinition } from '../types.js';
 
 export class WorkflowLoadError extends Data.TaggedError('WorkflowLoadError')<{
   readonly reason: WorkflowLoadFailureReason;
   readonly message: string;
   readonly workflowKey?: string | undefined;
   readonly artifactHash?: string | undefined;
+  /** Which node, edge or subgraph registration is wrong, when the structure is what failed. */
+  readonly diagnostics?: readonly StructureDiagnostic[] | undefined;
   readonly cause?: unknown;
 }> {}
 
+/**
+ * An imported, structurally verified artifact.
+ *
+ * `graphs` is how the interpreter turns a saved `graph_key` back into executable code without
+ * re-entering discovery, and `descriptor` is the same structure as data — which is what lets the
+ * inspector describe a version it must never import.
+ */
 export interface LoadedWorkflowArtifact {
   readonly artifactHash: string;
-  readonly definition: WorkflowDefinition<unknown>;
+  readonly definition: AnyWorkflowDefinition;
+  readonly descriptor: WorkflowStructureDescriptor;
+  readonly graphs: ReadonlyMap<string, AnyGraphDefinition>;
 }
 
-export type WorkflowDefinitionCache = Map<string, Promise<WorkflowDefinition<unknown>>>;
+// The loader is contract-checked, not type-checked: it inspects bundles compiled against their own
+// copy of the SDK, so the author's real parameter and state types are gone by the time these
+// objects arrive. `describeWorkflowModule` is what establishes the shape.
+export type AnyWorkflowDefinition = WorkflowDefinition<Record<string, unknown>, unknown>;
+export type AnyGraphDefinition = GraphDefinition<unknown, unknown, unknown, unknown>;
+
+export type WorkflowDefinitionCache = Map<string, Promise<LoadedWorkflowArtifact>>;
 
 const exactSemver =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -86,16 +110,12 @@ export function validateAndPublishWorkflowPackage(input: {
         );
       }
       await publishArtifact(input.cacheRoot, manifest.artifact.sha256, artifactBytes, input);
-      const definition = await importCachedArtifact(
+      return await importCachedArtifact(
         input.cacheRoot,
         manifest.artifact.sha256,
-        input,
+        { ...input, structureHash: manifest.structure.sha256 },
         input.definitionCache,
       );
-      return {
-        artifactHash: manifest.artifact.sha256,
-        definition,
-      } satisfies LoadedWorkflowArtifact;
     },
     catch: (cause) => normalizeFailure(cause, input),
   });
@@ -121,13 +141,14 @@ export function loadPinnedWorkflowArtifact(input: {
       if (hashArtifact(bytes) !== input.artifactHash) {
         throw failure('pinned_artifact_unavailable', input, 'Pinned workflow artifact is corrupt.');
       }
-      const definition = await importCachedArtifact(
+      // The same three structural steps run on the pinned bytes, so a corrupt or
+      // capability-invalid pin fails closed instead of executing.
+      return await importCachedArtifact(
         input.cacheRoot,
         input.artifactHash,
         input,
         input.definitionCache,
       );
-      return { artifactHash: input.artifactHash, definition } satisfies LoadedWorkflowArtifact;
     },
     catch: (cause) => normalizeFailure(cause, input, 'pinned_artifact_unavailable'),
   });
@@ -310,21 +331,36 @@ async function publishArtifact(
 async function importCachedArtifact(
   cacheRoot: string,
   hash: string,
-  input: { readonly workflowKey?: string | undefined; readonly artifactHash?: string | undefined },
+  input: {
+    readonly workflowKey?: string | undefined;
+    readonly artifactHash?: string | undefined;
+    readonly structureHash?: string | undefined;
+  },
   loadedDefinitions: WorkflowDefinitionCache,
 ) {
   const cacheKey = `${resolve(cacheRoot)}\0${hash}`;
   let pending = loadedDefinitions.get(cacheKey);
   if (!pending) {
     pending = import(pathToFileURL(artifactCachePath(cacheRoot, hash)).href).then((loaded) =>
-      workflowDefinitionFromDefault(loaded.default),
+      describeWorkflowArtifact(loaded, hash, input),
     );
     loadedDefinitions.set(cacheKey, pending);
   }
   try {
-    return await pending;
+    const artifact = await pending;
+    // Checked against the *caller's* expectation rather than the cached one, so a receipt whose
+    // structure hash was edited is caught even when the bundle itself is already imported.
+    if (input.structureHash && hashDescriptor(artifact.descriptor) !== input.structureHash) {
+      throw failure(
+        'structure_mismatch',
+        input,
+        'Workflow structure does not match its build receipt.',
+      );
+    }
+    return artifact;
   } catch (cause) {
     loadedDefinitions.delete(cacheKey);
+    if (cause instanceof WorkflowLoadError) throw cause;
     const reason =
       cause instanceof InvalidWorkflowExport ? 'invalid_export' : 'artifact_load_failed';
     throw failure(
@@ -338,18 +374,83 @@ async function importCachedArtifact(
   }
 }
 
-class InvalidWorkflowExport extends Error {}
-function workflowDefinitionFromDefault(value: unknown): WorkflowDefinition<unknown> {
-  if (!value || typeof value !== 'object')
-    throw new InvalidWorkflowExport('Default export must be a workflow definition object.');
-  const definition = value as Partial<Record<keyof WorkflowDefinition<unknown>, unknown>>;
-  const missing = ['command', 'validate', 'init', 'step'].filter(
-    (field) => typeof definition[field as keyof WorkflowDefinition<unknown>] !== 'function',
-  );
-  if (missing.length > 0)
-    throw new InvalidWorkflowExport(`Workflow definition is missing: ${missing.join(', ')}.`);
-  return definition as WorkflowDefinition<unknown>;
+/**
+ * Turns an imported module namespace into a usable artifact, or refuses.
+ *
+ * All three structural steps live here rather than at the two call sites, so the pinned path cannot
+ * drift into accepting something the publishing path rejects:
+ *
+ * 1. the module is structurally a workflow, reported per node and edge rather than as one verdict;
+ * 2. every graph it declares is reachable as a live object by its key;
+ * 3. it contains no node kind this release cannot execute.
+ *
+ * Step 3 is what keeps `checkpoint()` a real extension seam and an unlaunchable one at the same
+ * time: it validates, it gets a descriptor, and it is still refused at load.
+ */
+export function describeWorkflowArtifact(
+  loaded: unknown,
+  hash: string,
+  input: {
+    readonly workflowKey?: string | undefined;
+    readonly artifactHash?: string | undefined;
+  } = {},
+): LoadedWorkflowArtifact {
+  const structure = describeWorkflowModule(loaded);
+  if (!structure.ok) {
+    throw new WorkflowLoadError({
+      reason: 'invalid_structure',
+      message: `Workflow structure is invalid: ${structure.diagnostics[0]?.message ?? 'no diagnostics reported'}`,
+      workflowKey: input.workflowKey,
+      artifactHash: hash,
+      diagnostics: structure.diagnostics,
+    });
+  }
+
+  const capabilities = describeCapabilities(structure.descriptor);
+  if (!capabilities.launchable) {
+    const unsupported = capabilities.unsupported[0];
+    throw failure(
+      'unsupported_capability',
+      { ...input, artifactHash: hash },
+      unsupported
+        ? `This release cannot execute a ${unsupported.capability} node (${unsupported.graphKey}.${unsupported.nodeId}).`
+        : 'This release cannot execute one of this workflow\u2019s node kinds.',
+    );
+  }
+
+  const definition = (loaded as { default: AnyWorkflowDefinition }).default;
+  return {
+    artifactHash: hash,
+    definition,
+    descriptor: structure.descriptor,
+    graphs: collectLiveGraphs(definition),
+  };
 }
+
+/**
+ * Maps every declared graph key to the live object that implements it.
+ *
+ * A plain recursive walk is sound here precisely because it runs *after* `describeWorkflowModule`
+ * returned a descriptor: that pass has already rejected cycles, duplicate keys, unbounded depth and
+ * malformed identifiers, so there is nothing left for this walk to defend against. A test asserts
+ * the keys it produces are exactly the descriptor's, which is what keeps the two from drifting.
+ */
+function collectLiveGraphs(
+  definition: AnyWorkflowDefinition,
+): ReadonlyMap<string, AnyGraphDefinition> {
+  const graphs = new Map<string, AnyGraphDefinition>();
+  const collect = (graph: AnyGraphDefinition) => {
+    if (graphs.has(graph.key)) return;
+    graphs.set(graph.key, graph);
+    for (const node of Object.values(graph.nodes)) {
+      if (node.isagiKind === 'subgraph-node') collect(node.graph as AnyGraphDefinition);
+    }
+  };
+  collect(definition.graph as AnyGraphDefinition);
+  return graphs;
+}
+
+class InvalidWorkflowExport extends Error {}
 
 function artifactCachePath(cacheRoot: string, hash: string) {
   return join(cacheRoot, hash, 'index.mjs');

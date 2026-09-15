@@ -1,21 +1,30 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import {
   hashArtifact,
   hashWorkflowInputs,
   serializeWorkflowBuildManifest,
+  supportedWorkflowContractVersion,
+  workflowBuildManifestVersion,
   workflowSdkPackage,
   workflowVerifierPackage,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+import {
+  describeWorkflowModule,
+  hashDescriptor,
+  workflowStructureDescriptorVersion,
+} from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Either, Layer, Ref } from 'effect';
 
-import { DataDirectory, type IsagiDataDirectory } from '../persistence/index.js';
-import { makeTestDataDirectory } from '../persistence/test-support.js';
-import { defaultRuntimeConfig, RuntimeConfig } from '../runtime-config/index.js';
+import { DataDirectory, type IsagiDataDirectory } from '../../persistence/index.js';
+import { makeTestDataDirectory } from '../../persistence/test-support.js';
+import { defaultRuntimeConfig, RuntimeConfig } from '../../runtime-config/index.js';
 import { scanWorkflowSource } from './discovery.js';
 import { WorkflowLoadError } from './loader.js';
 import {
@@ -67,12 +76,53 @@ test('live registry captures configured sources once at layer construction', asy
   }
 });
 
-const artifact = `export default {
+/**
+ * A bundle, written the way a real one arrives: plain branded data, not an SDK import.
+ *
+ * An author's bundle embeds its own copy of the SDK, so the objects the loader inspects are never
+ * the runtime's own instances. Writing the brands out literally here is what keeps these tests
+ * honest about that — recognition has to work on plain data or it does not work at all.
+ */
+function bundleSource(input: { readonly graphKey: string; readonly nodes: string }): string {
+  return `const brand = (kind) => ({ isagiContract: 2, isagiKind: kind });
+export default {
+  ...brand('workflow'),
   command: () => ({ title: 'Packaged workflow' }),
   validate: () => {},
-  init: () => ({ version: 1 }),
-  step: async () => ({ type: 'done' })
-};\n`;
+  graph: {
+    ...brand('graph'),
+    key: '${input.graphKey}',
+    title: 'Packaged workflow',
+    init: () => ({ done: false }),
+    state: { done: { ...brand('state-field'), reduce: (_c, u) => u } },
+    entry: 'work',
+    nodes: ${input.nodes},
+    edges: {
+      'work-out': { ...brand('edge'), from: 'work', to: ['finished'], choose: () => ({ to: 'finished' }) }
+    },
+    outcomes: {
+      finished: { ...brand('outcome'), kind: 'success', output: (state) => state }
+    }
+  }
+};
+`;
+}
+
+const operationNodes = `{ work: { ...brand('operation-node'), run: async () => ({ ...brand('operation-result'), type: 'complete' }) } }`;
+
+const artifact = bundleSource({ graphKey: 'packaged-workflow', nodes: operationNodes });
+
+/** A bundle that validates structurally and still cannot be launched by this release. */
+const checkpointArtifact = bundleSource({
+  graphKey: 'checkpoint-workflow',
+  nodes: `{ work: { ...brand('checkpoint-node'), caption: 'Review before continuing' } }`,
+});
+
+/** A bundle whose entry node is not declared: structurally invalid, with a locating diagnostic. */
+const invalidStructureArtifact = bundleSource({
+  graphKey: 'broken-workflow',
+  nodes: operationNodes,
+}).replace("entry: 'work'", "entry: 'missing'");
 
 test('loads a verified standalone package and reuses its content-addressed pin', async () => {
   const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-loader-'));
@@ -436,8 +486,10 @@ test('distinguishes unsupported manifest, unsupported contract, and invalid pack
     const registry = createFilesystemWorkflowRegistry(workflows, cache);
 
     for (const [key, field, value, expected] of [
-      ['manifest', 'manifestVersion', 2, 'unsupported_manifest'],
-      ['contract', 'workflowContractVersion', 2, 'unsupported_contract'],
+      // The versions this release replaced. An old package must be rebuilt, never interpreted
+      // loosely, so both produce their own reason rather than a generic parse failure.
+      ['manifest', 'manifestVersion', 1, 'unsupported_manifest'],
+      ['contract', 'workflowContractVersion', 1, 'unsupported_contract'],
     ] as const) {
       const packageRoot = join(workflows, key);
       await writePackage(packageRoot, artifact);
@@ -483,6 +535,83 @@ test('concurrent latest loads publish one valid immutable artifact', async () =>
   }
 });
 
+test('refuses a structurally invalid bundle and says which node is wrong', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-invalid-structure-'));
+  try {
+    const workflows = join(root, 'workflows');
+    const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
+    await writePackage(join(workflows, 'broken'), invalidStructureArtifact);
+
+    const error = await failure(discoverAndLoad(registry, 'broken'));
+    assert.equal(error.reason, 'invalid_structure');
+    // The diagnostics are the point: an author needs to know *which* registration is wrong, and the
+    // API and inspector show exactly this list.
+    assert.ok(error.diagnostics && error.diagnostics.length > 0);
+    assert.ok(
+      error.diagnostics.some((diagnostic) => diagnostic.code === 'missing_entry'),
+      `Expected a missing_entry diagnostic, got ${JSON.stringify(error.diagnostics)}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('refuses a bundle whose receipt describes a different structure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-structure-mismatch-'));
+  try {
+    const workflows = join(root, 'workflows');
+    const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
+    // The receipt is internally well-formed and signed off; only its structure hash is a lie. The
+    // loader re-derives the structure from the bytes that will actually execute, so the edit cannot
+    // make one artifact hash pin a different graph.
+    await writePackage(join(workflows, 'mismatched'), artifact, { sha256: 'b'.repeat(64) });
+
+    assert.equal(await reason(discoverAndLoad(registry, 'mismatched')), 'structure_mismatch');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('refuses to load a checkpoint bundle that is valid but not launchable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-checkpoint-'));
+  try {
+    const workflows = join(root, 'workflows');
+    const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
+    await writePackage(join(workflows, 'checkpointed'), checkpointArtifact);
+
+    // Structurally valid — it reaches the capability report rather than failing validation — and
+    // still refused, because this release cannot execute a checkpoint node. That is what keeps the
+    // extension seam real without letting it run half-implemented.
+    const error = await failure(discoverAndLoad(registry, 'checkpointed'));
+    assert.equal(error.reason, 'unsupported_capability');
+    assert.match(error.message, /checkpoint/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('exposes every declared graph as a live object addressable by its descriptor key', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-graph-map-'));
+  try {
+    const workflows = join(root, 'workflows');
+    const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
+    await writePackage(join(workflows, 'packaged'), artifact);
+
+    const loaded = await Effect.runPromise(discoverAndLoad(registry, 'packaged'));
+
+    // The two halves must agree: the descriptor is what the inspector reads, the map is what the
+    // interpreter executes, and a key in one that is missing from the other is a run that cannot
+    // resolve its own frame.
+    assert.deepEqual(
+      [...loaded.graphs.keys()].sort(),
+      loaded.descriptor.graphs.map((graph) => graph.key).sort(),
+    );
+    assert.equal(loaded.graphs.get(loaded.descriptor.rootGraphKey), loaded.definition.graph);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function reason(effect: Effect.Effect<unknown, unknown>) {
   return (await failure(effect)).reason;
 }
@@ -507,13 +636,17 @@ async function failure(effect: Effect.Effect<unknown, unknown>) {
   return result.left;
 }
 
-async function writePackage(root: string, artifactText: string) {
+async function writePackage(
+  root: string,
+  artifactText: string,
+  structureOverride?: { readonly sha256: string } | undefined,
+) {
   const packageJson = `${JSON.stringify(
     {
       name: 'fixture-workflow',
       private: true,
-      dependencies: { [workflowSdkPackage]: '0.0.1' },
-      devDependencies: { [workflowVerifierPackage]: '0.0.1' },
+      dependencies: { [workflowSdkPackage]: '0.1.0' },
+      devDependencies: { [workflowVerifierPackage]: '0.1.0' },
     },
     null,
     2,
@@ -532,14 +665,50 @@ async function writePackage(root: string, artifactText: string) {
   await writeFile(
     join(root, 'dist', 'isagi-workflow-build.json'),
     serializeWorkflowBuildManifest({
-      manifestVersion: 1,
-      workflowContractVersion: 1,
-      sdk: { name: workflowSdkPackage, version: '0.0.1' },
-      verifier: { name: workflowVerifierPackage, version: '0.0.1' },
+      manifestVersion: workflowBuildManifestVersion,
+      workflowContractVersion: supportedWorkflowContractVersion,
+      sdk: { name: workflowSdkPackage, version: '0.1.0' },
+      verifier: { name: workflowVerifierPackage, version: '0.1.0' },
       source: { sha256: hashWorkflowInputs(inputs) },
       artifact: { entry: 'dist/index.js', sha256: hashArtifact(Buffer.from(artifactText)) },
+      // Derived from the bundle that was actually written, the same way the verifier derives it, so
+      // the receipt describes this graph rather than a hand-maintained guess about it.
+      structure: await describeBundleStructure(root, artifactText, structureOverride),
     }),
   );
+}
+
+/**
+ * The receipt's structure block, derived by importing the bundle exactly as the loader will.
+ *
+ * `structureOverride` exists for the tamper case: it is what an edited receipt looks like, and the
+ * loader must reject it because the structure it re-derives from the bytes disagrees.
+ */
+async function describeBundleStructure(
+  root: string,
+  artifactText: string,
+  structureOverride?: { readonly sha256: string } | undefined,
+) {
+  const modulePath = join(root, 'dist', `structure-probe-${randomUUID()}.mjs`);
+  await writeFile(modulePath, artifactText);
+  try {
+    const loaded: unknown = await import(pathToFileURL(modulePath).href);
+    const described = describeWorkflowModule(loaded);
+    // A real verifier never issues a receipt for a bundle it could not describe, so an invalid
+    // bundle can only reach the loader carrying a receipt that *claims* a valid structure — bytes
+    // edited after verification, or a receipt copied from elsewhere. The claim below is what that
+    // looks like, and the loader has to refuse it on the structure it re-derives, not on the claim.
+    return {
+      descriptorVersion: workflowStructureDescriptorVersion,
+      sha256:
+        structureOverride?.sha256 ??
+        (described.ok ? hashDescriptor(described.descriptor) : 'c'.repeat(64)),
+      rootGraphKey: described.ok ? described.descriptor.rootGraphKey : 'claimed-graph',
+      graphCount: described.ok ? described.descriptor.graphs.length : 1,
+    } as const;
+  } finally {
+    await rm(modulePath, { force: true });
+  }
 }
 
 function dataDirectoryPaths(root: string): IsagiDataDirectory {

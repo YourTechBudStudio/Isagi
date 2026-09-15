@@ -8,6 +8,18 @@ import { PtyService, type PtyLaunchError } from '../pty-processes/pty.service.js
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
 import { SessionLifecycle } from '../session-lifecycle/index.js';
 import type { AgentSessionRow } from '../surfaces/types.js';
+
+/**
+ * A losing insert in a keyed race, as SQLite reports it.
+ *
+ * Recognized narrowly by driver code rather than by message text, so an unrelated database fault is
+ * never mistaken for a race and quietly retried.
+ */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  const cause = (error as { readonly cause?: unknown }).cause;
+  const code = (cause as { readonly code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT_UNIQUE');
+}
 import { AgentSessionRepository } from './agent-sessions.repository.js';
 import { HarnessAdapterRegistry } from './harness/index.js';
 import { HarnessAdapterError, type HarnessLaunchOptions } from './harness/types.js';
@@ -17,7 +29,12 @@ export interface AgentSessionService {
     readonly worktreeId: number;
     readonly harness: AgentHarness;
     readonly cwd: string;
-  }) => Effect.Effect<{ readonly agentSessionId: number }, DatabaseError | HarnessLaunchBlocked>;
+    /** Names the session this call intends to create, so a re-entry after a crash can adopt it. */
+    readonly creationKey?: string | undefined;
+  }) => Effect.Effect<
+    { readonly agentSessionId: number },
+    DatabaseError | HarnessLaunchBlocked | AgentSessionError
+  >;
   readonly get: (
     agentSessionId: number,
   ) => Effect.Effect<AgentSessionRow, DatabaseError | AgentSessionError>;
@@ -115,13 +132,60 @@ export const AgentSessionServiceLive = Layer.effect(
       startFresh: (input) =>
         Effect.gen(function* () {
           yield* controlPlane.assertCanCreateProcess(input.harness);
-          const agentSessionId = yield* repository.create({
-            worktreeId: input.worktreeId,
-            harness: input.harness,
-            cwd: input.cwd,
-          });
-          yield* publishChanged(agentSessionId);
-          return { agentSessionId };
+          // Idempotent completion, not idempotent creation: a keyed call that finds its own
+          // session returns it rather than starting a second agent in the person's worktree.
+          const creationKey = input.creationKey;
+          const adopt = (session: AgentSessionRow) =>
+            Effect.gen(function* () {
+              // Every fact this call supplied is compared, not just the harness. `cwd` is derived
+              // from the worktree on the compound path, but this is a public owner API that accepts
+              // it independently, so a key reused against a different directory is a different
+              // intent and must not silently adopt.
+              if (
+                session.harness !== input.harness ||
+                session.worktreeId !== input.worktreeId ||
+                session.cwd !== input.cwd
+              ) {
+                return yield* Effect.fail(
+                  new AgentSessionError(
+                    'harness_mismatch',
+                    `Creation key ${creationKey} already names an agent session that does not match this request.`,
+                  ),
+                );
+              }
+              return { agentSessionId: session.id };
+            });
+
+          const existing = creationKey ? yield* repository.findByCreationKey(creationKey) : null;
+          if (existing) return yield* adopt(existing);
+
+          const created = yield* repository
+            .create({
+              worktreeId: input.worktreeId,
+              harness: input.harness,
+              cwd: input.cwd,
+              ...(creationKey === undefined ? {} : { creationKey }),
+            })
+            .pipe(
+              Effect.map((agentSessionId) => ({ agentSessionId, isNew: true })),
+              // Reading and then inserting is not atomic: two callers can both observe `absent`, and
+              // exactly one wins the unique index. Losing that race is convergence, not failure —
+              // the winner is the session this key names — so the conflict is a signal to re-read
+              // and validate rather than an error to surface. Without this, "safely converges under
+              // concurrent calls" would hold only because nothing ever raced.
+              Effect.catchIf(
+                (error) => creationKey !== undefined && isUniqueConstraintViolation(error),
+                () =>
+                  Effect.gen(function* () {
+                    const winner = yield* repository.findByCreationKey(creationKey!);
+                    if (!winner) return yield* Effect.die('keyed session vanished after conflict');
+                    return { ...(yield* adopt(winner)), isNew: false };
+                  }),
+              ),
+            );
+
+          if (created.isNew) yield* publishChanged(created.agentSessionId);
+          return { agentSessionId: created.agentSessionId };
         }),
       get: (agentSessionId) => findAgentSessionOrFail(repository, agentSessionId),
       ensureActivePtyProcess,

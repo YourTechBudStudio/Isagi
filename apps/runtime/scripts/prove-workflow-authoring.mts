@@ -152,10 +152,15 @@ async function main() {
     // 7. Load through the real runtime verified-package path (validate → publish → import).
     //    Imported here, not at module scope, so --package-only does not depend on runtime code.
     const { Effect } = await import('effect');
-    const { createFilesystemWorkflowRegistry } = await import('../src/workflows/registry.js');
+    const { createFilesystemWorkflowRegistry } =
+      await import('../src/workflows/structure/registry.js');
     const registry = createFilesystemWorkflowRegistry(workflowsRoot, cacheRoot);
-    const loaded = await Effect.runPromise(registry.resolveLatest(workflowKey));
-    if (!loaded) throw new Error('runtime registry returned no definition');
+    // Discovery then load, exactly as the runtime does it: the registry no longer offers a
+    // resolve-latest shortcut, because a run has to know *which* discovered package it loaded.
+    const discovery = await Effect.runPromise(registry.discover());
+    const entry = discovery.find(workflowKey);
+    if (!entry) throw new Error('runtime registry did not discover the scaffold');
+    const loaded = await Effect.runPromise(registry.loadDiscovered(entry));
     const manifest = await loaded.definition.command({
       worktreeId: 0,
       worktreePath: workflowDir,
@@ -169,9 +174,17 @@ async function main() {
       throw new Error('runtime load lost the declared input shape');
     if (!readdirSync(join(cacheRoot, loaded.artifactHash)).includes('index.mjs'))
       throw new Error('verified artifact was not published to the content-addressed cache');
+    // Structure is the half the receipt pins, so the proof checks it rather than only the command
+    // manifest: every declared graph must be reachable as live code by the key the descriptor uses.
+    if (loaded.descriptor.rootGraphKey !== loaded.definition.graph.key)
+      throw new Error('descriptor root graph disagrees with the loaded definition');
+    for (const graph of loaded.descriptor.graphs) {
+      if (!loaded.graphs.has(graph.key))
+        throw new Error(`descriptor graph ${graph.key} has no live definition`);
+    }
     log(
       'runtime-load',
-      `registry loaded ${workflowKey}: title="${manifest.title}", input="${manifest.inputs[0].key}", artifact=${loaded.artifactHash}`,
+      `registry loaded ${workflowKey}: title="${manifest.title}", input="${manifest.inputs[0].key}", graphs=${loaded.descriptor.graphs.length}, artifact=${loaded.artifactHash}`,
     );
 
     process.stdout.write('\nPROOF PASSED\n');

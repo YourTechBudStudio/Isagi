@@ -252,6 +252,12 @@ export const workflowTransitionKindSchema = Schema.Literal(
   'node_dispatched',
   'wait_armed',
   'wait_delivered',
+  // A producer's result reached its durable slot before anything tried to reduce it. It is its own
+  // transition because it is its own durable change: a client recovering by revision has to learn
+  // that a segment now carries a reusable operand — which is what decides whether a Retry re-runs
+  // the producer — and an attempt row read out of band is not revision-based recovery. It is
+  // emphatically not a successful reduction and not segment completion.
+  'producer_output_captured',
   'state_reduced',
   'routed',
   'child_output_published',

@@ -15,7 +15,7 @@ import { sendApiError } from './lib/api/index.js';
 import { isAllowedRuntimeOrigin } from './lib/security/origin.js';
 import { registerPathsApi } from './paths/api.js';
 import { registerPtyApi } from './pty-processes/index.js';
-import { registerRuntimeEventsApi } from './runtime-events/index.js';
+import { registerRuntimeEventsApi } from './runtime-events/api.js';
 import { RuntimeLayer } from './runtime.layer.js';
 import { restoreStartupSessions } from './session-restore/index.js';
 import { registerSurfacesApi } from './surfaces/index.js';

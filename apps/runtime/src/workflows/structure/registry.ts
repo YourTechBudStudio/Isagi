@@ -1,12 +1,23 @@
 import { join, normalize } from 'node:path';
 
-import { cont, done, suspend, wait } from '@yourtechbudstudio/isagi-workflow-sdk';
+import {
+  complete,
+  createGraph,
+  defineWorkflow,
+  edge,
+  operation,
+  outcome,
+  reduce,
+  suspend,
+  wait,
+} from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness } from '@isagi/contracts';
 
-import { DataDirectory } from '../persistence/index.js';
-import { RuntimeConfig } from '../runtime-config/index.js';
+import { DataDirectory } from '../../persistence/index.js';
+import { RuntimeConfig } from '../../runtime-config/index.js';
+import type { WorkflowConversationMessage, WorkflowInputs } from '../types.js';
 import {
   dedupeWorkflowSources,
   discoverOrderedWorkflowSources,
@@ -16,13 +27,14 @@ import {
   type WorkflowDiscoverySource,
 } from './discovery.js';
 import {
+  describeWorkflowArtifact,
   loadPinnedWorkflowArtifact,
   validateAndPublishWorkflowPackage,
   WorkflowLoadError,
+  type AnyWorkflowDefinition,
   type WorkflowDefinitionCache,
   type LoadedWorkflowArtifact,
 } from './loader.js';
-import type { WorkflowDefinition } from './types.js';
 
 export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryError')<{
   readonly code: 'scan_failed' | 'in_memory_mutation_unsupported';
@@ -73,7 +85,7 @@ export interface WorkflowRegistryService {
   ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
   readonly addWorkflow: (
     workflowKey: string,
-    definition: WorkflowDefinition<unknown>,
+    definition: AnyWorkflowDefinition,
   ) => Effect.Effect<void, WorkflowRegistryError>;
 }
 
@@ -185,10 +197,15 @@ function isErrno(cause: unknown, code: string) {
 }
 
 export function createWorkflowRegistry(
-  entries: Record<string, WorkflowDefinition<unknown>> = testWorkflows(),
+  entries: Record<string, AnyWorkflowDefinition> = testWorkflows(),
 ): WorkflowRegistryService {
   const workflows = new Map(Object.entries(entries));
   const hash = '0'.repeat(64);
+  // Described through the real extractor rather than hand-assembled: an in-memory workflow that
+  // would fail structural validation must fail here too, or these tests would be checking a shape
+  // the loader never accepts.
+  const artifactOf = (definition: AnyWorkflowDefinition) =>
+    describeWorkflowArtifact({ default: definition }, hash);
   return {
     discover: () =>
       Effect.sync(() =>
@@ -198,7 +215,7 @@ export function createWorkflowRegistry(
             .map(([workflowKey, definition]) =>
               createDiscoveredWorkflowEntry(workflowKey, {
                 kind: 'in_memory',
-                load: () => Effect.succeed({ artifactHash: hash, definition }),
+                load: () => Effect.succeed(artifactOf(definition)),
               }),
             ),
         ),
@@ -207,7 +224,7 @@ export function createWorkflowRegistry(
     loadPinned: (_artifactHash, workflowKey) => {
       const definition = workflowKey ? workflows.get(workflowKey) : undefined;
       return definition
-        ? Effect.succeed({ artifactHash: hash, definition })
+        ? Effect.succeed(artifactOf(definition))
         : Effect.fail(
             new WorkflowLoadError({
               reason: 'pinned_artifact_unavailable',
@@ -224,7 +241,15 @@ export function createWorkflowRegistry(
   };
 }
 
-function testWorkflows(): Record<string, WorkflowDefinition<unknown>> {
+/**
+ * In-memory workflows for tests and manual harness gates.
+ *
+ * Test-only and undiscoverable: nothing in `discover()` can reach them from the filesystem, and they
+ * exist so engine and harness tests have real graph definitions to run without building a package.
+ * They are authored against the same public SDK an author uses, so they cannot drift into a private
+ * shape the real contract does not support.
+ */
+function testWorkflows(): Record<string, AnyWorkflowDefinition> {
   return {
     'pi-gate': agentGateWorkflow({
       harness: 'pi',
@@ -236,65 +261,150 @@ function testWorkflows(): Record<string, WorkflowDefinition<unknown>> {
       label: 'Codex',
       prompt: 'Reply with one short sentence confirming the workflow gate is working.',
     }),
-    'agentless-cont-done': {
-      command: () => ({ title: 'Agentless cont/done' }),
-      validate: () => {},
-      init: () => ({ phase: 'a', snapshots: ['a'] }),
-      step: async (ctx, state) => {
-        const current = state as { readonly phase: string; readonly snapshots: readonly string[] };
-        if (current.phase === 'a') {
-          return cont({ phase: 'b', snapshots: [...current.snapshots, 'b'] });
-        }
-        if (current.phase === 'b') {
+    'agentless-cont-done': agentlessWorkflow(),
+    'agentless-suspend': agentlessSuspendWorkflow(),
+    'agentless-throws': agentlessThrowingWorkflow(),
+  } as Record<string, AnyWorkflowDefinition>;
+}
+
+/** Two visits to one node, so a test can observe a reducer applying twice and a loop edge. */
+function agentlessWorkflow() {
+  const graph = createGraph<
+    { readonly phase: string; readonly snapshots: readonly string[] },
+    { readonly snapshots: string },
+    WorkflowInputs
+  >({
+    key: 'agentless-cont-done',
+    title: 'Agentless cont/done',
+    init: () => ({ phase: 'a', snapshots: ['a'] }),
+    state: { phase: reduce.replace<string>(), snapshots: reduce.append<string>() },
+    entry: 'advance',
+    nodes: {
+      advance: operation(async (ctx, state) => {
+        if (state.phase === 'b') {
           await ctx.setUiFeedback({
             phase: 'almost_done',
             message: 'Agentless workflow advanced.',
           });
-          return cont({ phase: 'c', snapshots: [...current.snapshots, 'c'] });
         }
-        return done();
-      },
+        return complete({
+          update: { phase: nextPhase(state.phase), snapshots: nextPhase(state.phase) },
+        });
+      }),
     },
-    'agentless-suspend': {
-      command: () => ({ title: 'Agentless suspend' }),
-      validate: () => {},
-      init: () => ({ phase: 'start' }),
-      step: async () =>
-        suspend(
-          { phase: 'waiting' },
-          wait.agentTurn({
-            agentSessionId: 10,
-            sentAt: '2026-06-18T00:00:00.000Z',
-          }),
-        ),
+    edges: {
+      'advance-out': edge({
+        from: 'advance',
+        to: ['advance', 'finished'],
+        choose: (state) => ({ to: state.phase === 'c' ? 'finished' : 'advance' }),
+      }),
     },
-    'agentless-throws': {
-      command: () => ({ title: 'Agentless throws' }),
-      validate: () => {},
-      init: () => ({ phase: 'before_throw' }),
-      step: async () => {
-        throw new Error('Agentless fixture failure.');
-      },
+    outcomes: {
+      finished: outcome({ kind: 'success', output: (state) => ({ snapshots: state.snapshots }) }),
     },
-  };
+  });
+  return defineWorkflow({
+    command: () => ({ title: 'Agentless cont/done' }),
+    validate: () => {},
+    graph,
+  });
 }
 
+function nextPhase(phase: string): string {
+  return phase === 'a' ? 'b' : phase === 'b' ? 'c' : 'c';
+}
+
+/** Suspends on a human gate, so a test can drive wait arming, delivery and consumption. */
+function agentlessSuspendWorkflow() {
+  const graph = createGraph<{ readonly acknowledged: boolean }, {}, WorkflowInputs>({
+    key: 'agentless-suspend',
+    title: 'Agentless suspend',
+    init: () => ({ acknowledged: false }),
+    state: { acknowledged: reduce.replace<boolean>() },
+    entry: 'askForAck',
+    nodes: {
+      askForAck: operation(async () => complete({ update: { acknowledged: false } })),
+      recordAck: operation(async () => complete({ update: { acknowledged: true } })),
+    },
+    edges: {
+      'ask-out': edge({
+        from: 'askForAck',
+        to: ['recordAck'],
+        choose: () => ({ to: 'recordAck' }),
+      }),
+      'record-out': edge({
+        from: 'recordAck',
+        to: ['acknowledged'],
+        choose: () => ({ to: 'acknowledged' }),
+      }),
+    },
+    outcomes: {
+      acknowledged: outcome({
+        kind: 'success',
+        output: (state) => ({ acknowledged: state.acknowledged }),
+      }),
+    },
+  });
+  return defineWorkflow({
+    command: () => ({ title: 'Agentless suspend' }),
+    validate: () => {},
+    graph,
+  });
+}
+
+/** A callback that throws, so a test can observe a real execution-segment failure. */
+function agentlessThrowingWorkflow() {
+  const graph = createGraph<{ readonly attempted: boolean }, {}, WorkflowInputs>({
+    key: 'agentless-throws',
+    title: 'Agentless throws',
+    init: () => ({ attempted: false }),
+    state: { attempted: reduce.replace<boolean>() },
+    entry: 'boom',
+    nodes: {
+      boom: operation(async () => {
+        throw new Error('Agentless workflow failed on purpose.');
+      }),
+    },
+    edges: {
+      'boom-out': edge({ from: 'boom', to: ['never'], choose: () => ({ to: 'never' }) }),
+    },
+    outcomes: {
+      never: outcome({ kind: 'success', output: (state) => ({ attempted: state.attempted }) }),
+    },
+  });
+  return defineWorkflow({
+    command: () => ({ title: 'Agentless throws' }),
+    validate: () => {},
+    graph,
+  });
+}
+
+/**
+ * The manual harness gate: spawn a session, suspend on its turn, then read the reply back.
+ *
+ * `getConversationHistory` is a scoped read rather than a journaled operation, so a repaired segment
+ * reads again and may legitimately see a different answer.
+ */
 function agentGateWorkflow(input: {
   readonly harness: AgentHarness;
   readonly label: string;
   readonly prompt: string;
-}): WorkflowDefinition<unknown> {
-  return {
-    command: () => ({ title: `${input.label} gate` }),
-    validate: () => {},
-    init: () => ({ phase: 'spawn' }),
-    step: async (ctx, state, event) => {
-      const current = state as {
-        readonly phase: 'spawn' | 'await_turn';
-        readonly agentSessionId?: number | undefined;
-        readonly sentAt?: string | undefined;
-      };
-      if (current.phase === 'spawn') {
+}) {
+  const graph = createGraph<
+    { readonly agentSessionId: number | null; readonly message: string | null },
+    {},
+    WorkflowInputs
+  >({
+    key: `${input.harness}-gate`,
+    title: `${input.label} gate`,
+    init: () => ({ agentSessionId: null, message: null }),
+    state: {
+      agentSessionId: reduce.replace<number | null>(),
+      message: reduce.replace<string | null>(),
+    },
+    entry: 'askAgent',
+    nodes: {
+      askAgent: operation(async (ctx) => {
         await ctx.setUiFeedback({
           phase: 'spawning',
           message: `Starting ${input.label} workflow gate.`,
@@ -307,35 +417,51 @@ function agentGateWorkflow(input: {
           phase: 'waiting',
           message: `Waiting for ${input.label} to reply.`,
         });
-        return suspend(
-          {
-            phase: 'await_turn',
-            agentSessionId: seeded.agentSessionId,
-            sentAt: seeded.sentAt,
-          },
-          wait.agentTurn(seeded),
-        );
-      }
-
-      const payload = event as
-        | { readonly outcome: 'ended'; readonly recordedAt: string }
-        | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string }
-        | undefined;
-      if (payload?.outcome === 'failed') {
-        throw new Error(`${input.label} workflow gate turn failed: ${payload.reason}`);
-      }
-      if (payload?.outcome !== 'ended' || !current.agentSessionId) {
-        throw new Error(`${input.label} workflow gate resumed without a completed turn payload.`);
-      }
-      const history = await ctx.getConversationHistory(current.agentSessionId);
-      const message = latestAssistantText(history) ?? `${input.label} completed the workflow gate.`;
-      await ctx.setUiFeedback({ phase: 'done', message });
-      return done();
+        return suspend({
+          update: { agentSessionId: seeded.agentSessionId },
+          wait: wait.agentTurn(seeded),
+        });
+      }),
+      readReply: operation(async (ctx, state) => {
+        const history =
+          state.agentSessionId === null
+            ? []
+            : await ctx.getConversationHistory(state.agentSessionId);
+        const message =
+          latestAssistantText(history) ?? `${input.label} completed the workflow gate.`;
+        await ctx.setUiFeedback({ phase: 'done', message });
+        return complete({ update: { message } });
+      }),
     },
-  };
+    edges: {
+      'ask-out': edge({
+        from: 'askAgent',
+        to: ['readReply', 'turnFailed'],
+        // A confirmed failed turn is *data* the author routes on, not an execution failure.
+        choose: (_state, event) =>
+          event.kind === 'agent_turn' && event.outcome === 'failed'
+            ? { to: 'turnFailed' }
+            : { to: 'readReply' },
+      }),
+      'read-out': edge({ from: 'readReply', to: ['replied'], choose: () => ({ to: 'replied' }) }),
+    },
+    outcomes: {
+      replied: outcome({ kind: 'success', output: (state) => ({ message: state.message }) }),
+      turnFailed: outcome({
+        kind: 'failure',
+        reason: 'agent_turn_failed',
+        output: (state) => ({ message: state.message }),
+      }),
+    },
+  });
+  return defineWorkflow({
+    command: () => ({ title: `${input.label} gate` }),
+    validate: () => {},
+    graph,
+  });
 }
 
-function latestAssistantText(history: readonly import('./types.js').WorkflowConversationMessage[]) {
+function latestAssistantText(history: readonly WorkflowConversationMessage[]) {
   for (const message of [...history].reverse()) {
     if (message.role !== 'assistant') continue;
     const text = message.parts

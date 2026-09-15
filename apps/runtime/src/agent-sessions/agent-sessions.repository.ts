@@ -14,7 +14,13 @@ export interface AgentSessionRepositoryService {
     readonly worktreeId: number;
     readonly harness: AgentHarness;
     readonly cwd: string;
+    /** Optional caller-supplied intent key, so a crashed compound creation can find this row
+     *  again instead of creating a second session. Written only by this service. */
+    readonly creationKey?: string | undefined;
   }) => Effect.Effect<number, DatabaseError>;
+  readonly findByCreationKey: (
+    creationKey: string,
+  ) => Effect.Effect<AgentSessionRow | null, DatabaseError>;
   readonly setActivePtyProcess: (input: {
     readonly agentSessionId: number;
     readonly ptyProcessId: number;
@@ -50,6 +56,7 @@ export const AgentSessionRepositoryLive = Layer.effect(
                 harness: input.harness,
                 cwd: input.cwd,
                 activePtyProcessId: null,
+                creationKey: input.creationKey ?? null,
                 createdAt: now,
                 updatedAt: now,
                 lastSeenAt: null,
@@ -86,6 +93,18 @@ export const AgentSessionRepositoryLive = Layer.effect(
               .from(agentSessions)
               .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
               .where(eq(agentSessions.id, agentSessionId))
+              .get(),
+          );
+          return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;
+        }),
+      findByCreationKey: (creationKey) =>
+        Effect.gen(function* () {
+          const row = yield* database.use('find_agent_session_by_creation_key', (db) =>
+            db
+              .select({ session: agentSessions, process: ptyProcesses })
+              .from(agentSessions)
+              .leftJoin(ptyProcesses, eq(agentSessions.activePtyProcessId, ptyProcesses.id))
+              .where(eq(agentSessions.creationKey, creationKey))
               .get(),
           );
           return row ? yield* agentSessionRow(artifacts, row.session, row.process) : null;

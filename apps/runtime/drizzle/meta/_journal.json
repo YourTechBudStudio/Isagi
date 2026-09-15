@@ -57,6 +57,20 @@
       "when": 1788851109055,
       "tag": "0007_light_supreme_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789509980360,
+      "tag": "0008_retire_v1_workflow_store",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789509988123,
+      "tag": "0009_graph_workflow_records",
+      "breakpoints": true
     }
   ]
 }

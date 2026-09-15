@@ -47,6 +47,7 @@ import {
 } from '../../terminal-sessions/index.js';
 import { WorkspaceRepository, WorkspaceRepositoryLive } from '../../workspace/index.js';
 import { SurfaceRepositoryLive, SurfaceServiceLive } from '../index.js';
+import { SurfaceRepository, type SurfaceRepositoryService } from '../surfaces.repository.js';
 
 export function insertWorktree(rootPath: string) {
   return Effect.gen(function* () {
@@ -264,6 +265,15 @@ export function testLayer(
      * SQLite is synchronous here, so two forked opens would otherwise never
      * interleave and the assertion would hold with or without the lock.
      */
+    /**
+     * Wrap the real surface repository. The keyed-creation race test uses this to make another
+     * caller win the unique key between this one's read and its write: SQLite is synchronous, so
+     * two forked calls would otherwise interleave on the runtime's whim and the conflict path would
+     * be exercised only by luck.
+     */
+    readonly decorateSurfaceRepository?:
+      | ((inner: SurfaceRepositoryService) => SurfaceRepositoryService)
+      | undefined;
     readonly decorateEditorService?:
       | ((inner: EditorContextServiceShape) => EditorContextServiceShape)
       | undefined;
@@ -298,11 +308,18 @@ export function testLayer(
     fakeTerminalSessionService(options.terminalService),
   );
   const ptyService = Layer.succeed(PtyService, fakePtyService(options.ptyService));
-  const surfaceRepository = SurfaceRepositoryLive.pipe(
+  const decorateRepository = options.decorateSurfaceRepository;
+  const baseSurfaceRepository = SurfaceRepositoryLive.pipe(
     Layer.provide(database),
     Layer.provide(agentSessionArtifacts),
     Layer.provide(attentionProjection),
   );
+  const surfaceRepository = decorateRepository
+    ? Layer.effect(
+        SurfaceRepository,
+        Effect.map(SurfaceRepository, (inner) => decorateRepository(inner)),
+      ).pipe(Layer.provide(baseSurfaceRepository))
+    : baseSurfaceRepository;
   // One lock value, shared by session lifecycle, the editor service, and the
   // placement path, exactly as `runtime.layer.ts` shares it. Two would make the
   // per-worktree serialization these tests assert vacuous.

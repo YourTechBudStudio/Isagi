@@ -4312,6 +4312,7 @@ test('workflow spawn validation fails before surface or PTY work', async () => {
         workflowCapabilitiesLayer({
           surfaces: {
             ...fakeSurfaceService(),
+            findByCreationKey: () => Effect.succeed({ kind: 'absent' as const }),
             getSurfaceDetail: () =>
               Effect.sync(() => {
                 surfaceReads += 1;

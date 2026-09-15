@@ -58,10 +58,10 @@ import {
   InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
   RuntimeEventBusLive,
-  RuntimeEventProjectionLive,
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from './runtime-events/index.js';
+import { RuntimeEventProjectionLive } from './runtime-events/projection.service.js';
 import { SessionGcLive, type SessionGcService } from './session-gc/index.js';
 import { SessionLifecycleLive, type SessionLifecycleService } from './session-lifecycle/index.js';
 import {

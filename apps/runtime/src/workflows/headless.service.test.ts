@@ -36,7 +36,15 @@ function makeFakePty(calls: PtyCalls, onLaunch?: (() => void) | undefined): PtyS
         onLaunch?.();
         const ptyProcessId = nextPtyProcessId;
         nextPtyProcessId += 1;
-        return { ptyProcessId, command: 'agent', args: [], cwd: '/tmp/wt', logPath: null };
+        return {
+          ptyProcessId,
+          command: 'agent',
+          args: [],
+          cwd: '/tmp/wt',
+          logPath: null,
+          launchOutcome: 'spawned' as const,
+          launchFailureCause: null,
+        };
       }),
     pin: () => Effect.void,
     unpin: (input) =>

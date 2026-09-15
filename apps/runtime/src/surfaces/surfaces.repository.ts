@@ -45,6 +45,7 @@ import type {
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
+  KeyedCreationState,
   RenameSurfaceOutput,
   SetSurfaceLayoutOutput,
   SurfaceDeleteTarget,
@@ -112,6 +113,10 @@ export interface SurfaceRepositoryService {
   readonly splitSurfacePane: (
     input: SplitSurfacePaneInput,
   ) => Effect.Effect<SplitSurfacePaneOutput | null, DatabaseError>;
+  /** How far a keyed compound creation got, resolved from the rows this service owns. */
+  readonly findKeyedCreation: (
+    creationKey: string,
+  ) => Effect.Effect<KeyedCreationState, DatabaseError>;
   readonly setSurfaceLayout: (input: {
     readonly surfaceId: number;
     readonly layout: SurfaceLayoutNode;
@@ -417,6 +422,7 @@ export const SurfaceRepositoryLive = Layer.effect(
               sortOrder,
               sessionKind: null,
               sessionId: null,
+              creationKey: input.creationKey ?? null,
               createdAt: now,
               updatedAt: now,
             })
@@ -433,6 +439,47 @@ export const SurfaceRepositoryLive = Layer.effect(
             .where(eq(worktreeSurfaces.id, input.surfaceId))
             .run();
           return { surfaceId: input.surfaceId, paneId: pane.id, title };
+        }),
+      findKeyedCreation: (creationKey) =>
+        database.use('find_keyed_surface_creation', (db) => {
+          const pane = db
+            .select()
+            .from(surfacePanes)
+            .where(eq(surfacePanes.creationKey, creationKey))
+            .get();
+          const session = db
+            // The harness comes back with the id: a caller re-entering under this key has to be
+            // able to tell whether what was created is what it is now asking for.
+            .select({ id: agentSessions.id, harness: agentSessions.harness })
+            .from(agentSessions)
+            .where(eq(agentSessions.creationKey, creationKey))
+            .get();
+          // Resolved from the durable rows rather than from an in-memory record of what this
+          // process did, so it converges the same way after a restart as after a retry.
+          // No pane means nothing usable exists under this key, even if a stray session row does:
+          // a session with nowhere to live cannot satisfy the caller, so the compound starts over.
+          if (!pane) return { kind: 'absent' } as const satisfies KeyedCreationState;
+          if (!session) {
+            return {
+              kind: 'pane_only',
+              surfaceId: pane.surfaceId,
+              paneId: pane.id,
+            } as const satisfies KeyedCreationState;
+          }
+          const identity = {
+            kind: 'agent_session',
+            sessionId: session.id,
+            harness: session.harness,
+          } as const;
+          // Association is the postcondition, so a created-but-unassigned session is its own state:
+          // the repair is the assignment, never a second session.
+          const associated = pane.sessionKind === 'agent_session' && pane.sessionId === session.id;
+          return {
+            kind: associated ? 'complete' : 'session_unassigned',
+            surfaceId: pane.surfaceId,
+            paneId: pane.id,
+            session: identity,
+          } as const satisfies KeyedCreationState;
         }),
       setSurfaceLayout: (input) =>
         database.use('set_surface_layout', (db) => {

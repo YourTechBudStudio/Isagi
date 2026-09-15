@@ -958,6 +958,7 @@ test('every designed transition kind decodes, including the amendment replacemen
     'node_dispatched',
     'wait_armed',
     'wait_delivered',
+    'producer_output_captured',
     'state_reduced',
     'routed',
     'child_output_published',
