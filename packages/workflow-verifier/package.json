@@ -1,6 +1,6 @@
 {
   "name": "@yourtechbudstudio/isagi-workflow-verifier",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Verify standalone Isagi workflow artifacts and issue build receipts.",
   "license": "Apache-2.0",
   "author": "YourTechBud",
@@ -27,6 +27,10 @@
     "./receipt": {
       "types": "./dist/receipt.d.ts",
       "import": "./dist/receipt.js"
+    },
+    "./structure": {
+      "types": "./dist/structure.d.ts",
+      "import": "./dist/structure.js"
     }
   },
   "publishConfig": {
@@ -34,18 +38,23 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm pack --dry-run",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "check": "pnpm typecheck && pnpm test && pnpm pack --dry-run",
+    "test": "pnpm build && node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "acorn": "^8.18.0",
+    "eslint-scope": "^8.4.0"
+  },
   "devDependencies": {
+    "@types/eslint-scope": "^8.4.0",
     "@types/node": "^24.10.1",
-    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.0.1",
+    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.1.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "@yourtechbudstudio/isagi-workflow-sdk": "0.0.1"
+    "@yourtechbudstudio/isagi-workflow-sdk": "0.1.0"
   },
   "engines": {
     "node": ">=22"

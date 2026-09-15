@@ -9,5 +9,10 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../workflow-sdk" }]
+  "references": [
+    {
+      "path": "../workflow-sdk"
+    }
+  ],
+  "exclude": ["src/**/*.test.ts"]
 }

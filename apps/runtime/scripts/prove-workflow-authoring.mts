@@ -6,6 +6,14 @@
  * Run it from the repo root:
  *   pnpm --dir apps/runtime exec tsx scripts/prove-workflow-authoring.mts
  *
+ * Two modes, and the difference is reported honestly rather than hidden:
+ *
+ *   (default)   full proof — every stage, ending at the runtime registry load.
+ *   --package-only  the package pipeline only: pack → local install → typecheck → test → build →
+ *                   verify → standalone import. It stops before the runtime registry stage and says
+ *                   so. It exists so the authoring contract can be proven while the runtime is
+ *                   mid-migration; it is never a substitute for the full proof.
+ *
  * It never rewrites the fixture. This repository proof uses pnpm as development tooling, while the
  * workflow contract remains package-manager agnostic.
  */
@@ -15,9 +23,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { Effect } from 'effect';
-
-import { createFilesystemWorkflowRegistry } from '../src/workflows/registry.js';
+const packageOnly = process.argv.includes('--package-only');
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const sdkDir = join(repoRoot, 'packages/workflow-sdk');
@@ -100,7 +106,12 @@ async function main() {
         : 'install complete (pnpm printed no reuse/download summary)',
     );
 
-    // 4. Build through the workflow-owned command, then verify the existing artifact.
+    // 4. Run the workflow package's own quality gates, then build and verify through its scripts.
+    //    These are the author's scripts, run exactly as an author would run them.
+    run('pnpm', ['run', 'typecheck'], workflowDir);
+    log('typecheck', 'workflow-owned typecheck passed against the installed SDK');
+    run('pnpm', ['run', 'test'], workflowDir);
+    log('test', 'workflow-owned tests passed');
     run('pnpm', ['run', 'build'], workflowDir);
     log('build', 'workflow-owned build produced dist/index.js');
     run('pnpm', ['run', 'verify'], workflowDir);
@@ -113,8 +124,12 @@ async function main() {
     // 6. Import the standalone artifact directly.
     const artifact = await import(pathToFileURL(join(workflowDir, 'dist/index.js')).href);
     const workflow = artifact.default;
-    for (const name of ['command', 'validate', 'init', 'step'])
+    for (const name of ['command', 'validate'])
       if (typeof workflow?.[name] !== 'function') throw new Error(`artifact missing ${name}()`);
+    if (workflow?.isagiContract !== 2 || workflow?.isagiKind !== 'workflow')
+      throw new Error('artifact default export is not a contract-version-2 workflow definition');
+    if (workflow?.graph?.isagiKind !== 'graph')
+      throw new Error('artifact default export carries no root graph');
     const directManifest = await workflow.command({
       worktreeId: 0,
       worktreePath: workflowDir,
@@ -126,7 +141,18 @@ async function main() {
       throw new Error(`unexpected artifact title: ${directManifest.title}`);
     log('import', `standalone artifact command title = ${directManifest.title}`);
 
+    if (packageOnly) {
+      process.stdout.write(
+        '\nPACKAGE PROOF PASSED — the runtime registry stage was NOT run.\n' +
+          'This is not full integration evidence. Run without --package-only for that.\n',
+      );
+      return;
+    }
+
     // 7. Load through the real runtime verified-package path (validate → publish → import).
+    //    Imported here, not at module scope, so --package-only does not depend on runtime code.
+    const { Effect } = await import('effect');
+    const { createFilesystemWorkflowRegistry } = await import('../src/workflows/registry.js');
     const registry = createFilesystemWorkflowRegistry(workflowsRoot, cacheRoot);
     const loaded = await Effect.runPromise(registry.resolveLatest(workflowKey));
     if (!loaded) throw new Error('runtime registry returned no definition');

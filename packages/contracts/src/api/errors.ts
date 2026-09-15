@@ -2,7 +2,10 @@ import { Schema } from 'effect';
 
 import { editorAttemptFailureReasonSchema } from '../editor/types.js';
 import { harnessLaunchBlockReasonSchema } from '../surfaces/types.js';
-import { workflowLoadFailureReasonSchema } from '../workflows/types.js';
+import {
+  workflowStructureDiagnosticSchema,
+  workflowLoadFailureReasonSchema,
+} from '../workflows/types.js';
 import { apiInfrastructureErrorSchema } from './responses.js';
 
 export const projectPathRejectionReasonSchema = Schema.Literal(
@@ -100,27 +103,6 @@ export const worktreeCommandsRejectionReasonSchema = Schema.Literal(
   'command_config_invalid',
   'command_not_found',
   'command_action_failed',
-);
-
-export const workflowRejectionReasonSchema = Schema.Literal(
-  'unknown_workflow_key',
-  'workflow_discovery_failed',
-  'workflow_load_failed',
-  'worktree_not_found',
-  'surface_not_found',
-  'surface_worktree_mismatch',
-  'pane_not_found',
-  'agent_session_not_on_surface',
-  'workflow_launch_context_mismatch',
-  'validation_failed',
-  'workflow_root_surface_required',
-  'workflow_root_run_required',
-  'workflow_surface_busy',
-  'workflow_run_not_found',
-  'workflow_run_not_failed',
-  'workflow_wait_not_satisfiable',
-  'workflow_user_input_invalid',
-  'workflow_event_ledger_failed',
 );
 
 export const projectRelocationRejectionReasonSchema = Schema.Literal(
@@ -398,26 +380,113 @@ export const worktreeCommandsRejectedErrorSchema = Schema.Struct({
   }),
 });
 
+/**
+ * Context any workflow rejection may carry. Reason-specific *required* context is added by the
+ * variants below rather than being optional here, because a caller that must render a structural
+ * rejection or an unavailable payload cannot do so from a reason alone.
+ */
+const workflowRejectionContextFields = {
+  workflowKey: Schema.optional(Schema.String),
+  workflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  activeWorkflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  operation: Schema.optional(Schema.String),
+  worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
+  workflowSourceDirectory: Schema.optional(Schema.String),
+  workflowPackageDirectory: Schema.optional(Schema.String),
+  shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
+  /** The pin a caller asked for, for `workflow_version_not_adopted`. */
+  artifactHash: Schema.optional(Schema.String),
+  /** The operation holding a blocked run, for `workflow_operation_uncertain`. */
+  operationKey: Schema.optional(Schema.String),
+} as const;
+
+/** The two reasons whose context is mandatory; each has its own data variant below. */
+const workflowContextualRejectionReasonSchema = Schema.Literal(
+  'workflow_structure_validation_failed',
+  'workflow_payload_unavailable',
+);
+
+/** Reasons that carry no mandatory context of their own. */
+const workflowPlainRejectionReasonSchema = Schema.Literal(
+  'unknown_workflow_key',
+  'workflow_discovery_failed',
+  'workflow_load_failed',
+  'no_active_worktree',
+  'worktree_not_found',
+  'surface_not_found',
+  'surface_worktree_mismatch',
+  'pane_not_found',
+  'agent_session_not_on_surface',
+  'workflow_launch_context_mismatch',
+  'workflow_command_failed',
+  'workflow_inputs_rejected',
+  'workflow_root_surface_required',
+  'workflow_surface_attached',
+  'workflow_run_not_found',
+  'workflow_run_not_retryable',
+  'workflow_run_not_cancellable',
+  'workflow_wait_not_found',
+  'workflow_wait_already_resolved',
+  'workflow_user_input_invalid',
+  'workflow_version_not_adopted',
+  'workflow_operation_uncertain',
+  'workflow_stale_control',
+  'workflow_environment_unavailable',
+);
+
+/**
+ * Every expected workflow failure a client is meant to handle.
+ *
+ * Derived from the two sets the data variants actually use, so a reason can never be advertised
+ * here while `workflowRejectedErrorSchema` rejects it.
+ *
+ * The v1 members that no longer describe anything are gone with the mechanisms that produced them:
+ * `validation_failed` split into command and input failures, `workflow_root_run_required` and
+ * `workflow_surface_busy` went with child runs and the old occupancy rule, `workflow_run_not_failed`
+ * is subsumed by the retryability check, `workflow_wait_not_satisfiable` by wait-targeted advance,
+ * and `workflow_event_ledger_failed` by the removal of the JSONL ledger.
+ */
+export const workflowRejectionReasonSchema = Schema.Union(
+  workflowPlainRejectionReasonSchema,
+  workflowContextualRejectionReasonSchema,
+);
+
+/**
+ * The rejection payload, discriminated by reason so the two reasons with mandatory context cannot
+ * be sent without it. A flat struct of optional fields would let a runtime emit
+ * `workflow_payload_unavailable` with nothing to render, which is the failure this contract exists
+ * to prevent.
+ */
+export const workflowRejectionDataSchema = Schema.Union(
+  Schema.Struct({
+    reason: Schema.Literal('workflow_structure_validation_failed'),
+    /** Which registrations are wrong. Addressable records, never one free-text sentence. */
+    diagnostics: Schema.Array(workflowStructureDiagnosticSchema),
+    ...workflowRejectionContextFields,
+  }),
+  Schema.Struct({
+    reason: Schema.Literal('workflow_payload_unavailable'),
+    /** Which recorded value could not be served, and why. */
+    payloadRef: Schema.String.pipe(Schema.minLength(1)),
+    cause: Schema.Literal('missing', 'corrupt'),
+    ...workflowRejectionContextFields,
+  }),
+  Schema.Struct({
+    reason: workflowPlainRejectionReasonSchema,
+    ...workflowRejectionContextFields,
+  }),
+);
+
 export const workflowRejectedErrorSchema = Schema.Struct({
   code: Schema.Literal('workflow_rejected'),
   status: Schema.Union(Schema.Literal(400), Schema.Literal(409), Schema.Literal(500)),
   message: Schema.String,
   requestId: Schema.String,
-  data: Schema.Struct({
-    reason: workflowRejectionReasonSchema,
-    workflowKey: Schema.optional(Schema.String),
-    workflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    activeWorkflowRunId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    operation: Schema.optional(Schema.String),
-    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    surfaceId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    paneId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    agentSessionId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
-    workflowLoadFailureReason: Schema.optional(workflowLoadFailureReasonSchema),
-    workflowSourceDirectory: Schema.optional(Schema.String),
-    workflowPackageDirectory: Schema.optional(Schema.String),
-    shadowedWorkflowPackageDirectories: Schema.optional(Schema.Array(Schema.String)),
-  }),
+  data: workflowRejectionDataSchema,
 });
 
 export const projectRelocationRejectedErrorSchema = Schema.Struct({

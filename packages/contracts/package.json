@@ -9,14 +9,18 @@
   },
   "scripts": {
     "build": "vite build && tsc -b tsconfig.json --force",
-    "check": "pnpm typecheck && pnpm build",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "check": "pnpm typecheck && pnpm test",
+    "test": "pnpm build && node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@yourtechbudstudio/isagi-workflow-sdk": "workspace:*",
     "effect": "^3.21.2"
   },
   "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@yourtechbudstudio/isagi-workflow-verifier": "workspace:0.1.0",
+    "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.14"
   }
