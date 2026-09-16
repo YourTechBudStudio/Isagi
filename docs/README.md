@@ -26,7 +26,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 5. [`workflow-engine.md`](./workflow-engine.md) — the durable workflow subsystem: engine, run-centric API, event surfaces, and client boundary
 6. [`engineering-guidance/README.md`](./engineering-guidance/README.md) — coding and review guidance for keeping the repo maintainable
 7. [`development-runtime.md`](./development-runtime.md) — maintainer commands, ownership topology, deterministic preparation, staging, and troubleshooting
-8. [`issue-tracking-guidance.md`](./issue-tracking-guidance.md) — how epics and stories are represented in the repository's issue tracker, retrieved, and amended
+8. [`issue-tracking-guidance.md`](./issue-tracking-guidance.md) — how epics and stories are represented in GitHub issues, and how they are labeled, related, maintained, and closed
 
 ## Docs map
 
