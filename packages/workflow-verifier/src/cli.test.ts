@@ -33,8 +33,12 @@ const structureFile = 'dist/isagi-workflow-structure.json';
 
 /**
  * A closed, hand-written artifact in the shape a built bundle has: plain-data brands, no imports.
- * Writing it by hand keeps these tests independent of esbuild; the real build pipeline is proven
- * separately by the package proof script.
+ *
+ * Writing it by hand keeps these tests independent of esbuild. The real build pipeline — and
+ * everything downstream of it, up to a run suspended at its user gate — is proven separately by
+ * `apps/runtime/scripts/prove-workflow-authoring.mts`, which packs these packages, installs them
+ * into a copy of the canonical scaffold, builds and verifies it, loads it through the runtime
+ * registry, and launches it through the interpreter.
  */
 function artifact(options: { readonly checkpoint?: boolean; readonly graphKey?: string } = {}) {
   const key = options.graphKey ?? 'Minimal';

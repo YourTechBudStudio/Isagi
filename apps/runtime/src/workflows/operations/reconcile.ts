@@ -31,6 +31,43 @@ export interface OperationReconciler {
   readonly reconcileExecution: (
     executionId: number,
   ) => Effect.Effect<ExecutionReconciliation, never>;
+  /**
+   * Settle a submission from the turn its wait observed.
+   *
+   * The wait resolver watches turns; the operation layer owns every operation write. This is the
+   * seam between those two facts, and it exists so a submitted prompt does not rest in `dispatched`
+   * for the life of the record — which would leave it permanently in the unsettled set that startup
+   * walks, making boot work grow with retained history rather than with outstanding work.
+   *
+   * Total and idempotent: duplicate settlement is a no-op by the repository's monotonic guard, so a
+   * terminal observed twice files nothing twice.
+   */
+  /**
+   * Fix the association between a submission and the native turn it caused, durably and once.
+   *
+   * Selection is a watermark inference over evidence that keeps arriving, so it has to be frozen the
+   * first time it succeeds. Left unfrozen, a second start arriving before the first turn's terminal
+   * would re-read as ambiguity and settle a perfectly explainable operation `uncertain` — and a
+   * completed one would carry no correlation for inspection to show.
+   *
+   * Idempotent and total: an operation that already names a correlated start is left alone.
+   */
+  readonly fixTurnAssociation: (input: {
+    readonly operationId: number;
+    readonly attribution: 'inferred_by_watermark';
+    readonly startSeq: number | null;
+    readonly harnessSessionId: string;
+  }) => Effect.Effect<void, never>;
+  readonly recordTurnObservation: (input: {
+    readonly operationId: number;
+    readonly observation:
+      | {
+          readonly kind: 'settled';
+          readonly state: 'completed' | 'failed' | 'interrupted';
+          readonly result: unknown;
+        }
+      | { readonly kind: 'uncertain'; readonly detail: string };
+  }) => Effect.Effect<void, never>;
   readonly reconcileAtStartup: Effect.Effect<readonly ExecutionReconciliation[], never>;
   /** Exposed because a re-entered PTY-crossing call has to settle its own marker before reusing it. */
   readonly reconcileSubmission: (
@@ -245,6 +282,42 @@ export function makeOperationReconciler(dependencies: {
       yield* die(runs.blockRun({ runId, operationId: obligation.id }));
     });
 
+  const fixTurnAssociation: OperationReconciler['fixTurnAssociation'] = (input) =>
+    Effect.gen(function* () {
+      const record = yield* die(operations.findById(input.operationId));
+      // Already fixed, or past the point where fixing it would mean anything.
+      if (!record || record.correlatedHarnessSessionId !== null || isSettled(record.state)) return;
+      if (record.stage === null) return;
+      yield* advanceStage({
+        operationId: record.id,
+        stage: record.stage,
+        state: record.state,
+        attribution: input.attribution,
+        correlatedStartSeq: input.startSeq,
+        correlatedHarnessSessionId: input.harnessSessionId,
+      }).pipe(
+        // Total on purpose: the association is an optimisation over evidence that is still on disk.
+        // Losing the race to another writer costs a re-selection, not a fact.
+        Effect.catchAll(() => Effect.void),
+      );
+    });
+
+  const recordTurnObservation: OperationReconciler['recordTurnObservation'] = (input) =>
+    Effect.gen(function* () {
+      const record = yield* die(operations.findById(input.operationId));
+      if (!record || isSettled(record.state)) return;
+      if (input.observation.kind === 'uncertain') {
+        yield* settle({ record, state: 'uncertain', uncertaintyDetail: input.observation.detail });
+        yield* ensureBlocked(record.runId);
+        return;
+      }
+      yield* settle({
+        record,
+        state: input.observation.state,
+        result: input.observation.result,
+      });
+    });
+
   const reconcileExecution = (executionId: number): Effect.Effect<ExecutionReconciliation, never> =>
     Effect.gen(function* () {
       const records = yield* die(operations.listForExecution(executionId));
@@ -301,5 +374,11 @@ export function makeOperationReconciler(dependencies: {
 
   // ---- stop -------------------------------------------------------------
 
-  return { reconcileExecution, reconcileAtStartup, reconcileSubmission };
+  return {
+    fixTurnAssociation,
+    recordTurnObservation,
+    reconcileExecution,
+    reconcileAtStartup,
+    reconcileSubmission,
+  };
 }

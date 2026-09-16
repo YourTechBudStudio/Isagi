@@ -1853,3 +1853,50 @@ test('a diagnostic between preparation and claim does not invalidate the operand
     fixture.close();
   }
 });
+
+test('Dismiss requires a stopped run, and is inert once the attachment is gone', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const launched = await launch(fixture);
+    const live = (await run(fixture.runs.findRun(launched.run.id)))!;
+
+    // An active run keeps its surface. Releasing the attachment here would take the placement back
+    // while the work carried on, so Cancel has to come first.
+    const refused = await run(
+      fixture.runs.detachRun({ runId: live.id, controlRevision: live.controlRevision }),
+    );
+    assert.deepEqual(rejection(refused), { kind: 'run_active', status: 'ready' });
+    const unchanged = (await run(fixture.runs.findRun(live.id)))!;
+    assert.ok(await run(fixture.runs.findAttachment(live.id)), 'the attachment is untouched');
+    assert.equal(unchanged.controlRevision, live.controlRevision, 'no revision was consumed');
+    assert.equal(unchanged.revision, live.revision, 'and no transition was appended');
+
+    committedValue(
+      await run(
+        fixture.runs.applyCancel({ runId: live.id, controlRevision: live.controlRevision }),
+      ),
+    );
+    const cancelled = (await run(fixture.runs.findRun(live.id)))!;
+    const first = committedValue(
+      await run(
+        fixture.runs.detachRun({ runId: cancelled.id, controlRevision: cancelled.controlRevision }),
+      ),
+    );
+    assert.deepEqual(first, { detached: true });
+
+    // A repeat says so and writes nothing: a retried request must not fill the waterfall with
+    // controls that changed nothing.
+    const detached = (await run(fixture.runs.findRun(live.id)))!;
+    const repeat = committedValue(
+      await run(
+        fixture.runs.detachRun({ runId: detached.id, controlRevision: detached.controlRevision }),
+      ),
+    );
+    assert.deepEqual(repeat, { detached: false });
+    const afterRepeat = (await run(fixture.runs.findRun(live.id)))!;
+    assert.equal(afterRepeat.revision, detached.revision);
+    assert.equal(afterRepeat.controlRevision, detached.controlRevision);
+  } finally {
+    fixture.close();
+  }
+});

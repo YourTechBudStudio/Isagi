@@ -59,7 +59,10 @@ import {
   terminatePtyProcessIds,
   type PtyServiceShape,
 } from '../pty-processes/index.js';
-import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import {
+  InternalRuntimeEventBus,
+  type InternalRuntimeEventBusService,
+} from '../runtime-events/index.js';
 import { SurfaceRepository } from '../surfaces/index.js';
 import {
   runPostCreateSetup,
@@ -273,8 +276,19 @@ export const WorkspaceServiceLive = Layer.effect(
           const doomed = yield* durableSessionsInWorktrees(
             new Set(worktrees.map((worktree) => worktree.id)),
           );
+          // Read *before* the delete: `worktrees.project_id` cascades from `projects`, so after the
+          // commit there is no way to enumerate which worktrees went with it — and retained workflow
+          // history is matched by exactly those ids.
+          const doomedWorktreeIds = worktrees.map((worktree) => worktree.id);
           const deleted = yield* repository.deleteProject(projectId);
-          if (deleted) yield* publishDurableSessionDeletions(doomed);
+          if (deleted) {
+            yield* publishDurableSessionDeletions(doomed);
+            yield* internalEvents.publish({
+              type: 'project_deleted',
+              projectId,
+              worktreeIds: doomedWorktreeIds,
+            });
+          }
           return { projectId, deleted };
         }),
       getActiveContext,
@@ -339,7 +353,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
             yield* ensureProjectPathAvailable(repository, project);
             yield* validateBranchName(git, project, branch);
-            yield* reconcileProject(repository, commands, project).pipe(
+            yield* reconcileProject(repository, commands, internalEvents, project).pipe(
               Effect.provideService(Git, git),
             );
             const existing = yield* repository.findProjectWorktreeByBranch({
@@ -415,7 +429,9 @@ export const WorkspaceServiceLive = Layer.effect(
             yield* diagnosticPhase(
               'workspace.open_worktree.reconcile_after_git_add',
               checkoutContext,
-              reconcileProject(repository, commands, project).pipe(Effect.provideService(Git, git)),
+              reconcileProject(repository, commands, internalEvents, project).pipe(
+                Effect.provideService(Git, git),
+              ),
             );
             const created = yield* repository.findProjectWorktreeByBranch({
               projectId: project.id,
@@ -612,6 +628,11 @@ export const WorkspaceServiceLive = Layer.effect(
             // Announced only after the cascade commits: every connected client — not just
             // the one that asked — drops the terminals these identities backed.
             yield* publishDurableSessionDeletions(doomedSessions);
+            yield* internalEvents.publish({
+              type: 'worktree_deleted',
+              worktreeId: worktree.id,
+              projectId: project.id,
+            });
             const branchRemoval = yield* diagnosticPhase(
               'workspace.delete_worktree.branch_delete',
               context,
@@ -655,7 +676,7 @@ export const WorkspaceServiceLive = Layer.effect(
               ),
             ));
 
-          yield* reconcileProject(repository, commands, project).pipe(
+          yield* reconcileProject(repository, commands, internalEvents, project).pipe(
             Effect.provideService(Git, git),
           );
 
@@ -712,7 +733,13 @@ export const WorkspaceServiceLive = Layer.effect(
             projectId: input.projectId,
             rootPath: projectRoot.rootPath,
           });
-          yield* pruneMissingWorktrees(repository, commands, input.projectId, worktrees.missing);
+          yield* pruneMissingWorktrees(
+            repository,
+            commands,
+            internalEvents,
+            input.projectId,
+            worktrees.missing,
+          );
 
           return {
             projectId: input.projectId,
@@ -731,7 +758,7 @@ export const WorkspaceServiceLive = Layer.effect(
 
           for (const project of projects) {
             findings.push(
-              ...(yield* reconcileProject(repository, commands, project).pipe(
+              ...(yield* reconcileProject(repository, commands, internalEvents, project).pipe(
                 Effect.provideService(Git, git),
               )),
             );
@@ -1163,11 +1190,12 @@ function validateActiveContextPersistenceTarget(
 function reconcileProject(
   repository: WorkspaceRepositoryService,
   commands: import('../commands/index.js').CommandServiceShape,
+  internalEvents: InternalRuntimeEventBusService,
   project: ProjectRow,
 ) {
   return project.kind === 'folder'
     ? reconcileFolderProject(repository, project)
-    : reconcileGitProject(repository, commands, project);
+    : reconcileGitProject(repository, commands, internalEvents, project);
 }
 
 /**
@@ -1209,6 +1237,7 @@ function reconcileFolderProject(repository: WorkspaceRepositoryService, project:
 function reconcileGitProject(
   repository: WorkspaceRepositoryService,
   commands: import('../commands/index.js').CommandServiceShape,
+  internalEvents: InternalRuntimeEventBusService,
   project: ProjectRow,
 ) {
   return Effect.gen(function* () {
@@ -1258,7 +1287,13 @@ function reconcileGitProject(
       projectId: project.id,
       discovered: discovery.discovered,
     });
-    yield* pruneMissingWorktrees(repository, commands, project.id, worktrees.missing);
+    yield* pruneMissingWorktrees(
+      repository,
+      commands,
+      internalEvents,
+      project.id,
+      worktrees.missing,
+    );
 
     findings.push(...reconciliationFindingsFromWorktreeResult(project.id, worktrees));
 
@@ -1269,6 +1304,7 @@ function reconcileGitProject(
 function pruneMissingWorktrees(
   repository: WorkspaceRepositoryService,
   commands: import('../commands/index.js').CommandServiceShape,
+  internalEvents: InternalRuntimeEventBusService,
   projectId: number,
   worktrees: readonly Pick<WorktreeRow, 'id'>[],
 ) {
@@ -1282,6 +1318,14 @@ function pruneMissingWorktrees(
       const current = yield* repository.findWorktree(worktree.id);
       if (current) {
         yield* repository.deleteWorktree(worktree.id);
+        // Reconciliation deletes a worktree just as deliberately as a person does, and a run placed
+        // in it is just as gone. Announcing it here too is what keeps the notification a property of
+        // the deletion rather than of which caller performed it.
+        yield* internalEvents.publish({
+          type: 'worktree_deleted',
+          worktreeId: worktree.id,
+          projectId,
+        });
       }
     }
   });

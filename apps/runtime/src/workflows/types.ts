@@ -1,4 +1,7 @@
+import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Data } from 'effect';
+
+import type { WorkflowLoadFailureReason, WorkflowRejectionReason } from '@isagi/contracts';
 
 import type { DatabaseError } from '../persistence/index.js';
 
@@ -18,6 +21,7 @@ export type {
   GraphEdge,
   GraphNode,
   GraphOutcome,
+  GraphStateFields,
   GraphUpdate,
   HeadlessOperationHandle,
   HeadlessOperationResult,
@@ -51,26 +55,19 @@ export type {
 
 export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError;
 
+/**
+ * An expected engine failure, named with the same vocabulary the wire uses.
+ *
+ * `code` is deliberately the contract's `WorkflowRejectionReason` rather than a private enum. The
+ * engine is where these decisions are actually made, and keeping one vocabulary means the API layer
+ * maps identities and context — never renames a reason, and never has to invent one for a case the
+ * engine already distinguishes.
+ */
 export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')<{
-  readonly code:
-    | 'unknown_workflow_key'
-    | 'workflow_discovery_failed'
-    | 'workflow_load_failed'
-    | 'no_active_worktree'
-    | 'worktree_not_found'
-    | 'surface_not_found'
-    | 'surface_worktree_mismatch'
-    | 'pane_not_found'
-    | 'agent_session_not_on_surface'
-    | 'workflow_launch_context_mismatch'
-    | 'workflow_run_not_found'
-    | 'workflow_surface_busy'
-    | 'workflow_user_input_invalid';
+  readonly code: WorkflowRejectionReason;
   readonly message: string;
   readonly workflowKey?: string | undefined;
-  readonly workflowLoadFailureReason?:
-    | import('@isagi/contracts').WorkflowLoadFailureReason
-    | undefined;
+  readonly workflowLoadFailureReason?: WorkflowLoadFailureReason | undefined;
   readonly workflowSourceDirectory?: string | undefined;
   readonly workflowPackageDirectory?: string | undefined;
   readonly shadowedWorkflowPackageDirectories?: readonly string[] | undefined;
@@ -82,4 +79,13 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly surfaceId?: number | undefined;
   readonly paneId?: number | undefined;
   readonly agentSessionId?: number | undefined;
+  /** The pin a caller asked about, for a version that was never adopted. */
+  readonly artifactHash?: string | undefined;
+  /** The operation holding a blocked run, for `workflow_operation_uncertain`. */
+  readonly operationKey?: string | undefined;
+  /** Which registrations no longer fit, for `workflow_structure_validation_failed`. */
+  readonly diagnostics?: readonly StructureDiagnostic[] | undefined;
+  /** Which recorded value could not be served, for `workflow_payload_unavailable`. */
+  readonly payloadRef?: string | undefined;
+  readonly payloadCause?: 'missing' | 'corrupt' | undefined;
 }> {}

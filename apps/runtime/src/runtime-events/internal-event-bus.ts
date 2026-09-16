@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
-import type { SessionStatus, SurfaceChangedEvent, WorkflowEvent } from '@isagi/contracts';
+import type { SessionStatus, SurfaceChangedEvent } from '@isagi/contracts';
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
@@ -69,6 +69,29 @@ export type InternalRuntimeEvent =
       readonly payload: SurfaceChangedPayload;
     }
   | {
+      /**
+       * A worktree row and everything cascading from it are gone.
+       *
+       * Published after the delete commits, like every other deletion notification here, which is
+       * why a consumer cannot find affected work through anything that cascaded: workflow runs are
+       * matched by their retained destination identity instead.
+       */
+      readonly type: 'worktree_deleted';
+      readonly worktreeId: number;
+      readonly projectId: number;
+    }
+  | {
+      /**
+       * A project and its worktrees are gone.
+       *
+       * `worktreeIds` is read **before** the cascade, because `worktrees.project_id` cascades from
+       * `projects` and those rows cannot be enumerated afterwards.
+       */
+      readonly type: 'project_deleted';
+      readonly projectId: number;
+      readonly worktreeIds: readonly number[];
+    }
+  | {
       readonly type: 'pty_process_started';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
@@ -132,13 +155,6 @@ export type InternalRuntimeEvent =
       readonly type: 'workflow_run_recompute_requested';
       readonly rootRunId: number;
       readonly surfaceId: number | null;
-    }
-  | {
-      readonly type: 'workflow_event_appended';
-      readonly surfaceId: number | null;
-      readonly rootRunId: number | null;
-      readonly runId: number;
-      readonly event: WorkflowEvent;
     };
 
 export interface InternalRuntimeEventSubscription {

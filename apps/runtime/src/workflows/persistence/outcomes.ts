@@ -49,6 +49,23 @@ export type WorkflowWriteRejection =
       readonly surfaceId: number | null;
     }
   | { readonly kind: 'run_terminal'; readonly status: WorkflowRunStatus }
+  /**
+   * The run is still live, and the write only makes sense once it has stopped.
+   *
+   * The mirror of `run_terminal`, and needed because Dismiss is the one control whose precondition
+   * runs the other way: releasing a surface attachment while work is still dispatching would detach
+   * live work instead of stopping it, so an active run must be cancelled first.
+   */
+  | { readonly kind: 'run_active'; readonly status: WorkflowRunStatus }
+  /**
+   * The run is blocked on an external effect whose outcome nobody established.
+   *
+   * Raised only for operator input. A *world* event reaching a blocked run is still recorded — it is
+   * a fact about what happened, and discarding it would lose evidence — but a person answering a
+   * gate is an action, and an action that cannot take effect is refused rather than consumed. The
+   * check lives in the transaction so the refusal is atomic with the state it refuses against.
+   */
+  | { readonly kind: 'run_blocked'; readonly blockedOperationId: number | null }
   | { readonly kind: 'position_mismatch' }
   /**
    * Late evidence already exists for this operation and the new observation disagrees with it.

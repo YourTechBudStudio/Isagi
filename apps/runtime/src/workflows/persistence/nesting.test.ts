@@ -39,6 +39,29 @@ function fence(runRecord: WorkflowRunRecord, attemptId: number) {
   return { runId: runRecord.id, attemptId, owner: OWNER, ownerIncarnation: INCARNATION };
 }
 
+/**
+ * The dispatch input for a structural subgraph entry, read from the run as a dispatcher reads it.
+ *
+ * Entering a subgraph allocates no attempt, so it carries the *claim's* fences instead: the control
+ * revision, the saved position and the pin the registration was read under.
+ */
+const enterInput = async (
+  fixture: WorkflowPersistenceFixture,
+  runId: number,
+  parentExecutionId: number,
+  childGraphKey = 'child',
+) => {
+  const current = (await run(fixture.runs.findRun(runId)))!;
+  return {
+    runId,
+    controlRevision: current.controlRevision,
+    expectedPosition: current.position,
+    artifactHash: current.artifactHash,
+    parentExecutionId,
+    childGraphKey,
+  };
+};
+
 const claimOf = async (fixture: WorkflowPersistenceFixture, runId: number) => {
   const current = (await run(fixture.runs.findRun(runId)))!;
   return {
@@ -106,7 +129,7 @@ async function runToChildPublished(fixture: WorkflowPersistenceFixture) {
 
   // Opening the child runs no author code, so it allocates no attempt.
   const childFrameId = value(
-    await run(fixture.runs.enterSubgraph({ runId, parentExecutionId, childGraphKey: 'child' })),
+    await run(fixture.runs.enterSubgraph(await enterInput(fixture, runId, parentExecutionId))),
   ).childFrameId;
 
   // Child graph entry, then its one node, then routing to an outcome.
@@ -195,7 +218,7 @@ test('a child frame is linked reciprocally to the execution that opened it', asy
   }
 });
 
-test('opening a child twice adopts the frame that exists rather than opening a second', async () => {
+test('one execution opens exactly one child frame, and a replay writes nothing', async () => {
   const fixture = makeWorkflowPersistenceFixture();
   try {
     fixture.seedArtifact(PIN_A);
@@ -237,19 +260,21 @@ test('opening a child twice adopts the frame that exists rather than opening a s
     );
     const parentExecutionId = (await run(fixture.runs.listExecutions(created.frame.id)))[0]!.id;
 
-    const first = value(
-      await run(
-        fixture.runs.enterSubgraph({
-          runId: created.run.id,
-          parentExecutionId,
-          childGraphKey: 'child',
-        }),
-      ),
-    );
-    const revisionAfterFirst = (await run(fixture.runs.findRun(created.run.id)))!.revision;
+    const prepared = await enterInput(fixture, created.run.id, parentExecutionId);
+    value(await run(fixture.runs.enterSubgraph(prepared)));
+    const afterFirst = (await run(fixture.runs.findRun(created.run.id)))!;
 
-    // A crash between the frame insert and the position write leaves the run pointing at the
-    // parent's `node_callback` with a child frame already created. Re-entry must adopt it.
+    // Replaying the *same* prepared input is refused twice over: the run has moved to the child's
+    // `graph_entry`, and the parent execution already holds a child frame. Creating a second frame
+    // would give the parent's mapping two candidate results and no rule for choosing.
+    assert.deepEqual(rejection(await run(fixture.runs.enterSubgraph(prepared))), {
+      kind: 'position_mismatch',
+    });
+
+    // Even with the position forced back — the shape a crash between two separate writes would
+    // once have left — the reciprocal link is what refuses the second frame. There is no such crash
+    // window any more: the frame insert, the parent link and the position advance share one
+    // transaction.
     fixture.client.prepare('UPDATE workflow_runs SET position_json = ? WHERE id = ?').run(
       JSON.stringify({
         kind: 'node_callback',
@@ -258,35 +283,29 @@ test('opening a child twice adopts the frame that exists rather than opening a s
       }),
       created.run.id,
     );
-
-    const second = value(
-      await run(
-        fixture.runs.enterSubgraph({
-          runId: created.run.id,
-          parentExecutionId,
-          childGraphKey: 'child',
-        }),
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.enterSubgraph(await enterInput(fixture, created.run.id, parentExecutionId)),
+        ),
       ),
+      { kind: 'position_mismatch' },
     );
-    assert.equal(second.childFrameId, first.childFrameId, 'the same frame, adopted');
     assert.equal(
       (await run(fixture.runs.listFrames(created.run.id))).length,
       2,
       'a root and one child — never a duplicate child',
     );
-    // Safe idempotent replay still records that the dispatch happened again; what it must not do is
-    // create a second frame.
     assert.equal(
       (await run(fixture.runs.findRun(created.run.id)))!.revision,
-      revisionAfterFirst + 1,
+      afterFirst.revision,
+      'a refused entry appends no transition',
     );
 
-    // A stale parent, on the other hand, is a rejection rather than a replay.
+    // A stale parent is rejected for the same reason and equally writes nothing.
     const stale = await run(
       fixture.runs.enterSubgraph({
-        runId: created.run.id,
-        parentExecutionId: parentExecutionId + 500,
-        childGraphKey: 'child',
+        ...(await enterInput(fixture, created.run.id, parentExecutionId + 500)),
       }),
     );
     assert.deepEqual(rejection(stale), { kind: 'position_mismatch' });
@@ -624,15 +643,16 @@ test('a cancelled run cannot open a child frame, and nothing about it moves', as
     };
 
     // Opening a child frame is a graph advance, and Cancel revokes permission to advance. Nothing
-    // was produced here, so unlike a callback's result there is no evidence to retain either.
+    // was produced here, so unlike a callback's result there is no evidence to retain either. The
+    // reason reads `status` rather than `cancel_requested` because the gates run in the claim's
+    // order and Cancel writes the terminal status in the same transaction as the flag.
     const refused = await run(
       fixture.runs.enterSubgraph({
-        runId: created.run.id,
-        parentExecutionId,
-        childGraphKey: 'child',
+        ...(await enterInput(fixture, created.run.id, parentExecutionId)),
+        controlRevision: before.run.controlRevision,
       }),
     );
-    assert.deepEqual(rejection(refused), { kind: 'run_terminal', status: 'cancelled' });
+    assert.deepEqual(rejection(refused), { kind: 'not_claimable', reason: 'status' });
 
     const after = (await run(fixture.runs.findRun(created.run.id)))!;
     assert.deepEqual(await run(fixture.runs.listFrames(created.run.id)), before.frames);
@@ -645,6 +665,207 @@ test('a cancelled run cannot open a child frame, and nothing about it moves', as
     assert.equal(after.status, 'cancelled', 'the cancelled run is preserved');
     assert.deepEqual(after.position, before.run.position, 'and the position did not advance');
     assert.equal(after.revision, before.run.revision, 'and no transition was appended');
+  } finally {
+    fixture.close();
+  }
+});
+
+/** A run parked at a subgraph node's `node_callback`, which is where a structural entry dispatches. */
+async function runParkedAtSubgraphNode(fixture: WorkflowPersistenceFixture) {
+  fixture.seedArtifact(PIN_A);
+  fixture.seedArtifact(PIN_B);
+  const placement = fixture.seedPlacement();
+  const created = value(
+    await run(
+      fixture.runs.createRun({
+        workflowKey: 'fixture',
+        title: 'Nested fixture',
+        rootGraphKey: 'root',
+        artifactHash: PIN_A,
+        rootFrame: { graphKey: 'root' },
+        origin: {
+          worktreeId: placement.worktreeId,
+          worktreePath: '/repo/fixture',
+          surfaceId: placement.surfaceId,
+          paneId: null,
+          agentSessionId: null,
+        },
+        destination: {
+          worktreeId: placement.worktreeId,
+          worktreePath: '/repo/fixture',
+          surfaceId: placement.surfaceId,
+        },
+        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
+      }),
+    ),
+  );
+  const entry = await claimOf(fixture, created.run.id);
+  value(
+    await run(
+      fixture.runs.commitGraphEntry({
+        ...fence(entry.run, entry.claimed.attempt.id),
+        frameId: created.frame.id,
+        state: { value: {} },
+        entryNode: { nodeId: 'review', nodeKind: 'subgraph' },
+      }),
+    ),
+  );
+  const parentExecutionId = (await run(fixture.runs.listExecutions(created.frame.id)))[0]!.id;
+  return {
+    fixture,
+    placement,
+    runId: created.run.id,
+    rootFrameId: created.frame.id,
+    parentExecutionId,
+  };
+}
+
+test('a structural subgraph entry carries every dispatch gate a claim carries', async () => {
+  // Entering a subgraph advances the run and emits `node_dispatched`. It allocates no attempt, so
+  // it cannot be fenced by attempt ownership — which is precisely why it has to be fenced by
+  // everything else a claim checks. Each case asserts the run did not move.
+  const cases: readonly {
+    readonly name: string;
+    readonly arrange: (
+      scenario: Awaited<ReturnType<typeof runParkedAtSubgraphNode>>,
+    ) => Promise<void> | void;
+    /** `before` keeps the pre-arrangement revision, which is what makes an action *stale*. */
+    readonly prepare: 'before' | 'after';
+    readonly expected: unknown;
+  }[] = [
+    {
+      name: 'a stale entry prepared before a newer Pause',
+      prepare: 'before',
+      arrange: async (scenario) => {
+        const current = (await run(scenario.fixture.runs.findRun(scenario.runId)))!;
+        value(
+          await run(
+            scenario.fixture.runs.applyPause({
+              runId: scenario.runId,
+              controlRevision: current.controlRevision,
+            }),
+          ),
+        );
+      },
+      expected: { kind: 'control_revision_changed', controlRevision: 1 },
+    },
+    {
+      name: 'paused',
+      prepare: 'after',
+      arrange: async (scenario) => {
+        const current = (await run(scenario.fixture.runs.findRun(scenario.runId)))!;
+        value(
+          await run(
+            scenario.fixture.runs.applyPause({
+              runId: scenario.runId,
+              controlRevision: current.controlRevision,
+            }),
+          ),
+        );
+      },
+      expected: { kind: 'not_claimable', reason: 'paused' },
+    },
+    {
+      name: 'environment marked unavailable',
+      prepare: 'after',
+      arrange: async (scenario) => {
+        await run(
+          scenario.fixture.runs.setEnvironmentAvailable({
+            runId: scenario.runId,
+            available: false,
+          }),
+        );
+      },
+      expected: { kind: 'not_claimable', reason: 'environment_unavailable' },
+    },
+    {
+      name: 'destination deleted without a notification',
+      prepare: 'after',
+      arrange: (scenario) => {
+        scenario.fixture.client
+          .prepare('DELETE FROM worktrees WHERE id = ?')
+          .run(scenario.placement.worktreeId);
+      },
+      expected: { kind: 'not_claimable', reason: 'placement_missing' },
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = makeWorkflowPersistenceFixture();
+    try {
+      const scenario = await runParkedAtSubgraphNode(fixture);
+      const early =
+        testCase.prepare === 'before'
+          ? await enterInput(fixture, scenario.runId, scenario.parentExecutionId)
+          : null;
+      await testCase.arrange(scenario);
+      const prepared =
+        early ?? (await enterInput(fixture, scenario.runId, scenario.parentExecutionId));
+      const before = (await run(fixture.runs.findRun(scenario.runId)))!;
+
+      const refused = await run(fixture.runs.enterSubgraph(prepared));
+      assert.deepEqual(rejection(refused), testCase.expected, testCase.name);
+
+      const after = (await run(fixture.runs.findRun(scenario.runId)))!;
+      assert.deepEqual(
+        after.position,
+        before.position,
+        `${testCase.name}: the run did not advance`,
+      );
+      assert.equal(after.revision, before.revision, `${testCase.name}: nothing was recorded`);
+      assert.equal(
+        (await run(fixture.runs.listFrames(scenario.runId))).length,
+        1,
+        `${testCase.name}: no child frame was opened`,
+      );
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+test('a subgraph entry prepared under one pin is refused after a Retry repins the run', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const scenario = await runParkedAtSubgraphNode(fixture);
+    const prepared = await enterInput(fixture, scenario.runId, scenario.parentExecutionId);
+
+    // The registration that named this child graph was read from pin A. Adopting pin B may have
+    // removed it, so a frame opened from the stale read would name a graph the current structure
+    // does not declare.
+    const current = (await run(fixture.runs.findRun(scenario.runId)))!;
+    value(
+      await run(
+        fixture.runs.adoptRetryPin({
+          runId: scenario.runId,
+          controlRevision: current.controlRevision,
+          artifactHash: PIN_B,
+          expectedPosition: current.position,
+          expectedOwner: current.owner,
+        }),
+      ),
+    );
+    const repinned = (await run(fixture.runs.findRun(scenario.runId)))!;
+
+    assert.deepEqual(rejection(await run(fixture.runs.enterSubgraph(prepared))), {
+      kind: 'control_revision_changed',
+      controlRevision: repinned.controlRevision,
+    });
+    // Even with the newer revision supplied, the pin the decision was read under is checked on its
+    // own: the two fences answer different questions.
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.enterSubgraph({
+            ...prepared,
+            controlRevision: repinned.controlRevision,
+          }),
+        ),
+      ),
+      { kind: 'stale_preparation', source: 'artifact_hash' },
+    );
+    assert.equal((await run(fixture.runs.listFrames(scenario.runId))).length, 1);
+    assert.equal((await run(fixture.runs.findRun(scenario.runId)))!.revision, repinned.revision);
   } finally {
     fixture.close();
   }

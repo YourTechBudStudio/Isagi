@@ -1,14 +1,20 @@
 /**
  * Opt-in end-to-end proof for the packaged-workflow authoring contract. It is intentionally excluded
  * from `pnpm check`: it packs the public tarballs, installs them into a throwaway copy of the
- * canonical scaffold, verifies, and loads the artifact through the real runtime registry path.
+ * canonical scaffold, verifies it, loads it through the real runtime registry, and finally *runs*
+ * it through the real interpreter until it suspends at its user gate.
+ *
+ * This is the only place the whole chain is exercised against a genuinely built package:
+ *
+ *   scaffold → pack/install → typecheck/test/build → verify → registry load → engine launch →
+ *   root init → suspend at `user_continue`
  *
  * Run it from the repo root:
  *   pnpm --dir apps/runtime exec tsx scripts/prove-workflow-authoring.mts
  *
  * Two modes, and the difference is reported honestly rather than hidden:
  *
- *   (default)   full proof — every stage, ending at the runtime registry load.
+ *   (default)   full proof — every stage above, ending at a suspended run in a real database.
  *   --package-only  the package pipeline only: pack → local install → typecheck → test → build →
  *                   verify → standalone import. It stops before the runtime registry stage and says
  *                   so. It exists so the authoring contract can be proven while the runtime is
@@ -187,9 +193,182 @@ async function main() {
       `registry loaded ${workflowKey}: title="${manifest.title}", input="${manifest.inputs[0].key}", graphs=${loaded.descriptor.graphs.length}, artifact=${loaded.artifactHash}`,
     );
 
-    process.stdout.write('\nPROOF PASSED\n');
+    // 8. Run it. Everything below is the production interpreter against a real database, a real
+    //    artifact catalog sharing the registry's cache root, and the verified artifact from step 7 —
+    //    no in-memory definition, no stubbed structure.
+    await proveEngineLaunch({ workflowsRoot, cacheRoot, artifactHash: loaded.artifactHash });
+
+    process.stdout.write(
+      '\nPROOF PASSED — scaffold packed, installed, built, verified, loaded through the runtime' +
+        ' registry, and launched through the interpreter to its user gate.\n',
+    );
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Launch the verified scaffold through the real interpreter, and stop where it stops.
+ *
+ * The scaffold's entry node suspends on `wait.userContinue`, so a correct run reaches an armed
+ * `user_continue` wait and goes no further without a person. That is the assertion: not that the run
+ * finished, but that it got to the exact place the author's code says it should and is sitting on a
+ * durable wait nobody has answered.
+ *
+ * Capability adapters are deliberately refusing stubs. The canonical scaffold is harness-free, so a
+ * proof that needed a provider would be proving something about the provider instead — and if the
+ * scaffold ever starts calling a capability, this fails loudly rather than quietly faking one.
+ */
+async function proveEngineLaunch(input: {
+  readonly workflowsRoot: string;
+  readonly cacheRoot: string;
+  readonly artifactHash: string;
+}) {
+  const { Effect, Exit, Scope } = await import('effect');
+  const { makeWorkflowPersistenceFixture } =
+    await import('../src/workflows/persistence/test-support.js');
+  const { placementReaders } = await import('../src/workflows/engine/test-support.js');
+  const { makeWorkflowArtifactCatalog } =
+    await import('../src/workflows/structure/artifact-catalog.js');
+  const { createFilesystemWorkflowRegistry } =
+    await import('../src/workflows/structure/registry.js');
+  const { makeWorkflowOperationService } =
+    await import('../src/workflows/operations/operation.service.js');
+  const { makeWaitResolver } = await import('../src/workflows/waits/resolver.js');
+  const { makeDispatcher } = await import('../src/workflows/engine/dispatcher.js');
+  const { startWorkflow } = await import('../src/workflows/engine/launch.js');
+
+  const fixture = makeWorkflowPersistenceFixture();
+  const scope = await Effect.runPromise(Scope.make());
+  try {
+    const placement = fixture.seedPlacement();
+    const readers = placementReaders(fixture, placement);
+    // The catalog and the registry share one cache root, exactly as the runtime layer wires them:
+    // a pin published at launch has to be the pin the next dispatch loads.
+    const definitionCache = new Map();
+    const catalog = makeWorkflowArtifactCatalog(fixture.database, fixture.payloads, {
+      cacheRoot: input.cacheRoot,
+      definitionCache,
+    });
+    const registry = createFilesystemWorkflowRegistry(input.workflowsRoot, input.cacheRoot);
+
+    const refuse = (name: string) => () =>
+      Effect.die(
+        new Error(
+          `the canonical scaffold called ${name}; this proof deliberately provides no harness`,
+        ),
+      );
+    const adapters = {
+      agentSessions: {
+        prepareSend: refuse('prepareSend'),
+        createKeyedSession: refuse('createKeyedSession'),
+        prepareSeed: refuse('prepareSeed'),
+        submitPrompt: refuse('submitPrompt'),
+        awaitSeedAcknowledgement: refuse('awaitSeedAcknowledgement'),
+        sessionHarness: refuse('sessionHarness'),
+        turnEdges: () => Effect.succeed([]),
+        conversationHistory: refuse('conversationHistory'),
+      },
+      panes: { closePane: refuse('closePane') },
+      headless: {
+        assertCanCreateProcess: refuse('assertCanCreateProcess'),
+        allocate: refuse('allocate'),
+        pin: refuse('pin'),
+        unpin: refuse('unpin'),
+        capture: refuse('capture'),
+        terminate: refuse('terminate'),
+        semanticError: () => null,
+      },
+    };
+    const eventBus = {
+      publish: () => Effect.void,
+      subscribe: () => Effect.succeed({ take: Effect.never, unsubscribe: Effect.void }),
+    };
+
+    const operations = await Effect.runPromise(
+      Scope.extend(
+        makeWorkflowOperationService({
+          operations: fixture.operations,
+          runs: fixture.runs,
+          payloads: fixture.payloads,
+          adapters: adapters as never,
+          eventBus: eventBus as never,
+        }),
+        scope,
+      ),
+    );
+    const waits = makeWaitResolver({
+      runs: fixture.runs,
+      payloads: fixture.payloads,
+      operationRecords: fixture.operations,
+      operations,
+      catalog,
+      turnEdges: () => Effect.succeed([]),
+    });
+    const dispatcher = makeDispatcher({
+      runs: fixture.runs,
+      payloads: fixture.payloads,
+      operations,
+      operationRecords: fixture.operations,
+      catalog,
+      owner: 'authoring-proof',
+      ownerIncarnation: operations.incarnationId,
+      reconcileExecution: operations.reconcileExecution,
+      reconcileWait: waits.reconcileWait,
+    });
+
+    const launched = await Effect.runPromise(
+      startWorkflow(
+        {
+          runs: fixture.runs,
+          registry,
+          catalog,
+          workspace: readers.workspace as never,
+          surfaces: readers.surfaceService as never,
+        },
+        {
+          workflowKey,
+          inputs: { note: 'proved end to end' },
+          origin: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
+        },
+      ),
+    );
+    // The run must be pinned to the artifact the registry verified and published, not to some other
+    // version the catalog happened to hold.
+    if (launched.artifactHash !== input.artifactHash)
+      throw new Error(
+        `run adopted ${launched.artifactHash}, but the verified artifact was ${input.artifactHash}`,
+      );
+    log('engine-launch', `run ${launched.id} created, pinned to ${launched.artifactHash}`);
+
+    for (let pass = 0; pass < 10; pass += 1) {
+      const summary = await Effect.runPromise(dispatcher.drainOnce);
+      if (summary.advanced === 0) break;
+    }
+
+    const settled = await Effect.runPromise(fixture.runs.findRun(launched.id));
+    if (settled?.status !== 'waiting')
+      throw new Error(`expected the run to suspend, but it is ${settled?.status}`);
+    if (settled.position.kind !== 'awaiting_wait')
+      throw new Error(`expected an awaiting_wait position, got ${settled.position.kind}`);
+
+    const frame = await Effect.runPromise(fixture.runs.findFrame(settled.activeFrameId!));
+    const state = await Effect.runPromise(fixture.payloads.resolve(frame!.state!));
+    if ((state as { note?: unknown }).note !== 'proved end to end')
+      throw new Error(`root init did not carry the launch input: ${JSON.stringify(state)}`);
+
+    const armed = await Effect.runPromise(fixture.runs.listArmedWaits(launched.id));
+    if (armed.length !== 1 || armed[0]!.waitKind !== 'user_continue')
+      throw new Error(`expected one armed user_continue wait, got ${JSON.stringify(armed)}`);
+
+    log(
+      'engine-run',
+      `root init committed state ${JSON.stringify(state)}; run suspended at an armed` +
+        ` ${armed[0]!.waitKind} wait (wait ${armed[0]!.id}) with nobody to answer it`,
+    );
+  } finally {
+    await Effect.runPromise(Scope.close(scope, Exit.void));
+    fixture.close();
   }
 }
 

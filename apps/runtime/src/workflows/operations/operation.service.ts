@@ -35,7 +35,11 @@ import {
   type OperationAttemptIdentity,
 } from './attempt-context.js';
 import { makeCaptureRegistry } from './capture.js';
-import { makeOperationReconciler, type ExecutionReconciliation } from './reconcile.js';
+import {
+  makeOperationReconciler,
+  type ExecutionReconciliation,
+  type OperationReconciler,
+} from './reconcile.js';
 import { makeOperationSettlement } from './settlement.js';
 import { makeOperationStopPolicy, type StopSummary } from './stop.js';
 
@@ -65,6 +69,15 @@ export interface WorkflowOperationServiceShape {
   ) => Effect.Effect<ExecutionReconciliation, never>;
   /** The same, across every unsettled operation this process did not start. */
   readonly reconcileAtStartup: Effect.Effect<readonly ExecutionReconciliation[], never>;
+  /**
+   * Settle a submission from the turn its wait observed.
+   *
+   * The wait resolver owns turn observation and this layer owns every operation write, so the
+   * resolver reports what it saw rather than writing the row itself.
+   */
+  readonly recordTurnObservation: OperationReconciler['recordTurnObservation'];
+  /** Freeze a submission's turn association the first time it can be established. */
+  readonly fixTurnAssociation: OperationReconciler['fixTurnAssociation'];
   readonly stopOwnedOperations: (input: {
     readonly runId: number;
     readonly reason: string;
@@ -134,6 +147,8 @@ export function makeWorkflowOperationService(
       withAttemptContext,
       reconcileExecution: reconciler.reconcileExecution,
       reconcileAtStartup: reconciler.reconcileAtStartup,
+      recordTurnObservation: reconciler.recordTurnObservation,
+      fixTurnAssociation: reconciler.fixTurnAssociation,
       stopOwnedOperations: stop.stopOwnedOperations,
     };
 

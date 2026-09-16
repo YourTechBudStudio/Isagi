@@ -429,6 +429,8 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_run_not_found',
   'workflow_run_not_retryable',
   'workflow_run_not_cancellable',
+  /** Dismiss releases a stopped run's placement; an active run must be cancelled first. */
+  'workflow_run_not_dismissible',
   'workflow_wait_not_found',
   'workflow_wait_already_resolved',
   'workflow_user_input_invalid',

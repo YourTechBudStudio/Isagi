@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { WorkflowQuestionSpec } from './types.js';
+import type { WorkflowQuestionSpec } from '../types.js';
 import {
   validateWorkflowUserInputAnswers,
   WorkflowUserInputValidationError,

@@ -1,17 +1,34 @@
 /**
  * The workflows module's public surface.
  *
- * Narrow on purpose: everything below is a foundation other runtime code composes — durable
- * records, the payload boundary, the artifact catalog and saved-position validation. The engine,
- * capability adapters, wait resolver, read projection and HTTP routes are internal to this module
- * and reach their consumers through the runtime layer, not through this barrel.
+ * Narrow on purpose. Two kinds of thing are exported: the durable foundations other runtime code
+ * composes — records, the payload boundary, the artifact catalog, saved-position validation — and
+ * the one operational entry point, `WorkflowEngine`. The segment handlers, the wait resolver, the
+ * environment watch, the operation service and the HTTP routes are internal, and nothing reaches
+ * them except through a run id.
  *
- * The v1 exports that used to live here — the run-tree repository, the JSONL event ledger, the
- * `step` interpreter and its context — are gone with the contract they belonged to. The v1
- * capability, context and headless modules are now gone too, replaced by `operations/`, which the
- * runtime layer composes directly rather than through this barrel. The engine, wait resolver, read
- * projection and HTTP routes are still on disk and still red; phases 04–05 replace them.
+ * The v1 exports that used to live here are gone with the contract they belonged to: the run-tree
+ * repository, the JSONL event ledger, the `step` interpreter and its context, and the capability,
+ * headless and resume-path modules. The read projection and HTTP routes are still on disk and still
+ * red; phase 05 replaces them.
  */
+
+export {
+  WorkflowEngine,
+  WorkflowEngineLive,
+  type EngineFailure,
+  type WorkflowEngineService,
+} from './engine/interpreter.service.js';
+
+export type { ControlResult } from './engine/controls.js';
+export type { DrainSummary } from './engine/dispatcher.js';
+export type { DescriptorListing } from './engine/launch.js';
+
+export {
+  WorkflowOperationService,
+  WorkflowOperationServiceLive,
+  type WorkflowOperationServiceShape,
+} from './operations/operation.service.js';
 
 export {
   WorkflowPayloadStore,
@@ -86,7 +103,6 @@ export {
 } from './structure/loader.js';
 
 export {
-  createWorkflowRegistry,
   WorkflowRegistry,
   WorkflowRegistryLive,
   type WorkflowRegistryService,

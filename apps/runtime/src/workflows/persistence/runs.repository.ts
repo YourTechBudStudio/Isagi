@@ -172,11 +172,21 @@ export interface CommitGraphEntryInput extends AttemptFence {
  *
  * The child's parameter mapping and `init` both belong to the child's own `graph_entry` segment —
  * that is what `parameter_mapping_failed` and `graph_init_failed` are failure codes *of*. This
- * transaction only creates the frame shell and moves the position into it, so the only fence it
- * needs is that the run is still parked where the decision was prepared.
+ * transaction only creates the frame shell and moves the position into it.
+ *
+ * It is still a **dispatch**: it emits `node_dispatched` and advances the run. So it carries every
+ * gate a claim carries — status, Pause, Cancel, the environment cache and the live placement
+ * re-check — minus the one it cannot have, an attempt owner. Exclusion comes from the saved
+ * position instead: whichever transaction commits first moves the run to `graph_entry`, and the
+ * loser's position check rejects it before it writes anything.
  */
 export interface EnterSubgraphInput {
   readonly runId: number;
+  readonly controlRevision: number;
+  /** The `node_callback` position this decision was prepared against. */
+  readonly expectedPosition: WorkflowRunPosition;
+  /** The pin the subgraph registration was read from. */
+  readonly artifactHash: string;
   readonly parentExecutionId: number;
   readonly childGraphKey: string;
   readonly childDisplayName?: string | null;
@@ -266,8 +276,15 @@ export interface DeliverWaitInput {
 
 export interface WaitDelivery {
   readonly wait: WorkflowWaitRecord;
-  /** `advanced` when the run became ready to route; `late_evidence` on a terminal run. */
-  readonly outcome: 'advanced' | 'late_evidence';
+  /**
+   * What the delivery did to the *run*, which is a different question from what it did to the wait.
+   *
+   * `advanced` — the run is ready to route. `late_evidence` — a terminal run kept the event and
+   * moved nowhere. `held` — the run is blocked on an operation nobody can account for, so the event
+   * is recorded and the wait is delivered, but the run does not resume: answering one gate is not
+   * evidence about a different effect.
+   */
+  readonly outcome: 'advanced' | 'late_evidence' | 'held';
 }
 
 export interface ControlInput {
@@ -417,9 +434,10 @@ export interface WorkflowRunsRepositoryService {
   readonly adoptRetryPin: (
     input: AdoptRetryPinInput,
   ) => Effect.Effect<WorkflowWriteResult<void>, DatabaseError>;
+  /** `detached: false` means the run had no attachment left, which is a repeat rather than a fault. */
   readonly detachRun: (
     input: ControlInput,
-  ) => Effect.Effect<WorkflowWriteResult<void>, DatabaseError>;
+  ) => Effect.Effect<WorkflowWriteResult<{ readonly detached: boolean }>, DatabaseError>;
 
   // --- recovery -------------------------------------------------------------
   readonly parkUnfinishedRuns: (input: {
@@ -484,6 +502,16 @@ export interface WorkflowRunsRepositoryService {
   readonly findWait: (waitId: number) => Effect.Effect<WorkflowWaitRecord | null, DatabaseError>;
   readonly listArmedWaits: (
     runId?: number,
+  ) => Effect.Effect<readonly WorkflowWaitRecord[], DatabaseError>;
+  /**
+   * Every wait a node visit armed, newest last.
+   *
+   * The router needs it because a `routing` position names an edge, not a wait: the wait that
+   * delivered the event is found by asking the execution what it armed, rather than by widening the
+   * position union with an id only one of its arrival paths would ever carry.
+   */
+  readonly listWaitsForExecution: (
+    executionId: number,
   ) => Effect.Effect<readonly WorkflowWaitRecord[], DatabaseError>;
   readonly listPauseIntervals: (
     runId: number,
@@ -846,57 +874,75 @@ export function makeWorkflowRunsRepository(
         const now = new Date().toISOString();
         const row = findRunRow(db, input.runId);
         if (!row) return rejected<never>({ kind: 'run_not_found' });
+        if (row.controlRevision !== input.controlRevision) {
+          return rejected<never>({
+            kind: 'control_revision_changed',
+            controlRevision: row.controlRevision,
+          });
+        }
+        // The same dispatch gates a claim applies, in the same order, because this advances the run
+        // exactly as a claim does. Pause means "no further dispatch", and entering a subgraph is a
+        // dispatch — the only difference is that no author callback runs inside it.
+        if (row.status !== 'ready')
+          return rejected<never>({ kind: 'not_claimable', reason: 'status' });
+        if (row.paused) return rejected<never>({ kind: 'not_claimable', reason: 'paused' });
+        if (row.cancelRequested) {
+          return rejected<never>({ kind: 'not_claimable', reason: 'cancel_requested' });
+        }
+        if (!row.environmentAvailable) {
+          return rejected<never>({ kind: 'not_claimable', reason: 'environment_unavailable' });
+        }
+        if (!placementIsLive(db, row.destinationWorktreeId, row.destinationSurfaceId)) {
+          return rejected<never>({ kind: 'not_claimable', reason: 'placement_missing' });
+        }
+
         const run = runRecord(row);
         if (
+          encodeRunPosition(run.position) !== encodeRunPosition(input.expectedPosition) ||
           run.position.kind !== 'node_callback' ||
           run.position.executionId !== input.parentExecutionId
         ) {
           return rejected<never>({ kind: 'position_mismatch' });
         }
-        // Cancel revokes permission to advance the graph. Nothing was produced here, so there is no
-        // evidence to retain either — the transaction simply does not apply.
-        if (row.cancelRequested)
-          return rejected<never>({ kind: 'run_terminal', status: row.status });
+        // The registration was read from a pin. A Retry that repinned the run between the read and
+        // this write must not open a frame for a subgraph the new structure may not declare.
+        if (run.artifactHash !== input.artifactHash) {
+          return rejected<never>({ kind: 'stale_preparation', source: 'artifact_hash' });
+        }
 
         const parent = db
           .select()
           .from(workflowNodeExecutions)
           .where(eq(workflowNodeExecutions.id, input.parentExecutionId))
           .get();
-        if (!parent) return rejected<never>({ kind: 'position_mismatch' });
+        if (!parent || parent.runId !== run.id)
+          return rejected<never>({ kind: 'position_mismatch' });
         const parentFrame = db
           .select()
           .from(workflowGraphFrames)
           .where(eq(workflowGraphFrames.id, parent.frameId))
           .get();
-        if (!parentFrame) return rejected<never>({ kind: 'position_mismatch' });
+        if (!parentFrame || parentFrame.runId !== run.id) {
+          return rejected<never>({ kind: 'position_mismatch' });
+        }
+        // One execution opens at most one child frame. A second frame under the same visit would
+        // give the parent's mapping two candidate results and no rule for choosing between them.
+        if (parent.childFrameId !== null) return rejected<never>({ kind: 'position_mismatch' });
 
-        // Idempotent: a re-entry after a crash between the frame insert and the position write
-        // adopts the frame that already exists rather than opening a second one.
-        const existing = parent.childFrameId
-          ? db
-              .select()
-              .from(workflowGraphFrames)
-              .where(eq(workflowGraphFrames.id, parent.childFrameId))
-              .get()
-          : undefined;
-
-        const childFrame =
-          existing ??
-          db
-            .insert(workflowGraphFrames)
-            .values({
-              runId: run.id,
-              parentExecutionId: parent.id,
-              graphKey: input.childGraphKey,
-              entryArtifactHash: run.artifactHash,
-              depth: parentFrame.depth + 1,
-              status: 'initializing',
-              displayName: normalizeDisplayName(input.childDisplayName),
-              enteredAt: now,
-            })
-            .returning()
-            .get();
+        const childFrame = db
+          .insert(workflowGraphFrames)
+          .values({
+            runId: run.id,
+            parentExecutionId: parent.id,
+            graphKey: input.childGraphKey,
+            entryArtifactHash: run.artifactHash,
+            depth: parentFrame.depth + 1,
+            status: 'initializing',
+            displayName: normalizeDisplayName(input.childDisplayName),
+            enteredAt: now,
+          })
+          .returning()
+          .get();
 
         db.update(workflowNodeExecutions)
           .set({ childFrameId: childFrame.id, status: 'running' })
@@ -1446,9 +1492,10 @@ export function makeWorkflowRunsRepository(
         return null;
       }),
 
-    deliverWait: (input) => deliverWaitInternal(database, payloads, 'workflow_deliver_wait', input),
+    deliverWait: (input) =>
+      deliverWaitInternal(database, payloads, 'workflow_deliver_wait', input, 'world'),
     consumeHumanWait: (input) =>
-      deliverWaitInternal(database, payloads, 'workflow_consume_human_wait', input),
+      deliverWaitInternal(database, payloads, 'workflow_consume_human_wait', input, 'operator'),
 
     supersedeWait: (input) =>
       Effect.gen(function* () {
@@ -1620,13 +1667,33 @@ export function makeWorkflowRunsRepository(
     detachRun: ({ runId, controlRevision }) =>
       database.transaction('workflow_detach_run', (db) =>
         withControlFence(db, runId, controlRevision, (run, now) => {
+          // Dismiss releases a *finished* run's placement. An active run has to be cancelled first:
+          // detaching it would take the surface back while the work carried on, which is the one
+          // outcome the retention policy calls dishonest. Checked here rather than only in the
+          // control layer so no caller can reach the write without it.
+          if (!isTerminal(run.status)) {
+            return rejected<{ readonly detached: boolean }>({
+              kind: 'run_active',
+              status: run.status,
+            });
+          }
+          const attachment = db
+            .select()
+            .from(workflowRunAttachments)
+            .where(eq(workflowRunAttachments.runId, run.id))
+            .get();
+          // A repeat Dismiss is inert: it reports that the run is already detached and writes
+          // nothing, so a retried request cannot fill the waterfall with controls that changed
+          // nothing.
+          if (!attachment) return { value: { detached: false }, drafts: [] };
+
           db.delete(workflowRunAttachments).where(eq(workflowRunAttachments.runId, run.id)).run();
           db.update(workflowRuns)
             .set({ controlRevision: run.controlRevision + 1, updatedAt: now })
             .where(eq(workflowRuns.id, run.id))
             .run();
           return {
-            value: undefined as void,
+            value: { detached: true },
             drafts: [
               {
                 kind: 'control_applied' as const,
@@ -1969,6 +2036,17 @@ export function makeWorkflowRunsRepository(
         return row ? waitRecord(row) : null;
       }),
 
+    listWaitsForExecution: (executionId) =>
+      database.use('workflow_list_waits_for_execution', (db) =>
+        db
+          .select()
+          .from(workflowWaits)
+          .where(eq(workflowWaits.executionId, executionId))
+          .orderBy(asc(workflowWaits.id))
+          .all()
+          .map(waitRecord),
+      ),
+
     listArmedWaits: (runId) =>
       database.use('workflow_list_armed_waits', (db) =>
         db
@@ -2225,11 +2303,21 @@ function withControlFence<A>(
  * by whether the run is still non-terminal: a cancelled, done or failed run keeps its status and
  * position and takes the event as late evidence.
  */
+/**
+ * Who is delivering: the world, or a person.
+ *
+ * The difference decides what happens to a blocked run. An external event is evidence and is always
+ * recorded; an operator's answer is an action, and one that cannot take effect must not silently
+ * consume the gate it was aimed at.
+ */
+type DeliverySource = 'world' | 'operator';
+
 function deliverWaitInternal(
   database: TransactionalDatabase,
   payloads: WorkflowPayloadStoreService,
   operation: string,
   input: DeliverWaitInput,
+  source: DeliverySource,
 ) {
   return Effect.gen(function* () {
     const event = yield* payloads.publish(input.event.value);
@@ -2239,6 +2327,20 @@ function deliverWaitInternal(
       if (!wait) return rejected<WaitDelivery>({ kind: 'run_not_found' });
       if (wait.status !== 'armed') {
         return rejected<WaitDelivery>({ kind: 'wait_already_resolved', status: wait.status });
+      }
+      const blockedRow = db
+        .select({ status: workflowRuns.status, blocked: workflowRuns.blockedOperationId })
+        .from(workflowRuns)
+        .where(eq(workflowRuns.id, wait.runId))
+        .get();
+      // Read and refused inside the transaction, so a run that becomes blocked between a caller's
+      // check and this write cannot slip an answer through — and one that is already blocked cannot
+      // have its gate quietly consumed by an answer nothing will ever act on.
+      if (source === 'operator' && blockedRow?.status === 'blocked') {
+        return rejected<WaitDelivery>({
+          kind: 'run_blocked',
+          blockedOperationId: blockedRow.blocked,
+        });
       }
       const eventColumns = slotColumns(event);
       const updated = db
@@ -2263,7 +2365,12 @@ function deliverWaitInternal(
         },
       ];
 
-      const advances = row.status === 'waiting' || row.status === 'blocked';
+      // A blocked run holds an external effect whose outcome nobody established. Resuming it
+      // because an *unrelated* gate was answered would be exactly the operator assertion the design
+      // refuses: the wait is real and its event is recorded, but the block is the run's own
+      // obligation and only settling that operation — or Cancel — discharges it.
+      const held = row.status === 'blocked';
+      const advances = row.status === 'waiting';
       if (advances) {
         const execution = db
           .select()
@@ -2280,7 +2387,6 @@ function deliverWaitInternal(
         db.update(workflowRuns)
           .set({
             status: 'ready',
-            blockedOperationId: null,
             positionJson: encodeRunPosition({
               kind: 'routing',
               frameId: execution.frameId,
@@ -2297,7 +2403,11 @@ function deliverWaitInternal(
       return committed<WaitDelivery>(
         {
           wait: waitRecord(updated),
-          outcome: advances ? ('advanced' as const) : ('late_evidence' as const),
+          outcome: advances
+            ? ('advanced' as const)
+            : held
+              ? ('held' as const)
+              : ('late_evidence' as const),
         },
         transitions,
       );

@@ -1,6 +1,6 @@
 import { Data } from 'effect';
 
-import type { WorkflowQuestionSpec } from './types.js';
+import type { WorkflowQuestionSpec } from '../types.js';
 
 export type WorkflowUserInputAnswers = Record<string, string | string[] | boolean>;
 
