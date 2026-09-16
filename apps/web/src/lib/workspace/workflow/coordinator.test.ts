@@ -760,7 +760,42 @@ test('a remount replays a full baseline without inheriting facts the runtime no 
     orderedExecutions(state).map((execution) => execution.executionId),
     [5],
   );
+  // And the replacement is observable. Anything hydrated on demand beside this projection — a
+  // visit's operation cards — is keyed on this, so a replacement re-asks rather than trusting a
+  // fill it can no longer account for.
+  assert.equal(state.hydrationEpoch, 2, 'two fresh baselines, two epochs');
   second.synchronizer.stop();
+});
+
+test('a gap fill is not a replacement, and does not invalidate what was hydrated beside it', async () => {
+  const client = new QueryClient();
+  const { synchronizer } = await started(
+    scriptedReads({
+      executions: [
+        executionsPageFixture({
+          items: [workflowExecutionFixture({ executionId: 1, startedAt: t(1) })],
+          highWaterRevision: 2,
+        }),
+        executionsPageFixture({ highWaterRevision: 4 }),
+      ],
+      events: [
+        eventsPageFixture({ highWaterRevision: 2 }),
+        eventsPageFixture({ highWaterRevision: 4 }),
+      ],
+    }),
+    { client },
+  );
+  const afterBaseline = read(client).hydrationEpoch;
+
+  // A skipped revision: the coordinator fills the gap rather than starting over.
+  publishWorkflowSignal({
+    type: 'transition',
+    delta: workflowDeltaFixture({ revision: 4 }),
+  });
+  await settle();
+
+  assert.equal(read(client).hydrationEpoch, afterBaseline, 'a fill only ever adds facts');
+  synchronizer.stop();
 });
 
 test('a summary pushed during a pass survives the commit that follows it', async () => {

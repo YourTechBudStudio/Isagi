@@ -17,6 +17,7 @@ import {
   applyExecutionsPage,
   applySummary,
   emptyRunState,
+  freshBaselineState,
   withCoverage,
   type WorkflowRunState,
 } from './model.js';
@@ -223,7 +224,7 @@ export class RunSynchronizer {
     // A gap fill builds on what is already acknowledged; a fresh baseline builds on nothing, so a
     // replayed full hydration cannot inherit facts the runtime is no longer reporting.
     let candidate: WorkflowRunState =
-      sinceRevision === null ? emptyRunState(this.runId) : committed;
+      sinceRevision === null ? freshBaselineState(committed) : committed;
 
     if (sinceRevision === null) {
       const run = await this.reads.getRun(this.runId);

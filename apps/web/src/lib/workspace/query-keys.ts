@@ -70,6 +70,29 @@ export const workflowDescriptorQueryKey = (
   artifactHash: string | null,
 ) => ['workflows', runtimeIdentity, 'descriptor', artifactHash] as const;
 
+/**
+ * One visit's operation hydration, keyed on the baseline it was read against.
+ *
+ * The entry holds completion metadata only — the rows go into the run projection, which stays the
+ * one place an operation is read from. The epoch is in the key because a replaced baseline can come
+ * back without rows this read accounted for, and a cached "complete" would then be a claim about a
+ * projection that no longer exists.
+ */
+export const workflowExecutionOperationsQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  executionId: number | null,
+  hydrationEpoch: number,
+) =>
+  [
+    'workflows',
+    runtimeIdentity,
+    'execution-operations',
+    runId,
+    executionId,
+    hydrationEpoch,
+  ] as const;
+
 /** Immutable once written, like a descriptor: the bytes a reference names cannot change. */
 export const workflowPayloadQueryKey = (
   runtimeIdentity: string | null,

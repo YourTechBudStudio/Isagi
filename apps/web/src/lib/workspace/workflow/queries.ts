@@ -7,6 +7,7 @@ import type {
   ListWorkflowEventsOutput,
   StartWorkflowInput,
   WorkflowLaunchOrigin,
+  WorkflowOperationDto,
   WorkflowRunSummary,
 } from '@isagi/contracts';
 
@@ -20,6 +21,7 @@ import {
   workflowRunStateQueryKey,
   workflowCurrentStructureQueryKey,
   workflowDescriptorQueryKey,
+  workflowExecutionOperationsQueryKey,
 } from '../query-keys.js';
 import {
   advanceWorkflow,
@@ -29,6 +31,7 @@ import {
   getWorkflowStructure,
   listWorkflowDescriptors,
   listWorkflowEvents,
+  listWorkflowOperations,
   pauseWorkflow,
   resolveRuntimeIdentity,
   resumeWorkflow,
@@ -39,7 +42,8 @@ import { requestAttachedWorkflowRuns } from '../runtime-events.js';
 import { AttachedRunsSync, attachedRunForSurface, type AttachedRuns } from './attached.js';
 import { RunSynchronizer } from './coordinator.js';
 import { isDiagnosticTransition, workflowLogLine, type WorkflowLogLine } from './log.js';
-import { emptyRunState, type WorkflowRunState } from './model.js';
+import { emptyRunState, selectOperations, type WorkflowRunState } from './model.js';
+import { hydrateExecutionOperations, runStateAccessors } from './operations.js';
 import {
   currentConnectionPhase,
   subscribeToWorkflowSignals,
@@ -454,6 +458,98 @@ export function useWorkflowDescriptor(artifactHash: string | null) {
     : queryClient.getQueryData<GetWorkflowStructureOutput>(
         workflowDescriptorQueryKey(runtimeIdentity, artifactHash),
       );
+}
+
+/** What the dock knows about one visit's operation cards while they are being read. */
+export interface WorkflowOperationsView {
+  /** The operations themselves, always read from the canonical projection. */
+  readonly operations: readonly WorkflowOperationDto[];
+  /** True once every page has been read and merged, so the list can be called complete. */
+  readonly complete: boolean;
+  readonly isLoading: boolean;
+  readonly error: unknown;
+  readonly retry: () => void;
+}
+
+/**
+ * One visit's durable operations, hydrated on demand and rendered from the projection.
+ *
+ * The listing that hydrates a run carries no operation rows by design, so a run opened after the
+ * fact has none of its history's operations in the projection. This reads every page for the one
+ * selected visit and merges the keys the projection is missing; see `operations.ts` for why the
+ * merge can only ever add.
+ *
+ * Gated on a coherent baseline: hydrating into a projection that has not settled would insert rows
+ * a replacement is about to discard, and the query is keyed on that baseline's epoch so a
+ * replacement re-asks rather than trusting a fill it can no longer account for.
+ */
+export function useWorkflowExecutionOperations(
+  state: WorkflowRunState | null,
+  executionId: number | null,
+): WorkflowOperationsView {
+  const queryClient = useQueryClient();
+  const runtimeIdentity = useRuntimeIdentity();
+  const runId = state?.runId ?? null;
+  const hydrationEpoch = state?.hydrationEpoch ?? 0;
+  const enabled =
+    state !== null &&
+    state.hydrated &&
+    runId !== null &&
+    executionId !== null &&
+    runtimeIdentity !== null;
+
+  const query = useQuery({
+    queryKey: workflowExecutionOperationsQueryKey(
+      runtimeIdentity,
+      runId,
+      executionId,
+      hydrationEpoch,
+    ),
+    enabled,
+    // A point-in-time read of an immutable-by-key set: once every page is in the projection there is
+    // nothing this query can learn that a delta will not deliver first.
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) => {
+      if (runId === null || executionId === null) {
+        throw new Error('A workflow operations read needs a run and an execution.');
+      }
+      return hydrateExecutionOperations({
+        runId,
+        executionId,
+        hydrationEpoch,
+        read: ({ runId: id, executionId: execution, limit, cursor }) =>
+          runRuntimeEffect(
+            listWorkflowOperations(id, {
+              executionId: execution,
+              limit,
+              ...(cursor === null ? {} : { cursor }),
+            }),
+            { signal },
+          ),
+        ...runStateAccessors(queryClient, workflowRunStateQueryKey(runtimeIdentity, runId)),
+        signal,
+      });
+    },
+  });
+
+  const operations = useMemo(
+    () => (state === null || executionId === null ? [] : selectOperations(state, { executionId })),
+    [executionId, state],
+  );
+
+  return {
+    operations,
+    // Completeness is the read's claim, not the count's: `operationSummary.count` is a fact about
+    // the execution, not evidence that every card is here.
+    complete: query.isSuccess,
+    isLoading: enabled && query.isPending,
+    error: query.error,
+    retry: () => {
+      void query.refetch();
+    },
+  };
 }
 
 /**

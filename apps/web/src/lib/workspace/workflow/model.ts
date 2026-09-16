@@ -55,6 +55,17 @@ export interface WorkflowRunState {
   /** False until a coherent baseline has been established at `coverageRevision`. */
   readonly hydrated: boolean;
   /**
+   * How many times a *fresh* baseline has replaced this projection.
+   *
+   * A gap fill only ever adds facts, so it cannot invalidate anything a consumer derived. A fresh
+   * baseline is different: it starts from nothing and can legitimately come back without rows the
+   * previous one had. Anything hydrated on demand beside this projection — operation cards for a
+   * selected visit, today — is keyed on this number, so a replacement re-asks instead of trusting
+   * a fill it can no longer account for. Making it an observable fact is the point; inferring
+   * "the baseline was replaced" from a revision going backwards would be a guess.
+   */
+  readonly hydrationEpoch: number;
+  /**
    * The last recovery pass that failed, if one did.
    *
    * Recorded rather than logged: a failed recovery leaves this projection behind the runtime, and a
@@ -78,8 +89,40 @@ export function emptyRunState(runId: number): WorkflowRunState {
     pinAdoptions: [],
     coverageRevision: 0,
     hydrated: false,
+    hydrationEpoch: 0,
     recoveryError: null,
   };
+}
+
+/**
+ * The empty state a fresh baseline is built in, carrying the epoch forward.
+ *
+ * A fresh baseline deliberately inherits no rows — a replayed full hydration must not keep facts the
+ * runtime has stopped reporting — but the epoch is not a row. It has to survive, or every
+ * replacement would look like the first one and nothing could tell that a replacement happened.
+ */
+export function freshBaselineState(previous: WorkflowRunState): WorkflowRunState {
+  return { ...emptyRunState(previous.runId), hydrationEpoch: previous.hydrationEpoch + 1 };
+}
+
+/**
+ * Inserts operation rows this projection does not already have, and never touches one it does.
+ *
+ * On-demand hydration exists because the baseline listing deliberately carries no operations: an
+ * execution states how many it made, and the cards for the one visit a person selected are read
+ * separately. Those rows are point-in-time reads with no revision of their own, while everything
+ * already here arrived through revision-ordered coverage. So coverage wins, always — a fetched
+ * `dispatched` can never overwrite a settled `completed` that a delta has already applied.
+ */
+export function mergeMissingOperations(
+  state: WorkflowRunState,
+  rows: readonly WorkflowOperationDto[],
+): WorkflowRunState {
+  const missing = rows.filter((row) => !state.operations.has(row.operationKey));
+  if (missing.length === 0) return state;
+  const operations = new Map(state.operations);
+  for (const row of missing) operations.set(row.operationKey, row);
+  return { ...state, operations };
 }
 
 /**

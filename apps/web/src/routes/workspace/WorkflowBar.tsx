@@ -6,6 +6,7 @@ import {
   CircleAlert,
   CircleSlash,
   MessageCircle,
+  Network,
   Pause,
   Play,
   RotateCw,
@@ -35,6 +36,7 @@ import {
   type WorkflowLogView,
 } from '../../lib/workspace/workflow/queries.js';
 import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/signals.js';
+import { inspectorCopy } from './workflow/copy.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export interface WorkflowBarProps {
@@ -42,6 +44,16 @@ export interface WorkflowBarProps {
   readonly log: WorkflowLogView;
   readonly connection: RuntimeConnectionPhase;
   readonly logExpanded: boolean;
+  readonly inspectorOpen: boolean;
+  /**
+   * The bar's own element.
+   *
+   * The inspector overlay stops above the bar rather than covering it, which it can only do if
+   * somebody measures how tall the bar currently is — and it changes, because the log panel and the
+   * question form both grow it. A person answering a question while the inspector is open is the
+   * whole reason this is not a modal.
+   */
+  readonly sectionRef?: React.Ref<HTMLElement> | undefined;
   /**
    * True while any control mutation is in flight.
    *
@@ -52,6 +64,7 @@ export interface WorkflowBarProps {
   readonly actionsLocked: boolean;
   readonly actionError: string | null;
   readonly onToggleLog: () => void;
+  readonly onToggleInspector: () => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
   readonly onCancel: () => void;
@@ -95,9 +108,12 @@ export function WorkflowBar({
   log,
   connection,
   logExpanded,
+  inspectorOpen,
+  sectionRef,
   actionsLocked,
   actionError,
   onToggleLog,
+  onToggleInspector,
   onPause,
   onResume,
   onCancel,
@@ -141,6 +157,7 @@ export function WorkflowBar({
 
   return (
     <motion.section
+      ref={sectionRef}
       key={`workflow-bar-${summary.runId}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -173,6 +190,15 @@ export function WorkflowBar({
             onCancelIntent={() => setConfirmingCancelRunId(summary.runId)}
           />
           <span aria-hidden className="mx-1 h-4 w-px bg-line/20" />
+          {/* Inspection is a read, so it sits after the separator with the log toggle rather than
+              among the controls that change the run. */}
+          <WorkflowBarControl
+            icon={Network}
+            label={inspectorCopy.inspectLabel}
+            onClick={onToggleInspector}
+            active={inspectorOpen}
+            ariaExpanded={inspectorOpen}
+          />
           <WorkflowBarControl
             icon={logExpanded ? ChevronDown : ChevronUp}
             label={logExpanded ? 'Hide log' : 'Show log'}

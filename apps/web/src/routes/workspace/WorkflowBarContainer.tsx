@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { workflowCopy } from '../../copy/index.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
@@ -16,15 +16,38 @@ import {
   useRuntimeIdentity,
   useWorkflowLog,
 } from '../../lib/workspace/workflow/queries.js';
+import type { LayoutEngineFactory } from './workflow/useGraphLayout.js';
+import { WorkflowInspector } from './workflow/WorkflowInspector.js';
 import { WorkflowBar } from './WorkflowBar.js';
 import type { WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
-export function WorkflowBarContainer() {
+export function WorkflowBarContainer({
+  inspectorEngineFactory,
+}: {
+  /**
+   * A layout engine for the inspector, for the maintained browser fixture only.
+   *
+   * The stale-response, first-failure and cleanup rules live in a mounted hook, so testing them at
+   * all means being able to script what the engine does. Production passes nothing and gets the real
+   * ELK engine; there is no other caller and no other way in.
+   */
+  readonly inspectorEngineFactory?: LayoutEngineFactory | undefined;
+} = {}) {
   const { activeSurface } = useWorkspace();
   const summary = useAttachedWorkflowRun(activeSurface?.id ?? null) ?? null;
   const runId = summary?.runId ?? null;
   const runtimeIdentity = useRuntimeIdentity();
   const [logExpanded, setLogExpanded] = useState(false);
+  /**
+   * Local, and deliberately not a route.
+   *
+   * The inspector opens from the bar of the surface its run is attached to and nowhere else: there
+   * is no `/workspace/workflows/:runId`, no direct-by-run-id entry, and no promise that a link stays
+   * valid after Dismiss. Keeping it beside `logExpanded` is what makes that true by construction.
+   */
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [barHeight, setBarHeight] = useState(64);
+  const barRef = useRef<HTMLElement | null>(null);
   const connection = useRuntimeConnectionPhase();
   // The window is read only while the panel is open, and it never establishes delta coverage — the
   // full per-run coordinator is a separate, inspector-driven concern.
@@ -87,6 +110,25 @@ export function WorkflowBarContainer() {
     [advance, cancel, dismiss, pause, resume, retry, runId],
   );
 
+  /**
+   * Tracks how tall the bar is, so the overlay can stop above it.
+   *
+   * A callback ref rather than an effect on a stable ref: the bar unmounts and remounts with the
+   * run, and the observer has to follow the element that actually exists.
+   */
+  const setBarElement = useCallback((element: HTMLElement | null) => {
+    barRef.current = element;
+    if (element) setBarHeight(element.offsetHeight);
+  }, []);
+
+  useEffect(() => {
+    const element = barRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setBarHeight(element.offsetHeight));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [summary?.runId, logExpanded, inspectorOpen]);
+
   async function runAction(fallback: string, fn: () => Promise<unknown>) {
     // Refused rather than queued. The cluster is locked while anything is pending, so this only
     // catches a race between the click and the re-render.
@@ -110,8 +152,21 @@ export function WorkflowBarContainer() {
     }
   }
 
+  // A run that let go of this surface takes its inspector with it: an overlay left open would be
+  // describing a run the bar no longer shows.
+  if (summary === null && inspectorOpen) setInspectorOpen(false);
+
   return (
     <AnimatePresence initial={false}>
+      {summary && inspectorOpen && (
+        <WorkflowInspector
+          key={`workflow-inspector-${summary.runId}`}
+          summary={summary}
+          bottomInset={barHeight}
+          engineFactory={inspectorEngineFactory}
+          onClose={() => setInspectorOpen(false)}
+        />
+      )}
       {summary && (
         <WorkflowBar
           // One bar node, deliberately not keyed by run. Keying it left the previous run's bar
@@ -119,13 +174,16 @@ export function WorkflowBarContainer() {
           // bar was already up — two "Workflow" regions, and controls that would act on a run that
           // had just let go of the surface. The per-run state that must reset does so on `runId`.
           key="workflow-bar"
+          sectionRef={setBarElement}
           summary={summary}
           log={log}
           connection={connection}
           logExpanded={logExpanded}
+          inspectorOpen={inspectorOpen}
           actionsLocked={mutating}
           actionError={visible?.error ?? null}
           onToggleLog={() => setLogExpanded((expanded) => !expanded)}
+          onToggleInspector={() => setInspectorOpen((open) => !open)}
           onPause={actions.pause}
           onResume={actions.resume}
           onCancel={actions.cancel}
