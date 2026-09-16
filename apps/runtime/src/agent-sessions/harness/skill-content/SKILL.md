@@ -1,40 +1,21 @@
 ---
 name: isagi-docs
-description: Use only when the user asks to configure Isagi, create, modify, review, or verify an Isagi workflow, or understand or use an Isagi-specific feature such as folder projects, worktree hooks, commands, PTY backends, terminal history, scrollback, cache retention, harness policy, or workflow discovery. Do not use for ordinary development work merely because it runs inside Isagi.
+description: Configure Isagi projects and runtime settings, and author or repair Isagi workflows. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
-# Configure Isagi
+# Configure Isagi and author workflows
 
-Read only the reference that matches the request. Do not load unrelated references. When a request crosses more than one configuration surface, read only those references.
+Read only the references matching the request. Paths in these references are relative to this skill unless stated otherwise.
 
-## Choose the reference
+| Request                                                                                 | Read                                                                                                                       |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Git worktree setup: copying, linking, or running hooks (`worktrees`)                    | [Project config](references/config-project.md)                                                                             |
+| Git or folder project `commands`, fixed ports, allocated ports, and HTTP URLs           | [Project config](references/config-project.md)                                                                             |
+| Terminal backend (`pty`), terminal history, scrollback, or cache retention (`terminal`) | [Global config](references/config-global.md)                                                                               |
+| Harness availability or Docs installation (`harnesses`)                                 | [Global config](references/config-global.md)                                                                               |
+| Additional workflow discovery roots (`workflows.additionalDirectories`)                 | [Global config](references/config-global.md)                                                                               |
+| Creating, modifying, or verifying workflows and composing graphs                        | [Workflow authoring](references/workflows.md)                                                                              |
+| Agent sessions, headless work, prompts, or judgments within a workflow                  | [Workflow authoring](references/workflows.md) and [Agent work](references/workflow-agents.md)                              |
+| Repairing saved workflow runs or reasoning about Resume and Retry                       | [Workflow recovery](references/workflow-recovery.md); also [Workflow authoring](references/workflows.md) when editing code |
 
-| Request | Read |
-| --- | --- |
-| Copying or linking files into new Git worktrees; running setup after worktree creation | [Project config](references/config-project.md) for `worktrees` |
-| Configuring commands in Git or folder projects: lifecycle, fixed ports, allocated ports, and HTTP URLs | [Project config](references/config-project.md) for `commands` |
-| Selecting the terminal backend | [Global config](references/config-global.md) for `pty` |
-| Configuring terminal history, scrollback, or cache retention | [Global config](references/config-global.md) for `terminal` |
-| Enabling harnesses or their Docs integration | [Global config](references/config-global.md) for `harnesses` |
-| Adding machine-global directories Isagi discovers workflows in | [Global config](references/config-global.md) for `workflows.additionalDirectories` |
-| Creating, modifying, reviewing, or making a workflow resume/retry-aware | [Workflows](references/workflows.md) |
-
-## Boundaries
-
-- When the user requests a change, make the in-scope change without adding a separate proposal step.
-- For Git projects, warn the user that editing `worktrees.hooks` causes Isagi to ask them to trust the hooks again.
-- Finish workflow authoring by running the workflow package's `build` script followed by its `verify` script. A workflow is not complete until both succeed in that order.
-- Do not invent configuration keys. If a requested surface is not represented above or in the authoritative schemas, say that Isagi does not configure it today.
-
-## Default locations
-
-| Path | Scope |
-| --- | --- |
-| `{{DATA_ROOT}}/config.yaml` | Runtime configuration shared by every project |
-| `.isagi/config.yaml` | Project configuration at the project root |
-| `{{DATA_ROOT}}/workflows/<key>/` | Globally discovered workflow package |
-| `.isagi/workflows/<key>/` | Project-discovered workflow package |
-
-These are Isagi's built-in discovery locations, not restrictions on where a workflow may be authored. Follow an explicit user-provided target path. Additional machine-global discovery roots can be configured in `workflows.additionalDirectories`; see [Global config](references/config-global.md). Workflow sources are an ordered overlay evaluated from lowest to highest priority — the global data-root workflows, then each configured additional directory in the order listed, then the project's `.isagi/workflows` — and when more than one source defines the same workflow key, the highest-priority source wins.
-
-The configuration references embed the schemas Isagi validates. Their field descriptions are authoritative when prose and schema disagree.
+Follow an explicit user-provided target path. Configuration locations and workflow discovery defaults are in the relevant reference. For exact configuration fields, consult its linked schema; for workflow signatures, consult the installed SDK declarations. Report unsupported requests against those sources rather than inferring support from this index alone.

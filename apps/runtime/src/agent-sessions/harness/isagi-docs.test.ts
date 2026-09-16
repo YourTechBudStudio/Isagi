@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { posix } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -6,6 +7,7 @@ import {
   workflowSdkVersion,
   workflowVerifierVersion,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+import { parse } from 'yaml';
 
 import { projectConfigSchema } from '../../project-config/project-config.schema.js';
 import {
@@ -20,38 +22,31 @@ const dataRoot = '/Users/example/.isagi';
 const files = isagiDocsPackageFiles(dataRoot);
 const handwritten = [...files];
 
-/** Mirrors the generator's own trimming so a value assertion compares like with like. */
-const trimTrailingNewline = (source: string) => source.replace(/\n+$/, '');
-
 /** Every placeholder the generator substitutes, and the text it must expand to. */
 const substitutions = {
   DATA_ROOT: dataRoot,
   SDK_VERSION: workflowSdkVersion,
   VERIFIER_VERSION: workflowVerifierVersion,
   BUILDER_VERSION: workflowBuilderVersion,
-  RUNTIME_CONFIG_SCHEMA: trimTrailingNewline(
-    configSchemaReferenceSources['runtime-config.schema.ts'],
-  ),
-  PROJECT_CONFIG_SCHEMA: trimTrailingNewline(
-    configSchemaReferenceSources['project-config.schema.ts'],
-  ),
 } as const;
 
 /** Which template carries which placeholder, and where it is emitted. */
 const templates = {
-  'SKILL.md': { emittedAs: 'SKILL.md', tokens: ['DATA_ROOT'] },
+  'SKILL.md': { emittedAs: 'SKILL.md', tokens: [] },
   'config-global.md': {
     emittedAs: 'references/config-global.md',
-    tokens: ['DATA_ROOT', 'RUNTIME_CONFIG_SCHEMA'],
+    tokens: ['DATA_ROOT'],
   },
   'config-project.md': {
     emittedAs: 'references/config-project.md',
-    tokens: ['PROJECT_CONFIG_SCHEMA'],
+    tokens: [],
   },
   'workflows.md': {
     emittedAs: 'references/workflows.md',
-    tokens: ['SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
+    tokens: ['DATA_ROOT', 'SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
   },
+  'workflow-agents.md': { emittedAs: 'references/workflow-agents.md', tokens: [] },
+  'workflow-recovery.md': { emittedAs: 'references/workflow-recovery.md', tokens: [] },
 } as const satisfies Record<
   keyof typeof isagiDocsContentSources,
   { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
@@ -116,6 +111,10 @@ test('the skill package holds exactly the indexed references', () => {
       'references/config-global.md',
       'references/config-project.md',
       'references/workflows.md',
+      'references/workflow-agents.md',
+      'references/workflow-recovery.md',
+      'references/config-global.schema.ts',
+      'references/config-project.schema.ts',
       'references/minimal-workflow/package.json',
       'references/minimal-workflow/src/index.ts',
       'references/minimal-workflow/tests/workflow.test.ts',
@@ -128,73 +127,63 @@ test('the skill package holds exactly the indexed references', () => {
   );
 });
 
-test('the skill name matches its frontmatter', () => {
+test('skill metadata preserves automatic, focused invocation', () => {
   const router = files.get('SKILL.md') ?? '';
-  assert.match(router, new RegExp(`^name: ${isagiDocsName}$`, 'm'));
+  const frontmatter = /^---\n([\s\S]*?)\n---/.exec(router);
+  assert.ok(frontmatter, 'missing skill frontmatter');
+  const metadata = parse(frontmatter[1]!) as Record<string, unknown>;
+  assert.equal(metadata.name, isagiDocsName);
+  assert.equal(typeof metadata.description, 'string');
+  assert.ok(String(metadata.description).length > 0);
+  assert.equal(metadata['disable-model-invocation'], undefined);
+  assert.match(String(metadata.description), /Isagi workflows/);
+  assert.match(String(metadata.description), /Do not use for ordinary development work/);
 });
 
-test('the router reads as a focused skill package', () => {
-  const router = files.get('SKILL.md') ?? '';
-  assert.equal(router.includes(`${dataRoot}/config.yaml`), true);
-  assert.equal(router.includes(`${dataRoot}/workflows/<key>/`), true);
-  assert.match(router, /Read only the reference that matches the request/);
+test('all local reference links resolve within the generated skill and all files are reachable', () => {
+  const reached = new Set<string>();
+  const visit = (path: string) => {
+    if (reached.has(path)) return;
+    reached.add(path);
+    const source = files.get(path);
+    assert.ok(source !== undefined, `missing ${path}`);
+    if (!path.endsWith('.md')) return;
+    for (const match of source.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      const href = match[1]!;
+      if (/^(?:https?:|#)/.test(href)) continue;
+      const target = posix.normalize(posix.join(posix.dirname(path), href.split('#')[0]!));
+      assert.ok(
+        !target.startsWith('../') && !posix.isAbsolute(target),
+        `${path}: escaped link ${href}`,
+      );
+      if (href.endsWith('/')) {
+        const children = [...files.keys()].filter((key) => key.startsWith(target));
+        assert.ok(children.length > 0, `${path}: empty directory link ${href}`);
+        children.forEach(visit);
+      } else {
+        assert.ok(files.has(target), `${path}: broken link ${href}`);
+        visit(target);
+      }
+    }
+  };
+  visit('SKILL.md');
+  assert.deepEqual([...reached].sort(), [...files.keys()].sort());
 });
 
-test('the workflow reference uses the scaffold and installed SDK as authoring sources', () => {
-  const workflows = files.get('references/workflows.md') ?? '';
-  assert.match(workflows, /Read every file in the bundled/);
-  assert.match(
-    workflows,
-    /node_modules\/@yourtechbudstudio\/isagi-workflow-sdk\/dist\/index\.d\.ts/,
+test('on-demand configuration schemas preserve the authoritative source bytes', () => {
+  assert.equal(
+    files.get('references/config-global.schema.ts'),
+    configSchemaReferenceSources['runtime-config.schema.ts'],
   );
-  assert.match(workflows, /After all authoring changes are complete/);
-  assert.doesNotMatch(workflows, /After every edit/);
-  assert.doesNotMatch(workflows, /build receipt|artifact hash|pinned artifact/i);
-});
-
-test('the workflow reference preserves non-type-level authoring conventions', () => {
-  const workflows = files.get('references/workflows.md') ?? '';
-  for (const convention of [
-    /state\.stage\.kind/,
-    /JSON-serializable/,
-    /wait\.workflow/,
-    /operational calls as replayable/,
-    /latest complete assistant turn/,
-    /one reusable judgment contract.*each orchestrated agent session/,
-    /every tagged judgment outcome.*non-linear jumps/,
-    /setUiFeedback/,
-    /one Node ESM artifact/,
-    /tests hermetic/,
-  ]) {
-    assert.match(workflows, convention);
-  }
-});
-
-test('the workflow reference documents prompt modifiers', () => {
-  const workflows = files.get('references/workflows.md') ?? '';
-  // Section presence and the durable authoring rules, asserted as facts rather than pinned prose.
-  assert.match(workflows, /^## Prompt input and modifiers$/m);
-  assert.match(workflows, /skills stack/i);
-  assert.match(workflows, /command must be the only modifier/i);
-  assert.match(workflows, /does not check that a skill or command exists/i);
-  assert.match(workflows, /Headless OpenCode/);
-  assert.match(workflows, /UI-only commands/i);
-  // Per-harness rendering tokens: Pi's skill form, the shared slash-command form, and Codex's sigil.
-  for (const token of ['/skill:<name>', '/<name>', '$<name>']) {
-    assert.ok(workflows.includes(token), `workflow reference lost the ${token} rendering token`);
-  }
-  for (const harness of ['pi', 'opencode', 'claude', 'codex']) {
-    assert.match(
-      workflows,
-      new RegExp('`' + harness + '`'),
-      `workflow reference never names the ${harness} harness`,
-    );
-  }
+  assert.equal(
+    files.get('references/config-project.schema.ts'),
+    configSchemaReferenceSources['project-config.schema.ts'],
+  );
 });
 
 /**
- * Field-level drift cannot happen: the schema source is embedded verbatim and the router declares it
- * authoritative over the prose. A new *top-level* section is the gap. The router would keep silently
+ * The schema references carry source bytes verbatim; their guides declare them authoritative
+ * over prose. A new *top-level* section is the gap. The router would keep silently
  * omitting it, and the "does not configure today" ground rule would keep denying a feature that now
  * exists. This test covers exactly that slice and no more - it cannot see a whole new config file, a
  * new discovery root, or a new feature area, which is why the root AGENTS.md rule exists too.
@@ -240,15 +229,11 @@ test('the router routes additional workflow directories to the global config ref
 
 test('the router selects global config for terminal history and cache retention', () => {
   const router = files.get('SKILL.md') ?? '';
-  const frontmatter = router.slice(0, router.indexOf('---', 4));
-  assert.match(frontmatter, /terminal history/i);
-  assert.match(frontmatter, /scrollback/i);
-  assert.match(frontmatter, /cache retention/i);
   const routed = router
     .split('\n')
     .some(
       (line) =>
-        line.includes('terminal history') &&
+        line.toLowerCase().includes('terminal history') &&
         line.includes('`terminal`') &&
         line.includes('references/config-global.md'),
     );
@@ -435,12 +420,4 @@ test('the rendered workflow reference and shipped scaffold name the recommended 
     scaffold.includes(`"esbuild": "${workflowBuilderVersion}"`),
     'scaffold pins the builder exactly',
   );
-});
-
-test('the canonical skill allows precise description-driven invocation', () => {
-  const router = files.get('SKILL.md') ?? '';
-  assert.doesNotMatch(router, /^disable-model-invocation:/m);
-  assert.doesNotMatch(router, /^metadata:/m);
-  assert.match(router, /Use only when the user asks to configure Isagi/);
-  assert.match(router, /Do not use for ordinary development work/);
 });

@@ -1,117 +1,95 @@
 # Author workflows
 
-Use this reference to create, modify, or review a workflow package and verify the completed changes. Do not use it to launch or manage workflow runs.
+Create or modify a verified TypeScript workflow package. Authoring and verification do not launch a run.
 
-## Procedure
+## Package and sources
 
-1. Read every file in the bundled [`minimal-workflow/`](minimal-workflow/) scaffold before editing the target workflow. For a new workflow, copy the scaffold. For an existing workflow, preserve its authored code and use the scaffold to repair or update its package structure.
-2. Match the scaffold's exact package contract: `@yourtechbudstudio/isagi-workflow-sdk@{{SDK_VERSION}}` in `dependencies`, plus `@yourtechbudstudio/isagi-workflow-verifier@{{VERIFIER_VERSION}}` and `esbuild@{{BUILDER_VERSION}}` in `devDependencies`. Preserve the scaffold's `build` and `verify` scripts.
-3. Prepare the package dependencies using the target repository's existing conventions.
-4. Read `node_modules/@yourtechbudstudio/isagi-workflow-sdk/dist/index.d.ts` completely. Treat those declarations as the authority for workflow types, constructors, helpers, and signatures. Do not recreate the SDK API from this reference.
-5. Implement the user's requested workflow changes and tests using the conventions below.
-6. After all authoring changes are complete, run the package's `typecheck` and `test` scripts and fix every failure. The verifier does not run them; typecheck and tests are the author's quality gate.
-7. Then run the package's `build` script and its `verify` script. The verifier never compiles on the author's behalf; it checks that the Isagi runtime will be able to load the existing `dist/index.js` build — exact pins, symlink-free sources, and a loadable workflow export. Fix failures, rebuild, and rerun verification until both commands succeed; the runtime refuses to load a build whose sources changed after verification.
+For a new workflow, copy the bundled [minimal-workflow scaffold](minimal-workflow/); read its [definition](minimal-workflow/src/index.ts), [tests](minimal-workflow/tests/workflow.test.ts), [package](minimal-workflow/package.json), and [TypeScript settings](minimal-workflow/tsconfig.json). For an existing workflow, inspect its code and preserve its intended behavior while adapting the package contract as needed.
 
-## Definition and state
+Use the scaffold's exact compatible pins: `@yourtechbudstudio/isagi-workflow-sdk@{{SDK_VERSION}}` in dependencies, and `@yourtechbudstudio/isagi-workflow-verifier@{{VERIFIER_VERSION}}` plus `esbuild@{{BUILDER_VERSION}}` in devDependencies. Prepare dependencies using the target repository's conventions. Keep the canonical build and verify scripts.
 
-- Treat `step(ctx, state, event)` as a reducer over durable stages. Keep persisted state JSON-serializable: primitives, plain objects, arrays, and ISO strings, not `Date`, `Map`, `Set`, class instances, or provider-specific objects.
-- Make `state.stage` a discriminated union and make `step` one exhaustive switch over `state.stage.kind`. Prefer stage names that describe the wait, such as `await_review`, over a generic `await_headless` plus a second discriminator.
-- Keep data needed by one stage in that stage variant. Keep durable facts shared across stages at the top level. Before adding a `require*` accessor or optional field, check whether the value belongs in a narrower stage.
-- Use `satisfies State` on transition payloads to catch shape drift. Do not treat it as protection against stale optional data; design the union so stale data cannot exist.
-- Keep `state.stage` for internal control flow, `setUiFeedback({ phase })` for the status the user reads, and a separate field such as `currentPhase` for a workflow's own domain phase.
-- Keep `command` independent of optional pane or agent-session context. Use `validate` to reject bad launch inputs and `init` to copy every launch fact needed later into the initial state.
+The installed SDK is the authority for signatures. Start at `node_modules/@yourtechbudstudio/isagi-workflow-sdk/dist/index.d.ts` and follow its relative exports to the declarations needed for the task: `graph.d.ts`, `nodes.d.ts`, `state.d.ts`, `operations.d.ts`, and `launch.d.ts`. Import public symbols from the package root.
+
+Default-export `defineWorkflow(...)` from `src/index.ts`. Use relative `.js` imports with NodeNext TypeScript. Build one Node ESM artifact with statically resolvable dependencies: native addons, deferred module loading, code splitting, and emitted side assets are outside the bundle contract. Keep sources free of symlinks. Workflows are trusted Node code; verification is not a sandbox.
+
+## Location and discovery
+
+| Package path                                  | Scope   |
+| --------------------------------------------- | ------- |
+| `{{DATA_ROOT}}/workflows/<key>/`              | Global  |
+| `.isagi/workflows/<key>/` at the project root | Project |
+
+Follow an explicit target path; these are discovery defaults. [Global config](config-global.md) explains additional collection roots. Discovery priority is global, then additional roots in listed order, then project. The highest-priority package owns a matching key, even if broken; there is no fallback. The package directory key identifies the launchable workflow; graph keys identify structure inside it.
+
+## Graph structure and composition
+
+`defineWorkflow({ command, validate, graph })` pairs a launch form with a root graph. `command(origin)` declares text, select, multi-select, or confirm inputs; keep it usable without optional pane/session context. `validate(origin, inputs)` checks launch inputs. Those inputs become the root graph's parameters. Each graph's pure synchronous `init(destination, parameters)` creates its private state once; initialization is not a migration hook. Destination determines where work is placed; origin describes where the user launched it.
+
+Compose substantial workflows hierarchically:
+
+| Perspective | Responsibility                              | Example                                        |
+| ----------- | ------------------------------------------- | ---------------------------------------------- |
+| Business    | Goal and major phases                       | Deliver a story                                |
+| Logical     | A coherent process and its policy           | Implement, review, and revise within a budget  |
+| Operational | Concrete work, waits, and result collection | An agent turn followed by reading its response |
+
+These are responsibilities, not exactly three wrappers. Keep a tiny workflow flat; add nesting for meaningful ownership, reuse, or recovery boundaries. Optional `intent` metadata describes the perspective without enforcing behavior. For example, a business graph invokes a review-loop graph, which composes writer and reviewer graphs and returns a decision the business graph understands.
+
+Use `subgraph({ graph, parameters, onResult })` to register a child. `parameters(parentState)` passes inputs; `onResult(parentState, result)` maps its published output through the parent's reducers. Both are pure and synchronous. The result includes `outcomeId`, `outcomeKind`, `reason`, and typed `output`. The parent's edge then receives a `subgraph` event. Keep the parent contract focused on meaningful results rather than the child's handles or private state.
+
+One definition can be reused by several subgraph registrations. Routing loops are supported; recursive graph containment is not. Graph execution is sequential, although one headless wait can join several operations. There is no separate child-workflow launch or workflow-join wait.
+
+Graph keys and node, edge, and outcome IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`. Keep node and outcome IDs distinct within a graph. Use stable IDs for structure, titles/descriptions for purpose, and optional pure `label` callbacks for names captured at graph or node entry. The exported `checkpoint` node is reserved; this release rejects it during verification.
+
+## Operations, waits, and routing
+
+An `operation(async (ctx, state) => ...)` performs work and returns `complete({ update })` or `suspend({ update, wait })`. `complete` finishes this node visit, not the workflow. A wait is a durable declaration returned with `suspend`, not a Promise to await.
+
+| Wait                                  | Delivered event                                                 |
+| ------------------------------------- | --------------------------------------------------------------- |
+| `wait.userContinue(label)`            | `user_continue`                                                 |
+| `wait.userInput(questions)`           | `user_input` with answers                                       |
+| `wait.agentTurn(target)`              | `agent_turn` with ended, failed, or interrupted outcome         |
+| `wait.headlessAgent(handleOrHandles)` | `headless_agent` with completed, failed, or interrupted results |
+
+Use explicit human waits when the workflow needs a decision or fresh input. For agent capabilities and code patterns, read [Agent work](workflow-agents.md).
+
+Every node has exactly one `edge({ from, to, choose })`. Its pure synchronous `choose(state, event)` returns a declared destination and optional update. Immediate completion produces `event.kind === 'immediate'`; wait completion sends its typed `NodeEvent` directly to the edge, without calling the operation again. Narrow the event by `kind`. Perform conversation/file reads in an operation, then route on captured facts; an edge cannot perform IO or suspend. If a later operation needs event data, store it through an edge update.
+
+Cover each relevant failure and interruption explicitly: select recovery, an alternative, human input, or a declared failure outcome. An ended turn alone does not establish task success. Use `outcome({ kind: 'success' | 'failure', output })` with a pure synchronous output function for terminal domain results; a child's failure outcome reaches the parent as data. An exception in a callback, reducer, or router is an execution failure, not a routable domain result.
+
+During design, answer: “If this fails, what should happen next, and what work must not be repeated?” Ask the user when the recovery policy materially changes their intended workflow and cannot be inferred. Bound retry/review loops with counters in graph state and an explicit exhausted-budget route. A deliberate new visit is different from the runtime Retry control.
+
+## State and updates
+
+Keep parameters, state, updates, and outputs JSON-serializable: plain objects, arrays, primitives, and ISO date strings. Store durable domain facts and recovery budgets; graph structure already owns execution position. Keep child-only data inside the child.
+
+Register a reducer for every state field. Emit partial updates rather than mutating state: an omitted field stays unchanged, and an own field set to `undefined` is rejected. Reducers are pure and synchronous; a failed reduction does not partially apply an update.
+
+`createGraph<State>` uses each stored field type as its update type. Its second type argument overrides only fields whose update type differs. For example, to append individual notes to a stored list:
 
 ```ts
-type Stage =
-  | { readonly kind: "spawn_reviewer" }
-  | { readonly kind: "await_review"; readonly reviewer: Reviewer };
+import { reduce } from '@yourtechbudstudio/isagi-workflow-sdk';
 
-type State = {
-  readonly stateVersion: 1;
-  readonly stage: Stage;
-};
+type State = { readonly notes: readonly string[]; readonly rounds: number };
+type Updates = { readonly notes: string };
+// In createGraph<State, Updates>({ ... }):
+const stateFields = { notes: reduce.append<string>(), rounds: reduce.add() };
+// An update { notes: 'Needs tests', rounds: 1 } appends a note and increments rounds.
 ```
 
-## Transitions, waits, and sessions
+Start with `reduce.replace`. Use `add`, `append`, or `union` for accumulated facts, `collection` for explicit add/remove/clear commands, `optional` for set/clear of nullable values, and `field` or `reduce.custom` for domain-specific updates. Consult `state.d.ts` for their update types.
 
-- Return only through the SDK result constructors and build waits only with `wait.*`. A wait is a suspended reducer result, not a Promise to await.
-- Pass the target returned by `spawnAgentSession` or `sendAgentPrompt` directly to `wait.agentTurn`. Persist only stable identifiers needed by later stages.
-- Treat `event` as `unknown`. Narrow every resumed event with the SDK event helpers before reading it, and fail clearly on an unexpected or failed result.
-- Inspect every joined result from `wait.workflow` and `wait.headlessAgent`. A failed child operation still satisfies the wait and must be handled by the resumed stage.
-- Treat operational calls as replayable. Do not make correctness depend on spawning a session, sending a prompt, or starting a child workflow exactly once.
-- Read `ctx.invocation.kind` when a failed step needs retry-specific recovery. `normal` is ordinary dispatch; `retry` marks only the first replay of the failed leaf. The original `event` is preserved for compatibility.
-- Resume refreshes every currently paused, non-terminal run in the tree to the latest verified workflow artifact before any run is unpaused; completed and failed runs keep their existing pins. A step that was already executing when Pause was requested is not restarted or duplicated: it reaches its durable boundary under the old code, and the refreshed pin applies to its next invocation if it has one. The persisted state, wait, and event are preserved rather than reinitialized, so keep state compatible across workflow updates. If any current artifact cannot be discovered or loaded, the whole tree stays paused on its existing pins; a newer Pause also supersedes an older Resume that is still resolving artifacts.
-- Root Retry repairs the failed workflow branch using the latest verified workflow artifacts: failed child leaves become ready, failed ancestors return to their recorded workflow joins, and both kinds of failed run receive current artifact pins before recovery; completed siblings remain terminal on their existing pins. The persisted state and original event are replayed into the updated code, so keep state compatible across workflow updates. A retry-aware leaf should reread current durable state such as conversation history before trusting a previously captured response.
-- Bound recovery attempts in persisted stage state. If a retry sends a continuation to an existing agent session, record that transition and fail normally if the resulting turn is still incomplete; do not create an automatic retry loop.
-- Send one prompt per agent turn. Do not reset, resume, or switch the underlying harness conversation while a workflow-controlled turn is active.
-- Keep provider and harness-session identity out of workflow state. Durable `agentSessionId` and `paneId` values are sufficient.
-- Close panes created by the workflow when they are no longer needed. Never close the pane from which the workflow was launched.
+## Continuation essentials
 
-## Prompt input and modifiers
+Completed progress is saved rather than replayed. Resume uses the saved code version; Retry can adopt a newly verified build at a failed segment. When an unfinished operation runs again, matching recorded external calls reuse their results. Preserve the order and requests of those calls; a changed prompt at an already recorded position is not a new attempt. Direct filesystem/process/network effects need their own retry safety. Unknown delivery blocks dependent work rather than authorizing a resend.
 
-Every agent-input verb — `spawnAgentSession`, `sendAgentPrompt`, and `runHeadlessAgent` — accepts an optional `prompt` and optional `modifiers`. Treat the installed `dist/index.d.ts` as the authority for their exact shapes; this section covers only semantics and per-harness rendering.
+Read [Workflow recovery](workflow-recovery.md) when editing code for saved runs, writing retry-specific behavior, or dealing with interrupted/uncertain work.
 
-- A modifier is a semantic request: `{ kind: 'skill', name }` or `{ kind: 'command', name }`. Provide a plain asset name, not a rendered token — no leading `/` or `$`, and no whitespace or Unicode control or format characters. Isagi renders the harness-native token for you.
-- Skills stack in caller order with no count limit. Whether a harness actually applies several skills at once is the harness's behavior, not Isagi's guarantee; stacking beyond a harness's native support is your choice as the author.
-- A command must be the only modifier. You cannot stack commands or mix a command with skills.
-- `prompt` is optional. A whitespace-only prompt is treated as absent; a non-whitespace prompt is preserved as-is by the renderer (not trimmed), though interactive submission normalizes CRLF line endings to LF. An input with no modifier and no non-whitespace prompt is rejected and fails the step — before `spawnAgentSession` or `runHeadlessAgent` create any resources, and before `sendAgentPrompt` writes to its existing session.
-- Rendered tokens keep your order, separated by one space, and a present prompt is appended after one space.
+## Completion and evidence
 
-Isagi guarantees deterministic rendering and submission. It does not check that a skill or command exists, detect name collisions, or verify that the harness will interpret it. Availability and native interpretation remain the harness's responsibility.
+Keep tests hermetic with stubbed capabilities. Exercise the routes and updates that determine behavior: meaningful success, failure/interruption, exhausted budgets, human escalation, and child output mapping as applicable. The scaffold demonstrates direct graph tests without a live runtime or provider.
 
-| Harness    | `{ kind: 'skill', name }` | `{ kind: 'command', name }` |
-| ---------- | ------------------------- | --------------------------- |
-| `pi`       | `/skill:<name>`           | `/<name>`                   |
-| `opencode` | `/<name>`                 | `/<name>`                   |
-| `claude`   | `/<name>`                 | `/<name>`                   |
-| `codex`    | `$<name>`                 | `$<name>`                   |
+After authoring, run the package's `typecheck` and `test` scripts, then `build`, then `verify`. Verification checks the existing build, package compatibility, declared structure, and loadability; it does not compile, run tests, or prove that routes terminate or produce correct results. Fix failures and rebuild/reverify after changes; source or artifact changes invalidate verification.
 
-Pi is the only harness that renders a skill differently from a command. Claude and Codex have no native command concept, so a command modifier renders the same token as a skill on those harnesses; choose `pi` or `opencode` when you need first-class command syntax. This is generic per-harness rendering, not detection of a specific name.
-
-```ts
-// plain prompt
-await ctx.sendAgentPrompt({ agentSessionId, prompt: "Review the diff." });
-// modifier-only command
-await ctx.spawnAgentSession({ harness: "pi", modifiers: [{ kind: "command", name: "isagi-docs" }] });
-// stacked skills with a prompt
-await ctx.spawnAgentSession({
-  harness: "claude",
-  modifiers: [
-    { kind: "skill", name: "plan" },
-    { kind: "skill", name: "review" },
-  ],
-  prompt: "Implement phase 2.",
-});
-// object-form send
-await ctx.sendAgentPrompt({
-  agentSessionId,
-  modifiers: [{ kind: "skill", name: "review" }],
-  prompt: "Focus on auth.",
-});
-```
-
-Use command modifiers only for harness-native prompt templates or commands you expect to start an agent turn, and pass the spawn or send result to `wait.agentTurn` as usual. UI-only commands such as `/help`, `/settings`, or `/model` do not start a turn and are outside this contract; do not wait on one. Headless OpenCode is a further caveat: its plain `run` transport may treat slash-looking text as ordinary model prompt text rather than invoking a native command, though Isagi still renders and submits the text you asked for.
-
-## Conversations and judgments
-
-- Treat conversation history as role-tagged messages. A turn may contain several assistant messages; collect the latest complete assistant turn instead of assuming the final message is the full reply.
-- Orchestrated agents are non-deterministic and may skip, combine, or complete steps beyond the phase they were given.
-- Define one reusable judgment contract — its prompt, exact parser, and result type — for each orchestrated agent session, and apply it after every relevant turn instead of creating phase-specific judgments for the same agent.
-- Give that contract every workflow-relevant outcome the agent could produce. The current workflow phase is input to the judgment, but must not restrict its possible answers; let deterministic reducer code map each tagged outcome to continuing, jumping to another phase, finishing, requesting user input, or failing clearly. Collapse responses that take the same route and state precedence when outcomes overlap.
-- Treat a judgment prompt and parser as one contract. Request one exact JSON object; validate its key set and value domain; reject extra fields; log the judgment name and raw output on parse failure.
-- Tell workflow-driven agents they are unattended. Give them the goal, inputs, constraints, success criteria, stop conditions, and a path forward when uncertain. Do not make progress depend on a user answering mid-turn.
-
-## Feedback and diagnostics
-
-- Update `setUiFeedback` when the business-facing phase changes, not for every internal transition. Keep the copy concise, specific, and useful to the user's next action.
-- Use `ctx.log` for evidence such as identifiers, paths, operation ids, parsed payloads, and failure causes. Before returning `fail`, set specific user feedback and log the diagnostic context.
-- Do not report uncertain, partial, or failed work as success.
-
-## Package and bundle conventions
-
-- Default-export `defineWorkflow(...)` from `src/index.ts`. Use relative imports with `.js` extensions under NodeNext TypeScript.
-- Keep the static import graph resolvable from declared dependencies. Do not rely on files that exist only elsewhere on the author's machine.
-- Keep the bundle to one Node ESM artifact: no native addons, opaque dynamic imports, code splitting, or emitted side assets. Run native or external work in a process launched at workflow runtime.
-- Keep tests hermetic. Exercise representative transitions, waits, success, and failure outcomes without depending on a live Isagi runtime or agent provider. For each judgment contract, cover every tagged judgment outcome and its resulting route, including non-linear jumps.
-
-Typecheck and tests are the author's quality gate; build followed by verification is the completion gate for runtime compatibility. Report the commands that passed; do not claim the workflow is ready when any of them failed or was skipped.
+Report the commands that passed and any failed or skipped checks. A package is ready only when these checks succeed; live execution is separate from authoring verification.
