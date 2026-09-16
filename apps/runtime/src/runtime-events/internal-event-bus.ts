@@ -136,26 +136,16 @@ export type InternalRuntimeEvent =
       readonly runId: number;
       readonly operationId: number;
       readonly operationKey: string;
-    }
-  | {
-      readonly type: 'workflow_run_terminal';
-      readonly runId: number;
-      readonly status: 'done' | 'failed';
-    }
-  | {
-      // Internal repository→projection trigger: "a run row was touched, recompute its
-      // root summary". Distinct from the public `workflow_run_changed` contract event
-      // (payload = full WorkflowRunSummary) the projection emits on the public bus.
-      readonly type: 'workflow_run_touched';
-      readonly runId: number;
-      readonly rootRunId: number | null;
-      readonly surfaceId: number | null;
-    }
-  | {
-      readonly type: 'workflow_run_recompute_requested';
-      readonly rootRunId: number;
-      readonly surfaceId: number | null;
     };
+
+/*
+ * `workflow_run_terminal`, `workflow_run_touched` and `workflow_run_recompute_requested` are gone
+ * with the v1 projection that was their only consumer. The first was never published at all; the
+ * other two carried `rootRunId`, a child-run identity this story retired. Nothing recomputes a
+ * summary from a notification any more: a committed transition captures its own read model, and the
+ * publisher drains it from the database. A variant nobody produces or consumes is not a seam kept
+ * open for later — it is a claim about the runtime that is not true.
+ */
 
 export interface InternalRuntimeEventSubscription {
   readonly take: Effect.Effect<InternalRuntimeEvent>;

@@ -153,7 +153,12 @@ export const workflowOperationSummarySchema = Schema.Struct({
   capabilities: Schema.Array(workflowCapabilitySchema),
 });
 
-/** The facts a completed frame published, so an outcome has a moment on the clock and a payload. */
+/**
+ * The immutable fact a completed frame published: which outcome, with what value, produced by which
+ * pin. Its timing lives on the segment that evaluated it — a repaired publication commits under a
+ * new attempt while the value and its producing pin keep naming where they came from, so carrying
+ * one moment on two records would let them disagree.
+ */
 export const workflowFrameOutputSchema = Schema.Struct({
   outcomeId: nonEmptyString,
   outcomeKind: workflowOutcomeKindSchema,
@@ -161,8 +166,33 @@ export const workflowFrameOutputSchema = Schema.Struct({
   producedRef: workflowPayloadSlotSchema,
   /** The pin that produced the value, which can differ from the pin that retried the publication. */
   producerArtifactHash: Schema.NullOr(nonEmptyString),
-  attemptStartedAt: Schema.NullOr(nonEmptyString),
-  attemptEndedAt: Schema.NullOr(nonEmptyString),
+});
+
+/**
+ * A segment a *frame* owns rather than a node visit: entering the graph, and evaluating its output.
+ *
+ * Both run author code, both can fail, and neither has a node execution to hang from — a failed
+ * initialization and an output evaluation that threw before any outcome existed are the two states
+ * a frame can be stuck in with nothing else to show for it. Without this the dock would have to
+ * fetch attempts to say anything about either, which is exactly what these records exist to avoid.
+ *
+ * `null` on a frame means the segment was never attempted; a present record whose `latestAttempt`
+ * carries a failure means it was attempted and failed. The two are deliberately distinguishable.
+ */
+export const workflowFrameSegmentSchema = Schema.Struct({
+  segmentKind: Schema.Literal('graph_entry', 'graph_output'),
+  /** The outcome an output evaluation is for. Null for graph entry, which has no reference. */
+  segmentRef: Schema.NullOr(nonEmptyString),
+  attemptCount: positiveInteger,
+  startedAt: nonEmptyString,
+  endedAt: Schema.NullOr(nonEmptyString),
+  endCertainty: workflowEndCertaintySchema,
+  /** A segment started under one pin and repaired under another reads as first → latest. */
+  firstArtifactHash: nonEmptyString,
+  latestArtifactHash: nonEmptyString,
+  latestAttempt: workflowLatestAttemptSchema,
+  /** Retained even once a later attempt succeeded, so a repaired frame still explains itself. */
+  priorFailures: Schema.Array(workflowPriorFailureSchema),
 });
 
 /** One invocation of a graph. */
@@ -177,6 +207,13 @@ export const workflowFrameSchema = Schema.Struct({
   status: workflowFrameStatusSchema,
   displayName: Schema.NullOr(Schema.String),
   labelDiagnostic: Schema.NullOr(Schema.String),
+  /** The frame's own initialization segment. Null until it has been attempted at all. */
+  entry: Schema.NullOr(workflowFrameSegmentSchema),
+  /**
+   * The segment that evaluates this frame's output, which exists before any output does — a
+   * failed evaluation has one of these and no `output` at all.
+   */
+  outputEvaluation: Schema.NullOr(workflowFrameSegmentSchema),
   output: Schema.NullOr(workflowFrameOutputSchema),
   enteredAt: nonEmptyString,
   completedAt: Schema.NullOr(nonEmptyString),
@@ -300,6 +337,7 @@ export type WorkflowAttemptDto = typeof workflowAttemptSchema.Type;
 export type WorkflowOperationDto = typeof workflowOperationSchema.Type;
 export type WorkflowFrameDto = typeof workflowFrameSchema.Type;
 export type WorkflowFrameOutputDto = typeof workflowFrameOutputSchema.Type;
+export type WorkflowFrameSegmentDto = typeof workflowFrameSegmentSchema.Type;
 export type WorkflowExecutionDto = typeof workflowExecutionSchema.Type;
 export type WorkflowExecutionWaitDto = typeof workflowExecutionWaitSchema.Type;
 export type WorkflowExecutionRoutingDto = typeof workflowExecutionRoutingSchema.Type;

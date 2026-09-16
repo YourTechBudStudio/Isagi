@@ -769,12 +769,14 @@ test('a structural subgraph entry carries every dispatch gate a claim carries', 
       name: 'environment marked unavailable',
       prepare: 'after',
       arrange: async (scenario) => {
-        await run(
-          scenario.fixture.runs.setEnvironmentAvailable({
-            runId: scenario.runId,
-            available: false,
-          }),
-        );
+        // The gate on its own, without the pause that normally accompanies it. That state is
+        // reachable: a person resumes a run once its placement is back, and the availability cache
+        // has not caught up yet — which is precisely the window this dispatch gate exists to cover,
+        // so arranging it through the recording path would test a different rejection.
+        scenario.fixture.client
+          .prepare('UPDATE workflow_runs SET environment_available = 0 WHERE id = ?')
+          .run(scenario.runId);
+        await Promise.resolve();
       },
       expected: { kind: 'not_claimable', reason: 'environment_unavailable' },
     },

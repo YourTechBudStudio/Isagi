@@ -9,8 +9,8 @@
  *
  * The v1 exports that used to live here are gone with the contract they belonged to: the run-tree
  * repository, the JSONL event ledger, the `step` interpreter and its context, and the capability,
- * headless and resume-path modules. The read projection and HTTP routes are still on disk and still
- * red; phase 05 replaces them.
+ * headless and resume-path modules. Their replacements — the durable read model, its delta
+ * publisher and the HTTP routes — are the read surface below.
  */
 
 export {
@@ -19,6 +19,29 @@ export {
   type EngineFailure,
   type WorkflowEngineService,
 } from './engine/interpreter.service.js';
+
+export { registerWorkflowApi } from './api.js';
+
+export {
+  WorkflowRunProjection,
+  WorkflowRunProjectionLive,
+  makeWorkflowRunProjection,
+  type ReadFailure,
+  type WorkflowRunProjectionService,
+} from './read/projection.service.js';
+
+export {
+  WorkflowDeltaPublisher,
+  WorkflowDeltaPublisherLive,
+  type WorkflowDeltaPublisherService,
+} from './read/publisher.js';
+
+export {
+  WorkflowWriteWake,
+  WorkflowWriteWakeLive,
+  silentWriteWake,
+  type WorkflowWriteWakeService,
+} from './persistence/write-wake.js';
 
 export type { ControlResult } from './engine/controls.js';
 export type { DrainSummary } from './engine/dispatcher.js';

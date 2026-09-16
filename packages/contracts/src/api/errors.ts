@@ -433,6 +433,14 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_run_not_dismissible',
   'workflow_wait_not_found',
   'workflow_wait_already_resolved',
+  /**
+   * A paginated read was given a cursor the runtime will not honour: malformed, from another run or
+   * another route, bound to different filters, or issued against a recovery boundary this request
+   * does not describe. It is deliberately distinct from an infrastructure decoding failure, which
+   * means the *request* did not parse — here the request parsed and the cursor was rejected. The
+   * response never restates the cursor's internals; a client recovers by starting the listing again.
+   */
+  'workflow_cursor_invalid',
   'workflow_user_input_invalid',
   'workflow_version_not_adopted',
   'workflow_operation_uncertain',

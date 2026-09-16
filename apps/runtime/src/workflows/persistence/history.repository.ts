@@ -6,6 +6,7 @@ import type { WorkflowTransitionKind } from '@isagi/contracts';
 import type { RuntimeDrizzleDatabase } from '../../persistence/database.service.js';
 import { DatabaseError, RuntimeDatabase } from '../../persistence/index.js';
 import { workflowRuns, workflowTransitions } from '../../persistence/schema.js';
+import { captureTransitionChanges } from '../read/capture.js';
 import type { PayloadSlot } from './payload-store.js';
 import type { WorkflowTransitionRecord } from './records.js';
 import { transitionRecord } from './row-mappers.js';
@@ -86,6 +87,17 @@ export function appendTransitions(
     .set({ revision: current.revision + drafts.length, updatedAt: now })
     .where(eq(workflowRuns.id, runId))
     .run();
+
+  // The read model is captured here, for the same reason revisions are allocated here: this is the
+  // one point every durable workflow change passes through, so a delivery obligation attached to it
+  // cannot be forgotten by a new write site. It runs after this transaction's own mutations and
+  // inside the same transaction, so a rollback leaves neither history nor snapshot.
+  captureTransitionChanges(
+    db,
+    runId,
+    written.map((transition) => transition.revision),
+    drafts,
+  );
 
   return written;
 }

@@ -84,19 +84,20 @@ import {
 } from './terminal-sessions/index.js';
 import {
   WorkflowArtifactCatalogLive,
+  WorkflowDeltaPublisherLive,
   WorkflowEngineLive,
   WorkflowHistoryRepositoryLive,
   WorkflowOperationServiceLive,
   WorkflowOperationsRepositoryLive,
   WorkflowPayloadStoreLive,
   WorkflowRegistryLive,
-  WorkflowRunsRepositoryLive,
-  type WorkflowEngineService,
-} from './workflows/index.js';
-import {
   WorkflowRunProjectionLive,
+  WorkflowRunsRepositoryLive,
+  WorkflowWriteWakeLive,
+  type WorkflowDeltaPublisherService,
+  type WorkflowEngineService,
   type WorkflowRunProjectionService,
-} from './workflows/workflow-run-projection.service.js';
+} from './workflows/index.js';
 import {
   WorkspaceRepository,
   WorkspaceRepositoryLive,
@@ -150,13 +151,18 @@ const WorkflowPayloadStoreLayer = WorkflowPayloadStoreLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(DataDirectoryLive),
 );
+// One wake, shared by the two repositories that write and by the publisher that listens. Built
+// once, so every committed workflow transaction reaches the same drainer.
+const WorkflowWriteWakeLayer = WorkflowWriteWakeLive;
 const WorkflowRunsRepositoryLayer = WorkflowRunsRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowWriteWakeLayer),
 );
 const WorkflowOperationsRepositoryLayer = WorkflowOperationsRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowWriteWakeLayer),
 );
 const WorkflowHistoryRepositoryLayer = WorkflowHistoryRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -282,7 +288,16 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(HarnessLedgerObserverLayer),
 );
 const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
-  Layer.provide(WorkflowRunsRepositoryLayer),
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowPayloadStoreLayer),
+);
+/**
+ * The delta publisher, built alongside the API services so it is running before a route can be
+ * called. It needs the same wake the repositories signal and the public bus every client reads.
+ */
+const WorkflowDeltaPublisherLayer = WorkflowDeltaPublisherLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowWriteWakeLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
@@ -301,6 +316,7 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionServicesLayer,
   EventProjectionLayer,
   WorkflowRunProjectionLayer,
+  WorkflowDeltaPublisherLayer,
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
@@ -355,6 +371,7 @@ export type RuntimeServices =
   | SurfaceRepositoryService
   | WorkflowEngineService
   | WorkflowRunProjectionService
+  | WorkflowDeltaPublisherService
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService

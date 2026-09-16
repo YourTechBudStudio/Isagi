@@ -74,17 +74,21 @@ export function startEnvironmentWatch(deps: EnvironmentWatchDeps) {
 export function rederiveEnvironments(deps: EnvironmentWatchDeps) {
   return Effect.gen(function* () {
     const runs = yield* deps.runs.listNonTerminal();
-    const unavailable: WorkflowRunRecord[] = [];
+    let lost = 0;
     for (const run of runs) {
       const live = yield* placementIsLive(deps, run);
-      if (live === run.environmentAvailable) continue;
-      yield* deps.runs.setEnvironmentAvailable({ runId: run.id, available: live });
-      if (!live) unavailable.push(run);
+      // One call, one transaction: the gate, the pause band and the history it takes to see either
+      // move together or not at all. Deciding here whether anything needs saying would reintroduce
+      // the crash gap this replaced — a run whose gate is down with no pause on record looks
+      // "already handled" to a comparison and is exactly the state that needs repairing.
+      const changed = yield* deps.runs.applyEnvironmentAvailability({
+        runIds: [run.id],
+        available: live,
+        detail: { value: { control: live ? 'environment_restored' : 'environment_deleted' } },
+      });
+      if (!live && changed.length > 0) lost += 1;
     }
-    // Parked as a separate step, so a run that was already parked is not parked again and the
-    // waterfall does not gain a second band for one absence.
-    yield* parkRuns(deps, unavailable);
-    return unavailable.length;
+    return lost;
   });
 }
 
@@ -100,12 +104,19 @@ function placementIsLive(deps: EnvironmentWatchDeps, run: WorkflowRunRecord) {
   });
 }
 
+/**
+ * Parking every run whose environment just went away.
+ *
+ * No caller-side filtering of runs that are "probably already parked": the repository decides that
+ * from the state it is about to change, inside the transaction that changes it, so one absence never
+ * draws two bands and a half-applied absence is still repaired.
+ */
 function parkRuns(deps: EnvironmentWatchDeps, runs: readonly WorkflowRunRecord[]) {
-  const runIds = runs.filter((run) => !run.paused || run.environmentAvailable).map((run) => run.id);
-  if (runIds.length === 0) return Effect.void;
+  if (runs.length === 0) return Effect.void;
   return deps.runs
-    .parkEnvironmentDeleted({
-      runIds,
+    .applyEnvironmentAvailability({
+      runIds: runs.map((run) => run.id),
+      available: false,
       detail: { value: { control: 'environment_deleted' } },
     })
     .pipe(Effect.asVoid);

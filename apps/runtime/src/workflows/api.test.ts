@@ -1,593 +1,507 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import websocket from '@fastify/websocket';
-import { Effect, Either, Layer, ManagedRuntime } from 'effect';
+import { Effect, Either } from 'effect';
 import Fastify from 'fastify';
 
-import type { WorkflowEvent, WorkflowRunSummary } from '@isagi/contracts';
-
-import { InternalRuntimeEventBus, InternalRuntimeEventBusLive } from '../runtime-events/index.js';
+import { DatabaseError } from '../persistence/index.js';
 import { registerWorkflowApi } from './api.js';
-import { WorkflowEventLedger } from './event-ledger.service.js';
+import { WorkflowEngine } from './engine/interpreter.service.js';
+import { WorkflowRunProjection } from './read/projection.service.js';
 import { WorkflowEngineError } from './types.js';
-import { WorkflowEngine } from './workflow-engine.service.js';
-import type {
-  WorkflowEngineService,
-  WorkflowStartContextInput,
-} from './workflow-engine.service.js';
-import { WorkflowRunProjection } from './workflow-run-projection.service.js';
 
-test('workflow websocket rejects a different loopback origin before resolving a run', async () => {
-  const previous = process.env.ISAGI_ALLOWED_ORIGINS;
-  process.env.ISAGI_ALLOWED_ORIGINS = 'http://127.0.0.1:43129';
-  const fastify = Fastify({ logger: false });
-  try {
-    await fastify.register(websocket);
-    registerWorkflowApi(fastify, {
-      runPromise: () => Promise.reject(new Error('must not run')),
-    } as never);
-    await fastify.ready();
-    await assert.rejects(
-      fastify.injectWS('/api/v1/workflows/runs/42/events-stream', {
-        headers: { origin: 'http://127.0.0.1:43130' },
-      }),
-    );
-  } finally {
-    if (previous === undefined) delete process.env.ISAGI_ALLOWED_ORIGINS;
-    else process.env.ISAGI_ALLOWED_ORIGINS = previous;
-    await fastify.close();
-  }
-});
+/**
+ * The HTTP boundary itself: envelopes, decoding, and the mapping from an engine's own vocabulary to
+ * the wire's. The read model's behaviour is proved against real records in `read/`; what matters
+ * here is that a route hands its inputs on unchanged and that a rejection reaches the client as the
+ * structured answer it is, rather than as an internal error.
+ */
 
-test('list route returns workflow descriptors from the engine', async () => {
-  const fastify = Fastify({ logger: false });
-  let listContext: WorkflowStartContextInput | null = null;
-
-  registerWorkflowApi(fastify, {
-    runPromise: async <A>(effect: Effect.Effect<A, unknown, WorkflowEngineService>) =>
+function withServices(services: {
+  readonly engine?: Record<string, unknown>;
+  readonly projection?: Record<string, unknown>;
+}) {
+  return {
+    runPromise: async <A>(effect: Effect.Effect<A, unknown, never>) =>
       Effect.runPromise(
-        Effect.provideService(effect, WorkflowEngine, {
-          listWorkflowDescriptors: (input: { readonly context: WorkflowStartContextInput }) =>
-            Effect.sync(() => {
-              listContext = input.context;
-              return [
-                {
-                  ok: true as const,
-                  workflowKey: 'ship-it',
+        effect.pipe(
+          Effect.provideService(WorkflowEngine, (services.engine ?? {}) as never),
+          Effect.provideService(WorkflowRunProjection, (services.projection ?? {}) as never),
+        ) as Effect.Effect<A, unknown, never>,
+      ),
+  } as never;
+}
+
+function body<T>(raw: string) {
+  return JSON.parse(raw) as T;
+}
+
+test('the descriptors route returns manifests and unavailable workflows side by side', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        listWorkflowDescriptors: (input: unknown) =>
+          Effect.sync(() => {
+            seen = input;
+            return [
+              {
+                workflowKey: 'ship-it',
+                result: {
+                  ok: true,
                   manifest: {
                     title: 'Ship it',
                     description: 'Runs the release checklist.',
-                    inputs: [{ kind: 'text' as const, key: 'version', label: 'Version' }],
+                    inputs: [{ kind: 'text', key: 'version', label: 'Version' }],
                   },
                 },
-                {
-                  ok: false as const,
-                  workflowKey: 'broken',
-                  reason: 'artifact_load_failed' as const,
-                  diagnostic: 'Could not load workflow.',
+              },
+              {
+                workflowKey: 'broken',
+                result: {
+                  ok: false,
+                  reason: 'artifact_load_failed',
+                  diagnostics: [{ code: 'invalid_export', message: 'No default export.', at: {} }],
                 },
-              ];
-            }),
-        } as never),
-      ),
-  } as never);
+              },
+            ];
+          }),
+      },
+    }),
+  );
 
   const response = await fastify.inject({
     method: 'POST',
     url: '/api/v1/workflows/descriptors',
-    payload: { context: { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 } },
+    payload: { origin: { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 } },
   });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(listContext, { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 });
-  const body = JSON.parse(response.body) as {
-    readonly data: { readonly workflows: readonly unknown[] };
-    readonly meta: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    data: {
-      workflows: [
-        {
-          ok: true,
-          workflowKey: 'ship-it',
-          manifest: {
-            title: 'Ship it',
-            description: 'Runs the release checklist.',
-            inputs: [{ kind: 'text', key: 'version', label: 'Version' }],
-          },
-        },
-        {
-          ok: false,
-          workflowKey: 'broken',
-          reason: 'artifact_load_failed',
-          diagnostic: 'Could not load workflow.',
-        },
-      ],
-    },
-    meta: { requestId: body.meta.requestId },
+  assert.deepEqual(seen, {
+    origin: { worktreeId: 7, surfaceId: 42, paneId: 99, agentSessionId: 100 },
+  });
+  const decoded = body<{ data: { workflows: readonly Record<string, unknown>[] } }>(response.body);
+  assert.equal(decoded.data.workflows.length, 2);
+  assert.deepEqual(decoded.data.workflows[1], {
+    ok: false,
+    workflowKey: 'broken',
+    reason: 'artifact_load_failed',
+    diagnostics: [{ code: 'invalid_export', message: 'No default export.', at: {} }],
   });
 });
 
-test('start route starts a workflow with launch context and variables', async () => {
+test('the start route passes launch inputs and origin through unchanged', async () => {
   const fastify = Fastify({ logger: false });
-  let startInput: unknown = null;
-
-  registerWorkflowApi(fastify, {
-    runPromise: async <A>(effect: Effect.Effect<A, unknown, WorkflowEngineService>) =>
-      Effect.runPromise(
-        Effect.provideService(effect, WorkflowEngine, {
-          startWorkflow: (input: unknown) =>
-            Effect.sync(() => {
-              startInput = input;
-              return { id: 123, workflowKey: 'ship-it' };
-            }),
-        } as never),
-      ),
-  } as never);
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        startWorkflow: (input: unknown) =>
+          Effect.sync(() => {
+            seen = input;
+            return { id: 123, workflowKey: 'ship-it' };
+          }),
+      },
+    }),
+  );
 
   const response = await fastify.inject({
     method: 'POST',
     url: '/api/v1/workflows/runs',
     payload: {
       workflowKey: 'ship-it',
-      variables: { version: '1.2.3' },
-      context: { worktreeId: 7, surfaceId: 42, paneId: null, agentSessionId: null },
+      inputs: { version: '1.2.3' },
+      origin: { worktreeId: 7, surfaceId: 42 },
     },
   });
 
   assert.equal(response.statusCode, 200);
-  assert.deepEqual(startInput, {
+  assert.deepEqual(seen, {
     workflowKey: 'ship-it',
-    variables: { version: '1.2.3' },
-    context: { worktreeId: 7, surfaceId: 42, paneId: null, agentSessionId: null },
+    inputs: { version: '1.2.3' },
+    origin: { worktreeId: 7, surfaceId: 42 },
   });
-  const body = JSON.parse(response.body) as {
-    readonly data: { readonly workflowRunId: number; readonly workflowKey: string };
-    readonly meta: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    data: { workflowRunId: 123, workflowKey: 'ship-it' },
-    meta: { requestId: body.meta.requestId },
+  assert.deepEqual(body<{ data: unknown }>(response.body).data, {
+    runId: 123,
+    workflowKey: 'ship-it',
   });
 });
 
-test('workflow API maps wrapped workflow engine errors to contract errors', async () => {
+test('a paginated read passes its filters, limit and cursor to the projection', async () => {
   const fastify = Fastify({ logger: false });
-  registerWorkflowApi(fastify, {
-    runPromise: async () => {
-      return Either.left(
-        new WorkflowEngineError({
-          code: 'workflow_user_input_invalid',
-          message: 'Invalid workflow input.',
-          workflowRunId: 1,
-        }),
-      );
-    },
-  } as never);
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listOperations: (runId: number, query: unknown) =>
+          Effect.sync(() => {
+            seen = { runId, query };
+            return { items: [], nextCursor: null };
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/9/operations?executionId=4&state=uncertain&limit=25&cursor=abc',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, {
+    runId: 9,
+    query: { executionId: 4, state: 'uncertain', limit: 25, cursor: 'abc' },
+  });
+});
+
+test('an over-large page limit is refused at the boundary rather than silently clamped', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listOperations: () => Effect.succeed({ items: [], nextCursor: null }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/9/operations?limit=501',
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(
+    body<{ error: { code: string } }>(response.body).error.code,
+    'api_request_decoding_failed',
+  );
+});
+
+test('a rejected cursor reaches the client as its own reason, and says nothing about the cursor', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listEvents: () =>
+          Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_cursor_invalid',
+              message: 'This pagination cursor is not one this listing will continue.',
+            }),
+          ),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/3/events?cursor=not-a-cursor',
+  });
+
+  assert.equal(response.statusCode, 400);
+  const decoded = body<{ error: { data: { reason: string }; message: string } }>(response.body);
+  assert.equal(decoded.error.data.reason, 'workflow_cursor_invalid');
+  assert.ok(!decoded.error.message.includes('not-a-cursor'));
+});
+
+test('an unreadable payload carries which value failed and why', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        getPayload: () =>
+          Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_payload_unavailable',
+              message: 'Recorded value sha256:abc no longer matches its reference.',
+              workflowRunId: 3,
+              payloadRef: 'sha256:abc',
+              payloadCause: 'corrupt',
+            }),
+          ),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/3/payloads/sha256%3Aabc',
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(body<{ error: { data: unknown } }>(response.body).error.data, {
+    reason: 'workflow_payload_unavailable',
+    payloadRef: 'sha256:abc',
+    cause: 'corrupt',
+    workflowRunId: 3,
+  });
+});
+
+test('a structural refusal carries its addressable diagnostics', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        retry: () =>
+          Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_structure_validation_failed',
+              message: 'The latest verified version no longer fits where this run is parked.',
+              workflowRunId: 5,
+              diagnostics: [
+                {
+                  code: 'node_missing',
+                  message: 'Node writer is gone.',
+                  at: { graphKey: 'root', nodeId: 'writer' },
+                },
+              ],
+            }),
+          ),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({ method: 'POST', url: '/api/v1/workflows/runs/5/retry' });
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(body<{ error: { data: unknown } }>(response.body).error.data, {
+    reason: 'workflow_structure_validation_failed',
+    diagnostics: [
+      {
+        code: 'node_missing',
+        message: 'Node writer is gone.',
+        at: { graphKey: 'root', nodeId: 'writer' },
+      },
+    ],
+    workflowRunId: 5,
+  });
+});
+
+test('an occupied surface is a conflict, and a discovery failure is the runtime admitting a fault', async () => {
+  for (const [code, status] of [
+    ['workflow_surface_attached', 409],
+    ['workflow_discovery_failed', 500],
+    ['workflow_run_not_dismissible', 400],
+  ] as const) {
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(
+      fastify,
+      withServices({
+        engine: {
+          dismiss: () => Effect.fail(new WorkflowEngineError({ code, message: 'nope' })),
+        },
+      }),
+    );
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/v1/workflows/runs/5/dismiss',
+    });
+    assert.equal(response.statusCode, status, code);
+  }
+});
+
+test('a database failure is reported as one, not as a workflow rejection', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        getRun: () =>
+          Effect.fail(new DatabaseError({ operation: 'workflow_get_run', cause: new Error('io') })),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({ method: 'GET', url: '/api/v1/workflows/runs/4' });
+
+  assert.equal(response.statusCode, 500);
+  assert.equal(
+    body<{ error: { code: string } }>(response.body).error.code,
+    'runtime_database_failed',
+  );
+});
+
+test('every control returns the narrow accepted-action fact and nothing more', async () => {
+  const controls = ['pause', 'resume', 'retry', 'cancel', 'dismiss'] as const;
+  for (const control of controls) {
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(
+      fastify,
+      withServices({
+        engine: {
+          [control]: () =>
+            Effect.succeed({
+              runId: 7,
+              accepted: true,
+              status: 'running',
+              revision: 12,
+              diagnostics: [],
+            }),
+        },
+      }),
+    );
+    const response = await fastify.inject({
+      method: 'POST',
+      url: `/api/v1/workflows/runs/7/${control}`,
+    });
+    assert.equal(response.statusCode, 200, control);
+    assert.deepEqual(body<{ data: unknown }>(response.body).data, {
+      runId: 7,
+      accepted: true,
+      status: 'running',
+      revision: 12,
+      diagnostics: [],
+    });
+  }
+});
+
+test('advance addresses a wait by its own identity', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        advance: (input: unknown) =>
+          Effect.sync(() => {
+            seen = input;
+            return { runId: 7, accepted: true, status: 'ready', revision: 3, diagnostics: [] };
+          }),
+      },
+    }),
+  );
 
   const response = await fastify.inject({
     method: 'POST',
-    url: '/api/v1/workflows/runs/1/advance',
+    url: '/api/v1/workflows/runs/7/advance',
+    payload: { waitId: 44, answers: { risk: 'medium' } },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, { runId: 7, waitId: 44, answers: { risk: 'medium' } });
+});
+
+test('an advance without a wait identity is refused before it reaches the engine', async () => {
+  const fastify = Fastify({ logger: false });
+  let called = false;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        advance: () =>
+          Effect.sync(() => {
+            called = true;
+            return { runId: 7, accepted: true, status: 'ready', revision: 3, diagnostics: [] };
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs/7/advance',
     payload: { answers: { risk: 'medium' } },
   });
 
   assert.equal(response.statusCode, 400);
-  const body = JSON.parse(response.body) as {
-    readonly error: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    error: {
-      code: 'workflow_rejected',
-      status: 400,
-      message: 'Invalid workflow input.',
-      requestId: body.error.requestId,
-      data: { reason: 'workflow_user_input_invalid', workflowRunId: 1 },
-    },
-  });
+  assert.equal(called, false);
 });
 
-test('workflow API preserves the contracted load reason for web-owned copy', async () => {
+test('the websocket stream and the destructive clear route are gone', async () => {
   const fastify = Fastify({ logger: false });
-  registerWorkflowApi(fastify, {
-    runPromise: async () =>
-      Either.left(
-        new WorkflowEngineError({
-          code: 'workflow_load_failed',
-          message: 'Workflow source differs from the verified build.',
-          workflowKey: 'stale',
-          workflowLoadFailureReason: 'stale_source',
-        }),
-      ),
-  } as never);
-
-  const response = await fastify.inject({
-    method: 'POST',
-    url: '/api/v1/workflows/runs',
-    payload: {
-      workflowKey: 'stale',
-      context: { worktreeId: 7, surfaceId: 42 },
-    },
-  });
-
-  assert.equal(response.statusCode, 400);
-  const body = JSON.parse(response.body) as {
-    readonly error: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    error: {
-      code: 'workflow_rejected',
-      status: 400,
-      message: 'Workflow source differs from the verified build.',
-      requestId: body.error.requestId,
-      data: {
-        reason: 'workflow_load_failed',
-        workflowKey: 'stale',
-        workflowLoadFailureReason: 'stale_source',
-      },
-    },
-  });
+  registerWorkflowApi(fastify, withServices({}));
+  await fastify.ready();
+  for (const url of ['/api/v1/workflows/runs/1/events-stream', '/api/v1/workflows/runs/1/clear']) {
+    const response = await fastify.inject({ method: 'POST', url });
+    assert.equal(response.statusCode, 404, url);
+  }
+  assert.ok(Either.isRight(Either.right(true)));
 });
 
-test('workflow API maps discovery failures to HTTP 500 with source-only provenance', async () => {
+test('a load failure keeps its stable reason in structured data, not in prose', async () => {
   const fastify = Fastify({ logger: false });
-  registerWorkflowApi(fastify, {
-    runPromise: async () =>
-      Either.left(
-        new WorkflowEngineError({
-          code: 'workflow_discovery_failed',
-          message: 'Could not scan workflow directory.',
-          workflowSourceDirectory: '/configured/workflows',
-        }),
-      ),
-  } as never);
-
-  const response = await fastify.inject({
-    method: 'POST',
-    url: '/api/v1/workflows/descriptors',
-    payload: { context: { worktreeId: 7, surfaceId: 42 } },
-  });
-
-  assert.equal(response.statusCode, 500);
-  const body = JSON.parse(response.body) as {
-    readonly error: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    error: {
-      code: 'workflow_rejected',
-      status: 500,
-      message: 'Could not scan workflow directory.',
-      requestId: body.error.requestId,
-      data: {
-        reason: 'workflow_discovery_failed',
-        workflowSourceDirectory: '/configured/workflows',
-      },
-    },
-  });
-});
-
-test('workflow API includes factual discovered-package provenance and omits empty shadow arrays', async () => {
-  const fastify = Fastify({ logger: false });
-  registerWorkflowApi(fastify, {
-    runPromise: async () =>
-      Either.left(
-        new WorkflowEngineError({
-          code: 'workflow_load_failed',
-          message: 'A verified workflow build is required.',
-          workflowKey: 'broken',
-          workflowLoadFailureReason: 'missing_build',
-          workflowPackageDirectory: '/additional/broken',
-          shadowedWorkflowPackageDirectories: [],
-        }),
-      ),
-  } as never);
-
-  const response = await fastify.inject({
-    method: 'POST',
-    url: '/api/v1/workflows/runs',
-    payload: {
-      workflowKey: 'broken',
-      context: { worktreeId: 7, surfaceId: 42 },
-    },
-  });
-
-  assert.equal(response.statusCode, 400);
-  const body = JSON.parse(response.body) as {
-    readonly error: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    error: {
-      code: 'workflow_rejected',
-      status: 400,
-      message: 'A verified workflow build is required.',
-      requestId: body.error.requestId,
-      data: {
-        reason: 'workflow_load_failed',
-        workflowKey: 'broken',
-        workflowLoadFailureReason: 'missing_build',
-        workflowPackageDirectory: '/additional/broken',
-      },
-    },
-  });
-});
-
-test('workflow API includes shadowed package directories when they exist', async () => {
-  const fastify = Fastify({ logger: false });
-  registerWorkflowApi(fastify, {
-    runPromise: async () =>
-      Either.left(
-        new WorkflowEngineError({
-          code: 'workflow_load_failed',
-          message: 'Workflow package is invalid.',
-          workflowKey: 'broken',
-          workflowLoadFailureReason: 'invalid_package',
-          workflowPackageDirectory: '/project/broken',
-          shadowedWorkflowPackageDirectories: ['/core/broken', '/additional/broken'],
-        }),
-      ),
-  } as never);
-
-  const response = await fastify.inject({
-    method: 'POST',
-    url: '/api/v1/workflows/runs',
-    payload: {
-      workflowKey: 'broken',
-      context: { worktreeId: 7, surfaceId: 42 },
-    },
-  });
-
-  assert.equal(response.statusCode, 400);
-  const body = JSON.parse(response.body) as {
-    readonly error: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    error: {
-      code: 'workflow_rejected',
-      status: 400,
-      message: 'Workflow package is invalid.',
-      requestId: body.error.requestId,
-      data: {
-        reason: 'workflow_load_failed',
-        workflowKey: 'broken',
-        workflowLoadFailureReason: 'invalid_package',
-        workflowPackageDirectory: '/project/broken',
-        shadowedWorkflowPackageDirectories: ['/core/broken', '/additional/broken'],
-      },
-    },
-  });
-});
-
-test('retry route returns the run-scoped control response', async () => {
-  const fastify = Fastify({ logger: false });
-  let retryRunId: number | null = null;
-
-  registerWorkflowApi(fastify, {
-    runPromise: async <A>(effect: Effect.Effect<A, unknown, WorkflowEngineService>) =>
-      Effect.runPromise(
-        Effect.provideService(effect, WorkflowEngine, {
-          retry: (input: { readonly runId: number }) =>
-            Effect.sync(() => {
-              retryRunId = input.runId;
-              return { runId: 42, status: 'ready' };
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        startWorkflow: () =>
+          Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_load_failed',
+              message: 'Workflow source differs from the verified build.',
+              workflowKey: 'stale',
+              workflowLoadFailureReason: 'stale_source',
+              workflowSourceDirectory: '/repo/src/workflows/stale',
+              workflowPackageDirectory: '/repo/.isagi/workflows/stale',
             }),
-        } as never),
-      ),
-  } as never);
+          ),
+      },
+    }),
+  );
 
   const response = await fastify.inject({
     method: 'POST',
-    url: '/api/v1/workflows/runs/42/retry',
-    payload: {},
+    url: '/api/v1/workflows/runs',
+    payload: { workflowKey: 'stale', origin: { worktreeId: 1, surfaceId: 2 } },
   });
 
-  assert.equal(response.statusCode, 200);
-  assert.equal(retryRunId, 42);
-  const body = JSON.parse(response.body) as {
-    readonly data: { readonly runId: number; readonly status: string };
-    readonly meta: { readonly requestId: string };
-  };
-  assert.deepEqual(body, {
-    data: { runId: 42, status: 'ready' },
-    meta: { requestId: body.meta.requestId },
+  assert.equal(response.statusCode, 400);
+  // The client branches on the reason, never on the sentence: copy is the web app's to own.
+  assert.deepEqual(body<{ error: { data: unknown } }>(response.body).error.data, {
+    reason: 'workflow_load_failed',
+    workflowKey: 'stale',
+    workflowLoadFailureReason: 'stale_source',
+    workflowSourceDirectory: '/repo/src/workflows/stale',
+    workflowPackageDirectory: '/repo/.isagi/workflows/stale',
   });
 });
 
-test('workflow event replay rejects missing runs with a stable workflow reason', async () => {
+test('a stale control is reported as one, and a refused launch or control changes nothing', async () => {
+  const calls: string[] = [];
   const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      Layer.succeed(WorkflowRunProjection, {
-        listSummaries: () => Effect.succeed([]),
-        getSummary: () => Effect.succeed(null),
-      }),
-      Layer.succeed(WorkflowEventLedger, {
-        append: () => Effect.die('append is not used by replay route test'),
-        readRunEvents: () => Effect.die('missing runs must be rejected before ledger replay'),
-        latestUiFeedbackForRunTree: () => Effect.succeed(undefined),
-        deleteRunTreeLedgers: () => Effect.void,
-        collectOrphans: Effect.void,
-        sweepSurfaceDeletedRuns: Effect.void,
-        pathForRun: () => '',
-      }),
-    ),
-  );
-
-  try {
-    registerWorkflowApi(fastify, runtime as never);
-
-    const response = await fastify.inject({
-      method: 'GET',
-      url: '/api/v1/workflows/runs/99/events',
-    });
-
-    assert.equal(response.statusCode, 400);
-    const body = JSON.parse(response.body) as {
-      readonly error: { readonly requestId: string };
-    };
-    assert.deepEqual(body, {
-      error: {
-        code: 'workflow_rejected',
-        status: 400,
-        message: 'Workflow run 99 was not found.',
-        requestId: body.error.requestId,
-        data: { reason: 'workflow_run_not_found', workflowRunId: 99 },
-      },
-    });
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
-});
-
-test('workflow event stream includes child log events only when requested', async () => {
-  const fastify = Fastify({ logger: false });
-  const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      InternalRuntimeEventBusLive,
-      Layer.succeed(WorkflowRunProjection, {
-        listSummaries: () => Effect.succeed([workflowSummaryFixture()]),
-        getSummary: (runId: number) =>
-          Effect.succeed(runId === 42 ? workflowSummaryFixture() : null),
-      }),
-      Layer.succeed(WorkflowEventLedger, {
-        append: () => Effect.die('append is not used by stream route test'),
-        readRunEvents: (input: { readonly includeChildren: boolean }) =>
-          Effect.sleep('25 millis').pipe(
-            Effect.as(input.includeChildren ? [rootLogEvent(), childLogEvent()] : [rootLogEvent()]),
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        resume: () =>
+          Effect.sync(() => {
+            calls.push('resume');
+          }).pipe(
+            Effect.zipRight(
+              Effect.fail(
+                new WorkflowEngineError({
+                  code: 'workflow_stale_control',
+                  message: 'This run moved on since the control was prepared.',
+                  workflowRunId: 8,
+                }),
+              ),
+            ),
           ),
-        latestUiFeedbackForRunTree: () => Effect.succeed(undefined),
-        deleteRunTreeLedgers: () => Effect.void,
-        collectOrphans: Effect.void,
-        sweepSurfaceDeletedRuns: Effect.void,
-        pathForRun: () => '',
-      }),
-    ),
+      },
+      projection: {
+        getRun: () =>
+          Effect.sync(() => {
+            calls.push('read');
+            return { run: { runId: 8 } as never };
+          }),
+      },
+    }),
   );
 
-  try {
-    await fastify.register(websocket);
-    registerWorkflowApi(fastify, runtime as never);
-    await fastify.ready();
-
-    const rootOnly = await fastify.injectWS('/api/v1/workflows/runs/42/events-stream');
-    try {
-      rootOnly.send(JSON.stringify({ type: 'workflow_events_requested' }));
-      assert.deepEqual(await takeWorkflowStreamMessage(rootOnly), {
-        type: 'workflow_events_snapshot',
-        events: [rootLogEvent()],
-      });
-      await new Promise((resolve) => setImmediate(resolve));
-      await runtime.runPromise(publishChildWorkflowLogEvent);
-      await assertNoWorkflowStreamMessage(rootOnly);
-    } finally {
-      rootOnly.terminate();
-    }
-
-    const withChildren = await fastify.injectWS(
-      '/api/v1/workflows/runs/42/events-stream?includeChildren=true',
-    );
-    try {
-      withChildren.send(JSON.stringify({ type: 'workflow_events_requested' }));
-      assert.deepEqual(await takeWorkflowStreamMessage(withChildren), {
-        type: 'workflow_events_snapshot',
-        events: [rootLogEvent(), childLogEvent()],
-      });
-      await new Promise((resolve) => setImmediate(resolve));
-      await runtime.runPromise(publishChildWorkflowLogEvent);
-      assert.deepEqual(await takeWorkflowStreamMessage(withChildren), {
-        type: 'workflow_event_appended',
-        event: childLogEvent(),
-      });
-    } finally {
-      withChildren.terminate();
-    }
-
-    const missingRun = await fastify.injectWS('/api/v1/workflows/runs/99/events-stream');
-    try {
-      missingRun.send(JSON.stringify({ type: 'workflow_events_requested' }));
-      assert.deepEqual(await takeWorkflowStreamMessage(missingRun), {
-        type: 'error',
-        code: 'workflow_run_not_found',
-        message: 'Workflow run 99 was not found.',
-      });
-    } finally {
-      missingRun.terminate();
-    }
-  } finally {
-    await fastify.close();
-    await runtime.dispose();
-  }
-});
-
-const publishChildWorkflowLogEvent = Effect.gen(function* () {
-  const bus = yield* InternalRuntimeEventBus;
-  yield* bus.publish({
-    type: 'workflow_event_appended',
-    surfaceId: 3,
-    rootRunId: 42,
-    runId: 43,
-    event: childLogEvent(),
+  const refused = await fastify.inject({ method: 'POST', url: '/api/v1/workflows/runs/8/resume' });
+  assert.equal(refused.statusCode, 400);
+  assert.deepEqual(body<{ error: { data: unknown } }>(refused.body).error.data, {
+    reason: 'workflow_stale_control',
+    workflowRunId: 8,
   });
+  // A refused control reaches the engine once and stops there: the route does not retry it, does not
+  // fall back to another control, and does not read anything back to "fix up" the response.
+  assert.deepEqual(calls, ['resume']);
 });
-
-function workflowSummaryFixture(): WorkflowRunSummary {
-  return {
-    runId: 42,
-    rootRunId: 42,
-    parentRunId: null,
-    workflowKey: 'gate',
-    title: 'Gate',
-    status: 'running',
-    paused: false,
-    waitKind: null,
-    blockingWait: null,
-    worktreeId: 9,
-    surfaceId: 3,
-  };
-}
-
-function rootLogEvent(): WorkflowEvent {
-  return {
-    ts: '2026-06-12T00:00:00.000Z',
-    runId: 42,
-    type: 'log',
-    level: 'info',
-    message: 'root log',
-  };
-}
-
-function childLogEvent(): WorkflowEvent {
-  return {
-    ts: '2026-06-12T00:00:01.000Z',
-    runId: 43,
-    type: 'log',
-    level: 'info',
-    message: 'child log',
-  };
-}
-
-function takeWorkflowStreamMessage(ws: {
-  once: (event: 'message', listener: (data: Buffer) => void) => void;
-}) {
-  return new Promise<unknown>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error('Timed out waiting for workflow stream message.')),
-      1_000,
-    );
-    ws.once('message', (data) => {
-      clearTimeout(timeout);
-      resolve(JSON.parse(data.toString()));
-    });
-  });
-}
-
-async function assertNoWorkflowStreamMessage(ws: {
-  once: (event: 'message', listener: (data: Buffer) => void) => void;
-}) {
-  const sentinel = Symbol('no-message');
-  const result = await Promise.race([
-    takeWorkflowStreamMessage(ws),
-    new Promise<typeof sentinel>((resolve) => setTimeout(() => resolve(sentinel), 50)),
-  ]);
-  assert.equal(result, sentinel);
-}

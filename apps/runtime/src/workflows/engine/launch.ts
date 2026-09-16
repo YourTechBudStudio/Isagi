@@ -1,6 +1,7 @@
+import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Either } from 'effect';
 
-import type { WorkflowLaunchOrigin } from '@isagi/contracts';
+import type { WorkflowLaunchOrigin, WorkflowLoadFailureReason } from '@isagi/contracts';
 
 import type { SurfaceServiceShape } from '../../surfaces/index.js';
 import type { WorkspaceRepositoryService } from '../../workspace/workspace.repository.js';
@@ -8,17 +9,17 @@ import type { WorkflowRunRecord } from '../persistence/records.js';
 import type { WorkflowRunsRepositoryService } from '../persistence/runs.repository.js';
 import { errorMessage } from '../state/pure.js';
 import type { WorkflowArtifactCatalogService } from '../structure/artifact-catalog.js';
-import {
-  WorkflowLoadError,
-  type AnyWorkflowDefinition,
-  type LoadedWorkflowArtifact,
-} from '../structure/loader.js';
+import { WorkflowLoadError, type LoadedWorkflowArtifact } from '../structure/loader.js';
 import type {
   WorkflowPackageProvenance,
   WorkflowRegistryContext,
   WorkflowRegistryService,
 } from '../structure/registry.js';
-import { WorkflowEngineError, type WorkflowOrigin } from '../types.js';
+import {
+  WorkflowEngineError,
+  type WorkflowCommandManifest,
+  type WorkflowOrigin,
+} from '../types.js';
 
 /**
  * Starting a run.
@@ -47,11 +48,23 @@ export interface LaunchInput {
   readonly origin: WorkflowLaunchOrigin;
 }
 
+/**
+ * One discoverable workflow, as the launch palette sees it.
+ *
+ * The manifest is built here rather than handed out as a definition, because building it means
+ * calling the author's `command` — and author code is invoked by the engine, never by the API layer.
+ * A workflow that cannot be loaded, or whose `command` throws, is listed as unavailable with a
+ * reason instead of removing every other workflow from the palette.
+ */
 export interface DescriptorListing {
   readonly workflowKey: string;
   readonly result:
-    | { readonly ok: true; readonly definition: AnyWorkflowDefinition }
-    | { readonly ok: false; readonly error: WorkflowLoadError };
+    | { readonly ok: true; readonly manifest: WorkflowCommandManifest }
+    | {
+        readonly ok: false;
+        readonly reason: WorkflowLoadFailureReason;
+        readonly diagnostics: readonly StructureDiagnostic[];
+      };
 }
 
 export function startWorkflow(
@@ -165,18 +178,37 @@ export function listWorkflowDescriptors(
   return Effect.gen(function* () {
     const context = yield* registryContext(deps, origin.worktreeId);
     const snapshot = yield* discover(deps, context, undefined);
+    const launchOrigin = yield* buildOrigin(deps, origin);
     return yield* Effect.forEach(snapshot, (entry) =>
       deps.registry.loadDiscovered(entry).pipe(
+        Effect.flatMap((artifact) =>
+          Effect.tryPromise({
+            try: async () => artifact.definition.command(launchOrigin),
+            // A manifest the author's own code refused to produce leaves the workflow unlistable
+            // under this origin. It is reported as an artifact that did not yield a descriptor,
+            // which is what actually happened, rather than as a structural problem it is not.
+            catch: () =>
+              new WorkflowLoadError({
+                reason: 'artifact_load_failed',
+                message: `Building the command manifest for ${entry.workflowKey} failed.`,
+                workflowKey: entry.workflowKey,
+              }),
+          }),
+        ),
         Effect.map(
-          (artifact): DescriptorListing => ({
+          (manifest): DescriptorListing => ({
             workflowKey: entry.workflowKey,
-            result: { ok: true, definition: artifact.definition },
+            result: { ok: true, manifest },
           }),
         ),
         Effect.catchAll((error) =>
           Effect.succeed<DescriptorListing>({
             workflowKey: entry.workflowKey,
-            result: { ok: false, error },
+            result: {
+              ok: false,
+              reason: error.reason,
+              diagnostics: error.diagnostics ?? [],
+            },
           }),
         ),
       ),

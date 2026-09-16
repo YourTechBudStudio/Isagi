@@ -630,7 +630,9 @@ test('pause intervals are idempotent and never left open past a terminal transit
       ),
     );
     await run(fixture.runs.parkUnfinishedRuns({}));
-    await run(fixture.runs.parkEnvironmentDeleted({ runIds: [entered.run.id] }));
+    await run(
+      fixture.runs.applyEnvironmentAvailability({ runIds: [entered.run.id], available: false }),
+    );
 
     let intervals = await run(fixture.runs.listPauseIntervals(entered.run.id));
     assert.equal(intervals.length, 1, 'repeated parking converges on one band');
@@ -638,7 +640,7 @@ test('pause intervals are idempotent and never left open past a terminal transit
 
     current = (await run(fixture.runs.findRun(entered.run.id)))!;
     // Environment parking cleared the availability flag; restore it so the run can be claimed.
-    await run(fixture.runs.setEnvironmentAvailable({ runId: current.id, available: true }));
+    await run(fixture.runs.applyEnvironmentAvailability({ runIds: [current.id], available: true }));
     committedValue(
       await run(
         fixture.runs.applyResume({

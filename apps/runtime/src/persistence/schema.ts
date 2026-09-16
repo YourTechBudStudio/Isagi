@@ -821,6 +821,65 @@ export const workflowTransitions = sqliteTable(
 );
 
 /**
+ * What each committed revision changed, captured as it committed.
+ *
+ * The transition row says *that* something happened and to which identities; this table says what
+ * the affected records looked like at that moment. It exists because current rows cannot reproduce
+ * a historical delta: an execution mutates as its attempts, wait, routing and operations progress,
+ * so projecting it now and attaching it to revision 40 would hand a reconnecting client a future
+ * state under an old revision, and the REST replay of a delta would no longer equal the live event
+ * the runtime already published.
+ *
+ * Written inside the same transaction as the transitions it describes, after that transaction's own
+ * mutations, so a rollback leaves neither a transition nor a snapshot. Live publication and REST
+ * recovery both decode these same rows — there is one durable delta representation, not two
+ * algorithms that agree by hand.
+ *
+ * `record_json` holds the projected wire record, which is what both delivery paths need and what
+ * makes the read model independent of later mutation. `summary` rows are written for **every**
+ * revision, because a point-in-time run summary is what a baseline read at a frozen high-water
+ * revision must return; `summary_changed` marks the ones a delta should actually carry, so an
+ * unchanged summary does not ride along with every receipt update.
+ *
+ * Retention follows the rest of the model: these rows are history and are never evicted.
+ */
+export const workflowTransitionChanges = sqliteTable(
+  'workflow_transition_changes',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    revision: integer('revision').notNull(),
+    recordKind: text('record_kind', {
+      enum: ['summary', 'frame', 'execution', 'operation'],
+    }).notNull(),
+    /** The changed record's row id. Zero for `summary`, which is the run itself. */
+    recordId: integer('record_id').notNull(),
+    recordJson: text('record_json').notNull(),
+    /** Only meaningful for `summary`: whether this revision changed anything a client would show. */
+    summaryChanged: integer('summary_changed', { mode: 'boolean' }),
+  },
+  (table) => [
+    uniqueIndex('workflow_transition_changes_record_unique').on(
+      table.runId,
+      table.revision,
+      table.recordKind,
+      table.recordId,
+    ),
+    /** "What did revisions (n, h] change?" — the delta assembly scan. */
+    index('workflow_transition_changes_revision_idx').on(table.runId, table.revision),
+    /** "What did this record look like at or before revision h?" — every point-in-time read. */
+    index('workflow_transition_changes_record_idx').on(
+      table.runId,
+      table.recordKind,
+      table.recordId,
+      table.revision,
+    ),
+  ],
+);
+
+/**
  * One armed wait.
  *
  * Delivery targets this row's id, so a stale form or an old turn cannot satisfy a later visit to the

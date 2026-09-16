@@ -418,7 +418,8 @@ test('deleting the destination parks the run, and Resume refuses to place work t
     );
 
     await run(
-      harness.fixture.runs.parkEnvironmentDeleted({
+      harness.fixture.runs.applyEnvironmentAvailability({
+        available: false,
         runIds: (
           await run(harness.fixture.runs.listByDestinationWorktree(harness.placement.worktreeId))
         ).map((record) => record.id),

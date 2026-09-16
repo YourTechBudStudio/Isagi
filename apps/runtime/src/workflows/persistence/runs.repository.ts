@@ -63,6 +63,12 @@ import {
   waitRecord,
 } from './row-mappers.js';
 import { slotColumns, slotFromColumns } from './slots.js';
+import {
+  silentWriteWake,
+  wakingDatabase,
+  WorkflowWriteWake,
+  type WorkflowWriteWakeService,
+} from './write-wake.js';
 
 /**
  * A value a caller is recording.
@@ -443,14 +449,26 @@ export interface WorkflowRunsRepositoryService {
   readonly parkUnfinishedRuns: (input: {
     readonly now?: string;
   }) => Effect.Effect<readonly number[], DatabaseError>;
-  readonly parkEnvironmentDeleted: (input: {
+  /**
+   * Records that the environment under these runs went away, or came back.
+   *
+   * One transaction per run does everything that fact implies: the dispatch gate, the pause band
+   * where there is one to open, and the history that makes any of it visible. They were three
+   * separate operations before, and the gap between them was reachable — a crash after the gate was
+   * lowered left a run undispatchable with nothing on record, and the next startup saw the gate
+   * already lowered and moved on, so the run stayed silently stuck forever.
+   *
+   * Idempotent by the state it is asserting rather than by a caller-side filter: a run already
+   * recorded as parked for a missing environment is left alone, so one absence never draws two
+   * bands, while a run whose gate is down with no pause to explain it is repaired.
+   *
+   * Returns the runs this call actually changed.
+   */
+  readonly applyEnvironmentAvailability: (input: {
     readonly runIds: readonly number[];
+    readonly available: boolean;
     readonly detail?: RecordedValue | undefined;
   }) => Effect.Effect<readonly number[], DatabaseError | PayloadPublishError>;
-  readonly setEnvironmentAvailable: (input: {
-    readonly runId: number;
-    readonly available: boolean;
-  }) => Effect.Effect<void, DatabaseError>;
   readonly blockRun: (input: {
     readonly runId: number;
     readonly operationId: number;
@@ -530,7 +548,8 @@ export const WorkflowRunsRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const payloads = yield* WorkflowPayloadStore;
-    return makeWorkflowRunsRepository(database, payloads);
+    const wake = yield* WorkflowWriteWake;
+    return makeWorkflowRunsRepository(database, payloads, wake);
   }),
 );
 
@@ -545,12 +564,17 @@ export const WorkflowRunsRepositoryLive = Layer.effect(
  * is never given the opportunity.
  */
 export function makeWorkflowRunsRepository(
-  database: Pick<
+  runtimeDatabase: Pick<
     import('../../persistence/index.js').RuntimeDatabaseService,
     'use' | 'transaction'
   >,
   payloads: WorkflowPayloadStoreService,
+  /** Told that a write finished, never what it wrote. Defaults to nobody listening. */
+  wake: WorkflowWriteWakeService = silentWriteWake,
 ): WorkflowRunsRepositoryService {
+  // Every transaction below goes through this handle, so the delta publisher is woken by the fact
+  // that a write happened rather than by each write site remembering to say so.
+  const database = wakingDatabase(runtimeDatabase, wake);
   /**
    * Publishes a recorded value ahead of the transaction that will reference it.
    *
@@ -860,6 +884,12 @@ export function makeWorkflowRunsRepository(
               {
                 kind: 'graph_entered' as const,
                 frameId: input.frameId,
+                // The entry node's first visit is created *by* this transition, so the transition
+                // names it. Without that identity the visit would exist with nothing in history
+                // pointing at it, and a client recovering by revision would never learn it was
+                // dispatched — the frame's entry is the one place a node execution is born with no
+                // attempt of its own to name it.
+                executionId: execution.id,
                 attemptId: ctx.attempt.id,
                 artifactHash: ctx.attempt.artifactHash,
                 state,
@@ -1558,7 +1588,17 @@ export function makeWorkflowRunsRepository(
           // Checked before anything is written, and checked separately, because they fail for
           // different reasons and a caller has to be able to tell them apart: the destination is
           // gone, versus the run moved on since this Resume was prepared.
-          if (!placementIsLive(db, run.destination.worktreeId, run.destination.surfaceId)) {
+          //
+          // Both halves of the environment gate are required. Live placement is the authority, but
+          // the persisted flag is what the *claim* consults, so accepting a Resume while it is down
+          // would lift the pause and hand the dispatcher a run it then refuses — a run left running
+          // in name, undispatchable in fact, with nothing on record saying why. A stale flag is
+          // corrected where it is derived, by startup re-derivation, not by the control that is
+          // supposed to be honouring it.
+          if (
+            !run.environmentAvailable ||
+            !placementIsLive(db, run.destination.worktreeId, run.destination.surfaceId)
+          ) {
             return rejected<void>({
               kind: 'environment_unavailable',
               worktreeId: run.destination.worktreeId,
@@ -1770,15 +1810,63 @@ export function makeWorkflowRunsRepository(
         return parked;
       }),
 
-    parkEnvironmentDeleted: (input) =>
+    applyEnvironmentAvailability: (input) =>
       Effect.gen(function* () {
         const detail = yield* publish(input.detail);
-        return yield* database.transaction('workflow_park_environment_deleted', (db) => {
+        return yield* database.transaction('workflow_apply_environment_availability', (db) => {
           const now = new Date().toISOString();
-          const parked: number[] = [];
+          const changed: number[] = [];
           for (const runId of input.runIds) {
             const row = findRunRow(db, runId);
-            if (!row || isTerminal(row.status)) continue;
+            if (!row) continue;
+            const control = input.available ? 'environment_restored' : 'environment_deleted';
+            const recordedDetail = detail ?? {
+              inline: JSON.stringify({ control }),
+              ref: null,
+            };
+
+            if (input.available) {
+              // Restoration lifts nothing on its own. A run paused because its environment vanished
+              // stays paused until a person resumes it: the runtime learning that a worktree is back
+              // is not the same as a person asking for the work to continue. The gate flag and the
+              // recorded fact are all that change.
+              if (row.environmentAvailable) continue;
+              db.update(workflowRuns)
+                .set({ environmentAvailable: true, updatedAt: now })
+                .where(eq(workflowRuns.id, runId))
+                .run();
+              appendTransitions(
+                db,
+                runId,
+                [{ kind: 'control_applied', detail: recordedDetail }],
+                now,
+              );
+              changed.push(runId);
+              continue;
+            }
+
+            if (isTerminal(row.status)) {
+              // A stopped run is not parked — there is nothing left to gate — but the loss is still
+              // recorded. Its attachment has already cascaded away, and a run that never transitions
+              // again would otherwise keep reporting a surface that no longer exists.
+              if (!row.environmentAvailable) continue;
+              db.update(workflowRuns)
+                .set({ environmentAvailable: false, updatedAt: now })
+                .where(eq(workflowRuns.id, runId))
+                .run();
+              appendTransitions(
+                db,
+                runId,
+                [{ kind: 'control_applied', detail: recordedDetail }],
+                now,
+              );
+              changed.push(runId);
+              continue;
+            }
+
+            // Already parked for this absence: nothing to say, and nothing to draw twice.
+            if (!row.environmentAvailable && row.paused) continue;
+
             const drafts = openPause(db, runId, 'environment_deleted', now);
             db.update(workflowRuns)
               .set({ paused: true, environmentAvailable: false, updatedAt: now })
@@ -1787,30 +1875,13 @@ export function makeWorkflowRunsRepository(
             appendTransitions(
               db,
               runId,
-              [
-                ...drafts,
-                {
-                  kind: 'control_applied',
-                  detail: detail ?? {
-                    inline: JSON.stringify({ control: 'environment_deleted' }),
-                    ref: null,
-                  },
-                },
-              ],
+              [...drafts, { kind: 'control_applied', detail: recordedDetail }],
               now,
             );
-            parked.push(runId);
+            changed.push(runId);
           }
-          return parked;
+          return changed;
         });
-      }),
-
-    setEnvironmentAvailable: (input) =>
-      database.use('workflow_set_environment_available', (db) => {
-        db.update(workflowRuns)
-          .set({ environmentAvailable: input.available, updatedAt: new Date().toISOString() })
-          .where(eq(workflowRuns.id, input.runId))
-          .run();
       }),
 
     blockRun: (input) =>

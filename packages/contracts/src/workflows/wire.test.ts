@@ -899,6 +899,69 @@ test('a subgraph visit with no attempt at all is representable', () => {
   assert.equal(mapping.attemptCount, 0);
 });
 
+test('a frame-owned segment carries its own failure, and absence still means never attempted', () => {
+  // A failed initialization: the frame has an entry segment and nothing else to show for itself.
+  const failed = decode(workflowFrameSchema, {
+    ...frame,
+    status: 'initializing',
+    entry: {
+      ...frame.entry,
+      endedAt: at,
+      latestAttempt: {
+        ...frame.entry.latestAttempt,
+        status: 'failed',
+        failure: { code: 'graph_init_failed', message: 'init threw', detail: null },
+        recoveryMode: 'rerun_producer',
+        producerArtifactHash: null,
+      },
+    },
+  });
+  assert.equal(failed.entry?.latestAttempt.failure?.code, 'graph_init_failed');
+  assert.equal(failed.output, null);
+  assert.equal(failed.outputEvaluation, null, 'never attempted stays distinguishable from failed');
+
+  // An output evaluation that failed before any outcome exists: a segment, and still no output.
+  const evaluating = decode(workflowFrameSchema, {
+    ...frame,
+    outputEvaluation: {
+      segmentKind: 'graph_output',
+      segmentRef: 'delivered',
+      attemptCount: 2,
+      startedAt: at,
+      endedAt: null,
+      endCertainty: 'unknown',
+      firstArtifactHash: 'sha256:pin3',
+      latestArtifactHash: 'sha256:pin4',
+      latestAttempt: {
+        ...frame.entry.latestAttempt,
+        attemptIndex: 2,
+        artifactHash: 'sha256:pin4',
+        invocationKind: 'retry',
+        status: 'running',
+        failure: null,
+      },
+      priorFailures: [
+        {
+          attemptId: 3,
+          attemptIndex: 1,
+          segmentKind: 'graph_output',
+          artifactHash: 'sha256:pin3',
+          failure: { code: 'output_evaluation_failed', message: 'threw', detail: null },
+          repairedByAttemptIndex: null,
+          repairedByArtifactHash: null,
+        },
+      ],
+    },
+  });
+  assert.equal(evaluating.output, null, 'a segment exists before the value it would publish does');
+  assert.equal(
+    evaluating.outputEvaluation?.priorFailures[0]?.failure.code,
+    'output_evaluation_failed',
+  );
+  assert.equal(evaluating.outputEvaluation?.firstArtifactHash, 'sha256:pin3');
+  assert.equal(evaluating.outputEvaluation?.latestArtifactHash, 'sha256:pin4');
+});
+
 test('the designed frame, execution, attempt and certainty vocabularies decode', () => {
   for (const status of ['initializing', 'active', 'completed']) {
     assert.equal(decode(workflowFrameSchema, { ...frame, status }).status, status);
@@ -1012,6 +1075,28 @@ const frame = {
   status: 'active',
   displayName: null,
   labelDiagnostic: null,
+  entry: {
+    segmentKind: 'graph_entry',
+    segmentRef: null,
+    attemptCount: 1,
+    startedAt: at,
+    endedAt: at,
+    endCertainty: 'observed',
+    firstArtifactHash: 'sha256:pin3',
+    latestArtifactHash: 'sha256:pin3',
+    latestAttempt: {
+      attemptId: 3,
+      attemptIndex: 1,
+      artifactHash: 'sha256:pin3',
+      status: 'succeeded',
+      invocationKind: 'initial',
+      failure: null,
+      recoveryMode: 'reuse_producer_output',
+      producerArtifactHash: 'sha256:pin3',
+    },
+    priorFailures: [],
+  },
+  outputEvaluation: null,
   output: null,
   enteredAt: at,
   completedAt: null,

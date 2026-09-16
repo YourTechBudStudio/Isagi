@@ -71,6 +71,13 @@
       "when": 1789509988123,
       "tag": "0009_graph_workflow_records",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789532553140,
+      "tag": "0010_workflow_transition_changes",
+      "breakpoints": true
     }
   ]
 }

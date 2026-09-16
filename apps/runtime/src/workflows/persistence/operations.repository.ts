@@ -29,6 +29,12 @@ import type {
 import { operationRecord } from './row-mappers.js';
 import { isTerminalRunStatus, type RecordedValue } from './runs.repository.js';
 import { slotColumns } from './slots.js';
+import {
+  silentWriteWake,
+  wakingDatabase,
+  WorkflowWriteWake,
+  type WorkflowWriteWakeService,
+} from './write-wake.js';
 
 /**
  * States from which an operation can still move.
@@ -224,17 +230,21 @@ export const WorkflowOperationsRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const payloads = yield* WorkflowPayloadStore;
-    return makeWorkflowOperationsRepository(database, payloads);
+    const wake = yield* WorkflowWriteWake;
+    return makeWorkflowOperationsRepository(database, payloads, wake);
   }),
 );
 
 export function makeWorkflowOperationsRepository(
-  database: Pick<
+  runtimeDatabase: Pick<
     import('../../persistence/index.js').RuntimeDatabaseService,
     'use' | 'transaction'
   >,
   payloads: WorkflowPayloadStoreService,
+  /** Told that a write finished, never what it wrote. Defaults to nobody listening. */
+  wake: WorkflowWriteWakeService = silentWriteWake,
 ): WorkflowOperationsRepositoryService {
+  const database = wakingDatabase(runtimeDatabase, wake);
   const find = (db: RuntimeDrizzleDatabase, operationId: number) =>
     db.select().from(workflowOperations).where(eq(workflowOperations.id, operationId)).get();
 
