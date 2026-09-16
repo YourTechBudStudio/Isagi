@@ -13,17 +13,26 @@ import {
 import type { UpdaterDiagnosticRecord, UpdaterDiagnosticSink } from './diagnostics.js';
 
 class FakeUpdater extends EventEmitter implements UpdaterAdapter {
+  // Every flag starts at the opposite of what `start` must set, so a
+  // configuration that silently stopped being applied cannot pass.
   allowPrerelease = true;
-  autoDownload = false;
+  autoDownload = true;
   autoInstallOnAppQuit = true;
   autoRunAppAfterInstall = false;
   checks = 0;
+  downloads = 0;
   installs = 0;
   rejection: Error | undefined;
+  downloadRejection: Error | undefined;
 
   checkForUpdates() {
     this.checks += 1;
     return this.rejection ? Promise.reject(this.rejection) : Promise.resolve(null);
+  }
+
+  downloadUpdate() {
+    this.downloads += 1;
+    return this.downloadRejection ? Promise.reject(this.downloadRejection) : Promise.resolve(null);
   }
 
   quitAndInstall() {
@@ -118,34 +127,55 @@ function harness(
   return { coordinator, diagnostics, flushes: () => flushes, timers, updater };
 }
 
-test('start is idempotent, configures stable automatic downloads, and owns fixed scheduling', async () => {
+test('start is idempotent, never downloads on its own, and checks at once', async () => {
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
   await Effect.runPromise(subject.coordinator.start());
   assert.equal(subject.updater.allowPrerelease, false);
-  assert.equal(subject.updater.autoDownload, true);
+  // The whole point of the surface: finding an update must produce news to act
+  // on, never a silent fetch the user only learns about once it has finished.
+  assert.equal(subject.updater.autoDownload, false);
   assert.equal(subject.updater.autoInstallOnAppQuit, false);
   assert.equal(subject.updater.autoRunAppAfterInstall, true);
   assert.equal(subject.updater.listenerCount('error'), 1);
-  assert.deepEqual(
-    [...subject.timers.timeouts.values()].map((timer) => timer.milliseconds),
-    [30_000],
-  );
 
-  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
+  // No waiting timer at all — the launch check has already gone out, and it
+  // announces itself so the rail can say that Isagi looked.
   assert.equal(subject.updater.checks, 1);
+  assert.equal(snapshotState(subject.coordinator), 'checking');
+  assert.deepEqual([...subject.timers.timeouts.values()], []);
   assert.deepEqual(
     [...subject.timers.intervals.values()].map((timer) => timer.milliseconds),
     [14_400_000],
   );
+
+  // Nobody asked for the launch check, so its outcome is not spent on the rail.
   subject.updater.emit('update-not-available', { version: '1.2.3' });
+  assert.equal(snapshotState(subject.coordinator), 'idle');
   subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
   assert.equal(subject.updater.checks, 2);
+});
+
+test('a launch check that fails takes its own token back down without reporting', async () => {
+  // The user did not ask, so they do not see the failure — but they must not be
+  // left looking at `checking…` for the rest of the session either.
+  const subject = harness();
+  await Effect.runPromise(subject.coordinator.start());
+  assert.equal(snapshotState(subject.coordinator), 'checking');
+
+  subject.updater.emit('error', new Error('no provider'));
+
+  assert.equal(snapshotState(subject.coordinator), 'idle');
+  assert.deepEqual(
+    subject.diagnostics.map((record) => record.code),
+    ['updater_error'],
+  );
 });
 
 test('manual no-update is visible for five seconds and a new check cancels that timer', async () => {
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
+  subject.updater.emit('update-not-available', { version: '1.2.3' });
   await Effect.runPromise(subject.coordinator.checkForUpdates());
   assert.equal(snapshotState(subject.coordinator), 'checking');
   subject.updater.emit('update-not-available', { version: '1.2.3' });
@@ -166,21 +196,38 @@ function snapshotState(coordinator: UpdaterCoordinator) {
   return coordinator.snapshot.state;
 }
 
-test('automatic download owns the lock, normalizes progress, and reaches ready', async () => {
+test('a found update waits for the user, and only then does the download own the lock', async () => {
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
   subject.updater.emit('update-available', { version: '2.0.0' });
+
+  // Found, and nothing fetched. This is the state the rail exists to show.
   assert.deepEqual(subject.coordinator.snapshot, {
-    protocolVersion: 1,
+    protocolVersion: 2,
     revision: 2,
+    state: 'update_available',
+    installedVersion: '1.2.3',
+    targetVersion: '2.0.0',
+  });
+  assert.equal(subject.updater.downloads, 0);
+
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
+  assert.equal(subject.updater.downloads, 1);
+  assert.deepEqual(subject.coordinator.snapshot, {
+    protocolVersion: 2,
+    revision: 3,
     state: 'downloading',
     installedVersion: '1.2.3',
     targetVersion: '2.0.0',
     progressPercent: 0,
   });
+
+  // A download in flight owns the lock: neither a second check nor a second
+  // press may start anything alongside it.
   await Effect.runPromise(subject.coordinator.checkForUpdates());
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
   assert.equal(subject.updater.checks, 1);
+  assert.equal(subject.updater.downloads, 1);
   subject.updater.emit('download-progress', { percent: Number.POSITIVE_INFINITY });
   assert.equal(
     subject.coordinator.snapshot.state === 'downloading'
@@ -197,19 +244,52 @@ test('automatic download owns the lock, normalizes progress, and reaches ready',
   );
   subject.updater.emit('update-downloaded', { version: '2.0.0' });
   assert.equal(subject.coordinator.snapshot.state, 'ready');
-  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
   subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
   assert.equal(subject.updater.checks, 1);
+});
+
+test('a scheduled check never occupies the slot while a download waits to be pressed', async () => {
+  // The control is enabled and the rail says nothing about a background check,
+  // so a poll that claimed the in-flight slot would turn the press into a
+  // silent no-op — and republish identical facts, so not even a revision would
+  // arrive for the client to recover on.
+  const subject = harness();
+  await Effect.runPromise(subject.coordinator.start());
+  subject.updater.emit('update-available', { version: '2.0.0' });
+
+  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
+  assert.equal(subject.updater.checks, 1, 'a scheduled check ran while an update was on offer');
+
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
+  assert.equal(subject.updater.downloads, 1);
+  assert.equal(subject.coordinator.snapshot.state, 'downloading');
+});
+
+test('a scheduled check never occupies the slot while a failed download waits to be retried', async () => {
+  const subject = harness();
+  await Effect.runPromise(subject.coordinator.start());
+  subject.updater.emit('update-available', { version: '2.0.0' });
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
+  subject.updater.emit('error', new Error('download failed'));
+  assert.equal(subject.coordinator.snapshot.state, 'failed');
+
+  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
+  assert.equal(subject.updater.checks, 1, 'a scheduled check ran while a retry was on offer');
+
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
+  assert.equal(subject.updater.downloads, 2);
+  assert.equal(subject.coordinator.snapshot.state, 'downloading');
 });
 
 test('scheduled failures preserve an older manual failure and scheduled success replaces it', async () => {
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
+  subject.updater.emit('update-not-available', { version: '1.2.3' });
   await Effect.runPromise(subject.coordinator.checkForUpdates());
   subject.updater.emit('error', new Error('manual failed'));
   assert.equal(subject.coordinator.snapshot.state, 'failed');
 
-  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
+  subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
   subject.updater.emit('error', new Error('scheduled failed'));
   assert.equal(subject.coordinator.snapshot.state, 'failed');
   subject.timers.fireInterval(updaterSchedule.repeatCheckMs);
@@ -218,11 +298,11 @@ test('scheduled failures preserve an older manual failure and scheduled success 
   assert.equal(subject.diagnostics.length, 2);
 });
 
-test('download errors remain visible even when a scheduled check found the update', async () => {
+test('download errors stay visible and name what they failed to fetch', async () => {
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
-  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
   subject.updater.emit('update-available', { version: '2.0.0' });
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
   subject.updater.emit('error', new Error('download failed'));
   const snapshot = subject.coordinator.snapshot;
   assert.equal(snapshot.state, 'failed');
@@ -240,8 +320,8 @@ test('a download failure without a usable provider version still produces a snap
   // leave the coordinator unable to report the failure at all.
   const subject = harness();
   await Effect.runPromise(subject.coordinator.start());
-  subject.timers.fireTimeout(updaterSchedule.firstCheckMs);
   subject.updater.emit('update-available', {});
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
   subject.updater.emit('error', new Error('download failed'));
   const snapshot = subject.coordinator.snapshot;
 
@@ -279,8 +359,9 @@ test('a self-updating build has no manual state for a launch outcome to land on'
 
 test('promise rejection and idle error events are diagnosed without duplicate visible transitions', async () => {
   const subject = harness();
-  subject.updater.rejection = new Error('https://user:secret@example.test/?token=hidden');
   await Effect.runPromise(subject.coordinator.start());
+  subject.updater.emit('update-not-available', { version: '1.2.3' });
+  subject.updater.rejection = new Error('https://user:secret@example.test/?token=hidden');
   await Effect.runPromise(subject.coordinator.checkForUpdates());
   await Promise.resolve();
   assert.equal(subject.coordinator.snapshot.state, 'failed');
@@ -296,11 +377,11 @@ test('revisions change only with visible facts and stop suppresses late events a
   const revisions: number[] = [];
   subject.coordinator.subscribe((snapshot) => revisions.push(snapshot.revision));
   await Effect.runPromise(subject.coordinator.start());
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
   subject.updater.emit('update-available', { version: '2.0.0' });
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
   subject.updater.emit('download-progress', { percent: 10 });
   subject.updater.emit('download-progress', { percent: 10 });
-  assert.deepEqual(revisions, [1, 2, 3]);
+  assert.deepEqual(revisions, [1, 2, 3, 4]);
   await Effect.runPromise(subject.coordinator.stop());
   await Effect.runPromise(subject.coordinator.stop());
   subject.updater.emit('update-downloaded', { version: '2.0.0' });
@@ -311,10 +392,11 @@ test('revisions change only with visible facts and stop suppresses late events a
   assert.equal(subject.flushes(), 1);
 });
 
+/** checking (1) · update_available (2) · downloading (3) · ready (4). */
 async function reachReady(subject: ReturnType<typeof harness>) {
   await Effect.runPromise(subject.coordinator.start());
-  await Effect.runPromise(subject.coordinator.checkForUpdates());
   subject.updater.emit('update-available', { version: '2.0.0' });
+  await Effect.runPromise(subject.coordinator.downloadUpdate());
   subject.updater.emit('update-downloaded', { version: '2.0.0' });
 }
 
@@ -332,8 +414,8 @@ test('clear restart readiness installs while working and unknown readiness requi
   await reachReady(working);
   await Effect.runPromise(working.coordinator.requestRestart());
   assert.deepEqual(working.coordinator.snapshot, {
-    protocolVersion: 1,
-    revision: 4,
+    protocolVersion: 2,
+    revision: 5,
     state: 'restart_confirmation',
     installedVersion: '1.2.3',
     targetVersion: '2.0.0',
@@ -366,8 +448,8 @@ test('restart cancellation preserves the target and confirmation installs withou
   await Effect.runPromise(subject.coordinator.requestRestart());
   await Effect.runPromise(subject.coordinator.cancelRestart());
   assert.deepEqual(subject.coordinator.snapshot, {
-    protocolVersion: 1,
-    revision: 5,
+    protocolVersion: 2,
+    revision: 6,
     state: 'ready',
     installedVersion: '1.2.3',
     targetVersion: '2.0.0',

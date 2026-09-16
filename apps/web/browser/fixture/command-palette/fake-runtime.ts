@@ -479,6 +479,7 @@ export function installFakeRuntime(): CommandPaletteRuntimeControls {
         id: current.id,
         name: current.name,
         rootPath: requestedPath,
+        kind: current.kind,
         status: 'present',
         worktrees: current.worktrees,
       };
@@ -611,6 +612,7 @@ function registeredProject(
     id: projectId,
     name: rootPath.split('/').filter(Boolean).at(-1) ?? rootPath,
     rootPath,
+    kind: 'git',
     status: 'present',
     worktrees: [
       {

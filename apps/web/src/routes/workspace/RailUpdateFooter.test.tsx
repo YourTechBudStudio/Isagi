@@ -20,7 +20,7 @@ function render(
       onRestart={noop}
       onCancelRestart={noop}
       onConfirmRestart={noop}
-      onRetryDownload={noop}
+      onDownload={noop}
       onOpenDownloadPage={noop}
     />,
   );
@@ -48,6 +48,7 @@ describe('RailUpdateFooter', () => {
 
     for (const state of [
       { kind: 'checking' },
+      { kind: 'update-available', version: '0.4.3' },
       { kind: 'downloading', version: '0.4.3', percent: 12 },
       { kind: 'ready', version: '0.4.3' },
       { kind: 'installing', version: '0.4.3' },
@@ -83,9 +84,37 @@ describe('RailUpdateFooter', () => {
   it('offers the restart action with the target version in assistive text', () => {
     const markup = render({ kind: 'ready', version: '0.4.3' });
 
-    assert.match(markup, /Restart to update/);
-    assert.match(markup, /aria-label="Restart to update to Isagi 0\.4\.3"/);
+    // Verb first, both consequences named: the label has to read as a target,
+    // not as an instruction to go and restart the app yourself.
+    assert.match(markup, /Install &amp; restart/);
+    assert.match(markup, /aria-label="Install Isagi 0\.4\.3 and restart"/);
     assert.match(markup, /data-update-hairline="ready"/);
+  });
+
+  it('announces a found update as a delta the user can act on', () => {
+    const markup = render({ kind: 'update-available', version: '0.4.3' });
+
+    // The version token carries the news; the label says what pressing does and
+    // does not repeat the version sitting beside it.
+    assert.match(markup, /data-target-version[^>]*>0\.4\.3</);
+    assert.match(markup, />Download</);
+    assert.doesNotMatch(markup, /Download 0\.4\.3</);
+    assert.match(markup, /aria-label="Isagi 0\.4\.3 is available\. You have 0\.4\.2\."/);
+    assert.match(markup, /data-update-hairline="update-available"/);
+    // Nothing has been fetched, so nothing may claim progress.
+    assert.doesNotMatch(markup, /role="progressbar"/);
+  });
+
+  it('shows no delta when there is no target version to show', () => {
+    for (const state of [
+      { kind: 'idle' },
+      { kind: 'checking' },
+      { kind: 'up-to-date' },
+      { kind: 'check-failed' },
+      { kind: 'manual-required', openFailed: false },
+    ] satisfies DesktopUpdateState[]) {
+      assert.doesNotMatch(render(state), /data-target-version/, `${state.kind} invented a target`);
+    }
   });
 
   it('leaves no action to press while the app is closing to install', () => {
@@ -108,7 +137,7 @@ describe('RailUpdateFooter', () => {
   it('sends a build that cannot replace itself to the download page', () => {
     const markup = render({ kind: 'manual-required', openFailed: false });
 
-    assert.match(markup, /update manually/);
+    assert.match(markup, /Open download page/);
     assert.match(markup, /data-manual-control/);
     // Amber, not red: nothing failed — this build just installs by hand.
     assert.match(markup, /data-update-hairline="manual-required"/);
@@ -126,11 +155,11 @@ describe('RailUpdateFooter', () => {
     // retry is exactly the right thing to do.
     assert.match(markup, /data-manual-control/);
     assert.doesNotMatch(markup, /data-manual-control[^>]*disabled=""/);
-    assert.match(markup, /couldn&#x27;t open/);
+    assert.match(markup, />Try again</);
     assert.match(markup, /Couldn&#x27;t open the download page in a browser\. Try again\./);
     // A user-asked-for action that did nothing is a failure, so it reads as one.
     assert.match(markup, /text-error/);
-    assert.doesNotMatch(markup, /update manually/);
+    assert.doesNotMatch(markup, /Open download page/);
   });
 
   it('disables the restart control while the host is deciding', () => {
@@ -153,7 +182,10 @@ describe('RailUpdateFooter', () => {
       render({ kind: 'download-failed', version: '' }),
       /Couldn&#x27;t download the update\. Try again\./,
     );
-    assert.match(render({ kind: 'ready', version: '  ' }), /aria-label="Restart to update"/);
+    assert.match(
+      render({ kind: 'ready', version: '  ' }),
+      /aria-label="Install the update and restart"/,
+    );
     assert.match(
       render({ kind: 'downloading', version: '', percent: 12 }),
       /Downloading the update — 12% complete/,
@@ -185,6 +217,7 @@ const STATES: readonly DesktopUpdateState[] = [
   { kind: 'idle' },
   { kind: 'checking' },
   { kind: 'up-to-date' },
+  { kind: 'update-available', version: '0.4.3' },
   { kind: 'downloading', version: '0.4.3', percent: 0 },
   { kind: 'downloading', version: '0.4.3', percent: 97 },
   { kind: 'ready', version: '0.4.3' },

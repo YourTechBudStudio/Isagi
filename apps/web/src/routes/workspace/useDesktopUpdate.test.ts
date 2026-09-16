@@ -22,6 +22,7 @@ const SNAPSHOTS = [
   { ...base, state: 'idle' },
   { ...base, state: 'checking' },
   { ...base, state: 'up_to_date' },
+  { ...base, state: 'update_available', targetVersion: '0.4.3' },
   { ...base, state: 'downloading', targetVersion: '0.4.3', progressPercent: 38 },
   { ...base, state: 'ready', targetVersion: '0.4.3' },
   {
@@ -63,6 +64,7 @@ describe('toDesktopUpdateState', () => {
         'idle',
         'checking',
         'up-to-date',
+        'update-available',
         'downloading',
         'ready',
         // A confirmation is the ready control with a question attached, not a
@@ -82,15 +84,19 @@ describe('toDesktopUpdateState', () => {
 
   it('carries the target version wherever the user is told about one', () => {
     assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[4]), {
+      kind: 'update-available',
+      version: '0.4.3',
+    });
+    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[5]), {
       kind: 'downloading',
       version: '0.4.3',
       percent: 38,
     });
-    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[8]), {
+    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[9]), {
       kind: 'installing',
       version: '0.4.3',
     });
-    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[12]), {
+    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[13]), {
       kind: 'download-failed',
       version: '0.4.3',
     });
@@ -109,7 +115,7 @@ describe('toDesktopUpdateState', () => {
 
   it('never claims a version for a build that installs by hand', () => {
     // The state is decided during composition, before any provider is contacted.
-    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[9]), {
+    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[10]), {
       kind: 'manual-required',
       openFailed: false,
     });
@@ -118,7 +124,7 @@ describe('toDesktopUpdateState', () => {
   it('surfaces a download page that never opened, so the press is not silent', () => {
     // The host cannot report this any other way: launching a browser produces no
     // updater event, and the intent resolves whether or not it worked.
-    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[10]), {
+    assert.deepEqual(toDesktopUpdateState(SNAPSHOTS[11]), {
       kind: 'manual-required',
       openFailed: true,
     });
@@ -205,7 +211,7 @@ describe('toRestartActivity', () => {
   });
 
   it('keeps unknown activity distinct from a count', () => {
-    assert.deepEqual(toRestartActivity(SNAPSHOTS[6]), { kind: 'working', workingAgentCount: 2 });
-    assert.deepEqual(toRestartActivity(SNAPSHOTS[7]), { kind: 'unknown' });
+    assert.deepEqual(toRestartActivity(SNAPSHOTS[7]), { kind: 'working', workingAgentCount: 2 });
+    assert.deepEqual(toRestartActivity(SNAPSHOTS[8]), { kind: 'unknown' });
   });
 });

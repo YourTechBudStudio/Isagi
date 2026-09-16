@@ -23,6 +23,11 @@ export const STATE_OPTIONS: readonly FixtureStateOption[] = [
   { id: 'checking', label: 'Checking', state: { kind: 'checking' } },
   { id: 'up-to-date', label: 'Up to date', state: { kind: 'up-to-date' } },
   {
+    id: 'update-available',
+    label: 'Update available',
+    state: { kind: 'update-available', version: NEXT_VERSION },
+  },
+  {
     id: 'downloading-0',
     label: 'Downloading 0%',
     state: { kind: 'downloading', version: NEXT_VERSION, percent: 0 },
@@ -60,7 +65,7 @@ export const STATE_OPTIONS: readonly FixtureStateOption[] = [
 /**
  * How long the simulated host takes to answer a restart request. The real one
  * reads agent activity over HTTP with a two-second ceiling, so the disabled
- * `Restart to update` state is genuinely observable and worth pinning.
+ * `Install & restart` state is genuinely observable and worth pinning.
  */
 export const RESTART_LATENCY_MS = 400;
 

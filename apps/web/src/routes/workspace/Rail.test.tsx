@@ -75,10 +75,10 @@ describe('Rail update footer seam', () => {
     // Still the restart control in the same place — the host owns the question,
     // and the footer does not move to ask it.
     assert.match(markup, /data-restart-control/);
-    assert.match(markup, /Restart to update/);
+    assert.match(markup, /Install &amp; restart/);
   });
 
-  it('routes a download retry to the check intent, which is what resumes the lifecycle', () => {
+  it('routes a download retry to the download intent, not back through a check', () => {
     const called: string[] = [];
     const view = resolveView(
       {
@@ -94,15 +94,15 @@ describe('Rail update footer seam', () => {
     );
     assert.equal(view.presence, 'resolved');
 
-    view.onRetryDownload();
+    view.onDownload();
     view.onRestart();
     view.onCancelRestart();
     view.onConfirmRestart();
     view.onOpenDownloadPage();
 
-    // There is no separate resume operation: a retry restarts the whole
-    // check/download lifecycle, and the updater downloads again on its own.
-    assert.deepEqual(called, ['check', 'restart', 'cancel', 'confirm', 'download-page']);
+    // The provider still knows what the check found, so the remedy for a failed
+    // fetch is another fetch — not a second round trip through the check.
+    assert.deepEqual(called, ['download', 'restart', 'cancel', 'confirm', 'download-page']);
   });
 });
 
@@ -113,6 +113,7 @@ function resolveView(snapshot: DesktopUpdateSnapshot, handlers = handlersRecordi
 function handlersRecording(called: string[]): DesktopUpdateHandlers {
   return {
     onCheck: () => called.push('check'),
+    onDownload: () => called.push('download'),
     onRestart: () => called.push('restart'),
     onCancelRestart: () => called.push('cancel'),
     onConfirmRestart: () => called.push('confirm'),

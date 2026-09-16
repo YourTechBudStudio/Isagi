@@ -6,7 +6,6 @@ import type { UpdaterDiagnosticSink } from './diagnostics.js';
 import type { DownloadPageOutcome } from './download-page.js';
 
 export const updaterSchedule = {
-  firstCheckMs: 30_000,
   repeatCheckMs: 4 * 60 * 60 * 1_000,
   upToDateMs: 5_000,
 } as const;
@@ -28,6 +27,7 @@ export interface UpdaterAdapter {
   autoInstallOnAppQuit: boolean;
   autoRunAppAfterInstall: boolean;
   checkForUpdates(): Promise<unknown>;
+  downloadUpdate(): Promise<unknown>;
   quitAndInstall(): void;
   on(event: UpdaterEvent, listener: UpdaterListener): unknown;
   off(event: UpdaterEvent, listener: UpdaterListener): unknown;
@@ -46,6 +46,7 @@ export interface DesktopUpdaterService {
   start(): Effect.Effect<void>;
   stop(): Effect.Effect<void>;
   checkForUpdates(): Effect.Effect<void>;
+  downloadUpdate(): Effect.Effect<void>;
   requestRestart(): Effect.Effect<void>;
   confirmRestart(): Effect.Effect<void>;
   cancelRestart(): Effect.Effect<void>;
@@ -81,10 +82,22 @@ type SnapshotFacts = DesktopUpdateSnapshot extends infer Snapshot
     ? Omit<Snapshot, 'protocolVersion' | 'revision'>
     : never
   : never;
+/**
+ * Two independent facts about one in-flight operation, because the three ways a
+ * check can start need three different answers:
+ *
+ * - the launch check announces itself (`checking…` is how the user learns Isagi
+ *   looks at all) but its failure is not theirs to see, because they did not ask;
+ * - the four-hourly poll announces nothing and reports nothing;
+ * - a check the user pressed does both.
+ */
 type ActiveOperation = {
   readonly generation: number;
   phase: 'check' | 'download';
-  manual: boolean;
+  /** Publishes the in-flight state, so the rail says what is happening. */
+  readonly announce: boolean;
+  /** The user asked for this, so its outcome — either way — is theirs to see. */
+  readonly manual: boolean;
 };
 
 /**
@@ -149,7 +162,6 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   #started = false;
   #stopped = false;
   #active: ActiveOperation | undefined;
-  #firstCheckTimer: unknown;
   #repeatCheckTimer: unknown;
   #transientTimer: unknown;
   #readinessGeneration: number | undefined;
@@ -183,23 +195,31 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     return this.#store.subscribe(listener);
   }
 
+  /**
+   * Looks immediately, and never downloads on its own.
+   *
+   * Both halves answer the same complaint: an update the user was never told
+   * about. The check runs at launch rather than on a timer, so the rail has the
+   * answer by the time they have finished looking at the window; and
+   * `autoDownload` is off, so finding an update produces news to act on instead
+   * of a silent ~150MB fetch whose only visible trace is the state after it.
+   */
   start(): Effect.Effect<void> {
     return Effect.sync(() => {
       if (this.#started || this.#stopped) return;
       this.#started = true;
       this.#updater.allowPrerelease = false;
-      this.#updater.autoDownload = true;
+      this.#updater.autoDownload = false;
       this.#updater.autoInstallOnAppQuit = false;
       this.#updater.autoRunAppAfterInstall = true;
       for (const [event, listener] of this.#eventListeners) this.#updater.on(event, listener);
-      this.#firstCheckTimer = this.#timers.setTimeout(() => {
-        this.#firstCheckTimer = undefined;
-        this.#runScheduledCheck();
-        this.#repeatCheckTimer = this.#timers.setInterval(
-          () => this.#runScheduledCheck(),
-          updaterSchedule.repeatCheckMs,
-        );
-      }, updaterSchedule.firstCheckMs);
+      // Announced but not manual: the user sees that Isagi looked, and does not
+      // see a failure they did not ask for.
+      this.#beginCheck({ announce: true, manual: false });
+      this.#repeatCheckTimer = this.#timers.setInterval(
+        () => this.#runScheduledCheck(),
+        updaterSchedule.repeatCheckMs,
+      );
     });
   }
 
@@ -210,7 +230,6 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
       this.#generation += 1;
       this.#active = undefined;
       this.#readinessGeneration = undefined;
-      this.#clearTimer('first');
       this.#clearTimer('repeat');
       this.#clearTimer('transient');
       if (this.#started) {
@@ -222,7 +241,20 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   checkForUpdates(): Effect.Effect<void> {
-    return Effect.sync(() => this.#beginCheck(true));
+    return Effect.sync(() => this.#beginCheck({ announce: true, manual: true }));
+  }
+
+  /**
+   * Fetches the update the last check found. Only the user starts this, which is
+   * why it is an intent of its own rather than something `update_available`
+   * drifts into on a timer.
+   *
+   * A failed download is a legal starting point as well as `update_available`:
+   * the provider still knows what it found, so the retry is another download
+   * rather than a second round trip through the check.
+   */
+  downloadUpdate(): Effect.Effect<void> {
+    return Effect.sync(() => this.#beginDownload());
   }
 
   requestRestart(): Effect.Effect<void> {
@@ -311,15 +343,19 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
         : this.#writeLifecycle(DOWNLOAD_PAGE_FAILURE.code, DOWNLOAD_PAGE_FAILURE.summary);
   }
 
+  /**
+   * The check is over the moment an update is found. Nothing is in flight after
+   * this, because nothing else happens until the user presses — so the active
+   * operation is cleared rather than rolled into a download phase.
+   */
   readonly #onUpdateAvailable: UpdaterListener = (value) => {
-    if (!this.#ownsActiveGeneration()) return;
-    const targetVersion = updateVersion(value);
-    this.#active = { ...this.#active!, phase: 'download' };
+    const active = this.#active;
+    if (!active || active.phase !== 'check' || !this.#ownsGeneration(active.generation)) return;
+    this.#active = undefined;
     this.#store.publish({
-      state: 'downloading',
+      state: 'update_available',
       installedVersion: this.#installedVersion,
-      targetVersion,
-      progressPercent: 0,
+      targetVersion: updateVersion(value),
     });
   };
 
@@ -384,22 +420,47 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
   }
 
   #runScheduledCheck() {
-    if (isRestartLocked(this.#store.snapshot)) return;
-    this.#beginCheck(false);
+    if (suppressesScheduledCheck(this.#store.snapshot)) return;
+    this.#beginCheck({ announce: false, manual: false });
   }
 
-  #beginCheck(manual: boolean) {
+  /**
+   * The lock here is only the restart one, deliberately narrower than the
+   * scheduled path's: a check the user pressed is allowed to run from a state a
+   * timer may not disturb, because they asked and a timer did not.
+   */
+  #beginCheck(options: { readonly announce: boolean; readonly manual: boolean }) {
     if (!this.#started || this.#stopped || this.#active || isRestartLocked(this.#store.snapshot))
       return;
     this.#clearTimer('transient');
     const generation = this.#generation;
-    this.#active = { generation, phase: 'check', manual };
-    if (manual)
+    this.#active = { generation, phase: 'check', ...options };
+    if (options.announce)
       this.#store.publish({ state: 'checking', installedVersion: this.#installedVersion });
     void this.#updater.checkForUpdates().catch((error: unknown) => {
       if (!this.#active || this.#active.phase !== 'check' || !this.#ownsGeneration(generation))
         return;
       this.#handleFailure('check', 'check_rejected', error);
+    });
+  }
+
+  #beginDownload() {
+    if (!this.#started || this.#stopped || this.#active) return;
+    const targetVersion = downloadableVersion(this.#store.snapshot);
+    if (targetVersion === undefined) return;
+    this.#clearTimer('transient');
+    const generation = this.#generation;
+    this.#active = { generation, phase: 'download', announce: true, manual: true };
+    this.#store.publish({
+      state: 'downloading',
+      installedVersion: this.#installedVersion,
+      targetVersion,
+      progressPercent: 0,
+    });
+    void this.#updater.downloadUpdate().catch((error: unknown) => {
+      if (!this.#active || this.#active.phase !== 'download' || !this.#ownsGeneration(generation))
+        return;
+      this.#handleFailure('download', 'download_rejected', error);
     });
   }
 
@@ -411,7 +472,16 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     // one, and the target version is only still available on the outgoing state.
     const targetVersion = this.#targetVersion();
     void this.#writeDiagnostic(operation, code, error);
-    if (operation === 'check' && !active.manual) return;
+    if (operation === 'check' && !active.manual) {
+      // A check the user did not ask for never spends the rail on its failure.
+      // One that announced itself still has to take its own token back down —
+      // otherwise the launch check leaves `checking…` on screen forever — but a
+      // silent poll leaves the rail exactly as it found it, including an older
+      // failure the user has not dealt with yet.
+      if (active.announce && this.#store.snapshot.state === 'checking')
+        this.#store.publish({ state: 'idle', installedVersion: this.#installedVersion });
+      return;
+    }
     this.#store.publish(
       operation === 'check'
         ? {
@@ -480,11 +550,8 @@ export class UpdaterCoordinator implements DesktopUpdaterService {
     return !this.#stopped && generation === this.#generation;
   }
 
-  #clearTimer(kind: 'first' | 'repeat' | 'transient') {
-    if (kind === 'first' && this.#firstCheckTimer !== undefined) {
-      this.#timers.clearTimeout(this.#firstCheckTimer);
-      this.#firstCheckTimer = undefined;
-    } else if (kind === 'repeat' && this.#repeatCheckTimer !== undefined) {
+  #clearTimer(kind: 'repeat' | 'transient') {
+    if (kind === 'repeat' && this.#repeatCheckTimer !== undefined) {
       this.#timers.clearInterval(this.#repeatCheckTimer);
       this.#repeatCheckTimer = undefined;
     } else if (kind === 'transient' && this.#transientTimer !== undefined) {
@@ -538,6 +605,7 @@ const inertUpdaterService: Omit<DesktopUpdaterService, 'snapshot'> = {
   start: () => Effect.void,
   stop: () => Effect.void,
   checkForUpdates: () => Effect.void,
+  downloadUpdate: () => Effect.void,
   requestRestart: () => Effect.void,
   confirmRestart: () => Effect.void,
   cancelRestart: () => Effect.void,
@@ -590,6 +658,7 @@ class ManualUpdateService implements DesktopUpdaterService {
 
   start = () => Effect.void;
   checkForUpdates = () => Effect.void;
+  downloadUpdate = () => Effect.void;
   requestRestart = () => Effect.void;
   confirmRestart = () => Effect.void;
   cancelRestart = () => Effect.void;
@@ -632,6 +701,42 @@ class ManualUpdateService implements DesktopUpdaterService {
       summary: DOWNLOAD_PAGE_FAILURE.summary,
     });
   }
+}
+
+/**
+ * The version a download may be started for, or `undefined` when there is
+ * nothing to fetch. Read from the snapshot rather than held beside it, so the
+ * fact the user is looking at is the fact the download acts on.
+ */
+function downloadableVersion(snapshot: DesktopUpdateSnapshot) {
+  if (snapshot.state === 'update_available') return snapshot.targetVersion;
+  if (snapshot.state === 'failed' && snapshot.operation === 'download')
+    return snapshot.targetVersion;
+  return undefined;
+}
+
+/**
+ * States a *scheduled* check may not interrupt. Two reasons, one rule.
+ *
+ * A restart in flight must not have the rail changed underneath it.
+ *
+ * And a download the user has not started yet — offered, or offered again after
+ * a failure — is a live control they may press at any moment. A background check
+ * that quietly claimed the in-flight slot would make that press do nothing at
+ * all, and do it invisibly: the check announces nothing, so the control stays
+ * enabled, and when it finishes it republishes facts the rail already has, which
+ * pushes no revision for the client to recover on. The user would be left
+ * pressing a button that works most of the time.
+ *
+ * Waiting costs nothing here. The version is already known, so there is nothing
+ * a fresh check could tell the user that the rail is not already showing them.
+ *
+ * A failed *check* is deliberately absent: there the poll is exactly what
+ * quietly heals the rail, and a press landing on an in-flight check still gets
+ * the answer it asked for, only without the `checking…` token.
+ */
+function suppressesScheduledCheck(snapshot: DesktopUpdateSnapshot) {
+  return downloadableVersion(snapshot) !== undefined || isRestartLocked(snapshot);
 }
 
 function isRestartLocked(snapshot: DesktopUpdateSnapshot) {

@@ -1,6 +1,6 @@
 import { Schema } from 'effect';
 
-export const DESKTOP_UPDATE_PROTOCOL_VERSION = 1 as const;
+export const DESKTOP_UPDATE_PROTOCOL_VERSION = 2 as const;
 
 const snapshotBase = {
   protocolVersion: Schema.Literal(DESKTOP_UPDATE_PROTOCOL_VERSION),
@@ -25,6 +25,17 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('idle') }),
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('checking') }),
   Schema.Struct({ ...snapshotBase, state: Schema.Literal('up_to_date') }),
+  /**
+   * An update exists and nothing has been fetched for it yet. This is the state
+   * a launch settles into when there is news, and it is deliberately distinct
+   * from `downloading`: the artifact is large, so acquiring it is the user's
+   * decision rather than something that happens to them in the background.
+   */
+  Schema.Struct({
+    ...snapshotBase,
+    state: Schema.Literal('update_available'),
+    targetVersion: Schema.String,
+  }),
   Schema.Struct({
     ...snapshotBase,
     state: Schema.Literal('downloading'),
@@ -94,6 +105,10 @@ export const desktopUpdateSnapshotSchema = Schema.Union(
 
 export const desktopUpdateIntentSchema = Schema.Union(
   Schema.Struct({ type: Schema.Literal('check_for_updates') }),
+  /** Fetches the update the last check found. Carries no version: the desktop
+   * knows what it found, and a client-supplied target would be a second source
+   * of truth for the same fact. */
+  Schema.Struct({ type: Schema.Literal('download_update') }),
   Schema.Struct({ type: Schema.Literal('request_restart') }),
   Schema.Struct({ type: Schema.Literal('confirm_restart') }),
   Schema.Struct({ type: Schema.Literal('cancel_restart') }),

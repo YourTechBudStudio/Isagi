@@ -2,14 +2,24 @@
 // line and the restart confirmation.
 //
 // This is working chrome and a consequential confirmation, so nothing here gets
-// a joke, a mono whisper aside, or a marketing verb. The footer's own labels are
-// lowercase mono tokens — they sit on the version line and read as machine
-// status, not as sentences. The confirmation is the one place that speaks in
-// full sentences, because it is asking the user to accept a consequence.
+// a joke, a mono whisper aside, or a marketing verb.
 //
-// The confirmation states what is true and no more: agents stop because Isagi
-// has to close. It does not promise the work resumes, and it does not claim data
-// is lost — neither is something this surface can honestly know.
+// The footer's trailing slot obeys one rule, and the rule is the affordance:
+//
+//   status  — lowercase mono. Machine state. Nothing to press.
+//   action  — Title Case sans. A target. Pressing it does the thing it names.
+//
+// That is the whole signal. The footer spends no border and no fill on its
+// controls — they sit on the version line at the rail's ambient contrast — so
+// the shape of the label is what tells the user whether there is something here
+// for them. A lowercase action would read as a caption, and a status in Title
+// Case would read as a button that does nothing.
+//
+// The confirmation is the one place that speaks in full sentences, because it
+// is asking the user to accept a consequence. It states what is true and no
+// more: agents stop because Isagi has to close. It does not promise the work
+// resumes, and it does not claim data is lost — neither is something this
+// surface can honestly know.
 //
 // A provider event can omit the version, so every sentence that names one has a
 // versionless form. This is presentation hardening, not validation: the sentence
@@ -22,36 +32,45 @@ const named = (version: string) => version.trim().length > 0;
 const installTarget = (version: string) => (named(version) ? version : 'the update');
 
 export const updateCopy = {
-  // Mono status tokens on the version line.
+  // Lowercase mono tokens. Status only — never something to press.
   status: {
     checking: 'checking…',
     upToDate: 'up to date',
     downloading: (percent: number) => `${percent}%`,
     installing: 'closing…',
-    checkFailed: 'check failed',
-    downloadFailed: 'download failed',
-    manualRequired: 'update manually',
-    // The remedy has not changed — only the last attempt at it. The token says
-    // what happened rather than repeating the instruction, because a control
-    // that still reads `update manually` after doing nothing is the failure.
-    downloadPageFailed: "couldn't open",
   },
 
+  // Title Case actions. Every one of these is a button, and every button is one
+  // of these. They stay short because they share a 36px line with the version.
   actions: {
     check: 'Check for updates',
-    restart: 'Restart to update',
+    download: 'Download',
+    checkAgain: 'Check again',
+    // Both retries say the same thing because the user is in the same place:
+    // the thing they pressed did not work, and pressing again is the remedy.
+    tryAgain: 'Try again',
+    restart: 'Install & restart',
+    openDownloadPage: 'Open download page',
   },
 
-  // Accessible descriptions. The visible tokens are terse by design, so the
+  // Accessible descriptions. The visible labels are terse by design, so the
   // assistive text carries the version and the consequence.
   described: {
     installed: (version: string) => `Isagi ${version} installed`,
+    // The delta on the version line is visual; this is the same fact in a
+    // sentence, for a reader who never sees the arrow.
+    available: (installedVersion: string, version: string) =>
+      named(version)
+        ? `Isagi ${version} is available. You have ${installedVersion}.`
+        : `An update is available. You have ${installedVersion}.`,
+    download: (version: string) =>
+      named(version) ? `Download Isagi ${version}` : 'Download the update',
     downloading: (version: string, percent: number) =>
       named(version)
         ? `Downloading Isagi ${version} — ${percent}% complete`
         : `Downloading the update — ${percent}% complete`,
     restart: (version: string) =>
-      named(version) ? `Restart to update to Isagi ${version}` : 'Restart to update',
+      named(version) ? `Install Isagi ${version} and restart` : 'Install the update and restart',
     installing: (version: string) =>
       named(version)
         ? `Closing Isagi to install ${version}`
