@@ -85,6 +85,11 @@ export default defineConfig({
       use: { baseURL: `http://127.0.0.1:${fixturePort}/folder-project/` },
     },
     {
+      name: 'workflow-bar',
+      testMatch: /workflow-bar\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/workflow-bar/` },
+    },
+    {
       name: 'command-palette',
       testMatch: /command-palette(-path)?\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/command-palette/` },

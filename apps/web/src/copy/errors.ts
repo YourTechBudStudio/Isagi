@@ -13,6 +13,7 @@ import type {
   WorktreeDeleteRejectionReason,
   WorktreeOperationRejectionReason,
   WorktreeOrderRejectionReason,
+  WorkflowRejectionReason,
   WorktreeSetupRejectionReason,
 } from '@isagi/contracts';
 
@@ -179,27 +180,42 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   },
   workflow_rejected: {
     summary: "Isagi couldn't complete that workflow action.",
-    byReason: {
+    byReason: byReason<WorkflowRejectionReason>({
       unknown_workflow_key: "Isagi doesn't recognize that workflow.",
       workflow_discovery_failed: "Couldn't read a workflow source path.",
       workflow_load_failed: "Couldn't load that workflow's code.",
+      no_active_worktree: 'Pick a worktree before starting a workflow.',
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
       surface_worktree_mismatch: 'That surface belongs to a different worktree.',
       pane_not_found: "That pane isn't here anymore.",
       agent_session_not_on_surface: "That agent session isn't on this surface.",
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
-      validation_failed: "Those answers didn't pass the workflow's checks.",
+      workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
+      workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
       workflow_root_surface_required: 'A workflow needs a surface to run on.',
-      workflow_root_run_required: 'That action needs the main workflow run.',
-      workflow_surface_busy: 'This surface already has a workflow running.',
+      workflow_surface_attached: 'This surface already has a workflow on it.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
-      workflow_run_not_failed: "That workflow isn't in a failed state.",
-      workflow_wait_not_satisfiable: "That workflow can't be advanced right now.",
+      workflow_run_not_retryable: "There's nothing to retry on this run right now.",
+      workflow_run_not_cancellable:
+        "That workflow has already stopped, so there's nothing to cancel.",
+      workflow_run_not_dismissible: 'Cancel this workflow before dismissing it.',
+      workflow_wait_not_found: "That question isn't waiting for an answer anymore.",
+      workflow_wait_already_resolved: 'That question was already answered.',
+      workflow_cursor_invalid: 'That view moved on. Reopen it to pick up the latest.',
       workflow_user_input_invalid:
         "Those answers didn't go through. Check the fields and try again.",
-      workflow_event_ledger_failed: "Couldn't read the workflow's event log.",
-    },
+      workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
+      workflow_version_not_adopted: 'This run never ran that version of the workflow.',
+      workflow_payload_unavailable: "Isagi couldn't read that recorded value.",
+      // Deliberately not "it failed": nobody knows whether the work landed, and saying either way
+      // would be the one thing the runtime refuses to guess.
+      workflow_operation_uncertain:
+        "Isagi can't tell whether that external step went through, so the run is holding.",
+      workflow_stale_control: 'This workflow moved on. Try that again.',
+      workflow_environment_unavailable:
+        "This workflow's worktree isn't available, so it can't carry on.",
+    }),
   },
   worktree_commands_rejected: {
     summary: "Isagi couldn't complete that command action.",

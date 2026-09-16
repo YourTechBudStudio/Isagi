@@ -855,6 +855,7 @@ test('a failed display name is a diagnostic on the row, never a failed segment',
           executionId: execution.id,
           detail: {
             value: {
+              source: 'runtime_diagnostic',
               code: 'label_failed',
               level: 'warning',
               message: "The display name for node 'writer' was not captured because it threw.",

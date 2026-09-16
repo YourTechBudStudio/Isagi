@@ -8,6 +8,7 @@ import {
   workflowLoadFailureReasonCopy,
   worktreeActionsCopy,
 } from '../../copy/index.js';
+import { workflowSummaryFixture } from '../workspace/workflow/test-support.js';
 import { assembleEntries, workflowFailureEntry } from './entries.js';
 import type { CommandErrorContent, PaletteContext, PaletteEntry } from './types.js';
 
@@ -51,7 +52,14 @@ test('broken workflow descriptors become selectable error-detail entries', () =>
           ok: false,
           workflowKey: 'broken',
           reason: 'artifact_load_failed',
-          diagnostic: 'winner: /roots/extra/broken\nshadowed: /data/workflows/broken',
+          diagnostics: [
+            { code: 'invalid_export', message: 'The module exports no workflow.', at: {} },
+            {
+              code: 'missing_entry',
+              message: 'No entry node is declared.',
+              at: { graphKey: 'root', nodeId: 'writer' },
+            },
+          ],
         },
       ],
     }),
@@ -70,13 +78,18 @@ test('broken workflow descriptors become selectable error-detail entries', () =>
   assert.equal(content.body, workflowLoadFailureReasonCopy('artifact_load_failed'));
   assert.deepEqual(content.diagnostic, {
     label: 'Diagnostic',
-    detail: 'winner: /roots/extra/broken\nshadowed: /data/workflows/broken',
+    detail:
+      'invalid_export: The module exports no workflow.\nmissing_entry at root.writer: No entry node is declared.',
   });
 });
 
 test('a broken descriptor without a diagnostic omits the detail block', () => {
   const entries = assembleEntries(
-    ctx({ workflowDescriptors: [{ ok: false, workflowKey: 'broken', reason: 'missing_build' }] }),
+    ctx({
+      workflowDescriptors: [
+        { ok: false, workflowKey: 'broken', reason: 'missing_build', diagnostics: [] },
+      ],
+    }),
   );
   const content = errorOutcome(entries.find((candidate) => candidate.id === 'workflow:broken'));
   assert.equal(content.diagnostic, undefined);
@@ -87,7 +100,7 @@ test('healthy and broken descriptors coexist as distinct row kinds', () => {
     ctx({
       workflowDescriptors: [
         { ok: true, workflowKey: 'release', manifest: { title: 'Release' } },
-        { ok: false, workflowKey: 'broken', reason: 'stale_source' },
+        { ok: false, workflowKey: 'broken', reason: 'stale_source', diagnostics: [] },
       ],
     }),
   );
@@ -103,7 +116,7 @@ test('healthy and broken descriptors coexist as distinct row kinds', () => {
 test('every load-failure reason maps to non-empty reason-specific body copy', () => {
   for (const reason of workflowLoadFailureReasonSchema.literals) {
     const entries = assembleEntries(
-      ctx({ workflowDescriptors: [{ ok: false, workflowKey: 'x', reason }] }),
+      ctx({ workflowDescriptors: [{ ok: false, workflowKey: 'x', reason, diagnostics: [] }] }),
     );
     const content = errorOutcome(entries.find((candidate) => candidate.id === 'workflow:x'));
     assert.ok(content.body && content.body.length > 0, `missing body copy for ${reason}`);
@@ -168,19 +181,13 @@ test('workflow entries are disabled while the active surface is occupied', () =>
           manifest: { title: 'Release' },
         },
       ],
-      activeSurfaceWorkflowSummary: {
+      activeSurfaceWorkflowSummary: workflowSummaryFixture({
         runId: 99,
-        rootRunId: 99,
-        parentRunId: null,
         workflowKey: 'current',
         title: 'Current workflow',
         status: 'done',
-        paused: false,
-        waitKind: null,
-        blockingWait: null,
-        worktreeId: 10,
-        surfaceId: 42,
-      },
+        attachment: { worktreeId: 10, surfaceId: 42 },
+      }),
     }),
   );
 

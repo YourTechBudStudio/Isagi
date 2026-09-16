@@ -8,6 +8,7 @@ import {
   type CommandSummary,
   type RuntimeEvent,
   type RuntimeEventInputMessage,
+  type WorkflowRunSummary,
   type WorktreeCommandsOutput,
 } from '@isagi/contracts';
 
@@ -24,10 +25,41 @@ import {
 import { resolveRuntimeEventsWebSocketUrl } from './runtime-data.js';
 import { useWorkspaceStore } from './store.js';
 import { publishTerminalWorkspaceFact } from './terminal-presentation/coordinator-events.js';
-import { useWorkflowRunStore } from './workflow-runs.js';
+import { publishWorkflowSignal } from './workflow/signals.js';
 
 const initialReconnectDelayMs = 500;
 const maxReconnectDelayMs = 20_000;
+const snapshotRequestTimeoutMs = 10_000;
+
+/**
+ * The live connection, so a caller can ask the runtime for a fresh attached-run snapshot.
+ *
+ * There is no route that lists every attached run — attachment filters are per surface or per
+ * worktree — so the snapshot request on this socket *is* the read path for that question. Keeping a
+ * reference here is what lets a React Query `queryFn` use it like any other fetch.
+ */
+let activeSocket: WebSocket | null = null;
+const snapshotWaiters = new Set<(summaries: readonly WorkflowRunSummary[]) => void>();
+
+export function requestAttachedWorkflowRuns(): Promise<readonly WorkflowRunSummary[]> {
+  const socket = activeSocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error('The runtime connection is not open.'));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      snapshotWaiters.delete(waiter);
+      reject(new Error('The runtime did not answer the workflow snapshot request.'));
+    }, snapshotRequestTimeoutMs);
+    const waiter = (summaries: readonly WorkflowRunSummary[]) => {
+      window.clearTimeout(timer);
+      snapshotWaiters.delete(waiter);
+      resolve(summaries);
+    };
+    snapshotWaiters.add(waiter);
+    sendRuntimeEventInput(socket, { type: 'workflow_run_snapshot_requested' });
+  });
+}
 
 export function useRuntimeEventSubscription() {
   useEffect(() => {
@@ -69,8 +101,13 @@ export function useRuntimeEventSubscription() {
           socket = nextSocket;
           nextSocket.addEventListener('open', () => {
             reconnectDelayMs = initialReconnectDelayMs;
+            activeSocket = nextSocket;
             publishTerminalWorkspaceFact({ type: 'runtime_connected' });
             sendRuntimeEventInput(nextSocket, { type: 'attention_snapshot_requested' });
+            // Published before the snapshot is requested, so every workflow listener is registered
+            // and buffering before the first fact can arrive. A listener attached afterwards would
+            // miss exactly the transitions committed while the baseline was in flight.
+            publishWorkflowSignal({ type: 'connected' });
             sendRuntimeEventInput(nextSocket, { type: 'workflow_run_snapshot_requested' });
           });
           nextSocket.addEventListener('message', (event) => {
@@ -81,6 +118,8 @@ export function useRuntimeEventSubscription() {
           });
           nextSocket.addEventListener('close', () => {
             socket = null;
+            if (activeSocket === nextSocket) activeSocket = null;
+            publishWorkflowSignal({ type: 'disconnected' });
             scheduleReconnect();
           });
           nextSocket.addEventListener('error', () => {
@@ -99,6 +138,7 @@ export function useRuntimeEventSubscription() {
       stopped = true;
       clearReconnectTimer();
       socket?.close();
+      if (activeSocket === socket) activeSocket = null;
       socket = null;
     };
   }, []);
@@ -125,14 +165,24 @@ export function handleRuntimeEvent(event: RuntimeEvent) {
     case 'attention_source_removed':
       useAttentionStore.getState().removeSource(event.payload.source);
       break;
-    case 'workflow_run_snapshot':
-      useWorkflowRunStore.getState().replace(event.payload.summaries);
+    case 'workflow_run_snapshot': {
+      const summaries = event.payload.summaries;
+      publishWorkflowSignal({ type: 'snapshot', summaries });
+      for (const waiter of [...snapshotWaiters]) waiter(summaries);
       break;
+    }
     case 'workflow_run_changed':
-      useWorkflowRunStore.getState().upsert(event.payload);
+      publishWorkflowSignal({ type: 'run_changed', summary: event.payload });
       break;
-    case 'workflow_run_cleared':
-      useWorkflowRunStore.getState().clear(event.payload);
+    case 'workflow_run_detached':
+      publishWorkflowSignal({
+        type: 'run_detached',
+        runId: event.payload.runId,
+        surfaceId: event.payload.surfaceId,
+      });
+      break;
+    case 'workflow_run_transition':
+      publishWorkflowSignal({ type: 'transition', delta: event.payload });
       break;
     case 'durable_session_deleted':
       break;

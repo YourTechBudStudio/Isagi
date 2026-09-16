@@ -29,6 +29,7 @@ export function recordLabelDiagnostic(
       attemptId: fence.attemptId,
       detail: {
         value: {
+          source: 'runtime_diagnostic',
           code: 'label_failed',
           level: 'warning',
           message: `The display name for ${diagnostic.what} was not captured because ${diagnostic.reason}.`,

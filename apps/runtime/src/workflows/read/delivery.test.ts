@@ -84,7 +84,7 @@ test('every workflow write wakes the publisher, and no read does', async () => {
           runId,
           kind: 'log',
           frameId: rootFrameId,
-          detail: { value: { level: 'info', message: 'hello' } },
+          detail: { value: { source: 'author_log', level: 'info', message: 'hello' } },
         }),
       ),
     );
@@ -166,7 +166,9 @@ test('a committed write reaches the public bus without anybody asking it to', as
             runId,
             kind: 'ui_feedback',
             frameId: rootFrameId,
-            detail: { value: { kind: 'info', phase: 'writing', message: 'drafting' } },
+            detail: {
+              value: { source: 'ui_feedback', kind: 'info', phase: 'writing', message: 'drafting' },
+            },
           });
           // Give the drainer its turn; the assertion is that nothing had to poke it by hand.
           yield* Effect.sleep('50 millis');
@@ -212,7 +214,7 @@ test('a read costs what its page costs, and writes nothing', async () => {
             kind: 'log',
             frameId: rootFrameId,
             executionId: inserted.id,
-            detail: { value: { level: 'info', message: `visit ${index}` } },
+            detail: { value: { source: 'author_log', level: 'info', message: `visit ${index}` } },
           }),
         ),
       );
@@ -309,7 +311,7 @@ test('surface bookkeeping announces a released attachment once, when it is relea
           runId,
           kind: 'log',
           frameId: rootFrameId,
-          detail: { value: { level: 'info', message: 'after dismissal' } },
+          detail: { value: { source: 'author_log', level: 'info', message: 'after dismissal' } },
         }),
       ),
     );

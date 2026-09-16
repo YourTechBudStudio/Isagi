@@ -362,6 +362,38 @@ test('the ownership fence, not the control revision, decides whether an outcome 
   }
 });
 
+test('cancelling a paused run lowers the gate with the band that explained it', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const entered = await enterRootGraph(fixture);
+
+    const running = (await run(fixture.runs.findRun(entered.run.id)))!;
+    committedValue(
+      await run(
+        fixture.runs.applyPause({ runId: running.id, controlRevision: running.controlRevision }),
+      ),
+    );
+    const paused = (await run(fixture.runs.findRun(entered.run.id)))!;
+    assert.equal(paused.paused, true);
+
+    committedValue(
+      await run(
+        fixture.runs.applyCancel({ runId: paused.id, controlRevision: paused.controlRevision }),
+      ),
+    );
+
+    const cancelled = (await run(fixture.runs.findRun(entered.run.id)))!;
+    assert.equal(cancelled.status, 'cancelled');
+    // `paused` is the dispatch gate, not a memory of one. Leaving it raised on a terminal run left
+    // the flag and the closed band disagreeing, and every reader downstream inherited the
+    // disagreement — the bar called a cancelled run "Paused".
+    assert.equal(cancelled.paused, false);
+    assert.notEqual(cancelled.endedAt, null);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('a commit under Cancel records evidence and applies no graph transition', async () => {
   const fixture = makeWorkflowPersistenceFixture();
   try {
@@ -416,7 +448,7 @@ test('a commit under Cancel records evidence and applies no graph transition', a
         fixture.runs.appendDiagnostic({
           runId: after.id,
           kind: 'log',
-          detail: { value: { level: 'info', message: 'after cancel' } },
+          detail: { value: { source: 'author_log', level: 'info', message: 'after cancel' } },
         }),
       ),
     );
@@ -1838,7 +1870,7 @@ test('a diagnostic between preparation and claim does not invalidate the operand
         fixture.runs.appendDiagnostic({
           runId: entered.run.id,
           kind: 'log',
-          detail: { value: { level: 'info', message: 'unrelated' } },
+          detail: { value: { source: 'author_log', level: 'info', message: 'unrelated' } },
         }),
       ),
     );

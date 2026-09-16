@@ -1,17 +1,24 @@
 import { motion } from 'motion/react';
 
 import { EASE_EXPO } from '../../lib/motion.js';
-import type { WorkflowPresentationStatus } from '../../lib/workspace/workflow-derive.js';
+import type { WorkflowPresentationStatus } from '../../lib/workspace/workflow/derive.js';
 
 const glowClassByStatus: Record<WorkflowPresentationStatus, string> = {
   driving:
     'border-working/20 shadow-[inset_0_0_42px_color-mix(in_srgb,var(--color-working)_17%,transparent),0_0_34px_color-mix(in_srgb,var(--color-working)_12%,transparent)] animate-[breathe_3.5s_var(--ease-expo)_infinite]',
   waiting_user:
     'border-waiting/24 shadow-[inset_0_0_46px_color-mix(in_srgb,var(--color-waiting)_18%,transparent),0_0_38px_color-mix(in_srgb,var(--color-waiting)_14%,transparent)] animate-glow',
+  // Blocked is not "waiting on you to answer" — it is stuck on something Isagi cannot settle, so
+  // it reads as the error surface rather than the waiting one.
+  blocked:
+    'border-error/26 shadow-[inset_0_0_42px_color-mix(in_srgb,var(--color-error)_16%,transparent),0_0_30px_color-mix(in_srgb,var(--color-error)_10%,transparent)]',
   paused:
     'border-line/20 shadow-[inset_0_0_34px_color-mix(in_srgb,var(--color-fg-subtle)_9%,transparent)]',
   failed:
     'border-error/26 shadow-[inset_0_0_42px_color-mix(in_srgb,var(--color-error)_16%,transparent),0_0_30px_color-mix(in_srgb,var(--color-error)_10%,transparent)]',
+  // A cancelled run left work unfinished on purpose, so it settles rather than reading as success.
+  cancelled:
+    'border-line/20 shadow-[inset_0_0_34px_color-mix(in_srgb,var(--color-fg-subtle)_9%,transparent)]',
   done: 'border-green/18 shadow-[inset_0_0_34px_color-mix(in_srgb,var(--color-green)_10%,transparent)]',
 };
 

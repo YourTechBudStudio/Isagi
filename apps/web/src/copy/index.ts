@@ -36,6 +36,8 @@ export { updateCopy } from './updates.js';
 export { workbenchCopy } from './workbench.js';
 export {
   workflowCopy,
+  workflowDiagnosticCodeCopy,
+  workflowFailureHeadline,
   workflowLoadFailureReasonCopy,
   workflowLoadFailureReasonCopyOrFallback,
 } from './workflows.js';

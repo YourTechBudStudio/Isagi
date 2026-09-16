@@ -53,8 +53,19 @@ import type {
   RelocateProjectOutput,
   WorkspaceSnapshot,
   AdvanceWorkflowInput,
+  GetWorkflowPayloadOutput,
+  GetWorkflowRunOutput,
+  GetWorkflowStructureOutput,
+  ListRunExecutionsQuery,
+  ListRunExecutionsOutput,
   ListWorkflowDescriptorsInput,
   ListWorkflowDescriptorsOutput,
+  ListWorkflowEventsQuery,
+  ListWorkflowEventsOutput,
+  ListWorkflowOperationsQuery,
+  ListWorkflowOperationsOutput,
+  ListWorkflowRunsQuery,
+  ListWorkflowRunsOutput,
   StartWorkflowInput,
   StartWorkflowOutput,
   WorkflowRunControlOutput,
@@ -135,12 +146,60 @@ export function resumeWorkflow(runId: number): Effect.Effect<WorkflowRunControlO
   return getClient().pipe(Effect.flatMap((client) => client.resumeWorkflow(runId)));
 }
 
-export function clearWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
-  return getClient().pipe(Effect.flatMap((client) => client.clearWorkflow(runId)));
-}
-
 export function retryWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.retryWorkflow(runId)));
+}
+
+export function cancelWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.cancelWorkflow(runId)));
+}
+
+export function dismissWorkflow(runId: number): Effect.Effect<WorkflowRunControlOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.dismissWorkflow(runId)));
+}
+
+export function getWorkflowRun(runId: number): Effect.Effect<GetWorkflowRunOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowRun(runId)));
+}
+
+export function listWorkflowRuns(
+  query: ListWorkflowRunsQuery,
+): Effect.Effect<ListWorkflowRunsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowRuns(query)));
+}
+
+export function getWorkflowStructure(
+  runId: number,
+): Effect.Effect<GetWorkflowStructureOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowStructure(runId)));
+}
+
+export function listWorkflowExecutions(
+  runId: number,
+  query: ListRunExecutionsQuery,
+): Effect.Effect<ListRunExecutionsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowExecutions(runId, query)));
+}
+
+export function listWorkflowOperations(
+  runId: number,
+  query: ListWorkflowOperationsQuery,
+): Effect.Effect<ListWorkflowOperationsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowOperations(runId, query)));
+}
+
+export function listWorkflowEvents(
+  runId: number,
+  query: ListWorkflowEventsQuery,
+): Effect.Effect<ListWorkflowEventsOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowEvents(runId, query)));
+}
+
+export function getWorkflowPayload(
+  runId: number,
+  payloadRef: string,
+): Effect.Effect<GetWorkflowPayloadOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.getWorkflowPayload(runId, payloadRef)));
 }
 
 export function advanceWorkflow(
@@ -286,15 +345,6 @@ export function resolveCommandLogStreamWebSocketUrl(
   );
 }
 
-export function resolveWorkflowEventsStreamWebSocketUrl(
-  runId: number,
-  options: { readonly includeChildren?: boolean | undefined } = {},
-): Effect.Effect<string, Error> {
-  return getClient().pipe(
-    Effect.map((client) => client.resolveWorkflowEventsStreamWebSocketUrl(runId, options)),
-  );
-}
-
 export function resolveRuntimeEventsWebSocketUrl(): Effect.Effect<string, Error> {
   return getClient().pipe(Effect.map((client) => client.resolveRuntimeEventsWebSocketUrl()));
 }
@@ -431,6 +481,29 @@ export function editorDiagnostics(
 
 export function retryEditorProvisioning(): Effect.Effect<RetryEditorProvisioningOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.retryEditorProvisioning()));
+}
+
+/**
+ * A stable name for the runtime this client is talking to.
+ *
+ * There is no runtime-issued identifier on the wire, and the app resolves one runtime URL per
+ * session, so the normalized URL is the identity. It namespaces the workflow caches and the
+ * synchronization coordinator, which is what stops a run's converged state being reused for a
+ * different runtime if the configured URL ever changes under the same page.
+ */
+export function resolveRuntimeIdentity(): Effect.Effect<string, Error> {
+  return resolveRuntimeUrl().pipe(Effect.map(normalizeRuntimeIdentity));
+}
+
+export function normalizeRuntimeIdentity(runtimeUrl: string): string {
+  try {
+    const url = new URL(runtimeUrl);
+    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    // An unparseable value is still a distinct configuration, and using it verbatim keeps two
+    // different broken values apart rather than collapsing them onto one namespace.
+    return runtimeUrl;
+  }
 }
 
 function getClient() {

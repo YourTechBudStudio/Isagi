@@ -55,7 +55,7 @@ async function appendDiagnostics(
         fixture.runs.appendDiagnostic({
           runId,
           kind: 'log',
-          detail: { value: { level: 'info', message: `entry-${index}` } },
+          detail: { value: { source: 'author_log', level: 'info', message: `entry-${index}` } },
         }),
       ),
     );

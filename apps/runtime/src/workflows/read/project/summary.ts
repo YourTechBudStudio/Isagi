@@ -25,6 +25,7 @@ import {
 } from '../../../persistence/schema.js';
 import { runPosition } from '../../persistence/row-mappers.js';
 import { slotFromColumns } from '../../persistence/slots.js';
+import { decodeDiagnosticDetail } from './diagnostics.js';
 import { columnSlotDto, inlineValue, isRecord } from './payloads.js';
 
 type RunRow = typeof workflowRuns.$inferSelect;
@@ -263,18 +264,13 @@ function uiFeedback(db: RuntimeDrizzleDatabase, runId: number): WorkflowUiFeedba
     'workflow_transitions.detail',
     slotFromColumns('workflow_transitions.detail', row.detailInline, row.detailRef),
   );
-  if (!isRecord(detail)) return null;
+  const decoded = decodeDiagnosticDetail(detail);
+  if (decoded?.source !== 'ui_feedback') return null;
   return {
-    ...(typeof detail.kind === 'string' && isFeedbackKind(detail.kind)
-      ? { kind: detail.kind }
-      : {}),
-    ...(typeof detail.phase === 'string' ? { phase: detail.phase } : {}),
-    ...(typeof detail.message === 'string' ? { message: detail.message } : {}),
+    kind: decoded.kind,
+    ...(decoded.phase === undefined ? {} : { phase: decoded.phase }),
+    ...(decoded.message === undefined ? {} : { message: decoded.message }),
   };
-}
-
-function isFeedbackKind(value: string): value is 'info' | 'warning' | 'error' {
-  return value === 'info' || value === 'warning' || value === 'error';
 }
 
 /**

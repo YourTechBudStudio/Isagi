@@ -66,6 +66,53 @@ export const workflowUiFeedbackSchema: Schema.Schema<WorkflowUiFeedback> = Schem
 
 export const workflowLogLevelSchema = Schema.Literal('debug', 'info', 'warning', 'error');
 
+/**
+ * What a `log` or `ui_feedback` transition's detail actually contains.
+ *
+ * Every other transition's `detail` stays opaque, because it is whatever that segment recorded.
+ * These two kinds are different: they exist to be read back and shown to a person. Without a shape
+ * here a client would have to duck-type an unschematised payload across the runtime boundary, and a
+ * runtime change would silently blank the log instead of failing a test.
+ *
+ * `source` is an explicit discriminant rather than one inferred from which fields happen to be
+ * present, so an unrecognised shape is a decode failure the client renders as unavailable detail
+ * rather than a near-miss it mistakes for an author's own line.
+ */
+export const workflowDiagnosticCodeSchema = Schema.Literal(
+  'pinned_load_failed',
+  'label_failed',
+  'payload_unavailable',
+);
+
+export const workflowDiagnosticDetailSchema = Schema.Union(
+  /** A line the workflow's own author wrote through `ctx.log`. Shown as authored content. */
+  Schema.Struct({
+    source: Schema.Literal('author_log'),
+    level: workflowLogLevelSchema,
+    message: Schema.String,
+  }),
+  /**
+   * The runtime explaining itself. A client selects its own copy from the stable `code`; `message`
+   * is the raw diagnostic, shown only as clearly framed detail and never as voiced product copy.
+   */
+  Schema.Struct({
+    source: Schema.Literal('runtime_diagnostic'),
+    code: workflowDiagnosticCodeSchema,
+    level: workflowLogLevelSchema,
+    message: Schema.String,
+    /** Present on `payload_unavailable`: which recorded value could not be read, and why. */
+    payloadRef: Schema.optional(nonEmptyString),
+    cause: Schema.optional(Schema.Literal('missing', 'corrupt')),
+  }),
+  /** Author-set phase and message for the workflow bar. Shown as authored content. */
+  Schema.Struct({
+    source: Schema.Literal('ui_feedback'),
+    kind: Schema.Literal('info', 'warning', 'error'),
+    phase: Schema.optional(Schema.String),
+    message: Schema.optional(Schema.String),
+  }),
+);
+
 export const workflowUserInputAnswersSchema = Schema.Record({
   key: Schema.String,
   value: Schema.Union(Schema.String, Schema.Array(Schema.String), Schema.Boolean),
@@ -346,6 +393,8 @@ export type WorkflowQuestionOptionDto = typeof workflowQuestionOptionSchema.Type
 export type WorkflowQuestionSpecDto = typeof workflowQuestionSpecSchema.Type;
 export type WorkflowUiFeedbackDto = typeof workflowUiFeedbackSchema.Type;
 export type WorkflowLogLevelDto = typeof workflowLogLevelSchema.Type;
+export type WorkflowDiagnosticCode = typeof workflowDiagnosticCodeSchema.Type;
+export type WorkflowDiagnosticDetail = typeof workflowDiagnosticDetailSchema.Type;
 export type WorkflowInputKind = typeof workflowInputKindSchema.Type;
 export type WorkflowWaitKind = typeof workflowWaitKindSchema.Type;
 export type WorkflowWaitId = typeof workflowWaitIdSchema.Type;

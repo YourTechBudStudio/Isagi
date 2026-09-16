@@ -4,7 +4,7 @@ import test from 'node:test';
 import type { SurfaceDetail } from '@isagi/contracts';
 
 import type { Project, Surface } from '../workspace/types.js';
-import { buildPaletteContext, workflowContextFromSurfaceDetail } from './context.js';
+import { buildPaletteContext, workflowOriginFromSurfaceDetail } from './context.js';
 
 test('palette context carries active surface and frontend active pane target', () => {
   const surfaceA = surface({ id: 101, title: 'Agent', paneKinds: ['agent_session'] });
@@ -65,7 +65,7 @@ test('omitted configured command options leave both context fields undefined', (
 });
 
 test('workflow launch context carries focused agent session from surface detail', () => {
-  const context = workflowContextFromSurfaceDetail({
+  const context = workflowOriginFromSurfaceDetail({
     worktreeId: 10,
     surfaceId: 101,
     activePaneId: 501,
@@ -81,7 +81,7 @@ test('workflow launch context carries focused agent session from surface detail'
 });
 
 test('workflow launch context keeps pane target but nulls non-agent sessions', () => {
-  const context = workflowContextFromSurfaceDetail({
+  const context = workflowOriginFromSurfaceDetail({
     worktreeId: 10,
     surfaceId: 101,
     activePaneId: 501,
@@ -97,7 +97,7 @@ test('workflow launch context keeps pane target but nulls non-agent sessions', (
 });
 
 test('workflow launch context nulls stale pane targets missing from surface detail', () => {
-  const context = workflowContextFromSurfaceDetail({
+  const context = workflowOriginFromSurfaceDetail({
     worktreeId: 10,
     surfaceId: 101,
     activePaneId: 999,

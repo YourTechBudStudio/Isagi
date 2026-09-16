@@ -581,7 +581,7 @@ test('history far past a thousand transitions pages without a cap', async () => 
             runId,
             kind: 'log',
             frameId: rootFrameId,
-            detail: { value: { level: 'info', message: `step ${index}` } },
+            detail: { value: { source: 'author_log', level: 'info', message: `step ${index}` } },
           }),
         ),
       );
@@ -636,7 +636,7 @@ test('executions page in a stable order even when two visits share a timestamp',
             kind: 'log',
             frameId: rootFrameId,
             executionId: row.id,
-            detail: { value: { level: 'info', message: 'seen' } },
+            detail: { value: { source: 'author_log', level: 'info', message: 'seen' } },
           }),
         ),
       );
@@ -755,7 +755,7 @@ test('a baseline read stays on its own boundary while the run keeps moving', asy
           runId: scenario.runId,
           kind: 'log',
           frameId: scenario.rootFrameId,
-          detail: { value: { level: 'info', message: 'still going' } },
+          detail: { value: { source: 'author_log', level: 'info', message: 'still going' } },
         }),
       ),
     );

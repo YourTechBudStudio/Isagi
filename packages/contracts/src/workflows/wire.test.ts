@@ -14,7 +14,11 @@ import {
   workflowOperationSchema,
   workflowTransitionSchema,
 } from './executions.js';
-import { workflowPayloadSlotSchema, workflowWaitKindSchema } from './primitives.js';
+import {
+  workflowDiagnosticDetailSchema,
+  workflowPayloadSlotSchema,
+  workflowWaitKindSchema,
+} from './primitives.js';
 import {
   advanceWorkflowInputSchema,
   listFrameExecutionsOutputSchema,
@@ -1063,6 +1067,40 @@ test('the per-frame listing returns an ordinary page, not the run-wide recovery 
   );
   assert.equal(workflowsEndpoints.listFrameExecutions.output, listFrameExecutionsOutputSchema);
   assert.notEqual(workflowsEndpoints.listFrameExecutions.output, listRunExecutionsOutputSchema);
+});
+
+test('every diagnostic detail the runtime writes decodes, and an unrecognised one does not', () => {
+  const decodeDetail = Schema.decodeUnknownEither(workflowDiagnosticDetailSchema);
+
+  // The three shapes the runtime actually writes today. These literals are the wire-side half of
+  // the compile-time narrowing on the repository's `DiagnosticInput`: if a writer ever changes one,
+  // one of the two halves fails rather than a client silently rendering nothing.
+  assert.ok(
+    decodeDetail({ source: 'author_log', level: 'info', message: 'drafting' })._tag === 'Right',
+  );
+  assert.ok(
+    decodeDetail({
+      source: 'runtime_diagnostic',
+      code: 'payload_unavailable',
+      level: 'error',
+      message: 'The wait condition could not be read.',
+      payloadRef: 'sha256:abc',
+      cause: 'corrupt',
+    })._tag === 'Right',
+  );
+  assert.ok(
+    decodeDetail({ source: 'ui_feedback', kind: 'info', phase: 'writing', message: 'drafting' })
+      ._tag === 'Right',
+  );
+
+  // A detail that only looks like a diagnostic is refused rather than half-read. The discriminant
+  // is explicit precisely so this case is a decode failure a client shows as unavailable detail.
+  assert.ok(decodeDetail({ level: 'info', message: 'legacy shape' })._tag === 'Left');
+  assert.ok(decodeDetail({ source: 'author_log', message: 'no level' })._tag === 'Left');
+  assert.ok(
+    decodeDetail({ source: 'runtime_diagnostic', code: 'invented', level: 'error', message: 'x' })
+      ._tag === 'Left',
+  );
 });
 
 const frame = {

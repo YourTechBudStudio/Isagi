@@ -437,6 +437,7 @@ function recordPayloadDegradation(
       executionId: input.executionId,
       detail: {
         value: {
+          source: 'runtime_diagnostic',
           code: 'payload_unavailable',
           level: 'error',
           message: `The ${input.what} could not be read (${input.cause} reference ${input.ref}), so this wait cannot be evaluated.`,

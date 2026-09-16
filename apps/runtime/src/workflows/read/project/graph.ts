@@ -27,6 +27,7 @@ import {
   workflowWaits,
 } from '../../../persistence/schema.js';
 import { slotFromColumns } from '../../persistence/slots.js';
+import { decodeDiagnosticDetail } from './diagnostics.js';
 import { columnSlotDto, inlineValue, isRecord } from './payloads.js';
 
 type FrameRow = typeof workflowGraphFrames.$inferSelect;
@@ -557,8 +558,9 @@ function labelDiagnosticOf(
       'workflow_transitions.detail',
       slotFromColumns('workflow_transitions.detail', transition.detailInline, transition.detailRef),
     );
-    if (isRecord(detail) && detail.code === 'label_failed' && typeof detail.message === 'string') {
-      return detail.message;
+    const decoded = decodeDiagnosticDetail(detail);
+    if (decoded?.source === 'runtime_diagnostic' && decoded.code === 'label_failed') {
+      return decoded.message;
     }
   }
   return null;

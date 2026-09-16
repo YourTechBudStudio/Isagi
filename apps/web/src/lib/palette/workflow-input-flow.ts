@@ -1,9 +1,19 @@
-import type { WorkflowQuestionSpecDto } from '@isagi/contracts';
+import type { WorkflowQuestionSpecDto, WorkflowUserInputAnswers } from '@isagi/contracts';
 
 import type { InputFlowOption, InputFlowScreen } from '../../components/input-flow/index.js';
 import { paletteCopy } from '../../copy/index.js';
 
-export type WorkflowInputAnswers = Record<string, unknown>;
+/**
+ * The contract's own answer shape, not a looser local one.
+ *
+ * Every question kind this flow renders produces a string, a list of strings, or a boolean, and
+ * `advance` accepts exactly those. Typing the draft as `unknown` let a value that the runtime would
+ * reject travel all the way to the request before anything noticed.
+ */
+export type WorkflowInputAnswers = WorkflowUserInputAnswers;
+
+/** One answer, in the same closed set. */
+export type WorkflowInputAnswer = WorkflowInputAnswers[string];
 
 /**
  * Seed answers from each question's declared default. Questions without a

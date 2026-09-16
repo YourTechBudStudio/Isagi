@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 
-import type { WorkflowStartContext } from '@isagi/contracts';
+import type { WorkflowLaunchOrigin } from '@isagi/contracts';
 
 import { Chip } from '../../components/Chip.js';
 import {
@@ -18,10 +18,7 @@ import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';
 import { useEditorAvailable, useLaunchableHarnesses } from '../../lib/control-plane/queries.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import { configuredCommandSection } from '../../lib/palette/configured-commands.js';
-import {
-  buildPaletteContext,
-  workflowContextFromSurfaceDetail,
-} from '../../lib/palette/context.js';
+import { buildPaletteContext, workflowOriginFromSurfaceDetail } from '../../lib/palette/context.js';
 import {
   commandForWorkbenchActionId,
   resolveStateCommand,
@@ -51,14 +48,13 @@ import {
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { restoreWorkbenchFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import {
-  useStartWorkflowMutation,
-  useSurfaceDetailQuery,
-  useWorkflowDescriptorsQuery,
-  useWorktreeCommandsQuery,
-} from '../../lib/workspace/queries.js';
+import { useSurfaceDetailQuery, useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
+import {
+  useAttachedWorkflowRun,
+  useStartWorkflowMutation,
+  useWorkflowDescriptorsQuery,
+} from '../../lib/workspace/workflow/queries.js';
 import { EntryList, OutcomePanel, RunningPanel, Tip } from './CommandPaletteViews.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
@@ -112,16 +108,14 @@ export function CommandPalette() {
       activePaneBySurfaceId,
     ],
   );
-  const activeSurfaceWorkflowSummary = useWorkflowRunStore(
-    selectRootRunForSurface(baseCtx.activeSurface?.id),
-  );
+  const activeSurfaceWorkflowSummary = useAttachedWorkflowRun(baseCtx.activeSurface?.id);
   const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
     enabled: open && baseCtx.activeSurface !== null,
   });
-  const workflowLaunchContext = useMemo(
-    (): WorkflowStartContext | null =>
+  const workflowLaunchOrigin = useMemo(
+    (): WorkflowLaunchOrigin | null =>
       baseCtx.activeWorktree && baseCtx.activeSurface && activeSurfaceDetail.data
-        ? workflowContextFromSurfaceDetail({
+        ? workflowOriginFromSurfaceDetail({
             worktreeId: baseCtx.activeWorktree.id,
             surfaceId: baseCtx.activeSurface.id,
             activePaneId: baseCtx.activePaneId,
@@ -130,17 +124,17 @@ export function CommandPalette() {
         : null,
     [activeSurfaceDetail.data, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
   );
-  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchContext, { enabled: open });
+  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchOrigin, { enabled: open });
   // A whole-list discovery failure is derived only from the current enabled query
   // state: no launch context or a merely-pending query yields no failure row; a
   // terminal error (including a failed refetch over stale data) overrides the
   // cached descriptors via `assembleEntries` suppression.
   const workflowFailure = useMemo(
     () =>
-      workflowLaunchContext !== null && workflowDescriptors.isError
+      workflowLaunchOrigin !== null && workflowDescriptors.isError
         ? workflowFailurePresentation(workflowDescriptors.error)
         : undefined,
-    [workflowLaunchContext, workflowDescriptors.isError, workflowDescriptors.error],
+    [workflowLaunchOrigin, workflowDescriptors.isError, workflowDescriptors.error],
   );
   // Override the shared 10 s staleTime for this observer so each open, and each
   // worktree switch while open, starts a read; cached data may render meanwhile.
@@ -453,7 +447,7 @@ export function CommandPalette() {
   }, [open, machine.kind, running, acceptsInput, view, viewKey]);
 
   const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowInputAnswers) => {
-    if (!entry.workflow || !workflowLaunchContext) {
+    if (!entry.workflow || !workflowLaunchOrigin) {
       send({
         type: 'flow-failed',
         entryId: entry.id,
@@ -468,8 +462,8 @@ export function CommandPalette() {
     startWorkflowMutation.mutate(
       {
         workflowKey: entry.workflow.workflowKey,
-        variables: answers,
-        context: workflowLaunchContext,
+        inputs: answers,
+        origin: workflowLaunchOrigin,
       },
       {
         onSuccess: () => {

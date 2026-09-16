@@ -15,7 +15,11 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Cause, Effect, Exit, Fiber, Option } from 'effect';
 
-import type { WorkflowCapability, WorkflowInvocationKind } from '@isagi/contracts';
+import type {
+  WorkflowCapability,
+  WorkflowDiagnosticDetail,
+  WorkflowInvocationKind,
+} from '@isagi/contracts';
 
 import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
 import type { WorkflowOperationRecord } from '../persistence/records.js';
@@ -271,7 +275,7 @@ export function makeAttemptContextFactory(dependencies: {
             }
           });
 
-        const appendDiagnostic = (kind: 'log' | 'ui_feedback', detail: unknown) =>
+        const appendDiagnostic = (kind: 'log' | 'ui_feedback', detail: WorkflowDiagnosticDetail) =>
           Effect.gen(function* () {
             if (state.closed) {
               return yield* reject({
@@ -845,14 +849,17 @@ export function makeAttemptContextFactory(dependencies: {
             ),
 
           log: (level: WorkflowLogLevel, message: string) =>
-            runVerb(appendDiagnostic('log', { level, message })).then(() => undefined),
+            runVerb(appendDiagnostic('log', { source: 'author_log', level, message })).then(
+              () => undefined,
+            ),
 
           setUiFeedback: (feedback: WorkflowUiFeedback) =>
             runVerb(
               appendDiagnostic('ui_feedback', {
+                source: 'ui_feedback',
                 kind: feedback.kind ?? 'info',
-                phase: feedback.phase,
-                message: feedback.message,
+                ...(feedback.phase === undefined ? {} : { phase: feedback.phase }),
+                ...(feedback.message === undefined ? {} : { message: feedback.message }),
               }),
             ).then(() => undefined),
         };

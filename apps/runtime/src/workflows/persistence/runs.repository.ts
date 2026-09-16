@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
+  WorkflowDiagnosticDetail,
   WorkflowFailureCode,
   WorkflowInvocationKind,
   WorkflowNodeKind,
@@ -321,7 +322,12 @@ export interface AdoptRetryPinInput extends ControlInput {
 export interface DiagnosticInput {
   readonly runId: number;
   readonly kind: 'log' | 'ui_feedback';
-  readonly detail: RecordedValue;
+  /**
+   * Narrowed to the contract's shape rather than an opaque `RecordedValue`, because these two
+   * transition kinds are the ones a client reads back and shows to a person. The compiler is what
+   * keeps every writer on the wire shape; nothing else could, since the column is plain JSON.
+   */
+  readonly detail: { readonly value: WorkflowDiagnosticDetail };
   readonly frameId?: number | null;
   readonly executionId?: number | null;
   readonly attemptId?: number | null;
@@ -1641,6 +1647,12 @@ export function makeWorkflowRunsRepository(
             .set({
               cancelRequested: true,
               status: 'cancelled',
+              // Cleared with the band that explains it. `paused` is the dispatch gate, not a
+              // memory: leaving it raised on a terminal run makes the flag and the history
+              // disagree, and every reader that asks "is this run paused" then gets yes about a
+              // run that has stopped for good. The pause that happened is retained where pauses
+              // are retained — in the closed band above.
+              paused: false,
               controlRevision: run.controlRevision + 1,
               endedAt: now,
               updatedAt: now,

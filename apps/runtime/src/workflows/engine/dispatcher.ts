@@ -247,6 +247,7 @@ function loadPin(
             kind: 'log',
             detail: {
               value: {
+                source: 'runtime_diagnostic',
                 code: 'pinned_load_failed',
                 level: 'error',
                 message: `The pinned workflow version could not be loaded (${error.reason}): ${error.message}`,
