@@ -203,7 +203,23 @@ test('failures stay at the control that owns them and retry in place', async ({ 
   await page.click('[data-clear-actions]');
   await selectState(page, 'download-failed');
   await page.click(`${footer} [data-retry-control]`);
-  await expect(page.locator('[data-actions]')).toHaveText('retry-download');
+  // The provider still knows what the check found, so the retry is another
+  // fetch rather than a second round trip through the check.
+  await expect(page.locator('[data-actions]')).toHaveText('download');
+});
+
+test('a found update is announced as a delta and waits to be fetched', async ({ page }) => {
+  await selectState(page, 'update-available');
+  const control = page.locator(`${footer} [data-download-control]`);
+
+  // Nothing has been fetched, so nothing claims progress — the whole surface is
+  // the delta plus one word to press.
+  await expect(page.locator(`${footer} [data-target-version]`)).toHaveText('0.4.3');
+  await expect(control).toHaveText('Download');
+  await expect(page.locator(`${footer} [role="progressbar"]`)).toHaveCount(0);
+
+  await control.click();
+  await expect(page.locator('[data-actions]')).toHaveText('download');
 });
 
 test('a build that cannot replace itself opens the download page instead', async ({ page }) => {
@@ -217,7 +233,7 @@ test('a launch that never reached a browser says so and stays pressable', async 
   await selectState(page, 'manual-required-open-failed');
   const control = page.locator(`${footer} [data-manual-control]`);
 
-  await expect(control).toHaveText("couldn't open");
+  await expect(control).toHaveText('Try again');
   await expect(control).toBeEnabled();
   await control.click();
   // Same control, same intent: the remedy did not change, only the report of
@@ -232,7 +248,13 @@ test('the narrow rail keeps every state on one line', async ({ page }) => {
   await selectState(page, 'idle');
   const single = (await line.boundingBox())!.height;
 
-  for (const id of ['downloading-97', 'ready', 'check-failed', 'manual-required']) {
+  for (const id of [
+    'update-available',
+    'downloading-97',
+    'ready',
+    'check-failed',
+    'manual-required',
+  ]) {
     await selectState(page, id);
     const current = (await line.boundingBox())!.height;
     expect(current, `${id} wrapped at 200px`).toBeCloseTo(single, 0);
@@ -251,7 +273,7 @@ test('reduced motion drops the progress transition without hiding progress', asy
 });
 
 test('the contact sheet renders every state including the absent one', async ({ page }) => {
-  await expect(page.locator('[data-sheet-state]')).toHaveCount(14);
+  await expect(page.locator('[data-sheet-state]')).toHaveCount(15);
   // No desktop host means no footer at all, not an empty one.
   await expect(page.locator('[data-sheet-state="unsupported"] [data-update-footer]')).toHaveCount(
     0,

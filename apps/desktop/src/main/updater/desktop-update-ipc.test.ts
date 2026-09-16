@@ -26,6 +26,7 @@ function fakeService() {
     start: () => record('start'),
     stop: () => record('stop'),
     checkForUpdates: () => record('checkForUpdates'),
+    downloadUpdate: () => record('downloadUpdate'),
     requestRestart: () => record('requestRestart'),
     confirmRestart: () => record('confirmRestart'),
     cancelRestart: () => record('cancelRestart'),
@@ -49,6 +50,7 @@ test('every intent reaches exactly one operation', async () => {
   const opened: string[] = [];
   for (const [intent, expected] of [
     [{ type: 'check_for_updates' }, 'checkForUpdates'],
+    [{ type: 'download_update' }, 'downloadUpdate'],
     [{ type: 'request_restart' }, 'requestRestart'],
     [{ type: 'confirm_restart' }, 'confirmRestart'],
     [{ type: 'cancel_restart' }, 'cancelRestart'],
@@ -171,6 +173,7 @@ test('overlapping presses claim their attempts in press order, not completion or
 test('the intent channel accepts the closed contract union and nothing else', () => {
   for (const type of [
     'check_for_updates',
+    'download_update',
     'request_restart',
     'confirm_restart',
     'cancel_restart',

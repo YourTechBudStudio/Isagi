@@ -92,7 +92,7 @@ export function UpdateGalleryApp() {
             onRestart={restart.onRestart}
             onCancelRestart={restart.onCancelRestart}
             onConfirmRestart={restart.onConfirmRestart}
-            onRetryDownload={() => record('retry-download')}
+            onDownload={() => record('download')}
             onOpenDownloadPage={() => record('open-download-page')}
           />
         </RailShell>
@@ -193,7 +193,7 @@ function ContactSheetEntry({
           onRestart={() => record('request-restart')}
           onCancelRestart={() => record('cancel-restart')}
           onConfirmRestart={() => record('confirm-restart')}
-          onRetryDownload={() => record('retry-download')}
+          onDownload={() => record('download')}
           onOpenDownloadPage={() => record('open-download-page')}
         />
       </RailShell>

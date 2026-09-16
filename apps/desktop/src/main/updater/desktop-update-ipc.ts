@@ -47,6 +47,8 @@ export async function dispatchDesktopUpdateIntent(
   switch (intent.type) {
     case 'check_for_updates':
       return Effect.runPromise(service.checkForUpdates());
+    case 'download_update':
+      return Effect.runPromise(service.downloadUpdate());
     case 'request_restart':
       return Effect.runPromise(service.requestRestart());
     case 'confirm_restart':

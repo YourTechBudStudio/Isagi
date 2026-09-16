@@ -79,14 +79,14 @@ test('update subscription filters protocol versions and returns host cleanup', (
   try {
     const cleanup = subscribeDesktopUpdate((snapshot) => received.push(snapshot));
     const ready = {
-      protocolVersion: 1,
+      protocolVersion: 2,
       revision: 2,
       installedVersion: '0.4.2',
       state: 'ready',
       targetVersion: '0.4.3',
     } as const satisfies DesktopUpdateSnapshot;
     hostListener(ready);
-    hostListener({ ...ready, protocolVersion: 2 } as unknown as DesktopUpdateSnapshot);
+    hostListener({ ...ready, protocolVersion: 1 } as unknown as DesktopUpdateSnapshot);
     assert.deepEqual(received, [ready]);
     cleanup();
     assert.equal(cleanupCalls, 1);
@@ -104,6 +104,7 @@ test('each update action invokes its own host capability and nothing else', asyn
   globalWithWindow.window = {
     isagi: {
       checkForUpdates: capability('check'),
+      downloadUpdate: capability('download'),
       requestUpdateRestart: capability('requestRestart'),
       confirmUpdateRestart: capability('confirmRestart'),
       cancelUpdateRestart: capability('cancelRestart'),
@@ -114,6 +115,7 @@ test('each update action invokes its own host capability and nothing else', asyn
     for (const action of Object.values(desktopUpdateActions)) await action();
     assert.deepEqual(called, [
       'check',
+      'download',
       'requestRestart',
       'confirmRestart',
       'cancelRestart',

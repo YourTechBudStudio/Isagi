@@ -15,6 +15,10 @@ const base = {
 test('the update snapshot contract accepts the states the coordinator produces', () => {
   for (const snapshot of [
     { ...base, state: 'idle' },
+    { ...base, state: 'update_available', targetVersion: '2.0.0' },
+    // A provider event that omits the version still leaves an update the user
+    // can act on; only the sentence naming it degrades.
+    { ...base, state: 'update_available', targetVersion: '' },
     { ...base, state: 'downloading', targetVersion: '2.0.0', progressPercent: 0 },
     { ...base, state: 'downloading', targetVersion: '2.0.0', progressPercent: 100 },
     { ...base, state: 'ready', targetVersion: '2.0.0' },
@@ -59,6 +63,9 @@ test('the update snapshot contract accepts the states the coordinator produces',
 
 test('the update snapshot contract rejects states the coordinator can never reach', () => {
   for (const snapshot of [
+    // An available update is always about a target; without one there is
+    // nothing for the download intent to act on.
+    { ...base, state: 'update_available' },
     { ...base, state: 'downloading', targetVersion: '2.0.0', progressPercent: -1 },
     { ...base, state: 'downloading', targetVersion: '2.0.0', progressPercent: 101 },
     {

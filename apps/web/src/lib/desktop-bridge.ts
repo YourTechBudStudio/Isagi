@@ -81,6 +81,7 @@ export function subscribeDesktopUpdate(
  */
 export const desktopUpdateActions = {
   check: () => invokeHostAction(window.isagi?.checkForUpdates),
+  download: () => invokeHostAction(window.isagi?.downloadUpdate),
   requestRestart: () => invokeHostAction(window.isagi?.requestUpdateRestart),
   confirmRestart: () => invokeHostAction(window.isagi?.confirmUpdateRestart),
   cancelRestart: () => invokeHostAction(window.isagi?.cancelUpdateRestart),
