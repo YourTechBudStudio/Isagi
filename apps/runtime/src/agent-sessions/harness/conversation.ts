@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 
 import type { AgentSessionRow } from '../../surfaces/types.js';
+import type { HarnessConversationTurn } from './definition-types.js';
 import { harnessDefinition } from './definitions.js';
 import { HarnessLedgerObserver, type HarnessLedgerObserverService } from './observer.service.js';
 import type { HarnessObservationRecord } from './projection.js';
@@ -8,6 +9,7 @@ import type { ConversationMessage } from './types.js';
 
 export function getConversationHistory(
   session: Pick<AgentSessionRow, 'id' | 'harness' | 'cwd' | 'harnessSessionId'>,
+  turn?: HarnessConversationTurn,
 ): Effect.Effect<readonly ConversationMessage[], never, HarnessLedgerObserverService> {
   return Effect.gen(function* () {
     const observer = yield* HarnessLedgerObserver;
@@ -16,8 +18,13 @@ export function getConversationHistory(
     return yield* harnessDefinition(session.harness).conversation.read({
       agentSessionId: session.id,
       cwd: session.cwd,
-      harnessSessionId: session.harnessSessionId,
-      streams: targetedHarnessStreams(streams, session.harness, session.harnessSessionId),
+      harnessSessionId: turn?.harnessSessionId ?? session.harnessSessionId,
+      streams: targetedHarnessStreams(
+        streams,
+        session.harness,
+        turn?.harnessSessionId ?? session.harnessSessionId,
+      ),
+      turn,
     });
   });
 }

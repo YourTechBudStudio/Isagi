@@ -8,6 +8,7 @@ import {
 } from '../persistence/index.js';
 import { workflowRunEvents, workflowRuns } from '../persistence/schema.js';
 import { InternalRuntimeEventBus } from '../runtime-events/index.js';
+import type { WorkflowTurnProvenance, WorkflowTurnRetry } from './turn-recovery.js';
 import type {
   WorkflowWaitCondition,
   WorkflowHeadlessResult,
@@ -60,6 +61,7 @@ export interface WorkflowRepositoryService {
   readonly retryFailedRunTree: (input: {
     readonly rootRunId: number;
     readonly artifactPins: readonly WorkflowArtifactPin[];
+    readonly turnRetries?: readonly WorkflowTurnRetry[] | undefined;
   }) => Effect.Effect<WorkflowRetryResult | null, DatabaseError>;
   readonly claimReadyRun: (input: {
     readonly runId: number;
@@ -160,8 +162,17 @@ type WorkflowRunEventTrigger =
   | { readonly kind: 'fail'; readonly thrown: boolean };
 
 export type WorkflowResumePayload =
-  | { readonly outcome: 'ended'; readonly recordedAt: string }
-  | { readonly outcome: 'failed'; readonly recordedAt: string; readonly reason: string }
+  | {
+      readonly outcome: 'ended';
+      readonly recordedAt: string;
+      readonly agentTurn?: WorkflowTurnProvenance | undefined;
+    }
+  | {
+      readonly outcome: 'failed';
+      readonly recordedAt: string;
+      readonly reason: string;
+      readonly agentTurn?: WorkflowTurnProvenance | undefined;
+    }
   | { readonly kind: 'user_continue' }
   | {
       readonly kind: 'user_input';
@@ -523,13 +534,31 @@ export const WorkflowRepositoryLive = Layer.effect(
 
             const plannedRuns = [...plan.retriedRuns, ...plan.rearmedRuns];
             const artifactHashForRun = validateRetryArtifactPins(input.artifactPins, plannedRuns);
+            const turnRetries = new Map(input.turnRetries?.map((retry) => [retry.runId, retry]));
+            for (const retry of turnRetries.values()) {
+              const leaf = plan.retriedRuns.find((run) => run.id === retry.runId);
+              if (
+                !leaf ||
+                leaf.resumePayload !== retry.expectedResumePayload ||
+                leaf.updatedAt !== retry.expectedUpdatedAt
+              )
+                return null;
+            }
 
             for (const run of plan.retriedRuns) {
+              const turnRetry = turnRetries.get(run.id);
               const updated = db
                 .update(workflowRuns)
                 .set({
                   workflowArtifactHash: artifactHashForRun(run.id),
-                  status: 'ready',
+                  status: turnRetry && !turnRetry.payload ? 'waiting' : 'ready',
+                  waitKind: turnRetry && !turnRetry.payload ? 'agent_turn' : null,
+                  waitCondition: turnRetry && !turnRetry.payload ? json(turnRetry.condition) : null,
+                  resumePayload: turnRetry
+                    ? turnRetry.payload
+                      ? json(turnRetry.payload)
+                      : null
+                    : run.resumePayload,
                   retrying: true,
                   paused: false,
                   cancelRequested: false,
@@ -680,7 +709,9 @@ export const WorkflowRepositoryLive = Layer.effect(
               .update(workflowRuns)
               .set({
                 status: 'ready',
-                retrying: false,
+                retrying:
+                  'outcome' in input.resumePayload &&
+                  !!input.resumePayload.agentTurn?.condition.retryTurn,
                 waitKind: null,
                 waitCondition: null,
                 resumePayload: json(input.resumePayload),
@@ -721,6 +752,10 @@ export const WorkflowRepositoryLive = Layer.effect(
                     waitKind: null,
                     waitCondition: null,
                     resumePayload: json(input.resumePayload),
+                    ...('outcome' in input.resumePayload &&
+                    input.resumePayload.agentTurn?.condition.retryTurn
+                      ? { retrying: true }
+                      : {}),
                     owner: null,
                     updatedAt: timestamp(),
                   };

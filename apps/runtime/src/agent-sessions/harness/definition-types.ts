@@ -53,7 +53,18 @@ export interface HarnessDefinitionDependencies {
   readonly artifacts: AgentSessionArtifactsService;
 }
 
+export interface HarnessTurnReference {
+  readonly harnessSessionId: string;
+  readonly seq: number;
+  readonly startedAt: string;
+}
+
+export interface HarnessConversationTurn extends HarnessTurnReference {
+  readonly completedAt: string;
+}
+
 export interface HarnessConversationInput {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly cwd: string;
   readonly harnessSessionId: string | null;

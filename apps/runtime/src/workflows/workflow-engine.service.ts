@@ -48,6 +48,7 @@ import {
   userInputError,
   worktreePathForRun,
 } from './run-failure.js';
+import { planAgentTurnRetry, turnProvenance, type WorkflowTurnRetry } from './turn-recovery.js';
 import {
   waitKind,
   WorkflowEngineError,
@@ -775,15 +776,35 @@ export const WorkflowEngineLive = Layer.scoped(
             );
           }
           const plannedRuns = [...retryPlan.retriedRuns, ...retryPlan.rearmedRuns];
+          const artifactPins = yield* resolveCurrentWorkflowArtifactPins({
+            operation: 'retry',
+            root,
+            runs: plannedRuns,
+            registry,
+            workspaceRepository,
+          });
+          const turnRetries: WorkflowTurnRetry[] = [];
+          for (const leaf of retryPlan.retriedRuns) {
+            const source = turnProvenance(leaf);
+            if (!source) continue;
+            const edges = yield* observer.refreshTurnEdges(source.condition.agentSessionId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WorkflowEngineError({
+                    code: 'workflow_wait_not_satisfiable',
+                    message: `Could not refresh agent session ${source.condition.agentSessionId} for Retry: ${errorMessage(cause)}`,
+                    workflowRunId: leaf.id,
+                    agentSessionId: source.condition.agentSessionId,
+                  }),
+              ),
+            );
+            const retry = planAgentTurnRetry(leaf, edges);
+            if (retry) turnRetries.push(retry);
+          }
           const recovery = yield* repository.retryFailedRunTree({
             rootRunId: root.id,
-            artifactPins: yield* resolveCurrentWorkflowArtifactPins({
-              operation: 'retry',
-              root,
-              runs: plannedRuns,
-              registry,
-              workspaceRepository,
-            }),
+            artifactPins,
+            turnRetries,
           });
           if (!recovery) {
             return yield* Effect.fail(
@@ -801,6 +822,26 @@ export const WorkflowEngineLive = Layer.scoped(
             'info',
             `Workflow run ${recovery.root.id} retried with current workflow artifacts; recovered failed runs [${recovery.retriedRunIds.join(', ')}] and rearmed waiting runs [${recovery.rearmedRunIds.join(', ')}].`,
           );
+          for (const retry of turnRetries) {
+            const run = yield* repository.findRun(retry.runId);
+            if (!run) continue;
+            yield* appendInternalWorkflowLogBestEffort(
+              eventLedger,
+              run,
+              'info',
+              `Explicit retry selected agent session ${retry.condition.agentSessionId}, harness session ${retry.condition.retryTurn.harnessSessionId}, turn ${retry.condition.retryTurn.seq}: ${retry.payload?.outcome ?? 'waiting'}.`,
+            );
+            if (!retry.payload) {
+              yield* reconcileArmedTurnWait({
+                run,
+                condition: retry.condition,
+                repository,
+                observer,
+                eventLedger,
+                poke,
+              });
+            }
+          }
           yield* poke;
           return { runId: recovery.root.id, status: recovery.root.status };
         }),

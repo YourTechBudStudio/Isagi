@@ -242,7 +242,7 @@ Promise becomes a thrown step, which the engine records as a `failed` run.
 
 ### The `ctx` facts and verbs
 
-The context surface is `worktreePath`, `invocation`, and eight verbs (`WorkflowContext` in `packages/workflow-sdk/src/index.ts`). `invocation.kind` is `normal` for ordinary dispatch and `retry` for the first replay of a failed leaf; the retry marker is cleared by the next persisted result transition, while the leaf's original `event` remains available for compatibility.
+The context surface is `worktreePath`, `invocation`, and eight verbs (`WorkflowContext` in `packages/workflow-sdk/src/index.ts`). `invocation.kind` is `normal` for ordinary dispatch and `retry` for the first replay of a failed leaf; the retry marker is cleared by the next persisted result transition. The saved event is replayed unless explicit Retry selects a replacement agent turn under [ADR 0009](adrs/0009-explicit-retry-agent-turn-recovery.md).
 
 - **`spawnAgentSession({ harness, prompt?, modifiers?, model?, effort? })` →
   `{ agentSessionId, sentAt, paneId }`.** This verb may take a couple of seconds.
@@ -272,9 +272,7 @@ The context surface is `worktreePath`, `invocation`, and eight verbs (`WorkflowC
 
 - **`closePane(paneId)`** — closes a pane on the run's captured surface. If it is the last pane the
   surface is deleted; workflow authors should close panes they spawned, not the originating pane.
-- **`getConversationHistory(agentSessionId)`** — role-tagged message text from the durable agent's
-  current harness conversation. Runtime resolves provider identity internally from captured
-  metadata; workflow code never stores or supplies a harness session id.
+- **`getConversationHistory(agentSessionId)`** — role-tagged message text from the durable agent's current harness conversation. Runtime resolves provider identity internally from captured metadata; workflow code never stores or supplies a harness session id. During explicit agent-turn recovery, reads for that agent are restricted to the selected turn's response; see [ADR 0009](adrs/0009-explicit-retry-agent-turn-recovery.md).
 - **`runHeadlessAgent({ prompt?, modifiers?, harness, model?, effort?, timeoutMs? })` →
   `{ opId, launch }`.** Launches a trusted, agentic, non-interactive harness run in the worktree cwd
   and returns immediately. `launch.timeoutMs` is normalized before return so workflows persist a
@@ -503,7 +501,7 @@ Request/response schemas are authoritative in `packages/contracts/src/workflows/
 
 Notes:
 
-- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with `workflow_root_run_required`. Resume resolves and verifies the latest discoverable artifact for every currently paused non-terminal run and replaces those pins atomically when no newer control action superseded it. `retry` additionally requires a `failed` root (`workflow_run_not_failed`). It walks preserved workflow-join results, readies each still-failed leaf with `ctx.invocation.kind === 'retry'`, and rearms failed ancestors on their recorded joins; completed siblings remain terminal. A failed run without a recoverable failed-child join is the leaf. Retry resolves and verifies the latest discoverable artifact for every failed run in the recovered branch and replaces those pins atomically before recovery. Completed siblings keep their existing pins. If any current artifact cannot be discovered or loaded, Resume or Retry leaves the tree on its existing pins. Persisted state and any preserved resume event are passed to the updated workflow, so workflow authors own state compatibility across workflow updates.
+- `pause`/`resume`/`clear`/`retry` require a root run id; a child id is rejected with `workflow_root_run_required`. Resume resolves and verifies the latest discoverable artifact for every currently paused non-terminal run and replaces those pins atomically when no newer control action superseded it. `retry` additionally requires a `failed` root (`workflow_run_not_failed`). It walks preserved workflow-join results, readies each still-failed leaf with `ctx.invocation.kind === 'retry'`, and rearms failed ancestors on their recorded joins; completed siblings remain terminal. A failed run without a recoverable failed-child join is the leaf. Retry resolves and verifies the latest discoverable artifact for every failed run in the recovered branch and replaces those pins atomically before recovery. Completed siblings keep their existing pins. If any current artifact cannot be discovered or loaded, Resume or Retry leaves the tree on its existing pins. Persisted state and the preserved or reconciled resume event are passed to the updated workflow, so workflow authors own state compatibility across workflow updates. Agent-turn replacement and rearming on explicit Retry follow [ADR 0009](adrs/0009-explicit-retry-agent-turn-recovery.md).
 - `clear` is `POST`, not HTTP `DELETE`, because it requests **async cancellation** when a step is
   running (the running step finishes, then its tree is reaped); otherwise it deletes the tree
   immediately.

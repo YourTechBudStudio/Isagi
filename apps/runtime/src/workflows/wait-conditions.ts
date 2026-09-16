@@ -4,6 +4,7 @@
 // typed values, and classify turn edges.
 
 import type { WorkflowResumePayload } from './repository.js';
+import type { AgentTurnWait } from './turn-recovery.js';
 import type { WorkflowRunRow, WorkflowWaitCondition } from './types.js';
 
 export type TerminalTurnEdge = {
@@ -49,7 +50,7 @@ export function hasInFlightTurn(edges: readonly WorkflowObservedTurnEdge[]) {
 }
 
 export function findSatisfiedTerminalTurnEdge(
-  condition: Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }>,
+  condition: AgentTurnWait,
   edges: readonly WorkflowObservedTurnEdge[],
 ): TerminalTurnEdge | null {
   const start = edges
@@ -57,7 +58,11 @@ export function findSatisfiedTerminalTurnEdge(
       (edge): edge is TurnStartedEdge =>
         edge.type === 'turn_started' &&
         edge.agentSessionId === condition.agentSessionId &&
-        edge.recordedAt >= condition.sentAt,
+        edge.recordedAt >= condition.sentAt &&
+        (!condition.retryTurn ||
+          (edge.harnessSessionId === condition.retryTurn.harnessSessionId &&
+            edge.seq === condition.retryTurn.seq &&
+            edge.recordedAt === condition.retryTurn.startedAt)),
     )
     .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))[0];
   if (!start) return null;
@@ -85,19 +90,24 @@ function terminalMatchesStart(start: TurnStartedEdge, terminal: TerminalTurnEdge
   return start.recordedAt <= terminal.recordedAt;
 }
 
-export function resumePayload(edge: {
-  readonly type: 'turn_ended' | 'turn_failed';
-  readonly recordedAt: string;
-  readonly reason?: string | undefined;
-}): WorkflowResumePayload {
+export function resumePayload(
+  edge: {
+    readonly type: 'turn_ended' | 'turn_failed';
+    readonly recordedAt: string;
+    readonly reason?: string | undefined;
+  },
+  condition?: AgentTurnWait,
+): Extract<WorkflowResumePayload, { readonly outcome: string }> {
+  const provenance = condition ? { agentTurn: { condition } } : {};
   if (edge.type === 'turn_failed') {
     return {
+      ...provenance,
       outcome: 'failed',
       recordedAt: edge.recordedAt,
       reason: edge.reason ?? 'unknown',
     };
   }
-  return { outcome: 'ended', recordedAt: edge.recordedAt };
+  return { ...provenance, outcome: 'ended', recordedAt: edge.recordedAt };
 }
 
 export function parseTurnWaitCondition(run: WorkflowRunRow) {
@@ -109,7 +119,7 @@ export function parseTurnWaitCondition(run: WorkflowRunRow) {
       typeof parsed === 'object' &&
       (parsed as { readonly kind?: unknown }).kind === 'agent_turn'
     ) {
-      return parsed as WorkflowWaitCondition & { readonly kind: 'agent_turn' };
+      return parsed as AgentTurnWait;
     }
     return null;
   } catch {
@@ -182,7 +192,12 @@ export function parseState(run: WorkflowRunRow) {
 export function parseResumePayload(run: WorkflowRunRow) {
   if (!run.resumePayload) return undefined;
   try {
-    return JSON.parse(run.resumePayload) as unknown;
+    const payload = JSON.parse(run.resumePayload) as unknown;
+    if (payload && typeof payload === 'object' && 'agentTurn' in payload) {
+      const { agentTurn: _internal, ...event } = payload;
+      return event;
+    }
+    return payload;
   } catch (cause) {
     throw new Error(`Workflow run ${run.id} has invalid resume_payload.`, { cause });
   }

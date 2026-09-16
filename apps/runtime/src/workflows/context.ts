@@ -1,7 +1,11 @@
-import type { WorkflowVariables } from '@yourtechbudstudio/isagi-workflow-sdk';
+import type {
+  WorkflowVariables,
+  WorkflowConversationMessage,
+} from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Effect } from 'effect';
 
 import type { WorkflowCapabilitiesService } from './capabilities.js';
+import { completedRecoveryTurn } from './turn-recovery.js';
 import type { WorkflowContext, WorkflowRunRow } from './types.js';
 
 export function workflowContext(input: {
@@ -28,6 +32,8 @@ export function workflowContext(input: {
   // regardless, the gate runs at concurrency 1, and a JS Promise is not interruptible
   // by Effect anyway. Revisit if verbs need to abort cleanly on shutdown.
   const runEffect = <A>(effect: Effect.Effect<A, unknown, never>) => Effect.runPromise(effect);
+  const recovery = completedRecoveryTurn(input.run);
+  let recoveredHistory: Promise<readonly WorkflowConversationMessage[]> | undefined;
 
   return {
     worktreePath: input.worktreePath,
@@ -47,8 +53,15 @@ export function workflowContext(input: {
           paneId,
         }),
       ),
-    getConversationHistory: (agentSessionId) =>
-      runEffect(input.capabilities.getConversationHistory(agentSessionId)),
+    getConversationHistory: (agentSessionId) => {
+      if (recovery?.agentSessionId === agentSessionId) {
+        recoveredHistory ??= runEffect(
+          input.capabilities.getConversationHistory(agentSessionId, recovery.turn),
+        );
+        return recoveredHistory;
+      }
+      return runEffect(input.capabilities.getConversationHistory(agentSessionId));
+    },
     runHeadlessAgent: (prompt) =>
       runEffect(
         input.capabilities.runHeadlessAgentForRun({

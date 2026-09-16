@@ -1,5 +1,5 @@
 import { eq, inArray } from 'drizzle-orm';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness, AttentionState, SessionStatus } from '@isagi/contracts';
 
@@ -43,8 +43,18 @@ export interface HarnessLedgerObserverService {
   readonly getTurnEdges: (
     agentSessionId: number,
   ) => Effect.Effect<readonly ObservedHarnessTurnEdge[]>;
+  readonly refreshTurnEdges: (
+    agentSessionId: number,
+  ) => Effect.Effect<readonly ObservedHarnessTurnEdge[], unknown>;
   readonly getAttention: (agentSessionId: number) => Effect.Effect<AttentionState | undefined>;
 }
+
+export class HarnessObserverRefreshError extends Data.TaggedError('HarnessObserverRefreshError')<{
+  readonly agentSessionId: number;
+  readonly failedSources: readonly string[];
+  readonly failedOperations: readonly string[];
+  readonly message: string;
+}> {}
 
 export interface HarnessLedgerObserverTestControlService {
   readonly pollOnce: Effect.Effect<void, unknown>;
@@ -807,6 +817,34 @@ export const HarnessLedgerObserverLive = Layer.scoped(
     const service: HarnessLedgerObserverService = {
       getProjection: (agentSessionId) => Effect.sync(() => states.get(agentSessionId)?.projection),
       getTurnEdges: (agentSessionId) => Effect.sync(() => states.get(agentSessionId)?.edges ?? []),
+      // Explicit recovery needs a fresh, session-scoped observation, not the last
+      // background poll. Do not turn a refresh failure into a stale success.
+      refreshTurnEdges: (agentSessionId) =>
+        Effect.gen(function* () {
+          const inventory = yield* inventoryQuery({ mode: 'one', id: agentSessionId });
+          applyInventory(inventory, false);
+          return yield* withAgentLock(
+            agentSessionId,
+            Effect.gen(function* () {
+              yield* refreshAgent(agentSessionId, { publish: true, forceRecompute: true });
+              const state = states.get(agentSessionId);
+              if (
+                state &&
+                (state.failedSourcePaths.size > 0 || state.failedOperationKeys.size > 0)
+              ) {
+                return yield* Effect.fail(
+                  new HarnessObserverRefreshError({
+                    agentSessionId,
+                    failedSources: [...state.failedSourcePaths],
+                    failedOperations: [...state.failedOperationKeys],
+                    message: `Agent session ${agentSessionId} observation has unreadable sources.`,
+                  }),
+                );
+              }
+              return state?.edges ?? [];
+            }),
+          );
+        }),
       getAttention: (agentSessionId) => Effect.sync(() => states.get(agentSessionId)?.attention),
     };
     testControls.set(service, { pollOnce, pollAgentSession });

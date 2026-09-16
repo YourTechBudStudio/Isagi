@@ -48,6 +48,7 @@ import {
   sendAgentPrompt,
   WorkflowCapabilities,
   WorkflowCapabilitiesLive,
+  WorkflowAgentResponseUnavailable,
   type WorkflowCapabilitiesService,
 } from './capabilities.js';
 import { workflowContext } from './context.js';
@@ -68,7 +69,9 @@ import {
 import { WorkflowRepository, WorkflowRepositoryLive } from './repository.js';
 import type { WorkflowRepositoryService } from './repository.js';
 import { resolveTurnEdge } from './resolver.js';
+import { completedRecoveryTurn, planAgentTurnRetry, turnProvenance } from './turn-recovery.js';
 import { WorkflowEngineError, type WorkflowRunRow } from './types.js';
+import { parseResumePayload } from './wait-conditions.js';
 import { WorkflowEngine, WorkflowEngineLive } from './workflow-engine.service.js';
 import { deriveWorkflowRunSummary } from './workflow-run-projection.service.js';
 
@@ -2412,7 +2415,7 @@ test('resolver wakes waiting turn runs only after the condition watermark', asyn
     assert.equal(result.after?.status, 'ready');
     assert.equal(result.after?.waitKind, null);
     assert.equal(result.after?.waitCondition, null);
-    assert.deepEqual(JSON.parse(result.after?.resumePayload ?? '{}'), {
+    assert.deepEqual(result.after && parseResumePayload(result.after), {
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:10.000Z',
     });
@@ -2565,7 +2568,7 @@ test('paused waiting agent-turn run wakes to ready but is not dispatched', async
     assert.equal(result.afterWake?.status, 'ready');
     assert.equal(result.afterWake?.paused, true);
     assert.equal(result.afterWake?.waitKind, null);
-    assert.deepEqual(JSON.parse(result.afterWake?.resumePayload ?? '{}'), {
+    assert.deepEqual(result.afterWake && parseResumePayload(result.afterWake), {
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:20.000Z',
     });
@@ -2729,7 +2732,7 @@ test('step runner marks failed when a resumed failed turn throws', async () => {
     assert.match(JSON.parse(row?.error ?? '{}').message, /turn failed: new_start_supersedes/);
     // The driving event is preserved on the failed row so a later `retry` can
     // re-run the throwing step with the same event in hand.
-    assert.deepEqual(JSON.parse(row?.resumePayload ?? 'null'), {
+    assert.deepEqual(row && parseResumePayload(row), {
       outcome: 'failed',
       reason: 'new_start_supersedes',
       recordedAt: '2026-06-18T00:00:10.000Z',
@@ -2827,7 +2830,7 @@ test('resume reconciles a satisfied paused turn across a changed harness session
     assert.equal(row?.status, 'ready');
     assert.equal(row?.waitKind, null);
     assert.equal(row?.waitCondition, null);
-    assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
+    assert.deepEqual(row && parseResumePayload(row), {
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:12.000Z',
     });
@@ -2966,7 +2969,7 @@ test('resume reconciles turn edges that land while rearming a paused run', async
 
     assert.equal(row?.status, 'ready');
     assert.equal(row?.waitKind, null);
-    assert.deepEqual(JSON.parse(row?.resumePayload ?? '{}'), {
+    assert.deepEqual(row && parseResumePayload(row), {
       outcome: 'ended',
       recordedAt: '2026-06-18T00:00:12.000Z',
     });
@@ -3564,6 +3567,243 @@ test('retry re-runs a resume-driven failed step with the same event', async () =
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+for (const recoveryState of [
+  'completed',
+  'working',
+  'paused',
+  'racing',
+  'refresh_failed',
+  'failed',
+  'unchanged',
+] as const) {
+  test(`retry reconciles a ${recoveryState} later agent turn after runtime restart`, async () => {
+    const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-turn-recovery-'));
+    const time = (second: number) => new Date(Date.UTC(2026, 8, 13, 0, 0, second)).toISOString();
+    let edges: readonly ObservedHarnessTurnEdge[] = [
+      {
+        type: 'turn_started',
+        agentSessionId: 10,
+        harnessSessionId: 'old',
+        seq: 0,
+        recordedAt: time(0),
+      },
+      {
+        type: 'turn_failed',
+        agentSessionId: 10,
+        harnessSessionId: 'old',
+        seq: 0,
+        recordedAt: time(1),
+        reason: 'harness_error',
+      },
+    ];
+    const received: unknown[] = [];
+    const invocations: string[] = [];
+    const succeeds =
+      recoveryState !== 'failed' &&
+      recoveryState !== 'unchanged' &&
+      recoveryState !== 'refresh_failed';
+    const registry = createWorkflowRegistry({
+      recovery: {
+        command: () => ({ title: 'Recovery' }),
+        validate: () => {},
+        init: () => ({}),
+        step: async (ctx, _state, event) => {
+          received.push(event);
+          invocations.push(ctx.invocation.kind);
+          return (event as { outcome?: string }).outcome === 'ended'
+            ? done()
+            : fail('No agent response');
+        },
+      },
+    });
+    let completeAfterRead = false;
+    const observer: HarnessLedgerObserverService = {
+      ...fakeHarnessLedgerObserver(),
+      refreshTurnEdges(agentSessionId) {
+        return recoveryState === 'refresh_failed'
+          ? Effect.fail(new Error('observation unavailable'))
+          : this.getTurnEdges(agentSessionId);
+      },
+      getTurnEdges: () =>
+        Effect.sync(() => {
+          const snapshot = edges;
+          if (completeAfterRead) {
+            completeAfterRead = false;
+            edges = [
+              ...edges,
+              {
+                type: 'turn_ended',
+                agentSessionId: 10,
+                harnessSessionId: 'new',
+                seq: 0,
+                recordedAt: time(3),
+              },
+            ];
+          }
+          return snapshot;
+        }),
+    };
+    const layer = () =>
+      workflowLayer(dataRoot, Layer.succeed(WorkflowRegistry, registry), { observer });
+    try {
+      const id = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repository = yield* WorkflowRepository;
+          const engine = yield* WorkflowEngine;
+          const run = yield* repository.createRun({
+            workflowKey: 'recovery',
+            workflowTitle: 'Recovery',
+            workflowArtifactHash: '0'.repeat(64),
+            state: {},
+            stateVersion: 1,
+            worktreeId: 1,
+            surfaceId: 1,
+          });
+          yield* claimWorkflowRunForTest(repository, run.id);
+          yield* repository.completeSuspend({
+            runId: run.id,
+            state: {},
+            waitKind: 'agent_turn',
+            waitCondition: { kind: 'agent_turn', agentSessionId: 10, sentAt: time(0) },
+          });
+          yield* resolveTurnEdge({
+            repository,
+            engine,
+            observer,
+            edge: {
+              type: 'turn_failed',
+              agentSessionId: 10,
+              harnessSessionId: 'old',
+              recordedAt: time(1),
+              reason: 'harness_error',
+            },
+          });
+          yield* engine.drainOnce;
+          const failed = yield* repository.findRun(run.id);
+          assert.equal(failed?.status, 'failed');
+          assert.equal(turnProvenance(failed!)?.condition.agentSessionId, 10);
+          return run.id;
+        }).pipe(Effect.provide(layer())),
+      );
+
+      if (recoveryState !== 'unchanged') {
+        edges = [
+          ...edges,
+          {
+            type: 'turn_started',
+            agentSessionId: 10,
+            harnessSessionId: 'new',
+            seq: 0,
+            recordedAt: time(2),
+          },
+        ];
+      }
+      if (recoveryState === 'completed' || recoveryState === 'failed') {
+        edges = [
+          ...edges,
+          {
+            type: recoveryState === 'completed' ? 'turn_ended' : 'turn_failed',
+            agentSessionId: 10,
+            harnessSessionId: 'new',
+            seq: 0,
+            recordedAt: time(3),
+            reason: 'harness_error',
+          },
+        ];
+      }
+      completeAfterRead = recoveryState === 'racing';
+      if (recoveryState === 'paused') {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const repository = yield* WorkflowRepository;
+            const engine = yield* WorkflowEngine;
+            yield* engine.retry({ runId: id });
+            yield* repository.pauseNonTerminalRuns;
+          }).pipe(Effect.provide(layer())),
+        );
+      }
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const repository = yield* WorkflowRepository;
+          const engine = yield* WorkflowEngine;
+          if (recoveryState === 'refresh_failed') {
+            const before = yield* repository.findRun(id);
+            const result = yield* engine.retry({ runId: id }).pipe(Effect.either);
+            assert.ok(Either.isLeft(result));
+            assert.ok(result.left instanceof WorkflowEngineError);
+            assert.equal(result.left.code, 'workflow_wait_not_satisfiable');
+            assert.deepEqual(yield* repository.findRun(id), before);
+            return;
+          }
+          if (recoveryState === 'completed') {
+            const before = yield* repository.findRun(id);
+            const plan = planAgentTurnRetry(before!, edges);
+            assert.ok(plan);
+            // A stale observation plan must not refresh pins or reopen any rows.
+            const stale = yield* repository.retryFailedRunTree({
+              rootRunId: id,
+              artifactPins: [{ runId: id, workflowKey: 'recovery', artifactHash: 'a'.repeat(64) }],
+              turnRetries: [{ ...plan, expectedUpdatedAt: 'stale snapshot' }],
+            });
+            assert.equal(stale, null);
+            assert.deepEqual(yield* repository.findRun(id), before);
+          }
+          if (recoveryState === 'paused') yield* engine.resume({ runId: id });
+          else yield* engine.retry({ runId: id });
+          let recovered = yield* repository.findRun(id);
+          if (recoveryState === 'working' || recoveryState === 'paused') {
+            assert.equal(recovered?.status, 'waiting');
+            assert.equal(received.length, 1);
+            if (recoveryState === 'paused') yield* engine.pause({ runId: id });
+            edges = [
+              ...edges,
+              {
+                type: 'turn_ended',
+                agentSessionId: 10,
+                harnessSessionId: 'new',
+                seq: 0,
+                recordedAt: time(3),
+              },
+            ];
+            if (recoveryState === 'paused') yield* engine.resume({ runId: id });
+            else
+              yield* resolveTurnEdge({
+                repository,
+                engine,
+                observer,
+                edge: {
+                  type: 'turn_ended',
+                  agentSessionId: 10,
+                  harnessSessionId: 'new',
+                  recordedAt: time(3),
+                },
+              });
+            recovered = yield* repository.findRun(id);
+          }
+          if (succeeds) {
+            assert.deepEqual(completedRecoveryTurn(recovered!), {
+              agentSessionId: 10,
+              turn: { harnessSessionId: 'new', seq: 0, startedAt: time(2), completedAt: time(3) },
+            });
+          }
+          yield* engine.drainOnce;
+          const final = yield* repository.findRun(id);
+          assert.equal(final?.status, succeeds ? 'done' : 'failed');
+        }).pipe(Effect.provide(layer())),
+      );
+      assert.deepEqual(
+        invocations,
+        recoveryState === 'refresh_failed' ? ['normal'] : ['normal', 'retry'],
+      );
+      if (succeeds) {
+        assert.deepEqual(received[1], { outcome: 'ended', recordedAt: time(3) });
+      }
+    } finally {
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+}
 
 test('retry reopens failed child branches and rearms their failed parent join', async () => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-workflow-retry-tree-'));
@@ -4337,6 +4577,39 @@ test('workflow spawn validation fails before surface or PTY work', async () => {
   assert.equal(ptyEnsures, 0);
 });
 
+test('recovered conversation reads fail explicitly when the selected response is missing', async () => {
+  const agents = fakeAgentSessionService();
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const capabilities = yield* WorkflowCapabilities;
+      return yield* capabilities
+        .getConversationHistory(10, {
+          harnessSessionId: 'selected',
+          seq: 2,
+          startedAt: '2026-09-13T00:00:02.000Z',
+          completedAt: '2026-09-13T00:00:03.000Z',
+        })
+        .pipe(Effect.either);
+    }).pipe(
+      Effect.provide(
+        workflowCapabilitiesLayer({
+          agents: {
+            ...agents,
+            get: (id) =>
+              agents
+                .get(id)
+                .pipe(Effect.map((session) => ({ ...session, harness: 'claude' as const }))),
+          },
+        }),
+      ),
+    ),
+  );
+  assert.ok(Either.isLeft(result));
+  assert.ok(result.left instanceof WorkflowAgentResponseUnavailable);
+  assert.equal(result.left.agentSessionId, 10);
+  assert.equal(result.left.seq, 2);
+});
+
 test('workflow capabilities closePaneForRun delegates to the run surface', async () => {
   const deleted: Array<{ surfaceId: number; paneId: number }> = [];
   await Effect.runPromise(
@@ -5103,6 +5376,9 @@ function fakeHarnessLedgerObserver(
   return {
     getProjection: () => Effect.succeed({ recordsByHarnessSessionId: new Map() }),
     getTurnEdges: () => Effect.succeed(edges),
+    refreshTurnEdges(agentSessionId) {
+      return this.getTurnEdges(agentSessionId);
+    },
     getAttention: () => Effect.succeed('idle' as const),
   };
 }

@@ -9,11 +9,12 @@ import type {
   WorkflowLogLevel,
   WorkflowPromptInput,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
-import { Context, Effect, Layer } from 'effect';
+import { Context, Data, Effect, Layer } from 'effect';
 
 import type { AgentHarness, SplitPaneDirection, SurfaceLayoutNode } from '@isagi/contracts';
 
 import { getConversationHistory as readConversationHistory } from '../agent-sessions/harness/conversation.js';
+import type { HarnessConversationTurn } from '../agent-sessions/harness/definition-types.js';
 import type { AgentSessionArtifactsService } from '../agent-sessions/harness/ledger.js';
 import {
   HarnessLedgerObserver,
@@ -75,6 +76,7 @@ export interface WorkflowCapabilitiesService {
   }) => Effect.Effect<void, unknown>;
   readonly getConversationHistory: (
     agentSessionId: number,
+    turn?: HarnessConversationTurn,
   ) => Effect.Effect<readonly WorkflowConversationMessage[], unknown>;
   readonly runHeadlessAgentForRun: (input: {
     readonly run: WorkflowRunRow;
@@ -91,6 +93,15 @@ export interface WorkflowCapabilitiesService {
     readonly feedback: WorkflowUiFeedback;
   }) => Effect.Effect<void>;
 }
+
+export class WorkflowAgentResponseUnavailable extends Data.TaggedError(
+  'WorkflowAgentResponseUnavailable',
+)<{
+  readonly agentSessionId: number;
+  readonly harnessSessionId: string;
+  readonly seq: number;
+  readonly message: string;
+}> {}
 
 export const WorkflowCapabilities = Context.GenericTag<WorkflowCapabilitiesService>(
   'isagi/WorkflowCapabilities',
@@ -131,17 +142,36 @@ export const WorkflowCapabilitiesLive = Layer.effect(
           surfaces,
           paneId: input.paneId,
         }),
-      getConversationHistory: (agentSessionId) =>
+      getConversationHistory: (agentSessionId, turn) =>
         Effect.gen(function* () {
           const session = yield* agents.get(agentSessionId);
-          const harnessSessionId = yield* harnessSessionIdForAgentSession(
-            artifacts,
-            agentSessionId,
-          );
-          return yield* readConversationHistory({
-            ...session,
-            harnessSessionId,
-          }).pipe(Effect.provideService(HarnessLedgerObserver, observer));
+          const harnessSessionId =
+            turn?.harnessSessionId ??
+            (yield* harnessSessionIdForAgentSession(artifacts, agentSessionId));
+          const history = yield* readConversationHistory(
+            {
+              ...session,
+              harnessSessionId,
+            },
+            turn,
+          ).pipe(Effect.provideService(HarnessLedgerObserver, observer));
+          if (
+            turn &&
+            !history.some(
+              (message) =>
+                message.role === 'assistant' && message.parts.some((part) => part.text.trim()),
+            )
+          ) {
+            return yield* Effect.fail(
+              new WorkflowAgentResponseUnavailable({
+                agentSessionId,
+                harnessSessionId: turn.harnessSessionId,
+                seq: turn.seq,
+                message: `The completed response for agent session ${agentSessionId}, turn ${turn.seq} is unavailable.`,
+              }),
+            );
+          }
+          return history;
         }),
       runHeadlessAgentForRun: (input) =>
         headless.runHeadlessAgent({

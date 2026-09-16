@@ -24,6 +24,7 @@ import {
   stepErrorPayload,
   worktreePathForRun,
 } from './run-failure.js';
+import type { AgentTurnWait } from './turn-recovery.js';
 import type { WorkflowRunRow, WorkflowWaitCondition } from './types.js';
 import {
   findSatisfiedTerminalTurnEdge,
@@ -326,7 +327,7 @@ function continueResumedTurnRun(input: {
 
     yield* input.repository.readyResumedWait({
       runId: input.run.id,
-      resumePayload: resumePayload(terminalEdge),
+      resumePayload: resumePayload(terminalEdge, condition),
     });
     yield* appendInternalWorkflowLogBestEffort(
       input.eventLedger,
@@ -341,7 +342,7 @@ function continueResumedTurnRun(input: {
 
 export function reconcileArmedTurnWait(input: {
   readonly run: WorkflowRunRow;
-  readonly condition: Extract<WorkflowWaitCondition, { readonly kind: 'agent_turn' }>;
+  readonly condition: AgentTurnWait;
   readonly repository: WorkflowRepositoryService;
   readonly observer: HarnessLedgerObserverService;
   readonly eventLedger: WorkflowEventLedgerService;
@@ -353,7 +354,7 @@ export function reconcileArmedTurnWait(input: {
     if (edge) {
       const woke = yield* input.repository.wakeWaitingRun({
         runId: input.run.id,
-        resumePayload: resumePayload(edge),
+        resumePayload: resumePayload(edge, input.condition),
       });
       if (woke) {
         yield* appendInternalWorkflowLogBestEffort(

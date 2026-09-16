@@ -189,7 +189,7 @@ export function resolveTurnEdge(input: {
       if (!terminalEdge) continue;
       const woke = yield* input.repository.wakeWaitingRun({
         runId: run.id,
-        resumePayload: resumePayload(terminalEdge),
+        resumePayload: resumePayload(terminalEdge, condition),
       });
       if (woke) {
         yield* appendInternalWorkflowLogBestEffort(
