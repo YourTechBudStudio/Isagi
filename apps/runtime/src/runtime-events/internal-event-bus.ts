@@ -101,9 +101,18 @@ export type InternalRuntimeEvent =
       readonly ptyProcessId: number;
     }
   | {
-      readonly type: 'headless_op_completed';
+      /**
+       * A durable workflow operation reached a settled state.
+       *
+       * A wake-up, never the authority: the operation row is what says *what* it settled as, and a
+       * dropped notification costs a delay rather than a fact, because the wait resolver's own
+       * reconciliation reads the same rows. It replaces the old `headless_op_completed`, which named
+       * only one of the four capabilities that can settle.
+       */
+      readonly type: 'workflow_operation_settled';
       readonly runId: number;
-      readonly opId: string;
+      readonly operationId: number;
+      readonly operationKey: string;
     }
   | {
       readonly type: 'workflow_run_terminal';

@@ -7,8 +7,10 @@
  * and reach their consumers through the runtime layer, not through this barrel.
  *
  * The v1 exports that used to live here — the run-tree repository, the JSONL event ledger, the
- * `step` interpreter and its context — are gone with the contract they belonged to. Their modules
- * are still on disk and still red; phases 03–05 replace them.
+ * `step` interpreter and its context — are gone with the contract they belonged to. The v1
+ * capability, context and headless modules are now gone too, replaced by `operations/`, which the
+ * runtime layer composes directly rather than through this barrel. The engine, wait resolver, read
+ * projection and HTTP routes are still on disk and still red; phases 04–05 replace them.
  */
 
 export {

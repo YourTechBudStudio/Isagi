@@ -280,8 +280,13 @@ export const workflowOperationStageSchema = Schema.Literal(
   // reached a backend (settle `abandoned`, redispatch is safe) from a post-spawn failure where a
   // process may be live (settle `failed`, never redispatch under the same identity).
   'launch_failed',
-  // spawn_agent_session
-  'pane_created',
+  // spawn_agent_session. There is no `pane_created`: `SurfaceService.splitPane` creates the pane,
+  // the session and their association behind one keyed owner call, so the workflow layer never
+  // observes the intermediate point and could never write that stage. A crash inside the owner's
+  // compound leaves the operation at `intended` with no stage at all, and recovery resolves the
+  // real resource state through `findByCreationKey` — which is where `pane_only` and
+  // `session_unassigned` genuinely live. A stage literal no writer can produce would advertise a
+  // recovery fact that does not exist.
   'session_created',
   'seed_submitting',
   'seed_submitted',

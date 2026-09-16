@@ -51,6 +51,15 @@ export type WorkflowWriteRejection =
   | { readonly kind: 'run_terminal'; readonly status: WorkflowRunStatus }
   | { readonly kind: 'position_mismatch' }
   /**
+   * Late evidence already exists for this operation and the new observation disagrees with it.
+   *
+   * The first late observation is immutable. Overwriting it would let whichever report happened to
+   * arrive last define what a surviving process did, and the point of retaining late evidence is to
+   * keep the first thing anyone actually saw. The conflict is returned rather than swallowed so a
+   * caller can record that two incompatible reports arrived.
+   */
+  | { readonly kind: 'late_evidence_conflict' }
+  /**
    * A recorded call position was re-entered with a materially different request.
    *
    * The call position identifies *one* intended effect. Adopting a recorded operation whose request

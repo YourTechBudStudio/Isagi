@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
@@ -12,7 +12,7 @@ import type {
 
 import type { RuntimeDrizzleDatabase } from '../../persistence/database.service.js';
 import { DatabaseError, RuntimeDatabase } from '../../persistence/index.js';
-import { workflowOperations } from '../../persistence/schema.js';
+import { workflowOperations, workflowRuns } from '../../persistence/schema.js';
 import { canonicalJson } from '../state/serializable.js';
 import { appendTransitions } from './history.repository.js';
 import { committed, rejected, type WorkflowWriteResult } from './outcomes.js';
@@ -27,7 +27,7 @@ import type {
   WorkflowOperationTargetKind,
 } from './records.js';
 import { operationRecord } from './row-mappers.js';
-import type { RecordedValue } from './runs.repository.js';
+import { isTerminalRunStatus, type RecordedValue } from './runs.repository.js';
 import { slotColumns } from './slots.js';
 
 /**
@@ -42,6 +42,23 @@ const movableStates = [
   'dispatched',
 ] as const satisfies readonly WorkflowOperationState[];
 
+/**
+ * States a *receipt* may still advance out of.
+ *
+ * `abandoned` is included and the other settled states are not, because `abandoned` is the one
+ * settlement that means the effect provably never left. Re-entering that call position dispatches
+ * again **under the same operation identity** — §10.3 reaches that transition from `intended` and
+ * from `abandoned` deliberately — and a receipt guard that refused it would silently leave the row
+ * at its pre-boundary stage while the new dispatch really happened, which is the one disagreement
+ * between the record and the world this design cannot tolerate. A `completed`, `failed`,
+ * `interrupted` or `uncertain` operation stays closed: those describe effects that did leave.
+ */
+const receiptAdvanceableStates = [
+  'intended',
+  'dispatched',
+  'abandoned',
+] as const satisfies readonly WorkflowOperationState[];
+
 export interface RecordOperationIntentInput {
   readonly runId: number;
   readonly frameId: number;
@@ -49,7 +66,22 @@ export interface RecordOperationIntentInput {
   readonly originAttemptId: number;
   readonly capability: WorkflowCapability;
   readonly callIndex: number;
+  /**
+   * Recorded in full and inspectable: the author's normalized request together with whatever
+   * dispatch configuration was resolved for this operation.
+   */
   readonly request: RecordedValue;
+  /**
+   * The subset the fingerprint is taken over — the author's intent, and nothing the runtime chose
+   * on their behalf.
+   *
+   * These are two values because they answer different questions. A resumed operation must keep
+   * dispatching with the *effective* configuration it was created under, so that value has to be
+   * durable; but it must not participate in identity, or changing a runtime default would retire
+   * every in-flight operation that omitted the field and report it as an incompatible recovery
+   * request naming nothing the author did.
+   */
+  readonly fingerprintOf: RecordedValue;
   readonly artifactHash: string;
   readonly operationKey?: string;
 }
@@ -137,10 +169,50 @@ export interface WorkflowOperationsRepositoryService {
   readonly listUnsettled: (input?: {
     readonly runId?: number;
   }) => Effect.Effect<readonly WorkflowOperationRecord[], DatabaseError>;
+  /**
+   * The headless operation that owns a PTY process, if any.
+   *
+   * Durable, because the in-memory tracker only knows what *this* incarnation launched. A process
+   * that outlived the runtime capturing it is precisely the case where the tracker is empty and the
+   * question still has an answer. Scoped to `run_headless_agent`: an interactive session's process
+   * id is also recorded on prompt operations, and a session dying is turn evidence for the wait
+   * resolver rather than a late result for the prompt.
+   */
+  readonly findByPtyProcessId: (
+    ptyProcessId: number,
+  ) => Effect.Effect<WorkflowOperationRecord | null, DatabaseError>;
   readonly listByCaptureOwner: (
     captureOwner: string,
   ) => Effect.Effect<readonly WorkflowOperationRecord[], DatabaseError>;
   readonly listPendingStops: () => Effect.Effect<readonly WorkflowOperationRecord[], DatabaseError>;
+  /**
+   * The operation a run must name while it holds unresolved uncertainty, or null if it holds none.
+   *
+   * An uncertain operation is genuinely settled — it can never move again — so it has no place in
+   * `listUnsettled`; what it still carries is an obligation on its *run*, and settling and blocking
+   * are separate transactions, so a crash can leave the second undone.
+   *
+   * The obligation is defined at the level it lives at. `blocked_operation_id` is singular and
+   * belongs to the run, so a run holding uncertainty in more than one execution has to resolve to
+   * *one* answer, always the same one, or two repairs will displace each other on every restart.
+   * Lowest id is that answer: ids are allocated in creation order, so it is the earliest recorded
+   * uncertainty run-wide, and within a single execution it is the lowest call index — which keeps
+   * an earlier call position that only later turns out uncertain able to take the block from a
+   * later one.
+   */
+  readonly findBlockingObligation: (
+    runId: number,
+  ) => Effect.Effect<WorkflowOperationRecord | null, DatabaseError>;
+  /**
+   * Every run whose blocking obligation is not already discharged — one row per run.
+   *
+   * Filtering here rather than after the read is what keeps startup work proportional to outstanding
+   * repairs instead of to retained history, which is kept indefinitely.
+   */
+  readonly listBlockingObligations: () => Effect.Effect<
+    readonly WorkflowOperationRecord[],
+    DatabaseError
+  >;
 }
 
 export const WorkflowOperationsRepository = Context.GenericTag<WorkflowOperationsRepositoryService>(
@@ -169,21 +241,44 @@ export function makeWorkflowOperationsRepository(
   return {
     recordIntent: (input) =>
       Effect.gen(function* () {
-        // Fingerprinted from the same canonical bytes the request is stored as, so a callback that
-        // builds an equivalent object in a different key order still matches its recorded call.
+        // Canonicalized before hashing, so a callback that builds an equivalent object in a
+        // different key order still matches its recorded call.
         const requestJson = yield* Effect.try({
-          try: () => canonicalJson(input.request.value),
+          try: () => canonicalJson(input.fingerprintOf.value),
           catch: (cause) => cause,
         }).pipe(
           Effect.catchAll((cause) =>
             Effect.die(
-              new Error(`Operation request is not serializable: ${String(cause)}`, { cause }),
+              new Error(`Operation request identity is not serializable: ${String(cause)}`, {
+                cause,
+              }),
             ),
           ),
         );
         const request = yield* payloads.publish(input.request.value);
         return yield* database.transaction('workflow_record_operation_intent', (db) => {
           const now = new Date().toISOString();
+          // Cancel revokes permission to cross a *new* external boundary, and this is the last
+          // durable moment before one is crossed. Checking here rather than in the caller makes the
+          // fence atomic with the write it guards: Cancel and intent creation serialize through the
+          // same transaction, so a callback cannot read "not cancelled", lose the race, and still
+          // record an intent. What remains — intent recorded, then Cancel, then the boundary crossed
+          // — is the irreducible window the design names, and `stopOwnedOperations` is what answers
+          // for it. Reuse of an already-settled receipt never reaches this transaction, so accounting
+          // for recorded work still succeeds after Cancel.
+          const run = db
+            .select({ status: workflowRuns.status, cancelRequested: workflowRuns.cancelRequested })
+            .from(workflowRuns)
+            .where(eq(workflowRuns.id, input.runId))
+            .get();
+          if (!run) return rejected<WorkflowOperationRecord>({ kind: 'run_not_found' });
+          if (run.cancelRequested || isTerminalRunStatus(run.status)) {
+            return rejected<WorkflowOperationRecord>({
+              kind: 'run_terminal',
+              status: run.status,
+            });
+          }
+
           const existing = db
             .select()
             .from(workflowOperations)
@@ -271,7 +366,7 @@ export function makeWorkflowOperationsRepository(
           const now = new Date().toISOString();
           const row = find(db, input.operationId);
           if (!row) return rejected<WorkflowOperationRecord>({ kind: 'run_not_found' });
-          if (!(movableStates as readonly string[]).includes(row.state)) {
+          if (!(receiptAdvanceableStates as readonly string[]).includes(row.state)) {
             return rejected<WorkflowOperationRecord>({
               kind: 'operation_state_conflict',
               state: row.state,
@@ -298,6 +393,12 @@ export function makeWorkflowOperationsRepository(
               ...(input.correlatedHarnessSessionId === undefined
                 ? {}
                 : { correlatedHarnessSessionId: input.correlatedHarnessSessionId }),
+              // Redispatching an abandoned position reopens it: leaving `settled_at` set would make
+              // the row read as settled and dispatched at once, and the settlement it names is no
+              // longer the operation's outcome.
+              ...(row.state === 'abandoned'
+                ? { settledAt: null, resultInline: null, resultRef: null }
+                : {}),
               dispatchedAt: row.dispatchedAt ?? now,
             })
             .where(eq(workflowOperations.id, row.id))
@@ -433,6 +534,18 @@ export function makeWorkflowOperationsRepository(
           const row = find(db, input.operationId);
           if (!row) return rejected<WorkflowOperationRecord>({ kind: 'run_not_found' });
           const columns = slotColumns(evidence);
+          // Immutable once written, and idempotent for an identical repeat. Payload refs are
+          // content-addressed and the inline side is canonical JSON, so comparing the slot *is*
+          // comparing the value — no second read and no resolution inside the transaction.
+          if (row.lateEvidenceInline !== null || row.lateEvidenceRef !== null) {
+            const identical =
+              row.lateEvidenceInline === columns.inline && row.lateEvidenceRef === columns.ref;
+            return identical
+              ? // A duplicate report of the same observation is not news. It allocates no revision,
+                // because a client walking history must not be handed the same fact twice.
+                committed(operationRecord(row), [])
+              : rejected<WorkflowOperationRecord>({ kind: 'late_evidence_conflict' });
+          }
           const updated = db
             .update(workflowOperations)
             .set({ lateEvidenceInline: columns.inline, lateEvidenceRef: columns.ref })
@@ -513,6 +626,21 @@ export function makeWorkflowOperationsRepository(
           .map(operationRecord),
       ),
 
+    findByPtyProcessId: (ptyProcessId) =>
+      database.use('workflow_find_operation_by_pty_process', (db) => {
+        const row = db
+          .select()
+          .from(workflowOperations)
+          .where(
+            and(
+              eq(workflowOperations.ptyProcessId, ptyProcessId),
+              eq(workflowOperations.capability, 'run_headless_agent'),
+            ),
+          )
+          .get();
+        return row ? operationRecord(row) : null;
+      }),
+
     listByCaptureOwner: (captureOwner) =>
       database.use('workflow_list_operations_by_capture_owner', (db) =>
         db
@@ -527,6 +655,48 @@ export function makeWorkflowOperationsRepository(
           .orderBy(asc(workflowOperations.id))
           .all()
           .map(operationRecord),
+      ),
+
+    findBlockingObligation: (runId) =>
+      database.use('workflow_find_run_blocking_obligation', (db) => {
+        const row = db
+          .select()
+          .from(workflowOperations)
+          .where(
+            and(eq(workflowOperations.runId, runId), eq(workflowOperations.state, 'uncertain')),
+          )
+          .orderBy(asc(workflowOperations.id))
+          .get();
+        return row ? operationRecord(row) : null;
+      }),
+
+    listBlockingObligations: () =>
+      database.use('workflow_list_run_blocking_obligations', (db) =>
+        db
+          .select({ operation: workflowOperations })
+          .from(workflowOperations)
+          .innerJoin(workflowRuns, eq(workflowRuns.id, workflowOperations.runId))
+          .where(
+            and(
+              eq(workflowOperations.state, 'uncertain'),
+              // One row per run: the earliest recorded uncertainty, which is exactly what
+              // `findBlockingObligation` resolves to. Comparing every uncertain row against the
+              // run's single blocking id would return the others forever, and reconciling them
+              // would let each overwrite the block the previous one just wrote.
+              sql`${workflowOperations.id} = (
+                SELECT MIN(peer.id) FROM ${workflowOperations} AS peer
+                 WHERE peer.run_id = ${workflowOperations.runId}
+                   AND peer.state = 'uncertain'
+              )`,
+              or(
+                isNull(workflowRuns.blockedOperationId),
+                ne(workflowRuns.blockedOperationId, workflowOperations.id),
+              ),
+            ),
+          )
+          .orderBy(asc(workflowOperations.id))
+          .all()
+          .map((row) => operationRecord(row.operation)),
       ),
 
     listPendingStops: () =>

@@ -783,14 +783,14 @@ test('an operation always records where it came from and what it intends to send
 
 test('every launch stage a recovery decision depends on is representable', () => {
   // `launch_failed` separates a preparation failure that never reached a backend from a post-spawn
-  // failure where a process may be live; `pane_created` is a keyed-creation state whose recovery
-  // must adopt the existing pane rather than create a second one.
+  // failure where a process may be live. Every stage here has a writer: the compound spawn's
+  // pane/session creation is one owner call, so `session_created` is the first stage that spawn can
+  // report and there is deliberately no `pane_created` to represent a point nothing can observe.
   for (const stage of [
     'allocated',
     'starting',
     'started',
     'launch_failed',
-    'pane_created',
     'session_created',
     'seed_submitting',
     'seed_submitted',

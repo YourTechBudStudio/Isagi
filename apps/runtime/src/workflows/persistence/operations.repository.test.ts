@@ -103,6 +103,7 @@ test('an intent records a call position before anything crosses a boundary', asy
           capability: 'run_headless_agent',
           callIndex: 0,
           request: { value: { prompt: 'judge this' } },
+          fingerprintOf: { value: { prompt: 'judge this' } },
           artifactHash: PIN,
         }),
       ),
@@ -113,6 +114,75 @@ test('an intent records a call position before anything crosses a boundary', asy
     assert.equal(operation.stage, null);
     assert.match(operation.operationKey, /^wop_/);
     assert.match(operation.requestFingerprint, /^[a-f0-9]{64}$/);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('identity covers what the author asked for, not what the runtime resolved for them', async () => {
+  // The recorded request holds both facts; only one of them is identity. A runtime-chosen dispatch
+  // value — a resolved default timeout, say — has to be durable so a redispatch keeps it, but if it
+  // entered the fingerprint then changing that default would give every in-flight operation that
+  // omitted the field a new identity, and the next recovery would reject an unchanged callback with
+  // `operation_request_changed` naming nothing the author did.
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const ctx = await insideCallback(fixture);
+    const authorIntent = { harness: 'claude', renderedPrompt: 'judge this', timeoutMs: null };
+    const base = {
+      runId: ctx.runId,
+      frameId: ctx.frameId,
+      executionId: ctx.executionId,
+      originAttemptId: ctx.attemptId,
+      capability: 'run_headless_agent' as const,
+      callIndex: 0,
+      artifactHash: PIN,
+      fingerprintOf: { value: authorIntent },
+    };
+    const recorded = value(
+      await run(
+        fixture.operations.recordIntent({
+          ...base,
+          request: { value: { request: authorIntent, dispatch: { effectiveTimeoutMs: 600_000 } } },
+        }),
+      ),
+    );
+
+    // The same author intent re-entered while the runtime's resolved default has changed underneath
+    // it. This is the recovery path, and it must adopt rather than refuse.
+    const adopted = value(
+      await run(
+        fixture.operations.recordIntent({
+          ...base,
+          request: { value: { request: authorIntent, dispatch: { effectiveTimeoutMs: 900_000 } } },
+        }),
+      ),
+    );
+    assert.equal(adopted.id, recorded.id);
+    assert.equal(adopted.requestFingerprint, recorded.requestFingerprint);
+
+    // And the recorded request is not rewritten by the adoption: the operation keeps dispatching
+    // under the configuration it was created with.
+    const stored = await run(fixture.payloads.resolve(adopted.request!));
+    assert.deepEqual(stored, {
+      request: authorIntent,
+      dispatch: { effectiveTimeoutMs: 600_000 },
+    });
+
+    // A changed *author* intent at the same position is still refused, before any effect.
+    const changed = await run(
+      fixture.operations.recordIntent({
+        ...base,
+        fingerprintOf: { value: { ...authorIntent, timeoutMs: 30_000 } },
+        request: {
+          value: {
+            request: { ...authorIntent, timeoutMs: 30_000 },
+            dispatch: { effectiveTimeoutMs: 30_000 },
+          },
+        },
+      }),
+    );
+    assert.equal(rejection(changed).kind, 'operation_request_changed');
   } finally {
     fixture.close();
   }
@@ -132,6 +202,7 @@ test('the fingerprint is over canonical bytes, so key order does not change iden
           capability: 'send_agent_prompt',
           callIndex: 0,
           request: { value: { a: 1, b: 2 } },
+          fingerprintOf: { value: { a: 1, b: 2 } },
           artifactHash: PIN,
         }),
       ),
@@ -146,6 +217,7 @@ test('the fingerprint is over canonical bytes, so key order does not change iden
           capability: 'send_agent_prompt',
           callIndex: 1,
           request: { value: { b: 2, a: 1 } },
+          fingerprintOf: { value: { b: 2, a: 1 } },
           artifactHash: PIN,
         }),
       ),
@@ -169,6 +241,7 @@ test('re-entering a callback adopts the recorded call rather than creating a sec
       capability: 'close_pane' as const,
       callIndex: 0,
       request: { value: { paneId: 7 } },
+      fingerprintOf: { value: { paneId: 7 } },
       artifactHash: PIN,
     };
     const first = value(await run(fixture.operations.recordIntent(intent)));
@@ -196,6 +269,7 @@ test('a stage is recorded before its boundary and allocates its own history', as
           capability: 'send_agent_prompt',
           callIndex: 0,
           request: { value: { prompt: 'hello' } },
+          fingerprintOf: { value: { prompt: 'hello' } },
           artifactHash: PIN,
         }),
       ),
@@ -255,6 +329,7 @@ test('settlement is monotonic, so a duplicate or late write is a no-op', async (
           capability: 'run_headless_agent',
           callIndex: 0,
           request: { value: { prompt: 'judge' } },
+          fingerprintOf: { value: { prompt: 'judge' } },
           artifactHash: PIN,
         }),
       ),
@@ -318,6 +393,7 @@ test('late evidence is retained without reviving a settled operation', async () 
           capability: 'run_headless_agent',
           callIndex: 0,
           request: { value: {} },
+          fingerprintOf: { value: {} },
           artifactHash: PIN,
         }),
       ),
@@ -357,6 +433,7 @@ test('a stop outcome is recorded once and never downgraded', async () => {
           capability: 'run_headless_agent',
           callIndex: 0,
           request: { value: {} },
+          fingerprintOf: { value: {} },
           artifactHash: PIN,
         }),
       ),
@@ -416,6 +493,7 @@ test('blocking a terminal run records the operation without resurrecting the run
           capability: 'send_agent_prompt',
           callIndex: 0,
           request: { value: {} },
+          fingerprintOf: { value: {} },
           artifactHash: PIN,
         }),
       ),
@@ -463,6 +541,7 @@ test('one call position holds one operation, enforced by the database', async ()
         capability: 'close_pane',
         callIndex: 0,
         request: { value: {} },
+        fingerprintOf: { value: {} },
         artifactHash: PIN,
       }),
     );
@@ -505,6 +584,7 @@ async function operationWorld(fixture: WorkflowPersistenceFixture, title: string
           capability,
           callIndex: callIndex++,
           request: { value: { title } },
+          fingerprintOf: { value: { title } },
           artifactHash: PIN,
         }),
       ),
@@ -676,6 +756,7 @@ test('a call position re-entered with a changed request is refused, not adopted'
       capability: 'spawn_agent_session' as const,
       callIndex: 0,
       request: { value: original },
+      fingerprintOf: { value: original },
       artifactHash: PIN,
     };
     const recorded = value(await run(fixture.operations.recordIntent(intent)));
@@ -691,6 +772,7 @@ test('a call position re-entered with a changed request is refused, not adopted'
       fixture.operations.recordIntent({
         ...intent,
         request: { value: { ...original, sourcePaneId: 99 } },
+        fingerprintOf: { value: { ...original, sourcePaneId: 99 } },
       }),
     );
     const movedRejection = rejection(movedSource);
@@ -709,6 +791,7 @@ test('a call position re-entered with a changed request is refused, not adopted'
           fixture.operations.recordIntent({
             ...intent,
             request: { value: { ...original, direction: 'down' } },
+            fingerprintOf: { value: { ...original, direction: 'down' } },
           }),
         ),
       ).kind,
@@ -751,6 +834,7 @@ test('key order in a request does not make it a different request', async () => 
         fixture.operations.recordIntent({
           ...intent,
           request: { value: { sourcePaneId: 21, direction: 'right' } },
+          fingerprintOf: { value: { sourcePaneId: 21, direction: 'right' } },
         }),
       ),
     );
@@ -761,6 +845,7 @@ test('key order in a request does not make it a different request', async () => 
         fixture.operations.recordIntent({
           ...intent,
           request: { value: { direction: 'right', sourcePaneId: 21 } },
+          fingerprintOf: { value: { direction: 'right', sourcePaneId: 21 } },
         }),
       ),
     );
@@ -785,6 +870,7 @@ test('a Retry under an edited pin re-enters the same call unchanged', async () =
           capability: 'spawn_agent_session',
           callIndex: 0,
           request,
+          fingerprintOf: request,
           artifactHash: PIN,
         }),
       ),
@@ -803,6 +889,7 @@ test('a Retry under an edited pin re-enters the same call unchanged', async () =
           capability: 'spawn_agent_session',
           callIndex: 0,
           request,
+          fingerprintOf: request,
           artifactHash: 'e'.repeat(64),
         }),
       ),
@@ -813,3 +900,78 @@ test('a Retry under an edited pin re-enters the same call unchanged', async () =
     fixture.close();
   }
 });
+
+test('the first late evidence is immutable, and an identical repeat allocates no revision', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const ctx = await insideCallback(fixture);
+    const operation = value(
+      await run(
+        fixture.operations.recordIntent({
+          runId: ctx.runId,
+          frameId: ctx.frameId,
+          executionId: ctx.executionId,
+          originAttemptId: ctx.attemptId,
+          capability: 'run_headless_agent',
+          callIndex: 0,
+          request: { value: { prompt: 'judge' } },
+          fingerprintOf: { value: { prompt: 'judge' } },
+          artifactHash: PIN,
+        }),
+      ),
+    );
+    value(
+      await run(fixture.operations.settle({ operationId: operation.id, state: 'interrupted' })),
+    );
+
+    const observed = { reason: 'late_process_terminal', result: { status: 'completed' } };
+    const first = value(
+      await run(
+        fixture.operations.recordLateEvidence({
+          operationId: operation.id,
+          evidence: { value: observed },
+        }),
+      ),
+    );
+    assert.ok(first.lateEvidence);
+    const revisionsAfterFirst = revisionCount(fixture, ctx.runId);
+
+    // The same observation reported twice is not two facts. It must not allocate a second revision,
+    // or a client walking history would be handed the same thing again.
+    const repeat = value(
+      await run(
+        fixture.operations.recordLateEvidence({
+          operationId: operation.id,
+          evidence: { value: observed },
+        }),
+      ),
+    );
+    assert.deepEqual(repeat.lateEvidence, first.lateEvidence);
+    assert.equal(revisionCount(fixture, ctx.runId), revisionsAfterFirst);
+
+    // A *different* later report does not get to redefine what the process did. The first thing
+    // anyone actually saw is the thing worth keeping, and whichever report arrived last is not
+    // evidence of anything.
+    const conflicting = await run(
+      fixture.operations.recordLateEvidence({
+        operationId: operation.id,
+        evidence: { value: { reason: 'late_process_terminal', result: { status: 'failed' } } },
+      }),
+    );
+    assert.equal(rejection(conflicting).kind, 'late_evidence_conflict');
+
+    const unchanged = (await run(fixture.operations.findById(operation.id)))!;
+    assert.deepEqual(unchanged.lateEvidence, first.lateEvidence);
+    assert.equal(unchanged.state, 'interrupted', 'and the settlement is untouched throughout');
+    assert.equal(revisionCount(fixture, ctx.runId), revisionsAfterFirst);
+  } finally {
+    fixture.close();
+  }
+});
+
+function revisionCount(fixture: WorkflowPersistenceFixture, runId: number): number {
+  const row = fixture.client
+    .prepare(`SELECT COUNT(*) AS total FROM workflow_transitions WHERE run_id = ?`)
+    .get(runId) as { total: number };
+  return row.total;
+}

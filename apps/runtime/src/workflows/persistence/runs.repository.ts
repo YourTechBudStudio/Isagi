@@ -2545,8 +2545,19 @@ function findOpenPause(db: RuntimeDrizzleDatabase, runId: number) {
     .get();
 }
 
-function isTerminal(status: WorkflowRunRecord['status']): boolean {
+/**
+ * A run that can no longer advance or authorize new work.
+ *
+ * Exported because the operation boundary asks the same question immediately before crossing an
+ * external boundary, and two copies of "what counts as terminal" is exactly the drift that lets one
+ * of them quietly fall behind.
+ */
+export function isTerminalRunStatus(status: WorkflowRunRecord['status']): boolean {
   return status === 'done' || status === 'failed' || status === 'cancelled';
+}
+
+function isTerminal(status: WorkflowRunRecord['status']): boolean {
+  return isTerminalRunStatus(status);
 }
 
 /**
