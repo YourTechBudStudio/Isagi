@@ -7,7 +7,8 @@
  * This is the only place the whole chain is exercised against a genuinely built package:
  *
  *   scaffold → pack/install → typecheck/test/build → verify → registry load → engine launch →
- *   root init → suspend at `user_continue`
+ *   environment preparation (forked, as production forks it) → root init → suspend at
+ *   `user_continue`
  *
  * Run it from the repo root:
  *   pnpm --dir apps/runtime exec tsx scripts/prove-workflow-authoring.mts
@@ -30,6 +31,14 @@ import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { supportedWorkflowContractVersion } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+
+import type { PreparationDeps } from '../src/workflows/engine/environment/types.js';
+// Type-only, so nothing here loads runtime source at module scope — the stages below import their
+// implementations dynamically, after the packages have been built. These two annotate the dependency
+// objects further down: without them the objects are structurally unchecked, and a required field
+// added to either interface would leave this proof compiling and then dying on a path the default
+// placement never takes.
+import type { LaunchDeps } from '../src/workflows/engine/launch.js';
 
 const packageOnly = process.argv.includes('--package-only');
 
@@ -227,16 +236,25 @@ async function main() {
  * Capability adapters are deliberately refusing stubs. The canonical scaffold is harness-free, so a
  * proof that needed a provider would be proving something about the provider instead — and if the
  * scaffold ever starts calling a capability, this fails loudly rather than quietly faking one.
+ *
+ * Owning services are refusing stubs for the same reason, and here that is an assertion rather than
+ * a convenience. The scaffold declares no `environment` hook and this proof passes no `placement`,
+ * so the run takes the default `current`/`current` placement — which allocates nothing. Every
+ * allocating owning-service operation therefore dies if it is reached, and `owning.calls` is
+ * asserted empty below: a default launch that reached an owning service at all — never mind created
+ * a worktree — would fail this proof instead of quietly succeeding against a fake.
  */
 async function proveEngineLaunch(input: {
   readonly workflowsRoot: string;
   readonly cacheRoot: string;
   readonly artifactHash: string;
 }) {
-  const { Effect, Exit, Scope } = await import('effect');
+  const { Effect, Exit, Fiber, Scope } = await import('effect');
   const { makeWorkflowPersistenceFixture } =
     await import('../src/workflows/persistence/test-support.js');
-  const { placementReaders } = await import('../src/workflows/engine/test-support.js');
+  const { owningServices, placementReaders } =
+    await import('../src/workflows/engine/test-support.js');
+  const { prepareEnvironment } = await import('../src/workflows/engine/environment/preparation.js');
   const { makeWorkflowArtifactCatalog } =
     await import('../src/workflows/structure/artifact-catalog.js');
   const { createFilesystemWorkflowRegistry } =
@@ -252,6 +270,7 @@ async function proveEngineLaunch(input: {
   try {
     const placement = fixture.seedPlacement();
     const readers = placementReaders(fixture, placement);
+    const owning = owningServices(fixture);
     // The catalog and the registry share one cache root, exactly as the runtime layer wires them:
     // a pin published at launch has to be the pin the next dispatch loads.
     const definitionCache = new Map();
@@ -326,20 +345,68 @@ async function proveEngineLaunch(input: {
       reconcileWait: waits.reconcileWait,
     });
 
+    /**
+     * The launch path as the interpreter layer wires it, fork included.
+     *
+     * `startWorkflow` no longer returns a placed run: it creates the run at
+     * `environment_preparation` with a null destination and hands back the claimed attempt, and
+     * `prepareEnvironment` is what commits a destination and moves the run to its graph entry. So
+     * the launch is `startWorkflow` *then* preparation, joined — and the dispatcher below would find
+     * nothing to drain without it, because it deliberately never claims this segment.
+     *
+     * Preparation is forked into this proof's scope and joined, mirroring `runPreparation` in
+     * `interpreter.service.ts` rather than running it inline. The fork is the production behaviour
+     * and this is the only place it executes anywhere: the engine test harness runs preparation
+     * inline by a deliberate phase-7 decision, so `Effect.forkIn` has no other exercise. Running it
+     * inline here would have left that wiring unproven while looking correct.
+     *
+     * Both dependency objects deliberately match `engine/test-support.ts`'s field for field,
+     * including the shape of `surfaces` — a narrower or wider stub here would make this proof cover
+     * something the engine suite does not.
+     */
+    const launchDeps: LaunchDeps = {
+      runs: fixture.runs,
+      registry,
+      catalog,
+      workspace: readers.workspace as never,
+      workspaceService: owning.workspaceService as never,
+      surfaceRepository: readers.surfaceRepository as never,
+      surfaces: {
+        ...readers.surfaceService,
+        createSinglePaneSurface: owning.createSinglePaneSurface,
+      } as never,
+      owner: 'authoring-proof',
+      // The incarnation the operation service owns, shared exactly as the layer shares it: the
+      // launch claims the preparation attempt and preparation fences against that same claim, so
+      // two different values here would make the launch's own claim look like somebody else's.
+      ownerIncarnation: operations.incarnationId,
+    };
+    const prepDeps: PreparationDeps = {
+      runs: fixture.runs,
+      workspace: readers.workspace as never,
+      workspaceService: owning.workspaceService as never,
+      surfaceRepository: readers.surfaceRepository as never,
+      surfaces: { createSinglePaneSurface: owning.createSinglePaneSurface } as never,
+      owner: launchDeps.owner,
+      ownerIncarnation: launchDeps.ownerIncarnation,
+      // In the runtime this pokes the dispatcher awake. Here the drain loop below is explicit and
+      // synchronous, so there is nothing to wake.
+      poke: Effect.void,
+    };
     const launched = await Effect.runPromise(
-      startWorkflow(
-        {
-          runs: fixture.runs,
-          registry,
-          catalog,
-          workspace: readers.workspace as never,
-          surfaces: readers.surfaceService as never,
-        },
-        {
-          workflowKey,
-          inputs: { note: 'proved end to end' },
-          origin: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-        },
+      startWorkflow(launchDeps, {
+        workflowKey,
+        inputs: { note: 'proved end to end' },
+        origin: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
+      }).pipe(
+        Effect.tap((context) =>
+          Effect.forkIn(prepareEnvironment(prepDeps, context), scope).pipe(
+            Effect.flatMap(Fiber.join),
+          ),
+        ),
+        // `interpreter.service.ts` destructures `{ run }` here; this script cannot, because `run`
+        // is its own shell helper above.
+        Effect.map((context) => context.run),
       ),
     );
     // The run must be pinned to the artifact the registry verified and published, not to some other
@@ -348,7 +415,39 @@ async function proveEngineLaunch(input: {
       throw new Error(
         `run adopted ${launched.artifactHash}, but the verified artifact was ${input.artifactHash}`,
       );
-    log('engine-launch', `run ${launched.id} created, pinned to ${launched.artifactHash}`);
+
+    /**
+     * Preparation committed a destination, and it is the one the launch was placed in.
+     *
+     * Re-read rather than taken from `launched`, which is the pre-preparation record: a null
+     * destination here would mean the fork never ran or never committed, and the drain below would
+     * then fail for a reason that looks like an interpreter problem instead of a launch one.
+     */
+    const prepared = await Effect.runPromise(fixture.runs.findRun(launched.id));
+    if (
+      prepared?.destination.worktreeId !== placement.worktreeId ||
+      prepared.destination.surfaceId !== placement.surfaceId
+    )
+      throw new Error(
+        `preparation did not commit the placed destination: ${JSON.stringify(prepared?.destination)}`,
+      );
+    // Stricter than "allocated nothing", and worded for what it measures: `owning.calls` records
+    // every owning-service call, allocating or not, so a future read-only preflight on this path
+    // would trip it too. That is the assertion wanted here — a default placement should not need to
+    // ask an owning service anything — but the message must not call a preflight an allocation.
+    if (owning.calls.length > 0 || owning.deletions.length > 0)
+      throw new Error(
+        `a default launch must reach no owning service, but it called ${JSON.stringify([
+          owning.calls,
+          owning.deletions,
+        ])}`,
+      );
+    log(
+      'engine-launch',
+      `run ${launched.id} created, pinned to ${launched.artifactHash}; preparation forked into the` +
+        ` engine scope committed worktree ${prepared.destination.worktreeId}/surface` +
+        ` ${prepared.destination.surfaceId} and allocated nothing`,
+    );
 
     for (let pass = 0; pass < 10; pass += 1) {
       const summary = await Effect.runPromise(dispatcher.drainOnce);

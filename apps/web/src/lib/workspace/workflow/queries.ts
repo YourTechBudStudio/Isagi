@@ -194,19 +194,19 @@ export interface WorkflowLogView {
  */
 export const workflowLogLiveLimit = 200;
 
-/** A window of history, and how far the read that produced it is complete to. */
+/**
+ * A window of history, and how far the read that produced it is complete to.
+ *
+ * `coverageRevision` is local to this window and deliberately never reaches the coordinator: it
+ * answers "is the window still in retention" for `hasOlder` and eviction, and nothing else. This is
+ * a view of recent activity, not recovery, and treating a partially loaded window as coverage would
+ * let the full coordinator skip the revisions it never read.
+ */
 interface WorkflowLogHistory {
   readonly lines: readonly WorkflowLogLine[];
   readonly coverageRevision: number;
 }
 
-/**
- * The bar's bounded recent-activity window.
- *
- * It reads a window of history and then follows live diagnostics. It deliberately establishes no
- * coverage: this is a view of recent activity, not recovery, and treating a partially loaded window
- * as coverage would let the full coordinator skip the revisions it never read.
- */
 /**
  * What an open log panel is currently reading.
  *
