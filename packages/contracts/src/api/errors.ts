@@ -137,6 +137,12 @@ export const worktreeOperationRejectionReasonSchema = Schema.Literal(
    * in each of the four management families that carry it.
    */
   'worktrees_not_supported',
+  /**
+   * `openWorktreeInput.mode: 'create_new'` was asked to create something that already exists. Both
+   * are unreachable under the default `open` mode, which adopts instead of refusing.
+   */
+  'branch_exists',
+  'worktree_exists',
   'command_cleanup_failed',
 );
 
@@ -402,6 +408,18 @@ const workflowRejectionContextFields = {
   artifactHash: Schema.optional(Schema.String),
   /** The operation holding a blocked run, for `workflow_operation_uncertain`. */
   operationKey: Schema.optional(Schema.String),
+  /** Which way a placement is unusable, for `workflow_placement_invalid`. */
+  placementIssue: Schema.optional(
+    Schema.Literal('surface_not_on_worktree', 'worktree_not_in_project', 'invalid_surface_title'),
+  ),
+  /** What already exists, for `workflow_environment_collision`. */
+  collision: Schema.optional(Schema.Literal('branch', 'worktree', 'checkout_path')),
+  /** The branch a launch asked to create, for the branch and collision reasons. */
+  branch: Schema.optional(Schema.String),
+  /** The ref that could not be resolved, for `workflow_base_ref_not_found`. */
+  baseRef: Schema.optional(Schema.String),
+  /** The launch project, for `workflow_worktree_creation_unsupported`. */
+  projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 } as const;
 
 /** The two reasons whose context is mandatory; each has its own data variant below. */
@@ -446,6 +464,21 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_operation_uncertain',
   'workflow_stale_control',
   'workflow_environment_unavailable',
+  /** The workflow's `environment` hook threw, or returned a value the placement schema refuses. */
+  'workflow_environment_selection_failed',
+  /** The requested placement does not describe a usable destination. See `placementIssue`. */
+  'workflow_placement_invalid',
+  /** A folder project maintains its own single environment, so it has no worktrees to create. */
+  'workflow_worktree_creation_unsupported',
+  'workflow_branch_invalid',
+  'workflow_base_ref_not_found',
+  /**
+   * Something already occupies what the launch asked to create. 409 rather than 400: the request is
+   * well-formed and would succeed against a different live state. See `collision`.
+   */
+  'workflow_environment_collision',
+  /** Pause and Resume are refused while a run is still preparing its environment. */
+  'workflow_run_preparing',
 );
 
 /**

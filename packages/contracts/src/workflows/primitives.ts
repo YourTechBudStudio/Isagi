@@ -1,9 +1,12 @@
 import { workflowInputKinds, workflowWaitKinds } from '@yourtechbudstudio/isagi-workflow-sdk';
 import type {
   WorkflowCommandManifest,
+  WorkflowPlacementRequest,
   WorkflowQuestionOption,
   WorkflowQuestionSpec,
+  WorkflowSurfaceChoice,
   WorkflowUiFeedback,
+  WorkflowWorktreeChoice,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Schema } from 'effect';
 
@@ -168,20 +171,138 @@ export const workflowPlacementSchema = Schema.Struct({
   available: Schema.Boolean,
 });
 
+/**
+ * Which worktree a run was asked to execute in.
+ *
+ * Annotated against the SDK type rather than merely resembling it: the author hook returns the SDK
+ * shape and this schema decodes it, so a drift between the two would only surface as a runtime
+ * decode failure at launch. The annotation makes it a compile error instead — the same binding
+ * `workflowCommandManifestSchema` already uses.
+ */
+export const workflowWorktreeChoiceSchema: Schema.Schema<WorkflowWorktreeChoice> = Schema.Union(
+  Schema.Struct({ kind: Schema.Literal('current') }),
+  Schema.Struct({ kind: Schema.Literal('existing'), worktreeId: positiveInteger }),
+  Schema.Struct({
+    kind: Schema.Literal('create'),
+    branch: nonEmptyString,
+    fromRef: nonEmptyString,
+  }),
+);
+
+/** Which surface a run was asked to attach to. Bound to the SDK type for the same reason. */
+export const workflowSurfaceChoiceSchema: Schema.Schema<WorkflowSurfaceChoice> = Schema.Union(
+  Schema.Struct({ kind: Schema.Literal('current') }),
+  Schema.Struct({ kind: Schema.Literal('existing'), surfaceId: positiveInteger }),
+  Schema.Struct({ kind: Schema.Literal('create'), title: nonEmptyString }),
+);
+
+/**
+ * A requested placement: what was asked for, never what was obtained.
+ *
+ * It is validated against live rows before anything is allocated, and the effective destination is
+ * written only once preparation commits. Retained verbatim, so a run can always say what it was
+ * asked to do even after the resources it names are gone.
+ */
+export const workflowPlacementRequestSchema: Schema.Schema<WorkflowPlacementRequest> =
+  Schema.Struct({
+    worktree: workflowWorktreeChoiceSchema,
+    surface: workflowSurfaceChoiceSchema,
+  });
+
+/**
+ * Who decided the placement. `override` is a caller supplying `placement` on the start request,
+ * `selector` is the workflow's own `environment` hook, `default` is the unchanged current/current
+ * behaviour when neither is present. A caller beats the hook, which beats the default.
+ */
+export const workflowPlacementSourceSchema = Schema.Literal('default', 'selector', 'override');
+
+/**
+ * What preparation created, if anything.
+ *
+ * Receipts exist only for allocations. A reused worktree or surface leaves none, because the choice
+ * is already pinned by `preparation.request` / `origin` and the effective ids are written by the
+ * commit into `destination`. That is what lets a failed preparation name exactly the resources this
+ * launch brought into existence — and lets a Retry reuse them instead of creating a second set.
+ */
+export const workflowWorktreeReceiptSchema = Schema.Struct({
+  /** `adopted_after_interruption`: a prior attempt of this same run had already created it. */
+  acquisition: Schema.Literal('created', 'adopted_after_interruption'),
+  worktreeId: positiveInteger,
+  worktreePath: nonEmptyString,
+  branch: Schema.NullOr(nonEmptyString),
+  recordedAt: nonEmptyString,
+});
+
+export const workflowSetupReceiptSchema = Schema.Struct({
+  /** `unknown`: the worktree was adopted after an interruption and nobody observed whether hooks ran. */
+  status: Schema.Literal('skipped', 'succeeded', 'failed', 'unknown'),
+  reason: Schema.NullOr(Schema.Literal('not_configured', 'hooks_disabled', 'interrupted')),
+  setupRunId: Schema.NullOr(positiveInteger),
+  failure: Schema.NullOr(
+    Schema.Struct({
+      hookIndex: positiveInteger,
+      hookType: Schema.Literal('copy', 'symlink', 'command'),
+      message: Schema.String,
+      exitCode: Schema.NullOr(Schema.Number.pipe(Schema.int())),
+      outputExcerpt: Schema.NullOr(Schema.String),
+    }),
+  ),
+  recordedAt: nonEmptyString,
+});
+
+export const workflowSurfaceReceiptSchema = Schema.Struct({
+  surfaceId: positiveInteger,
+  /** What was asked for, beside what was actually titled: the owner may trim or disambiguate. */
+  requestedTitle: nonEmptyString,
+  title: nonEmptyString,
+  recordedAt: nonEmptyString,
+});
+
+/** The four steps of preparation, in order. `commit` writes the destination and the attachment. */
+export const workflowEnvironmentStepSchema = Schema.Literal(
+  'worktree',
+  'setup',
+  'surface',
+  'commit',
+);
+
+export const workflowEnvironmentFailureReasonSchema = Schema.Literal(
+  'worktree_missing',
+  'surface_missing',
+  'surface_not_on_worktree',
+  'branch_exists',
+  'worktree_exists',
+  'checkout_path_unavailable',
+  'git_failed',
+  'setup_trust_required',
+  'setup_failed',
+  'workspace_rejected',
+  'surface_busy',
+  'interrupted',
+);
+
+/**
+ * Why preparation stopped, and where.
+ *
+ * The identity fields are `optional` rather than nullable on purpose: which of them exists is
+ * decided by the reason. A `surface_busy` has no `branch`; a `branch_exists` has no
+ * `occupyingRunId`. Forcing every reason to carry every field as an explicit null would make the
+ * retained record larger and less honest about what the failing step actually knew.
+ */
+export const workflowEnvironmentFailureDetailSchema = Schema.Struct({
+  step: workflowEnvironmentStepSchema,
+  reason: workflowEnvironmentFailureReasonSchema,
+  worktreeId: Schema.optional(positiveInteger),
+  surfaceId: Schema.optional(positiveInteger),
+  branch: Schema.optional(nonEmptyString),
+  occupyingRunId: Schema.optional(positiveInteger),
+  /** Raw Git, hook or owning-service output. The web frames it as diagnostic detail, never as the headline. */
+  diagnostic: Schema.optional(Schema.String),
+});
+
 export const workflowNodeKindSchema = Schema.Literal('operation', 'subgraph', 'checkpoint');
 
 export const workflowOutcomeKindSchema = Schema.Literal('success', 'failure');
-
-/** Where a run is parked between segments. Each value names the next segment the engine would run. */
-export const workflowPositionKindSchema = Schema.Literal(
-  'graph_entry',
-  'node_callback',
-  'awaiting_wait',
-  'routing',
-  'graph_output',
-  'child_output_mapping',
-  'terminal',
-);
 
 /** A wait is a durable row, so its identity is that row's id rather than an opaque string. */
 export const workflowWaitIdSchema = positiveInteger;
@@ -192,6 +313,10 @@ export const workflowWaitIdSchema = positiveInteger;
  * kind for the same boundary. The two enums are deliberately distinct and must not be merged.
  */
 export const workflowSegmentKindSchema = Schema.Literal(
+  // The launch-time segment that allocates and commits a run's destination. It is an ordinary
+  // segment, not a parallel lifecycle: it owns attempts, fences, failure records and Retry exactly
+  // like the others, which is the whole reason preparation is modelled this way.
+  'environment_preparation',
   'graph_entry',
   'node_callback',
   'routing',
@@ -239,6 +364,9 @@ export const workflowWaitStatusSchema = Schema.Literal(
  * diagnostic, never a segment failure.
  */
 export const workflowFailureCodeSchema = Schema.Literal(
+  /** The run never reached its graph: preparing its destination failed. Detail is a
+   *  `WorkflowEnvironmentFailureDetail`, which names the step and what it had already allocated. */
+  'environment_preparation_failed',
   'parameter_mapping_failed',
   'graph_init_failed',
   'node_callback_failed',
@@ -369,9 +497,18 @@ export const workflowOperationTargetSchema = Schema.Struct({
 export type WorkflowPayloadRef = typeof workflowPayloadRefSchema.Type;
 export type WorkflowPayloadSlot = typeof workflowPayloadSlotSchema.Type;
 export type WorkflowPlacement = typeof workflowPlacementSchema.Type;
+export type WorkflowWorktreeChoiceDto = typeof workflowWorktreeChoiceSchema.Type;
+export type WorkflowSurfaceChoiceDto = typeof workflowSurfaceChoiceSchema.Type;
+export type WorkflowPlacementRequestDto = typeof workflowPlacementRequestSchema.Type;
+export type WorkflowPlacementSource = typeof workflowPlacementSourceSchema.Type;
+export type WorkflowWorktreeReceipt = typeof workflowWorktreeReceiptSchema.Type;
+export type WorkflowSetupReceipt = typeof workflowSetupReceiptSchema.Type;
+export type WorkflowSurfaceReceipt = typeof workflowSurfaceReceiptSchema.Type;
+export type WorkflowEnvironmentStep = typeof workflowEnvironmentStepSchema.Type;
+export type WorkflowEnvironmentFailureReason = typeof workflowEnvironmentFailureReasonSchema.Type;
+export type WorkflowEnvironmentFailureDetail = typeof workflowEnvironmentFailureDetailSchema.Type;
 export type WorkflowNodeKind = typeof workflowNodeKindSchema.Type;
 export type WorkflowOutcomeKind = typeof workflowOutcomeKindSchema.Type;
-export type WorkflowPositionKind = typeof workflowPositionKindSchema.Type;
 export type WorkflowSegmentKind = typeof workflowSegmentKindSchema.Type;
 export type WorkflowAttemptStatus = typeof workflowAttemptStatusSchema.Type;
 export type WorkflowFrameStatus = typeof workflowFrameStatusSchema.Type;

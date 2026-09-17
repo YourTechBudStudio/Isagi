@@ -13,6 +13,7 @@ import {
   workflowCommandManifestSchema,
   workflowInputsSchema,
   workflowOperationStateSchema,
+  workflowPlacementRequestSchema,
   workflowSegmentKindSchema,
   workflowUserInputAnswersSchema,
   workflowWaitIdSchema,
@@ -103,6 +104,13 @@ export const startWorkflowInputSchema = Schema.Struct({
   workflowKey: nonEmptyString,
   inputs: Schema.optional(workflowInputsSchema),
   origin: workflowLaunchOriginSchema,
+  /**
+   * An explicit destination, which takes precedence over the workflow's own `environment` hook.
+   * Absent means the hook decides, and absent hook means the current worktree and surface. An
+   * override bypasses *selection*, never validation: it is checked against live rows exactly as a
+   * hook's answer is.
+   */
+  placement: Schema.optional(workflowPlacementRequestSchema),
 });
 
 export const startWorkflowOutputSchema = Schema.Struct({

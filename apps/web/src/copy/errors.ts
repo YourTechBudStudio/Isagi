@@ -36,6 +36,10 @@ const setupTrustMismatch = 'The setup hooks changed since you last trusted them.
 // A folder project maintains its own single environment, so every checkout
 // management family refuses with the same fact.
 const folderProjectNoWorktrees = 'This project is a plain folder, so it has no worktrees.';
+// The same two Git facts refuse a worktree the person opened by hand and a
+// worktree a workflow asked for, so they read identically in both places.
+const branchNameRejected = "Git won't accept that branch name.";
+const baseRefMissing = "Couldn't find the base ref to branch from.";
 const harnessLaunchBlockCopy = {
   onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
   config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
@@ -113,8 +117,8 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_present: projectFilesGone,
       branch_not_found: "Git doesn't have that branch.",
       new_branch_requires_base: 'A new branch needs a base ref to grow from.',
-      invalid_branch_name: "Git won't accept that branch name.",
-      base_ref_not_found: "Couldn't find the base ref to branch from.",
+      invalid_branch_name: branchNameRejected,
+      base_ref_not_found: baseRefMissing,
       checkout_path_exists: "Something's already sitting at that checkout path.",
       checkout_path_registered: 'Another worktree already claims that checkout path.',
       checkout_parent_unavailable: "The folder that should hold this worktree isn't there.",
@@ -215,6 +219,18 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_stale_control: 'This workflow moved on. Try that again.',
       workflow_environment_unavailable:
         "This workflow's worktree isn't available, so it can't carry on.",
+      // Selection, then validation, then the two Git facts, then the collision, then the refusal
+      // to act on a run that is still setting itself up. Each says what stopped the launch and
+      // leaves the raw Git or hook output to the diagnostic panel below it.
+      workflow_environment_selection_failed:
+        "This workflow couldn't decide where to run, so nothing was started.",
+      workflow_placement_invalid: "That isn't a place this workflow can run.",
+      workflow_worktree_creation_unsupported: folderProjectNoWorktrees,
+      workflow_branch_invalid: branchNameRejected,
+      workflow_base_ref_not_found: baseRefMissing,
+      workflow_environment_collision:
+        'Something already sits where this workflow wanted to set up.',
+      workflow_run_preparing: "This run is still setting up where it'll work. Give it a moment.",
     }),
   },
   worktree_commands_rejected: {

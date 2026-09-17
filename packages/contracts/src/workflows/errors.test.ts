@@ -51,9 +51,75 @@ test('every v2 rejection reason that needs no mandatory context is expressible',
     'workflow_operation_uncertain',
     'workflow_stale_control',
     'workflow_environment_unavailable',
+    'workflow_environment_selection_failed',
+    'workflow_placement_invalid',
+    'workflow_worktree_creation_unsupported',
+    'workflow_branch_invalid',
+    'workflow_base_ref_not_found',
+    'workflow_environment_collision',
+    'workflow_run_preparing',
   ]) {
     assert.doesNotThrow(() => decode(rejection({ reason })), reason);
   }
+});
+
+test('every way a launch can refuse a placement carries the context that explains it', () => {
+  // These reasons exist to be acted on: a person retries with a different branch, a different
+  // surface, or a different project. A reason with nothing attached leaves the palette with only
+  // its generic summary, which is the failure the structured context is here to prevent.
+  assert.doesNotThrow(() =>
+    decode(
+      rejection({
+        reason: 'workflow_placement_invalid',
+        workflowKey: 'reviewed-document',
+        placementIssue: 'surface_not_on_worktree',
+        worktreeId: 3,
+        surfaceId: 8,
+      }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    decode(
+      rejection({
+        reason: 'workflow_worktree_creation_unsupported',
+        workflowKey: 'reviewed-document',
+        projectId: 2,
+      }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    decode(rejection({ reason: 'workflow_branch_invalid', branch: 'feat/..bad' })),
+  );
+  assert.doesNotThrow(() =>
+    decode(
+      rejection({
+        reason: 'workflow_base_ref_not_found',
+        branch: 'feat/x',
+        baseRef: 'origin/gone',
+      }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    decode(
+      rejection({
+        reason: 'workflow_environment_collision',
+        collision: 'worktree',
+        branch: 'feat/x',
+        worktreeId: 4,
+      }),
+    ),
+  );
+  assert.doesNotThrow(() =>
+    decode(rejection({ reason: 'workflow_run_preparing', workflowRunId: 1, operation: 'pause' })),
+  );
+  // The two refinable fields are closed sets: an invented issue or collision would reach a client
+  // as an unrenderable value rather than as a decode failure here.
+  assert.throws(() =>
+    decode(rejection({ reason: 'workflow_placement_invalid', placementIssue: 'surface_is_ugly' })),
+  );
+  assert.throws(() =>
+    decode(rejection({ reason: 'workflow_environment_collision', collision: 'vibes' })),
+  );
 });
 
 test('the v1 reasons whose mechanisms were removed are gone', () => {
@@ -172,8 +238,15 @@ test('the exported reason set cannot drift from the set the error data accepts',
     'workflow_operation_uncertain',
     'workflow_stale_control',
     'workflow_environment_unavailable',
+    'workflow_environment_selection_failed',
+    'workflow_placement_invalid',
+    'workflow_worktree_creation_unsupported',
+    'workflow_branch_invalid',
+    'workflow_base_ref_not_found',
+    'workflow_environment_collision',
+    'workflow_run_preparing',
   ]);
-  assert.equal(every.length, 26);
+  assert.equal(every.length, 33);
 
   for (const reason of every) {
     const data: Record<string, unknown> = { reason };

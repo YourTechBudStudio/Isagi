@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { workflowWaitKinds } from '@yourtechbudstudio/isagi-workflow-sdk';
+import type { WorkflowPlacementRequest } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Schema } from 'effect';
 
 import type { ApiEndpoint } from '../api/types.js';
@@ -16,11 +17,18 @@ import {
 } from './executions.js';
 import {
   workflowDiagnosticDetailSchema,
+  workflowEnvironmentFailureDetailSchema,
   workflowPayloadSlotSchema,
+  workflowPlacementRequestSchema,
+  workflowPlacementSourceSchema,
+  workflowSetupReceiptSchema,
+  workflowSurfaceReceiptSchema,
   workflowWaitKindSchema,
+  workflowWorktreeReceiptSchema,
 } from './primitives.js';
 import {
   advanceWorkflowInputSchema,
+  startWorkflowInputSchema,
   listFrameExecutionsOutputSchema,
   listRunExecutionsOutputSchema,
   listWorkflowEventsOutputSchema,
@@ -110,6 +118,16 @@ const summary = {
   attachment: { worktreeId: 1, surfaceId: 2 },
   origin: placement,
   destination: placement,
+  preparation: {
+    source: 'default',
+    request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+    baseCommit: null,
+    status: 'prepared',
+    worktree: null,
+    setup: null,
+    surface: null,
+    failure: null,
+  },
   controls: {
     pause: true,
     resume: false,
@@ -1021,6 +1039,10 @@ test('the mapping segment is named output_mapping, and the position kind stays d
 test('every designed transition kind decodes, including the amendment replacements', () => {
   for (const kind of [
     'run_started',
+    // Preparation's two facts. Their detail stays in the opaque payload slot: the inspector renders
+    // from `summary.preparation`, and the trace needs only a label.
+    'environment_step_recorded',
+    'environment_prepared',
     'graph_entered',
     'node_dispatched',
     'wait_armed',
@@ -1176,3 +1198,265 @@ const transition = {
   detailRef: null,
   stateRef: null,
 };
+
+/**
+ * The author hook returns the SDK shape and this schema decodes it. Asserting over a structurally
+ * similar copy would pass while the two drift, so the binding is a type identity in both
+ * directions, checked by the compiler — the same binding `workflowCommandManifestSchema` uses.
+ */
+type ContractPlacementRequest = typeof workflowPlacementRequestSchema.Type;
+const sdkPlacementIsContractPlacement: ContractPlacementRequest =
+  null as unknown as WorkflowPlacementRequest;
+const contractPlacementIsSdkPlacement: WorkflowPlacementRequest =
+  null as unknown as ContractPlacementRequest;
+
+test('the wire placement request is the SDK placement request, not a look-alike', () => {
+  void sdkPlacementIsContractPlacement;
+  void contractPlacementIsSdkPlacement;
+
+  // Every choice an author or a caller can express survives the wire...
+  for (const worktree of [
+    { kind: 'current' },
+    { kind: 'existing', worktreeId: 3 },
+    { kind: 'create', branch: 'feat/x', fromRef: 'main' },
+  ]) {
+    for (const surface of [
+      { kind: 'current' },
+      { kind: 'existing', surfaceId: 8 },
+      { kind: 'create', title: 'Review' },
+    ]) {
+      assert.deepEqual(decode(workflowPlacementRequestSchema, { worktree, surface }), {
+        worktree,
+        surface,
+      });
+    }
+  }
+
+  // ...and a choice that names the wrong identity for its kind does not, because each kind is its
+  // own struct rather than one bag of optional ids.
+  assert.throws(() =>
+    decode(workflowPlacementRequestSchema, {
+      worktree: { kind: 'existing', branch: 'feat/x' },
+      surface: { kind: 'current' },
+    }),
+  );
+  assert.throws(() =>
+    decode(workflowPlacementRequestSchema, {
+      worktree: { kind: 'create', branch: '', fromRef: 'main' },
+      surface: { kind: 'current' },
+    }),
+  );
+});
+
+test('a caller can override placement on the start request, and omitting it stays legal', () => {
+  const origin = { worktreeId: 1, surfaceId: 2 };
+  assert.equal(
+    decode(startWorkflowInputSchema, { workflowKey: 'reviewed-document', origin }).placement,
+    undefined,
+  );
+  const overridden = decode(startWorkflowInputSchema, {
+    workflowKey: 'reviewed-document',
+    origin,
+    placement: {
+      worktree: { kind: 'create', branch: 'feat/x', fromRef: 'main' },
+      surface: { kind: 'create', title: 'Review' },
+    },
+  });
+  assert.equal(overridden.placement?.worktree.kind, 'create');
+});
+
+test('every placement source is expressible, and an invented one is not', () => {
+  for (const source of ['default', 'selector', 'override']) {
+    assert.equal(decode(workflowPlacementSourceSchema, source), source);
+  }
+  assert.throws(() => decode(workflowPlacementSourceSchema, 'guessed'));
+});
+
+test('receipts record what a launch allocated, including a setup nobody observed', () => {
+  const worktree = decode(workflowWorktreeReceiptSchema, {
+    acquisition: 'adopted_after_interruption',
+    worktreeId: 4,
+    worktreePath: '/w/feat-x',
+    branch: 'feat/x',
+    recordedAt: at,
+  });
+  assert.equal(worktree.acquisition, 'adopted_after_interruption');
+  // A folder project's worktree has no branch; the receipt says so rather than omitting the field.
+  assert.equal(
+    decode(workflowWorktreeReceiptSchema, {
+      acquisition: 'created',
+      worktreeId: 4,
+      worktreePath: '/w/feat-x',
+      branch: null,
+      recordedAt: at,
+    }).branch,
+    null,
+  );
+
+  // The honest answer after an adoption: hooks may or may not have run, and nothing observed which.
+  assert.equal(
+    decode(workflowSetupReceiptSchema, {
+      status: 'unknown',
+      reason: 'interrupted',
+      setupRunId: null,
+      failure: null,
+      recordedAt: at,
+    }).status,
+    'unknown',
+  );
+  const failed = decode(workflowSetupReceiptSchema, {
+    status: 'failed',
+    reason: null,
+    setupRunId: 11,
+    failure: {
+      hookIndex: 2,
+      hookType: 'command',
+      message: 'pnpm install exited 1',
+      exitCode: 1,
+      outputExcerpt: 'ERR_PNPM_NO_LOCKFILE',
+    },
+    recordedAt: at,
+  });
+  assert.equal(failed.failure?.hookType, 'command');
+
+  // The requested title is retained beside the effective one, so a disambiguated title is visible
+  // as a rename rather than passing for what the author asked for.
+  const surface = decode(workflowSurfaceReceiptSchema, {
+    surfaceId: 8,
+    requestedTitle: 'Review',
+    title: 'Review (2)',
+    recordedAt: at,
+  });
+  assert.equal(surface.requestedTitle, 'Review');
+  assert.notEqual(surface.title, surface.requestedTitle);
+});
+
+test('an environment failure names its step, its reason and only the identities that reason knows', () => {
+  const busy = decode(workflowEnvironmentFailureDetailSchema, {
+    step: 'commit',
+    reason: 'surface_busy',
+    surfaceId: 8,
+    occupyingRunId: 2,
+  });
+  assert.equal(busy.occupyingRunId, 2);
+  // Which identities are present varies by reason, so absence is absence — not an explicit null
+  // every reason would have to carry.
+  assert.equal(busy.branch, undefined);
+  assert.equal(
+    decode(workflowEnvironmentFailureDetailSchema, {
+      step: 'worktree',
+      reason: 'branch_exists',
+      branch: 'feat/x',
+      diagnostic: "fatal: a branch named 'feat/x' already exists",
+    }).diagnostic,
+    "fatal: a branch named 'feat/x' already exists",
+  );
+  assert.throws(() =>
+    decode(workflowEnvironmentFailureDetailSchema, { step: 'worktree', reason: 'it_broke' }),
+  );
+  assert.throws(() =>
+    decode(workflowEnvironmentFailureDetailSchema, { step: 'nothing', reason: 'git_failed' }),
+  );
+});
+
+test('a run preparing its environment is a position, a segment and a failure code', () => {
+  const preparing = decode(workflowRunPositionSchema, {
+    kind: 'environment_preparation',
+    frameId: 1,
+  });
+  assert.deepEqual(preparing, { kind: 'environment_preparation', frameId: 1 });
+  // The position names the root frame. A frameless preparation position would break attempt
+  // identity, which is derived from the position alone.
+  assert.throws(() => decode(workflowRunPositionSchema, { kind: 'environment_preparation' }));
+  assert.equal(
+    decode(workflowAttemptSchema, { ...attempt, segmentKind: 'environment_preparation' })
+      .segmentKind,
+    'environment_preparation',
+  );
+  assert.equal(
+    decode(workflowRunSummarySchema, {
+      ...summary,
+      status: 'failed',
+      position: { kind: 'environment_preparation', frameId: 1 },
+      failure: {
+        code: 'environment_preparation_failed',
+        message: 'the branch already exists',
+        segmentKind: 'environment_preparation',
+        attemptId: 9,
+        frameId: 1,
+        executionId: null,
+      },
+    }).failure?.code,
+    'environment_preparation_failed',
+  );
+});
+
+test('a summary reports a half-prepared environment without pretending it succeeded', () => {
+  const decoded = decode(workflowRunSummarySchema, {
+    ...summary,
+    status: 'failed',
+    // Nothing was committed, so the destination and the attachment are still empty...
+    destination: { ...placement, worktreeId: null, worktreePath: null, surfaceId: null },
+    attachment: null,
+    preparation: {
+      source: 'selector',
+      request: {
+        worktree: { kind: 'create', branch: 'feat/x', fromRef: 'main' },
+        surface: { kind: 'create', title: 'Review' },
+      },
+      baseCommit: 'a'.repeat(40),
+      status: 'failed',
+      // ...but the worktree this launch created is real, and the record names it so a person can
+      // find it. Nothing is deleted on a failure path.
+      worktree: {
+        acquisition: 'created',
+        worktreeId: 4,
+        worktreePath: '/w/feat-x',
+        branch: 'feat/x',
+        recordedAt: at,
+      },
+      setup: {
+        status: 'skipped',
+        reason: 'not_configured',
+        setupRunId: null,
+        failure: null,
+        recordedAt: at,
+      },
+      surface: null,
+      failure: { step: 'surface', reason: 'workspace_rejected', worktreeId: 4 },
+    },
+    failure: {
+      code: 'environment_preparation_failed',
+      message: 'the surface could not be created',
+      segmentKind: 'environment_preparation',
+      attemptId: 9,
+      frameId: 1,
+      executionId: null,
+    },
+  });
+  assert.equal(decoded.preparation.worktree?.worktreeId, 4);
+  assert.equal(decoded.preparation.surface, null);
+  assert.equal(decoded.preparation.failure?.step, 'surface');
+  assert.equal(decoded.destination.worktreeId, null);
+});
+
+test('preparation is required on every summary, and its status is a closed set', () => {
+  // Optional would let a runtime omit it and leave a client unable to tell "current/current" from
+  // "nobody recorded a decision". Every run records its placement before anything is allocated.
+  const { preparation: _omitted, ...withoutPreparation } = summary;
+  assert.throws(() => decode(workflowRunSummarySchema, withoutPreparation));
+  for (const status of ['pending', 'prepared', 'failed', 'cancelled']) {
+    assert.doesNotThrow(() =>
+      decode(workflowRunSummarySchema, {
+        ...summary,
+        preparation: { ...summary.preparation, status },
+      }),
+    );
+  }
+  assert.throws(() =>
+    decode(workflowRunSummarySchema, {
+      ...summary,
+      preparation: { ...summary.preparation, status: 'in_progress' },
+    }),
+  );
+});

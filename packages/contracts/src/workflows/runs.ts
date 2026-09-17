@@ -13,7 +13,13 @@ import {
   workflowFailureCodeSchema,
   workflowNodeKindSchema,
   workflowOutcomeKindSchema,
+  workflowEnvironmentFailureDetailSchema,
+  workflowPlacementRequestSchema,
   workflowPlacementSchema,
+  workflowPlacementSourceSchema,
+  workflowSetupReceiptSchema,
+  workflowSurfaceReceiptSchema,
+  workflowWorktreeReceiptSchema,
   workflowPayloadSlotSchema,
   workflowQuestionSpecSchema,
   workflowSegmentKindSchema,
@@ -41,6 +47,13 @@ export const workflowRunStatusSchema = Schema.Literal(
  * edge, say — cannot be represented, let alone transmitted.
  */
 export const workflowRunPositionSchema = Schema.Union(
+  /**
+   * Before the graph: the run is preparing its destination. `frameId` names the **root frame**,
+   * which is what makes preparation an ordinary segment — `workflow_segment_attempts.frame_id` is
+   * `NOT NULL`, attempt identity is derived from the position alone, and the summary's
+   * `failure.frameId` is a required positive integer. A position with no frame would break all three.
+   */
+  Schema.Struct({ kind: Schema.Literal('environment_preparation'), frameId: positiveInteger }),
   Schema.Struct({ kind: Schema.Literal('graph_entry'), frameId: positiveInteger }),
   Schema.Struct({
     kind: Schema.Literal('node_callback'),
@@ -180,6 +193,28 @@ export const workflowRunSummarySchema = Schema.Struct({
   ),
   origin: workflowPlacementSchema,
   destination: workflowPlacementSchema,
+  /**
+   * How this run's destination was chosen, and what preparing it actually did.
+   *
+   * Always present: every run records its placement decision before anything is allocated, so a run
+   * that failed half way through preparation is as inspectable as one that never started. The
+   * receipts are null for reuse choices, which allocate nothing.
+   *
+   * `status` is derived at read time from the run's position, status and receipts, never stored —
+   * storing it would create a second authority that can disagree with the position.
+   */
+  preparation: Schema.Struct({
+    source: workflowPlacementSourceSchema,
+    request: workflowPlacementRequestSchema,
+    /** The commit `fromRef` resolved to at launch. Null unless the worktree choice was `create`. */
+    baseCommit: Schema.NullOr(nonEmptyString),
+    status: Schema.Literal('pending', 'prepared', 'failed', 'cancelled'),
+    worktree: Schema.NullOr(workflowWorktreeReceiptSchema),
+    setup: Schema.NullOr(workflowSetupReceiptSchema),
+    surface: Schema.NullOr(workflowSurfaceReceiptSchema),
+    /** Present only while `status` is 'failed' and the failing attempt is a preparation attempt. */
+    failure: Schema.NullOr(workflowEnvironmentFailureDetailSchema),
+  }),
   controls: workflowRunControlsSchema,
   createdAt: nonEmptyString,
   updatedAt: nonEmptyString,

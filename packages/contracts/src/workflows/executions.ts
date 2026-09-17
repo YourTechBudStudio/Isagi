@@ -285,6 +285,12 @@ export const workflowExecutionSchema = Schema.Struct({
  */
 export const workflowTransitionKindSchema = Schema.Literal(
   'run_started',
+  // Preparation's two durable facts. One allocation was made and recorded (detail: `{ step,
+  // receipt }`), and preparation committed (detail: `{ destination }`). Their detail stays in the
+  // opaque payload slot every non-diagnostic transition uses: nothing decodes it, because the run
+  // summary's `preparation` object is what the inspector renders, and the trace needs only labels.
+  'environment_step_recorded',
+  'environment_prepared',
   'graph_entered',
   'node_dispatched',
   'wait_armed',
