@@ -183,6 +183,7 @@ test('a run advances one segment at a time, from launch to a committed outcome',
     assert.deepEqual(
       attempts.map((attempt) => [attempt.segmentKind, attempt.attemptIndex, attempt.status]),
       [
+        ['environment_preparation', 1, 'succeeded'],
         ['graph_entry', 1, 'succeeded'],
         ['node_callback', 1, 'succeeded'],
         ['routing', 1, 'succeeded'],
@@ -246,7 +247,15 @@ test('a subgraph node opens a frame with no attempt, and its execution stays ope
     const rootAttempts = await run(harness.fixture.runs.listAttemptsForFrame(root.id));
     assert.deepEqual(
       rootAttempts.map((attempt) => attempt.segmentKind),
-      ['graph_entry', 'output_mapping', 'routing', 'output_mapping', 'routing', 'graph_output'],
+      [
+        'environment_preparation',
+        'graph_entry',
+        'output_mapping',
+        'routing',
+        'output_mapping',
+        'routing',
+        'graph_output',
+      ],
     );
     assert.equal(
       rootAttempts.filter((attempt) => attempt.segmentKind === 'node_callback').length,

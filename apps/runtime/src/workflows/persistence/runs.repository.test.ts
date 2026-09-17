@@ -3,9 +3,12 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import type { WorkflowPlacementRequestDto } from '@isagi/contracts';
+
 import type { WorkflowWriteResult } from './outcomes.js';
 import type { WorkflowAttemptRecord, WorkflowRunRecord } from './records.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -34,30 +37,14 @@ async function launch(fixture: WorkflowPersistenceFixture) {
   fixture.seedArtifact(PIN_A);
   fixture.seedArtifact(PIN_B);
   const placement = fixture.seedPlacement();
-  const created = committedValue(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Fixture run',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root', parameters: { value: { note: 'hello' } } },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Fixture run',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root', parameters: { value: { note: 'hello' } } },
+    placement,
+  });
   return { ...created, placement };
 }
 
@@ -128,7 +115,9 @@ test('a claim and its attempt are one transaction, and nothing else creates an a
     const attempts = fixture.client
       .prepare('SELECT count(*) AS count FROM workflow_segment_attempts')
       .get() as { count: number };
-    assert.equal(attempts.count, 1);
+    // Two: the preparation attempt the launch claimed and closed, and this graph entry. The losing
+    // claim added none, which is the guarantee under test.
+    assert.equal(attempts.count, 2);
   } finally {
     fixture.close();
   }
@@ -157,8 +146,8 @@ test('a claim prepared against a stale control revision is rejected', async () =
           count: number;
         }
       ).count,
-      0,
-      'a rejected claim allocates no attempt',
+      1,
+      'a rejected claim allocates no attempt beyond the placement it inherited',
     );
   } finally {
     fixture.close();
@@ -217,7 +206,7 @@ test('invocation kind is derived, and an adopted Retry survives a restart', asyn
           count: number;
         }
       ).count,
-      2,
+      3,
       'adoption itself creates no attempt',
     );
 
@@ -743,7 +732,7 @@ test('a restart interrupts the running attempt rather than inventing an end for 
     const claimed = await claim(fixture, entered.run);
 
     const parked = await run(fixture.runs.parkUnfinishedRuns({}));
-    assert.deepEqual(parked, [entered.run.id]);
+    assert.deepEqual(parked, { parked: [entered.run.id], preparationsFailed: [] });
 
     const after = (await run(fixture.runs.findRun(entered.run.id)))!;
     assert.equal(after.status, 'ready');
@@ -767,32 +756,51 @@ test('one surface holds one attached run, including a terminal one until it is d
   const fixture = makeWorkflowPersistenceFixture();
   try {
     const launched = await launch(fixture);
-    const second = await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Second',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: launched.placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: launched.placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
+    // Creating a second run is always allowed — nothing is occupied until a destination is
+    // committed. Occupancy is refused at the one write that makes a destination effective.
+    const second = committedValue(
+      await run(
+        fixture.runs.createRun({
+          workflowKey: 'fixture',
+          title: 'Second',
+          rootGraphKey: 'root',
+          artifactHash: PIN_A,
+          rootFrame: { graphKey: 'root' },
+          origin: {
+            worktreeId: launched.placement.worktreeId,
+            worktreePath: '/repo/fixture',
+            surfaceId: launched.placement.surfaceId,
+            paneId: null,
+            agentSessionId: null,
+          },
+          preparation: {
+            source: 'default',
+            request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+            baseCommit: null,
+            checkoutPath: null,
+          },
+          claim: { owner: OWNER, ownerIncarnation: INCARNATION, input: { value: {} } },
+        }),
+      ),
+    );
+    const refused = await run(
+      fixture.runs.commitEnvironmentPreparation({
+        runId: second.run.id,
+        attemptId: second.attempt.id,
+        owner: OWNER,
+        ownerIncarnation: INCARNATION,
         destination: {
           worktreeId: launched.placement.worktreeId,
           worktreePath: '/repo/fixture',
           surfaceId: launched.placement.surfaceId,
         },
-        attachment: {
-          worktreeId: launched.placement.worktreeId,
-          surfaceId: launched.placement.surfaceId,
-        },
       }),
     );
-    assert.deepEqual(rejection(second), { kind: 'surface_busy', runId: launched.run.id });
+    assert.deepEqual(rejection(refused), { kind: 'surface_busy', runId: launched.run.id });
+    // A refused commit writes nothing at all: no destination, no attachment, no second occupant.
+    const stillUnplaced = (await run(fixture.runs.findRun(second.run.id)))!;
+    assert.equal(stillUnplaced.destination.surfaceId, null);
+    assert.equal(await run(fixture.runs.findAttachment(second.run.id)), null);
 
     // Cancel makes it terminal, and it still occupies the surface.
     const current = (await run(fixture.runs.findRun(launched.run.id)))!;
@@ -942,8 +950,13 @@ test('an unproduced slot and a recorded JSON null stay distinguishable', async (
             paneId: null,
             agentSessionId: null,
           },
-          destination: { worktreeId: null, worktreePath: null, surfaceId: null },
-          attachment: null,
+          preparation: {
+            source: 'default',
+            request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+            baseCommit: null,
+            checkoutPath: null,
+          },
+          claim: { owner: OWNER, ownerIncarnation: INCARNATION, input: { value: {} } },
         }),
       ),
     );
@@ -964,8 +977,13 @@ test('an unproduced slot and a recorded JSON null stay distinguishable', async (
             paneId: null,
             agentSessionId: null,
           },
-          destination: { worktreeId: null, worktreePath: null, surfaceId: null },
-          attachment: null,
+          preparation: {
+            source: 'default',
+            request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+            baseCommit: null,
+            checkoutPath: null,
+          },
+          claim: { owner: OWNER, ownerIncarnation: INCARNATION, input: { value: {} } },
         }),
       ),
     );
@@ -1213,11 +1231,14 @@ test('an execution-less attempt is reachable by its frame and by its own id', as
     const byId = await run(fixture.runs.findAttempt(entry.attempt.id));
     assert.equal(byId?.id, entry.attempt.id);
 
+    // The preparation attempt shares the root frame and is execution-less too, so the frame lookup
+    // returns both. Segment identity is what tells them apart, which the query below asserts.
     const byFrame = await run(fixture.runs.listAttemptsForFrame(launched.frame.id));
     assert.deepEqual(
-      byFrame.map((attempt) => attempt.id),
-      [entry.attempt.id],
+      byFrame.map((attempt) => attempt.segmentKind),
+      ['environment_preparation', 'graph_entry'],
     );
+    assert.ok(byFrame.some((attempt) => attempt.id === entry.attempt.id));
 
     const bySegment = await run(
       fixture.runs.listAttemptsForSegment({
@@ -1290,26 +1311,14 @@ test('a captured display name is bounded, and an empty one is stored as absent',
   try {
     fixture.seedArtifact(PIN_A);
     const runaway = 'n'.repeat(5000);
-    const created = committedValue(
-      await run(
-        fixture.runs.createRun({
-          workflowKey: 'fixture',
-          title: 'Fixture',
-          rootGraphKey: 'root',
-          artifactHash: PIN_A,
-          rootFrame: { graphKey: 'root', displayName: runaway },
-          origin: {
-            worktreeId: null,
-            worktreePath: null,
-            surfaceId: null,
-            paneId: null,
-            agentSessionId: null,
-          },
-          destination: { worktreeId: null, worktreePath: null, surfaceId: null },
-          attachment: null,
-        }),
-      ),
-    );
+    const created = await createPlacedRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Fixture',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root', displayName: runaway },
+      placement: fixture.seedPlacement(),
+    });
     // Persisted, not merely returned: a runaway name must not be able to bloat the row.
     const frame = (await run(fixture.runs.findFrame(created.frame.id)))!;
     assert.equal(frame.displayName?.length, 200);
@@ -1844,8 +1853,8 @@ test('a claim whose operands moved is rejected, allocating nothing', async () =>
           count: number;
         }
       ).count,
-      1,
-      'only the graph-entry attempt from setup',
+      2,
+      'only the placement and graph-entry attempts from setup',
     );
     assert.equal(after.activeAttemptId, null);
     assert.equal(after.owner, null);
@@ -1930,6 +1939,701 @@ test('Dismiss requires a stopped run, and is inert once the attachment is gone',
     const afterRepeat = (await run(fixture.runs.findRun(live.id)))!;
     assert.equal(afterRepeat.revision, detached.revision);
     assert.equal(afterRepeat.controlRevision, detached.controlRevision);
+  } finally {
+    fixture.close();
+  }
+});
+
+// --- environment preparation --------------------------------------------------------------------
+//
+// A run exists before it is placed. These cover the three writes that make that safe: creation
+// claims its own attempt so an interruption has something to attribute itself to, receipts record
+// what was allocated and refuse to overwrite it, and one commit makes a destination effective.
+
+/** A run parked mid-preparation: claimed, unplaced, with a preparation row describing the request. */
+async function preparing(
+  fixture: WorkflowPersistenceFixture,
+  request: WorkflowPlacementRequestDto = {
+    worktree: { kind: 'create', branch: 'feat/x', fromRef: 'main' },
+    surface: { kind: 'create', title: 'Work' },
+  },
+) {
+  fixture.seedArtifact(PIN_A);
+  const placement = fixture.seedPlacement();
+  const created = committedValue(
+    await run(
+      fixture.runs.createRun({
+        workflowKey: 'fixture',
+        title: 'Preparing run',
+        rootGraphKey: 'root',
+        artifactHash: PIN_A,
+        rootFrame: { graphKey: 'root', parameters: { value: { note: 'hello' } } },
+        origin: {
+          worktreeId: placement.worktreeId,
+          worktreePath: '/repo/fixture',
+          surfaceId: placement.surfaceId,
+          paneId: null,
+          agentSessionId: null,
+        },
+        preparation: {
+          source: 'selector',
+          request,
+          baseCommit: 'c'.repeat(40),
+          checkoutPath: '/data/worktrees/feat-x',
+        },
+        claim: {
+          owner: OWNER,
+          ownerIncarnation: INCARNATION,
+          input: { value: { segment: 'environment_preparation' } },
+        },
+      }),
+    ),
+  );
+  return { ...created, placement };
+}
+
+function preparationFence(created: { run: WorkflowRunRecord; attempt: WorkflowAttemptRecord }) {
+  return {
+    runId: created.run.id,
+    attemptId: created.attempt.id,
+    owner: OWNER,
+    ownerIncarnation: INCARNATION,
+  };
+}
+
+const WORKTREE_RECEIPT = {
+  acquisition: 'created',
+  worktreeId: 1,
+  worktreePath: '/data/worktrees/feat-x',
+  branch: 'feat/x',
+} as const;
+
+test('a created run is claimed at its preparation segment, unplaced, with its request recorded', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const created = await preparing(fixture);
+
+    assert.deepEqual(created.run.position, {
+      kind: 'environment_preparation',
+      frameId: created.frame.id,
+    });
+    assert.equal(created.run.status, 'running');
+    assert.equal(created.run.owner, OWNER);
+    assert.equal(created.run.ownerIncarnation, INCARNATION);
+    assert.equal(created.run.activeAttemptId, created.attempt.id);
+    assert.equal(created.run.activeFrameId, created.frame.id);
+
+    // Unplaced: nothing is decided and nothing is occupied until the commit.
+    assert.deepEqual(created.run.destination, {
+      worktreeId: null,
+      worktreePath: null,
+      surfaceId: null,
+    });
+    assert.equal(await run(fixture.runs.findAttachment(created.run.id)), null);
+
+    // The root frame is untouched by preparation — `graph_entry` still enters it.
+    assert.equal(created.frame.status, 'initializing');
+    assert.deepEqual(await run(fixture.payloads.resolve(created.frame.parameters!)), {
+      note: 'hello',
+    });
+
+    assert.equal(created.attempt.segmentKind, 'environment_preparation');
+    assert.equal(created.attempt.executionId, null);
+    assert.equal(created.attempt.attemptIndex, 1);
+    assert.equal(created.attempt.invocationKind, 'initial');
+    assert.equal(created.attempt.status, 'running');
+
+    const preparation = (await run(fixture.runs.findPreparation(created.run.id)))!;
+    assert.equal(preparation.source, 'selector');
+    assert.deepEqual(preparation.request, {
+      worktree: { kind: 'create', branch: 'feat/x', fromRef: 'main' },
+      surface: { kind: 'create', title: 'Work' },
+    });
+    assert.equal(preparation.baseCommit, 'c'.repeat(40));
+    assert.equal(preparation.checkoutPath, '/data/worktrees/feat-x');
+    assert.deepEqual(
+      [preparation.worktree, preparation.setup, preparation.surface],
+      [null, null, null],
+      'nothing has been allocated yet, so there is no receipt for anything',
+    );
+
+    // The claim is atomic with the creation, so the dispatch is recorded by the same transaction.
+    const history = fixture.client
+      .prepare('SELECT kind FROM workflow_transitions WHERE run_id = ? ORDER BY revision')
+      .all(created.run.id) as { kind: string }[];
+    assert.deepEqual(
+      history.map((row) => row.kind),
+      ['run_started', 'node_dispatched'],
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test('a receipt writes its column and its transition, and is never overwritten', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const created = await preparing(fixture);
+    const fence = preparationFence(created);
+
+    assert.equal(
+      committedValue(
+        await run(
+          fixture.runs.recordEnvironmentReceipt({
+            ...fence,
+            step: 'worktree',
+            receipt: WORKTREE_RECEIPT,
+          }),
+        ),
+      ),
+      'advanced',
+    );
+    const afterWorktree = (await run(fixture.runs.findPreparation(created.run.id)))!;
+    assert.equal(afterWorktree.worktree?.worktreeId, 1);
+    assert.equal(afterWorktree.worktree?.acquisition, 'created');
+    assert.ok(afterWorktree.worktree?.recordedAt, 'the repository stamps the time, not the caller');
+    assert.notEqual(afterWorktree.updatedAt, null);
+
+    // A second worktree receipt is refused rather than replacing the only record of a real
+    // allocation — the thing a retry reads to decide between reusing and creating.
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.recordEnvironmentReceipt({
+            ...fence,
+            step: 'worktree',
+            receipt: { ...WORKTREE_RECEIPT, worktreeId: 2, worktreePath: '/elsewhere' },
+          }),
+        ),
+      ),
+      { kind: 'receipt_already_recorded', step: 'worktree' },
+    );
+    assert.equal(
+      (await run(fixture.runs.findPreparation(created.run.id)))!.worktree?.worktreeId,
+      1,
+      'and the first receipt still stands',
+    );
+
+    // Setup is the one receipt a later attempt may replace, because hooks can be re-run.
+    for (const status of ['failed', 'succeeded'] as const) {
+      assert.equal(
+        committedValue(
+          await run(
+            fixture.runs.recordEnvironmentReceipt({
+              ...fence,
+              step: 'setup',
+              receipt: {
+                status,
+                reason: null,
+                setupRunId: null,
+                failure: null,
+              },
+            }),
+          ),
+        ),
+        'advanced',
+      );
+    }
+    assert.equal(
+      (await run(fixture.runs.findPreparation(created.run.id)))!.setup?.status,
+      'succeeded',
+    );
+
+    // The superseded receipt survives in history even though its column is gone, which is what
+    // lets the trace show that hooks failed once and then succeeded.
+    const recorded = fixture.client
+      .prepare(
+        `SELECT detail_inline FROM workflow_transitions
+         WHERE run_id = ? AND kind = 'environment_step_recorded' ORDER BY revision`,
+      )
+      .all(created.run.id) as { detail_inline: string }[];
+    assert.deepEqual(
+      recorded.map((row) => {
+        const detail = JSON.parse(row.detail_inline) as {
+          step: string;
+          receipt: { status?: string };
+        };
+        return [detail.step, detail.receipt.status ?? null];
+      }),
+      [
+        ['worktree', null],
+        ['setup', 'failed'],
+        ['setup', 'succeeded'],
+      ],
+    );
+
+    // A lost fence records nothing at all.
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.recordEnvironmentReceipt({
+            ...fence,
+            ownerIncarnation: 'someone-else',
+            step: 'surface',
+            receipt: { surfaceId: 9, requestedTitle: 'Work', title: 'Work' },
+          }),
+        ),
+      ),
+      { kind: 'attempt_not_owned' },
+    );
+    assert.equal((await run(fixture.runs.findPreparation(created.run.id)))!.surface, null);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('a Cancel that lands after an allocation still records the receipt that names it', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const created = await preparing(fixture);
+    const fence = preparationFence(created);
+    committedValue(
+      await run(
+        fixture.runs.applyCancel({
+          runId: created.run.id,
+          controlRevision: created.run.controlRevision,
+        }),
+      ),
+    );
+
+    // The worktree genuinely exists by now. Cancel revokes permission to advance, never permission
+    // to record — a cancelled preparation that could not say what it created would leave a real
+    // worktree with nothing naming it.
+    assert.equal(
+      committedValue(
+        await run(
+          fixture.runs.recordEnvironmentReceipt({
+            ...fence,
+            step: 'worktree',
+            receipt: WORKTREE_RECEIPT,
+          }),
+        ),
+      ),
+      'cancelled_evidence',
+    );
+
+    const preparation = (await run(fixture.runs.findPreparation(created.run.id)))!;
+    assert.equal(preparation.worktree?.worktreeId, 1, 'the column was still written');
+
+    const attempt = (await run(fixture.runs.findAttempt(created.attempt.id)))!;
+    assert.equal(attempt.status, 'cancelled');
+    assert.ok(attempt.endedAt);
+
+    const after = (await run(fixture.runs.findRun(created.run.id)))!;
+    assert.equal(after.owner, null);
+    assert.equal(after.activeAttemptId, null);
+    assert.deepEqual(after.position, {
+      kind: 'environment_preparation',
+      frameId: created.frame.id,
+    });
+    assert.deepEqual(
+      after.destination,
+      { worktreeId: null, worktreePath: null, surfaceId: null },
+      'a cancelled preparation never became placed',
+    );
+
+    // Evidence first, then the control that stopped anything further: history reads in the order
+    // the facts occurred.
+    const history = fixture.client
+      .prepare('SELECT kind FROM workflow_transitions WHERE run_id = ? ORDER BY revision')
+      .all(created.run.id) as { kind: string }[];
+    assert.deepEqual(history.map((row) => row.kind).slice(-2), [
+      'environment_step_recorded',
+      'control_applied',
+    ]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('committing a preparation places the run, and an occupied surface refuses it outright', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const created = await preparing(fixture);
+    assert.equal(
+      committedValue(
+        await run(
+          fixture.runs.commitEnvironmentPreparation({
+            ...preparationFence(created),
+            destination: {
+              worktreeId: created.placement.worktreeId,
+              worktreePath: '/repo/fixture',
+              surfaceId: created.placement.surfaceId,
+            },
+          }),
+        ),
+      ),
+      'advanced',
+    );
+
+    const placed = (await run(fixture.runs.findRun(created.run.id)))!;
+    assert.deepEqual(placed.destination, {
+      worktreeId: created.placement.worktreeId,
+      worktreePath: '/repo/fixture',
+      surfaceId: created.placement.surfaceId,
+    });
+    assert.deepEqual(placed.position, { kind: 'graph_entry', frameId: created.frame.id });
+    assert.equal(placed.status, 'ready');
+    assert.equal(placed.owner, null, 'ownership is released with the commit');
+    assert.equal(placed.ownerIncarnation, null);
+    assert.equal(placed.activeAttemptId, null);
+
+    const attachment = (await run(fixture.runs.findAttachment(created.run.id)))!;
+    assert.equal(attachment.surfaceId, created.placement.surfaceId);
+    assert.equal(attachment.worktreeId, created.placement.worktreeId);
+
+    const attempt = (await run(fixture.runs.findAttempt(created.attempt.id)))!;
+    assert.equal(attempt.status, 'succeeded');
+    assert.equal(attempt.endCertainty, 'observed');
+
+    const prepared = fixture.client
+      .prepare(
+        `SELECT detail_inline FROM workflow_transitions
+         WHERE run_id = ? AND kind = 'environment_prepared'`,
+      )
+      .get(created.run.id) as { detail_inline: string };
+    assert.deepEqual(JSON.parse(prepared.detail_inline), {
+      destination: {
+        worktreeId: created.placement.worktreeId,
+        worktreePath: '/repo/fixture',
+        surfaceId: created.placement.surfaceId,
+      },
+    });
+
+    // The same surface cannot hold two. A second preparation is refused at the commit, and the
+    // refusal writes nothing.
+    const second = await preparing(fixture);
+    const before = (await run(fixture.runs.findRun(second.run.id)))!.revision;
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.commitEnvironmentPreparation({
+            ...preparationFence(second),
+            destination: {
+              worktreeId: created.placement.worktreeId,
+              worktreePath: '/repo/fixture',
+              surfaceId: created.placement.surfaceId,
+            },
+          }),
+        ),
+      ),
+      { kind: 'surface_busy', runId: created.run.id },
+    );
+    const refused = (await run(fixture.runs.findRun(second.run.id)))!;
+    assert.deepEqual(refused.destination, {
+      worktreeId: null,
+      worktreePath: null,
+      surfaceId: null,
+    });
+    assert.equal(await run(fixture.runs.findAttachment(second.run.id)), null);
+    assert.equal(refused.revision, before, 'and no history was appended');
+    assert.equal(
+      (await run(fixture.runs.findAttempt(second.attempt.id)))!.status,
+      'running',
+      'the attempt is left exactly as it was, so the caller may still act',
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test('a preparation position is claimable without a destination, but not while paused or cancelled', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    // A run that failed mid-preparation is where Retry re-enters, so the claim has to work against
+    // a null destination — the live-placement re-check would otherwise reject it forever.
+    const created = await preparing(fixture);
+
+    /** Fails the currently claimed preparation attempt and repins it, as Retry does. */
+    async function failAndAdopt(attemptId: number) {
+      committedValue(
+        await run(
+          fixture.runs.failSegment({
+            runId: created.run.id,
+            attemptId,
+            owner: OWNER,
+            ownerIncarnation: INCARNATION,
+            code: 'environment_preparation_failed',
+            message: 'worktree creation failed',
+          }),
+        ),
+      );
+      const failed = (await run(fixture.runs.findRun(created.run.id)))!;
+      committedValue(
+        await run(
+          fixture.runs.adoptRetryPin({
+            runId: failed.id,
+            controlRevision: failed.controlRevision,
+            artifactHash: PIN_A,
+            expectedPosition: failed.position,
+            expectedOwner: failed.owner,
+          }),
+        ),
+      );
+      return (await run(fixture.runs.findRun(created.run.id)))!;
+    }
+
+    let current = await failAndAdopt(created.attempt.id);
+    assert.deepEqual(current.destination, {
+      worktreeId: null,
+      worktreePath: null,
+      surfaceId: null,
+    });
+    assert.deepEqual(current.position, {
+      kind: 'environment_preparation',
+      frameId: created.frame.id,
+    });
+
+    const retried = committedValue(
+      await run(
+        fixture.runs.claimSegment({
+          ...(await prepareClaim(fixture, current.id)),
+          owner: OWNER,
+          ownerIncarnation: INCARNATION,
+        }),
+      ),
+    );
+    assert.equal(retried.attempt.segmentKind, 'environment_preparation');
+    assert.equal(retried.attempt.executionId, null);
+    assert.equal(retried.attempt.attemptIndex, 2);
+    assert.equal(retried.attempt.invocationKind, 'retry');
+
+    // Every other guard still applies; only the placement re-check is skipped.
+    current = await failAndAdopt(retried.attempt.id);
+    committedValue(
+      await run(
+        fixture.runs.applyPause({ runId: current.id, controlRevision: current.controlRevision }),
+      ),
+    );
+    current = (await run(fixture.runs.findRun(created.run.id)))!;
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.claimSegment({
+            ...(await prepareClaim(fixture, current.id)),
+            owner: OWNER,
+            ownerIncarnation: INCARNATION,
+          }),
+        ),
+      ),
+      { kind: 'not_claimable', reason: 'paused' },
+    );
+
+    // And a cancelled run is refused for the ordinary reason, not for a missing destination.
+    committedValue(
+      await run(
+        fixture.runs.applyCancel({ runId: current.id, controlRevision: current.controlRevision }),
+      ),
+    );
+    current = (await run(fixture.runs.findRun(created.run.id)))!;
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.runs.claimSegment({
+            ...(await prepareClaim(fixture, current.id)),
+            owner: OWNER,
+            ownerIncarnation: INCARNATION,
+          }),
+        ),
+      ),
+      { kind: 'not_claimable', reason: 'status' },
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test('a restart fails a preparing run at its first outstanding allocation, and parks everything else', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    // One preparing run and one ordinary run, so the single pass is shown to handle both.
+    const preparingRun = await preparing(fixture);
+    const entered = await enterRootGraph(fixture);
+    await claim(fixture, entered.run);
+
+    const outcome = await run(fixture.runs.parkUnfinishedRuns({}));
+    assert.deepEqual(outcome, {
+      parked: [entered.run.id],
+      preparationsFailed: [preparingRun.run.id],
+    });
+
+    const failed = (await run(fixture.runs.findRun(preparingRun.run.id)))!;
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.failureCode, 'environment_preparation_failed');
+    assert.equal(
+      failed.failureMessage,
+      'The runtime restarted while this run was preparing its environment.',
+    );
+    assert.equal(failed.failureAttemptId, preparingRun.attempt.id);
+    assert.equal(failed.paused, false, 'no pause band: Retry is the single re-entry path');
+    assert.ok(failed.endedAt);
+    assert.equal(failed.owner, null);
+    assert.equal(failed.activeAttemptId, null);
+    assert.deepEqual(
+      await run(fixture.runs.listPauseIntervals(preparingRun.run.id)),
+      [],
+      'and no interval was opened for it',
+    );
+
+    const attempt = (await run(fixture.runs.findAttempt(preparingRun.attempt.id)))!;
+    assert.equal(attempt.status, 'interrupted');
+    assert.equal(attempt.endCertainty, 'unknown');
+    assert.equal(attempt.endedAt, null, 'an unobserved end is not a timestamp');
+    assert.deepEqual(await run(fixture.payloads.resolve(attempt.failureDetail!)), {
+      step: 'worktree',
+      reason: 'interrupted',
+    });
+
+    const history = fixture.client
+      .prepare(
+        'SELECT kind, detail_inline FROM workflow_transitions WHERE run_id = ? ORDER BY revision',
+      )
+      .all(preparingRun.run.id) as { kind: string; detail_inline: string | null }[];
+    assert.deepEqual(history.map((row) => row.kind).slice(-2), [
+      'segment_failed',
+      'control_applied',
+    ]);
+    assert.deepEqual(JSON.parse(history.at(-1)!.detail_inline!), {
+      control: 'runtime_restart',
+      preparationFailed: true,
+    });
+
+    // The ordinary run is parked exactly as it always was.
+    const parked = (await run(fixture.runs.findRun(entered.run.id)))!;
+    assert.equal(parked.status, 'ready');
+    assert.equal(parked.paused, true);
+    assert.ok(
+      (await run(fixture.runs.listPauseIntervals(entered.run.id))).some(
+        (interval) => interval.reason === 'runtime_restart' && interval.resumedAt === null,
+      ),
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+test('the named step follows the receipts, and a preparation with no attempt fails without one', async () => {
+  for (const scenario of [
+    {
+      name: 'nothing allocated yet',
+      receipts: [] as const,
+      step: 'worktree',
+    },
+    {
+      name: 'worktree created, hooks not yet run',
+      receipts: ['worktree'] as const,
+      step: 'setup',
+    },
+    {
+      name: 'hooks failed, so they are still outstanding',
+      receipts: ['worktree', 'setup-failed'] as const,
+      step: 'setup',
+    },
+    {
+      name: 'worktree and hooks done, surface not created',
+      receipts: ['worktree', 'setup-ok'] as const,
+      step: 'surface',
+    },
+    {
+      name: 'every allocation made; only the commit is left',
+      receipts: ['worktree', 'setup-ok', 'surface'] as const,
+      step: 'commit',
+    },
+  ]) {
+    const fixture = makeWorkflowPersistenceFixture();
+    try {
+      const created = await preparing(fixture);
+      const fence = preparationFence(created);
+      for (const receipt of scenario.receipts) {
+        if (receipt === 'worktree') {
+          committedValue(
+            await run(
+              fixture.runs.recordEnvironmentReceipt({
+                ...fence,
+                step: 'worktree',
+                receipt: WORKTREE_RECEIPT,
+              }),
+            ),
+          );
+        } else if (receipt === 'surface') {
+          committedValue(
+            await run(
+              fixture.runs.recordEnvironmentReceipt({
+                ...fence,
+                step: 'surface',
+                receipt: { surfaceId: 7, requestedTitle: 'Work', title: 'Work' },
+              }),
+            ),
+          );
+        } else {
+          committedValue(
+            await run(
+              fixture.runs.recordEnvironmentReceipt({
+                ...fence,
+                step: 'setup',
+                receipt: {
+                  status: receipt === 'setup-ok' ? 'succeeded' : 'failed',
+                  reason: null,
+                  setupRunId: null,
+                  failure: null,
+                },
+              }),
+            ),
+          );
+        }
+      }
+
+      await run(fixture.runs.parkUnfinishedRuns({}));
+      const attempt = (await run(fixture.runs.findAttempt(created.attempt.id)))!;
+      assert.deepEqual(
+        await run(fixture.payloads.resolve(attempt.failureDetail!)),
+        { step: scenario.step, reason: 'interrupted' },
+        scenario.name,
+      );
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+test('a reuse-only preparation names the commit, and an attempt-less row fails with nothing to blame', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    // Reuse allocates nothing, leaves no receipt, and is re-validated on every attempt — so it is
+    // never named as an outstanding step.
+    const created = await preparing(fixture, {
+      worktree: { kind: 'current' },
+      surface: { kind: 'existing', surfaceId: 4 },
+    });
+    // A Retry that crashed between adopting its pin and allocating its claim: the run is
+    // non-terminal and preparing, with no attempt to attribute the interruption to.
+    fixture.client
+      .prepare(
+        `UPDATE workflow_runs
+         SET status = 'ready', active_attempt_id = NULL, owner = NULL, owner_incarnation = NULL
+         WHERE id = ?`,
+      )
+      .run(created.run.id);
+    fixture.client
+      .prepare(`UPDATE workflow_segment_attempts SET status = 'failed' WHERE id = ?`)
+      .run(created.attempt.id);
+
+    const outcome = await run(fixture.runs.parkUnfinishedRuns({}));
+    assert.deepEqual(outcome, { parked: [], preparationsFailed: [created.run.id] });
+
+    const failed = (await run(fixture.runs.findRun(created.run.id)))!;
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.failureCode, 'environment_preparation_failed');
+    assert.equal(
+      failed.failureAttemptId,
+      null,
+      'there is genuinely no attempt to point at, and an older closed one would misattribute it',
+    );
+    assert.equal(
+      (await run(fixture.runs.findAttempt(created.attempt.id)))!.status,
+      'failed',
+      'the already-closed attempt is left exactly as it was',
+    );
   } finally {
     fixture.close();
   }

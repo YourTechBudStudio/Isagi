@@ -20,6 +20,7 @@ import {
 } from '../../runtime-events/internal-event-bus.js';
 import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -392,30 +393,14 @@ export async function makeOperationHarness(): Promise<OperationHarness> {
   const fixture = makeWorkflowPersistenceFixture();
   fixture.seedArtifact(PIN);
   const placement = fixture.seedPlacement();
-  const created = expectOk(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Fixture',
+    rootGraphKey: 'root',
+    artifactHash: PIN,
+    rootFrame: { graphKey: 'root' },
+    placement,
+  });
   const entry = expectOk(
     await run(
       fixture.runs.claimSegment({

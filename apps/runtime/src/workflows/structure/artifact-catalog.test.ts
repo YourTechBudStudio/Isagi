@@ -7,6 +7,7 @@ import type { WorkflowStructureDescriptor } from '@yourtechbudstudio/isagi-workf
 import { Effect } from 'effect';
 
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -50,35 +51,20 @@ test('a rejected Retry may leave an unused catalog entry but changes nothing abo
   try {
     fixture.seedArtifact(PIN_A);
     const placement = fixture.seedPlacement();
-    const created = await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    );
-    assert.ok(created.ok);
-    const frameId = created.value.frame.id;
+    const created = await createPlacedRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Fixture',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement,
+    });
+    const frameId = created.frame.id;
 
     // Drive the run to a failed node callback, which is where a Retry would be offered.
     const entry = await run(
       fixture.runs.claimSegment({
-        ...(await prepareClaim(fixture, created.value.run.id)),
+        ...(await prepareClaim(fixture, created.run.id)),
         owner: OWNER,
         ownerIncarnation: INCARNATION,
       }),
@@ -86,7 +72,7 @@ test('a rejected Retry may leave an unused catalog entry but changes nothing abo
     assert.ok(entry.ok);
     await run(
       fixture.runs.commitGraphEntry({
-        runId: created.value.run.id,
+        runId: created.run.id,
         attemptId: entry.value.attempt.id,
         owner: OWNER,
         ownerIncarnation: INCARNATION,
@@ -95,7 +81,7 @@ test('a rejected Retry may leave an unused catalog entry but changes nothing abo
         entryNode: { nodeId: 'work', nodeKind: 'operation' },
       }),
     );
-    let current = (await run(fixture.runs.findRun(created.value.run.id)))!;
+    let current = (await run(fixture.runs.findRun(created.run.id)))!;
     const callback = await run(
       fixture.runs.claimSegment({
         ...(await prepareClaim(fixture, current.id)),
@@ -114,7 +100,7 @@ test('a rejected Retry may leave an unused catalog entry but changes nothing abo
         message: 'boom',
       }),
     );
-    current = (await run(fixture.runs.findRun(created.value.run.id)))!;
+    current = (await run(fixture.runs.findRun(created.run.id)))!;
 
     const before = {
       pin: current.artifactHash,
@@ -149,7 +135,7 @@ test('a rejected Retry may leave an unused catalog entry but changes nothing abo
 
     // Rejected, so the control is never applied. Everything the run owns is byte-identical, and the
     // unused catalog row is inert history rather than a pin anyone adopted.
-    const after = (await run(fixture.runs.findRun(created.value.run.id)))!;
+    const after = (await run(fixture.runs.findRun(created.run.id)))!;
     assert.equal(after.artifactHash, before.pin);
     assert.equal(after.status, before.status);
     assert.deepEqual(after.position, before.position);

@@ -4,6 +4,7 @@ import test from 'node:test';
 import { makeWorkflowHistoryRepository } from './history.repository.js';
 import type { WorkflowWriteResult } from './outcomes.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -19,26 +20,17 @@ function value<A>(result: WorkflowWriteResult<A>): A {
 
 async function runWithHistory(fixture: WorkflowPersistenceFixture) {
   fixture.seedArtifact(PIN);
-  const created = value(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: null,
-          worktreePath: null,
-          surfaceId: null,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: { worktreeId: null, worktreePath: null, surfaceId: null },
-        attachment: null,
-      }),
-    ),
-  );
+  // A real placement, where this used to create a placeless run. A run reaches its graph only by
+  // committing a destination now, and these tests are about paging history rather than about being
+  // unplaced, so going through the real path costs nothing and asserts more.
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Fixture',
+    rootGraphKey: 'root',
+    artifactHash: PIN,
+    rootFrame: { graphKey: 'root' },
+    placement: fixture.seedPlacement(),
+  });
   return created.run.id;
 }
 
@@ -69,16 +61,18 @@ test('history reads in revision order, bounded by the page size', async () => {
     const runId = await runWithHistory(fixture);
     await appendDiagnostics(fixture, runId, 9);
 
-    // `run_started` plus nine diagnostics.
-    assert.equal(await run(history.countForRun(runId)), 10);
-    assert.equal(await run(history.currentRevision(runId)), 10);
+    // Placement history — `run_started`, `node_dispatched`, `environment_prepared` — plus nine
+    // diagnostics. A run reaches its graph by committing a destination, and that commit is three
+    // transitions, not one.
+    assert.equal(await run(history.countForRun(runId)), 12);
+    assert.equal(await run(history.currentRevision(runId)), 12);
 
     const page = await run(history.since({ runId, sinceRevision: 0, limit: 4 }));
     assert.deepEqual(
       page.transitions.map((transition) => transition.revision),
       [1, 2, 3, 4],
     );
-    assert.equal(page.highWaterRevision, 10);
+    assert.equal(page.highWaterRevision, 12);
   } finally {
     fixture.close();
   }
@@ -93,13 +87,13 @@ test('a page is bounded by the high-water it reported, so newer work is left for
 
     const first = await run(history.since({ runId, sinceRevision: 0, limit: 4 }));
     const boundary = first.highWaterRevision;
-    assert.equal(boundary, 10);
+    assert.equal(boundary, 12);
 
     // More history commits *while* the caller is still paging. A page must never reach above the
     // boundary it already reported, or a caller that acknowledges coverage up to that boundary
     // would be acknowledging revisions it was never handed.
     await appendDiagnostics(fixture, runId, 5, 9);
-    assert.equal(await run(history.currentRevision(runId)), 15);
+    assert.equal(await run(history.currentRevision(runId)), 17);
 
     const second = await run(history.since({ runId, sinceRevision: 4, limit: 4 }));
     assert.deepEqual(
@@ -140,12 +134,12 @@ test('history is scoped to its run, and an unknown run reads as empty rather tha
     const second = await runWithHistory(fixture);
     await appendDiagnostics(fixture, first, 3);
 
-    assert.equal(await run(history.countForRun(first)), 4);
-    assert.equal(await run(history.countForRun(second)), 1, 'only its own run_started');
+    assert.equal(await run(history.countForRun(first)), 6);
+    assert.equal(await run(history.countForRun(second)), 3, 'only its own placement history');
     const page = await run(history.since({ runId: second, sinceRevision: 0, limit: 50 }));
     assert.deepEqual(
       page.transitions.map((transition) => transition.kind),
-      ['run_started'],
+      ['run_started', 'node_dispatched', 'environment_prepared'],
     );
     assert.ok(page.transitions.every((transition) => transition.runId === second));
 
@@ -167,14 +161,14 @@ test('reading from the current revision yields nothing, without claiming more co
     const runId = await runWithHistory(fixture);
     await appendDiagnostics(fixture, runId, 2);
 
-    const caughtUp = await run(history.since({ runId, sinceRevision: 3, limit: 10 }));
+    const caughtUp = await run(history.since({ runId, sinceRevision: 5, limit: 10 }));
     assert.deepEqual(caughtUp.transitions, []);
-    assert.equal(caughtUp.highWaterRevision, 3, 'an empty page still reports the real boundary');
+    assert.equal(caughtUp.highWaterRevision, 5, 'an empty page still reports the real boundary');
 
     // A cursor past the end is not an error and does not invent coverage.
     const ahead = await run(history.since({ runId, sinceRevision: 99, limit: 10 }));
     assert.deepEqual(ahead.transitions, []);
-    assert.equal(ahead.highWaterRevision, 3);
+    assert.equal(ahead.highWaterRevision, 5);
   } finally {
     fixture.close();
   }
@@ -186,30 +180,14 @@ test('every committed transition is readable back, including several from one tr
     const history = makeWorkflowHistoryRepository(fixture.database);
     fixture.seedArtifact(PIN);
     const placement = fixture.seedPlacement();
-    const created = value(
-      await run(
-        fixture.runs.createRun({
-          workflowKey: 'fixture',
-          title: 'Fixture',
-          rootGraphKey: 'root',
-          artifactHash: PIN,
-          rootFrame: { graphKey: 'root' },
-          origin: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-            paneId: null,
-            agentSessionId: null,
-          },
-          destination: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-          },
-          attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-        }),
-      ),
-    );
+    const created = await createPlacedRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Fixture',
+      rootGraphKey: 'root',
+      artifactHash: PIN,
+      rootFrame: { graphKey: 'root' },
+      placement,
+    });
     const entry = value(
       await run(
         fixture.runs.claimSegment({
@@ -269,6 +247,8 @@ test('every committed transition is readable back, including several from one tr
       [
         'run_started',
         'node_dispatched',
+        'environment_prepared',
+        'node_dispatched',
         'graph_entered',
         'node_dispatched',
         'state_reduced',
@@ -277,7 +257,7 @@ test('every committed transition is readable back, including several from one tr
     );
     assert.deepEqual(
       page.transitions.map((transition) => transition.revision),
-      [1, 2, 3, 4, 5, 6],
+      [1, 2, 3, 4, 5, 6, 7, 8],
     );
     // The armed wait's identity is carried on its transition, so a reader recovering by revision
     // can resolve it without a second query shape.

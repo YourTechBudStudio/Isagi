@@ -334,6 +334,10 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     catalog,
     workspace: workspace as never,
     surfaces: readers.surfaceService as never,
+    // Launch-scoped, and deliberately not the dispatcher's identity: launch claims and holds the
+    // preparation segment itself, so the two never contend for the same attempt.
+    owner: 'workflow-launch:test',
+    ownerIncarnation: 'incarnation:test',
   };
 
   let incarnation = await buildIncarnation();

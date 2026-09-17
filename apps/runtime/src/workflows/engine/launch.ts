@@ -40,6 +40,14 @@ export interface LaunchDeps {
   readonly catalog: WorkflowArtifactCatalogService;
   readonly workspace: WorkspaceRepositoryService;
   readonly surfaces: SurfaceServiceShape;
+  /**
+   * Who holds a run's environment preparation.
+   *
+   * Launch-scoped, not the dispatcher's identity: the preparation segment is claimed by the launch
+   * itself and held for the whole of preparation, and the dispatcher deliberately never claims it.
+   */
+  readonly owner: string;
+  readonly ownerIncarnation: string;
 }
 
 export interface LaunchInput {
@@ -135,29 +143,20 @@ export function startWorkflow(
         paneId: origin.paneId ?? null,
         agentSessionId: origin.agentSessionId ?? null,
       },
-      // Origin and destination are split concepts that happen to coincide at launch: the origin is
-      // descriptive provenance that may name a pane the person has since closed, while the
-      // destination is where work is placed and every nested frame inherits it.
-      destination: {
-        worktreeId: origin.worktreeId,
-        worktreePath: origin.worktreePath,
-        surfaceId: origin.surfaceId,
+      preparation: {
+        source: 'default',
+        request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+        baseCommit: null,
+        checkoutPath: null,
       },
-      attachment: { worktreeId: origin.worktreeId, surfaceId: origin.surfaceId },
+      claim: {
+        owner: deps.owner,
+        ownerIncarnation: deps.ownerIncarnation,
+        input: { value: { segment: 'environment_preparation' } },
+      },
     });
 
     if (!created.ok) {
-      if (created.rejection.kind === 'surface_busy') {
-        return yield* Effect.fail(
-          new WorkflowEngineError({
-            code: 'workflow_surface_attached',
-            message: `Surface ${origin.surfaceId} already has a workflow attached.`,
-            workflowKey: input.workflowKey,
-            activeWorkflowRunId: created.rejection.runId,
-            surfaceId: origin.surfaceId,
-          }),
-        );
-      }
       return yield* Effect.fail(
         new WorkflowEngineError({
           code: 'workflow_load_failed',
@@ -166,7 +165,87 @@ export function startWorkflow(
         }),
       );
     }
-    return created.value.run;
+
+    // --- phase 05 bridge, deleted by phase 06 -------------------------------------------------
+    //
+    // Stands in for the whole selection-and-preparation stage that does not exist yet:
+    // `selectPlacement` → `resolvePlacement` → the engine-owned preparation fiber. Here the
+    // placement is always the unchanged current/current default, so nothing has to be allocated and
+    // the destination can be committed inline — which lands the run at `graph_entry` with an
+    // attachment, exactly where it was before the environment segment existed.
+    //
+    // Phase 06 **replaces** this, it does not extend it: the real path selects a placement, validates
+    // it against live rows, and hands the returned attempt to the preparation fiber, which commits
+    // the destination itself once the worktree, setup and surface steps are done.
+    //
+    // Occupancy semantics do not move during the bridge. `surface_busy` simply arrives from the
+    // commit instead of from `createRun`, so the palette sees the same refusal it always did.
+    const placement = yield* deps.runs.commitEnvironmentPreparation({
+      runId: created.value.run.id,
+      attemptId: created.value.attempt.id,
+      owner: deps.owner,
+      ownerIncarnation: deps.ownerIncarnation,
+      destination: {
+        worktreeId: origin.worktreeId,
+        worktreePath: origin.worktreePath,
+        surfaceId: origin.surfaceId,
+      },
+    });
+
+    if (!placement.ok) {
+      const busy = placement.rejection.kind === 'surface_busy' ? placement.rejection : null;
+      const message = busy
+        ? `Surface ${origin.surfaceId} already has a workflow attached.`
+        : `The run could not be placed: ${placement.rejection.kind}.`;
+
+      // The run and its claimed attempt already exist, so a refused placement has to be *closed*,
+      // not abandoned. Nothing else would ever close it: the dispatcher never claims
+      // `environment_preparation`, so an owned, running, destination-less run would sit untouched
+      // until the next restart, and the caller would hold no id with which to inspect or retry it.
+      // Failing it through the fence is what a preparation failure is, and it is what phase 07's
+      // fiber will do for every other step.
+      yield* deps.runs.failSegment({
+        runId: created.value.run.id,
+        attemptId: created.value.attempt.id,
+        owner: deps.owner,
+        ownerIncarnation: deps.ownerIncarnation,
+        code: 'environment_preparation_failed',
+        message,
+        // Structured only for the one rejection that is an operational condition. A
+        // `position_mismatch` here is a defect with no honest reason literal, and inventing one
+        // would put a wrong fact on the record; its message already names the kind.
+        ...(busy
+          ? {
+              detail: {
+                value: {
+                  step: 'commit',
+                  reason: 'surface_busy',
+                  surfaceId: origin.surfaceId,
+                  occupyingRunId: busy.runId,
+                },
+              },
+            }
+          : {}),
+      });
+
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: busy ? 'workflow_surface_attached' : 'workflow_load_failed',
+          message,
+          workflowKey: input.workflowKey,
+          // The refused run is retained and failed, so the caller gets a handle on it rather than
+          // only being told no.
+          workflowRunId: created.value.run.id,
+          ...(busy ? { activeWorkflowRunId: busy.runId, surfaceId: origin.surfaceId } : {}),
+        }),
+      );
+    }
+
+    // Re-read rather than returned from the create: the destination, position and ownership all
+    // moved in the commit, and handing back the pre-commit record would describe a run that no
+    // longer exists.
+    const placed = yield* deps.runs.findRun(created.value.run.id);
+    return placed ?? created.value.run;
   });
 }
 

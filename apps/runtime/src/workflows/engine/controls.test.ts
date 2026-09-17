@@ -463,7 +463,11 @@ test('a missed deletion notification is caught by the claim’s own live-placeme
     const attempts = await run(
       harness.fixture.runs.listAttemptsForFrame((await harness.runOf(launched.id)).activeFrameId!),
     );
-    assert.equal(attempts.length, 0, 'and the rejected claim allocated no attempt');
+    assert.deepEqual(
+      attempts.map((attempt) => attempt.segmentKind),
+      ['environment_preparation'],
+      'and the rejected claim allocated no attempt beyond the placement the launch made',
+    );
   });
 });
 
@@ -961,7 +965,7 @@ test('a callback already running when its placement disappears still commits its
       (await run(harness.fixture.runs.listAttemptsForFrame(frame.id))).map(
         (candidate) => candidate.segmentKind,
       ),
-      ['graph_entry', 'node_callback'],
+      ['environment_preparation', 'graph_entry', 'node_callback'],
       'and the routing segment was never allocated an attempt',
     );
 

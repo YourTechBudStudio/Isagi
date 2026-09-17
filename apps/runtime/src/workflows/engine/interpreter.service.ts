@@ -113,7 +113,17 @@ export const WorkflowEngineLive = Layer.scoped(
       reconcileWait: waits.reconcileWait,
     });
 
-    const launchDeps = { runs, registry, catalog, workspace, surfaces };
+    const launchDeps = {
+      runs,
+      registry,
+      catalog,
+      workspace,
+      surfaces,
+      owner,
+      // The same incarnation the dispatcher and the operation service use: "this process started
+      // that work" has to mean one thing, or a claim this process holds looks abandoned to it.
+      ownerIncarnation: operations.incarnationId,
+    };
     const controls = makeControls({
       ...launchDeps,
       payloads,

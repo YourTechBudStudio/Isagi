@@ -5,6 +5,7 @@ import {
   workflowSetupReceiptSchema,
   workflowSurfaceReceiptSchema,
   workflowWorktreeReceiptSchema,
+  type WorkflowEnvironmentStep,
   type WorkflowPlacementRequestDto,
   type WorkflowSetupReceipt,
   type WorkflowSurfaceReceipt,
@@ -121,4 +122,37 @@ export function encodeSetupReceipt(receipt: WorkflowSetupReceipt): string {
 
 export function encodeSurfaceReceipt(receipt: WorkflowSurfaceReceipt): string {
   return JSON.stringify(receipt);
+}
+
+/**
+ * The first **allocation** this preparation still owes, and therefore where a re-entry resumes.
+ *
+ * Named by allocation rather than by step, because only an allocation leaves a receipt. Reuse
+ * choices create nothing, leave no receipt and are re-validated against live rows on every attempt,
+ * so they are never the answer — a `current` worktree is not "incomplete", it is not this
+ * preparation's to complete at all.
+ *
+ * Lives here, beside the decoders, and is exported because three callers need the same answer:
+ * startup recovery names the step an interrupted preparation died at, the preparation segment
+ * decides per step whether to reuse a receipt or act, and the read projection reports progress. A
+ * second copy of "which allocation is outstanding" would decide whether a retry reuses an existing
+ * worktree or creates a second one, which is the most consequential thing here to get inconsistent.
+ *
+ * A `setup` receipt that is `failed` or `unknown` counts as outstanding: hooks may still need to
+ * run. It is also the one receipt a later attempt may replace, which is the same fact seen from the
+ * write side.
+ */
+export function firstIncompleteStep(record: WorkflowRunPreparationRecord): WorkflowEnvironmentStep {
+  if (record.request.worktree.kind === 'create') {
+    if (record.worktree === null) return 'worktree';
+    if (
+      record.setup === null ||
+      record.setup.status === 'failed' ||
+      record.setup.status === 'unknown'
+    ) {
+      return 'setup';
+    }
+  }
+  if (record.request.surface.kind === 'create' && record.surface === null) return 'surface';
+  return 'commit';
 }

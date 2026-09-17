@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { WorkflowWriteResult } from './outcomes.js';
 import type { WorkflowRunRecord } from './records.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -86,30 +87,14 @@ async function runToChildPublished(fixture: WorkflowPersistenceFixture) {
   fixture.seedArtifact(PIN_A);
   fixture.seedArtifact(PIN_B);
   const placement = fixture.seedPlacement();
-  const created = value(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Nested fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Nested fixture',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root' },
+    placement,
+  });
   const runId = created.run.id;
   const rootFrameId = created.frame.id;
 
@@ -223,30 +208,14 @@ test('one execution opens exactly one child frame, and a replay writes nothing',
   try {
     fixture.seedArtifact(PIN_A);
     const placement = fixture.seedPlacement();
-    const created = value(
-      await run(
-        fixture.runs.createRun({
-          workflowKey: 'fixture',
-          title: 'Nested fixture',
-          rootGraphKey: 'root',
-          artifactHash: PIN_A,
-          rootFrame: { graphKey: 'root' },
-          origin: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-            paneId: null,
-            agentSessionId: null,
-          },
-          destination: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-          },
-          attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-        }),
-      ),
-    );
+    const created = await createPlacedRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Nested fixture',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement,
+    });
     const entry = await claimOf(fixture, created.run.id);
     value(
       await run(
@@ -593,30 +562,14 @@ test('a cancelled run cannot open a child frame, and nothing about it moves', as
   try {
     fixture.seedArtifact(PIN_A);
     const placement = fixture.seedPlacement();
-    const created = value(
-      await run(
-        fixture.runs.createRun({
-          workflowKey: 'fixture',
-          title: 'Nested fixture',
-          rootGraphKey: 'root',
-          artifactHash: PIN_A,
-          rootFrame: { graphKey: 'root' },
-          origin: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-            paneId: null,
-            agentSessionId: null,
-          },
-          destination: {
-            worktreeId: placement.worktreeId,
-            worktreePath: '/repo/fixture',
-            surfaceId: placement.surfaceId,
-          },
-          attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-        }),
-      ),
-    );
+    const created = await createPlacedRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Nested fixture',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement,
+    });
     const entry = await claimOf(fixture, created.run.id);
     value(
       await run(
@@ -675,30 +628,14 @@ async function runParkedAtSubgraphNode(fixture: WorkflowPersistenceFixture) {
   fixture.seedArtifact(PIN_A);
   fixture.seedArtifact(PIN_B);
   const placement = fixture.seedPlacement();
-  const created = value(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Nested fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Nested fixture',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root' },
+    placement,
+  });
   const entry = await claimOf(fixture, created.run.id);
   value(
     await run(

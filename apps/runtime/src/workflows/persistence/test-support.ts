@@ -19,8 +19,10 @@ import {
   type WorkflowOperationsRepositoryService,
 } from './operations.repository.js';
 import { makeWorkflowPayloadStore, type WorkflowPayloadStoreService } from './payload-store.js';
+import type { WorkflowFrameRecord, WorkflowRunRecord } from './records.js';
 import {
   makeWorkflowRunsRepository,
+  type CreateRunInput,
   type WorkflowRunsRepositoryService,
 } from './runs.repository.js';
 
@@ -124,6 +126,84 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
     },
   };
 }
+
+/**
+ * Creates a run and places it, the way a launch does, leaving it exactly where a claim expects it.
+ *
+ * Creation and placement are two transactions now: `createRun` leaves the run claimed at
+ * `environment_preparation` with no destination, and `commitEnvironmentPreparation` is what makes a
+ * destination effective. Almost every test downstream of this is about what happens *after* a run
+ * is placed, so they go through here rather than each one learning the preparation protocol — and
+ * as a side benefit the real commit path is exercised by the whole suite instead of only by its own
+ * file.
+ *
+ * A test that is about preparation itself calls `createRun` directly and drives the steps.
+ */
+export async function createPlacedRun(
+  fixture: WorkflowPersistenceFixture,
+  input: {
+    readonly workflowKey: string;
+    readonly title: string;
+    readonly rootGraphKey: string;
+    readonly artifactHash: string;
+    readonly rootFrame: CreateRunInput['rootFrame'];
+    readonly placement: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly worktreePath?: string;
+    readonly owner?: string;
+    readonly ownerIncarnation?: string;
+  },
+): Promise<{ run: WorkflowRunRecord; frame: WorkflowFrameRecord }> {
+  const worktreePath = input.worktreePath ?? '/repo/fixture';
+  const owner = input.owner ?? PLACEMENT_OWNER;
+  const ownerIncarnation = input.ownerIncarnation ?? PLACEMENT_INCARNATION;
+  const created = await run(
+    fixture.runs.createRun({
+      workflowKey: input.workflowKey,
+      title: input.title,
+      rootGraphKey: input.rootGraphKey,
+      artifactHash: input.artifactHash,
+      rootFrame: input.rootFrame,
+      origin: {
+        worktreeId: input.placement.worktreeId,
+        worktreePath,
+        surfaceId: input.placement.surfaceId,
+        paneId: null,
+        agentSessionId: null,
+      },
+      preparation: {
+        source: 'default',
+        request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+        baseCommit: null,
+        checkoutPath: null,
+      },
+      claim: { owner, ownerIncarnation, input: { value: { segment: 'environment_preparation' } } },
+    }),
+  );
+  if (!created.ok) {
+    throw new Error(`expected a created run, got ${JSON.stringify(created.rejection)}`);
+  }
+  const placed = await run(
+    fixture.runs.commitEnvironmentPreparation({
+      runId: created.value.run.id,
+      attemptId: created.value.attempt.id,
+      owner,
+      ownerIncarnation,
+      destination: {
+        worktreeId: input.placement.worktreeId,
+        worktreePath,
+        surfaceId: input.placement.surfaceId,
+      },
+    }),
+  );
+  if (!placed.ok) {
+    throw new Error(`expected a placed run, got ${JSON.stringify(placed.rejection)}`);
+  }
+  const record = (await run(fixture.runs.findRun(created.value.run.id)))!;
+  return { run: record, frame: created.value.frame };
+}
+
+const PLACEMENT_OWNER = 'workflow-launch:test';
+const PLACEMENT_INCARNATION = 'incarnation:test';
 
 /**
  * Composes the operands a claim needs, the way a dispatcher would.

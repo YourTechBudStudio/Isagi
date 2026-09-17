@@ -41,7 +41,10 @@ export interface RecoverySummary {
 
 export function recoverAtStartup(deps: RecoveryDeps): Effect.Effect<RecoverySummary> {
   return Effect.gen(function* () {
-    const parked = yield* deps.runs.parkUnfinishedRuns({});
+    // `preparationsFailed` is deliberately not surfaced here yet: phase 08 owns what startup does
+    // with a run whose environment preparation was interrupted, including whether the summary grows
+    // a field for it. Reading only `parked` keeps this call honest about what it currently reports.
+    const { parked } = yield* deps.runs.parkUnfinishedRuns({});
     const reconciled = yield* deps.operations.reconcileAtStartup;
     const delivered = yield* deps.waits.reconcileWaits();
     const environmentsLost = yield* rederiveEnvironments(deps);

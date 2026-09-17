@@ -7,9 +7,14 @@ import type {
   WorkflowInvocationKind,
   WorkflowNodeKind,
   WorkflowOutcomeKind,
+  WorkflowPlacementRequestDto,
+  WorkflowPlacementSource,
   WorkflowRunPosition,
   WorkflowSegmentKind,
+  WorkflowSetupReceipt,
+  WorkflowSurfaceReceipt,
   WorkflowWaitKind,
+  WorkflowWorktreeReceipt,
 } from '@isagi/contracts';
 
 import type { RuntimeDrizzleDatabase } from '../../persistence/database.service.js';
@@ -19,6 +24,7 @@ import {
   workflowNodeExecutions,
   workflowPauseIntervals,
   workflowRunAttachments,
+  workflowRunPreparations,
   workflowRuns,
   workflowSegmentAttempts,
   workflowVersionAdoptions,
@@ -40,6 +46,14 @@ import {
   type PayloadSlot,
   type WorkflowPayloadStoreService,
 } from './payload-store.js';
+import {
+  encodePlacementRequest,
+  encodeSetupReceipt,
+  encodeSurfaceReceipt,
+  encodeWorktreeReceipt,
+  firstIncompleteStep,
+  preparationRecord,
+} from './preparations.js';
 import type {
   WorkflowAttemptRecord,
   WorkflowExecutionRecord,
@@ -48,6 +62,7 @@ import type {
   WorkflowPauseReason,
   WorkflowRunAttachmentRecord,
   WorkflowRunPlacement,
+  WorkflowRunPreparationRecord,
   WorkflowRunRecord,
   WorkflowVersionAdoptionRecord,
   WorkflowWaitRecord,
@@ -59,6 +74,7 @@ import {
   executionRecord,
   frameRecord,
   pauseIntervalRecord,
+  runPosition,
   runRecord,
   versionAdoptionRecord,
   waitRecord,
@@ -94,12 +110,36 @@ export interface CreateRunInput {
     readonly parameters?: RecordedValue | undefined;
   };
   readonly origin: WorkflowRunPlacement;
-  readonly destination: {
-    readonly worktreeId: number | null;
-    readonly worktreePath: string | null;
-    readonly surfaceId: number | null;
+  /**
+   * The placement decision, recorded before anything is allocated.
+   *
+   * A run is created *unplaced*: every `destination_*` column is null and no attachment exists until
+   * `commitEnvironmentPreparation` writes them. What is durable at creation is what was asked for
+   * and what the launch resolved for it, which is what lets a preparation that fails half way say
+   * what it was trying to do and what it had already decided.
+   */
+  readonly preparation: {
+    readonly source: WorkflowPlacementSource;
+    readonly request: WorkflowPlacementRequestDto;
+    /** What `fromRef` resolved to. Null unless the worktree choice is `create`. */
+    readonly baseCommit: string | null;
+    /** The path the workspace preflight derived. Null unless the worktree choice is `create`. */
+    readonly checkoutPath: string | null;
   };
-  readonly attachment: { readonly worktreeId: number; readonly surfaceId: number | null } | null;
+  /**
+   * The first preparation attempt, claimed in the same transaction as the run.
+   *
+   * Not a separate `claimSegment` call, and that is the point. A preparing run whose attempt was
+   * allocated a moment later would have a window in which it exists, owns real Git work about to
+   * start, and has nothing an interruption could be attributed to — so a crash inside that window
+   * would leave a run that startup recovery could see was unfinished but could not say anything
+   * honest about.
+   */
+  readonly claim: {
+    readonly owner: string;
+    readonly ownerIncarnation: string;
+    readonly input: RecordedValue;
+  };
 }
 
 /**
@@ -159,6 +199,36 @@ export interface AttemptFence {
   readonly attemptId: number;
   readonly owner: string;
   readonly ownerIncarnation: string;
+}
+
+/**
+ * One allocation preparation made, recorded under the attempt that made it.
+ *
+ * `recordedAt` is deliberately absent: the repository stamps it from the transaction's own clock,
+ * the same way every other durable timestamp here is written, so a receipt can never claim a time
+ * the write did not happen at.
+ */
+export type RecordEnvironmentReceiptInput = AttemptFence &
+  (
+    | { readonly step: 'worktree'; readonly receipt: Omit<WorkflowWorktreeReceipt, 'recordedAt'> }
+    | { readonly step: 'setup'; readonly receipt: Omit<WorkflowSetupReceipt, 'recordedAt'> }
+    | { readonly step: 'surface'; readonly receipt: Omit<WorkflowSurfaceReceipt, 'recordedAt'> }
+  );
+
+/**
+ * The destination a prepared run actually landed in.
+ *
+ * Every field is required, unlike the run record's nullable destination columns. A run reaches this
+ * transaction only once preparation has a real worktree and a real surface in hand; the columns stay
+ * nullable because "never placed" has to remain expressible for a run that failed or was cancelled
+ * before it got here.
+ */
+export interface CommitEnvironmentPreparationInput extends AttemptFence {
+  readonly destination: {
+    readonly worktreeId: number;
+    readonly worktreePath: string;
+    readonly surfaceId: number;
+  };
 }
 
 export interface CommitGraphEntryInput extends AttemptFence {
@@ -342,10 +412,20 @@ export interface SegmentIdentity {
 
 export interface WorkflowRunsRepositoryService {
   // --- lifecycle ------------------------------------------------------------
-  readonly createRun: (
-    input: CreateRunInput,
-  ) => Effect.Effect<
-    WorkflowWriteResult<{ run: WorkflowRunRecord; frame: WorkflowFrameRecord }>,
+  /**
+   * Creates a run already claimed at its `environment_preparation` segment, and not yet placed.
+   *
+   * Returns the attempt as well as the run and frame because the attempt *is* the handle: the
+   * launch hands it straight to the preparation fiber, which needs it to fence every receipt and
+   * the commit. No occupancy check happens here and `surface_busy` is never returned — nothing is
+   * being occupied yet, and the single occupancy authority is `commitEnvironmentPreparation`.
+   */
+  readonly createRun: (input: CreateRunInput) => Effect.Effect<
+    WorkflowWriteResult<{
+      run: WorkflowRunRecord;
+      frame: WorkflowFrameRecord;
+      attempt: WorkflowAttemptRecord;
+    }>,
     DatabaseError | PayloadPublishError
   >;
   readonly claimSegment: (
@@ -394,6 +474,43 @@ export interface WorkflowRunsRepositoryService {
   >;
   readonly failSegment: (
     input: FailSegmentInput,
+  ) => Effect.Effect<
+    WorkflowWriteResult<SegmentCommitOutcome>,
+    DatabaseError | PayloadPublishError
+  >;
+
+  // --- environment preparation ----------------------------------------------
+  /**
+   * Records one allocation preparation made, under the attempt fence.
+   *
+   * Receipts are **evidence, not decisions**, so this is one of the few writes that still applies
+   * under Cancel: a Cancel landing after `openWorktree` returned must still leave a receipt naming
+   * the worktree, or a cancelled preparation cannot report what exists and nothing can be cleaned
+   * up by hand. A cancelled write returns `'cancelled_evidence'` with the column and the transition
+   * both written.
+   *
+   * A `worktree` or `surface` receipt is written once. A second one is refused with
+   * `receipt_already_recorded` rather than overwriting the only record of a real allocation. Setup
+   * is the exception: a `failed` or `unknown` receipt is replaced when a retry re-runs hooks, and
+   * the superseded one survives as its own `environment_step_recorded` transition.
+   */
+  readonly recordEnvironmentReceipt: (
+    input: RecordEnvironmentReceiptInput,
+  ) => Effect.Effect<
+    WorkflowWriteResult<SegmentCommitOutcome>,
+    DatabaseError | PayloadPublishError
+  >;
+  /**
+   * Makes a destination effective, and moves the run into its graph.
+   *
+   * The one write that sets `destination_*` and the one place occupancy is enforced in-transaction.
+   * Deliberately **not** recorded under Cancel: this is the preparation write that advances the
+   * run, so it is the one Cancel stops. A cancelled preparation rests at `environment_preparation`
+   * with a null destination and its receipts intact — never with an attachment quietly occupying a
+   * surface for a run nobody can advance.
+   */
+  readonly commitEnvironmentPreparation: (
+    input: CommitEnvironmentPreparationInput,
   ) => Effect.Effect<
     WorkflowWriteResult<SegmentCommitOutcome>,
     DatabaseError | PayloadPublishError
@@ -452,9 +569,21 @@ export interface WorkflowRunsRepositoryService {
   ) => Effect.Effect<WorkflowWriteResult<{ readonly detached: boolean }>, DatabaseError>;
 
   // --- recovery -------------------------------------------------------------
+  /**
+   * One pass over every non-terminal run at startup, with two outcomes.
+   *
+   * A run mid-graph is **parked**: paused, ownership released, its running attempt marked
+   * interrupted, ready for a person to resume. A run mid-*preparation* is **failed** instead, with
+   * no pause band opened. Retry is its single re-entry path — receipts plus the adoption predicate
+   * are what make a partially prepared environment safe to re-enter, and a resumed pause would send
+   * it back through the dispatcher, which never claims this segment.
+   */
   readonly parkUnfinishedRuns: (input: {
     readonly now?: string;
-  }) => Effect.Effect<readonly number[], DatabaseError>;
+  }) => Effect.Effect<
+    { readonly parked: readonly number[]; readonly preparationsFailed: readonly number[] },
+    DatabaseError
+  >;
   /**
    * Records that the environment under these runs went away, or came back.
    *
@@ -497,6 +626,10 @@ export interface WorkflowRunsRepositoryService {
   readonly listByDestinationSurface: (
     surfaceId: number,
   ) => Effect.Effect<readonly WorkflowRunRecord[], DatabaseError>;
+  /** The placement decision and the receipts for one run, or null for a run created before this. */
+  readonly findPreparation: (
+    runId: number,
+  ) => Effect.Effect<WorkflowRunPreparationRecord | null, DatabaseError>;
   readonly findAttachment: (
     runId: number,
   ) => Effect.Effect<WorkflowRunAttachmentRecord | null, DatabaseError>;
@@ -602,19 +735,13 @@ export function makeWorkflowRunsRepository(
     createRun: (input) =>
       Effect.gen(function* () {
         const parameters = yield* publish(input.rootFrame.parameters);
+        // Both recorded values are published before the transaction opens, like every other one. A
+        // rejected create leaves unreferenced payloads, which is acceptable garbage; the reverse —
+        // a committed run referencing bytes that were never written — is what this ordering makes
+        // impossible.
+        const claimInput = yield* publish(input.claim.input);
         return yield* database.transaction('workflow_create_run', (db) => {
           const now = new Date().toISOString();
-
-          if (input.attachment?.surfaceId != null) {
-            const occupant = db
-              .select({ runId: workflowRunAttachments.runId })
-              .from(workflowRunAttachments)
-              .where(eq(workflowRunAttachments.surfaceId, input.attachment.surfaceId))
-              .get();
-            // Checked rather than left to the unique index so the caller gets the occupying run
-            // instead of a constraint violation. The index still backs it under a race.
-            if (occupant) return rejected<never>({ kind: 'surface_busy', runId: occupant.runId });
-          }
 
           // The run and its root frame reference each other, so one of them is written first with a
           // placeholder. `terminal` is the honest placeholder — it names no segment — and it is
@@ -633,9 +760,12 @@ export function makeWorkflowRunsRepository(
               originSurfaceId: input.origin.surfaceId,
               originPaneId: input.origin.paneId,
               originAgentSessionId: input.origin.agentSessionId,
-              destinationWorktreeId: input.destination.worktreeId,
-              destinationWorktreePath: input.destination.worktreePath,
-              destinationSurfaceId: input.destination.surfaceId,
+              // Unplaced by construction. A destination becomes effective in exactly one
+              // transaction, `commitEnvironmentPreparation`, and until it runs the honest answer to
+              // "where does this run land" is "not decided yet, here is what was asked for".
+              destinationWorktreeId: null,
+              destinationWorktreePath: null,
+              destinationSurfaceId: null,
               createdAt: now,
               updatedAt: now,
             })
@@ -660,22 +790,58 @@ export function makeWorkflowRunsRepository(
             .returning()
             .get();
 
-          const position: WorkflowRunPosition = { kind: 'graph_entry', frameId: frameRow.id };
-          db.update(workflowRuns)
-            .set({ positionJson: encodeRunPosition(position), activeFrameId: frameRow.id })
-            .where(eq(workflowRuns.id, runRow.id))
+          db.insert(workflowRunPreparations)
+            .values({
+              runId: runRow.id,
+              source: input.preparation.source,
+              requestJson: encodePlacementRequest(input.preparation.request),
+              baseCommit: input.preparation.baseCommit,
+              checkoutPath: input.preparation.checkoutPath,
+              createdAt: now,
+              updatedAt: now,
+            })
             .run();
 
-          if (input.attachment) {
-            db.insert(workflowRunAttachments)
-              .values({
-                runId: runRow.id,
-                worktreeId: input.attachment.worktreeId,
-                surfaceId: input.attachment.surfaceId,
-                attachedAt: now,
-              })
-              .run();
-          }
+          // Preparation is a segment like any other, so its first try is an ordinary attempt: same
+          // table, same fence, same retry accounting, same inspector. It carries no execution
+          // because no node is running — the run has not entered its graph yet.
+          const claimColumns = slotColumns(claimInput);
+          const attemptRow = db
+            .insert(workflowSegmentAttempts)
+            .values({
+              runId: runRow.id,
+              frameId: frameRow.id,
+              executionId: null,
+              segmentKind: 'environment_preparation',
+              segmentRef: null,
+              attemptIndex: 1,
+              artifactHash: input.artifactHash,
+              status: 'running',
+              invocationKind: 'initial',
+              startedAt: now,
+              endCertainty: 'observed',
+              inputInline: claimColumns.inline,
+              inputRef: claimColumns.ref,
+            })
+            .returning()
+            .get();
+
+          const position: WorkflowRunPosition = {
+            kind: 'environment_preparation',
+            frameId: frameRow.id,
+          };
+          db.update(workflowRuns)
+            .set({
+              positionJson: encodeRunPosition(position),
+              activeFrameId: frameRow.id,
+              status: 'running',
+              owner: input.claim.owner,
+              ownerIncarnation: input.claim.ownerIncarnation,
+              activeAttemptId: attemptRow.id,
+              updatedAt: now,
+            })
+            .where(eq(workflowRuns.id, runRow.id))
+            .run();
 
           db.insert(workflowVersionAdoptions)
             .values({
@@ -696,12 +862,26 @@ export function makeWorkflowRunsRepository(
                 frameId: frameRow.id,
                 artifactHash: input.artifactHash,
               },
+              // The claim is atomic with creation, so the dispatch is too. Note the consequence:
+              // `node_dispatched` no longer implies "the dispatcher claimed this" — the dispatcher
+              // deliberately never claims the preparation segment. Anything inferring a claim from
+              // this transition kind has to read the segment kind as well.
+              {
+                kind: 'node_dispatched',
+                frameId: frameRow.id,
+                executionId: null,
+                attemptId: attemptRow.id,
+                artifactHash: input.artifactHash,
+              },
             ],
             now,
           );
 
           const run = runRecord(findRunRow(db, runRow.id)!);
-          return committed({ run, frame: frameRecord(frameRow) }, transitions);
+          return committed(
+            { run, frame: frameRecord(frameRow), attempt: attemptRecord(attemptRow) },
+            transitions,
+          );
         });
       }),
 
@@ -731,15 +911,26 @@ export function makeWorkflowRunsRepository(
           if (!row.environmentAvailable) {
             return rejected<never>({ kind: 'not_claimable', reason: 'environment_unavailable' });
           }
+          // Decoded before the placement guard, not after, because the guard's answer depends on
+          // it: a preparing run has no destination yet by construction, and checking a null
+          // placement for liveness would reject every preparation claim — the run could never be
+          // retried at all.
+          const run = runRecord(row);
+
           // The live re-check. `environment_available` is a cache for cheap filtering, never the
           // authority: a missed deletion notification costs one rejected claim here rather than a
           // callback running against a worktree that is gone. Reading the owner's rows is read
           // composition; this repository never writes them.
-          if (!placementIsLive(db, row.destinationWorktreeId, row.destinationSurfaceId)) {
+          //
+          // Skipped only for `environment_preparation`, whose whole job is to *establish* the
+          // placement this guard checks. Preparation re-checks liveness per step instead, against
+          // the rows it is about to act on rather than against a destination that does not exist.
+          if (
+            run.position.kind !== 'environment_preparation' &&
+            !placementIsLive(db, row.destinationWorktreeId, row.destinationSurfaceId)
+          ) {
             return rejected<never>({ kind: 'not_claimable', reason: 'placement_missing' });
           }
-
-          const run = runRecord(row);
 
           // The prepared input is checked before anything is allocated, so a stale preparation costs
           // one rejected claim and leaves no attempt, no ownership, no pending invocation kind and no
@@ -1104,7 +1295,9 @@ export function makeWorkflowRunsRepository(
               ],
             };
           },
-          { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          {
+            cancelledEvidence: { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          },
         );
       }),
 
@@ -1188,7 +1381,9 @@ export function makeWorkflowRunsRepository(
 
             return { value: 'advanced' as SegmentCommitOutcome, drafts };
           },
-          { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          {
+            cancelledEvidence: { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          },
         );
       }),
 
@@ -1275,7 +1470,12 @@ export function makeWorkflowRunsRepository(
               ],
             };
           },
-          { producerOutput: output, producerArtifactHash: input.outputArtifactHash },
+          {
+            cancelledEvidence: {
+              producerOutput: output,
+              producerArtifactHash: input.outputArtifactHash,
+            },
+          },
         );
       }),
 
@@ -1319,7 +1519,9 @@ export function makeWorkflowRunsRepository(
               ],
             };
           },
-          { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          {
+            cancelledEvidence: { producerOutput, producerArtifactHash: input.producerArtifactHash },
+          },
         );
       }),
 
@@ -1390,7 +1592,12 @@ export function makeWorkflowRunsRepository(
             drafts.push(...closeOpenPause(db, ctx.run.id, ctx.now));
             return { value: 'advanced' as SegmentCommitOutcome, drafts };
           },
-          { producerOutput: output, producerArtifactHash: input.outputArtifactHash },
+          {
+            cancelledEvidence: {
+              producerOutput: output,
+              producerArtifactHash: input.outputArtifactHash,
+            },
+          },
         );
       }),
 
@@ -1446,6 +1653,140 @@ export function makeWorkflowRunsRepository(
           drafts.push(...closeOpenPause(db, ctx.run.id, ctx.now));
           return { value: 'advanced' as SegmentCommitOutcome, drafts };
         });
+      }),
+
+    recordEnvironmentReceipt: (input) =>
+      Effect.gen(function* () {
+        // One plan, used on both paths. Passing it as `recordUnderCancel` as well as `advance` is
+        // what makes a receipt survive a Cancel that lands after the allocation already happened —
+        // and, because the plan can refuse, what stops a duplicate receipt overwriting the first on
+        // either path.
+        const plan = (
+          db: RuntimeDrizzleDatabase,
+          ctx: OwnedContext,
+        ): CommitPlan<SegmentCommitOutcome> | WorkflowWriteResult<SegmentCommitOutcome> => {
+          const row = db
+            .select()
+            .from(workflowRunPreparations)
+            .where(eq(workflowRunPreparations.runId, ctx.run.id))
+            .get();
+          // No preparation row means this run was never preparing, so there is no step to record
+          // against. Reported as a position mismatch rather than a missing row because that is what
+          // it means to the caller: it is holding an attempt for a segment this run is not at.
+          if (!row) return rejected<SegmentCommitOutcome>({ kind: 'position_mismatch' });
+
+          if (input.step === 'worktree' && row.worktreeReceiptJson !== null) {
+            return rejected<SegmentCommitOutcome>({
+              kind: 'receipt_already_recorded',
+              step: 'worktree',
+            });
+          }
+          if (input.step === 'surface' && row.surfaceReceiptJson !== null) {
+            return rejected<SegmentCommitOutcome>({
+              kind: 'receipt_already_recorded',
+              step: 'surface',
+            });
+          }
+
+          // Stamped here, from the transaction's clock, so the receipt cannot claim a moment the
+          // write did not happen at.
+          const receipt = { ...input.receipt, recordedAt: ctx.now };
+          const columns =
+            input.step === 'worktree'
+              ? { worktreeReceiptJson: encodeWorktreeReceipt(receipt as WorkflowWorktreeReceipt) }
+              : input.step === 'setup'
+                ? { setupReceiptJson: encodeSetupReceipt(receipt as WorkflowSetupReceipt) }
+                : { surfaceReceiptJson: encodeSurfaceReceipt(receipt as WorkflowSurfaceReceipt) };
+          db.update(workflowRunPreparations)
+            .set({ ...columns, updatedAt: ctx.now })
+            .where(eq(workflowRunPreparations.runId, ctx.run.id))
+            .run();
+
+          return {
+            value: 'advanced' as SegmentCommitOutcome,
+            drafts: [
+              {
+                kind: 'environment_step_recorded',
+                frameId: ctx.attempt.frameId,
+                attemptId: ctx.attempt.id,
+                artifactHash: ctx.attempt.artifactHash,
+                // Inline, and never decoded on the way back out. A superseded setup receipt lives
+                // on only here, which is what lets history show that hooks failed once and then
+                // succeeded rather than only the surviving column.
+                detail: { inline: JSON.stringify({ step: input.step, receipt }), ref: null },
+              },
+            ],
+          };
+        };
+        return yield* ownedCommit(database, 'workflow_record_environment_receipt', input, plan, {
+          recordUnderCancel: plan,
+        });
+      }),
+
+    commitEnvironmentPreparation: (input) =>
+      ownedCommit(database, 'workflow_commit_environment_preparation', input, (db, ctx) => {
+        if (ctx.run.position.kind !== 'environment_preparation') {
+          return rejected<SegmentCommitOutcome>({ kind: 'position_mismatch' });
+        }
+
+        // Checked rather than left to the unique index so the caller gets the occupying run instead
+        // of a constraint violation. `workflow_run_attachments_surface_unique` still backs it under
+        // a race, and a violation surfacing as a `DatabaseError` is the correct outcome there — the
+        // check and the insert are in one transaction, so losing that race is a fault, not a state.
+        const occupant = db
+          .select({ runId: workflowRunAttachments.runId })
+          .from(workflowRunAttachments)
+          .where(eq(workflowRunAttachments.surfaceId, input.destination.surfaceId))
+          .get();
+        if (occupant) {
+          return rejected<SegmentCommitOutcome>({ kind: 'surface_busy', runId: occupant.runId });
+        }
+
+        db.update(workflowRuns)
+          .set({
+            destinationWorktreeId: input.destination.worktreeId,
+            destinationWorktreePath: input.destination.worktreePath,
+            destinationSurfaceId: input.destination.surfaceId,
+            updatedAt: ctx.now,
+          })
+          .where(eq(workflowRuns.id, ctx.run.id))
+          .run();
+
+        db.insert(workflowRunAttachments)
+          .values({
+            runId: ctx.run.id,
+            worktreeId: input.destination.worktreeId,
+            surfaceId: input.destination.surfaceId,
+            attachedAt: ctx.now,
+          })
+          .run();
+
+        finishAttempt(db, ctx, 'succeeded');
+        // The root frame is still `initializing`: `graph_entry` is what enters it, unchanged by any
+        // of this. Preparation's whole contribution is that the destination exists by the time it
+        // runs.
+        setPosition(db, ctx.run.id, {
+          position: { kind: 'graph_entry', frameId: ctx.run.activeFrameId! },
+          activeFrameId: ctx.run.activeFrameId,
+          status: 'ready',
+          now: ctx.now,
+        });
+
+        return {
+          value: 'advanced' as SegmentCommitOutcome,
+          drafts: [
+            {
+              kind: 'environment_prepared',
+              frameId: ctx.attempt.frameId,
+              attemptId: ctx.attempt.id,
+              artifactHash: ctx.attempt.artifactHash,
+              detail: {
+                inline: JSON.stringify({ destination: input.destination }),
+                ref: null,
+              },
+            },
+          ],
+        };
       }),
 
     captureProducerOutput: (input) =>
@@ -1765,30 +2106,115 @@ export function makeWorkflowRunsRepository(
           .where(inArray(workflowRuns.status, ['ready', 'running', 'waiting', 'blocked']))
           .all();
         const parked: number[] = [];
+        const preparationsFailed: number[] = [];
         for (const row of rows) {
           // No owner predicate: clearing ownership is what this is *for*. A previous incarnation's
           // claim is exactly what has to be released.
-          const drafts = openPause(db, row.id, 'runtime_restart', now);
-          if (row.activeAttemptId !== null) {
-            const attempt = db
+          const activeAttempt =
+            row.activeAttemptId === null
+              ? undefined
+              : db
+                  .select()
+                  .from(workflowSegmentAttempts)
+                  .where(eq(workflowSegmentAttempts.id, row.activeAttemptId))
+                  .get();
+          const interrupted = activeAttempt?.status === 'running' ? activeAttempt : undefined;
+
+          if (runPosition(row.id, row.positionJson).kind === 'environment_preparation') {
+            // Failed, not parked, and no pause band opened. A parked preparation would wait for a
+            // Resume that puts it back in the dispatcher's hands — and the dispatcher deliberately
+            // never claims this segment, so it would wait forever. Retry is the single re-entry
+            // path, and the receipts plus the adoption predicate are what make re-entry safe.
+            const preparation = db
               .select()
-              .from(workflowSegmentAttempts)
-              .where(eq(workflowSegmentAttempts.id, row.activeAttemptId))
+              .from(workflowRunPreparations)
+              .where(eq(workflowRunPreparations.runId, row.id))
               .get();
-            if (attempt?.status === 'running') {
-              // Interrupted, not failed: nobody observed how it ended, and inventing an end would
-              // be a claim the runtime cannot support. Its recorded operands stay inspectable and
-              // reusable.
+            if (interrupted) {
+              // Interrupted, not failed, at the attempt level: nobody observed how it ended. The
+              // step names the first allocation still outstanding, which is what a person reading
+              // this needs to know and what a Retry resumes from. Absent a preparation row — which
+              // `createRun` writes in the same transaction as the run, so this is corruption rather
+              // than a state — no step is invented.
+              const detail = preparation
+                ? {
+                    inline: JSON.stringify({
+                      step: firstIncompleteStep(preparationRecord(preparation)),
+                      reason: 'interrupted',
+                    }),
+                    ref: null,
+                  }
+                : null;
+              const detailColumns = slotColumns(detail);
               db.update(workflowSegmentAttempts)
-                .set({ status: 'interrupted', endCertainty: 'unknown' })
-                .where(eq(workflowSegmentAttempts.id, attempt.id))
+                .set({
+                  status: 'interrupted',
+                  endCertainty: 'unknown',
+                  failureDetailInline: detailColumns.inline,
+                  failureDetailRef: detailColumns.ref,
+                })
+                .where(eq(workflowSegmentAttempts.id, interrupted.id))
                 .run();
-              if (attempt.executionId !== null) {
-                db.update(workflowNodeExecutions)
-                  .set({ endCertainty: 'unknown' })
-                  .where(eq(workflowNodeExecutions.id, attempt.executionId))
-                  .run();
-              }
+            }
+            db.update(workflowRuns)
+              .set({
+                status: 'failed',
+                owner: null,
+                ownerIncarnation: null,
+                activeAttemptId: null,
+                failureCode: 'environment_preparation_failed',
+                failureMessage:
+                  'The runtime restarted while this run was preparing its environment.',
+                // Null when a Retry crashed between adopting its pin and allocating its claim.
+                // There is genuinely no attempt to point at, and pointing at an older closed one
+                // would attribute this interruption to a try that ended for another reason.
+                failureAttemptId: interrupted?.id ?? null,
+                endedAt: now,
+                updatedAt: now,
+              })
+              .where(eq(workflowRuns.id, row.id))
+              .run();
+            appendTransitions(
+              db,
+              row.id,
+              [
+                {
+                  kind: 'segment_failed',
+                  frameId: interrupted?.frameId ?? row.activeFrameId,
+                  attemptId: interrupted?.id ?? null,
+                  artifactHash: interrupted?.artifactHash ?? row.artifactHash,
+                },
+                {
+                  kind: 'control_applied',
+                  detail: {
+                    inline: JSON.stringify({
+                      control: 'runtime_restart',
+                      preparationFailed: true,
+                    }),
+                    ref: null,
+                  },
+                },
+              ],
+              now,
+            );
+            preparationsFailed.push(row.id);
+            continue;
+          }
+
+          const drafts = openPause(db, row.id, 'runtime_restart', now);
+          if (interrupted) {
+            // Interrupted, not failed: nobody observed how it ended, and inventing an end would
+            // be a claim the runtime cannot support. Its recorded operands stay inspectable and
+            // reusable.
+            db.update(workflowSegmentAttempts)
+              .set({ status: 'interrupted', endCertainty: 'unknown' })
+              .where(eq(workflowSegmentAttempts.id, interrupted.id))
+              .run();
+            if (interrupted.executionId !== null) {
+              db.update(workflowNodeExecutions)
+                .set({ endCertainty: 'unknown' })
+                .where(eq(workflowNodeExecutions.id, interrupted.executionId))
+                .run();
             }
           }
           db.update(workflowRuns)
@@ -1819,7 +2245,7 @@ export function makeWorkflowRunsRepository(
           );
           parked.push(row.id);
         }
-        return parked;
+        return { parked, preparationsFailed };
       }),
 
     applyEnvironmentAvailability: (input) =>
@@ -2019,6 +2445,16 @@ export function makeWorkflowRunsRepository(
           .map(runRecord),
       ),
 
+    findPreparation: (runId) =>
+      database.use('workflow_find_preparation', (db) => {
+        const row = db
+          .select()
+          .from(workflowRunPreparations)
+          .where(eq(workflowRunPreparations.runId, runId))
+          .get();
+        return row ? preparationRecord(row) : null;
+      }),
+
     findAttachment: (runId) =>
       database.use('workflow_find_attachment', (db) => {
         const row = db
@@ -2202,6 +2638,11 @@ interface CommitPlan<A> {
  * permission to reach its durable boundary, and revision guards have no say at all — an already
  * claimed attempt's outcome is structurally incapable of being dropped because a newer control
  * arrived while it was running.
+ *
+ * `underCancel` is the third thing, and it is narrow on purpose: Cancel revokes permission to
+ * *advance*, never permission to *record*. A commit that produced durable evidence before the
+ * Cancel landed — a producer's output, a receipt naming a worktree that now genuinely exists —
+ * hands that evidence over here, and it is written while the graph stays exactly where it was.
  */
 function ownedCommit<A>(
   database: TransactionalDatabase,
@@ -2211,9 +2652,23 @@ function ownedCommit<A>(
     db: RuntimeDrizzleDatabase,
     ctx: OwnedContext,
   ) => CommitPlan<A> | WorkflowWriteResult<A>,
-  cancelledEvidence?: {
-    readonly producerOutput: PayloadSlot | null;
-    readonly producerArtifactHash: string;
+  underCancel?: {
+    readonly cancelledEvidence?: {
+      readonly producerOutput: PayloadSlot | null;
+      readonly producerArtifactHash: string;
+    };
+    /**
+     * Evidence to persist even though the run is cancelled. Runs before the attempt is closed.
+     *
+     * Deliberately the *same* function type as `advance`, so the caller can pass one plan for both
+     * paths rather than maintaining a second, narrower copy that cannot refuse. Refusal matters
+     * here: a duplicate worktree receipt arriving under Cancel must not overwrite the only record
+     * of a real allocation, and a plan that could only return drafts would have no way to say so.
+     */
+    readonly recordUnderCancel?: (
+      db: RuntimeDrizzleDatabase,
+      ctx: OwnedContext,
+    ) => CommitPlan<A> | WorkflowWriteResult<A>;
   },
 ): Effect.Effect<WorkflowWriteResult<A>, DatabaseError> {
   return database.transaction(operation, (db) => {
@@ -2245,13 +2700,24 @@ function ownedCommit<A>(
       // Cancel revokes permission to advance, never permission to record. The candidate result is
       // kept on the attempt as cancelled-attempt evidence, no state is reduced, no position moves,
       // and the run stays cancelled.
-      if (cancelledEvidence) {
+      if (underCancel?.cancelledEvidence) {
         captureProducer(
           db,
           ctx.attempt.id,
-          cancelledEvidence.producerOutput,
-          cancelledEvidence.producerArtifactHash,
+          underCancel.cancelledEvidence.producerOutput,
+          underCancel.cancelledEvidence.producerArtifactHash,
         );
+      }
+      let evidenceDrafts: readonly TransitionDraft[] = [];
+      if (underCancel?.recordUnderCancel) {
+        const plan = underCancel.recordUnderCancel(db, ctx);
+        // A refusal under Cancel obeys the same rule a refusal on the advancing path does: write
+        // nothing and say so. The attempt is left running on a cancelled run, which is correct —
+        // this branch is reachable only from a defect, since every preparation step reads its own
+        // receipt before acting, and inventing cleanup for an unreachable state would hide the
+        // signal the caller is meant to halt on.
+        if ('ok' in plan) return plan;
+        evidenceDrafts = plan.drafts;
       }
       db.update(workflowSegmentAttempts)
         .set({ status: 'cancelled', endedAt: now, endCertainty: 'observed' })
@@ -2265,6 +2731,9 @@ function ownedCommit<A>(
         db,
         ctx.run.id,
         [
+          // Evidence first: what happened is recorded before the control that stopped anything more
+          // from happening, so history reads in the order the facts occurred.
+          ...evidenceDrafts,
           {
             kind: 'control_applied',
             frameId: ctx.attempt.frameId,
@@ -2501,6 +2970,15 @@ function deliverWaitInternal(
 /** The run's *current* segment, derived from its saved position. */
 function segmentFromPosition(position: WorkflowRunPosition): SegmentIdentity | null {
   switch (position.kind) {
+    case 'environment_preparation':
+      // Frame-scoped like every other segment, so attempts, retry counting and the inspector all
+      // work unchanged — but with no execution, because no node runs before the environment exists.
+      return {
+        frameId: position.frameId,
+        executionId: null,
+        segmentKind: 'environment_preparation',
+        segmentRef: null,
+      };
     case 'graph_entry':
       return {
         frameId: position.frameId,

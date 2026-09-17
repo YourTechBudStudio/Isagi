@@ -47,6 +47,10 @@ interface ChangeSet {
  */
 const relations: Record<WorkflowTransitionKind, { readonly parentExecutionOfFrame: boolean }> = {
   run_started: { parentExecutionOfFrame: false },
+  // Preparation is frame-scoped and has no execution, so its transitions name every record they
+  // change through the frame id they already carry.
+  environment_step_recorded: { parentExecutionOfFrame: false },
+  environment_prepared: { parentExecutionOfFrame: false },
   graph_entered: { parentExecutionOfFrame: false },
   node_dispatched: { parentExecutionOfFrame: false },
   wait_armed: { parentExecutionOfFrame: false },

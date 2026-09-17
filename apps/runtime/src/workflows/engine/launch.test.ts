@@ -295,3 +295,64 @@ test('a surface that already holds a run refuses the next launch, terminal run i
     );
   });
 });
+
+test('an occupant that appears after the pre-check leaves a failed run, never a stranded one', async () => {
+  await withHarness(async (harness) => {
+    const counters: Counters = { command: 0, validate: 0, init: 0 };
+    harness.publish({
+      workflowKey: 'launchable',
+      version: '1',
+      definition: launchableWorkflow(counters),
+    });
+    const first = await harness.launch({ workflowKey: 'launchable', inputs: { topic: 'first' } });
+
+    // The race the commit's occupancy check exists for, made deterministic: the pre-check reads
+    // runs *by destination surface*, the commit reads the *attachment* table, and between the two
+    // a concurrent launch can occupy the surface. Detaching the first run's destination while
+    // leaving its attachment reproduces exactly that divergence — the pre-check sees a free
+    // surface, the commit sees the occupant.
+    harness.fixture.client
+      .prepare('UPDATE workflow_runs SET destination_surface_id = NULL WHERE id = ?')
+      .run(first.id);
+
+    const refused = rejectionOf(
+      await harness.launchExit({ workflowKey: 'launchable', inputs: { topic: 'second' } }),
+    );
+    assert.equal(refused.code, 'workflow_surface_attached');
+    assert.equal(refused.activeWorkflowRunId, first.id, 'and it names the run holding the surface');
+
+    // The refused launch did create a run, because it had already claimed one — and that run is
+    // *failed*, not left owned and running at a segment the dispatcher never claims.
+    const strandedId = refused.workflowRunId!;
+    assert.notEqual(strandedId, first.id);
+    const stranded = await harness.runOf(strandedId);
+    assert.equal(stranded.status, 'failed');
+    assert.equal(stranded.failureCode, 'environment_preparation_failed');
+    assert.equal(stranded.owner, null, 'ownership was released');
+    assert.equal(stranded.activeAttemptId, null);
+    assert.ok(stranded.endedAt);
+    assert.deepEqual(stranded.destination, {
+      worktreeId: null,
+      worktreePath: null,
+      surfaceId: null,
+    });
+    assert.equal(
+      await run(harness.fixture.runs.findAttachment(strandedId)),
+      null,
+      'and it occupies nothing',
+    );
+
+    const attempt = (await run(harness.fixture.runs.findAttempt(stranded.failureAttemptId!)))!;
+    assert.equal(attempt.segmentKind, 'environment_preparation');
+    assert.equal(attempt.status, 'failed');
+    assert.deepEqual(await run(harness.fixture.payloads.resolve(attempt.failureDetail!)), {
+      step: 'commit',
+      reason: 'surface_busy',
+      surfaceId: harness.placement.surfaceId,
+      occupyingRunId: first.id,
+    });
+
+    // Nothing is waiting for it: the dispatcher has no claimable run left.
+    assert.equal(await harness.drain(), 0);
+  });
+});

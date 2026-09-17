@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { WorkflowWriteResult } from './outcomes.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -27,30 +28,14 @@ function rejection<A>(result: WorkflowWriteResult<A>) {
 async function insideCallback(fixture: WorkflowPersistenceFixture) {
   fixture.seedArtifact(PIN);
   const placement = fixture.seedPlacement();
-  const created = value(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: 'fixture',
-        title: 'Fixture',
-        rootGraphKey: 'root',
-        artifactHash: PIN,
-        rootFrame: { graphKey: 'root' },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Fixture',
+    rootGraphKey: 'root',
+    artifactHash: PIN,
+    rootFrame: { graphKey: 'root' },
+    placement,
+  });
   const entry = value(
     await run(
       fixture.runs.claimSegment({

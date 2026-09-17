@@ -133,10 +133,13 @@ test('a root init failure is a retained, retryable segment — not a launch that
     const attempts = await run(harness.fixture.runs.listAttemptsForFrame(frame.id));
     assert.deepEqual(
       attempts.map((attempt) => [attempt.segmentKind, attempt.attemptIndex, attempt.status]),
-      [['graph_entry', 1, 'failed']],
+      [
+        ['environment_preparation', 1, 'succeeded'],
+        ['graph_entry', 1, 'failed'],
+      ],
     );
     assert.equal(
-      attempts[0]!.producerOutput,
+      attempts[1]!.producerOutput,
       null,
       'graph entry captures no operand: both its callbacks are pure and commit atomically with it',
     );

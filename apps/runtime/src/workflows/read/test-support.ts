@@ -7,6 +7,7 @@ import type { RuntimeEvent } from '@isagi/contracts';
 import type { RuntimeEventBusService } from '../../runtime-events/event-bus.js';
 import type { WorkflowWriteResult } from '../persistence/outcomes.js';
 import {
+  createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -73,30 +74,14 @@ export async function startRun(
   fixture.seedArtifact(PIN_A);
   fixture.seedArtifact(PIN_B);
   const placement = fixture.seedPlacement();
-  const created = value(
-    await run(
-      fixture.runs.createRun({
-        workflowKey: options.workflowKey ?? 'fixture',
-        title: options.title ?? 'Fixture run',
-        rootGraphKey: 'root',
-        artifactHash: PIN_A,
-        rootFrame: { graphKey: 'root', parameters: { value: { topic: 'graphs' } } },
-        origin: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-          paneId: null,
-          agentSessionId: null,
-        },
-        destination: {
-          worktreeId: placement.worktreeId,
-          worktreePath: '/repo/fixture',
-          surfaceId: placement.surfaceId,
-        },
-        attachment: { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
-      }),
-    ),
-  );
+  const created = await createPlacedRun(fixture, {
+    workflowKey: options.workflowKey ?? 'fixture',
+    title: options.title ?? 'Fixture run',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root', parameters: { value: { topic: 'graphs' } } },
+    placement,
+  });
   return { runId: created.run.id, rootFrameId: created.frame.id, placement };
 }
 
