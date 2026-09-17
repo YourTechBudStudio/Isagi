@@ -109,6 +109,11 @@ export function runWithLiveWorkspace<A, E>(
     RuntimeDatabaseService | WorkspaceRepositoryService | WorkspaceService
   >,
 ) {
+  // Deliberately *not* canonicalized here. `os.tmpdir()` is a symlink on macOS, so this root is a
+  // genuine instance of the case the product has to handle, and `makeTestDataDirectory` resolves it
+  // through the same derivation the runtime uses. Normalizing it in the fixture would make the one
+  // test that checks Isagi's paths against Git's pass for the fixture's reason rather than the
+  // product's.
   const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
   return Effect.runPromise(
     build.pipe(Effect.provide(liveWorkspaceLayer(dataRoot, options))),

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Queue } from 'effect';
+import { Context, Effect, Fiber, Layer, Queue } from 'effect';
 
 import type { WorkflowLaunchOrigin, WorkflowPlacementRequestDto } from '@isagi/contracts';
 
@@ -22,7 +22,7 @@ import { makeControls, type ControlResult } from './controls.js';
 import { makeDispatcher, type DrainSummary } from './dispatcher.js';
 import type { PlacementInfrastructureError } from './environment/placement.js';
 import { prepareEnvironment } from './environment/preparation.js';
-import type { PreparationContext } from './environment/types.js';
+import type { PreparationContext, PreparationDeps } from './environment/types.js';
 import { listWorkflowDescriptors, startWorkflow, type DescriptorListing } from './launch.js';
 import { recoverAtStartup } from './recovery.js';
 
@@ -133,6 +133,10 @@ export const WorkflowEngineLive = Layer.scoped(
       reconcileWait: waits.reconcileWait,
     });
 
+    // The layer's own scope, captured so preparation can be forked into it rather than into the
+    // request fiber. See `runPreparation` below for why that distinction is the whole point.
+    const engineScope = yield* Effect.scope;
+
     const launchDeps = {
       runs,
       registry,
@@ -146,17 +150,35 @@ export const WorkflowEngineLive = Layer.scoped(
       // that work" has to mean one thing, or a claim this process holds looks abandoned to it.
       ownerIncarnation: operations.incarnationId,
     };
+    const prepDeps: PreparationDeps = {
+      runs,
+      workspace,
+      workspaceService,
+      surfaceRepository,
+      surfaces,
+      owner,
+      ownerIncarnation: operations.incarnationId,
+      poke,
+    };
+
     /**
-     * Preparation, run where the engine can account for it.
+     * Preparation, forked into the engine's scope and then awaited.
      *
-     * Phase 07 forks this into the engine scope and joins the fiber, per program design §3.6. Today
-     * it is the phase-06 stand-in and runs inline, which is behaviourally identical for the only
-     * placements it can perform — nothing it does outlives the call.
+     * Forking rather than running inline is what stops a dropped client connection from
+     * interrupting `git worktree add` or a setup hook half way: the request fiber may be
+     * interrupted, but the work belongs to the engine, which outlives any one request. The join is
+     * what makes the launch request block until the environment exists, which is the behaviour the
+     * palette already has for `openWorktree`.
+     *
+     * The fiber is deliberately **interruptible**, the same posture as the dispatcher worker.
+     * Runtime shutdown closes this scope and interrupts it, and the residue that leaves — a
+     * checkout with no receipt — is exactly what the adoption predicate and startup recovery exist
+     * to handle. Nothing here is wrapped in `Effect.uninterruptible`: an uninterruptible hook could
+     * hold shutdown for its entire timeout.
      */
     const runPreparation = (ctx: PreparationContext) =>
-      prepareEnvironment(
-        { runs, workspace, owner, ownerIncarnation: operations.incarnationId, poke },
-        ctx,
+      Effect.forkIn(prepareEnvironment(prepDeps, ctx), engineScope).pipe(
+        Effect.flatMap(Fiber.join),
       );
 
     const controls = makeControls({

@@ -3,11 +3,23 @@ import { createHash } from 'node:crypto';
 import type { WorkflowStructureDescriptor } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Exit, Scope } from 'effect';
 
-import type { WorkflowLoadFailureReason, WorkflowPlacementRequestDto } from '@isagi/contracts';
+import type {
+  OpenWorktreeInput,
+  OpenWorktreeOutput,
+  WorkflowLoadFailureReason,
+  WorkflowPlacementRequestDto,
+  WorktreeSetupResult,
+} from '@isagi/contracts';
 
 import { DatabaseError } from '../../persistence/index.js';
 import type { InternalRuntimeEvent } from '../../runtime-events/internal-event-bus.js';
-import type { WorkspaceServiceError } from '../../workspace/workspace.service.js';
+import { duplicateSafeTitle, SurfaceError, validateSurfaceTitle } from '../../surfaces/index.js';
+import type {
+  CreateSinglePaneSurfaceInput,
+  CreateSinglePaneSurfaceOutput,
+} from '../../surfaces/index.js';
+import type { SurfaceServiceError } from '../../surfaces/surfaces.service.js';
+import { WorkspaceError, type WorkspaceServiceError } from '../../workspace/workspace.service.js';
 import {
   makeWorkflowOperationService,
   type WorkflowOperationServiceShape,
@@ -17,7 +29,11 @@ import {
   makeFakeAdapterState,
   type FakeAdapterState,
 } from '../operations/test-support.js';
-import type { WorkflowArtifactRecord, WorkflowRunRecord } from '../persistence/records.js';
+import type {
+  WorkflowArtifactRecord,
+  WorkflowRunPreparationRecord,
+  WorkflowRunRecord,
+} from '../persistence/records.js';
 import {
   makeWorkflowPersistenceFixture,
   run,
@@ -35,9 +51,10 @@ import { makeWaitResolver, type WaitResolver } from '../waits/resolver.js';
 import { makeControls } from './controls.js';
 import { makeDispatcher, type Dispatcher } from './dispatcher.js';
 import { prepareEnvironment } from './environment/preparation.js';
-import type { PreparationContext } from './environment/types.js';
+import type { PreparationContext, PreparationDeps } from './environment/types.js';
 import { startWorkflow, type LaunchDeps } from './launch.js';
 import { recoverAtStartup } from './recovery.js';
+import type { SegmentOutcome } from './segments/shared.js';
 
 /**
  * A whole workflow runtime, minus the parts that would make a test a integration-with-the-world test.
@@ -69,8 +86,13 @@ export interface EngineHarness {
    * environments cannot quietly move the default one out from under the others.
    */
   readonly seedPlacement: () => Placement;
-  /** Make the next call to one named commit fail and roll back, exactly as a crash would. */
-  readonly crashNext: (commit: CommitName) => void;
+  /**
+   * Make a call to one named commit fail and roll back, exactly as a crash would.
+   *
+   * `skip` lets the first N calls through first, which is how a test lands a crash *between* two
+   * writes that share a name — preparation's three receipts being the case that needs it.
+   */
+  readonly crashNext: (commit: CommitName, skip?: number) => void;
   /**
    * Make the next artifact resolution fail, as an unverified or tampered build does.
    *
@@ -101,8 +123,21 @@ export interface EngineHarness {
     readonly origin?: { readonly worktreeId: number; readonly surfaceId: number };
     readonly request?: WorkflowPlacementRequestDto;
   }) => Promise<Exit.Exit<WorkflowRunRecord, unknown>>;
-  /** The owning-service seam: the preflight double, and the call log a rejection asserts against. */
+  /** The owning-service seam: the doubles, the call log, and the deletions log that must stay empty. */
   readonly owning: ReturnType<typeof owningServices>;
+  /** The durable preparation record: what was requested, and what this launch actually allocated. */
+  readonly preparationOf: (runId: number) => Promise<WorkflowRunPreparationRecord | null>;
+  /**
+   * Re-enters preparation the way Retry will, through the real transactions.
+   *
+   * **Phase 08 owns the real control, and owns re-pointing every caller of this at it.** The
+   * sequence below is deliberately the one `controls.retry` will perform at this position — adopt
+   * the pin against the failed position and a released owner, re-read, claim with the recorded
+   * decision and its receipts — minus the artifact re-resolution, which belongs to the control and
+   * not to the segment. A helper that quietly diverges from the control it stands in for is the
+   * failure this note exists to prevent: when phase 08 lands, confirm the two match and delete this.
+   */
+  readonly retryPreparation: (runId: number) => Promise<SegmentOutcome>;
   readonly drain: () => Promise<number>;
   /**
    * What the resolver's subscriber does when an event reaches it.
@@ -151,6 +186,8 @@ export interface EngineHarness {
  * the write really fail.
  */
 export type CommitName =
+  | 'recordEnvironmentReceipt'
+  | 'commitEnvironmentPreparation'
   | 'commitGraphEntry'
   | 'commitNodeResult'
   | 'commitRouting'
@@ -161,6 +198,8 @@ export type CommitName =
   | 'appendDiagnostic';
 
 const commitNames = new Set<CommitName>([
+  'recordEnvironmentReceipt',
+  'commitEnvironmentPreparation',
   'commitGraphEntry',
   'commitNodeResult',
   'commitRouting',
@@ -185,7 +224,15 @@ interface RegisteredVersion {
 export async function makeEngineHarness(): Promise<EngineHarness> {
   const fixture = makeWorkflowPersistenceFixture();
   const placement = fixture.seedPlacement();
-  const failOnce = new Set<CommitName>();
+  /**
+   * Which write to crash, and how many of its calls to let through first.
+   *
+   * The skip count exists for preparation: its receipts are three separate transactions under one
+   * name, and "crashed between the worktree receipt and the setup receipt" is a materially
+   * different durable state from "crashed before either" — one leaves a worktree nothing owns a
+   * record of, the other leaves a retry that must reuse it.
+   */
+  const failOnce = new Map<CommitName, number>();
   /**
    * A commit that fails once, which is how a crash is simulated honestly.
    *
@@ -200,9 +247,16 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
         return original;
       }
       return (...args: readonly unknown[]) => {
-        if (!failOnce.delete(property as CommitName)) {
+        const name = property as CommitName;
+        const remaining = failOnce.get(name);
+        if (remaining === undefined) {
           return (original as (...a: readonly unknown[]) => unknown)(...args);
         }
+        if (remaining > 0) {
+          failOnce.set(name, remaining - 1);
+          return (original as (...a: readonly unknown[]) => unknown)(...args);
+        }
+        failOnce.delete(name);
         return Effect.fail(
           new DatabaseError({
             operation: property,
@@ -334,7 +388,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
   };
 
   const readers = placementReaders(fixture, placement);
-  const owning = owningServices();
+  const owning = owningServices(fixture);
   const workspace = readers.workspace;
   const surfaces = readers.surfaceRepository;
   const launchDeps: LaunchDeps = {
@@ -418,21 +472,24 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
   }
 
   /**
-   * The same binding `interpreter.service.ts` makes: phase 06's stand-in today, phase 07's forked
-   * fiber tomorrow. Composed here rather than inside `startWorkflow`, because the launch function
-   * deliberately returns the claimed attempt and lets the engine layer decide where preparation runs.
+   * The same preparation `interpreter.service.ts` runs, over the same dependencies.
+   *
+   * One deliberate divergence: production forks into the engine scope and joins the fiber, while
+   * this runs inline. Join semantics are identical when nothing interrupts, and neither binding
+   * covers shutdown interruption — so forking here would buy no assertion and cost a closure over
+   * mutable incarnation state plus nondeterministic scheduling in every engine test.
    */
-  const runPreparation = (ctx: PreparationContext) =>
-    prepareEnvironment(
-      {
-        runs,
-        workspace: workspace as never,
-        owner: launchDeps.owner,
-        ownerIncarnation: launchDeps.ownerIncarnation,
-        poke: Effect.void,
-      },
-      ctx,
-    );
+  const prepDeps: PreparationDeps = {
+    runs,
+    workspace: workspace as never,
+    workspaceService: owning.workspaceService as never,
+    surfaceRepository: readers.surfaceRepository as never,
+    surfaces: { createSinglePaneSurface: owning.createSinglePaneSurface } as never,
+    owner: launchDeps.owner,
+    ownerIncarnation: launchDeps.ownerIncarnation,
+    poke: Effect.void,
+  };
+  const runPreparation = (ctx: PreparationContext) => prepareEnvironment(prepDeps, ctx);
 
   const launched = (input: {
     readonly workflowKey: string;
@@ -482,8 +539,8 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     seedPlacement: () => fixture.seedPlacement(),
     publish,
     setCurrent,
-    crashNext: (commit) => {
-      failOnce.add(commit);
+    crashNext: (commit, skip = 0) => {
+      failOnce.set(commit, skip);
     },
     breakNextLoad: (reason = 'stale_source') => {
       brokenLoad = reason;
@@ -510,6 +567,52 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
         }),
       ),
     owning,
+    preparationOf: (runId) => run(fixture.runs.findPreparation(runId)),
+    retryPreparation: async (runId) => {
+      const failed = (await run(fixture.runs.findRun(runId)))!;
+      const adopted = await run(
+        fixture.runs.adoptRetryPin({
+          runId,
+          controlRevision: failed.controlRevision,
+          artifactHash: failed.artifactHash,
+          expectedPosition: failed.position,
+          // A failed run has already released ownership, which is what makes the pin adoptable.
+          expectedOwner: null,
+        }),
+      );
+      if (!adopted.ok) throw new Error(`Retry pin was refused: ${adopted.rejection.kind}`);
+      const repinned = (await run(fixture.runs.findRun(runId)))!;
+      const prep = await run(fixture.runs.findPreparation(runId));
+      const claimed = await run(
+        fixture.runs.claimSegment({
+          runId,
+          controlRevision: repinned.controlRevision,
+          owner: launchDeps.owner,
+          ownerIncarnation: launchDeps.ownerIncarnation,
+          input: {
+            value: {
+              segment: 'environment_preparation',
+              source: prep?.source ?? null,
+              request: prep?.request ?? null,
+              baseCommit: prep?.baseCommit ?? null,
+              checkoutPath: prep?.checkoutPath ?? null,
+              receipts: {
+                worktree: prep?.worktree ?? null,
+                setup: prep?.setup ?? null,
+                surface: prep?.surface ?? null,
+              },
+            },
+          },
+          preparation: {
+            position: repinned.position,
+            artifactHash: repinned.artifactHash,
+            frameStates: [],
+          },
+        }),
+      );
+      if (!claimed.ok) throw new Error(`Retry claim was refused: ${claimed.rejection.kind}`);
+      return run(runPreparation({ run: claimed.value.run, attempt: claimed.value.attempt }));
+    },
     drain,
     deliver: (runId) => run(incarnation.waits.reconcileWaits(runId)),
     settleOperation: async ({ operationId, state, result }) => {
@@ -593,16 +696,30 @@ export function placementReaders(fixture: WorkflowPersistenceFixture, placement:
 }
 
 /**
- * The owning-service seam, and the log that proves a refused launch allocated nothing.
+ * The owning-service seam: what preparation is allowed to mutate, and the log that proves what it did.
  *
- * Phase 04 verified `preflightWorktreeCreation` against a real Git fixture across fourteen cases.
- * What is under test here is the *mapping* from its `WorkspaceError` codes into workflow rejections,
- * so a double that raises tagged errors tests that claim directly. The three genuinely allocating
- * operations are present only to be loud: nothing on the launch path may reach them, and a call
- * that does dies rather than quietly succeeding.
+ * Every allocating operation **dies by default**. That is what keeps phase 06's guarantee structural
+ * rather than conventional: no launch-path rejection may reach a service that creates, and one that
+ * does says so loudly instead of quietly succeeding. A preparation test opts each operation in by
+ * name, which also makes the opt-in itself readable — a test that never calls `allowsWorktrees()`
+ * is asserting that no worktree was ever created.
+ *
+ * What the enabled operations then do is **write real rows**, not return plausible shapes. A
+ * `findWorktree` after a creation has to find the worktree, a keyed surface re-entry has to resolve
+ * through the real `creation_key` column, and a second creation on the same branch has to collide —
+ * none of which a fabricated return value can produce.
  */
-export function owningServices() {
+export function owningServices(fixture: WorkflowPersistenceFixture) {
   const calls: string[] = [];
+  /**
+   * Every destructive operation anyone asked for.
+   *
+   * Preparation deliberately has no deletion in its dependency surface, so this can only ever be
+   * populated by a future widening — which is exactly the regression the "nothing is deleted on any
+   * failure path" rule exists to prevent. Asserted empty on every failure route.
+   */
+  const deletions: string[] = [];
+
   let preflight: (input: {
     readonly projectId: number;
     readonly branch: string;
@@ -610,7 +727,7 @@ export function owningServices() {
   }) => Effect.Effect<{ commit: string; checkoutPath: string }, WorkspaceServiceError> = (input) =>
     Effect.succeed({
       commit: 'a'.repeat(40),
-      checkoutPath: `/isagi/worktrees/${input.projectId}/${input.branch}`,
+      checkoutPath: derivedCheckoutPath(input.projectId, input.branch),
     });
 
   const allocating =
@@ -618,13 +735,217 @@ export function owningServices() {
     (...args: readonly unknown[]) => {
       calls.push(name);
       void args;
-      return Effect.die(new Error(`${name} must not be reached from the launch path.`));
+      return Effect.die(new Error(`${name} must not be reached unless a test allows it.`));
     };
 
-  return {
+  let openWorktree: (input: {
+    readonly projectId: number;
+    readonly request: OpenWorktreeInput;
+  }) => Effect.Effect<OpenWorktreeOutput, WorkspaceServiceError> = allocating('openWorktree');
+
+  let runWorktreeSetup: (input: {
+    readonly projectId: number;
+    readonly worktreeId: number;
+  }) => Effect.Effect<Exclude<WorktreeSetupResult, { status: 'not_run' }>, WorkspaceServiceError> =
+    allocating('runWorktreeSetup');
+
+  let createSinglePaneSurface: (
+    input: CreateSinglePaneSurfaceInput,
+  ) => Effect.Effect<CreateSinglePaneSurfaceOutput, SurfaceServiceError> =
+    allocating('createSinglePaneSurface');
+
+  /**
+   * Worktree creation that really creates, and really collides.
+   *
+   * It mirrors the two decisions of `openWorktree` that preparation depends on: `create_new`
+   * refuses a branch this project already has a worktree for, with the same `worktree_exists` error
+   * carrying the same identities — which is what the adoption predicate is then asked to judge —
+   * and a successful creation inserts a row at Isagi's derived checkout path, so the path the
+   * preflight recorded and the path the row reports are the same string for the same reason they
+   * are in production.
+   */
+  const allowsWorktrees = (options?: {
+    readonly setup?: Exclude<WorktreeSetupResult, { status: 'not_run' }> | undefined;
+  }) => {
+    openWorktree = (input) =>
+      Effect.suspend(() => {
+        calls.push('openWorktree');
+        const branch = input.request.branch.trim();
+        const existing = fixture.client
+          .prepare('SELECT id, path FROM worktrees WHERE project_id = ? AND branch = ?')
+          .get(input.projectId, branch) as { id: number; path: string } | undefined;
+        if (existing && input.request.mode === 'create_new') {
+          return Effect.fail(
+            new WorkspaceError({
+              branch,
+              code: 'worktree_exists',
+              message: `Worktree ${existing.id} is already checked out on branch ${branch}.`,
+              path: existing.path,
+              projectId: input.projectId,
+              worktreeId: existing.id,
+            }),
+          );
+        }
+        const worktreeId = seedWorktreeRow(fixture, {
+          projectId: input.projectId,
+          branch,
+          path: derivedCheckoutPath(input.projectId, branch),
+        });
+        const setup = options?.setup ?? ({ status: 'skipped', reason: 'not_configured' } as const);
+        return Effect.succeed(
+          (setup.status === 'failed'
+            ? {
+                projectId: input.projectId,
+                worktreeId,
+                branch,
+                status: 'created_setup_failed',
+                setup,
+              }
+            : {
+                projectId: input.projectId,
+                worktreeId,
+                branch,
+                status: 'created',
+                setup,
+              }) as OpenWorktreeOutput,
+        );
+      });
+    return api;
+  };
+
+  const allowsSetup = (
+    result: Exclude<WorktreeSetupResult, { status: 'not_run' }> = {
+      status: 'succeeded',
+      runId: 1,
+    },
+  ) => {
+    runWorktreeSetup = () =>
+      Effect.suspend(() => {
+        calls.push('runWorktreeSetup');
+        return Effect.succeed(result);
+      });
+    return api;
+  };
+
+  /**
+   * Surface creation through the real rows, key and all.
+   *
+   * `creation_key` is the whole reason this cannot be a stub: re-entry after a crash between the
+   * insert and its receipt has to resolve *the same surface*, and only the real column can decide
+   * that. The title goes through the same `validateSurfaceTitle` and `duplicateSafeTitle` the
+   * service uses, so a duplicate title is rewritten here exactly as it would be in production.
+   */
+  const allowsSurfaces = () => {
+    createSinglePaneSurface = (input) =>
+      Effect.suspend(() => {
+        calls.push('createSinglePaneSurface');
+        const worktree = fixture.client
+          .prepare('SELECT id, path FROM worktrees WHERE id = ?')
+          .get(input.worktreeId) as { id: number; path: string } | undefined;
+        if (!worktree) {
+          return Effect.fail(
+            new SurfaceError({
+              code: 'worktree_not_found',
+              message: `Worktree ${input.worktreeId} was not found.`,
+              worktreeId: input.worktreeId,
+            }),
+          );
+        }
+        const created = (
+          titleBase: string,
+        ): Effect.Effect<CreateSinglePaneSurfaceOutput, SurfaceServiceError> =>
+          Effect.suspend(() => {
+            if (input.creationKey !== undefined) {
+              const keyed = fixture.client
+                .prepare(
+                  `SELECT s.id AS surfaceId, s.worktree_id AS worktreeId, s.title AS title,
+                          (SELECT p.id FROM surface_panes p WHERE p.surface_id = s.id ORDER BY p.id LIMIT 1) AS paneId
+                     FROM worktree_surfaces s WHERE s.creation_key = ?`,
+                )
+                .get(input.creationKey) as
+                | { surfaceId: number; worktreeId: number; title: string; paneId: number }
+                | undefined;
+              if (keyed) {
+                return keyed.worktreeId === input.worktreeId
+                  ? Effect.succeed({
+                      surfaceId: keyed.surfaceId,
+                      paneId: keyed.paneId,
+                      title: keyed.title,
+                      cwd: worktree.path,
+                    })
+                  : Effect.fail(
+                      new SurfaceError({
+                        code: 'creation_key_mismatch',
+                        message: `Creation key ${input.creationKey} already names surface ${keyed.surfaceId} on worktree ${keyed.worktreeId}.`,
+                        surfaceId: keyed.surfaceId,
+                        worktreeId: keyed.worktreeId,
+                      }),
+                    );
+              }
+            }
+            const siblings = fixture.client
+              .prepare(
+                'SELECT title, sort_order AS sortOrder FROM worktree_surfaces WHERE worktree_id = ?',
+              )
+              .all(input.worktreeId) as { title: string; sortOrder: number }[];
+            const title = duplicateSafeTitle(
+              titleBase,
+              siblings.map((sibling) => sibling.title),
+            );
+            const now = new Date().toISOString();
+            const surface = fixture.client
+              .prepare(
+                `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, creation_key, created_at, updated_at)
+                 VALUES (?, ?, '{}', ?, ?, ?, ?)`,
+              )
+              .run(
+                input.worktreeId,
+                title,
+                siblings.reduce((max, sibling) => Math.max(max, sibling.sortOrder), -1) + 1,
+                input.creationKey ?? null,
+                now,
+                now,
+              );
+            const pane = fixture.client
+              .prepare(
+                `INSERT INTO surface_panes (surface_id, title, sort_order, session_kind, session_id, created_at, updated_at)
+                 VALUES (?, ?, 0, NULL, NULL, ?, ?)`,
+              )
+              .run(Number(surface.lastInsertRowid), title, now, now);
+            return Effect.succeed({
+              surfaceId: Number(surface.lastInsertRowid),
+              paneId: Number(pane.lastInsertRowid),
+              title,
+              cwd: worktree.path,
+            });
+          });
+        return validateSurfaceTitle(input.titleBase).pipe(Effect.flatMap(created));
+      });
+    return api;
+  };
+
+  const api = {
     /** Every call, allocating or not. A rejection test asserts this is exactly what it expects. */
     calls,
+    deletions,
     setPreflight: (handler: typeof preflight) => void (preflight = handler),
+    setOpenWorktree: (handler: typeof openWorktree) => void (openWorktree = handler),
+    /**
+     * Wraps whatever creator is currently installed.
+     *
+     * Deliberately handed the installed implementation rather than the service method: the method
+     * dispatches through the mutable slot this replaces, so a wrapper that called it would call
+     * itself. Tests use this to observe the window *inside* an allocation — what the preparation
+     * row held while the worktree was being made, or a Cancel landing between the two.
+     */
+    wrapOpenWorktree: (wrap: (inner: typeof openWorktree) => typeof openWorktree) => {
+      const inner = openWorktree;
+      openWorktree = wrap(inner);
+    },
+    setRunWorktreeSetup: (handler: typeof runWorktreeSetup) => void (runWorktreeSetup = handler),
+    allowsWorktrees,
+    allowsSetup,
+    allowsSurfaces,
     workspaceService: {
       preflightWorktreeCreation: (input: {
         readonly projectId: number;
@@ -635,11 +956,64 @@ export function owningServices() {
           calls.push('preflightWorktreeCreation');
           return preflight(input);
         }),
-      openWorktree: allocating('openWorktree'),
-      runWorktreeSetup: allocating('runWorktreeSetup'),
+      openWorktree: (input: { readonly projectId: number; readonly request: OpenWorktreeInput }) =>
+        Effect.suspend(() => openWorktree(input)),
+      runWorktreeSetup: (input: { readonly projectId: number; readonly worktreeId: number }) =>
+        Effect.suspend(() => runWorktreeSetup(input)),
+      deleteWorktree: (...args: readonly unknown[]) => {
+        deletions.push('deleteWorktree');
+        void args;
+        return Effect.die(new Error('Preparation must never delete a worktree.'));
+      },
     },
-    createSinglePaneSurface: allocating('createSinglePaneSurface'),
+    createSinglePaneSurface: (input: CreateSinglePaneSurfaceInput) =>
+      Effect.suspend(() => createSinglePaneSurface(input)),
+    deleteSurface: (...args: readonly unknown[]) => {
+      deletions.push('deleteSurface');
+      void args;
+      return Effect.die(new Error('Preparation must never delete a surface.'));
+    },
   };
+  return api;
+}
+
+/** The checkout path Isagi derives for a branch, as both the preflight and the creator see it. */
+export function derivedCheckoutPath(projectId: number, branch: string): string {
+  return `/isagi/worktrees/${projectId}/${branch}`;
+}
+
+/**
+ * Inserts a worktree row the way reconciliation would, and returns its id.
+ *
+ * Exported because two very different things need it: the creation fake above, and the tests that
+ * stage an *interrupted* creation — a real checkout Git holds with no receipt naming it — which is
+ * the state the adoption predicate exists to judge.
+ */
+export function seedWorktreeRow(
+  fixture: WorkflowPersistenceFixture,
+  input: {
+    readonly projectId: number;
+    readonly branch: string;
+    readonly path: string;
+    readonly firstSeenAt?: string | undefined;
+  },
+): number {
+  const now = new Date().toISOString();
+  const inserted = fixture.client
+    .prepare(
+      `INSERT INTO worktrees (project_id, path, branch, head, sort_order, created_at, updated_at, first_seen_at)
+       VALUES (?, ?, ?, NULL, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM worktrees WHERE project_id = ?), ?, ?, ?)`,
+    )
+    .run(
+      input.projectId,
+      input.path,
+      input.branch,
+      input.projectId,
+      now,
+      now,
+      input.firstSeenAt ?? now,
+    );
+  return Number(inserted.lastInsertRowid);
 }
 
 function workspaceReader(fixture: WorkflowPersistenceFixture, placement: Placement) {
@@ -667,6 +1041,31 @@ function workspaceReader(fixture: WorkflowPersistenceFixture, placement: Placeme
           .prepare('SELECT id, name, kind, root_path AS rootPath FROM projects WHERE id = ?')
           .get(projectId) as
           | { id: number; name: string; kind: 'git' | 'folder'; rootPath: string }
+          | undefined;
+        return row ?? null;
+      }),
+    /**
+     * The worktree a project has on a branch, which is what the adoption predicate asks for.
+     *
+     * Selected rather than derived from `listWorktrees` for the same reason production does: one
+     * indexed read, and the `first_seen_at` the predicate compares is a column, not a guess.
+     */
+    findProjectWorktreeByBranch: (input: { readonly projectId: number; readonly branch: string }) =>
+      Effect.sync(() => {
+        const row = fixture.client
+          .prepare(
+            `SELECT id, project_id AS projectId, path, branch, head, first_seen_at AS firstSeenAt
+               FROM worktrees WHERE project_id = ? AND branch = ?`,
+          )
+          .get(input.projectId, input.branch) as
+          | {
+              id: number;
+              projectId: number;
+              path: string;
+              branch: string | null;
+              head: string | null;
+              firstSeenAt: string;
+            }
           | undefined;
         return row ?? null;
       }),

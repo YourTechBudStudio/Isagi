@@ -133,7 +133,21 @@ function advance(
   run: WorkflowRunRecord,
 ): Effect.Effect<SegmentOutcome, SegmentFault> {
   return Effect.gen(function* () {
-    if (run.position.kind === 'terminal' || run.position.kind === 'awaiting_wait') {
+    /**
+     * Three positions this worker never touches, and `environment_preparation` is the deliberate one.
+     *
+     * The dispatcher is a single worker fiber running one segment per claim across every run. A
+     * preparation can spend minutes inside `git worktree add`, setup hooks and post-create
+     * commands, so claiming one here would stall every other run in the system. Only the launch
+     * request and the Retry control drive that segment, each on its own fiber, and there is
+     * deliberately no fallback for a preparation left `ready` — startup recovery fails it instead,
+     * so Retry stays its single re-entry path.
+     */
+    if (
+      run.position.kind === 'terminal' ||
+      run.position.kind === 'awaiting_wait' ||
+      run.position.kind === 'environment_preparation'
+    ) {
       return halted(`not_dispatchable:${run.position.kind}`);
     }
 

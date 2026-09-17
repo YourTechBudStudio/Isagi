@@ -94,8 +94,20 @@ export function segmentFailure(failure: PureFailure): SegmentFailure {
   return { _tag: 'WorkflowSegmentFailure', failure };
 }
 
+/**
+ * What the fencing helpers below actually read.
+ *
+ * Narrowed to a `Pick` rather than typed as `EngineDeps` so the preparation segment can reuse them
+ * without pretending to own a payload store, an operation service or a wait reconciler — none of
+ * which it has, and none of which fencing a failed attempt has ever needed.
+ */
+export type FencedDeps = Pick<EngineDeps, 'runs' | 'owner' | 'ownerIncarnation'>;
+
+/** The same narrowing on the context side: preparation runs before any artifact is pinned to it. */
+export type FencedContext = Pick<SegmentContext, 'run' | 'attempt'>;
+
 /** Records the failure the handler raised, which is always an ordinary outcome. */
-export function recordSegmentFailure(deps: EngineDeps, ctx: SegmentContext) {
+export function recordSegmentFailure(deps: FencedDeps, ctx: FencedContext) {
   return (raised: SegmentFailure) => failSegment(deps, ctx, raised.failure);
 }
 
@@ -111,7 +123,7 @@ export function halted(reason: string): SegmentOutcome {
   return { kind: 'halted', reason };
 }
 
-export function fenceOf(deps: EngineDeps, ctx: SegmentContext) {
+export function fenceOf(deps: FencedDeps, ctx: FencedContext) {
   return {
     runId: ctx.run.id,
     attemptId: ctx.attempt.id,
@@ -138,8 +150,8 @@ export function segmentIdentityOf(attempt: WorkflowAttemptRecord): SegmentIdenti
  * person to look at and retry.
  */
 export function failSegment(
-  deps: EngineDeps,
-  ctx: SegmentContext,
+  deps: FencedDeps,
+  ctx: FencedContext,
   failure: PureFailure,
 ): Effect.Effect<SegmentOutcome, SegmentFault> {
   return deps.runs
@@ -259,6 +271,8 @@ export function segmentKindOfPosition(
   kind: WorkflowRunPosition['kind'],
 ): WorkflowSegmentKind | null {
   switch (kind) {
+    case 'environment_preparation':
+      return 'environment_preparation';
     case 'graph_entry':
       return 'graph_entry';
     case 'node_callback':

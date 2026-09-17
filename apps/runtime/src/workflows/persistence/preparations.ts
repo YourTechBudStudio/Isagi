@@ -138,21 +138,45 @@ export function encodeSurfaceReceipt(receipt: WorkflowSurfaceReceipt): string {
  * second copy of "which allocation is outstanding" would decide whether a retry reuses an existing
  * worktree or creates a second one, which is the most consequential thing here to get inconsistent.
  *
- * A `setup` receipt that is `failed` or `unknown` counts as outstanding: hooks may still need to
- * run. It is also the one receipt a later attempt may replace, which is the same fact seen from the
- * write side.
+ * A `setup` receipt that is not known good counts as outstanding — see {@link setupIsIncomplete},
+ * which the preparation segment consults for the same decision. It is also the one receipt a later
+ * attempt may replace, which is the same fact seen from the write side.
  */
 export function firstIncompleteStep(record: WorkflowRunPreparationRecord): WorkflowEnvironmentStep {
   if (record.request.worktree.kind === 'create') {
     if (record.worktree === null) return 'worktree';
-    if (
-      record.setup === null ||
-      record.setup.status === 'failed' ||
-      record.setup.status === 'unknown'
-    ) {
-      return 'setup';
-    }
+    if (setupIsIncomplete(record.setup)) return 'setup';
   }
   if (record.request.surface.kind === 'create' && record.surface === null) return 'surface';
   return 'commit';
+}
+
+/**
+ * Whether this worktree's setup hooks are **not known to be good**, and so must run.
+ *
+ * One sentence, in one place, because two callers act on it in opposite directions and a
+ * disagreement between them is invisible: the preparation segment re-runs hooks when this is true,
+ * and the progress projection reports the run as sitting at `setup`. Split those apart and the
+ * inspector says `commit` while the segment re-runs hooks, or hooks never run on a worktree the
+ * inspector calls incomplete — a divergence no test would catch unless it happened to pin both.
+ *
+ * `null` is a real state, not a missing one: the worktree receipt and the setup receipt are separate
+ * transactions, so a crash between them leaves setup null, and reading that as "done" would hand the
+ * run a checkout whose hooks never ran. `unknown` says the same thing about an adopted checkout
+ * nobody observed.
+ *
+ * Deliberately a `switch` with no `default`, over a receipt rather than the whole record: a fifth
+ * status added to `workflowSetupReceiptSchema` is a one-line change, and this is where it has to be
+ * a compile error rather than a silent choice about somebody's hooks.
+ */
+export function setupIsIncomplete(setup: WorkflowSetupReceipt | null): boolean {
+  if (setup === null) return true;
+  switch (setup.status) {
+    case 'succeeded':
+    case 'skipped':
+      return false;
+    case 'failed':
+    case 'unknown':
+      return true;
+  }
 }

@@ -306,6 +306,15 @@ test('a surface that already holds a run refuses the next launch, terminal run i
   });
 });
 
+/**
+ * The commit-time occupancy race, and the one place the two `surface_busy` experiences diverge.
+ *
+ * A surface that is *already* busy is refused at validation, before any row exists, and the caller
+ * is told so (`workflow_surface_attached`, 409). A surface that becomes busy *after* that check is
+ * a different story: the run exists by then, so the launch request answers normally and the run is
+ * retained, failed, and retryable once the occupant is dismissed (program design §4.5). That is
+ * the whole reason preparation is a segment rather than a pre-flight guard.
+ */
 test('an occupant that appears after the pre-check leaves a failed run, never a stranded one', async () => {
   await withHarness(async (harness) => {
     const counters: Counters = { command: 0, validate: 0, init: 0 };
@@ -325,15 +334,12 @@ test('an occupant that appears after the pre-check leaves a failed run, never a 
       .prepare('UPDATE workflow_runs SET destination_surface_id = NULL WHERE id = ?')
       .run(first.id);
 
-    const refused = rejectionOf(
-      await harness.launchExit({ workflowKey: 'launchable', inputs: { topic: 'second' } }),
-    );
-    assert.equal(refused.code, 'workflow_surface_attached');
-    assert.equal(refused.activeWorkflowRunId, first.id, 'and it names the run holding the surface');
+    // The launch itself succeeds: preparation failing is the *run's* outcome, not the request's.
+    const second = await harness.launch({ workflowKey: 'launchable', inputs: { topic: 'second' } });
 
-    // The refused launch did create a run, because it had already claimed one — and that run is
-    // *failed*, not left owned and running at a segment the dispatcher never claims.
-    const strandedId = refused.workflowRunId!;
+    // And the run it handed back is *failed*, not left owned and running at a segment the
+    // dispatcher never claims.
+    const strandedId = second.id;
     assert.notEqual(strandedId, first.id);
     const stranded = await harness.runOf(strandedId);
     assert.equal(stranded.status, 'failed');
