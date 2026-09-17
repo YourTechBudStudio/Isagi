@@ -3,6 +3,8 @@ import { Effect, Schema } from 'effect';
 import {
   workflowEnvironmentFailureDetailSchema,
   type WorkflowEnvironmentFailureReason,
+  type WorkflowPlacementRequestDto,
+  type WorkflowPlacementSource,
   type WorkflowEnvironmentStep,
   type WorkflowSetupReceipt,
   type WorkflowSurfaceReceipt,
@@ -225,6 +227,70 @@ export function prepareEnvironment(
     // preparation failure is an ordinary retained failed attempt, not a fault.
     Effect.catchTag('WorkflowSegmentFailure', recordSegmentFailure(deps, ctx)),
   );
+}
+
+/**
+ * The placement decision, in the flat form both the preparation row and the attempt input record it.
+ *
+ * Deliberately the same shape `createRun` takes for its `preparation` field, so the row and the
+ * retained attempt history cannot describe the same decision differently.
+ */
+export interface PreparationDecision {
+  readonly source: WorkflowPlacementSource;
+  readonly request: WorkflowPlacementRequestDto;
+  /** What `fromRef` resolved to. Null unless the worktree choice is `create`. */
+  readonly baseCommit: string | null;
+  /** The path the workspace preflight derived. Null unless the worktree choice is `create`. */
+  readonly checkoutPath: string | null;
+}
+
+/** What a launch has already brought into existence. Reuse choices allocate nothing and leave none. */
+export interface PreparationReceipts {
+  readonly worktree: WorkflowWorktreeReceipt | null;
+  readonly setup: WorkflowSetupReceipt | null;
+  readonly surface: WorkflowSurfaceReceipt | null;
+}
+
+export interface PreparationAttemptInput extends PreparationDecision {
+  readonly segment: 'environment_preparation';
+  /** Omitted on a first claim, which by definition has allocated nothing yet. */
+  readonly receipts?: PreparationReceipts;
+}
+
+/**
+ * The claimed attempt's recorded input — the one constructor, for both parties that claim this
+ * segment.
+ *
+ * It is the placement decision in full — what was asked for, who decided it, and the two facts a
+ * `create` resolved to — so the attempt can say what it was about to do even if every row it names
+ * is gone by the time somebody reads it. A Retry additionally passes what earlier attempts already
+ * allocated, which is what makes its history distinguishable from a first try's.
+ *
+ * **One home on purpose.** `claimSegment` types this as `RecordedValue`, i.e. `{ value: unknown }`,
+ * so a field added at one call site and forgotten at the other would be invisible to the compiler
+ * and to the tests — and would surface only as a retried attempt's history quietly missing a fact
+ * the initial attempt recorded, in exactly the records somebody reads when a preparation half-failed.
+ */
+export function preparationAttemptInput(
+  decision: PreparationDecision,
+  allocated?: PreparationReceipts,
+): PreparationAttemptInput {
+  return {
+    segment: 'environment_preparation',
+    source: decision.source,
+    request: decision.request,
+    baseCommit: decision.baseCommit,
+    checkoutPath: decision.checkoutPath,
+    ...(allocated === undefined
+      ? {}
+      : {
+          receipts: {
+            worktree: allocated.worktree,
+            setup: allocated.setup,
+            surface: allocated.surface,
+          },
+        }),
+  };
 }
 
 /** The creation key a run's surface is created under. One per run, stable across every attempt. */

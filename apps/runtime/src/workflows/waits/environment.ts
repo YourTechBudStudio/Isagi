@@ -18,6 +18,12 @@ import type { WorkflowRunsRepositoryService } from '../persistence/runs.reposito
  * `environment_available` is a **cache**, never the authority. A dropped notification therefore
  * costs one rejected claim — the claim re-checks live placement itself — rather than a callback
  * running against a worktree that is gone.
+ *
+ * **A run still preparing its environment is invisible here, deliberately.** Its destination columns
+ * are null until the preparation commits, so no query in this file can reach it — and nothing is
+ * lost by that: a worktree deleted mid-preparation is caught by the next step's own liveness check,
+ * or by the one a Retry performs. Parking such a run would offer a Resume the dispatcher would never
+ * act on, which is the same reason startup recovery fails a preparing run rather than parking it.
  */
 export interface EnvironmentWatchDeps {
   readonly runs: WorkflowRunsRepositoryService;

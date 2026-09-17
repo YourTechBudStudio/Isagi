@@ -20,6 +20,7 @@ import type { AnyWorkflowDefinition } from '../structure/loader.js';
 import type { WorkflowDestination } from '../types.js';
 import { surfaceCreationKey } from './environment/preparation.js';
 import {
+  createBoth,
   derivedCheckoutPath,
   makeEngineHarness,
   seedWorktreeRow,
@@ -132,14 +133,6 @@ async function failureDetailOf(harness: EngineHarness, runId: number) {
     string,
     unknown
   >;
-}
-
-/** The placement request a `create` worktree and a `create` surface make together. */
-function createBoth(branch: string, title: string) {
-  return {
-    worktree: { kind: 'create' as const, branch, fromRef: 'main' },
-    surface: { kind: 'create' as const, title },
-  };
 }
 
 test('a default launch reuses its origin, writes no receipt, and initializes against the destination', async () => {
@@ -347,9 +340,13 @@ test('setup that fails during creation keeps the worktree, and Retry re-runs onl
     // Retry picks up exactly where the receipts say it should: hooks again, creation never.
     harness.owning.calls.length = 0;
     harness.owning.allowsSetup({ status: 'succeeded', runId: 8 });
-    const prepared = await harness.retryPreparation(started.id);
+    const retried = await harness.retry(started.id);
 
-    assert.deepEqual(prepared, { kind: 'advanced' });
+    assert.deepEqual(
+      [retried.accepted, retried.status],
+      [true, 'ready'],
+      'the control accepted, and the run it hands back is dispatchable again',
+    );
     assert.deepEqual(harness.owning.calls, ['runWorktreeSetup', 'createSinglePaneSurface']);
     const prep = (await harness.preparationOf(started.id))!;
     assert.equal(prep.setup?.status, 'succeeded');
@@ -395,9 +392,9 @@ test('a crash between the worktree receipt and the setup receipt leaves setup un
 
     harness.owning.calls.length = 0;
     harness.owning.allowsSetup({ status: 'succeeded', runId: 3 });
-    const prepared = await harness.retryPreparation(1);
+    const retried = await harness.retry(1);
 
-    assert.deepEqual(prepared, { kind: 'advanced' });
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
     assert.deepEqual(harness.owning.calls, ['runWorktreeSetup', 'createSinglePaneSurface']);
     assert.equal(worktreeRows(harness).length, 2, 'the interrupted creation was reused');
     const prep = (await harness.preparationOf(1))!;
@@ -483,9 +480,13 @@ test('Retry refuses to adopt a worktree whose path or age does not match the int
         ...(mismatch === 'age' ? { firstSeenAt: '2020-01-01T00:00:00.000Z' } : {}),
       });
 
-      const prepared = await harness.retryPreparation(started.id);
+      const retried = await harness.retry(started.id);
 
-      assert.deepEqual(prepared, { kind: 'halted', reason: 'environment_preparation_failed' });
+      assert.deepEqual(
+        [retried.accepted, retried.status],
+        [true, 'failed'],
+        'the control accepted and ran; the preparation is what failed',
+      );
       const detail = await failureDetailOf(harness, started.id);
       assert.equal(detail.reason, 'worktree_exists');
       assert.equal(detail.step, 'worktree');
@@ -516,9 +517,9 @@ test('Retry adopts the checkout its own interrupted attempt left, and re-runs se
 
     harness.owning.calls.length = 0;
     harness.owning.allowsSetup({ status: 'succeeded', runId: 11 });
-    const prepared = await harness.retryPreparation(1);
+    const retried = await harness.retry(1);
 
-    assert.deepEqual(prepared, { kind: 'advanced' });
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
     const prep = (await harness.preparationOf(1))!;
     assert.equal(prep.worktree?.acquisition, 'adopted_after_interruption');
     assert.equal(prep.worktree?.worktreePath, prep.checkoutPath);
@@ -560,9 +561,9 @@ test('a surface created but not yet recorded is resolved again by its creation k
 
     await harness.restart();
     harness.owning.calls.length = 0;
-    const prepared = await harness.retryPreparation(1);
+    const retried = await harness.retry(1);
 
-    assert.deepEqual(prepared, { kind: 'advanced' });
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
     assert.deepEqual(harness.owning.calls, ['createSinglePaneSurface']);
     const prep = (await harness.preparationOf(1))!;
     assert.equal(prep.surface?.surfaceId, orphan.id, 'the key resolved the same surface');
@@ -612,8 +613,8 @@ test('a surface taken between the pre-check and the commit fails the run, and Re
     assert.equal((await run(harness.controls.dismiss(first.id))).accepted, true);
 
     harness.owning.calls.length = 0;
-    const prepared = await harness.retryPreparation(second.id);
-    assert.deepEqual(prepared, { kind: 'advanced' });
+    const retried = await harness.retry(second.id);
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
     assert.deepEqual(harness.owning.calls, []);
     const prep = (await harness.preparationOf(second.id))!;
     assert.deepEqual([prep.worktree, prep.setup, prep.surface], [null, null, null]);
@@ -786,9 +787,9 @@ test('an untrusted hook configuration is an honest preparation failure that keep
         }),
       ),
     );
-    const prepared = await harness.retryPreparation(1);
+    const retried = await harness.retry(1);
 
-    assert.deepEqual(prepared, { kind: 'halted', reason: 'environment_preparation_failed' });
+    assert.deepEqual([retried.accepted, retried.status], [true, 'failed']);
     const detail = await failureDetailOf(harness, 1);
     assert.equal(detail.step, 'setup');
     assert.equal(detail.reason, 'setup_trust_required');

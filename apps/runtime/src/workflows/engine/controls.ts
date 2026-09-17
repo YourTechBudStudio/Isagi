@@ -17,7 +17,10 @@ import {
   validateWorkflowUserInputAnswers,
   WorkflowUserInputValidationError,
 } from '../waits/user-input.js';
+import { preparationAttemptInput } from './environment/preparation.js';
+import type { PreparationContext } from './environment/types.js';
 import { resolveArtifact, type LaunchDeps } from './launch.js';
+import type { SegmentFault, SegmentOutcome } from './segments/shared.js';
 import { edgeFromNode } from './structure.js';
 
 /**
@@ -53,6 +56,15 @@ export interface ControlDeps extends LaunchDeps {
   readonly waits: WaitResolver;
   /** Wakes the dispatcher after a control made a run dispatchable again. */
   readonly poke: Effect.Effect<void>;
+  /**
+   * The preparation segment, exactly as the launch path runs it.
+   *
+   * Injected rather than imported so Retry blocks on the *same* binding a launch does — in
+   * production a fiber forked into the engine scope and then joined, so a dropped client cannot
+   * interrupt Git half way. A second construction here would be a second lifecycle policy for one
+   * segment.
+   */
+  readonly runPreparation: (ctx: PreparationContext) => Effect.Effect<SegmentOutcome, SegmentFault>;
 }
 
 export function makeControls(deps: ControlDeps) {
@@ -79,6 +91,7 @@ function pause(deps: ControlDeps, runId: number): Effect.Effect<ControlResult, C
   return Effect.gen(function* () {
     const run = yield* requireRun(deps, runId);
     if (isTerminal(run)) return yield* staleControl(run, 'pause');
+    if (isPreparing(run)) return yield* preparingControl(run, 'pause');
     const applied = yield* deps.runs.applyPause({ runId, controlRevision: run.controlRevision });
     return yield* resultOf(deps, run, applied);
   });
@@ -94,6 +107,7 @@ function resume(deps: ControlDeps, runId: number): Effect.Effect<ControlResult, 
   return Effect.gen(function* () {
     const run = yield* requireRun(deps, runId);
     if (isTerminal(run)) return yield* staleControl(run, 'resume');
+    if (isPreparing(run)) return yield* preparingControl(run, 'resume');
 
     const loaded = yield* deps.catalog
       .loadPinned({ artifactHash: run.artifactHash, workflowKey: run.workflowKey })
@@ -174,6 +188,10 @@ function retry(deps: ControlDeps, runId: number): Effect.Effect<ControlResult, C
         }),
       );
     }
+    // A preparing run has no executions, so it can hold no operations and none of the graph-shaped
+    // preconditions below apply to it.
+    if (isPreparing(run)) return yield* retryPreparation(deps, run);
+
     // Retry cannot manufacture an outcome for an effect nobody can account for, so unresolved
     // uncertainty blocks it outright rather than being repinned around.
     const obligation = yield* deps.operationRecords.findBlockingObligation(run.id);
@@ -215,6 +233,108 @@ function retry(deps: ControlDeps, runId: number): Effect.Effect<ControlResult, C
     const result = yield* resultOf(deps, run, applied);
     if (result.accepted) yield* deps.poke;
     return result;
+  });
+}
+
+/**
+ * Retry for a run whose environment never finished being prepared.
+ *
+ * Same three moves as any other Retry — resolve the latest verified artifact, validate it against
+ * where the run is parked, adopt the pin — and then one that is specific to this position: it claims
+ * the preparation segment itself and **blocks on it**, exactly as the launch request does. A
+ * preparing run is not dispatchable, so handing it back to the worker would strand it.
+ *
+ * **`environment` is never called again.** The recorded placement request *is* the decision; asking
+ * the author's selector a second time would silently relocate a run that may already have allocated
+ * a worktree, and the receipts that make re-entry safe are written against the first answer.
+ */
+function retryPreparation(
+  deps: ControlDeps,
+  run: WorkflowRunRecord,
+): Effect.Effect<ControlResult, ControlError> {
+  return Effect.gen(function* () {
+    /**
+     * Registry context comes from the **origin**, because a preparing run has no destination yet.
+     *
+     * Both resolve to the same project, which is all discovery uses. The consequence is that a
+     * deleted origin worktree makes a failed preparation permanently unretryable — accepted, and
+     * the honest reading of "this run can no longer name the project it was launched into". Nothing
+     * is lost by it: every allocated resource is still named by a receipt and nothing is deleted.
+     */
+    const worktreeId = run.origin.worktreeId;
+    if (worktreeId === null) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_environment_unavailable',
+          message:
+            'This run no longer records the worktree it was launched from, so a current version cannot be resolved.',
+          workflowRunId: run.id,
+        }),
+      );
+    }
+    const artifact = yield* resolveArtifact(deps, run.workflowKey, worktreeId);
+
+    // The full saved-position check, which at this position reduces to one question — is this graph
+    // still the root? No frame has been entered and no node visited, so there is nothing else a
+    // structural change could invalidate. See `retry-validation.ts`.
+    const diagnostics = yield* validateAdoption(deps, run, artifact.descriptor);
+    if (diagnostics.length > 0) {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_structure_validation_failed',
+          message: 'The latest verified version no longer fits where this run is parked.',
+          workflowKey: run.workflowKey,
+          workflowRunId: run.id,
+          artifactHash: artifact.artifactHash,
+          diagnostics,
+        }),
+      );
+    }
+
+    const adopted = yield* deps.runs.adoptRetryPin({
+      runId: run.id,
+      controlRevision: run.controlRevision,
+      artifactHash: artifact.artifactHash,
+      expectedPosition: run.position,
+      // Already null on both paths that produce a retryable preparation — the failure and the
+      // startup-recovery branch each release ownership — so the literal states the invariant rather
+      // than reading as though it might be something else.
+      expectedOwner: null,
+    });
+    if (!adopted.ok) return yield* resultOf(deps, run, adopted);
+
+    // Re-read: the adoption moved the pin and the control revision, and the claim is fenced on both.
+    const repinned = yield* requireRun(deps, run.id);
+    const prep = yield* deps.runs.findPreparation(run.id);
+    const claimed = yield* deps.runs.claimSegment({
+      runId: repinned.id,
+      controlRevision: repinned.controlRevision,
+      owner: deps.owner,
+      ownerIncarnation: deps.ownerIncarnation,
+      /**
+       * The decision in full, plus what earlier attempts already allocated — built by the same
+       * constructor the launch uses, so a first attempt's history and a retried one's cannot drift.
+       *
+       * A missing row is unreachable: `createRun` writes it in the same transaction as the run. It
+       * claims with the bare segment name rather than a decision of nulls, because recording a
+       * decision that was never read would be the one lie this history exists to prevent — and
+       * `prepareEnvironment` then fails it honestly through its own `requirePreparation`.
+       */
+      input: {
+        value: prep ? preparationAttemptInput(prep, prep) : { segment: 'environment_preparation' },
+      },
+      preparation: {
+        position: repinned.position,
+        artifactHash: repinned.artifactHash,
+        frameStates: [],
+      },
+    });
+    // The adoption stood; only a concurrent control realistically refuses the claim. Reporting it as
+    // not accepted is the honest answer — nothing was claimed and nothing will run.
+    if (!claimed.ok) return yield* resultOf(deps, repinned, claimed);
+
+    yield* deps.runPreparation({ run: claimed.value.run, attempt: claimed.value.attempt });
+    return yield* resultOf(deps, repinned, claimed);
   });
 }
 
@@ -541,6 +661,37 @@ function resultOf(
       };
     }),
   );
+}
+
+/**
+ * Pause and Resume have no meaning at `environment_preparation`, so they refuse rather than pretend.
+ *
+ * A paused preparing run would have nothing that could move it again: the dispatcher never claims
+ * this segment, Retry requires `failed` or `blocked`, and Resume only lifts the gate. There is also
+ * nothing to gate — preparation is one segment that either commits or fails.
+ *
+ * **The terminal check runs first, and that ordering is load-bearing.** A run that *failed* while
+ * preparing keeps this position forever, and this reason's shipped copy reads "This run is still
+ * setting up where it'll work. Give it a moment." Saying that about a run that died minutes ago
+ * would be the product stating something false, so a stopped run gets `workflow_stale_control` and
+ * only a live one gets this.
+ */
+function preparingControl(
+  run: WorkflowRunRecord,
+  operation: 'pause' | 'resume',
+): Effect.Effect<never, ControlError> {
+  return Effect.fail(
+    new WorkflowEngineError({
+      code: 'workflow_run_preparing',
+      message: `This run is still preparing its environment, so it cannot be ${operation === 'pause' ? 'paused' : 'resumed'}.`,
+      workflowRunId: run.id,
+      operation,
+    }),
+  );
+}
+
+function isPreparing(run: WorkflowRunRecord) {
+  return run.position.kind === 'environment_preparation';
 }
 
 function isTerminal(run: WorkflowRunRecord) {

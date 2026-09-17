@@ -48,13 +48,12 @@ import {
 } from '../structure/loader.js';
 import type { WorkflowRegistryService } from '../structure/registry.js';
 import { makeWaitResolver, type WaitResolver } from '../waits/resolver.js';
-import { makeControls } from './controls.js';
+import { makeControls, type ControlResult } from './controls.js';
 import { makeDispatcher, type Dispatcher } from './dispatcher.js';
 import { prepareEnvironment } from './environment/preparation.js';
 import type { PreparationContext, PreparationDeps } from './environment/types.js';
 import { startWorkflow, type LaunchDeps } from './launch.js';
-import { recoverAtStartup } from './recovery.js';
-import type { SegmentOutcome } from './segments/shared.js';
+import { recoverAtStartup, type RecoverySummary } from './recovery.js';
 
 /**
  * A whole workflow runtime, minus the parts that would make a test a integration-with-the-world test.
@@ -128,16 +127,15 @@ export interface EngineHarness {
   /** The durable preparation record: what was requested, and what this launch actually allocated. */
   readonly preparationOf: (runId: number) => Promise<WorkflowRunPreparationRecord | null>;
   /**
-   * Re-enters preparation the way Retry will, through the real transactions.
+   * The Retry control, run to completion.
    *
-   * **Phase 08 owns the real control, and owns re-pointing every caller of this at it.** The
-   * sequence below is deliberately the one `controls.retry` will perform at this position — adopt
-   * the pin against the failed position and a released owner, re-read, claim with the recorded
-   * decision and its receipts — minus the artifact re-resolution, which belongs to the control and
-   * not to the segment. A helper that quietly diverges from the control it stands in for is the
-   * failure this note exists to prevent: when phase 08 lands, confirm the two match and delete this.
+   * Pure delegation, and it must stay that way. It replaced a helper that re-implemented the
+   * control's sequence for the preparation position, which could drift from the control it stood in
+   * for; a wrapper that only calls the control cannot. The control is position-agnostic, so this
+   * carries no preparation-specific behaviour and takes no shortcuts — at `environment_preparation`
+   * it blocks for the whole preparation, because that is what the control does.
    */
-  readonly retryPreparation: (runId: number) => Promise<SegmentOutcome>;
+  readonly retry: (runId: number) => Promise<ControlResult>;
   readonly drain: () => Promise<number>;
   /**
    * What the resolver's subscriber does when an event reaches it.
@@ -174,7 +172,7 @@ export interface EngineHarness {
   /** The run as it is now. */
   readonly runOf: (runId: number) => Promise<WorkflowRunRecord>;
   /** Tear the incarnation down and build a fresh one over the same database. */
-  readonly restart: () => Promise<void>;
+  readonly restart: () => Promise<RecoverySummary>;
   readonly close: () => Promise<void>;
 }
 
@@ -186,6 +184,7 @@ export interface EngineHarness {
  * the write really fail.
  */
 export type CommitName =
+  | 'claimSegment'
   | 'recordEnvironmentReceipt'
   | 'commitEnvironmentPreparation'
   | 'commitGraphEntry'
@@ -198,6 +197,9 @@ export type CommitName =
   | 'appendDiagnostic';
 
 const commitNames = new Set<CommitName>([
+  // Not a commit, but the same kind of seam: it is the transaction a Retry crashes *inside* when it
+  // has already adopted its pin, which is the one recovery state no commit can produce.
+  'claimSegment',
   'recordEnvironmentReceipt',
   'commitEnvironmentPreparation',
   'commitGraphEntry',
@@ -209,6 +211,19 @@ const commitNames = new Set<CommitName>([
   'enterSubgraph',
   'appendDiagnostic',
 ]);
+
+/**
+ * The placement request a `create` worktree and a `create` surface make together.
+ *
+ * Shared because the placement request DTO is still moving through phase 10, and three suites
+ * hand-rolling the same literal means three edits when it does.
+ */
+export function createBoth(branch: string, title: string) {
+  return {
+    worktree: { kind: 'create' as const, branch, fromRef: 'main' },
+    surface: { kind: 'create' as const, title },
+  };
+}
 
 /** One independent environment: a project, a worktree and a surface inside it. */
 export interface Placement {
@@ -408,6 +423,26 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     ownerIncarnation: 'incarnation:test',
   };
 
+  /**
+   * The same preparation `interpreter.service.ts` runs, over the same dependencies.
+   *
+   * One deliberate divergence: production forks into the engine scope and joins the fiber, while
+   * this runs inline. Join semantics are identical when nothing interrupts, and neither binding
+   * covers shutdown interruption — so forking here would buy no assertion and cost a closure over
+   * mutable incarnation state plus nondeterministic scheduling in every engine test.
+   */
+  const prepDeps: PreparationDeps = {
+    runs,
+    workspace: workspace as never,
+    workspaceService: owning.workspaceService as never,
+    surfaceRepository: readers.surfaceRepository as never,
+    surfaces: { createSinglePaneSurface: owning.createSinglePaneSurface } as never,
+    owner: launchDeps.owner,
+    ownerIncarnation: launchDeps.ownerIncarnation,
+    poke: Effect.void,
+  };
+  const runPreparation = (ctx: PreparationContext) => prepareEnvironment(prepDeps, ctx);
+
   let incarnation = await buildIncarnation();
   async function buildIncarnation() {
     const scope = await Effect.runPromise(Scope.make());
@@ -467,29 +502,10 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
       operations,
       waits,
       poke: Effect.void,
+      runPreparation,
     });
     return { scope, operations, waits, dispatcher, controls };
   }
-
-  /**
-   * The same preparation `interpreter.service.ts` runs, over the same dependencies.
-   *
-   * One deliberate divergence: production forks into the engine scope and joins the fiber, while
-   * this runs inline. Join semantics are identical when nothing interrupts, and neither binding
-   * covers shutdown interruption — so forking here would buy no assertion and cost a closure over
-   * mutable incarnation state plus nondeterministic scheduling in every engine test.
-   */
-  const prepDeps: PreparationDeps = {
-    runs,
-    workspace: workspace as never,
-    workspaceService: owning.workspaceService as never,
-    surfaceRepository: readers.surfaceRepository as never,
-    surfaces: { createSinglePaneSurface: owning.createSinglePaneSurface } as never,
-    owner: launchDeps.owner,
-    ownerIncarnation: launchDeps.ownerIncarnation,
-    poke: Effect.void,
-  };
-  const runPreparation = (ctx: PreparationContext) => prepareEnvironment(prepDeps, ctx);
 
   const launched = (input: {
     readonly workflowKey: string;
@@ -568,51 +584,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
       ),
     owning,
     preparationOf: (runId) => run(fixture.runs.findPreparation(runId)),
-    retryPreparation: async (runId) => {
-      const failed = (await run(fixture.runs.findRun(runId)))!;
-      const adopted = await run(
-        fixture.runs.adoptRetryPin({
-          runId,
-          controlRevision: failed.controlRevision,
-          artifactHash: failed.artifactHash,
-          expectedPosition: failed.position,
-          // A failed run has already released ownership, which is what makes the pin adoptable.
-          expectedOwner: null,
-        }),
-      );
-      if (!adopted.ok) throw new Error(`Retry pin was refused: ${adopted.rejection.kind}`);
-      const repinned = (await run(fixture.runs.findRun(runId)))!;
-      const prep = await run(fixture.runs.findPreparation(runId));
-      const claimed = await run(
-        fixture.runs.claimSegment({
-          runId,
-          controlRevision: repinned.controlRevision,
-          owner: launchDeps.owner,
-          ownerIncarnation: launchDeps.ownerIncarnation,
-          input: {
-            value: {
-              segment: 'environment_preparation',
-              source: prep?.source ?? null,
-              request: prep?.request ?? null,
-              baseCommit: prep?.baseCommit ?? null,
-              checkoutPath: prep?.checkoutPath ?? null,
-              receipts: {
-                worktree: prep?.worktree ?? null,
-                setup: prep?.setup ?? null,
-                surface: prep?.surface ?? null,
-              },
-            },
-          },
-          preparation: {
-            position: repinned.position,
-            artifactHash: repinned.artifactHash,
-            frameStates: [],
-          },
-        }),
-      );
-      if (!claimed.ok) throw new Error(`Retry claim was refused: ${claimed.rejection.kind}`);
-      return run(runPreparation({ run: claimed.value.run, attempt: claimed.value.attempt }));
-    },
+    retry: (runId) => run(incarnation.controls.retry(runId)),
     drain,
     deliver: (runId) => run(incarnation.waits.reconcileWaits(runId)),
     settleOperation: async ({ operationId, state, result }) => {
@@ -653,7 +625,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     restart: async () => {
       await Effect.runPromise(Scope.close(incarnation.scope, Exit.void));
       incarnation = await buildIncarnation();
-      await run(
+      return run(
         recoverAtStartup({
           runs,
           workspace: workspace as never,

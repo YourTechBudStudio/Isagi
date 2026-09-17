@@ -95,6 +95,28 @@ function validateLeafPosition(
     case 'terminal':
       return diagnostics;
 
+    /**
+     * A run still preparing its environment has entered no frame and visited no node, so none of
+     * the node, wait, routing or outcome checks below have anything to judge. Exactly one structural
+     * fact can invalidate it: the graph it was created to run must still be the *root*.
+     *
+     * The graph-exists check in the caller is not sufficient on its own. An author who renames the
+     * root graph but keeps the old key declared as a subgraph passes that lookup, and the run would
+     * then resume against a graph the new code no longer enters at. `graph.key` is the leaf frame's
+     * key, which at this position is the run's own root graph key, because the root frame is the
+     * only frame `createRun` wrote.
+     */
+    case 'environment_preparation': {
+      if (input.descriptor.rootGraphKey !== graph.key) {
+        diagnostics.push({
+          code: 'graph_missing',
+          message: `Graph "${graph.key}" is no longer this workflow's root graph, so this run has nowhere to start.`,
+          at: { graphKey: graph.key },
+        });
+      }
+      return diagnostics;
+    }
+
     case 'node_callback':
     case 'awaiting_wait': {
       const execution = input.execution;

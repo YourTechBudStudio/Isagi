@@ -9,10 +9,11 @@ import {
   operation,
   outcome,
   reduce,
+  subgraph,
   suspend,
   wait,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
-import { Effect } from 'effect';
+import { Cause, Effect, Option } from 'effect';
 
 import {
   InternalRuntimeEventBus,
@@ -21,8 +22,14 @@ import {
 import type { InternalRuntimeEvent } from '../../runtime-events/internal-event-bus.js';
 import { run } from '../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
+import { WorkflowEngineError } from '../types.js';
 import { startEnvironmentWatch } from '../waits/environment.js';
-import { makeEngineHarness, type EngineHarness, type Placement } from './test-support.js';
+import {
+  createBoth,
+  makeEngineHarness,
+  type EngineHarness,
+  type Placement,
+} from './test-support.js';
 
 /** A workflow whose only node throws, so a run can be driven to `failed` for control tests. */
 function failingWorkflow(): AnyWorkflowDefinition {
@@ -1197,5 +1204,401 @@ test('an operator answer to a blocked run is refused, not consumed', async () =>
     const after = await harness.runOf(launched.id);
     assert.deepEqual(after, blocked, 'and nothing about the run moved');
     assert.equal(transitionCount(harness, launched.id, 'wait_delivered'), 0);
+  });
+});
+
+/**
+ * The controls, pointed at a run that is still preparing its environment.
+ *
+ * A preparing run is the one position the dispatcher never claims, which changes what each control
+ * can honestly do. Retry becomes the *only* thing that moves it — so it claims the segment itself
+ * and blocks on it, exactly as the launch request does. Pause and Resume become refusals, because a
+ * paused preparation would wait for a Resume that hands it back to a worker that will not take it.
+ * Cancel, Dismiss and Advance are unchanged, and the cases below say what "unchanged" means here.
+ *
+ * The preparation itself is phase 07's subject and has its own file; what is under test here is the
+ * control boundary in front of it.
+ */
+
+interface SelectorLog {
+  calls: number;
+}
+
+function preparableGraph() {
+  return createGraph<{ readonly rounds: number }, {}, Record<string, unknown>>({
+    key: 'preparable',
+    title: 'Preparable',
+    init: () => ({ rounds: 0 }),
+    state: { rounds: reduce.add() },
+    entry: 'work',
+    nodes: { work: operation(async () => complete({ update: { rounds: 1 } })) },
+    edges: {
+      'work-out': edge({ from: 'work', to: ['finished'], choose: () => ({ to: 'finished' }) }),
+    },
+    outcomes: { finished: outcome({ kind: 'success', output: () => ({}) }) },
+  });
+}
+
+/**
+ * A workflow that can carry an `environment` selector, and that can be *demoted*.
+ *
+ * `demoted` keeps `preparable` declared — as a subgraph of a new root — which is the case the
+ * graph-exists check cannot see. The graph a run was created to start in is still there; it is
+ * simply no longer where this workflow begins.
+ */
+function preparableWorkflow(
+  options: {
+    readonly selector?: SelectorLog | undefined;
+    readonly demoted?: boolean | undefined;
+  } = {},
+): AnyWorkflowDefinition {
+  const preparable = preparableGraph();
+  const graph = options.demoted
+    ? createGraph<{ readonly rounds: number }, {}, Record<string, unknown>>({
+        key: 'relocated',
+        title: 'Relocated',
+        init: () => ({ rounds: 0 }),
+        state: { rounds: reduce.add() },
+        entry: 'inner',
+        nodes: {
+          inner: subgraph({
+            graph: preparable,
+            parameters: () => ({}),
+            onResult: () => ({ rounds: 1 }),
+          }),
+        },
+        edges: {
+          'inner-out': edge({
+            from: 'inner',
+            to: ['finished'],
+            choose: () => ({ to: 'finished' }),
+          }),
+        },
+        outcomes: { finished: outcome({ kind: 'success', output: () => ({}) }) },
+      })
+    : preparable;
+  const selector = options.selector;
+  return defineWorkflow({
+    command: () => ({ title: 'Preparable' }),
+    validate: () => {},
+    ...(selector
+      ? {
+          environment: () => {
+            selector.calls += 1;
+            return {
+              worktree: { kind: 'create' as const, branch: 'feature/prep', fromRef: 'main' },
+              surface: { kind: 'create' as const, title: 'Prep' },
+            };
+          },
+        }
+      : {}),
+    graph,
+  }) as AnyWorkflowDefinition;
+}
+
+function transitionKindsOf(harness: EngineHarness, runId: number): string[] {
+  return (
+    harness.fixture.client
+      .prepare('SELECT kind FROM workflow_transitions WHERE run_id = ? ORDER BY revision')
+      .all(runId) as { kind: string }[]
+  ).map((row) => row.kind);
+}
+
+/** Hooks that fail, which is the cheapest way to a failed preparation that allocated something. */
+const failingSetup = {
+  status: 'failed',
+  runId: 7,
+  failedHookIndex: 1,
+  failedHookType: 'command',
+  message: 'the hook exited non-zero',
+  exitCode: 1,
+  outputExcerpt: 'boom',
+} as const;
+
+async function preparationFailureOf(harness: EngineHarness, runId: number) {
+  const failed = await harness.runOf(runId);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.failureCode, 'environment_preparation_failed');
+  const attempt = (await run(harness.fixture.runs.findAttempt(failed.failureAttemptId!)))!;
+  return (await run(harness.fixture.payloads.resolve(attempt.failureDetail!))) as Record<
+    string,
+    unknown
+  >;
+}
+
+/** Runs a control and returns the error it refused with, failing the test if it did not refuse. */
+async function refusalOf(effect: Effect.Effect<unknown, unknown>): Promise<WorkflowEngineError> {
+  const exit = await Effect.runPromiseExit(effect);
+  assert.equal(exit._tag, 'Failure', 'expected the control to refuse');
+  if (exit._tag !== 'Failure') throw new Error('unreachable');
+  const failure = Option.getOrNull(Cause.failureOption(exit.cause));
+  assert.ok(
+    failure instanceof WorkflowEngineError,
+    `expected a typed refusal, got ${Cause.pretty(exit.cause)}`,
+  );
+  return failure;
+}
+
+/**
+ * Drives a launch to a failed preparation that created a worktree and then failed its hooks.
+ *
+ * `branch: null` omits the caller override entirely, which is the only way the author's selector
+ * gets asked — a caller `placement` beats the hook, by design.
+ */
+async function failedPreparation(harness: EngineHarness, branch: string | null = 'feature/retry') {
+  harness.owning.allowsWorktrees({ setup: failingSetup }).allowsSurfaces();
+  const started = await harness.launch({
+    workflowKey: 'preparable',
+    ...(branch === null ? {} : { request: createBoth(branch, 'Prep') }),
+  });
+  const detail = await preparationFailureOf(harness, started.id);
+  assert.deepEqual([detail.step, detail.reason], ['setup', 'setup_failed']);
+  return started;
+}
+
+test('Retry of a failed preparation adopts the latest verified version, and never re-runs the selector', async () => {
+  await withHarness(async (harness) => {
+    const selector: SelectorLog = { calls: 0 };
+    harness.publish({
+      workflowKey: 'preparable',
+      version: '1',
+      definition: preparableWorkflow({ selector }),
+    });
+
+    const started = await failedPreparation(harness, null);
+    assert.equal(selector.calls, 1, 'the launch asked the author where to go');
+    const failed = await harness.runOf(started.id);
+
+    // A newer verified version, published after the failure. Retry adopts it — the same
+    // latest-code semantics every other Retry has, so an author who fixed their package is not left
+    // running the old code because the failure happened to be in preparation.
+    harness.publish({
+      workflowKey: 'preparable',
+      version: '2',
+      definition: preparableWorkflow({ selector }),
+    });
+    harness.setCurrent('preparable', '2');
+    harness.owning.calls.length = 0;
+    harness.owning.allowsSetup({ status: 'succeeded', runId: 9 });
+
+    const retried = await harness.retry(started.id);
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
+
+    const after = await harness.runOf(started.id);
+    assert.notEqual(after.artifactHash, failed.artifactHash, 'the newer version was adopted');
+    assert.equal(after.position.kind, 'graph_entry');
+    const kinds = transitionKindsOf(harness, started.id);
+    assert.deepEqual(
+      kinds.slice(kinds.indexOf('retry_pin_adopted')),
+      [
+        'retry_pin_adopted',
+        // The adoption's own control band, written in the same transaction as the repin.
+        'control_applied',
+        'node_dispatched',
+        // The two allocations this attempt made: hooks, then the surface.
+        'environment_step_recorded',
+        'environment_step_recorded',
+        'environment_prepared',
+      ],
+      'the adoption precedes the claim, the claim precedes the work, and the commit ends it',
+    );
+
+    /**
+     * The selector was **not** asked again, and that is the load-bearing assertion here.
+     *
+     * The recorded placement request *is* the decision. Re-selecting under a newer version could
+     * silently relocate a run that has already created a worktree, and the receipts that make
+     * re-entry safe are all written against the first answer.
+     */
+    assert.equal(selector.calls, 1);
+    const prep = (await harness.preparationOf(started.id))!;
+    assert.equal(prep.source, 'selector');
+    assert.deepEqual(
+      harness.owning.calls,
+      ['runWorktreeSetup', 'createSinglePaneSurface'],
+      'and the worktree it already created was reused, not made a second time',
+    );
+    assert.deepEqual(harness.owning.deletions, []);
+  });
+});
+
+test('Retry refuses a version whose root graph is no longer the root, changing nothing', async () => {
+  await withHarness(async (harness) => {
+    harness.publish({ workflowKey: 'preparable', version: '1', definition: preparableWorkflow() });
+    const started = await failedPreparation(harness, 'feature/moved');
+    const before = await harness.runOf(started.id);
+    const prepBefore = (await harness.preparationOf(started.id))!;
+
+    // The graph the run was created to start in is **still declared**, now as a subgraph of a new
+    // root. The graph-exists check passes on it; being the *root* is the thing that changed, and
+    // resuming here would start the run somewhere the author no longer begins.
+    harness.publish({
+      workflowKey: 'preparable',
+      version: '2',
+      definition: preparableWorkflow({ demoted: true }),
+    });
+    harness.setCurrent('preparable', '2');
+
+    harness.owning.calls.length = 0;
+    const refusal = await refusalOf(harness.controls.retry(started.id));
+    assert.equal(refusal.code, 'workflow_structure_validation_failed');
+    assert.deepEqual(
+      refusal.diagnostics?.map((diagnostic) => diagnostic.code),
+      ['graph_missing'],
+    );
+
+    assert.deepEqual(await harness.runOf(started.id), before, 'the run is byte-identical');
+    assert.deepEqual(await harness.preparationOf(started.id), prepBefore);
+    assert.deepEqual(harness.owning.calls, [], 'and nothing was allocated by a refused Retry');
+  });
+});
+
+test('Retry blocks until the preparation it claimed has settled', async () => {
+  await withHarness(async (harness) => {
+    harness.publish({ workflowKey: 'preparable', version: '1', definition: preparableWorkflow() });
+    const started = await failedPreparation(harness, 'feature/blocking');
+
+    // Ordering, observed rather than assumed: the hook records that it ran, and the control must
+    // not have returned before it did.
+    const order: string[] = [];
+    harness.owning.allowsSetup({ status: 'succeeded', runId: 4 });
+    harness.owning.setRunWorktreeSetup(() =>
+      Effect.suspend(() => {
+        order.push('setup');
+        return Effect.succeed({ status: 'succeeded', runId: 4 } as const);
+      }),
+    );
+
+    const retried = await harness.retry(started.id);
+    order.push('returned');
+
+    assert.deepEqual(order, ['setup', 'returned'], 'the control waited for the work it claimed');
+    // The status it reports is the *settled* one, read after preparation finished rather than the
+    // `ready` the pin adoption left a moment earlier.
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
+    assert.equal((await harness.runOf(started.id)).position.kind, 'graph_entry');
+    assert.ok((await harness.preparationOf(started.id))!.surface, 'through to the last step');
+  });
+});
+
+test('Pause and Resume refuse a preparing run, and a stopped one is stale rather than preparing', async () => {
+  await withHarness(async (harness) => {
+    harness.publish({ workflowKey: 'preparable', version: '1', definition: preparableWorkflow() });
+    harness.owning.allowsWorktrees().allowsSurfaces();
+
+    // Both controls are applied from *inside* the preparation, which is the only moment a run is
+    // genuinely preparing: a failed one keeps this position forever.
+    const refusals: WorkflowEngineError[] = [];
+    harness.owning.wrapOpenWorktree(
+      (inner) => (input) =>
+        inner(input).pipe(
+          Effect.tap(() =>
+            Effect.promise(async () => {
+              refusals.push(await refusalOf(harness.controls.pause(1)));
+              refusals.push(await refusalOf(harness.controls.resume(1)));
+            }),
+          ),
+        ),
+    );
+
+    const started = await harness.launch({
+      workflowKey: 'preparable',
+      request: createBoth('feature/gated', 'Gated'),
+    });
+
+    assert.deepEqual(
+      refusals.map((refusal) => [refusal.code, refusal.operation]),
+      [
+        ['workflow_run_preparing', 'pause'],
+        ['workflow_run_preparing', 'resume'],
+      ],
+    );
+    const placed = await harness.runOf(started.id);
+    assert.equal(placed.paused, false, 'the refusal happened before any write');
+    assert.equal(placed.position.kind, 'graph_entry', 'and the preparation finished regardless');
+
+    /**
+     * The terminal check has to come first, and this is why.
+     *
+     * A run that *failed* while preparing keeps `environment_preparation` as its position. Answering
+     * `workflow_run_preparing` there would tell the person "this run is still setting up where
+     * it'll work" about a run that is already dead — which is the shipped copy for that reason, and
+     * a straightforwardly false statement.
+     */
+    const stopped = await failedPreparation(harness, 'feature/stopped');
+    const stale = await refusalOf(harness.controls.pause(stopped.id));
+    assert.deepEqual([stale.code, stale.operation], ['workflow_stale_control', 'pause']);
+    assert.equal(
+      (await refusalOf(harness.controls.resume(stopped.id))).code,
+      'workflow_stale_control',
+    );
+  });
+});
+
+test('Cancel during preparation keeps the receipt, advances nothing, and closes Retry', async () => {
+  await withHarness(async (harness) => {
+    harness.publish({ workflowKey: 'preparable', version: '1', definition: preparableWorkflow() });
+    harness.owning.allowsWorktrees().allowsSurfaces();
+    harness.owning.wrapOpenWorktree(
+      (inner) => (input) =>
+        inner(input).pipe(
+          Effect.tap(() =>
+            Effect.promise(async () => void (await run(harness.controls.cancel(1)))),
+          ),
+        ),
+    );
+
+    const started = await harness.launch({
+      workflowKey: 'preparable',
+      request: createBoth('feature/cancelled', 'Cancelled'),
+    });
+
+    const cancelled = await harness.runOf(started.id);
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(cancelled.position.kind, 'environment_preparation', 'nothing advanced');
+    assert.deepEqual(cancelled.destination, {
+      worktreeId: null,
+      worktreePath: null,
+      surfaceId: null,
+    });
+
+    // Receipts are evidence, not decisions: what was really created is recorded even though the
+    // run that created it was cancelled, because that record is all a person has to find it by.
+    const prep = (await harness.preparationOf(started.id))!;
+    assert.equal(prep.worktree?.acquisition, 'created');
+    const attempt = (await run(
+      harness.fixture.runs.findAttempt(cancelled.failureAttemptId ?? prep.runId),
+    ))!;
+    assert.equal(attempt.status, 'cancelled');
+    assert.deepEqual(harness.owning.deletions, [], 'and nothing was tidied away');
+
+    // Retry is closed, which is what the summary's `controls.retry` flag will report in phase 09.
+    // Asserted here from the control's own side: a flag that says `false` while the control would
+    // have accepted is the failure worth catching.
+    const refusal = await refusalOf(harness.controls.retry(started.id));
+    assert.equal(refusal.code, 'workflow_run_not_retryable');
+  });
+});
+
+test('Dismiss on a failed preparation finds no attachment, and changes nothing', async () => {
+  await withHarness(async (harness) => {
+    harness.publish({ workflowKey: 'preparable', version: '1', definition: preparableWorkflow() });
+    const started = await failedPreparation(harness, 'feature/dismissed');
+    const before = await harness.runOf(started.id);
+    const prepBefore = (await harness.preparationOf(started.id))!;
+
+    // A preparing run never reached the commit, so it has no attachment to release. That is a
+    // `detached: false` from `detachRun`, not a refusal — the run is terminal and Dismiss is the
+    // control for a terminal run.
+    const dismissed = await run(harness.controls.dismiss(started.id));
+    assert.equal(dismissed.accepted, true);
+    assert.equal(dismissed.status, 'failed');
+    assert.equal(await run(harness.fixture.runs.findAttachment(started.id)), null);
+    assert.equal((await harness.runOf(started.id)).position.kind, before.position.kind);
+    assert.deepEqual(
+      await harness.preparationOf(started.id),
+      prepBefore,
+      'and every receipt is still there to find the worktree by',
+    );
   });
 });

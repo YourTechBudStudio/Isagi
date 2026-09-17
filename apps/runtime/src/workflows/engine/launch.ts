@@ -26,8 +26,9 @@ import {
   type WorkflowOrigin,
 } from '../types.js';
 import { resolvePlacement, type PlacementInfrastructureError } from './environment/placement.js';
+import { preparationAttemptInput, type PreparationDecision } from './environment/preparation.js';
 import { selectPlacement } from './environment/selection.js';
-import type { LaunchProject, ResolvedPlacement } from './environment/types.js';
+import type { LaunchProject } from './environment/types.js';
 
 /**
  * Starting a run.
@@ -177,6 +178,16 @@ export function startWorkflow(
       selection,
     });
 
+    // The four facts the decision reduces to, derived once and then recorded twice — as the durable
+    // preparation row, and as the claimed attempt's input. Deriving them twice is how a row and its
+    // own history start disagreeing.
+    const decision: PreparationDecision = {
+      source: resolved.source,
+      request: resolved.request,
+      baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
+      checkoutPath: resolved.worktree.kind === 'create' ? resolved.worktree.checkoutPath : null,
+    };
+
     const created = yield* deps.runs.createRun({
       workflowKey: input.workflowKey,
       title: manifest.title,
@@ -190,19 +201,15 @@ export function startWorkflow(
         paneId: origin.paneId ?? null,
         agentSessionId: origin.agentSessionId ?? null,
       },
-      preparation: {
-        source: resolved.source,
-        request: resolved.request,
-        baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
-        checkoutPath: resolved.worktree.kind === 'create' ? resolved.worktree.checkoutPath : null,
-      },
+      preparation: decision,
       // Claimed in the same transaction as the run. The dispatcher deliberately never claims this
       // segment, so the launch itself holds it for the whole of preparation — and there is no window
       // in which a preparing run exists with nothing an interruption could be attributed to.
       claim: {
         owner: deps.owner,
         ownerIncarnation: deps.ownerIncarnation,
-        input: { value: preparationInput(resolved) },
+        // No receipts: a first claim has allocated nothing by definition.
+        input: { value: preparationAttemptInput(decision) },
       },
     });
 
@@ -218,23 +225,6 @@ export function startWorkflow(
 
     return { run: created.value.run, attempt: created.value.attempt };
   });
-}
-
-/**
- * The claimed attempt's recorded input.
- *
- * It is the placement decision in full — what was asked for, who decided it, and the two facts a
- * `create` resolved to — so the attempt can say what it was about to do even if every row it names
- * is gone by the time somebody reads it.
- */
-function preparationInput(resolved: ResolvedPlacement) {
-  return {
-    segment: 'environment_preparation',
-    source: resolved.source,
-    request: resolved.request,
-    baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
-    checkoutPath: resolved.worktree.kind === 'create' ? resolved.worktree.checkoutPath : null,
-  };
 }
 
 /**

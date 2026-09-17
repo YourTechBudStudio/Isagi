@@ -188,6 +188,7 @@ export const WorkflowEngineLive = Layer.scoped(
       operations,
       waits,
       poke,
+      runPreparation,
     });
 
     const service: WorkflowEngineService = {
@@ -226,7 +227,7 @@ export const WorkflowEngineLive = Layer.scoped(
       operations,
       waits,
     });
-    if (recovery.parked > 0 || recovery.environmentsLost > 0) {
+    if (recovery.parked > 0 || recovery.environmentsLost > 0 || recovery.preparationsFailed > 0) {
       yield* Effect.logInfo('[runtime] Workflow startup recovery complete', recovery);
     }
 

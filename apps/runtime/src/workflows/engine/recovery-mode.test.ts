@@ -18,7 +18,7 @@ import { Effect } from 'effect';
 
 import { run } from '../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
-import { makeEngineHarness, type EngineHarness } from './test-support.js';
+import { createBoth, makeEngineHarness, type EngineHarness } from './test-support.js';
 
 /**
  * Which producer a repaired segment re-runs, and which it must not.
@@ -930,5 +930,191 @@ test('a routing failure after a successful mapping does not apply the mapping tw
         [2, 'succeeded'],
       ],
     );
+  });
+});
+
+/**
+ * A restart that lands while a run is preparing its environment.
+ *
+ * Recovery's ordinary answer — park it, and wait for a Resume — cannot work here, because the party
+ * a Resume hands a run back to is the dispatcher, and the dispatcher deliberately never claims this
+ * segment. So a preparing run is **failed** instead, with no pause band, and Retry becomes its
+ * single re-entry path. The rule lives inside `parkUnfinishedRuns` so one pass over one query
+ * handles both kinds of row; the cases here are the engine-level half of it, through the real
+ * `recoverAtStartup` and the real Retry control.
+ *
+ * The transaction's own semantics — which step is named, which attempt is blamed, what happens with
+ * no attempt at all — are `runs.repository.test.ts`'s subject and are not restated.
+ */
+
+function preparingWorkflow(): AnyWorkflowDefinition {
+  const graph = createGraph<{ readonly rounds: number }, {}, Record<string, unknown>>({
+    key: 'preparing',
+    title: 'Preparing',
+    init: () => ({ rounds: 0 }),
+    state: { rounds: reduce.add() },
+    entry: 'work',
+    nodes: { work: operation(async () => complete({ update: { rounds: 1 } })) },
+    edges: {
+      'work-out': edge({ from: 'work', to: ['finished'], choose: () => ({ to: 'finished' }) }),
+    },
+    outcomes: { finished: outcome({ kind: 'success', output: () => ({}) }) },
+  });
+  return defineWorkflow({
+    command: () => ({ title: 'Preparing' }),
+    validate: () => {},
+    graph,
+  }) as AnyWorkflowDefinition;
+}
+
+function publishPreparing(harness: EngineHarness) {
+  harness.publish({ workflowKey: 'preparing', version: '1', definition: preparingWorkflow() });
+}
+
+async function attemptsOf(harness: EngineHarness, runId: number) {
+  const frames = await run(harness.fixture.runs.listFrames(runId));
+  const attempts = await Promise.all(
+    frames.map((frame) => run(harness.fixture.runs.listAttemptsForFrame(frame.id))),
+  );
+  return attempts.flat();
+}
+
+test('a restart mid-preparation fails the run rather than parking it, and Retry is the way back', async () => {
+  await withHarness(async (harness) => {
+    publishPreparing(harness);
+    harness.owning.allowsWorktrees().allowsSurfaces();
+    // Crash after the worktree receipt: an attempt is open, and a real checkout exists that only
+    // that receipt names.
+    harness.crashNext('recordEnvironmentReceipt', 1);
+
+    const exit = await harness.launchExit({
+      workflowKey: 'preparing',
+      request: createBoth('feature/restart', 'Restart'),
+    });
+    assert.equal(exit._tag, 'Failure');
+
+    const summary = await harness.restart();
+    assert.equal(summary.preparationsFailed, 1, 'startup reports it');
+    assert.equal(summary.parked, 0, 'and it is emphatically not parked');
+
+    const failed = await harness.runOf(1);
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.paused, false, 'no pause band, because there is no Resume that would help');
+    assert.equal(failed.position.kind, 'environment_preparation');
+    assert.equal(failed.failureCode, 'environment_preparation_failed');
+
+    // Interrupted, not failed, at the attempt level: nobody observed how it ended. The step names
+    // the first allocation still outstanding, which is what a Retry resumes from.
+    const attempt = (await attemptsOf(harness, 1)).at(-1)!;
+    assert.equal(attempt.status, 'interrupted');
+    assert.equal(attempt.endCertainty, 'unknown');
+    assert.deepEqual(await run(harness.fixture.payloads.resolve(attempt.failureDetail!)), {
+      step: 'setup',
+      reason: 'interrupted',
+    });
+
+    // And the single re-entry path really does re-enter: same worktree, no second allocation.
+    harness.owning.calls.length = 0;
+    harness.owning.allowsSetup({ status: 'succeeded', runId: 2 });
+    const retried = await harness.retry(1);
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
+    assert.deepEqual(harness.owning.calls, ['runWorktreeSetup', 'createSinglePaneSurface']);
+    assert.deepEqual(harness.owning.deletions, []);
+  });
+});
+
+test('a restart before preparation took its first step is handled the same way', async () => {
+  await withHarness(async (harness) => {
+    publishPreparing(harness);
+    harness.owning.allowsWorktrees().allowsSurfaces();
+    // The first thing preparation does for a `create` request is record its worktree receipt, so
+    // crashing it without a skip lands before any step could complete.
+    harness.crashNext('recordEnvironmentReceipt');
+
+    await harness.launchExit({
+      workflowKey: 'preparing',
+      request: createBoth('feature/early', 'Early'),
+    });
+    assert.equal((await harness.preparationOf(1))!.worktree, null, 'no step was recorded');
+
+    const summary = await harness.restart();
+    assert.deepEqual(
+      [summary.preparationsFailed, summary.parked],
+      [1, 0],
+      'the same answer, whether or not a step had completed',
+    );
+    const failed = await harness.runOf(1);
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.paused, false);
+    const attempt = (await attemptsOf(harness, 1)).at(-1)!;
+    assert.deepEqual(await run(harness.fixture.payloads.resolve(attempt.failureDetail!)), {
+      step: 'worktree',
+      reason: 'interrupted',
+    });
+  });
+});
+
+test('a Retry that crashed between adopting its pin and claiming its attempt is still retryable', async () => {
+  await withHarness(async (harness) => {
+    publishPreparing(harness);
+    harness.owning
+      .allowsWorktrees({
+        setup: {
+          status: 'failed',
+          runId: 1,
+          failedHookIndex: 1,
+          failedHookType: 'command',
+          message: 'no',
+          exitCode: 1,
+          outputExcerpt: 'no',
+        },
+      })
+      .allowsSurfaces();
+    const started = await harness.launch({
+      workflowKey: 'preparing',
+      request: createBoth('feature/halfretry', 'Half'),
+    });
+    assert.equal((await harness.runOf(started.id)).status, 'failed');
+    const attemptsBefore = (await attemptsOf(harness, started.id)).length;
+
+    /**
+     * The window the run row cannot describe on its own.
+     *
+     * `adoptRetryPin` repins the run and leaves it `ready`, and `claimSegment` is a separate
+     * transaction. A process killed between the two leaves a non-terminal preparing run with **no
+     * attempt at all** — so there is nothing to mark interrupted, and nothing an older closed
+     * attempt could honestly be blamed for.
+     */
+    harness.crashNext('claimSegment');
+    const exit = await Effect.runPromiseExit(harness.controls.retry(started.id));
+    assert.equal(exit._tag, 'Failure');
+    const stranded = await harness.runOf(started.id);
+    assert.equal(stranded.status, 'ready');
+    assert.equal(stranded.activeAttemptId, null);
+    assert.equal(
+      (await attemptsOf(harness, started.id)).length,
+      attemptsBefore,
+      'no attempt was allocated',
+    );
+
+    const summary = await harness.restart();
+    assert.deepEqual([summary.preparationsFailed, summary.parked], [1, 0]);
+
+    const recovered = await harness.runOf(started.id);
+    assert.equal(recovered.status, 'failed');
+    assert.equal(
+      recovered.failureAttemptId,
+      null,
+      'there is genuinely no attempt to point at, so none is invented',
+    );
+    assert.equal(recovered.paused, false);
+
+    // Retry is still offered, and it works: the receipts from the *first* attempt still say what
+    // was allocated, so the re-entry reuses rather than duplicates.
+    harness.owning.calls.length = 0;
+    harness.owning.allowsSetup({ status: 'succeeded', runId: 5 });
+    const retried = await harness.retry(started.id);
+    assert.deepEqual([retried.accepted, retried.status], [true, 'ready']);
+    assert.deepEqual(harness.owning.calls, ['runWorktreeSetup', 'createSinglePaneSurface']);
   });
 });

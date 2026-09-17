@@ -13,7 +13,9 @@ import type { WaitResolver } from '../waits/resolver.js';
  *
  * 1. **Park.** Every unfinished run is paused, its ownership cleared, its interrupted attempt closed
  *    with an *unknown* end rather than a fabricated one. Nothing committed is ever re-executed; only
- *    an uncommitted segment can be re-entered, and only after step 2.
+ *    an uncommitted segment can be re-entered, and only after step 2. The one exception is a run
+ *    interrupted mid-*preparation*, which is failed instead of parked: Retry is its single re-entry
+ *    path, so a pause band would only offer a Resume that nothing could act on.
  * 2. **Settle operations.** What crossed an external boundary is established from durable evidence
  *    while graph dispatch is still gated. A lost headless capture becomes one interruption; an
  *    ambiguous submission becomes uncertainty and blocks its run.
@@ -37,14 +39,20 @@ export interface RecoverySummary {
   readonly reconciledExecutions: number;
   readonly deliveredWaits: number;
   readonly environmentsLost: number;
+  /**
+   * Runs whose environment preparation was interrupted, and which this pass failed.
+   *
+   * Failed rather than parked, and deliberately so: Retry is the single re-entry path for a
+   * half-prepared environment, and a pause band would offer a Resume that nothing could act on.
+   * `parkUnfinishedRuns` decides this — one pass over one query handles both kinds of row — and
+   * startup only reports it.
+   */
+  readonly preparationsFailed: number;
 }
 
 export function recoverAtStartup(deps: RecoveryDeps): Effect.Effect<RecoverySummary> {
   return Effect.gen(function* () {
-    // `preparationsFailed` is deliberately not surfaced here yet: phase 08 owns what startup does
-    // with a run whose environment preparation was interrupted, including whether the summary grows
-    // a field for it. Reading only `parked` keeps this call honest about what it currently reports.
-    const { parked } = yield* deps.runs.parkUnfinishedRuns({});
+    const { parked, preparationsFailed } = yield* deps.runs.parkUnfinishedRuns({});
     const reconciled = yield* deps.operations.reconcileAtStartup;
     const delivered = yield* deps.waits.reconcileWaits();
     const environmentsLost = yield* rederiveEnvironments(deps);
@@ -53,6 +61,7 @@ export function recoverAtStartup(deps: RecoveryDeps): Effect.Effect<RecoverySumm
       reconciledExecutions: reconciled.length,
       deliveredWaits: delivered,
       environmentsLost,
+      preparationsFailed: preparationsFailed.length,
     };
   }).pipe(
     Effect.catchAllCause((cause) =>
@@ -61,7 +70,13 @@ export function recoverAtStartup(deps: RecoveryDeps): Effect.Effect<RecoverySumm
         // recovery failed would take every other run down with it. The failure is loud, and the
         // parked runs stay parked, which is the safe resting state.
         console.error('[runtime] Workflow startup recovery failed', cause);
-        return { parked: 0, reconciledExecutions: 0, deliveredWaits: 0, environmentsLost: 0 };
+        return {
+          parked: 0,
+          reconciledExecutions: 0,
+          deliveredWaits: 0,
+          environmentsLost: 0,
+          preparationsFailed: 0,
+        };
       }),
     ),
   );
