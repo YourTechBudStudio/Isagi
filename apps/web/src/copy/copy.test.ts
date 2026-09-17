@@ -185,3 +185,18 @@ function surfaceRejected(reason: 'surface_not_found' | 'pane_not_found' | 'inval
 function exit() {
   return { exitCode: null, signal: null };
 }
+
+test('the two create-only worktree refusals have their own lines', () => {
+  // Unreachable until a caller asks to create rather than adopt, which is what a workflow placement
+  // does. Without copy they fall back to the family summary and say nothing about what is in the way.
+  for (const reason of ['branch_exists', 'worktree_exists'] as const) {
+    const copy = runtimeErrorCopy.fromApiError({
+      code: 'worktree_open_rejected',
+      status: 409,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason, projectId: 2, branch: 'feat/x' },
+    } as ApiError);
+    assert.notEqual(copy, "Couldn't open that worktree.", `missing copy: ${reason}`);
+  }
+});

@@ -43,6 +43,18 @@ export function workflowSummaryFixture(
     attachment: { worktreeId: 10, surfaceId: 101 },
     origin: placement(),
     destination: placement(),
+    // The common case, so tests that care about placement override it: nobody chose anything, the
+    // run went where it was launched from, and preparing that allocated nothing worth a receipt.
+    preparation: {
+      source: 'default',
+      request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+      baseCommit: null,
+      status: 'prepared',
+      worktree: null,
+      setup: null,
+      surface: null,
+      failure: null,
+    },
     controls: {
       pause: true,
       resume: false,

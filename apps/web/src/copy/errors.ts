@@ -40,6 +40,10 @@ const folderProjectNoWorktrees = 'This project is a plain folder, so it has no w
 // worktree a workflow asked for, so they read identically in both places.
 const branchNameRejected = "Git won't accept that branch name.";
 const baseRefMissing = "Couldn't find the base ref to branch from.";
+// A create that found the thing already there. The same two facts refuse a
+// worktree the person asked for by hand and one a workflow's placement asked for.
+const branchAlreadyExists = 'That branch already exists.';
+const worktreeAlreadyExists = "There's already a worktree for that branch.";
 const harnessLaunchBlockCopy = {
   onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
   config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
@@ -127,6 +131,10 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       setup_trust_required: 'These setup hooks need your OK before they can run.',
       setup_trust_mismatch: setupTrustMismatch,
       worktrees_not_supported: folderProjectNoWorktrees,
+      // Only reachable when the caller asked to create rather than adopt, so
+      // "already exists" is the refusal, not a state to work with.
+      branch_exists: branchAlreadyExists,
+      worktree_exists: worktreeAlreadyExists,
     }),
   },
   worktree_setup_rejected: {
@@ -198,7 +206,9 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
       workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
       workflow_root_surface_required: 'A workflow needs a surface to run on.',
-      workflow_surface_attached: 'This surface already has a workflow on it.',
+      // Destination wording: the busy surface is the one the run was aimed at, which
+      // is not necessarily the one the person is looking at.
+      workflow_surface_attached: 'That surface already has a workflow on it.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
       workflow_run_not_retryable: "There's nothing to retry on this run right now.",
       workflow_run_not_cancellable:

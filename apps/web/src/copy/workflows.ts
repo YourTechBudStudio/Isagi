@@ -1,7 +1,10 @@
 import type {
   WorkflowDiagnosticCode,
+  WorkflowEnvironmentFailureReason,
   WorkflowFailureCode,
   WorkflowLoadFailureReason,
+  WorkflowSurfaceReceipt,
+  WorkflowWorktreeReceipt,
 } from '@isagi/contracts';
 
 export const workflowCopy = {
@@ -86,6 +89,11 @@ const workflowFailureHeadlines = {
   operation_context_closed: 'A step tried to call out after it had already finished.',
 
   payload_unavailable: 'A value this run recorded earlier could not be read back.',
+
+  // Preparing the environment is a segment like any other, so it fails like one. The step and the
+  // reason are the useful facts and they live on the preparation record, which is where the palette
+  // and the inspector read them from; this is the one-line version for a run that only shows a code.
+  environment_preparation_failed: "This workflow's environment could not be prepared.",
 } as const satisfies Record<WorkflowFailureCode, string>;
 
 export function workflowFailureHeadline(code: WorkflowFailureCode): string {
@@ -135,4 +143,213 @@ export function workflowLoadFailureReasonCopy(reason: WorkflowLoadFailureReason)
 
 export function workflowLoadFailureReasonCopyOrFallback(reason: string): string {
   return workflowLoadFailureCopy[reason as WorkflowLoadFailureReason] ?? workflowCopy.loadFailed;
+}
+
+/**
+ * What a preparation failure knew about itself, in the shapes the sentences need.
+ *
+ * Which of these exists is decided by the reason — a `surface_busy` has no branch, a
+ * `branch_exists` has no occupying run — so every field is optional and every line below reads
+ * correctly without it. The alternative, a sentence that names a field the runtime never recorded,
+ * is the one thing this copy must not do.
+ */
+export interface WorkflowEnvironmentFailureFacts {
+  readonly branch?: string | undefined;
+  readonly occupyingRunId?: number | undefined;
+  readonly hook?: { readonly index: number; readonly type: string } | undefined;
+}
+
+/**
+ * A placement that named a row which is now gone cannot be retried into existence.
+ *
+ * Retry replays the recorded placement request verbatim — the request *is* the decision, and the
+ * author's selector is deliberately never asked again — so re-resolving an id whose row has been
+ * deleted fails identically every time. The only real next move is a new launch.
+ */
+const placementIsFixed = 'This run can only go where it was placed, so start the workflow again.';
+
+/**
+ * Why preparing the environment stopped, in one sentence, and whether Retry can change the answer.
+ *
+ * Every `line` is a function of the facts the runtime recorded, so a reason that has an identity to
+ * name can name it and still read as a whole sentence when it does not. `satisfies` over the
+ * contract union is what keeps the set complete: a reason added to the contract fails this build
+ * rather than silently falling through to a generic line.
+ *
+ * `retryable: false` is reserved for the reasons where Retry would re-run the identical request
+ * against the identical missing row and return the identical panel — an offer that cannot work. The
+ * rest keep Retry, and each names what to change first where there is something to change; only
+ * `git_failed`, `setup_failed`, `workspace_rejected` and `interrupted` end without advice, because
+ * for those "try it again" genuinely is the next move.
+ */
+const workflowEnvironmentFailureLines = {
+  worktree_missing: {
+    retryable: false,
+    line: () => `That worktree isn't there anymore. ${placementIsFixed}`,
+  },
+  surface_missing: {
+    retryable: false,
+    line: () => `That surface isn't there anymore. ${placementIsFixed}`,
+  },
+  surface_not_on_worktree: {
+    retryable: false,
+    line: () => `That surface belongs to a different worktree. ${placementIsFixed}`,
+  },
+  branch_exists: {
+    retryable: true,
+    line: ({ branch }) =>
+      branch
+        ? `Branch ${branch} already exists, so Isagi didn't create a worktree from it. Retry once it's gone, or start again with a different name.`
+        : "That branch already exists, so Isagi didn't create a worktree from it. Retry once it's gone, or start again with a different name.",
+  },
+  worktree_exists: {
+    retryable: true,
+    line: ({ branch }) =>
+      branch
+        ? `There's already a worktree for ${branch}. Retry once it's gone, or start again with a different branch.`
+        : "There's already a worktree for that branch. Retry once it's gone, or start again with a different branch.",
+  },
+  checkout_path_unavailable: {
+    retryable: true,
+    line: () =>
+      'Something is already at the path Isagi would have checked out into. Clear it, then retry.',
+  },
+  git_failed: { retryable: true, line: () => "Git wouldn't create the worktree." },
+  setup_trust_required: {
+    retryable: true,
+    line: () =>
+      'The setup hooks need to be trusted before they can run. Open the worktree once to review them, then retry.',
+  },
+  setup_failed: {
+    retryable: true,
+    line: ({ hook }) =>
+      hook
+        ? `Setup hook ${hook.index} (${hook.type}) didn't finish.`
+        : "A setup hook didn't finish.",
+  },
+  workspace_rejected: { retryable: true, line: () => "Isagi couldn't set up that environment." },
+  surface_busy: {
+    retryable: true,
+    line: ({ occupyingRunId }) =>
+      occupyingRunId
+        ? `That surface already has a workflow on it (run #${occupyingRunId}). Dismiss that run, then retry.`
+        : 'That surface already has a workflow on it. Dismiss that run, then retry.',
+  },
+  interrupted: {
+    retryable: true,
+    line: () => 'Isagi stopped part-way through preparing the environment.',
+  },
+} as const satisfies Record<
+  WorkflowEnvironmentFailureReason,
+  {
+    readonly retryable: boolean;
+    readonly line: (facts: WorkflowEnvironmentFailureFacts) => string;
+  }
+>;
+
+export const workflowEnvironmentCopy = {
+  preparationFailedTitle: "Couldn't prepare the environment.",
+  preparationCancelledTitle: 'Cancelled while preparing the environment.',
+  preparationCancelledBody: 'The workflow never started.',
+  /**
+   * A failure the summary could not describe.
+   *
+   * Three different things produce it — the failing attempt belongs to another segment, there is no
+   * failing attempt at all after a recovery, or the recorded detail did not read back — and this
+   * line is true of all three. Naming a cause here, such as an interruption, would be asserting one
+   * of the three as fact.
+   */
+  preparationReasonUnknown: "Isagi can't say where preparing the environment stopped.",
+  /**
+   * The launch went through and the follow-up read did not.
+   *
+   * Two runtime calls answer one question — "did this work" — and only the first of them decides
+   * whether a run exists. Reporting a failed read as a failed launch would tell somebody their
+   * workflow did not start while a prepared run with a live attachment sits behind it.
+   */
+  // "that run", not "that launch": the same sentence is shown after a Retry, and the run is what
+  // both paths have in common.
+  summaryUnreadableTitle: "Couldn't read what happened to that run.",
+  summaryUnreadableBody: 'The workflow started, so its run is there.',
+  // The launch request blocks until preparation is decided, so reaching this means something below
+  // Isagi restarted mid-launch. It says what is true and offers nothing it cannot deliver.
+  preparationPendingTitle: 'Still preparing the environment.',
+  preparationPendingBody:
+    "The run exists and is still setting itself up. It'll appear once it has somewhere to work.",
+  nothingCreated: 'Nothing was created.',
+  nothingDeleted: 'Nothing was deleted.',
+  retryFromSetup: 'Retry runs setup again on the same worktree.',
+  retryOnSameWorktree: 'Retry picks up on the same worktree.',
+  setupOutputLabel: 'Setup output',
+  diagnosticLabel: 'Runtime detail',
+} as const;
+
+export function workflowEnvironmentFailureLine(
+  reason: WorkflowEnvironmentFailureReason,
+  facts: WorkflowEnvironmentFailureFacts = {},
+): string {
+  return workflowEnvironmentFailureLines[reason].line(facts);
+}
+
+/**
+ * Whether Retry could produce a different answer for this reason.
+ *
+ * Asked by the outcome before it offers Retry at all: an action that is guaranteed to return the
+ * same panel is not a next step, it is a loop. Unknown reasons are not this function's problem — a
+ * failure the summary could not describe is still retryable, and the caller decides that.
+ */
+export function workflowEnvironmentFailureRetryable(
+  reason: WorkflowEnvironmentFailureReason,
+): boolean {
+  return workflowEnvironmentFailureLines[reason].retryable;
+}
+
+/**
+ * What this launch brought into existence, in one sentence, or that it brought nothing.
+ *
+ * Receipts are written only for allocations, so this sentence can never over-claim: a reused
+ * worktree or surface leaves none. An adopted worktree still reads as "created" because an earlier
+ * attempt of this same run is what created it — the run is the subject, not the attempt.
+ */
+export function workflowEnvironmentCreatedLine(receipts: {
+  readonly worktree: WorkflowWorktreeReceipt | null;
+  readonly surface: WorkflowSurfaceReceipt | null;
+  /** Already compacted for display by the caller; this file formats, it does not resolve paths. */
+  readonly worktreePath?: string | undefined;
+}): string {
+  const { worktree, surface } = receipts;
+  const path = receipts.worktreePath ?? worktree?.worktreePath;
+  const worktreePhrase = worktree
+    ? worktree.branch
+      ? `the worktree ${worktree.branch} at ${path}`
+      : `the worktree at ${path}`
+    : null;
+  const surfacePhrase = surface ? `the surface "${surface.title}"` : null;
+  const phrases = [worktreePhrase, surfacePhrase].filter(
+    (phrase): phrase is string => phrase !== null,
+  );
+  if (phrases.length === 0) {
+    return workflowEnvironmentCopy.nothingCreated;
+  }
+  return `Before it stopped, Isagi created ${phrases.join(' and ')}.`;
+}
+
+/**
+ * What Retry would do, given what already exists — or nothing, when Retry is not being offered.
+ *
+ * Silent in both directions on purpose: describing a Retry that is not on the panel would name an
+ * action the person cannot take, and describing one when nothing was allocated would promise
+ * continuity that does not exist.
+ */
+export function workflowEnvironmentRetryLine(input: {
+  readonly worktree: WorkflowWorktreeReceipt | null;
+  readonly failedAtSetup: boolean;
+  readonly retryable: boolean;
+}): string | null {
+  if (input.worktree === null || !input.retryable) {
+    return null;
+  }
+  return input.failedAtSetup
+    ? workflowEnvironmentCopy.retryFromSetup
+    : workflowEnvironmentCopy.retryOnSameWorktree;
 }

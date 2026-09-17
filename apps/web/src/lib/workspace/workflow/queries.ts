@@ -28,6 +28,7 @@ import {
   cancelWorkflow,
   dismissWorkflow,
   getWorkflowPayload,
+  getWorkflowRun,
   getWorkflowStructure,
   listWorkflowDescriptors,
   listWorkflowEvents,
@@ -590,6 +591,13 @@ export function useResumeWorkflowMutation(runId: number | null) {
   return useMutation({ mutationFn: () => runControl(runId, resumeWorkflow, 'resume') });
 }
 
+/**
+ * Retry for a run this component already names — the bar's and the inspector's control.
+ *
+ * Binds its run when the component mounts and returns the control's own small result. The palette's
+ * `useWorkflowRetryByIdMutation` is the same control bound the other way round, for a caller that
+ * does not know the run until it has started one.
+ */
 export function useRetryWorkflowMutation(runId: number | null) {
   return useMutation({ mutationFn: () => runControl(runId, retryWorkflow, 'retry') });
 }
@@ -649,9 +657,46 @@ export function useWorkflowDescriptorsQuery(
   });
 }
 
+/**
+ * Start a workflow.
+ *
+ * The request blocks until preparing the environment has committed or failed, so it takes real time
+ * and answers only one question: which run this is. What actually happened to it is a separate read,
+ * deliberately — a caller that composed the two could not tell a rejected launch from a run it
+ * merely failed to read back, and would report a prepared run as one that never started.
+ */
 export function useStartWorkflowMutation() {
   return useMutation({
     mutationFn: (input: StartWorkflowInput) => runRuntimeEffect(startWorkflow(input)),
+  });
+}
+
+/**
+ * Retry a run whose preparation never finished, blocking for the whole preparation as the control
+ * does.
+ *
+ * Deliberately separate from `useRetryWorkflowMutation`, which the bar and the inspector use: that
+ * one binds its run when the component mounts, and the palette does not know the run id until the
+ * launch it is reporting on has returned. Named for how it binds, because the two otherwise differ
+ * by word order alone.
+ */
+export function useWorkflowRetryByIdMutation() {
+  return useMutation({ mutationFn: (runId: number) => runRuntimeEffect(retryWorkflow(runId)) });
+}
+
+/**
+ * The run's own account of itself, read once, on demand.
+ *
+ * Not cached: this is a point-in-time answer to "what happened to the launch I just made", and the
+ * run's live projection reaches every other surface through the attached-run cache and the
+ * coordinator.
+ */
+export function useWorkflowRunSummaryMutation() {
+  return useMutation({
+    mutationFn: async (runId: number): Promise<WorkflowRunSummary> => {
+      const output = await runRuntimeEffect(getWorkflowRun(runId));
+      return output.run;
+    },
   });
 }
 

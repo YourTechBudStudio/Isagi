@@ -107,6 +107,10 @@ export const inspectorCopy = {
 
   // Header
   runFacts: 'Run facts',
+  // Who decided where this run works. Shown only when somebody did decide: a run that went where it
+  // was launched from says nothing, because there is nothing there a person did not already know.
+  placementBySelector: 'chosen by workflow',
+  placementByOverride: 'placed by caller',
   dockResize: 'Resize details',
   dockResizeHint: 'Up and down arrows resize the details panel.',
 } as const;

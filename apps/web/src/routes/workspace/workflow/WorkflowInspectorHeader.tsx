@@ -60,6 +60,7 @@ export function WorkflowInspectorHeader({
         <p className="mt-0.5 truncate font-mono text-[11.5px] text-fg-subtle">
           {facts.join(' · ')}
         </p>
+        <PlacementLine summary={summary} />
         <ReasonLine summary={summary} />
       </div>
       <button
@@ -74,6 +75,90 @@ export function WorkflowInspectorHeader({
       </button>
     </header>
   );
+}
+
+/**
+ * Who chose this run's environment, and what they chose — on its own line, or not at all.
+ *
+ * Only a run whose placement somebody decided has anything to say here, so the common case (the
+ * unchanged current worktree and surface) adds nothing and the header looks exactly as it did. The
+ * line wraps rather than truncating: it is the least important line in the header and the one most
+ * likely to be long, and truncating it would drop the created branch first.
+ *
+ * Every phrase comes from the run's own retained record — the placement request, the receipts and
+ * the destination the commit wrote. Nothing here re-reads a worktree or surface row, so a deleted
+ * resource leaves the sentence intact rather than blanking it.
+ */
+function PlacementLine({ summary }: { readonly summary: WorkflowRunSummary }) {
+  const line = placementFact(summary);
+  if (line === null) {
+    return null;
+  }
+  return (
+    <p className="mt-0.5 font-mono text-[11.5px] wrap-break-word text-fg-subtle">
+      <span className="text-fg-muted">{line.provenance}</span>
+      {line.choices.map((choice) => (
+        <span key={choice}> · {choice}</span>
+      ))}
+    </p>
+  );
+}
+
+function placementFact(
+  summary: WorkflowRunSummary,
+): { readonly provenance: string; readonly choices: readonly string[] } | null {
+  const { preparation } = summary;
+  if (preparation.source === 'default') {
+    return null;
+  }
+  return {
+    provenance:
+      preparation.source === 'selector'
+        ? inspectorCopy.placementBySelector
+        : inspectorCopy.placementByOverride,
+    choices: [worktreeChoiceFact(summary), surfaceChoiceFact(summary)],
+  };
+}
+
+function worktreeChoiceFact(summary: WorkflowRunSummary): string {
+  const choice = summary.preparation.request.worktree;
+  if (choice.kind === 'current') {
+    return 'current worktree';
+  }
+  if (choice.kind === 'existing') {
+    // The path is what the commit wrote, so it is there for every run that reaches the inspector;
+    // the id is a last resort that names something rather than rendering a blank phrase.
+    const path = summary.destination.worktreePath;
+    return `existing worktree ${path === null ? `#${choice.worktreeId}` : folderName(path)}`;
+  }
+  const baseCommit = summary.preparation.baseCommit;
+  const from = `from ${choice.fromRef}${baseCommit === null ? '' : ` @ ${shortHash(baseCommit)}`}`;
+  return `new worktree ${choice.branch} ${from}`;
+}
+
+/**
+ * The surface axis of the choice.
+ *
+ * An existing surface is named by its id in the request and nothing else: the summary carries no
+ * title for a surface this launch did not create, and reading one out of live workspace state would
+ * put a deletable fact inside a line that is otherwise retained history. "existing surface" is the
+ * true and complete statement of what was asked for.
+ */
+function surfaceChoiceFact(summary: WorkflowRunSummary): string {
+  const choice = summary.preparation.request.surface;
+  if (choice.kind === 'current') {
+    return 'current surface';
+  }
+  if (choice.kind === 'existing') {
+    return 'existing surface';
+  }
+  // The receipt's title is what the surface is actually called: the owner may trim or disambiguate
+  // what was asked for, and the header should say what exists.
+  return `new surface "${summary.preparation.surface?.title ?? choice.title}"`;
+}
+
+function folderName(path: string): string {
+  return path.split('/').at(-1) || path;
 }
 
 /**
@@ -168,6 +253,6 @@ function StatusChip({
  */
 function surfaceFact(summary: WorkflowRunSummary): string {
   const path = summary.destination.worktreePath;
-  const name = path === null ? 'no worktree' : path.split('/').at(-1) || path;
+  const name = path === null ? 'no worktree' : folderName(path);
   return summary.destination.available ? `surface ${name}` : `surface ${name} · unavailable`;
 }
