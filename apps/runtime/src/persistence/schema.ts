@@ -21,6 +21,7 @@ import {
   workflowOperationStageSchema,
   workflowOperationStateSchema,
   workflowOutcomeKindSchema,
+  workflowPlacementSourceSchema,
   workflowRunStatusSchema,
   workflowSegmentKindSchema,
   workflowStopStateSchema,
@@ -54,6 +55,7 @@ const capabilities = workflowCapabilitySchema.literals;
 const operationStates = workflowOperationStateSchema.literals;
 const operationStages = workflowOperationStageSchema.literals;
 const stopStates = workflowStopStateSchema.literals;
+const placementSources = workflowPlacementSourceSchema.literals;
 
 /**
  * A recorded value lives in a *slot pair*: `<name>_inline` for canonical JSON at or under the inline
@@ -170,17 +172,35 @@ export const worktreeSetupSteps = sqliteTable('worktree_setup_steps', {
   outputExcerpt: text('output_excerpt'),
 });
 
-export const worktreeSurfaces = sqliteTable('worktree_surfaces', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  worktreeId: integer('worktree_id')
-    .notNull()
-    .references(() => worktrees.id, { onDelete: 'cascade' }),
-  title: text('title').notNull(),
-  layoutJson: text('layout_json').notNull(),
-  sortOrder: integer('sort_order').notNull(),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
-});
+export const worktreeSurfaces = sqliteTable(
+  'worktree_surfaces',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    worktreeId: integer('worktree_id')
+      .notNull()
+      .references(() => worktrees.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    layoutJson: text('layout_json').notNull(),
+    sortOrder: integer('sort_order').notNull(),
+    /**
+     * The caller-supplied intent key for a surface this call is creating, written by this owning
+     * service and nobody else (ADR 0008), so a crashed compound creation can be completed rather
+     * than repeated. Null for every ordinary, unkeyed creation, which is the common case.
+     *
+     * This is a **distinct keyspace** from `surface_panes.creation_key`, not a shared one. The
+     * repository's `findKeyedCreation` deliberately does not read this column: it resolves a pane
+     * or agent-session key, and a surface created through `createSinglePaneSurface` leaves its pane
+     * unkeyed (only `splitPane` writes a keyed pane). Surface re-entry therefore has its own lookup
+     * over this table. Because the two keyspaces are separate tables, an identical key string in
+     * both cannot cross over, which is why neither a three-table resolution nor a suffixed
+     * `…:surface` / `…:pane` key split is needed.
+     */
+    creationKey: text('creation_key'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('worktree_surfaces_creation_key_unique').on(table.creationKey)],
+);
 
 export const surfacePanes = sqliteTable(
   'surface_panes',
@@ -541,7 +561,13 @@ export const workflowRuns = sqliteTable(
     originSurfaceId: integer('origin_surface_id'),
     originPaneId: integer('origin_pane_id'),
     originAgentSessionId: integer('origin_agent_session_id'),
-    /** Equal to origin in #43; #44 changes only how a destination is chosen, not this shape. */
+    /**
+     * Where the run's work is actually placed, and null until `commitEnvironmentPreparation` writes
+     * it. A launch records only the *requested* placement (`workflow_run_preparations`); the
+     * effective ids are written by the one transaction that also inserts the attachment and
+     * re-checks occupancy, so a run that never finished preparing has no destination rather than a
+     * provisional one. Descriptive, with no foreign key, for the same reason as `origin_*`.
+     */
     destinationWorktreeId: integer('destination_worktree_id'),
     destinationWorktreePath: text('destination_worktree_path'),
     destinationSurfaceId: integer('destination_surface_id'),
@@ -593,6 +619,55 @@ export const workflowRunAttachments = sqliteTable(
       .where(sql`${table.surfaceId} IS NOT NULL`),
     index('workflow_run_attachments_worktree_idx').on(table.worktreeId),
   ],
+);
+
+/**
+ * One row per run: the placement decision made at launch, and the receipts of what preparing it
+ * actually did.
+ *
+ * Written before any owning service allocates anything, which is what makes a partial preparation
+ * inspectable: a run that failed half way through can always say what was asked for and what was
+ * created. Receipts carry plain ids and paths with **no** foreign key, like `origin_*` and
+ * `destination_*`, so they outlive the resources they name (ADR 0006) — a receipt naming a worktree
+ * the person has since deleted is still the honest record of what this launch brought into
+ * existence.
+ *
+ * There is deliberately **no status column**. Preparation status is derived at read time from the
+ * run's position, status and receipts, per ADR 0008's "persist source facts, derive product state";
+ * storing it would create a second authority that can disagree with the position.
+ *
+ * A receipt exists only for an *allocation*. A reused worktree or surface leaves none, because the
+ * choice is already pinned by `request_json` and `origin_*`, and the effective ids are written by
+ * the commit into `destination_*`. That is also what lets a retry reuse what exists rather than
+ * create a second set.
+ */
+export const workflowRunPreparations = sqliteTable(
+  'workflow_run_preparations',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    /** Who decided the placement: a caller override, the workflow's `environment` hook, or neither. */
+    source: text('source', { enum: placementSources }).notNull(),
+    /** Serialized `WorkflowPlacementRequest`, decoded through the shared schema like `position_json`. */
+    requestJson: text('request_json').notNull(),
+    /** What `fromRef` resolved to at launch. Null unless the worktree choice was `create`. */
+    baseCommit: text('base_commit'),
+    /**
+     * The checkout path the workspace preflight derived, recorded rather than re-derived because
+     * the derivation is private to `workspace.service.ts` and depends on the data directory. The
+     * adoption predicate compares an existing worktree's path against this. Null unless the
+     * worktree choice was `create`.
+     */
+    checkoutPath: text('checkout_path'),
+    worktreeReceiptJson: text('worktree_receipt_json'),
+    setupReceiptJson: text('setup_receipt_json'),
+    surfaceReceiptJson: text('surface_receipt_json'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('workflow_run_preparations_run_unique').on(table.runId)],
 );
 
 /** One invocation of a graph. A definition is reusable structure; a frame is one use of it. */

@@ -10,13 +10,18 @@ import type {
   WorkflowOperationStage,
   WorkflowOperationState,
   WorkflowOutcomeKind,
+  WorkflowPlacementRequestDto,
+  WorkflowPlacementSource,
   WorkflowRunPosition,
   WorkflowRunStatus,
   WorkflowSegmentKind,
+  WorkflowSetupReceipt,
   WorkflowStopState,
+  WorkflowSurfaceReceipt,
   WorkflowTransitionKind,
   WorkflowWaitKind,
   WorkflowWaitStatus,
+  WorkflowWorktreeReceipt,
 } from '@isagi/contracts';
 
 import type { PayloadSlot } from './payload-store.js';
@@ -78,6 +83,27 @@ export interface WorkflowRunRecord {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly endedAt: string | null;
+}
+
+/**
+ * How a run's destination was chosen, and what preparing it allocated.
+ *
+ * One record per run, written before any owning service allocates anything. `request` is what was
+ * *asked for* and never changes; the receipts are what this launch actually created, and are null
+ * for reuse choices, which create nothing. There is no status field: preparation status is derived
+ * by the read projection from the run's position, status and these receipts.
+ */
+export interface WorkflowRunPreparationRecord {
+  readonly runId: number;
+  readonly source: WorkflowPlacementSource;
+  readonly request: WorkflowPlacementRequestDto;
+  readonly baseCommit: string | null;
+  readonly checkoutPath: string | null;
+  readonly worktree: WorkflowWorktreeReceipt | null;
+  readonly setup: WorkflowSetupReceipt | null;
+  readonly surface: WorkflowSurfaceReceipt | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface WorkflowRunAttachmentRecord {

@@ -1,4 +1,5 @@
 import type {
+  WorkflowEnvironmentStep,
   WorkflowOperationState,
   WorkflowRunStatus,
   WorkflowWaitStatus,
@@ -67,6 +68,19 @@ export type WorkflowWriteRejection =
    */
   | { readonly kind: 'run_blocked'; readonly blockedOperationId: number | null }
   | { readonly kind: 'position_mismatch' }
+  /**
+   * A preparation receipt already exists for this step and would have been overwritten.
+   *
+   * A receipt is the record of an allocation that actually happened, so overwriting one loses the
+   * only evidence that a worktree or surface exists — which is exactly what a later attempt reads
+   * to decide between reusing and creating. Returned as a named rejection rather than letting the
+   * write land, so the attempt to overwrite is a visible defect signal instead of silent data loss.
+   *
+   * The setup receipt is the one deliberate exception: a `failed` or `unknown` setup is replaced by
+   * a `succeeded` one when a retry re-runs hooks, and the superseded receipt stays in history as its
+   * own `environment_step_recorded` transition.
+   */
+  | { readonly kind: 'receipt_already_recorded'; readonly step: WorkflowEnvironmentStep }
   /**
    * Late evidence already exists for this operation and the new observation disagrees with it.
    *

@@ -16,7 +16,17 @@ import { buildWorkspaceSnapshot } from '../workspace/workspace.snapshot.js';
 import { DataDirectory } from './data-directory.service.js';
 import { RuntimeDatabase, RuntimeDatabaseLive } from './database.service.js';
 import { migrationsDirectory } from './migrations.js';
-import { projects, workflowRuns, worktrees } from './schema.js';
+import {
+  projects,
+  workflowArtifacts,
+  workflowGraphFrames,
+  workflowPayloads,
+  workflowRunAttachments,
+  workflowRuns,
+  workflowSegmentAttempts,
+  workflowTransitions,
+  worktrees,
+} from './schema.js';
 import { makeTestDataDirectory } from './test-support.js';
 
 /**
@@ -60,6 +70,21 @@ const PRE_PROJECT_KIND_TAGS = [
   '0004_mixed_synch',
   '0005_tiny_jackal',
   '0006_stale_the_hood',
+] as const;
+
+/** The migration set as it stood before the durable preparation record. */
+const PRE_PREPARATION_TAGS = [
+  '0000_lazy_morbius',
+  '0001_durable_workflow_artifact_pin',
+  '0002_daily_thor_girl',
+  '0003_peaceful_squirrel_girl',
+  '0004_mixed_synch',
+  '0005_tiny_jackal',
+  '0006_stale_the_hood',
+  '0007_light_supreme_intelligence',
+  '0008_retire_v1_workflow_store',
+  '0009_graph_workflow_records',
+  '0010_workflow_transition_changes',
 ] as const;
 
 interface JournalEntry {
@@ -150,14 +175,15 @@ const SEEDED_SURFACES = [
  * columns added between the pre-`0002` baseline and the current migration head.
  * Everything not listed here has to come back unchanged — note that
  * `worktree_surfaces.sort_order` predates `0002` and so is *not* excused from
- * the comparison. `projects.kind` arrives later, in `0007`, but this case
- * migrates all the way to head, so it is excused here too; the dedicated
- * pre-kind case below is what actually asserts its backfilled value.
+ * the comparison. `projects.kind` arrives later, in `0007`, and
+ * `worktree_surfaces.creation_key` later still, in `0011`, but this case
+ * migrates all the way to head, so both are excused here too; the dedicated
+ * pre-kind case below is what actually asserts the backfilled value.
  */
 const ADDED_COLUMNS = {
   projects: ['sort_order', 'kind'],
   worktrees: ['sort_order'],
-  worktree_surfaces: [],
+  worktree_surfaces: ['creation_key'],
 } as const satisfies Record<string, readonly string[]>;
 
 type RawRow = Record<string, unknown>;
@@ -342,13 +368,19 @@ const V2_WORKFLOW_TABLES = [
   'workflow_version_adoptions',
   'workflow_pause_intervals',
   'workflow_payloads',
+  'workflow_transition_changes',
+  'workflow_run_preparations',
 ] as const;
 
-/** `0009` adds `creation_key` to the two owner tables that can create a keyed resource. */
+/**
+ * `0009` adds `creation_key` to the two owner tables that can create a keyed resource, and `0011`
+ * adds it to `worktree_surfaces` as a third, separate keyspace. This case migrates all the way to
+ * head, so every one of them is excused here.
+ */
 const PRE_GRAPH_WORKFLOW_ADDED_COLUMNS = {
   projects: [],
   worktrees: [],
-  worktree_surfaces: [],
+  worktree_surfaces: ['creation_key'],
   surface_panes: ['creation_key'],
   agent_sessions: ['creation_key'],
   terminal_sessions: [],
@@ -361,6 +393,181 @@ function tableExists(client: BetterSqlite.Database, table: string) {
     client
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
       .get(table) !== undefined
+  );
+}
+
+/**
+ * `0011` adds `creation_key` to `worktree_surfaces`, the third owner table able to create a keyed
+ * resource — and the first whose keyspace is deliberately separate from the others.
+ */
+const PRE_PREPARATION_ADDED_COLUMNS = {
+  projects: [],
+  worktrees: [],
+  worktree_surfaces: ['creation_key'],
+  surface_panes: [],
+  agent_sessions: [],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * Builds a genuine pre-`0011` database and populates a whole graph-era run in it.
+ *
+ * The workflow rows go in through Drizzle rather than raw SQL, which the older cases in this file
+ * need: `0011` changes only `worktree_surfaces` and adds a new table, so every workflow model here
+ * already matches the pre-`0011` shape exactly. `worktree_surfaces` is still seeded with raw SQL,
+ * because its model now names a column the historical schema does not have.
+ */
+function seedPrePreparationDatabase(databasePath: string, migrationsFolder: string) {
+  const client = new BetterSqlite(databasePath);
+  try {
+    client.pragma('foreign_keys = ON');
+    migrate(drizzle(client), { migrationsFolder });
+
+    assert.equal(
+      hasColumn(client, 'worktree_surfaces', 'creation_key'),
+      false,
+      'Expected the historical schema to predate worktree_surfaces.creation_key.',
+    );
+    assert.equal(
+      tableExists(client, 'workflow_run_preparations'),
+      false,
+      'Expected the historical schema to predate workflow_run_preparations.',
+    );
+
+    const insertProject = client.prepare(
+      `INSERT INTO projects (name, root_path, kind, status, sort_order, created_at, updated_at, last_seen_at, missing_reason)
+       VALUES (@name, @root_path, 'git', @status, @sort_order, @created_at, @updated_at, @last_seen_at, @missing_reason)`,
+    );
+    for (const [index, project] of SEEDED_PROJECTS.entries()) {
+      insertProject.run({ ...project, sort_order: (SEEDED_PROJECTS.length - index) * 10 });
+    }
+
+    const insertWorktree = client.prepare(
+      `INSERT INTO worktrees (project_id, path, branch, head, sort_order, created_at, updated_at, first_seen_at, last_seen_at)
+       VALUES (@project_id, @path, @branch, @head, @sort_order, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL)`,
+    );
+    for (const [index, worktree] of SEEDED_WORKTREES.entries()) {
+      insertWorktree.run({ ...worktree, sort_order: index * 5 });
+    }
+
+    const insertSurface = client.prepare(
+      `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+       VALUES (@worktree_id, @title, '{}', @sort_order, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    );
+    for (const surface of SEEDED_SURFACES) insertSurface.run(surface);
+
+    const at = '2026-09-01T00:00:00.000Z';
+    const artifactHash = 'c'.repeat(64);
+    const db = drizzle(client);
+
+    db.insert(workflowPayloads)
+      .values({
+        payloadRef: 'sha256:' + 'd'.repeat(64),
+        byteSize: 12,
+        mediaType: 'application/json',
+        createdAt: at,
+      })
+      .run();
+
+    db.insert(workflowArtifacts)
+      .values({
+        artifactHash,
+        workflowKey: 'demo',
+        contractVersion: 3,
+        manifestVersion: 1,
+        descriptorVersion: 1,
+        sdkVersion: '0.2.0',
+        verifierVersion: '0.2.0',
+        sourceHash: 'e'.repeat(64),
+        structureHash: 'f'.repeat(64),
+        rootGraphKey: 'root',
+        descriptorInline: '{}',
+        descriptorRef: null,
+        firstSeenAt: at,
+      })
+      .run();
+
+    const run = db
+      .insert(workflowRuns)
+      .values({
+        workflowKey: 'demo',
+        title: 'Demo run',
+        rootGraphKey: 'root',
+        artifactHash,
+        status: 'ready',
+        positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
+        createdAt: at,
+        updatedAt: at,
+      })
+      .returning({ id: workflowRuns.id })
+      .all()[0]!;
+
+    const frame = db
+      .insert(workflowGraphFrames)
+      .values({
+        runId: run.id,
+        graphKey: 'root',
+        entryArtifactHash: artifactHash,
+        depth: 0,
+        status: 'active',
+        enteredAt: at,
+      })
+      .returning({ id: workflowGraphFrames.id })
+      .all()[0]!;
+
+    db.insert(workflowSegmentAttempts)
+      .values({
+        runId: run.id,
+        frameId: frame.id,
+        segmentKind: 'graph_entry',
+        attemptIndex: 0,
+        artifactHash,
+        status: 'running',
+        invocationKind: 'initial',
+        startedAt: at,
+        endCertainty: 'unknown',
+      })
+      .run();
+
+    db.insert(workflowTransitions)
+      .values({ runId: run.id, revision: 1, recordedAt: at, kind: 'run_started' })
+      .run();
+
+    db.insert(workflowRunAttachments)
+      .values({ runId: run.id, worktreeId: 1, surfaceId: 1, attachedAt: at })
+      .run();
+
+    // Proves the seed actually populated every table the delete is expected to empty. Without this
+    // the post-migration count assertions would pass on a database that never held a run.
+    for (const table of [
+      'workflow_runs',
+      'workflow_graph_frames',
+      'workflow_segment_attempts',
+      'workflow_transitions',
+      'workflow_run_attachments',
+      'workflow_artifacts',
+      'workflow_payloads',
+    ]) {
+      assert.equal(
+        (client.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count,
+        1,
+        `Expected the seed to populate ${table} before the upgrade.`,
+      );
+    }
+
+    return {
+      rows: readHistoricalRows(client, PRE_PREPARATION_ADDED_COLUMNS),
+      artifacts: client.prepare('SELECT * FROM workflow_artifacts').all(),
+      payloads: client.prepare('SELECT * FROM workflow_payloads').all(),
+    };
+  } finally {
+    client.close();
+  }
+}
+
+function indexExists(client: BetterSqlite.Database, name: string) {
+  return (
+    client.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`).get(name) !==
+    undefined
   );
 }
 
@@ -490,6 +697,13 @@ test('a fresh database initializes the whole retained model, not only the upgrad
       assert.equal(tableExists(inspect, 'workflow_run_events'), false);
       assert.equal(hasColumn(inspect, 'surface_panes', 'creation_key'), true);
       assert.equal(hasColumn(inspect, 'agent_sessions', 'creation_key'), true);
+      assert.equal(hasColumn(inspect, 'worktree_surfaces', 'creation_key'), true);
+
+      // Both uniqueness rules `0011` introduces: one preparation per run, and a surface creation
+      // key that cannot name two surfaces. Without them a re-entered keyed creation could produce a
+      // second surface, and a run could carry two disagreeing placement decisions.
+      assert.equal(indexExists(inspect, 'workflow_run_preparations_run_unique'), true);
+      assert.equal(indexExists(inspect, 'worktree_surfaces_creation_key_unique'), true);
 
       // The slot constraints have to be present on a fresh install too, not only implied by the
       // schema module: they are what stops a row that is simultaneously inline and referenced.
@@ -587,9 +801,10 @@ test('the graph-workflow migration replaces the v1 store and keeps unrelated dat
 const PRE_KIND_ADDED_COLUMNS = {
   projects: ['kind'],
   worktrees: [],
-  worktree_surfaces: [],
-  // `creation_key` arrives later, in the graph-workflow migration. Listing it here keeps this case
-  // about the columns `0007` adds rather than about every column added since.
+  // Both `creation_key` columns arrive later — panes in the graph-workflow migration, surfaces in
+  // the preparation one. Listing them here keeps this case about the columns `0007` adds rather
+  // than about every column added since.
+  worktree_surfaces: ['creation_key'],
   surface_panes: ['creation_key'],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -705,6 +920,92 @@ test('the project-kind migration upgrades a pre-kind database and backfills git'
     // The upgraded rows still compose a snapshot the shared contract accepts,
     // which is what the web will decode after this migration runs.
     assert.doesNotThrow(() => Schema.decodeUnknownSync(workspaceSnapshotSchema)(upgraded.snapshot));
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Proves the preparation migration (`0011`) upgrades a database created before it existed, and that
+ * its clean-state reset deletes exactly what it claims to.
+ *
+ * Story #44 makes the run summary's `preparation` field non-nullable, and there is no honest way to
+ * backfill it: a synthetic preparation row would record a provenance nobody ever observed. Only
+ * developer databases exist, so the migration deletes every run instead. That makes the delete the
+ * riskiest statement in the plan and the one whose failure is invisible — `DELETE FROM
+ * workflow_runs` relies on `ON DELETE CASCADE`, which fires only while `foreign_keys` is ON, so a
+ * delete landing inside a `PRAGMA foreign_keys=OFF` table-rebuild window would leave orphaned
+ * frames, attempts, transitions and attachments behind rather than removing them. The row counts
+ * and the `foreign_key_check` below are what turn that from a hope into a fact.
+ *
+ * The seed is a fully populated graph-era run — artifact, payload, run, frame, attempt, transition
+ * and attachment — so the cascade is proven against real rows, not against empty tables. The
+ * artifact and payload rows are the control: they are content-addressed retained records and must
+ * survive, because nothing about them becomes inconsistent when a run disappears.
+ */
+test('the preparation migration resets runs, keeps content-addressed records and cascades cleanly', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-preparation-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+
+  try {
+    const seeded = seedPrePreparationDatabase(
+      dataDirectory.paths.databasePath,
+      historicalMigrationsFolder(dataRoot, PRE_PREPARATION_TAGS),
+    );
+
+    // The production layer, which runs the committed migrations users actually receive.
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_open_prepared_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      const count = (table: string) =>
+        (inspect.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number })
+          .count;
+
+      assert.equal(tableExists(inspect, 'workflow_run_preparations'), true);
+      assert.equal(hasColumn(inspect, 'worktree_surfaces', 'creation_key'), true);
+      assert.equal(indexExists(inspect, 'workflow_run_preparations_run_unique'), true);
+      assert.equal(indexExists(inspect, 'worktree_surfaces_creation_key_unique'), true);
+
+      // The clean-state reset, and the cascade it depends on. Every one of these tables held a row
+      // before the upgrade, which is what the seed assertions below guard.
+      assert.equal(count('workflow_runs'), 0);
+      assert.equal(count('workflow_graph_frames'), 0);
+      assert.equal(count('workflow_segment_attempts'), 0);
+      assert.equal(count('workflow_transitions'), 0);
+      assert.equal(count('workflow_run_attachments'), 0);
+
+      // The control: content-addressed retained records are explicitly left in place.
+      assert.equal(count('workflow_artifacts'), 1);
+      assert.equal(count('workflow_payloads'), 1);
+      assert.deepEqual(
+        inspect.prepare('SELECT * FROM workflow_artifacts').all(),
+        seeded.artifacts,
+        'The artifact catalog must come back byte-identical, not merely non-empty.',
+      );
+      assert.deepEqual(inspect.prepare('SELECT * FROM workflow_payloads').all(), seeded.payloads);
+
+      // Every unrelated historical row and column, unchanged.
+      assert.deepEqual(readHistoricalRows(inspect, PRE_PREPARATION_ADDED_COLUMNS), seeded.rows);
+      assert.equal(seeded.rows.projects.length, SEEDED_PROJECTS.length);
+      assert.equal(seeded.rows.worktrees.length, SEEDED_WORKTREES.length);
+      assert.equal(seeded.rows.worktree_surfaces.length, SEEDED_SURFACES.length);
+
+      // No dangling reference survived the delete in either direction.
+      assert.deepEqual(inspect.pragma('foreign_key_check'), []);
+    } finally {
+      inspect.close();
+    }
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }
