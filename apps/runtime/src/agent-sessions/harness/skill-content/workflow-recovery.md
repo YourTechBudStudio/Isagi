@@ -4,6 +4,8 @@ Use this reference when repairing a saved run or changing code it may use. For p
 
 ## Choose the kind of continuation
 
+For failures during environment preparation, read [Workflow environments](workflow-environments.md): Retry replays the recorded placement request and base commit without re-running `environment`, and some failures require a new launch. Pause and Resume are refused during preparation; a run interrupted there is failed on restart, with Retry as its re-entry path. The continuation guidance below applies after preparation has completed.
+
 | Intent                                                | Mechanism                            | Authoring consequence                                                                          |
 | ----------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | Continue saved work after Pause or restart            | Resume                               | Uses the saved verified code version; does not restart initialization or satisfy a human gate  |
@@ -11,7 +13,7 @@ Use this reference when repairing a saved run or changing code it may use. For p
 | Deliberately try work again after a delivered failure | An edge routes to another node visit | Starts new work under the existing version; store a budget and choose an exhausted-budget path |
 | Get new input or recheck current facts                | Human wait or a read operation       | Express the desired observation explicitly rather than repeating earlier side effects          |
 
-Pause gates future execution; an in-flight callback can finish its durable boundary, and external work can continue. Restart parks unfinished runs until explicit Resume. Cancel prevents further progression and requests best-effort cleanup; it does not undo external effects.
+After environment preparation, Pause gates future execution; an in-flight callback can finish its durable boundary, and external work can continue. Restart parks unfinished runs past preparation until explicit Resume. Cancel prevents further progression and requests best-effort cleanup; it does not undo external effects.
 
 A failure outcome is a graph result, including when delivered by a child. It is not a thrown segment waiting for the Retry control. A failed route can be repaired without repeating the preceding completed operation. A failed parent result mapping can be repaired without rerunning the completed child.
 

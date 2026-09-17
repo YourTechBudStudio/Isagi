@@ -1,6 +1,6 @@
 ---
 name: isagi-docs
-description: Configure Isagi projects and runtime settings, and author or repair Isagi workflows. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
+description: Configure Isagi projects and runtime settings, and author or repair Isagi workflows. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, workflow environments and placement, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
 # Configure Isagi and author workflows
@@ -15,6 +15,7 @@ Read only the references matching the request. Paths in these references are rel
 | Harness availability or Docs installation (`harnesses`)                                 | [Global config](references/config-global.md)                                                                               |
 | Additional workflow discovery roots (`workflows.additionalDirectories`)                 | [Global config](references/config-global.md)                                                                               |
 | Creating, modifying, or verifying workflows and composing graphs                        | [Workflow authoring](references/workflows.md)                                                                              |
+| Choosing or creating the worktree and surface a workflow runs in (`environment`, placement overrides, preparation failures) | [Workflow environments](references/workflow-environments.md) |
 | Agent sessions, headless work, prompts, or judgments within a workflow                  | [Workflow authoring](references/workflows.md) and [Agent work](references/workflow-agents.md)                              |
 | Repairing saved workflow runs or reasoning about Resume and Retry                       | [Workflow recovery](references/workflow-recovery.md); also [Workflow authoring](references/workflows.md) when editing code |
 

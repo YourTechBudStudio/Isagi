@@ -30,6 +30,10 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   files.set('references/config-global.md', render('config-global.md', substitutions));
   files.set('references/config-project.md', render('config-project.md', substitutions));
   files.set('references/workflows.md', render('workflows.md', substitutions));
+  files.set(
+    'references/workflow-environments.md',
+    render('workflow-environments.md', substitutions),
+  );
   files.set('references/workflow-agents.md', render('workflow-agents.md', substitutions));
   files.set('references/workflow-recovery.md', render('workflow-recovery.md', substitutions));
   files.set(

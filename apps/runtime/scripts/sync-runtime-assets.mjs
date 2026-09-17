@@ -57,6 +57,7 @@ function syncAssets(assetRoot) {
     'config-global.md',
     'config-project.md',
     'workflows.md',
+    'workflow-environments.md',
     'workflow-agents.md',
     'workflow-recovery.md',
   ]) {

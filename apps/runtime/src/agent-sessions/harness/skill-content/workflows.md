@@ -23,7 +23,9 @@ Follow an explicit target path; these are discovery defaults. [Global config](co
 
 ## Graph structure and composition
 
-`defineWorkflow({ command, validate, graph })` pairs a launch form with a root graph. `command(origin)` declares text, select, multi-select, or confirm inputs; keep it usable without optional pane/session context. `validate(origin, inputs)` checks launch inputs. Those inputs become the root graph's parameters. Each graph's pure synchronous `init(destination, parameters)` creates its private state once; initialization is not a migration hook. Destination determines where work is placed; origin describes where the user launched it.
+`defineWorkflow({ command, validate, environment, graph })` pairs a launch form with a root graph; `environment` is optional. `command(origin)` declares text, select, multi-select, or confirm inputs; keep it usable without optional pane/session context. `validate(origin, inputs)` checks launch inputs. Those inputs become the root graph's parameters. Each graph's pure synchronous `init(destination, parameters)` creates its private state once; initialization is not a migration hook. Destination determines where work is placed; origin describes where the user launched it.
+
+Read [Workflow environments](workflow-environments.md) to choose or create the destination with `environment`, use caller placement overrides, and handle preparation failures.
 
 Compose substantial workflows hierarchically:
 

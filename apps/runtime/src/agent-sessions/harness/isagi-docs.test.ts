@@ -45,6 +45,7 @@ const templates = {
     emittedAs: 'references/workflows.md',
     tokens: ['DATA_ROOT', 'SDK_VERSION', 'VERIFIER_VERSION', 'BUILDER_VERSION'],
   },
+  'workflow-environments.md': { emittedAs: 'references/workflow-environments.md', tokens: [] },
   'workflow-agents.md': { emittedAs: 'references/workflow-agents.md', tokens: [] },
   'workflow-recovery.md': { emittedAs: 'references/workflow-recovery.md', tokens: [] },
 } as const satisfies Record<
@@ -111,6 +112,7 @@ test('the skill package holds exactly the indexed references', () => {
       'references/config-global.md',
       'references/config-project.md',
       'references/workflows.md',
+      'references/workflow-environments.md',
       'references/workflow-agents.md',
       'references/workflow-recovery.md',
       'references/config-global.schema.ts',
