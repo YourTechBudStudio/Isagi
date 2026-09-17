@@ -2,14 +2,13 @@ import { Schema } from 'effect';
 
 import { workflowRunPositionSchema, type WorkflowRunPosition } from '@isagi/contracts';
 
-import type {
-  HarnessConversationTurn,
-  HarnessTurnReference,
-} from '../../agent-sessions/harness/definition-types.js';
+import type { HarnessTurnReference } from '../../agent-sessions/harness/definition-types.js';
+import type { WorkflowOperationRecord, WorkflowExecutionRecord } from '../persistence/records.js';
+import { encodeRunPosition } from '../persistence/row-mappers.js';
 import { isPlainObject } from '../state/reducers.js';
 import type { AgentTurnEvent, WaitDeclaration } from '../types.js';
 import {
-  isTerminalTurnEdge,
+  selectTurnAssociation,
   terminalForFixedAssociation,
   type TurnStartedEdge,
   type WorkflowObservedTurnEdge,
@@ -35,6 +34,25 @@ export interface AttemptTurnRecovery {
   readonly event: AgentTurnEvent;
 }
 
+export interface SourceAgentTurnWait {
+  readonly waitId: number;
+  readonly declaration: Extract<WaitDeclaration, { kind: 'agent_turn' }>;
+  readonly event: AgentTurnEvent;
+}
+
+export type RetryTurnRecoveryPlan =
+  | { readonly kind: 'arm'; readonly declaration: RecoveryWaitDeclaration }
+  | { readonly kind: 'reuse'; readonly declaration: RecoveryWaitDeclaration };
+
+export function isAgentTurnEvent(value: unknown): value is AgentTurnEvent {
+  return (
+    isPlainObject(value) &&
+    value.kind === 'agent_turn' &&
+    (value.outcome === 'ended' || value.outcome === 'failed' || value.outcome === 'interrupted') &&
+    typeof value.recordedAt === 'string'
+  );
+}
+
 export function attemptTurnRecovery(value: unknown): AttemptTurnRecovery | null {
   if (!isPlainObject(value) || !isPlainObject(value.agentTurnRecovery)) return null;
   const recovery = value.agentTurnRecovery;
@@ -45,16 +63,112 @@ export function attemptTurnRecovery(value: unknown): AttemptTurnRecovery | null 
     typeof recovery.turn.harnessSessionId !== 'string' ||
     typeof recovery.turn.seq !== 'number' ||
     typeof recovery.turn.startedAt !== 'string' ||
-    !isPlainObject(recovery.event) ||
-    recovery.event.kind !== 'agent_turn' ||
-    (recovery.event.outcome !== 'ended' &&
-      recovery.event.outcome !== 'failed' &&
-      recovery.event.outcome !== 'interrupted') ||
-    typeof recovery.event.recordedAt !== 'string'
+    !isAgentTurnEvent(recovery.event)
   ) {
     return null;
   }
   return recovery as unknown as AttemptTurnRecovery;
+}
+
+/** Which execution can provide agent-turn provenance for this failed graph position. */
+export function recoverySourceExecution(
+  position: Extract<WorkflowRunPosition, { kind: 'node_callback' | 'routing' }>,
+  executions: readonly WorkflowExecutionRecord[],
+): WorkflowExecutionRecord | null {
+  const index = executions.findIndex((execution) => execution.id === position.executionId);
+  if (index < 0) return null;
+  return position.kind === 'routing' ? executions[index]! : (executions[index - 1] ?? null);
+}
+
+/** Newest retained authored agent-turn wait from a resolved evidence list. */
+export function sourceAgentTurnWait(
+  waits: readonly {
+    readonly waitId: number;
+    readonly status: 'armed' | 'delivered' | 'consumed' | 'superseded';
+    readonly condition: unknown;
+    readonly event: unknown;
+  }[],
+): SourceAgentTurnWait | null {
+  for (const wait of [...waits].reverse()) {
+    if (wait.status !== 'delivered' && wait.status !== 'consumed') continue;
+    if (
+      recoveryWaitDeclaration(wait.condition) ||
+      !isPlainObject(wait.condition) ||
+      wait.condition.kind !== 'agent_turn' ||
+      !isPlainObject(wait.condition.target) ||
+      typeof wait.condition.target.agentSessionId !== 'number' ||
+      typeof wait.condition.target.sentAt !== 'string' ||
+      !isAgentTurnEvent(wait.event)
+    ) {
+      continue;
+    }
+    return {
+      waitId: wait.waitId,
+      declaration: wait.condition as unknown as Extract<WaitDeclaration, { kind: 'agent_turn' }>,
+      event: wait.event,
+    };
+  }
+  return null;
+}
+
+/**
+ * The complete ADR 0009 selection policy, over evidence the Retry control has already gathered.
+ * No IO or persistence: callers can test every policy branch without constructing the engine.
+ */
+export function selectRetryTurnRecovery(input: {
+  readonly position: Extract<WorkflowRunPosition, { kind: 'node_callback' | 'routing' }>;
+  readonly hasSavedProducerOutput: boolean;
+  readonly source: SourceAgentTurnWait | null;
+  readonly operations: readonly WorkflowOperationRecord[];
+  readonly edges: readonly WorkflowObservedTurnEdge[];
+  readonly existingRecoveries: readonly RecoveryWaitDeclaration[];
+}): RetryTurnRecoveryPlan | null {
+  if (input.hasSavedProducerOutput || !input.source) return null;
+  if (input.position.kind === 'node_callback' && input.source.event.outcome !== 'ended')
+    return null;
+
+  const agentSessionId = input.source.declaration.target.agentSessionId;
+  const latest = latestObservedTurn(agentSessionId, input.edges);
+  if (!latest) return null;
+  const submission = input.operations.find(
+    (record) =>
+      record.submissionWatermark === input.source!.declaration.target.sentAt &&
+      (record.capability === 'send_agent_prompt' || record.capability === 'spawn_agent_session'),
+  );
+  const inferred = selectTurnAssociation(
+    { agentSessionId, sentAt: input.source.declaration.target.sentAt },
+    input.edges,
+  );
+  const original =
+    submission?.correlatedHarnessSessionId !== null &&
+    submission?.correlatedHarnessSessionId !== undefined &&
+    typeof submission.correlatedStartSeq === 'number'
+      ? {
+          harnessSessionId: submission.correlatedHarnessSessionId,
+          seq: submission.correlatedStartSeq,
+        }
+      : inferred.kind === 'fixed' && typeof inferred.startSeq === 'number'
+        ? { harnessSessionId: inferred.harnessSessionId, seq: inferred.startSeq }
+        : null;
+  if (input.source.event.outcome !== 'ended' && sameTurn(original, latest)) return null;
+
+  const declaration: RecoveryWaitDeclaration = {
+    kind: 'agent_turn',
+    target: { agentSessionId, sentAt: latest.startedAt },
+    isagiRecovery: {
+      kind: 'explicit_retry',
+      sourceWaitId: input.source.waitId,
+      resumePosition: input.position,
+      turn: latest,
+    },
+  };
+  const existing = input.existingRecoveries.find(
+    (candidate) =>
+      sameTurn(candidate.isagiRecovery.turn, latest) &&
+      encodeRunPosition(candidate.isagiRecovery.resumePosition) ===
+        encodeRunPosition(input.position),
+  );
+  return existing ? { kind: 'reuse', declaration: existing } : { kind: 'arm', declaration };
 }
 
 const decodePosition = Schema.decodeUnknownEither(workflowRunPositionSchema);
@@ -181,29 +295,4 @@ export function turnEventOf(terminal: {
     recordedAt: terminal.recordedAt,
     reason: terminal.reason ?? 'harness_error',
   };
-}
-
-export function completedRecoveryTurn(
-  declaration: RecoveryWaitDeclaration,
-  event: AgentTurnEvent,
-): HarnessConversationTurn | null {
-  return event.outcome === 'ended'
-    ? { ...declaration.isagiRecovery.turn, completedAt: event.recordedAt }
-    : null;
-}
-
-export function terminalEdgeForTurn(
-  agentSessionId: number,
-  turn: HarnessTurnReference,
-  edges: readonly WorkflowObservedTurnEdge[],
-) {
-  return (
-    edges.find(
-      (edge) =>
-        isTerminalTurnEdge(edge) &&
-        edge.agentSessionId === agentSessionId &&
-        edge.harnessSessionId === turn.harnessSessionId &&
-        edge.seq === turn.seq,
-    ) ?? null
-  );
 }

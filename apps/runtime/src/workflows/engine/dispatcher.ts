@@ -2,11 +2,15 @@ import { Effect } from 'effect';
 
 import type { PayloadSlot } from '../persistence/payload-store.js';
 import type { WorkflowRunRecord } from '../persistence/records.js';
+import { encodeRunPosition } from '../persistence/row-mappers.js';
 import type { ClaimPreparation } from '../persistence/runs.repository.js';
 import type { WorkflowArtifactCatalogService } from '../structure/artifact-catalog.js';
 import type { LoadedWorkflowArtifact } from '../structure/loader.js';
-import type { AgentTurnEvent } from '../types.js';
-import { recoveryWaitDeclaration, type AttemptTurnRecovery } from '../waits/turn-recovery.js';
+import {
+  isAgentTurnEvent,
+  recoveryWaitDeclaration,
+  type AttemptTurnRecovery,
+} from '../waits/turn-recovery.js';
 import { runGraphEntry } from './segments/graph-entry.js';
 import { runGraphOutput } from './segments/graph-output.js';
 import { runNodeCallback } from './segments/node-callback.js';
@@ -443,7 +447,8 @@ function recoveryInputOf(
       const declaration = recoveryWaitDeclaration(declarationValue);
       if (
         !declaration ||
-        JSON.stringify(declaration.isagiRecovery.resumePosition) !== JSON.stringify(run.position)
+        encodeRunPosition(declaration.isagiRecovery.resumePosition) !==
+          encodeRunPosition(run.position)
       ) {
         continue;
       }
@@ -458,17 +463,4 @@ function recoveryInputOf(
     }
     return undefined;
   });
-}
-
-function isAgentTurnEvent(value: unknown): value is AgentTurnEvent {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'kind' in value &&
-    value.kind === 'agent_turn' &&
-    'outcome' in value &&
-    (value.outcome === 'ended' || value.outcome === 'failed' || value.outcome === 'interrupted') &&
-    'recordedAt' in value &&
-    typeof value.recordedAt === 'string'
-  );
 }

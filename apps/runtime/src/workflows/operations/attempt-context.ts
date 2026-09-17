@@ -131,7 +131,7 @@ export function makeAttemptContextFactory(dependencies: {
         const gate = yield* Effect.makeSemaphore(1);
         const conversationGate = yield* Effect.makeSemaphore(1);
         const state = { nextCallIndex: 0, consumed: 0, closed: false };
-        const recoveredConversation = new Map<number, readonly WorkflowConversationMessage[]>();
+        let recoveredConversation: readonly WorkflowConversationMessage[] | null = null;
 
         const reject = (
           input: ConstructorParameters<typeof OperationRejection>[0],
@@ -795,54 +795,61 @@ export function makeAttemptContextFactory(dependencies: {
             // A scoped read: no call position, no receipt. A repaired segment simply reads again and
             // may legitimately observe a different answer.
             runVerb(
-              conversationGate.withPermits(1)(
-                Effect.gen(function* () {
-                  if (state.closed) {
-                    return yield* reject({
-                      code: 'operation_context_closed',
-                      message: `Operation context for attempt ${identity.attemptId} is closed.`,
-                    });
-                  }
-                  const recovery = identity.agentTurnRecovery;
-                  if (recovery?.agentSessionId !== agentSessionId) {
-                    return yield* adapters.agentSessions.conversationHistory(agentSessionId);
-                  }
-                  const cached = recoveredConversation.get(agentSessionId);
-                  if (cached) return cached;
-                  if (recovery.event.outcome !== 'ended') {
-                    return yield* reject({
-                      code: 'workflow_operation_failed',
-                      message: `The exact agent turn selected by Retry ${recovery.event.outcome}; it has no completed response to read.`,
-                      detail: { waitId: recovery.waitId, outcome: recovery.event.outcome },
-                    });
-                  }
-                  const messages = yield* adapters.agentSessions.conversationHistory(
-                    agentSessionId,
-                    {
-                      ...recovery.turn,
-                      completedAt: recovery.event.recordedAt,
-                    },
-                  );
-                  const hasAssistantContent = messages.some(
-                    (message) =>
-                      message.role === 'assistant' &&
-                      message.parts.some((part) => part.type === 'text' && part.text.length > 0),
-                  );
-                  if (!hasAssistantContent) {
-                    return yield* reject({
-                      code: 'workflow_operation_failed',
-                      message: `The exact agent turn selected by Retry has no readable assistant response.`,
-                      detail: {
-                        waitId: recovery.waitId,
-                        harnessSessionId: recovery.turn.harnessSessionId,
-                        seq: recovery.turn.seq,
+              Effect.gen(function* () {
+                if (state.closed) {
+                  return yield* reject({
+                    code: 'operation_context_closed',
+                    message: `Operation context for attempt ${identity.attemptId} is closed.`,
+                  });
+                }
+                const recovery = identity.agentTurnRecovery;
+                if (recovery?.agentSessionId !== agentSessionId) {
+                  return yield* adapters.agentSessions.conversationHistory(agentSessionId);
+                }
+                return yield* conversationGate.withPermits(1)(
+                  Effect.gen(function* () {
+                    if (state.closed) {
+                      return yield* reject({
+                        code: 'operation_context_closed',
+                        message: `Operation context for attempt ${identity.attemptId} is closed.`,
+                      });
+                    }
+                    if (recoveredConversation) return recoveredConversation;
+                    if (recovery.event.outcome !== 'ended') {
+                      return yield* reject({
+                        code: 'workflow_operation_failed',
+                        message: `The exact agent turn selected by Retry ${recovery.event.outcome}; it has no completed response to read.`,
+                        detail: { waitId: recovery.waitId, outcome: recovery.event.outcome },
+                      });
+                    }
+                    const messages = yield* adapters.agentSessions.conversationHistory(
+                      agentSessionId,
+                      {
+                        ...recovery.turn,
+                        completedAt: recovery.event.recordedAt,
                       },
-                    });
-                  }
-                  recoveredConversation.set(agentSessionId, messages);
-                  return messages;
-                }),
-              ),
+                    );
+                    const hasAssistantContent = messages.some(
+                      (message) =>
+                        message.role === 'assistant' &&
+                        message.parts.some((part) => part.text.trim().length > 0),
+                    );
+                    if (!hasAssistantContent) {
+                      return yield* reject({
+                        code: 'workflow_operation_failed',
+                        message: `The exact agent turn selected by Retry has no readable assistant response.`,
+                        detail: {
+                          waitId: recovery.waitId,
+                          harnessSessionId: recovery.turn.harnessSessionId,
+                          seq: recovery.turn.seq,
+                        },
+                      });
+                    }
+                    recoveredConversation = messages;
+                    return messages;
+                  }),
+                );
+              }),
             ) as Promise<readonly WorkflowConversationMessage[]>,
 
           runHeadlessAgent: (input: WorkflowHeadlessAgentInput) =>

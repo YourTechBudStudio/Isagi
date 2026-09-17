@@ -14,6 +14,7 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Effect } from 'effect';
 
+import { HarnessObserverRefreshError } from '../../agent-sessions/harness/observer.service.js';
 import type { WorkflowOperationRecord } from '../persistence/records.js';
 import { run } from '../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
@@ -91,7 +92,7 @@ function edgeSet(input: {
 
 test('Retry binds a failed response read to the latest exact completed turn', async () => {
   await withHarness(async (harness) => {
-    let failRead = true;
+    let remainingReadFailures = 2;
     const graph = createGraph<
       { readonly response: string | null },
       {},
@@ -109,7 +110,10 @@ test('Retry binds a failed response read to the latest exact completed turn', as
         }),
         read: operation(async (ctx) => {
           const history = await ctx.getConversationHistory(500);
-          if (failRead) throw new Error('simulated response parser failure');
+          if (remainingReadFailures > 0) {
+            remainingReadFailures -= 1;
+            throw new Error('simulated response parser failure');
+          }
           const response = history
             .filter((message) => message.role === 'assistant')
             .flatMap((message) => message.parts)
@@ -143,27 +147,49 @@ test('Retry binds a failed response read to the latest exact completed turn', as
     harness.adapters.conversationHistory = [
       { role: 'assistant', parts: [{ type: 'text', text: 'original' }] },
     ];
-    harness.adapters.turnEdges.set(500, edgeSet(times));
+    harness.adapters.turnEdges.set(500, edgeSet({ start: times.start, end: times.end }));
     assert.equal(await harness.deliver(launched.id), 1);
     await harness.drain();
     assert.equal((await harness.runOf(launched.id)).status, 'failed');
     assert.deepEqual(harness.adapters.conversationTurns, [null]);
 
-    failRead = false;
     harness.adapters.conversationHistory = [
       { role: 'assistant', parts: [{ type: 'text', text: 'human-guided answer' }] },
     ];
-    harness.adapters.turnEdges.set(
+    harness.turnRefresh.edges.set(
       500,
       edgeSet({ ...times, laterStart: times.laterStart, laterEnd: times.laterEnd }),
     );
     assert.equal((await harness.retry(launched.id)).accepted, true);
+    assert.deepEqual(harness.turnRefresh.calls, [500]);
+    await harness.drain();
+    const failedAgain = await harness.runOf(launched.id);
+    assert.equal(failedAgain.status, 'failed');
+    assert.equal(failedAgain.position.kind, 'node_callback');
+    const waitsAfterFirstRecovery = await run(
+      harness.fixture.runs.listWaitsForExecution(
+        failedAgain.position.kind === 'node_callback' ? failedAgain.position.executionId : -1,
+      ),
+    );
+    assert.equal(
+      waitsAfterFirstRecovery.filter((candidate) => candidate.waitKind === 'agent_turn').length,
+      1,
+    );
+
+    assert.equal((await harness.retry(launched.id)).accepted, true);
+    assert.deepEqual(harness.turnRefresh.calls, [500, 500]);
     await harness.drain();
 
     const finished = await harness.runOf(launched.id);
     assert.equal(finished.status, 'done');
     assert.deepEqual(harness.adapters.conversationTurns, [
       null,
+      {
+        harnessSessionId: 'native-session',
+        seq: 2,
+        startedAt: times.laterStart,
+        completedAt: times.laterEnd,
+      },
       {
         harnessSessionId: 'native-session',
         seq: 2,
@@ -222,12 +248,15 @@ test('Retry routes on a newer turn event without resending the prompt', async ()
     await harness.drain();
     const submission = (await run(harness.fixture.operations.listForRun(launched.id)))[0]!;
     const times = turnTimes(submission);
-    harness.adapters.turnEdges.set(500, edgeSet({ ...times, firstFailed: true }));
+    harness.adapters.turnEdges.set(
+      500,
+      edgeSet({ start: times.start, end: times.end, firstFailed: true }),
+    );
     assert.equal(await harness.deliver(launched.id), 1);
     await harness.drain();
     assert.equal((await harness.runOf(launched.id)).status, 'failed');
 
-    harness.adapters.turnEdges.set(
+    harness.turnRefresh.edges.set(
       500,
       edgeSet({
         ...times,
@@ -237,6 +266,110 @@ test('Retry routes on a newer turn event without resending the prompt', async ()
       }),
     );
     assert.equal((await harness.retry(launched.id)).accepted, true);
+    assert.deepEqual(harness.turnRefresh.calls, [500]);
+    await harness.drain();
+    assert.equal((await harness.runOf(launched.id)).status, 'done');
+    assert.equal(harness.adapters.counters.promptWrites, 1);
+  });
+});
+
+test('an armed recovery turn keeps its identity across Pause and restart', async () => {
+  await withHarness(async (harness) => {
+    const graph = createGraph<{ readonly recovered: boolean }, {}, { readonly recovered: boolean }>(
+      {
+        key: 'durable-recovery-wait',
+        title: 'Durable recovery wait',
+        init: () => ({ recovered: false }),
+        state: { recovered: reduce.replace<boolean>() },
+        entry: 'prompt',
+        nodes: {
+          prompt: operation(async (ctx) => {
+            const target = await ctx.sendAgentPrompt({ agentSessionId: 500, prompt: 'work' });
+            return suspend({ wait: wait.agentTurn(target) });
+          }),
+        },
+        edges: {
+          'prompt-out': edge({
+            from: 'prompt',
+            to: ['done'],
+            choose: (_state, event) => {
+              if (event.kind !== 'agent_turn' || event.outcome !== 'ended') {
+                throw new Error('the original turn did not complete');
+              }
+              return { to: 'done', update: { recovered: true } };
+            },
+          }),
+        },
+        outcomes: {
+          done: outcome({ kind: 'success', output: (state) => ({ recovered: state.recovered }) }),
+        },
+      },
+    );
+    harness.publish({
+      workflowKey: 'durable-recovery-wait',
+      version: '1',
+      definition: defineWorkflow({
+        command: () => ({ title: 'Durable recovery wait' }),
+        validate: () => {},
+        graph,
+      }) as AnyWorkflowDefinition,
+    });
+
+    const launched = await harness.launch({ workflowKey: 'durable-recovery-wait' });
+    await harness.drain();
+    const submission = (await run(harness.fixture.operations.listForRun(launched.id)))[0]!;
+    const times = turnTimes(submission);
+    harness.adapters.turnEdges.set(
+      500,
+      edgeSet({ start: times.start, end: times.end, firstFailed: true }),
+    );
+    assert.equal(await harness.deliver(launched.id), 1);
+    await harness.drain();
+    assert.equal((await harness.runOf(launched.id)).status, 'failed');
+
+    const recoveryStarted = [
+      ...edgeSet({ start: times.start, end: times.end, firstFailed: true }),
+      {
+        type: 'turn_started' as const,
+        agentSessionId: 500,
+        harnessSessionId: 'native-session',
+        seq: 2,
+        recordedAt: times.laterStart,
+      },
+    ];
+    harness.turnRefresh.edges.set(500, recoveryStarted);
+    assert.equal((await harness.retry(launched.id)).accepted, true);
+
+    const waiting = await harness.runOf(launched.id);
+    assert.equal(waiting.status, 'waiting');
+    assert.equal(waiting.position.kind, 'awaiting_wait');
+    const recoveryWaitId = waiting.position.kind === 'awaiting_wait' ? waiting.position.waitId : -1;
+    assert.equal((await run(harness.controls.pause(launched.id))).accepted, true);
+    await harness.restart();
+
+    const restarted = await harness.runOf(launched.id);
+    assert.equal(restarted.status, 'waiting');
+    assert.equal(restarted.paused, true);
+    assert.deepEqual(restarted.position, waiting.position);
+    const retainedWait = await run(harness.fixture.runs.findWait(recoveryWaitId));
+    assert.equal(retainedWait?.status, 'armed');
+
+    harness.adapters.turnEdges.set(500, [
+      ...recoveryStarted,
+      {
+        type: 'turn_ended',
+        agentSessionId: 500,
+        harnessSessionId: 'native-session',
+        seq: 2,
+        recordedAt: times.laterEnd,
+      },
+    ]);
+    assert.equal(await harness.deliver(launched.id), 1);
+    const ready = await harness.runOf(launched.id);
+    assert.equal(ready.status, 'ready');
+    assert.equal(ready.paused, true);
+
+    assert.equal((await run(harness.controls.resume(launched.id))).accepted, true);
     await harness.drain();
     assert.equal((await harness.runOf(launched.id)).status, 'done');
     assert.equal(harness.adapters.counters.promptWrites, 1);
@@ -283,14 +416,19 @@ test('a refresh failure leaves a failed run byte-identical', async () => {
     await harness.drain();
     const submission = (await run(harness.fixture.operations.listForRun(launched.id)))[0]!;
     const times = turnTimes(submission);
-    harness.adapters.turnEdges.set(500, edgeSet(times));
+    harness.adapters.turnEdges.set(500, edgeSet({ start: times.start, end: times.end }));
     await harness.deliver(launched.id);
     await harness.drain();
     const before = await harness.runOf(launched.id);
     assert.equal(before.status, 'failed');
 
     fail = false;
-    harness.adapters.failures.set('turnEdges', new Error('native artifact unreadable'));
+    harness.turnRefresh.failure = new HarnessObserverRefreshError({
+      agentSessionId: 500,
+      failedSources: ['/native/session.jsonl'],
+      failedOperations: [],
+      message: 'native artifact unreadable',
+    });
     const result = await Effect.runPromiseExit(harness.controls.retry(launched.id));
     assert.equal(result._tag, 'Failure');
     assert.deepEqual(await harness.runOf(launched.id), before);

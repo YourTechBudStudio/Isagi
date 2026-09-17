@@ -11,6 +11,7 @@ import type {
   WorktreeSetupResult,
 } from '@isagi/contracts';
 
+import { HarnessObserverRefreshError } from '../../agent-sessions/harness/observer.service.js';
 import { DatabaseError } from '../../persistence/index.js';
 import type { InternalRuntimeEvent } from '../../runtime-events/internal-event-bus.js';
 import { duplicateSafeTitle, SurfaceError, validateSurfaceTitle } from '../../surfaces/index.js';
@@ -47,6 +48,7 @@ import {
   type LoadedWorkflowArtifact,
 } from '../structure/loader.js';
 import type { WorkflowRegistryService } from '../structure/registry.js';
+import type { WorkflowObservedTurnEdge } from '../waits/conditions.js';
 import { makeWaitResolver, type WaitResolver } from '../waits/resolver.js';
 import { makeControls, type ControlResult } from './controls.js';
 import { makeDispatcher, type Dispatcher } from './dispatcher.js';
@@ -75,6 +77,11 @@ import { recoverAtStartup, type RecoverySummary } from './recovery.js';
 export interface EngineHarness {
   readonly fixture: WorkflowPersistenceFixture;
   readonly adapters: FakeAdapterState;
+  readonly turnRefresh: {
+    readonly edges: Map<number, readonly WorkflowObservedTurnEdge[]>;
+    readonly calls: number[];
+    failure: HarnessObserverRefreshError | null;
+  };
   readonly events: InternalRuntimeEvent[];
   /** The placement every launch targets unless one is named explicitly. */
   readonly placement: Placement;
@@ -238,6 +245,11 @@ interface RegisteredVersion {
 
 export async function makeEngineHarness(): Promise<EngineHarness> {
   const fixture = makeWorkflowPersistenceFixture();
+  const turnRefresh: EngineHarness['turnRefresh'] = {
+    edges: new Map(),
+    calls: [],
+    failure: null,
+  };
   const placement = fixture.seedPlacement();
   /**
    * Which write to crash, and how many of its calls to let through first.
@@ -502,7 +514,14 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
       operationRecords: fixture.operations,
       operations,
       waits,
-      refreshTurnEdges: adapterServices.agentSessions.turnEdges,
+      refreshTurnEdges: (agentSessionId) =>
+        Effect.gen(function* () {
+          turnRefresh.calls.push(agentSessionId);
+          if (turnRefresh.failure) return yield* Effect.fail(turnRefresh.failure);
+          const refreshed = turnRefresh.edges.get(agentSessionId) ?? [];
+          adapters.turnEdges.set(agentSessionId, [...refreshed]);
+          return refreshed;
+        }),
       poke: Effect.void,
       runPreparation,
     });
@@ -552,6 +571,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
   return {
     fixture,
     adapters,
+    turnRefresh,
     events,
     placement,
     seedPlacement: () => fixture.seedPlacement(),

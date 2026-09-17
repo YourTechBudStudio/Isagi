@@ -1,6 +1,7 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect } from 'effect';
 
+import { HarnessObserverRefreshError } from '../../agent-sessions/harness/observer.service.js';
 import type { DatabaseError } from '../../persistence/index.js';
 import type { WorkflowOperationServiceShape } from '../operations/operation.service.js';
 import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
@@ -8,21 +9,21 @@ import type {
   PayloadPublishError,
   WorkflowPayloadStoreService,
 } from '../persistence/payload-store.js';
-import type { WorkflowExecutionRecord, WorkflowRunRecord } from '../persistence/records.js';
+import type {
+  WorkflowExecutionRecord,
+  WorkflowRunRecord,
+  WorkflowWaitRecord,
+} from '../persistence/records.js';
 import { isPlainObject } from '../state/reducers.js';
 import { validateSavedPositions } from '../structure/retry-validation.js';
-import {
-  WorkflowEngineError,
-  type AgentTurnEvent,
-  type WaitDeclaration,
-  type WorkflowUserInputAnswers,
-} from '../types.js';
-import { selectTurnAssociation, type WorkflowObservedTurnEdge } from '../waits/conditions.js';
+import { WorkflowEngineError, type WorkflowUserInputAnswers } from '../types.js';
+import type { WorkflowObservedTurnEdge } from '../waits/conditions.js';
 import type { WaitResolver } from '../waits/resolver.js';
 import {
-  latestObservedTurn,
+  recoverySourceExecution,
   recoveryWaitDeclaration,
-  sameTurn,
+  selectRetryTurnRecovery,
+  sourceAgentTurnWait,
   type RecoveryWaitDeclaration,
 } from '../waits/turn-recovery.js';
 import {
@@ -69,7 +70,7 @@ export interface ControlDeps extends LaunchDeps {
   /** Forces fresh native turn evidence before Retry decides whether a newer turn exists. */
   readonly refreshTurnEdges: (
     agentSessionId: number,
-  ) => Effect.Effect<readonly WorkflowObservedTurnEdge[], unknown>;
+  ) => Effect.Effect<readonly WorkflowObservedTurnEdge[], HarnessObserverRefreshError>;
   /** Wakes the dispatcher after a control made a run dispatchable again. */
   readonly poke: Effect.Effect<void>;
   /**
@@ -295,123 +296,77 @@ function prepareTurnRecovery(
     // event or transcript underneath a decision/result the failed attempt already produced.
     if (saved) return null;
 
-    const sourceExecution =
-      run.position.kind === 'routing'
-        ? yield* deps.runs.findExecution(run.position.executionId)
-        : yield* previousExecution(deps, run.position.frameId, run.position.executionId);
+    const executions = yield* deps.runs.listExecutions(run.position.frameId);
+    const sourceExecution = recoverySourceExecution(run.position, executions);
     if (!sourceExecution) return null;
 
     const waits = yield* deps.runs.listWaitsForExecution(sourceExecution.id);
-    let source: {
-      readonly waitId: number;
-      readonly declaration: Extract<WaitDeclaration, { kind: 'agent_turn' }>;
-      readonly event: AgentTurnEvent;
-    } | null = null;
-    for (const wait of [...waits].reverse()) {
-      if (
-        (wait.status !== 'delivered' && wait.status !== 'consumed') ||
-        !wait.condition ||
-        !wait.event
-      )
-        continue;
-      const [condition, event] = yield* Effect.all([
-        deps.payloads.resolve(wait.condition).pipe(Effect.orElseSucceed(() => null)),
-        deps.payloads.resolve(wait.event).pipe(Effect.orElseSucceed(() => null)),
-      ]);
-      if (
-        recoveryWaitDeclaration(condition) ||
-        !isPlainObject(condition) ||
-        condition.kind !== 'agent_turn' ||
-        !isPlainObject(condition.target) ||
-        typeof condition.target.agentSessionId !== 'number' ||
-        typeof condition.target.sentAt !== 'string' ||
-        !isAgentTurnEvent(event)
-      ) {
-        continue;
-      }
-      source = {
-        waitId: wait.id,
-        declaration: condition as unknown as Extract<WaitDeclaration, { kind: 'agent_turn' }>,
-        event,
-      };
-      break;
-    }
+    const source = sourceAgentTurnWait(yield* resolveTurnWaitEvidence(deps, waits));
     if (!source) return null;
     // A callback after the wait is only a response-read recovery when the source turn completed.
     if (run.position.kind === 'node_callback' && source.event.outcome !== 'ended') return null;
 
     const agentSessionId = source.declaration.target.agentSessionId;
-    const refreshed = yield* deps.refreshTurnEdges(agentSessionId).pipe(Effect.either);
-    if (refreshed._tag === 'Left') {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'workflow_agent_observation_unavailable',
-          message: `The agent session could not be refreshed, so Retry left the run unchanged.`,
-          workflowRunId: run.id,
-          agentSessionId,
-        }),
-      );
-    }
-    const latest = latestObservedTurn(agentSessionId, refreshed.right);
-    if (!latest) return null;
-
+    const refreshed = yield* deps.refreshTurnEdges(agentSessionId).pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          console.warn('[runtime] Workflow Retry could not refresh agent-turn evidence', {
+            runId: run.id,
+            agentSessionId,
+            failedSources: error.failedSources,
+            failedOperations: error.failedOperations,
+          });
+        }).pipe(
+          Effect.zipRight(
+            Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_agent_observation_unavailable',
+                message: `The agent session could not be refreshed, so Retry left the run unchanged.`,
+                workflowRunId: run.id,
+                agentSessionId,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
     const records = yield* deps.operationRecords.listForExecution(sourceExecution.id);
-    const submission = records.find(
-      (record) =>
-        record.submissionWatermark === source!.declaration.target.sentAt &&
-        (record.capability === 'send_agent_prompt' || record.capability === 'spawn_agent_session'),
-    );
-    const inferred = selectTurnAssociation(
-      { agentSessionId, sentAt: source.declaration.target.sentAt },
-      refreshed.right,
-    );
-    const original =
-      submission?.correlatedHarnessSessionId !== null &&
-      submission?.correlatedHarnessSessionId !== undefined &&
-      typeof submission.correlatedStartSeq === 'number'
-        ? {
-            harnessSessionId: submission.correlatedHarnessSessionId,
-            seq: submission.correlatedStartSeq,
-          }
-        : inferred.kind === 'fixed' && typeof inferred.startSeq === 'number'
-          ? { harnessSessionId: inferred.harnessSessionId, seq: inferred.startSeq }
-          : null;
-    // Retrying the same failed/interrupted source turn is ordinary segment retry. A later human
-    // turn is the only evidence that can replace that event.
-    if (source.event.outcome !== 'ended' && sameTurn(original, latest)) return null;
-
+    const currentWaits =
+      sourceExecution.id === run.position.executionId
+        ? waits
+        : yield* deps.runs.listWaitsForExecution(run.position.executionId);
+    const existingRecoveries = (yield* resolveTurnWaitEvidence(deps, currentWaits))
+      .map((wait) => recoveryWaitDeclaration(wait.condition))
+      .filter((declaration): declaration is RecoveryWaitDeclaration => declaration !== null);
+    const plan = selectRetryTurnRecovery({
+      position: run.position,
+      hasSavedProducerOutput: saved !== null,
+      source,
+      operations: records,
+      edges: refreshed,
+      existingRecoveries,
+    });
+    if (!plan || plan.kind === 'reuse') return null;
     return {
       frameId: run.position.frameId,
       executionId: run.position.executionId,
-      declaration: {
-        kind: 'agent_turn',
-        target: { agentSessionId, sentAt: latest.startedAt },
-        isagiRecovery: {
-          kind: 'explicit_retry',
-          sourceWaitId: source.waitId,
-          resumePosition: run.position,
-          turn: latest,
-        },
-      },
+      declaration: plan.declaration,
     };
   });
 }
 
-function previousExecution(deps: ControlDeps, frameId: number, executionId: number) {
-  return deps.runs.listExecutions(frameId).pipe(
-    Effect.map((executions) => {
-      const index = executions.findIndex((execution) => execution.id === executionId);
-      return index > 0 ? executions[index - 1]! : null;
+function resolveTurnWaitEvidence(deps: ControlDeps, waits: readonly WorkflowWaitRecord[]) {
+  return Effect.forEach(waits, (wait) =>
+    Effect.all({
+      waitId: Effect.succeed(wait.id),
+      status: Effect.succeed(wait.status),
+      condition: wait.condition
+        ? deps.payloads.resolve(wait.condition).pipe(Effect.orElseSucceed(() => null))
+        : Effect.succeed(null),
+      event: wait.event
+        ? deps.payloads.resolve(wait.event).pipe(Effect.orElseSucceed(() => null))
+        : Effect.succeed(null),
     }),
-  );
-}
-
-function isAgentTurnEvent(value: unknown): value is AgentTurnEvent {
-  return (
-    isPlainObject(value) &&
-    value.kind === 'agent_turn' &&
-    (value.outcome === 'ended' || value.outcome === 'failed' || value.outcome === 'interrupted') &&
-    typeof value.recordedAt === 'string'
   );
 }
 
