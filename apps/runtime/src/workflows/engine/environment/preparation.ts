@@ -18,8 +18,10 @@ import type { DatabaseError } from '../../../persistence/index.js';
 import { SurfaceError } from '../../../surfaces/index.js';
 import { WorkspaceError } from '../../../workspace/workspace.service.js';
 import { WorktreeSetupError } from '../../../worktree-setup/index.js';
+import { inlinePayloadThresholdBytes } from '../../persistence/payload-store.js';
 import { setupIsIncomplete } from '../../persistence/preparations.js';
 import type { WorkflowRunPreparationRecord } from '../../persistence/records.js';
+import { canonicalBytes } from '../../state/serializable.js';
 import {
   advanced,
   halted,
@@ -342,6 +344,105 @@ interface FailureInput {
 const decodeFailureDetail = Schema.decodeUnknownEither(workflowEnvironmentFailureDetailSchema);
 
 /**
+ * How much failed-hook or Git output survives into the retained failure detail, and why it is capped.
+ *
+ * The detail is written to the attempt's `failure_detail` slot, which goes through the payload store
+ * like every other recorded value: above `inlinePayloadThresholdBytes` it is offloaded to a ref, and
+ * the run summary never resolves refs. An offloaded detail therefore reads back as *nothing* — not a
+ * long diagnostic, but no `step` and no `reason` either, so a person is told the environment could
+ * not be prepared with no indication of why.
+ *
+ * That was reachable by default rather than at an edge: a failing command hook's `outputExcerpt` is
+ * bounded by the setup runner's 32 KiB `TailBuffer`, four times the 8192-byte inline threshold, and
+ * raw Git stderr is bounded by nothing at all. Any hook that printed more than about 8 KB — a build,
+ * an installer, a test run — lost its whole failure detail.
+ *
+ * Capping here keeps the fields that matter. "Setup hook 2 failed, and here is the last few KB of
+ * its output" is useful; "could not prepare the environment" is not. Nothing is lost that is held
+ * only here: a setup failure's fuller excerpt is also on the setup *receipt*, which is plain JSON in
+ * `workflow_run_preparations` and never passes through the payload store.
+ *
+ * The **tail** is kept, not the head, because a hook's actual error is at the end — the same choice
+ * `TailBuffer` already makes, and this extends that house rule rather than inventing one. Truncation
+ * is marked so a clipped diagnostic cannot be read as complete output.
+ */
+const maxDiagnosticBytes = 4096;
+const diagnosticTruncationMarker = '[earlier output truncated]\n';
+
+/** The last `maxBytes` of `text`, starting at a character boundary and marked as clipped. */
+function tailOf(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.byteLength <= maxBytes) return text;
+  let kept = buffer.subarray(buffer.byteLength - maxBytes);
+  const newline = kept.indexOf(0x0a);
+  if (newline !== -1) {
+    // Prefer a line boundary: the excerpt then starts where a line does rather than mid-sentence.
+    kept = kept.subarray(newline + 1);
+  } else {
+    // No newline in the window — one long line of output, which Git and JSON both produce. Skip any
+    // UTF-8 continuation bytes the byte-offset cut left at the front, so the excerpt still starts at
+    // a character rather than at a replacement glyph.
+    let start = 0;
+    while (start < kept.byteLength && (kept[start]! & 0xc0) === 0x80) start += 1;
+    kept = kept.subarray(start);
+  }
+  return diagnosticTruncationMarker + kept.toString('utf8');
+}
+
+/**
+ * The detail, with its diagnostic cut down until the whole thing is small enough to stay inline.
+ *
+ * The 4096-byte bound is deliberately generous against a 8192-byte threshold, because the other
+ * fields are a step, a reason, two or three small integers and a branch name. The loop is not there
+ * to shave that margin: it is there because JSON escaping expands what it encodes — a newline costs
+ * two bytes, a control character six — so a fixed *input* bound cannot by itself promise a bounded
+ * *encoded* size. Shrinking until the encoded detail actually fits is what turns "inline in
+ * practice" into a guarantee the projection can rely on. In practice it never iterates.
+ *
+ * If even the bare fields did not fit, the diagnostic is dropped entirely rather than the detail
+ * being lost: `step` and `reason` are what a person reads first and what the web writes its line
+ * from.
+ *
+ * Measured with the payload store's **own** encoder rather than with `JSON.stringify`. The threshold
+ * and the encoder are one rule — `publish` classifies on `canonicalBytes(value).byteLength` — and a
+ * second implementation of that rule here would have to be changed in step with `canonicalJson`
+ * forever, with the drift failing silently in exactly the way this function exists to prevent: a
+ * detail that measures under the threshold here, encodes over it there, and offloads to a ref the
+ * summary never resolves.
+ *
+ * What the store publishes is the *decoded* detail rather than this candidate. The two are
+ * structurally identical because `workflowEnvironmentFailureDetailSchema` is a plain struct with no
+ * transforms and no defaults, so decoding neither adds a key nor rewrites a value — which is what
+ * makes measuring the candidate a measurement of what is actually stored. Adding a transform to that
+ * schema would break the correspondence, and this is the comment that says so.
+ */
+function inlineableDetail(
+  base: Record<string, unknown>,
+  diagnostic: string | undefined,
+): Record<string, unknown> {
+  if (diagnostic === undefined) return base;
+  try {
+    for (let budget = maxDiagnosticBytes; budget >= 1; budget = Math.floor(budget / 2)) {
+      const candidate = { ...base, diagnostic: tailOf(diagnostic, budget) };
+      if (canonicalBytes(candidate).byteLength <= inlinePayloadThresholdBytes) return candidate;
+    }
+  } catch {
+    /**
+     * `canonicalBytes` is the store's measure *and* its admissibility gate, and only the measure is
+     * wanted here: `assertSerializable` throws on a value the store would refuse, such as a
+     * non-finite number reaching one of the identity fields.
+     *
+     * Caught rather than allowed to propagate because {@link fail} promises never to throw, and
+     * that promise is load-bearing — a defect inside this fiber abandons a claimed attempt no other
+     * party will collect. Dropping the diagnostic is already the defined answer to "this will not
+     * fit"; "this will not encode" belongs in the same bucket, and the bare fields then reach the
+     * decoder, which degrades an unacceptable one to its step and reason exactly as it always has.
+     */
+  }
+  return base;
+}
+
+/**
  * Raises a preparation failure, with its detail decoded through the contract schema.
  *
  * Decoded rather than merely constructed: the detail is written into the attempt's `failure_detail`
@@ -349,12 +450,19 @@ const decodeFailureDetail = Schema.decodeUnknownEither(workflowEnvironmentFailur
  * turn a legible failure into an unreadable one at exactly the moment somebody needs to read it.
  */
 function fail(input: FailureInput): Effect.Effect<never, SegmentFailure> {
-  const { step, reason, message, ...identities } = input;
-  const decoded = decodeFailureDetail({
-    step,
-    reason,
-    ...Object.fromEntries(Object.entries(identities).filter(([, value]) => value !== undefined)),
-  });
+  const { step, reason, message, diagnostic, ...identities } = input;
+  const decoded = decodeFailureDetail(
+    inlineableDetail(
+      {
+        step,
+        reason,
+        ...Object.fromEntries(
+          Object.entries(identities).filter(([, value]) => value !== undefined),
+        ),
+      },
+      diagnostic,
+    ),
+  );
   /**
    * A detail that will not decode degrades to its step and reason; it never throws.
    *

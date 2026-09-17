@@ -2,12 +2,17 @@ import assert from 'node:assert/strict';
 
 import { Effect } from 'effect';
 
-import type { RuntimeEvent } from '@isagi/contracts';
+import type {
+  RuntimeEvent,
+  WorkflowPlacementRequestDto,
+  WorkflowPlacementSource,
+} from '@isagi/contracts';
 
 import type { RuntimeEventBusService } from '../../runtime-events/event-bus.js';
 import type { WorkflowWriteResult } from '../persistence/outcomes.js';
 import {
   createPlacedRun,
+  createPreparingRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
@@ -83,6 +88,52 @@ export async function startRun(
     placement,
   });
   return { runId: created.run.id, rootFrameId: created.frame.id, placement };
+}
+
+/**
+ * Creates a run that is still *preparing*: no destination, no attachment, one claimed attempt.
+ *
+ * `startRun`'s counterpart, stopping where a launch stops rather than committing: almost everything
+ * downstream is about what happens after a run is placed, and these tests are about the state
+ * before that. The run itself is built by `createPreparingRun`, which `createPlacedRun` also builds
+ * on, so there is one composition of the launch fixture and not two. What is added here is what the
+ * read harness needs around it — both pins seeded, a placement seeded, and the harness's own owner
+ * so the `fence` helper matches the claim.
+ */
+export async function startPreparingRun(
+  fixture: WorkflowPersistenceFixture,
+  options: {
+    readonly source?: WorkflowPlacementSource;
+    readonly request?: WorkflowPlacementRequestDto;
+    readonly baseCommit?: string | null;
+    readonly checkoutPath?: string | null;
+  } = {},
+) {
+  fixture.seedArtifact(PIN_A);
+  fixture.seedArtifact(PIN_B);
+  const placement = fixture.seedPlacement();
+  const created = await createPreparingRun(fixture, {
+    workflowKey: 'fixture',
+    title: 'Fixture run',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root', parameters: { value: { topic: 'graphs' } } },
+    placement,
+    owner: OWNER,
+    ownerIncarnation: INCARNATION,
+    preparation: {
+      source: options.source ?? 'default',
+      request: options.request ?? { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+      baseCommit: options.baseCommit ?? null,
+      checkoutPath: options.checkoutPath ?? null,
+    },
+  });
+  return {
+    runId: created.run.id,
+    rootFrameId: created.frame.id,
+    attemptId: created.attempt.id,
+    placement,
+  };
 }
 
 /** Claims whatever segment the run is parked at, the way the dispatcher would. */

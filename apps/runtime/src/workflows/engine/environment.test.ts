@@ -361,6 +361,119 @@ test('setup that fails during creation keeps the worktree, and Retry re-runs onl
   });
 });
 
+/**
+ * A chatty hook must not cost the whole failure detail, and this is where that is enforced.
+ *
+ * The detail goes through the payload store: above `inlinePayloadThresholdBytes` (8192) it is
+ * offloaded to a ref, and the run summary never resolves refs, so an offloaded detail reads back as
+ * no `step` and no `reason` at all — the person is told the environment could not be prepared and
+ * nothing else. That was the default outcome rather than an edge case, because a failing command
+ * hook's excerpt is bounded by the setup runner's 32 KiB `TailBuffer`, four times the threshold.
+ *
+ * 32 KiB is therefore exactly the worst case the product can produce, which is what this feeds it.
+ */
+test('a hook that printed 32 KiB still leaves a failure the summary can name', async () => {
+  await withHarness(async (harness) => {
+    publish(harness, counters());
+    const outputExcerpt = Array.from(
+      { length: 1024 },
+      (_, line) => `${line} npm ERR! could not resolve dependency tree`,
+    ).join('\n');
+    assert.ok(
+      Buffer.byteLength(outputExcerpt, 'utf8') >= 32 * 1024,
+      'the fixture has to actually be the worst case it claims to be',
+    );
+    harness.owning
+      .allowsWorktrees({
+        setup: {
+          status: 'failed',
+          runId: 3,
+          failedHookIndex: 2,
+          failedHookType: 'command',
+          message: 'pnpm install failed',
+          exitCode: 1,
+          outputExcerpt,
+        },
+      })
+      .allowsSurfaces();
+
+    const started = await harness.launch({
+      workflowKey: 'placeable',
+      request: createBoth('feature/chatty', 'Chatty'),
+    });
+
+    const failed = await harness.runOf(started.id);
+    const attempt = (await run(harness.fixture.runs.findAttempt(failed.failureAttemptId!)))!;
+    assert.equal(
+      attempt.failureDetail?.ref,
+      null,
+      'the detail stayed inline, which is what makes it readable from the summary at all',
+    );
+
+    const detail = await failureDetailOf(harness, started.id);
+    assert.equal(detail.step, 'setup');
+    assert.equal(detail.reason, 'setup_failed');
+    // The tail is what is kept — a hook's actual error is at the end of its output — and the
+    // truncation is marked so a clipped excerpt cannot be read as the whole of it.
+    const diagnostic = detail.diagnostic as string;
+    assert.match(diagnostic, /^\[earlier output truncated\]\n/);
+    assert.ok(diagnostic.endsWith('1023 npm ERR! could not resolve dependency tree'));
+    assert.ok(
+      Buffer.byteLength(diagnostic, 'utf8') <= 4096 + '[earlier output truncated]\n'.length,
+      'and it is bounded, with room left for the rest of the struct',
+    );
+
+    // Nothing was lost that is held only here: the setup receipt is plain JSON in the preparation
+    // row rather than a payload, so the fuller excerpt is still on the record beside this.
+    const prep = (await harness.preparationOf(started.id))!;
+    assert.equal(prep.setup?.failure?.outputExcerpt, outputExcerpt);
+  });
+});
+
+/**
+ * The other shape a chatty failure takes: one very long line, which Git and JSON both produce.
+ *
+ * The bound cuts at a byte offset, so with no newline in the window to resynchronize on, the cut
+ * can land in the middle of a multi-byte character and leave the excerpt starting on a replacement
+ * glyph. A `→` is three bytes and the window is not a multiple of three, so this lands mid-character
+ * by construction rather than by luck.
+ */
+test('a single-line diagnostic is clipped at a character, not in the middle of one', async () => {
+  await withHarness(async (harness) => {
+    publish(harness, counters());
+    const outputExcerpt = '→'.repeat(11000);
+    assert.ok(Buffer.byteLength(outputExcerpt, 'utf8') >= 32 * 1024);
+    assert.equal(outputExcerpt.includes('\n'), false, 'the point of this case is that it has none');
+    harness.owning
+      .allowsWorktrees({
+        setup: {
+          status: 'failed',
+          runId: 4,
+          failedHookIndex: 1,
+          failedHookType: 'command',
+          message: 'the formatter failed',
+          exitCode: 1,
+          outputExcerpt,
+        },
+      })
+      .allowsSurfaces();
+
+    const started = await harness.launch({
+      workflowKey: 'placeable',
+      request: createBoth('feature/oneline', 'One line'),
+    });
+
+    const diagnostic = (await failureDetailOf(harness, started.id)).diagnostic as string;
+    assert.match(diagnostic, /^\[earlier output truncated\]\n/);
+    assert.equal(
+      diagnostic.includes('\ufffd'),
+      false,
+      'a byte-offset cut must not leave a replacement character at the front of the excerpt',
+    );
+    assert.ok(diagnostic.endsWith('→'));
+  });
+});
+
 test('a crash between the worktree receipt and the setup receipt leaves setup unknown, and Retry re-runs it', async () => {
   await withHarness(async (harness) => {
     publish(harness, counters());

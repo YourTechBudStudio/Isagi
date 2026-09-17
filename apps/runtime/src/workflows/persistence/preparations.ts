@@ -132,11 +132,15 @@ export function encodeSurfaceReceipt(receipt: WorkflowSurfaceReceipt): string {
  * so they are never the answer — a `current` worktree is not "incomplete", it is not this
  * preparation's to complete at all.
  *
- * Lives here, beside the decoders, and is exported because three callers need the same answer:
- * startup recovery names the step an interrupted preparation died at, the preparation segment
- * decides per step whether to reuse a receipt or act, and the read projection reports progress. A
- * second copy of "which allocation is outstanding" would decide whether a retry reuses an existing
- * worktree or creates a second one, which is the most consequential thing here to get inconsistent.
+ * Lives here, beside the decoders, and is exported because two callers need the same answer:
+ * startup recovery names the step an interrupted preparation died at, and the preparation segment
+ * decides per step whether to reuse a receipt or act. A second copy of "which allocation is
+ * outstanding" would decide whether a retry reuses an existing worktree or creates a second one,
+ * which is the most consequential thing here to get inconsistent.
+ *
+ * The read projection is deliberately **not** a caller: the run summary reports the receipts
+ * themselves and derives nothing from them, because the receipts are the progress record and a
+ * derived step would be a second authority over the same fact.
  *
  * A `setup` receipt that is not known good counts as outstanding — see {@link setupIsIncomplete},
  * which the preparation segment consults for the same decision. It is also the one receipt a later

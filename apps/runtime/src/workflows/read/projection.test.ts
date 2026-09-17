@@ -3,8 +3,10 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
+import { workflowRunPreparations } from '../../persistence/schema.js';
 import type { WorkflowEngineError } from '../types.js';
 import {
   claim,
@@ -15,6 +17,7 @@ import {
   PIN_A,
   PIN_B,
   run,
+  startPreparingRun,
   startRun,
   value,
   type ReadHarness,
@@ -1164,5 +1167,479 @@ test('an output evaluation that failed exists before the output it would publish
     assert.equal(frame.outputEvaluation?.endCertainty, 'observed');
     assert.equal(frame.entry?.latestAttempt.status, 'succeeded', 'entry succeeded; output did not');
     assert.equal(frame.completedAt, null);
+  });
+});
+
+/**
+ * What the summary says about where a run was sent, and what preparing it actually did.
+ *
+ * `preparation.status` is derived from the run's position, status and receipts and stored nowhere,
+ * so these pin the derivation against real durable states rather than against a column. The rule
+ * that matters most is the negative one: a terminal preparation — failed or cancelled — may be
+ * holding a real worktree, and must never project as `pending`.
+ */
+
+test('a default launch records the placement nobody chose, and allocates nothing for it', async () => {
+  await withHarness(async (harness) => {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    await enterRoot(harness.fixture, { runId, frameId: rootFrameId, nodeId: 'writer' });
+
+    const summary = (await read(harness.projection.getRun(runId))).run;
+    assert.deepEqual(summary.preparation, {
+      source: 'default',
+      request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+      baseCommit: null,
+      status: 'prepared',
+      // Reuse allocates nothing, so it leaves no receipt. This is what lets a failure name only the
+      // resources a launch actually created, and a retry reuse rather than duplicate.
+      worktree: null,
+      setup: null,
+      surface: null,
+      failure: null,
+    });
+  });
+});
+
+test('a run that is still preparing is pending, and offers no control that would strand it', async () => {
+  await withHarness(async (harness) => {
+    const { runId } = await startPreparingRun(harness.fixture, {
+      source: 'selector',
+      request: {
+        worktree: { kind: 'create', branch: 'feat/in-flight', fromRef: 'main' },
+        surface: { kind: 'create', title: 'In flight' },
+      },
+      baseCommit: '1122334',
+      checkoutPath: '/repo/worktrees/in-flight',
+    });
+
+    const summary = (await read(harness.projection.getRun(runId))).run;
+    assert.equal(summary.position.kind, 'environment_preparation');
+    assert.equal(summary.preparation.status, 'pending', 'it can still move, and only then');
+    assert.equal(summary.preparation.request.worktree.kind, 'create');
+    assert.equal(summary.destination.worktreeId, null, 'nothing is placed until the commit');
+    assert.equal(summary.attachment, null);
+    assert.deepEqual(summary.controls, {
+      // Pause parks a run for the dispatcher to pick up again, and the dispatcher deliberately
+      // never claims this segment — so a paused preparation would wait for a Resume that could
+      // never deliver it. The control refuses it, and the flag has to agree.
+      pause: false,
+      resume: false,
+      retry: false,
+      // Cancel is the one way out, and it is offered: it stops the preparation and leaves the
+      // receipts naming whatever was already allocated.
+      cancel: true,
+      dismiss: false,
+      advance: false,
+    });
+  });
+});
+
+test('a preparation that failed half way names what it created, and offers Retry from its origin', async () => {
+  await withHarness(async (harness) => {
+    const { runId, attemptId, placement } = await startPreparingRun(harness.fixture, {
+      source: 'selector',
+      request: {
+        worktree: { kind: 'create', branch: 'feat/story-44', fromRef: 'main' },
+        surface: { kind: 'create', title: 'Implement story #44' },
+      },
+      baseCommit: '9f3e1c2',
+      checkoutPath: '/repo/worktrees/story-44',
+    });
+
+    // Preparation got as far as a worktree and then its setup hooks failed: the worktree is real
+    // and nothing deletes it, which is precisely why the receipt has to outlive the failure.
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'worktree',
+          receipt: {
+            acquisition: 'created',
+            worktreeId: placement.worktreeId,
+            worktreePath: '/repo/worktrees/story-44',
+            branch: 'feat/story-44',
+          },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'setup',
+          receipt: {
+            status: 'failed',
+            reason: null,
+            setupRunId: 7,
+            failure: {
+              hookIndex: 1,
+              hookType: 'command',
+              message: 'pnpm install exited 1',
+              exitCode: 1,
+              outputExcerpt: 'ERR_PNPM_FETCH_404',
+            },
+          },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.runs.failSegment({
+          ...fence(runId, attemptId),
+          code: 'environment_preparation_failed',
+          message: 'pnpm install exited 1',
+          detail: {
+            value: {
+              step: 'setup',
+              reason: 'setup_failed',
+              worktreeId: placement.worktreeId,
+              diagnostic: 'ERR_PNPM_FETCH_404',
+            },
+          },
+        }),
+      ),
+    );
+
+    const summary = (await read(harness.projection.getRun(runId))).run;
+    assert.equal(summary.preparation.status, 'failed');
+    assert.equal(summary.preparation.source, 'selector');
+    assert.equal(summary.preparation.baseCommit, '9f3e1c2');
+    assert.equal(summary.preparation.worktree?.branch, 'feat/story-44');
+    assert.equal(summary.preparation.worktree?.acquisition, 'created');
+    assert.equal(summary.preparation.setup?.status, 'failed');
+    assert.equal(summary.preparation.surface, null, 'it never got that far');
+    // The whole failure is readable from the summary: a client renders it without fetching the
+    // attempt it came from.
+    assert.deepEqual(summary.preparation.failure, {
+      step: 'setup',
+      reason: 'setup_failed',
+      worktreeId: placement.worktreeId,
+      diagnostic: 'ERR_PNPM_FETCH_404',
+    });
+
+    // Nothing was placed, so there is nothing to release and nothing to pause.
+    assert.equal(summary.destination.worktreeId, null);
+    assert.equal(summary.attachment, null);
+    assert.deepEqual(summary.controls, {
+      pause: false,
+      resume: false,
+      // Offered against the *origin* worktree: a preparing run has no destination, and Retry only
+      // needs somewhere to resolve the latest verified version from.
+      retry: true,
+      cancel: false,
+      dismiss: false,
+      advance: false,
+    });
+  });
+});
+
+test('a cancelled preparation rests as cancelled, keeps its receipts, and never reads as pending', async () => {
+  await withHarness(async (harness) => {
+    const { runId, attemptId, placement } = await startPreparingRun(harness.fixture, {
+      source: 'override',
+      request: {
+        worktree: { kind: 'create', branch: 'feat/abandoned', fromRef: 'main' },
+        surface: { kind: 'create', title: 'Abandoned' },
+      },
+      baseCommit: 'abc1234',
+      checkoutPath: '/repo/worktrees/abandoned',
+    });
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'worktree',
+          receipt: {
+            acquisition: 'created',
+            worktreeId: placement.worktreeId,
+            worktreePath: '/repo/worktrees/abandoned',
+            branch: 'feat/abandoned',
+          },
+        }),
+      ),
+    );
+    const before = await currentRun(harness.fixture, runId);
+    value(
+      await run(
+        harness.fixture.runs.applyCancel({ runId, controlRevision: before.controlRevision }),
+      ),
+    );
+
+    const summary = (await read(harness.projection.getRun(runId))).run;
+    // Terminal, and terminal in a way that is not a failure: a cancelled preparation may be holding
+    // a real worktree, so it must read as a resting state rather than as work still in progress.
+    assert.equal(summary.preparation.status, 'cancelled');
+    assert.equal(summary.preparation.failure, null, 'a cancel is not a preparation failure');
+    assert.equal(
+      summary.preparation.worktree?.worktreePath,
+      '/repo/worktrees/abandoned',
+      'the receipt is what tells a person which worktree was left behind',
+    );
+    assert.equal(summary.destination.worktreeId, null);
+    assert.equal(
+      summary.controls.retry,
+      false,
+      'a cancelled run is not retryable, and the control refuses it',
+    );
+    assert.equal(summary.controls.pause, false);
+  });
+});
+
+test('a Retry interrupted before its claim is failed with nothing to blame, and is still retryable', async () => {
+  await withHarness(async (harness) => {
+    const { runId, attemptId } = await startPreparingRun(harness.fixture, {
+      request: {
+        worktree: { kind: 'create', branch: 'feat/halfretry', fromRef: 'main' },
+        surface: { kind: 'create', title: 'Half' },
+      },
+      baseCommit: 'dd11ee2',
+      checkoutPath: '/repo/worktrees/halfretry',
+    });
+    value(
+      await run(
+        harness.fixture.runs.failSegment({
+          ...fence(runId, attemptId),
+          code: 'environment_preparation_failed',
+          message: 'git refused',
+          detail: {
+            value: { step: 'worktree', reason: 'branch_exists', branch: 'feat/halfretry' },
+          },
+        }),
+      ),
+    );
+
+    /**
+     * The window the run row cannot describe on its own: `adoptRetryPin` clears the failure and
+     * leaves the run `ready`, and `claimSegment` is a separate transaction. A process killed
+     * between the two leaves a preparing run with no attempt at all, which startup recovery then
+     * fails with nothing to point at.
+     */
+    const failed = await currentRun(harness.fixture, runId);
+    value(
+      await run(
+        harness.fixture.runs.adoptRetryPin({
+          runId,
+          controlRevision: failed.controlRevision,
+          artifactHash: PIN_B,
+          expectedPosition: failed.position,
+          expectedOwner: null,
+        }),
+      ),
+    );
+    await run(harness.fixture.runs.parkUnfinishedRuns({}));
+
+    const summary = (await read(harness.projection.getRun(runId))).run;
+    assert.equal(summary.status, 'failed');
+    assert.equal(summary.preparation.status, 'failed');
+    assert.equal(summary.failure, null, 'there is no attempt to attribute the interruption to');
+    assert.equal(summary.preparation.failure, null, 'and so no detail is invented for it');
+    // The clause most likely to be "corrected" by somebody reading this projection in isolation:
+    // retryability is a fact about the run's status, not about the presence of a failing attempt.
+    assert.equal(summary.controls.retry, true, 'a failure with no attempt is still retryable');
+  });
+});
+
+test('every receipt and the commit deliver a summary a client can apply', async () => {
+  await withHarness(async (harness) => {
+    const { runId, attemptId, placement } = await startPreparingRun(harness.fixture, {
+      source: 'selector',
+      request: {
+        worktree: { kind: 'create', branch: 'feat/delta', fromRef: 'main' },
+        surface: { kind: 'create', title: 'Delta' },
+      },
+      baseCommit: 'feed123',
+      checkoutPath: '/repo/worktrees/delta',
+    });
+    const from = (await currentRun(harness.fixture, runId)).revision;
+
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'worktree',
+          receipt: {
+            acquisition: 'created',
+            worktreeId: placement.worktreeId,
+            worktreePath: '/repo/worktrees/delta',
+            branch: 'feat/delta',
+          },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'setup',
+          receipt: { status: 'succeeded', reason: null, setupRunId: 9, failure: null },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.runs.recordEnvironmentReceipt({
+          ...fence(runId, attemptId),
+          step: 'surface',
+          receipt: {
+            surfaceId: placement.surfaceId,
+            requestedTitle: 'Delta',
+            title: 'Delta',
+          },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.runs.commitEnvironmentPreparation({
+          runId,
+          attemptId,
+          owner: 'worker-1',
+          ownerIncarnation: 'incarnation-1',
+          destination: {
+            worktreeId: placement.worktreeId,
+            worktreePath: '/repo/worktrees/delta',
+            surfaceId: placement.surfaceId,
+          },
+        }),
+      ),
+    );
+
+    const events = await read(harness.projection.listEvents(runId, { sinceRevision: from }));
+    assert.deepEqual(
+      events.items.map((delta) => delta.transition.kind),
+      [
+        'environment_step_recorded',
+        'environment_step_recorded',
+        'environment_step_recorded',
+        'environment_prepared',
+      ],
+      'a receipt is a transition, and so is the commit',
+    );
+    // No publisher change was needed for any of this: `captureTransitionChanges` diffs the projected
+    // summary across the transaction, so a projection that gained a field gains its deltas for free.
+    // Asserting the summaries rather than their presence is what makes that non-vacuous.
+    for (const delta of events.items) {
+      assert.ok(delta.changes.summary, `${delta.transition.kind} carried no summary`);
+      assert.equal(delta.changes.summary.revision, delta.revision);
+    }
+    assert.deepEqual(
+      events.items.map((delta) => [
+        delta.changes.summary!.preparation.worktree !== null,
+        delta.changes.summary!.preparation.setup !== null,
+        delta.changes.summary!.preparation.surface !== null,
+        delta.changes.summary!.preparation.status,
+      ]),
+      [
+        [true, false, false, 'pending'],
+        [true, true, false, 'pending'],
+        [true, true, true, 'pending'],
+        [true, true, true, 'prepared'],
+      ],
+      'each step is visible as it lands, and only the commit says prepared',
+    );
+    assert.equal(events.items.at(-1)!.changes.summary!.destination.surfaceId, placement.surfaceId);
+  });
+});
+
+test('a run with no preparation row fails its next write rather than inventing a placement', async () => {
+  await withHarness(async (harness) => {
+    const { runId } = await startRun(harness.fixture);
+    // `createRun` writes the preparation row in the same transaction as the run, so its absence is
+    // corruption rather than a state. Removing it by hand is the only way to reach this.
+    await run(
+      harness.fixture.database.use('test_delete_preparation', (db) => {
+        db.delete(workflowRunPreparations).where(eq(workflowRunPreparations.runId, runId)).run();
+      }),
+    );
+
+    /**
+     * It surfaces on the next *write*, not on the next read.
+     *
+     * The summary is projected in exactly one place — `captureTransitionChanges`, inside every
+     * workflow transaction — and reads serve the snapshot it captured. So a corrupt run does not
+     * degrade quietly into a listing; it stops the transaction that would have recorded a
+     * fabricated summary, which is the same posture `runPosition` takes for an unreadable position.
+     * A guessed placement request would relocate a run, and a guessed receipt would make a retry
+     * create a second worktree instead of reusing the first.
+     */
+    const before = await currentRun(harness.fixture, runId);
+    const failed = await Effect.runPromise(
+      Effect.either(
+        harness.fixture.runs.applyCancel({ runId, controlRevision: before.controlRevision }),
+      ),
+    );
+    assert.equal(failed._tag, 'Left', 'the write was not allowed to complete');
+    assert.match(
+      String((failed as { left: { cause: unknown } }).left.cause),
+      /unreadable preparation row/,
+    );
+
+    // And the write really did not land: the run is what it was.
+    const after = await currentRun(harness.fixture, runId);
+    assert.equal(after.status, before.status);
+    assert.equal(after.revision, before.revision);
+  });
+});
+
+/**
+ * What the summary can and cannot read back of a recorded failure detail.
+ *
+ * `preparation.failure` is decoded from the failing attempt's `failure_detail`, which goes through
+ * the payload store like every other recorded value: above `inlinePayloadThresholdBytes` it is
+ * offloaded to a ref, and the projection deliberately never resolves refs.
+ *
+ * The writer is what keeps that from mattering. `prepareEnvironment` bounds the diagnostic so the
+ * encoded detail always fits inline — pinned end to end by "a hook that printed 32 KiB still leaves
+ * a failure the summary can name" in `engine/environment.test.ts`, which drives a real worst-case
+ * hook failure through the segment. What is pinned *here* is the read side of that contract: an
+ * inline detail is projected whole, and a detail the projection cannot read degrades to null rather
+ * than throwing, because this projection runs inside every workflow write.
+ */
+test('an inline preparation failure detail is projected whole, and an unreadable one degrades', async () => {
+  await withHarness(async (harness) => {
+    const readDetailFor = async (diagnostic: string) => {
+      const { runId, attemptId } = await startPreparingRun(harness.fixture, {
+        request: {
+          worktree: { kind: 'create', branch: `feat/d${diagnostic.length}`, fromRef: 'main' },
+          surface: { kind: 'create', title: 'Diagnostic' },
+        },
+      });
+      value(
+        await run(
+          harness.fixture.runs.failSegment({
+            ...fence(runId, attemptId),
+            code: 'environment_preparation_failed',
+            message: 'a setup hook failed',
+            detail: { value: { step: 'setup', reason: 'setup_failed', diagnostic } },
+          }),
+        ),
+      );
+      const summary = (await read(harness.projection.getRun(runId))).run;
+      // Whatever happens to the detail, the run-level failure still reports the code and message,
+      // so nothing ever goes entirely unreported.
+      assert.equal(summary.failure?.code, 'environment_preparation_failed');
+      assert.equal(summary.preparation.status, 'failed');
+      return summary.preparation.failure;
+    };
+
+    // What the bounded writer produces: the whole detail, read back from the summary alone.
+    const inline = await readDetailFor('ERR_PNPM_FETCH_404\n'.repeat(16));
+    assert.equal(inline?.step, 'setup');
+    assert.equal(inline?.reason, 'setup_failed');
+
+    /**
+     * The defensive path, written straight past the writer's bound.
+     *
+     * No caller can reach this any more — `fail()` is the single construction site for a
+     * preparation failure detail and it guarantees an inline encoding — so this is here to pin the
+     * *degrade*, not a reachable state. It matters because the alternative is a throw, and this
+     * projection runs inside every workflow write: an unreadable detail must cost a field, never
+     * the transaction that was recording the failure.
+     */
+    assert.equal(
+      await readDetailFor('x'.repeat(32 * 1024)),
+      null,
+      'an offloaded detail is reported as no detail, never as no failure',
+    );
   });
 });

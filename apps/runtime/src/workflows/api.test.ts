@@ -125,10 +125,159 @@ test('the start route passes launch inputs and origin through unchanged', async 
     inputs: { version: '1.2.3' },
     origin: { worktreeId: 7, surfaceId: 42 },
   });
+  assert.ok(
+    seen !== null && !('placement' in (seen as object)),
+    'a launch without an override omits the key rather than passing undefined, because absent is ' +
+      'what means "select normally"',
+  );
   assert.deepEqual(body<{ data: unknown }>(response.body).data, {
     runId: 123,
     workflowKey: 'ship-it',
   });
+});
+
+test('a caller placement reaches the engine exactly as it was sent', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        startWorkflow: (input: unknown) =>
+          Effect.sync(() => {
+            seen = input;
+            return { id: 8, workflowKey: 'ship-it' };
+          }),
+      },
+    }),
+  );
+
+  const placement = {
+    worktree: { kind: 'create', branch: 'feat/story-44', fromRef: 'main' },
+    surface: { kind: 'create', title: 'Implement story #44' },
+  };
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs',
+    payload: { workflowKey: 'ship-it', origin: { worktreeId: 7, surfaceId: 42 }, placement },
+  });
+
+  assert.equal(response.statusCode, 200);
+  // Carried through unaltered: the route decides nothing about placement. Selection, precedence
+  // over the author hook and validation all belong to the engine, and the CLI story reaches the
+  // same contract through the same field.
+  assert.deepEqual((seen as { placement: unknown }).placement, placement);
+});
+
+/**
+ * Every way a launch can refuse a placement, as the wire reports it.
+ *
+ * A rejection reason alone is not enough to act on: a person needs to know *which* placement issue,
+ * *what* collided, and against which branch, ref or project. Those identities are the difference
+ * between "fix your request" and "guess which half of it was wrong", so the status and the context
+ * are pinned together rather than separately.
+ */
+test('every placement rejection carries its status and the identities that explain it', async () => {
+  const cases = [
+    {
+      error: {
+        code: 'workflow_placement_invalid' as const,
+        message: 'that surface is on another worktree',
+        placementIssue: 'surface_not_on_worktree' as const,
+        surfaceId: 12,
+        worktreeId: 3,
+      },
+      status: 400,
+      data: { placementIssue: 'surface_not_on_worktree', surfaceId: 12, worktreeId: 3 },
+    },
+    {
+      // A conflict with live state, not a malformed request: the same placement would succeed
+      // against a workspace where that branch did not exist.
+      error: {
+        code: 'workflow_environment_collision' as const,
+        message: 'that branch already exists',
+        collision: 'branch' as const,
+        branch: 'feat/story-44',
+      },
+      status: 409,
+      data: { collision: 'branch', branch: 'feat/story-44' },
+    },
+    {
+      // Both halves of the pair: what could not be resolved, and what it was being resolved for.
+      error: {
+        code: 'workflow_base_ref_not_found' as const,
+        message: 'no such ref',
+        baseRef: 'origin/nope',
+        branch: 'feat/story-44',
+      },
+      status: 400,
+      data: { baseRef: 'origin/nope', branch: 'feat/story-44' },
+    },
+    {
+      error: {
+        code: 'workflow_environment_unavailable' as const,
+        message: 'that worktree is gone',
+        projectId: 4,
+        worktreeId: 9,
+      },
+      status: 400,
+      data: { projectId: 4, worktreeId: 9 },
+    },
+    {
+      // The author's hook threw, or returned a placement the schema refuses. The workflow key is
+      // the identity that matters: the defect is in that package, not in the caller's request.
+      error: {
+        code: 'workflow_environment_selection_failed' as const,
+        message: 'the environment hook threw',
+        workflowKey: 'picky',
+      },
+      status: 400,
+      data: { workflowKey: 'picky' },
+    },
+    {
+      // A folder project maintains its own single environment, so there are no worktrees to create.
+      error: {
+        code: 'workflow_worktree_creation_unsupported' as const,
+        message: 'this project has no worktrees to create',
+        projectId: 2,
+      },
+      status: 400,
+      data: { projectId: 2 },
+    },
+    {
+      error: {
+        code: 'workflow_branch_invalid' as const,
+        message: 'that is not a usable branch name',
+        branch: 'feat//bad',
+      },
+      status: 400,
+      data: { branch: 'feat//bad' },
+    },
+  ];
+
+  for (const scenario of cases) {
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(
+      fastify,
+      withServices({
+        engine: { startWorkflow: () => Effect.fail(new WorkflowEngineError(scenario.error)) },
+      }),
+    );
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/v1/workflows/runs',
+      payload: { workflowKey: 'placeable', origin: { worktreeId: 1, surfaceId: 2 } },
+    });
+
+    assert.equal(response.statusCode, scenario.status, scenario.error.code);
+    const decoded = body<{ error: { code: string; data: Record<string, unknown> } }>(response.body);
+    assert.equal(decoded.error.code, 'workflow_rejected');
+    assert.deepEqual(
+      decoded.error.data,
+      { reason: scenario.error.code, ...scenario.data },
+      scenario.error.code,
+    );
+  }
 });
 
 test('a paginated read passes its filters, limit and cursor to the projection', async () => {
@@ -305,6 +454,50 @@ test('an occupied surface is a conflict, and a discovery failure is the runtime 
       url: '/api/v1/workflows/runs/5/dismiss',
     });
     assert.equal(response.statusCode, status, code);
+  }
+});
+
+/**
+ * The one new rejection that is not a launch rejection, driven through the routes that raise it.
+ *
+ * Pause and Resume are refused while a run is still preparing, because parking a preparation would
+ * hand it to a dispatcher that deliberately never claims that segment. It is an ordinary 400 — the
+ * request is well-formed and the same run will accept both controls a moment later — and it carries
+ * the run id, so a client can go and look at what the run is actually doing.
+ */
+test('Pause and Resume refuse a preparing run through their own routes', async () => {
+  for (const control of ['pause', 'resume'] as const) {
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(
+      fastify,
+      withServices({
+        engine: {
+          [control]: () =>
+            Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_run_preparing',
+                message: "This run is still setting up where it'll work. Give it a moment.",
+                workflowRunId: 6,
+                operation: control,
+              }),
+            ),
+        },
+      }),
+    );
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: `/api/v1/workflows/runs/6/${control}`,
+    });
+
+    assert.equal(response.statusCode, 400, control);
+    const decoded = body<{ error: { code: string; data: Record<string, unknown> } }>(response.body);
+    assert.equal(decoded.error.code, 'workflow_rejected');
+    assert.deepEqual(decoded.error.data, {
+      reason: 'workflow_run_preparing',
+      workflowRunId: 6,
+      operation: control,
+    });
   }
 });
 

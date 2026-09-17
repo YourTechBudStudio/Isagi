@@ -84,6 +84,9 @@ export function registerWorkflowApi(
         workflowKey: input.workflowKey,
         inputs: input.inputs,
         origin: input.origin,
+        // Omitted rather than passed as undefined: absent means "no override, select normally",
+        // and the engine's own selection reads the key's presence.
+        ...(input.placement === undefined ? {} : { placement: input.placement }),
       });
       return { runId: created.id, workflowKey: created.workflowKey };
     }),

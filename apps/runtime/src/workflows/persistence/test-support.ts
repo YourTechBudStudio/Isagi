@@ -128,18 +128,16 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
 }
 
 /**
- * Creates a run and places it, the way a launch does, leaving it exactly where a claim expects it.
+ * Creates a run and leaves it **preparing**: claimed at `environment_preparation`, no destination,
+ * no attachment.
  *
- * Creation and placement are two transactions now: `createRun` leaves the run claimed at
- * `environment_preparation` with no destination, and `commitEnvironmentPreparation` is what makes a
- * destination effective. Almost every test downstream of this is about what happens *after* a run
- * is placed, so they go through here rather than each one learning the preparation protocol — and
- * as a side benefit the real commit path is exercised by the whole suite instead of only by its own
- * file.
- *
- * A test that is about preparation itself calls `createRun` directly and drives the steps.
+ * The one place the `createRun` launch fixture is composed. It is shared rather than restated
+ * because that input shape is still moving — this story alone took `destination` and `attachment`
+ * off it and added `preparation`, and the placement request DTO moves again in phase 10. Two object
+ * literals building it would both keep compiling with a field added to one and forgotten in the
+ * other, since every key of `preparation` is either optional or supplied per call.
  */
-export async function createPlacedRun(
+export async function createPreparingRun(
   fixture: WorkflowPersistenceFixture,
   input: {
     readonly workflowKey: string;
@@ -151,8 +149,17 @@ export async function createPlacedRun(
     readonly worktreePath?: string;
     readonly owner?: string;
     readonly ownerIncarnation?: string;
+    /** Defaults to the current/current placement nobody chose, which is what most tests want. */
+    readonly preparation?: CreateRunInput['preparation'];
   },
-): Promise<{ run: WorkflowRunRecord; frame: WorkflowFrameRecord }> {
+): Promise<{
+  run: WorkflowRunRecord;
+  frame: WorkflowFrameRecord;
+  attempt: { readonly id: number };
+  worktreePath: string;
+  owner: string;
+  ownerIncarnation: string;
+}> {
   const worktreePath = input.worktreePath ?? '/repo/fixture';
   const owner = input.owner ?? PLACEMENT_OWNER;
   const ownerIncarnation = input.ownerIncarnation ?? PLACEMENT_INCARNATION;
@@ -170,7 +177,7 @@ export async function createPlacedRun(
         paneId: null,
         agentSessionId: null,
       },
-      preparation: {
+      preparation: input.preparation ?? {
         source: 'default',
         request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
         baseCommit: null,
@@ -182,15 +189,52 @@ export async function createPlacedRun(
   if (!created.ok) {
     throw new Error(`expected a created run, got ${JSON.stringify(created.rejection)}`);
   }
+  return {
+    run: created.value.run,
+    frame: created.value.frame,
+    attempt: created.value.attempt,
+    worktreePath,
+    owner,
+    ownerIncarnation,
+  };
+}
+
+/**
+ * Creates a run and places it, the way a launch does, leaving it exactly where a claim expects it.
+ *
+ * Creation and placement are two transactions now: `createPreparingRun` leaves the run claimed at
+ * `environment_preparation` with no destination, and `commitEnvironmentPreparation` is what makes a
+ * destination effective. Almost every test downstream of this is about what happens *after* a run
+ * is placed, so they go through here rather than each one learning the preparation protocol — and
+ * as a side benefit the real commit path is exercised by the whole suite instead of only by its own
+ * file.
+ *
+ * A test that is about preparation itself stops at `createPreparingRun` and drives the steps.
+ */
+export async function createPlacedRun(
+  fixture: WorkflowPersistenceFixture,
+  input: {
+    readonly workflowKey: string;
+    readonly title: string;
+    readonly rootGraphKey: string;
+    readonly artifactHash: string;
+    readonly rootFrame: CreateRunInput['rootFrame'];
+    readonly placement: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly worktreePath?: string;
+    readonly owner?: string;
+    readonly ownerIncarnation?: string;
+  },
+): Promise<{ run: WorkflowRunRecord; frame: WorkflowFrameRecord }> {
+  const created = await createPreparingRun(fixture, input);
   const placed = await run(
     fixture.runs.commitEnvironmentPreparation({
-      runId: created.value.run.id,
-      attemptId: created.value.attempt.id,
-      owner,
-      ownerIncarnation,
+      runId: created.run.id,
+      attemptId: created.attempt.id,
+      owner: created.owner,
+      ownerIncarnation: created.ownerIncarnation,
       destination: {
         worktreeId: input.placement.worktreeId,
-        worktreePath,
+        worktreePath: created.worktreePath,
         surfaceId: input.placement.surfaceId,
       },
     }),
@@ -198,8 +242,8 @@ export async function createPlacedRun(
   if (!placed.ok) {
     throw new Error(`expected a placed run, got ${JSON.stringify(placed.rejection)}`);
   }
-  const record = (await run(fixture.runs.findRun(created.value.run.id)))!;
-  return { run: record, frame: created.value.frame };
+  const record = (await run(fixture.runs.findRun(created.run.id)))!;
+  return { run: record, frame: created.frame };
 }
 
 const PLACEMENT_OWNER = 'workflow-launch:test';
