@@ -83,6 +83,7 @@ export const testWorktreeSetupRepository = {
 
 export const testSurfaceRepository = {
   findKeyedCreation: () => Effect.succeed({ kind: 'absent' as const }),
+  findSurfaceByCreationKey: () => Effect.succeed(null),
   worktreeExists: () => Effect.succeed(false),
   findSurface: () => Effect.succeed(null),
   findPane: () => Effect.succeed(null),

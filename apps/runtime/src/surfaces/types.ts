@@ -118,6 +118,13 @@ export interface CreateSinglePaneSurfaceInput {
   readonly initialSession?:
     | { readonly kind: 'editor_context'; readonly sessionId: number }
     | undefined;
+  /**
+   * Names the surface this call intends to create, so a re-entry adopts it instead of creating a
+   * second. Written to `worktree_surfaces.creation_key`, which is its own keyspace: the pane this
+   * call creates stays unkeyed, and surface re-entry resolves through `findSurfaceByCreationKey`
+   * rather than `findKeyedCreation`.
+   */
+  readonly creationKey?: string | undefined;
 }
 
 export interface CreateSinglePaneSurfaceOutput {

@@ -229,6 +229,21 @@ function setupRejectionReason(error: WorktreeSetupError) {
   }
 }
 
+/**
+ * The open-worktree rejections that mean "something is already there", as opposed to "your request
+ * was malformed". All four describe a resource this call would have had to take over, which is what
+ * 409 says and 400 does not — and it keeps the answer consistent with the workflow boundary, where
+ * `workflow_environment_collision` is already a 409 for the same underlying condition.
+ */
+function isWorktreeOpenConflict(code: WorkspaceError['code']) {
+  return (
+    code === 'checkout_path_exists' ||
+    code === 'checkout_path_registered' ||
+    code === 'branch_exists' ||
+    code === 'worktree_exists'
+  );
+}
+
 function worktreeRejectionReason(error: WorkspaceError) {
   switch (error.code) {
     case 'project_not_found':
@@ -237,6 +252,8 @@ function worktreeRejectionReason(error: WorkspaceError) {
     case 'new_branch_requires_base':
     case 'invalid_branch_name':
     case 'base_ref_not_found':
+    case 'branch_exists':
+    case 'worktree_exists':
     case 'checkout_path_exists':
     case 'checkout_path_registered':
     case 'checkout_parent_unavailable':
@@ -485,12 +502,11 @@ function toWorkspaceApiError(error: unknown, context: ApiRouteContext): ApiError
     if (context.endpointId === 'worktrees.open') {
       return {
         code: 'worktree_open_rejected',
-        status:
-          error.code === 'checkout_path_exists' || error.code === 'checkout_path_registered'
-            ? 409
-            : error.code === 'checkout_parent_unavailable'
-              ? 500
-              : 400,
+        status: isWorktreeOpenConflict(error.code)
+          ? 409
+          : error.code === 'checkout_parent_unavailable'
+            ? 500
+            : 400,
         message: error.message,
         requestId: context.requestId,
         data: {

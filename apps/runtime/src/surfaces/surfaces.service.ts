@@ -343,7 +343,7 @@ export const SurfaceServiceLive = Layer.effect(
       findByCreationKey: (creationKey) => repository.findKeyedCreation(creationKey),
       createSurface: (input) =>
         Effect.gen(function* () {
-          const surface = yield* createSinglePaneSurface(repository, {
+          const { output: surface } = yield* createSinglePaneSurface(repository, {
             worktreeId: input.worktreeId,
             titleBase: titleBaseForInitialPane(input.initialPane),
           });
@@ -512,22 +512,18 @@ export const SurfaceServiceLive = Layer.effect(
         }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
-          const exists = yield* repository.worktreeExists(input.worktreeId);
-          if (!exists)
-            return yield* Effect.fail(
-              new SurfaceError({
-                code: 'worktree_not_found',
-                message: `Worktree ${input.worktreeId} was not found.`,
-                worktreeId: input.worktreeId,
-              }),
-            );
-          const output = yield* repository.createSinglePaneSurface(input);
-          yield* publishSurfaceChanged(eventBus, {
-            worktreeId: input.worktreeId,
-            surfaceId: output.surfaceId,
-            change: 'created',
-          });
-          return output;
+          // Validated here and not only in `renameSurface`: a title that cannot be set by rename
+          // has no business being created either, and launch-time placement validation calls the
+          // same rule so a title is refused before anything is allocated rather than after.
+          const titleBase = yield* validateSurfaceTitle(input.titleBase);
+          const created = yield* createSinglePaneSurface(repository, { ...input, titleBase });
+          if (created.status === 'created')
+            yield* publishSurfaceChanged(eventBus, {
+              worktreeId: input.worktreeId,
+              surfaceId: created.output.surfaceId,
+              change: 'created',
+            });
+          return created.output;
         }),
       setWorktreeEnvironmentFocus: (input) => setWorktreeEnvironmentFocus(repository, input),
       // Reordering changes no surface's identity, panes, sessions, or layout, so
@@ -575,6 +571,11 @@ function surfaceOrderMessage(reason: SurfaceOrderRejectionReason) {
   }
 }
 
+/**
+ * The one path to a single-pane surface. Returns whether a surface was actually created, because
+ * only a real creation may publish `surface_changed: created` — a keyed re-entry that adopted an
+ * existing surface has changed nothing for any client to refetch.
+ */
 function createSinglePaneSurface(
   repository: SurfaceRepositoryService,
   input: CreateSinglePaneSurfaceInput,
@@ -589,7 +590,39 @@ function createSinglePaneSurface(
           worktreeId: input.worktreeId,
         }),
       );
-    return yield* repository.createSinglePaneSurface(input);
+    const result = yield* repository.createSinglePaneSurface(input).pipe(
+      // The lookup and the insert share one transaction, so within a single connection this cannot
+      // be reached. It is kept because that is an assumption about how the runtime opens SQLite,
+      // not a contract: if a second writer ever exists, losing the key is convergence — the winner
+      // is the surface this key names — and re-reading is the honest answer, not an error.
+      Effect.catchIf(
+        (error) => input.creationKey !== undefined && isUniqueConstraintViolation(error),
+        () => Effect.succeed('lost_race' as const),
+      ),
+    );
+    if (result === 'lost_race') {
+      const winner = yield* repository.findSurfaceByCreationKey(input.creationKey!);
+      if (!winner) return yield* Effect.die('keyed surface vanished after a unique conflict');
+      return winner.worktreeId === input.worktreeId
+        ? ({ status: 'adopted', output: winner } as const)
+        : yield* Effect.fail(creationKeyMismatch(input, winner.surfaceId, winner.worktreeId));
+    }
+    if (result.status === 'creation_key_mismatch')
+      return yield* Effect.fail(creationKeyMismatch(input, result.surfaceId, result.worktreeId));
+    return result;
+  });
+}
+
+function creationKeyMismatch(
+  input: CreateSinglePaneSurfaceInput,
+  surfaceId: number,
+  worktreeId: number,
+) {
+  return new SurfaceError({
+    code: 'creation_key_mismatch',
+    message: `Creation key ${input.creationKey} names surface ${surfaceId} in worktree ${worktreeId}, but this creation targets worktree ${input.worktreeId}.`,
+    worktreeId: input.worktreeId,
+    surfaceId,
   });
 }
 
@@ -922,7 +955,7 @@ function sessionSurfaceError(
   });
 }
 
-function validateSurfaceTitle(title: string) {
+export function validateSurfaceTitle(title: string) {
   const trimmed = title.trim();
   if (trimmed.length === 0 || trimmed.length > 80)
     return Effect.fail(
