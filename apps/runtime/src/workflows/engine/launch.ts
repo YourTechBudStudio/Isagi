@@ -1,11 +1,16 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Either } from 'effect';
 
-import type { WorkflowLaunchOrigin, WorkflowLoadFailureReason } from '@isagi/contracts';
+import type {
+  WorkflowLaunchOrigin,
+  WorkflowLoadFailureReason,
+  WorkflowPlacementRequestDto,
+} from '@isagi/contracts';
 
-import type { SurfaceServiceShape } from '../../surfaces/index.js';
+import type { SurfaceRepositoryService, SurfaceServiceShape } from '../../surfaces/index.js';
+import type { WorkspaceServiceShape } from '../../workspace/index.js';
 import type { WorkspaceRepositoryService } from '../../workspace/workspace.repository.js';
-import type { WorkflowRunRecord } from '../persistence/records.js';
+import type { WorkflowAttemptRecord, WorkflowRunRecord } from '../persistence/records.js';
 import type { WorkflowRunsRepositoryService } from '../persistence/runs.repository.js';
 import { errorMessage } from '../state/pure.js';
 import type { WorkflowArtifactCatalogService } from '../structure/artifact-catalog.js';
@@ -20,19 +25,35 @@ import {
   type WorkflowCommandManifest,
   type WorkflowOrigin,
 } from '../types.js';
+import { resolvePlacement, type PlacementInfrastructureError } from './environment/placement.js';
+import { selectPlacement } from './environment/selection.js';
+import type { LaunchProject, ResolvedPlacement } from './environment/types.js';
 
 /**
  * Starting a run.
  *
- * The order is load → place → `command` → occupancy → `validate` → create, and every step before
- * the last leaves no run row behind: a workflow that cannot be loaded, a destination that is not
- * there, a command manifest that throws or inputs the author refuses are all launch failures, not
- * runs that immediately fail.
+ * The order is load → origin → project → `command` → `validate` → select → resolve → create, and
+ * every step before the last leaves no run row behind: a workflow that cannot be loaded, an origin
+ * that is not there, a command manifest that throws, inputs the author refuses and a placement that
+ * does not describe a usable destination are all launch failures, not runs that immediately fail.
+ *
+ * **Selection sits after `validate` and before `createRun`.** Where a run lands is decided by
+ * exactly one of three sources — a caller override, the author's `environment` hook, or the
+ * unchanged current/current default — and then statically validated against live rows and a
+ * read-only Git preflight. Everything that could refuse the launch therefore happens while the
+ * launch can still simply be refused.
+ *
+ * **Occupancy is checked on the destination, not the origin.** A surface busy with a run no longer
+ * blocks a launch headed somewhere else, which is the behaviour change this story exists for.
  *
  * `init` is *not* in that list, and its absence is the point. Initialization runs as the root
  * frame's first `graph_entry` segment, so a failed initialization is a retained, inspectable,
  * retryable segment rather than a launch that vanished. That is also what makes "recovery does not
  * repeat graph initialization" a statement about a committed fact rather than a hope.
+ *
+ * Preparation is not here either, and for the same reason: `startWorkflow` returns the run **and
+ * the claimed preparation attempt**, and the engine layer hands both to the preparation segment. A
+ * launch that got as far as a run row owns a durable, retryable unit of work from then on.
  */
 export interface LaunchDeps {
   readonly runs: WorkflowRunsRepositoryService;
@@ -40,6 +61,18 @@ export interface LaunchDeps {
   readonly catalog: WorkflowArtifactCatalogService;
   readonly workspace: WorkspaceRepositoryService;
   readonly surfaces: SurfaceServiceShape;
+  /**
+   * The one owning-service call the launch path makes, and it allocates nothing.
+   *
+   * A `create` worktree choice is refused here — unsupported project, bad branch name, unknown base
+   * ref, or a collision — rather than half way through preparation with a run row already behind it.
+   */
+  readonly workspaceService: Pick<WorkspaceServiceShape, 'preflightWorktreeCreation'>;
+  /** Rows, not detail: discovery lists surfaces and validation checks one belongs where it claims. */
+  readonly surfaceRepository: Pick<
+    SurfaceRepositoryService,
+    'findSurface' | 'listWorkspaceSurfaceMetadata'
+  >;
   /**
    * Who holds a run's environment preparation.
    *
@@ -54,6 +87,18 @@ export interface LaunchInput {
   readonly workflowKey: string;
   readonly inputs: Record<string, unknown>;
   readonly origin: WorkflowLaunchOrigin;
+  /**
+   * A caller's explicit choice of destination. It beats the author's `environment` hook, which beats
+   * the default — a caller is a person or a CLI saying "put this here", and an override a workflow
+   * could quietly overrule would not be one. It bypasses *selection*, never validation.
+   */
+  readonly placement?: WorkflowPlacementRequestDto | undefined;
+}
+
+/** What a launch hands to the preparation segment: the run, and the attempt it already holds. */
+export interface LaunchedRun {
+  readonly run: WorkflowRunRecord;
+  readonly attempt: WorkflowAttemptRecord;
 }
 
 /**
@@ -79,18 +124,19 @@ export function startWorkflow(
   deps: LaunchDeps,
   input: LaunchInput,
 ): Effect.Effect<
-  WorkflowRunRecord,
+  LaunchedRun,
   | WorkflowEngineError
-  | import('../../persistence/index.js').DatabaseError
+  | PlacementInfrastructureError
   | import('../persistence/payload-store.js').PayloadPublishError
 > {
   return Effect.gen(function* () {
     const artifact = yield* resolveArtifact(deps, input.workflowKey, input.origin.worktreeId);
     const definition = artifact.definition;
 
-    // Placement is validated against live rows before any author code runs, so a command manifest is
-    // never built for a destination that has already gone.
+    // The origin is validated against live rows before any author code runs, so a command manifest
+    // is never built for a place the person launched from that has since gone.
     const origin = yield* buildOrigin(deps, input.origin);
+    const project = yield* requireProject(deps, origin.worktreeId);
 
     const manifest = yield* Effect.tryPromise({
       try: async () => definition.command(origin),
@@ -104,22 +150,6 @@ export function startWorkflow(
         }),
     });
 
-    // One attached run per surface, including a terminal one until it is dismissed. Checked here for
-    // a useful message and enforced by a partial unique index, so a race cannot create a second.
-    const occupant = yield* deps.runs.listByDestinationSurface(origin.surfaceId);
-    const attached = yield* firstAttached(deps, occupant);
-    if (attached) {
-      return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'workflow_surface_attached',
-          message: `Surface ${origin.surfaceId} already has a workflow attached. Dismiss it before starting another.`,
-          workflowKey: input.workflowKey,
-          activeWorkflowRunId: attached,
-          surfaceId: origin.surfaceId,
-        }),
-      );
-    }
-
     yield* Effect.tryPromise({
       try: async () => definition.validate(origin, input.inputs),
       catch: (cause) =>
@@ -128,6 +158,23 @@ export function startWorkflow(
           message: errorMessage(cause),
           workflowKey: input.workflowKey,
         }),
+    });
+
+    // Where this run lands, decided and then checked. Both steps are still read-only: the placement
+    // is a decision about live rows, and nothing exists yet that a failure would have to account for.
+    const selection = yield* selectPlacement(deps, {
+      definition,
+      workflowKey: input.workflowKey,
+      origin,
+      project,
+      inputs: input.inputs,
+      placement: input.placement,
+    });
+    const resolved = yield* resolvePlacement(deps, {
+      workflowKey: input.workflowKey,
+      origin,
+      project,
+      selection,
     });
 
     const created = yield* deps.runs.createRun({
@@ -144,15 +191,18 @@ export function startWorkflow(
         agentSessionId: origin.agentSessionId ?? null,
       },
       preparation: {
-        source: 'default',
-        request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
-        baseCommit: null,
-        checkoutPath: null,
+        source: resolved.source,
+        request: resolved.request,
+        baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
+        checkoutPath: resolved.worktree.kind === 'create' ? resolved.worktree.checkoutPath : null,
       },
+      // Claimed in the same transaction as the run. The dispatcher deliberately never claims this
+      // segment, so the launch itself holds it for the whole of preparation — and there is no window
+      // in which a preparing run exists with nothing an interruption could be attributed to.
       claim: {
         owner: deps.owner,
         ownerIncarnation: deps.ownerIncarnation,
-        input: { value: { segment: 'environment_preparation' } },
+        input: { value: preparationInput(resolved) },
       },
     });
 
@@ -166,86 +216,53 @@ export function startWorkflow(
       );
     }
 
-    // --- phase 05 bridge, deleted by phase 06 -------------------------------------------------
-    //
-    // Stands in for the whole selection-and-preparation stage that does not exist yet:
-    // `selectPlacement` → `resolvePlacement` → the engine-owned preparation fiber. Here the
-    // placement is always the unchanged current/current default, so nothing has to be allocated and
-    // the destination can be committed inline — which lands the run at `graph_entry` with an
-    // attachment, exactly where it was before the environment segment existed.
-    //
-    // Phase 06 **replaces** this, it does not extend it: the real path selects a placement, validates
-    // it against live rows, and hands the returned attempt to the preparation fiber, which commits
-    // the destination itself once the worktree, setup and surface steps are done.
-    //
-    // Occupancy semantics do not move during the bridge. `surface_busy` simply arrives from the
-    // commit instead of from `createRun`, so the palette sees the same refusal it always did.
-    const placement = yield* deps.runs.commitEnvironmentPreparation({
-      runId: created.value.run.id,
-      attemptId: created.value.attempt.id,
-      owner: deps.owner,
-      ownerIncarnation: deps.ownerIncarnation,
-      destination: {
-        worktreeId: origin.worktreeId,
-        worktreePath: origin.worktreePath,
-        surfaceId: origin.surfaceId,
-      },
-    });
+    return { run: created.value.run, attempt: created.value.attempt };
+  });
+}
 
-    if (!placement.ok) {
-      const busy = placement.rejection.kind === 'surface_busy' ? placement.rejection : null;
-      const message = busy
-        ? `Surface ${origin.surfaceId} already has a workflow attached.`
-        : `The run could not be placed: ${placement.rejection.kind}.`;
+/**
+ * The claimed attempt's recorded input.
+ *
+ * It is the placement decision in full — what was asked for, who decided it, and the two facts a
+ * `create` resolved to — so the attempt can say what it was about to do even if every row it names
+ * is gone by the time somebody reads it.
+ */
+function preparationInput(resolved: ResolvedPlacement) {
+  return {
+    segment: 'environment_preparation',
+    source: resolved.source,
+    request: resolved.request,
+    baseCommit: resolved.worktree.kind === 'create' ? resolved.worktree.baseCommit : null,
+    checkoutPath: resolved.worktree.kind === 'create' ? resolved.worktree.checkoutPath : null,
+  };
+}
 
-      // The run and its claimed attempt already exist, so a refused placement has to be *closed*,
-      // not abandoned. Nothing else would ever close it: the dispatcher never claims
-      // `environment_preparation`, so an owned, running, destination-less run would sit untouched
-      // until the next restart, and the caller would hold no id with which to inspect or retry it.
-      // Failing it through the fence is what a preparation failure is, and it is what phase 07's
-      // fiber will do for every other step.
-      yield* deps.runs.failSegment({
-        runId: created.value.run.id,
-        attemptId: created.value.attempt.id,
-        owner: deps.owner,
-        ownerIncarnation: deps.ownerIncarnation,
-        code: 'environment_preparation_failed',
-        message,
-        // Structured only for the one rejection that is an operational condition. A
-        // `position_mismatch` here is a defect with no honest reason literal, and inventing one
-        // would put a wrong fact on the record; its message already names the kind.
-        ...(busy
-          ? {
-              detail: {
-                value: {
-                  step: 'commit',
-                  reason: 'surface_busy',
-                  surfaceId: origin.surfaceId,
-                  occupyingRunId: busy.runId,
-                },
-              },
-            }
-          : {}),
-      });
-
+/**
+ * The project a launch belongs to.
+ *
+ * Read once and passed down, because selection, validation and the worktree preflight all need the
+ * same answer, and three independent reads could disagree with each other inside one launch.
+ */
+function requireProject(
+  deps: LaunchDeps,
+  worktreeId: number,
+): Effect.Effect<
+  LaunchProject,
+  WorkflowEngineError | import('../../persistence/index.js').DatabaseError
+> {
+  return Effect.gen(function* () {
+    const worktree = yield* deps.workspace.findWorktree(worktreeId);
+    const project = worktree ? yield* deps.workspace.findProject(worktree.projectId) : null;
+    if (!project) {
       return yield* Effect.fail(
         new WorkflowEngineError({
-          code: busy ? 'workflow_surface_attached' : 'workflow_load_failed',
-          message,
-          workflowKey: input.workflowKey,
-          // The refused run is retained and failed, so the caller gets a handle on it rather than
-          // only being told no.
-          workflowRunId: created.value.run.id,
-          ...(busy ? { activeWorkflowRunId: busy.runId, surfaceId: origin.surfaceId } : {}),
+          code: 'worktree_not_found',
+          message: `Worktree ${worktreeId} has no project.`,
+          worktreeId,
         }),
       );
     }
-
-    // Re-read rather than returned from the create: the destination, position and ownership all
-    // moved in the commit, and handing back the pre-commit record would describe a run that no
-    // longer exists.
-    const placed = yield* deps.runs.findRun(created.value.run.id);
-    return placed ?? created.value.run;
+    return { id: project.id, name: project.name, kind: project.kind, rootPath: project.rootPath };
   });
 }
 
@@ -521,15 +538,4 @@ function buildOrigin(
       agentSessionId: pane?.session?.kind === 'agent_session' ? pane.session.agentSession.id : null,
     };
   });
-}
-
-/** The run currently holding this surface's attachment, if any. */
-function firstAttached(deps: LaunchDeps, candidates: readonly WorkflowRunRecord[]) {
-  return Effect.reduce(candidates, null as number | null, (held, candidate) =>
-    held !== null
-      ? Effect.succeed(held)
-      : deps.runs
-          .findAttachment(candidate.id)
-          .pipe(Effect.map((attachment) => (attachment ? candidate.id : null))),
-  );
 }

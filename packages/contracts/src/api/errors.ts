@@ -696,9 +696,23 @@ export const worktreeCommandsApiErrorSchema = Schema.Union(
   runtimeDataDirectoryFailedErrorSchema,
 );
 
+/**
+ * Launching a run can fail the way any project-touching endpoint can.
+ *
+ * Beyond `workflow_rejected`, the launch path makes one owning-service call — the worktree-creation
+ * preflight — so Git, the state file, a project path and project configuration can all fail
+ * underneath it. Those are infrastructure rather than a placement the caller chose badly, and they
+ * are reported as themselves so a client can tell "fix your request" from "something broke
+ * underneath it". They must be declared here or the response encoder refuses them and the caller
+ * receives `api_response_encoding_failed` instead of the diagnosable failure.
+ */
 export const workflowApiErrorSchema = Schema.Union(
   workflowRejectedErrorSchema,
+  projectPathRejectedErrorSchema,
+  worktreeSetupRejectedErrorSchema,
+  gitCommandFailedErrorSchema,
   runtimeDatabaseFailedErrorSchema,
+  runtimeStateFileFailedErrorSchema,
   runtimeDataDirectoryFailedErrorSchema,
 );
 

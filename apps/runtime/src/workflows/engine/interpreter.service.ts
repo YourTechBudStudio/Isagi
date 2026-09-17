@@ -1,11 +1,12 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
-import type { WorkflowLaunchOrigin } from '@isagi/contracts';
+import type { WorkflowLaunchOrigin, WorkflowPlacementRequestDto } from '@isagi/contracts';
 
 import { HarnessLedgerObserver } from '../../agent-sessions/harness/observer.service.js';
 import type { DatabaseError } from '../../persistence/index.js';
 import { InternalRuntimeEventBus } from '../../runtime-events/internal-event-bus.js';
 import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
+import { WorkspaceService } from '../../workspace/index.js';
 import { WorkspaceRepository } from '../../workspace/index.js';
 import { WorkflowOperationService } from '../operations/operation.service.js';
 import { WorkflowOperationsRepository } from '../persistence/operations.repository.js';
@@ -19,6 +20,9 @@ import { startEnvironmentWatch } from '../waits/environment.js';
 import { makeWaitResolver, startWaitResolver } from '../waits/resolver.js';
 import { makeControls, type ControlResult } from './controls.js';
 import { makeDispatcher, type DrainSummary } from './dispatcher.js';
+import type { PlacementInfrastructureError } from './environment/placement.js';
+import { prepareEnvironment } from './environment/preparation.js';
+import type { PreparationContext } from './environment/types.js';
 import { listWorkflowDescriptors, startWorkflow, type DescriptorListing } from './launch.js';
 import { recoverAtStartup } from './recovery.js';
 
@@ -37,6 +41,8 @@ export interface WorkflowEngineService {
     readonly workflowKey: string;
     readonly inputs?: Record<string, unknown> | undefined;
     readonly origin: WorkflowLaunchOrigin;
+    /** A caller's explicit destination. It beats the workflow's `environment` hook and the default. */
+    readonly placement?: WorkflowPlacementRequestDto | undefined;
   }) => Effect.Effect<WorkflowRunRecord, EngineFailure>;
   readonly pause: (input: {
     readonly runId: number;
@@ -64,7 +70,20 @@ export interface WorkflowEngineService {
   readonly poke: Effect.Effect<void>;
 }
 
-export type EngineFailure = WorkflowEngineError | DatabaseError | PayloadPublishError;
+/**
+ * What a control or a launch can fail with.
+ *
+ * `PlacementInfrastructureError` is here because the launch path makes one owning-service call — the
+ * worktree creation preflight — and Git, the state file and project configuration can fail
+ * underneath it. Those are infrastructure, not a placement the person chose badly, so they cross
+ * this boundary as themselves and `workflows/api.ts` reports each one the way the workspace boundary
+ * already reports it.
+ */
+export type EngineFailure =
+  | WorkflowEngineError
+  | DatabaseError
+  | PayloadPublishError
+  | PlacementInfrastructureError;
 
 export const WorkflowEngine = Context.GenericTag<WorkflowEngineService>('isagi/WorkflowEngine');
 
@@ -77,6 +96,7 @@ export const WorkflowEngineLive = Layer.scoped(
     const catalog = yield* WorkflowArtifactCatalog;
     const registry = yield* WorkflowRegistry;
     const workspace = yield* WorkspaceRepository;
+    const workspaceService = yield* WorkspaceService;
     const surfaces = yield* SurfaceService;
     const surfaceRepository = yield* SurfaceRepository;
     const operations = yield* WorkflowOperationService;
@@ -118,12 +138,27 @@ export const WorkflowEngineLive = Layer.scoped(
       registry,
       catalog,
       workspace,
+      workspaceService,
       surfaces,
+      surfaceRepository,
       owner,
       // The same incarnation the dispatcher and the operation service use: "this process started
       // that work" has to mean one thing, or a claim this process holds looks abandoned to it.
       ownerIncarnation: operations.incarnationId,
     };
+    /**
+     * Preparation, run where the engine can account for it.
+     *
+     * Phase 07 forks this into the engine scope and joins the fiber, per program design §3.6. Today
+     * it is the phase-06 stand-in and runs inline, which is behaviourally identical for the only
+     * placements it can perform — nothing it does outlives the call.
+     */
+    const runPreparation = (ctx: PreparationContext) =>
+      prepareEnvironment(
+        { runs, workspace, owner, ownerIncarnation: operations.incarnationId, poke },
+        ctx,
+      );
+
     const controls = makeControls({
       ...launchDeps,
       payloads,
@@ -140,7 +175,14 @@ export const WorkflowEngineLive = Layer.scoped(
           workflowKey: input.workflowKey,
           inputs: input.inputs ?? {},
           origin: input.origin,
-        }).pipe(Effect.tap(() => poke)),
+          ...(input.placement === undefined ? {} : { placement: input.placement }),
+        }).pipe(
+          // The launch request blocks until preparation completes. Forking into the engine scope is
+          // what stops a dropped client from interrupting Git half way; the trailing `poke` moved
+          // inside preparation, which is now the only thing that knows when a run is dispatchable.
+          Effect.tap(runPreparation),
+          Effect.map(({ run }) => run),
+        ),
       pause: (input) => controls.pause(input.runId),
       resume: (input) => controls.resume(input.runId),
       retry: (input) => controls.retry(input.runId),

@@ -3,8 +3,12 @@ import type { FastifyInstance } from 'fastify';
 
 import { apiEndpoints, type ApiError } from '@isagi/contracts';
 
-import { registerApiEndpoint, type ApiRouteContext, errorMessage } from '../lib/api/index.js';
-import { DatabaseError } from '../persistence/index.js';
+import {
+  infrastructureApiError,
+  registerApiEndpoint,
+  type ApiRouteContext,
+  errorMessage,
+} from '../lib/api/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
 import { WorkflowEngine } from './engine/interpreter.service.js';
 import { WorkflowRunProjection } from './read/projection.service.js';
@@ -217,6 +221,11 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
         : {}),
       ...(error.artifactHash ? { artifactHash: error.artifactHash } : {}),
       ...(error.operationKey ? { operationKey: error.operationKey } : {}),
+      ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
+      ...(error.collision ? { collision: error.collision } : {}),
+      ...(error.branch ? { branch: error.branch } : {}),
+      ...(error.baseRef ? { baseRef: error.baseRef } : {}),
+      ...(error.projectId ? { projectId: error.projectId } : {}),
     };
 
     return {
@@ -238,15 +247,24 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
     };
   }
 
-  if (error instanceof DatabaseError) {
-    return {
-      code: 'runtime_database_failed',
-      status: 500,
-      message: `Database operation failed: ${error.operation}`,
-      requestId: context.requestId,
-      data: { operation: error.operation },
-    };
-  }
+  /**
+   * The launch path's one owning-service call, and what it can fail with that is not a placement.
+   *
+   * `resolvePlacement` maps every `WorkspaceError` the worktree preflight raises into a workflow
+   * rejection, so what reaches here is infrastructure: Git, the database, the state file, project
+   * paths, project configuration. It is reported through the shared mapper rather than restated
+   * here, so the same Git failure reads identically whichever route hit it.
+   *
+   * One class the launch channel declares is deliberately not covered there: `WorktreeSetupRunError`
+   * is in `WorkspaceServiceError` because `openWorktree` and `runWorktreeSetup` can raise it,
+   * neither of which the launch path calls — the preflight runs no hooks. It also has no honest
+   * `worktree_setup_rejected` reason, since that union names configuration and trust states rather
+   * than a hook that failed while running, and inventing one would put a wrong fact on the response.
+   * It therefore falls through to the unhandled arm below and is logged. Preparation, which *can*
+   * really produce it, records it as a segment failure and never as a fault.
+   */
+  const infrastructure = infrastructureApiError(error, context);
+  if (infrastructure) return infrastructure;
 
   console.error(
     `[runtime] Unhandled workflow API handler error during ${context.endpointId}`,
@@ -266,5 +284,9 @@ function statusForWorkflowRejection(code: WorkflowEngineError['code']): 400 | 40
   if (code === 'workflow_discovery_failed') return 500;
   // A surface already showing a run is a conflict with somebody else's state, not a bad request.
   if (code === 'workflow_surface_attached') return 409;
+  // So is a branch, worktree or checkout path that already exists: the request is well-formed and
+  // would succeed against a different live state. The workspace boundary answers 409 for the same
+  // underlying condition on `worktrees.open`.
+  if (code === 'workflow_environment_collision') return 409;
   return 400;
 }

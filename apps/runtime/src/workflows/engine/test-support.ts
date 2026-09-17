@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import type { WorkflowStructureDescriptor } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Effect, Exit, Scope } from 'effect';
 
-import type { WorkflowLoadFailureReason } from '@isagi/contracts';
+import type { WorkflowLoadFailureReason, WorkflowPlacementRequestDto } from '@isagi/contracts';
 
 import { DatabaseError } from '../../persistence/index.js';
 import type { InternalRuntimeEvent } from '../../runtime-events/internal-event-bus.js';
+import type { WorkspaceServiceError } from '../../workspace/workspace.service.js';
 import {
   makeWorkflowOperationService,
   type WorkflowOperationServiceShape,
@@ -33,6 +34,8 @@ import type { WorkflowRegistryService } from '../structure/registry.js';
 import { makeWaitResolver, type WaitResolver } from '../waits/resolver.js';
 import { makeControls } from './controls.js';
 import { makeDispatcher, type Dispatcher } from './dispatcher.js';
+import { prepareEnvironment } from './environment/preparation.js';
+import type { PreparationContext } from './environment/types.js';
 import { startWorkflow, type LaunchDeps } from './launch.js';
 import { recoverAtStartup } from './recovery.js';
 
@@ -88,13 +91,18 @@ export interface EngineHarness {
     readonly inputs?: Record<string, unknown>;
     /** Defaults to the harness placement. */
     readonly placement?: Placement;
+    /** A caller override, exactly as the start request carries one. */
+    readonly request?: WorkflowPlacementRequestDto;
   }) => Promise<WorkflowRunRecord>;
   /** Launch without unwrapping the failure, for the rejections that must leave no run behind. */
   readonly launchExit: (input: {
     readonly workflowKey: string;
     readonly inputs?: Record<string, unknown>;
     readonly origin?: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly request?: WorkflowPlacementRequestDto;
   }) => Promise<Exit.Exit<WorkflowRunRecord, unknown>>;
+  /** The owning-service seam: the preflight double, and the call log a rejection asserts against. */
+  readonly owning: ReturnType<typeof owningServices>;
   readonly drain: () => Promise<number>;
   /**
    * What the resolver's subscriber does when an event reaches it.
@@ -326,6 +334,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
   };
 
   const readers = placementReaders(fixture, placement);
+  const owning = owningServices();
   const workspace = readers.workspace;
   const surfaces = readers.surfaceRepository;
   const launchDeps: LaunchDeps = {
@@ -333,7 +342,12 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     registry,
     catalog,
     workspace: workspace as never,
-    surfaces: readers.surfaceService as never,
+    workspaceService: owning.workspaceService as never,
+    surfaceRepository: readers.surfaceRepository as never,
+    surfaces: {
+      ...readers.surfaceService,
+      createSinglePaneSurface: owning.createSinglePaneSurface,
+    } as never,
     // Launch-scoped, and deliberately not the dispatcher's identity: launch claims and holds the
     // preparation segment itself, so the two never contend for the same attempt.
     owner: 'workflow-launch:test',
@@ -404,6 +418,44 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
   }
 
   /**
+   * The same binding `interpreter.service.ts` makes: phase 06's stand-in today, phase 07's forked
+   * fiber tomorrow. Composed here rather than inside `startWorkflow`, because the launch function
+   * deliberately returns the claimed attempt and lets the engine layer decide where preparation runs.
+   */
+  const runPreparation = (ctx: PreparationContext) =>
+    prepareEnvironment(
+      {
+        runs,
+        workspace: workspace as never,
+        owner: launchDeps.owner,
+        ownerIncarnation: launchDeps.ownerIncarnation,
+        poke: Effect.void,
+      },
+      ctx,
+    );
+
+  const launched = (input: {
+    readonly workflowKey: string;
+    readonly inputs?: Record<string, unknown> | undefined;
+    readonly origin: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly placement?: Parameters<typeof startWorkflow>[1]['placement'];
+  }) =>
+    startWorkflow(launchDeps, {
+      workflowKey: input.workflowKey,
+      inputs: input.inputs ?? {},
+      origin: input.origin,
+      ...(input.placement === undefined ? {} : { placement: input.placement }),
+    }).pipe(
+      Effect.tap(runPreparation),
+      // Re-read rather than returned from the create: the destination, position and ownership all
+      // moved in the commit, and handing back the pre-commit record would describe a run that no
+      // longer exists.
+      Effect.flatMap(({ run: created }) =>
+        runs.findRun(created.id).pipe(Effect.map((placed) => placed ?? created)),
+      ),
+    );
+
+  /**
    * The wake queue's stand-in: drain until nothing moves.
    *
    * It deliberately does **not** resolve waits. An earlier version did, and that compensation hid a
@@ -436,25 +488,28 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     breakNextLoad: (reason = 'stale_source') => {
       brokenLoad = reason;
     },
-    launch: async ({ workflowKey, inputs, placement: target }) =>
+    launch: async ({ workflowKey, inputs, placement: target, request }) =>
       run(
-        startWorkflow(launchDeps, {
+        launched({
           workflowKey,
-          inputs: inputs ?? {},
+          inputs,
           origin: {
             worktreeId: (target ?? placement).worktreeId,
             surfaceId: (target ?? placement).surfaceId,
           },
+          ...(request === undefined ? {} : { placement: request }),
         }),
       ),
-    launchExit: ({ workflowKey, inputs, origin }) =>
+    launchExit: ({ workflowKey, inputs, origin, request }) =>
       Effect.runPromiseExit(
-        startWorkflow(launchDeps, {
+        launched({
           workflowKey,
-          inputs: inputs ?? {},
+          inputs,
           origin: origin ?? { worktreeId: placement.worktreeId, surfaceId: placement.surfaceId },
+          ...(request === undefined ? {} : { placement: request }),
         }),
       ),
+    owning,
     drain,
     deliver: (runId) => run(incarnation.waits.reconcileWaits(runId)),
     settleOperation: async ({ operationId, state, result }) => {
@@ -537,22 +592,99 @@ export function placementReaders(fixture: WorkflowPersistenceFixture, placement:
   };
 }
 
+/**
+ * The owning-service seam, and the log that proves a refused launch allocated nothing.
+ *
+ * Phase 04 verified `preflightWorktreeCreation` against a real Git fixture across fourteen cases.
+ * What is under test here is the *mapping* from its `WorkspaceError` codes into workflow rejections,
+ * so a double that raises tagged errors tests that claim directly. The three genuinely allocating
+ * operations are present only to be loud: nothing on the launch path may reach them, and a call
+ * that does dies rather than quietly succeeding.
+ */
+export function owningServices() {
+  const calls: string[] = [];
+  let preflight: (input: {
+    readonly projectId: number;
+    readonly branch: string;
+    readonly fromRef: string;
+  }) => Effect.Effect<{ commit: string; checkoutPath: string }, WorkspaceServiceError> = (input) =>
+    Effect.succeed({
+      commit: 'a'.repeat(40),
+      checkoutPath: `/isagi/worktrees/${input.projectId}/${input.branch}`,
+    });
+
+  const allocating =
+    (name: string) =>
+    (...args: readonly unknown[]) => {
+      calls.push(name);
+      void args;
+      return Effect.die(new Error(`${name} must not be reached from the launch path.`));
+    };
+
+  return {
+    /** Every call, allocating or not. A rejection test asserts this is exactly what it expects. */
+    calls,
+    setPreflight: (handler: typeof preflight) => void (preflight = handler),
+    workspaceService: {
+      preflightWorktreeCreation: (input: {
+        readonly projectId: number;
+        readonly branch: string;
+        readonly fromRef: string;
+      }) =>
+        Effect.suspend(() => {
+          calls.push('preflightWorktreeCreation');
+          return preflight(input);
+        }),
+      openWorktree: allocating('openWorktree'),
+      runWorktreeSetup: allocating('runWorktreeSetup'),
+    },
+    createSinglePaneSurface: allocating('createSinglePaneSurface'),
+  };
+}
+
 function workspaceReader(fixture: WorkflowPersistenceFixture, placement: Placement) {
   return {
     findWorktree: (worktreeId: number) =>
       Effect.sync(() => {
         const row = fixture.client
-          .prepare('SELECT id, project_id AS projectId, path FROM worktrees WHERE id = ?')
-          .get(worktreeId) as { id: number; projectId: number; path: string } | undefined;
+          .prepare(
+            'SELECT id, project_id AS projectId, path, branch, head FROM worktrees WHERE id = ?',
+          )
+          .get(worktreeId) as
+          | {
+              id: number;
+              projectId: number;
+              path: string;
+              branch: string | null;
+              head: string | null;
+            }
+          | undefined;
         return row ?? null;
       }),
     findProject: (projectId: number) =>
       Effect.sync(() => {
         const row = fixture.client
-          .prepare('SELECT id, root_path AS rootPath FROM projects WHERE id = ?')
-          .get(projectId) as { id: number; rootPath: string } | undefined;
+          .prepare('SELECT id, name, kind, root_path AS rootPath FROM projects WHERE id = ?')
+          .get(projectId) as
+          | { id: number; name: string; kind: 'git' | 'folder'; rootPath: string }
+          | undefined;
         return row ?? null;
       }),
+    /** Every worktree in the database. Discovery does the project filtering, as it does in production. */
+    listWorktrees: Effect.sync(
+      () =>
+        fixture.client
+          .prepare(
+            'SELECT id, project_id AS projectId, path, branch, head FROM worktrees ORDER BY id',
+          )
+          .all() as readonly {
+          id: number;
+          projectId: number;
+          path: string;
+          branch: string | null;
+          head: string | null;
+        }[],
+    ),
     placement,
   };
 }
@@ -562,10 +694,20 @@ function surfaceReader(fixture: WorkflowPersistenceFixture, placement: Placement
     findSurface: (surfaceId: number) =>
       Effect.sync(() => {
         const row = fixture.client
-          .prepare('SELECT id, worktree_id AS worktreeId FROM worktree_surfaces WHERE id = ?')
-          .get(surfaceId) as { id: number; worktreeId: number } | undefined;
+          .prepare(
+            'SELECT id, worktree_id AS worktreeId, title FROM worktree_surfaces WHERE id = ?',
+          )
+          .get(surfaceId) as { id: number; worktreeId: number; title: string } | undefined;
         return row ?? null;
       }),
+    listWorkspaceSurfaceMetadata: Effect.sync(
+      () =>
+        fixture.client
+          .prepare(
+            'SELECT id, worktree_id AS worktreeId, title FROM worktree_surfaces ORDER BY worktree_id, id',
+          )
+          .all() as readonly { id: number; worktreeId: number; title: string }[],
+    ),
     placement,
   };
 }

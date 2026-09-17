@@ -4,6 +4,7 @@ import test from 'node:test';
 import { Effect, Either } from 'effect';
 import Fastify from 'fastify';
 
+import { GitCommandError } from '../git/index.js';
 import { DatabaseError } from '../persistence/index.js';
 import { registerWorkflowApi } from './api.js';
 import { WorkflowEngine } from './engine/interpreter.service.js';
@@ -504,4 +505,58 @@ test('a stale control is reported as one, and a refused launch or control change
   // A refused control reaches the engine once and stops there: the route does not retry it, does not
   // fall back to another control, and does not read anything back to "fix up" the response.
   assert.deepEqual(calls, ['resume']);
+});
+
+test('a Git failure under a launch is reported as a Git failure, not as an unhandled error', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      engine: {
+        // The launch path makes one owning-service call — the worktree-creation preflight — so Git
+        // can fail underneath a launch. It is infrastructure, not a placement the person chose
+        // badly, and a client has to be able to tell those apart: a `workflow_rejected` says "fix
+        // your request", this says "something broke underneath it".
+        startWorkflow: () =>
+          Effect.fail(
+            new GitCommandError({
+              args: ['-C', '/repo', 'rev-parse', '--verify', 'origin/main^{commit}'],
+              cwd: '/repo',
+              stderr: 'fatal: not a git repository',
+              failure: { kind: 'exited', exitCode: 128 },
+              cause: new Error('git exited 128'),
+            }),
+          ),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'POST',
+    url: '/api/v1/workflows/runs',
+    payload: {
+      workflowKey: 'placeable',
+      origin: { worktreeId: 1, surfaceId: 2 },
+      placement: {
+        worktree: { kind: 'create', branch: 'feat/new', fromRef: 'origin/main' },
+        surface: { kind: 'create', title: 'New work' },
+      },
+    },
+  });
+
+  assert.equal(response.statusCode, 500);
+  const decoded = body<{ error: { code: string; data: { args: string[]; cwd: string | null } } }>(
+    response.body,
+  );
+  // The same envelope `workspace/api.ts` produces for the same failure: one shared mapper, so a
+  // client never has to learn which route it happened to hit.
+  assert.equal(decoded.error.code, 'git_command_failed');
+  assert.deepEqual(decoded.error.data.args, [
+    '-C',
+    '/repo',
+    'rev-parse',
+    '--verify',
+    'origin/main^{commit}',
+  ]);
+  assert.equal(decoded.error.data.cwd, '/repo');
 });

@@ -274,6 +274,19 @@ const WorkflowOperationServiceLayer = WorkflowOperationServiceLive.pipe(
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(HarnessControlPlaneLayer),
 );
+const CommandServiceLayer = CommandServiceLive.pipe(
+  Layer.provide(CommandRepositoryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(PtyRepositoryLayer),
+  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
+  Layer.provide(DataDirectoryLive),
+);
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(SurfaceAndPtyServiceLayer),
+  Layer.provide(CommandServiceLayer),
+);
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(WorkflowRunsRepositoryLayer),
   Layer.provide(WorkflowOperationsRepositoryLayer),
@@ -285,6 +298,9 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(RepositoryLive),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(SurfaceRepositoryLayer),
+  // The launch path's worktree-creation preflight: the one owning-service call it makes, and the
+  // only reason the engine depends on the workspace *service* rather than only its repository.
+  Layer.provide(WorkspaceServiceLayer),
   Layer.provide(HarnessLedgerObserverLayer),
 );
 const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
@@ -322,19 +338,6 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionGcLayer,
   EditorProvisioningLayer,
   EditorContextServiceLayer,
-);
-const CommandServiceLayer = CommandServiceLive.pipe(
-  Layer.provide(CommandRepositoryLayer),
-  Layer.provide(RepositoryLive),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
-  Layer.provide(DataDirectoryLive),
-);
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(SurfaceRepositoryLayer),
-  Layer.provide(SurfaceAndPtyServiceLayer),
-  Layer.provide(CommandServiceLayer),
 );
 const StartupActivationLayer = Layer.scopedDiscard(
   Effect.gen(function* () {

@@ -41,16 +41,22 @@ export type {
   WorkflowDefinition,
   WorkflowDestination,
   WorkflowEdgeId,
+  WorkflowEnvironmentContext,
   WorkflowGraphKey,
   WorkflowInputs,
   WorkflowNodeId,
   WorkflowOrigin,
   WorkflowOutcomeId,
+  WorkflowPlacementRequest,
   WorkflowQuestionOption,
   WorkflowQuestionSpec,
+  WorkflowSurfaceChoice,
+  WorkflowSurfaceSummary,
   WorkflowUiFeedback,
   WorkflowUserInputAnswers,
   WorkflowWaitKind,
+  WorkflowWorktreeChoice,
+  WorkflowWorktreeSummary,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 export type WorkflowEngineServiceError = WorkflowEngineError | DatabaseError;
@@ -88,4 +94,23 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   /** Which recorded value could not be served, for `workflow_payload_unavailable`. */
   readonly payloadRef?: string | undefined;
   readonly payloadCause?: 'missing' | 'corrupt' | undefined;
+  /**
+   * Which way a placement is unusable, for `workflow_placement_invalid`.
+   *
+   * The reason alone is not actionable — "that isn't a place this workflow can run" does not tell a
+   * person whether to pick a different surface, a different worktree, or a shorter title.
+   */
+  readonly placementIssue?:
+    | 'surface_not_on_worktree'
+    | 'worktree_not_in_project'
+    | 'invalid_surface_title'
+    | undefined;
+  /** What already exists, for `workflow_environment_collision`. */
+  readonly collision?: 'branch' | 'worktree' | 'checkout_path' | undefined;
+  /** The branch a launch asked to create, for the branch and collision reasons. */
+  readonly branch?: string | undefined;
+  /** The ref that could not be resolved, for `workflow_base_ref_not_found`. */
+  readonly baseRef?: string | undefined;
+  /** The launch project, for `workflow_worktree_creation_unsupported`. */
+  readonly projectId?: number | undefined;
 }> {}

@@ -20,14 +20,18 @@ import { makeEngineHarness, type EngineHarness } from './test-support.js';
 /**
  * Launch, and the promise that a rejected launch leaves nothing behind.
  *
- * The order is load → place → `command` → occupancy → `validate` → create, and every step before
- * the last is a *launch* failure rather than a run that immediately fails. `init` is deliberately
- * not in that list: it runs as the first segment, which is what makes a failed initialization
- * inspectable and retryable instead of a launch that vanished.
+ * The order is load → origin → project → `command` → `validate` → select → resolve → create, and
+ * every step before the last is a *launch* failure rather than a run that immediately fails. `init`
+ * is deliberately not in that list: it runs as the first segment, which is what makes a failed
+ * initialization inspectable and retryable instead of a launch that vanished.
  *
  * Each case below asserts the distinct reason *and* that no run, frame, attachment, version
  * adoption or transition exists afterwards. A launch that half-happened would be far worse than one
  * that was refused.
+ *
+ * Placement selection and the rejection table have their own file,
+ * [`environment/placement.test.ts`](./environment/placement.test.ts). What stays here is the launch
+ * *order* and what survives a refusal.
  */
 
 async function withHarness(body: (harness: EngineHarness) => Promise<void>) {
@@ -101,7 +105,8 @@ async function assertNothingWasCreated(harness: EngineHarness) {
          (SELECT count(*) FROM workflow_run_attachments) AS attachments,
          (SELECT count(*) FROM workflow_version_adoptions) AS adoptions,
          (SELECT count(*) FROM workflow_transitions) AS transitions,
-         (SELECT count(*) FROM workflow_segment_attempts) AS attempts`,
+         (SELECT count(*) FROM workflow_segment_attempts) AS attempts,
+         (SELECT count(*) FROM workflow_run_preparations) AS preparations`,
     )
     .get() as Record<string, number>;
   assert.deepEqual(counts, {
@@ -111,6 +116,7 @@ async function assertNothingWasCreated(harness: EngineHarness) {
     adoptions: 0,
     transitions: 0,
     attempts: 0,
+    preparations: 0,
   });
 }
 
@@ -251,6 +257,10 @@ test('a command manifest that throws and inputs that are refused are different f
 });
 
 test('a surface that already holds a run refuses the next launch, terminal run included', async () => {
+  // Retargeted, not deleted: the check moved from the *origin* surface to the *destination* one.
+  // With the default current/current placement they are the same surface, so this is still the
+  // ordinary case a person meets — the launch headed somewhere else is covered in
+  // `environment/placement.test.ts`.
   await withHarness(async (harness) => {
     const counters: Counters = { command: 0, validate: 0, init: 0 };
     harness.publish({

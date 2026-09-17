@@ -8,3 +8,4 @@ export {
   unhandledApiError,
 } from './errors.js';
 export type { ApiRouteContext } from './errors.js';
+export { infrastructureApiError } from './infrastructure-errors.js';
