@@ -219,7 +219,9 @@ export interface OperationInvocation {
  * repeating the effect.
  *
  * `getConversationHistory` is a **scoped read**. It takes no call position and has no receipt, so a
- * repaired segment simply reads again and may observe a different answer.
+ * repaired segment normally reads again and may observe a different answer. When an explicit Retry
+ * recovers a retained agent-turn wait, the runtime may instead bind reads for that same Isagi agent
+ * session to the exact native turn selected by the Retry; other session reads remain fresh.
  *
  * `log` and `setUiFeedback` are **durable diagnostics**. They are retained and inspectable — a log
  * written before a callback failure survives it — but they are not operations, consume no call

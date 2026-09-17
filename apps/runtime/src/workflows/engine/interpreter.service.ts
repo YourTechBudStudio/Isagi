@@ -187,6 +187,7 @@ export const WorkflowEngineLive = Layer.scoped(
       operationRecords,
       operations,
       waits,
+      refreshTurnEdges: observer.refreshTurnEdges,
       poke,
       runPreparation,
     });

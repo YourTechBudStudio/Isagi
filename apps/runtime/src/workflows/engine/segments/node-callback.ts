@@ -9,6 +9,7 @@ import { errorMessage, pureFailure, type PureFailure, type PureResult } from '..
 import { reduceState } from '../../state/reducers.js';
 import type { AnyGraphDefinition } from '../../structure/loader.js';
 import type { OperationContext, WaitDeclaration } from '../../types.js';
+import { attemptTurnRecovery } from '../../waits/turn-recovery.js';
 import { headlessHandlesOf, validateOperationResult, type ValidatedResult } from '../results.js';
 import { edgeFromNode, nodeOf } from '../structure.js';
 import {
@@ -205,6 +206,11 @@ function invokeCallback(
           attemptIndex: ctx.attempt.attemptIndex,
           invocationKind: ctx.attempt.invocationKind,
           artifactHash: ctx.run.artifactHash,
+          agentTurnRecovery: ctx.attempt.input
+            ? attemptTurnRecovery(
+                yield* resolveSlot(deps, ctx.attempt.input, `Input of attempt ${ctx.attempt.id}`),
+              )
+            : null,
           destination: {
             worktreeId: destination.worktreeId,
             worktreePath: destination.worktreePath,

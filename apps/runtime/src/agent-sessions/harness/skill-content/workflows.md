@@ -86,6 +86,8 @@ Start with `reduce.replace`. Use `add`, `append`, or `union` for accumulated fac
 
 Completed progress is saved rather than replayed. Resume uses the saved code version; Retry can adopt a newly verified build at a failed segment. When an unfinished operation runs again, matching recorded external calls reuse their results. Preserve the order and requests of those calls; a changed prompt at an already recorded position is not a new attempt. Direct filesystem/process/network effects need their own retry safety. Unknown delivery blocks dependent work rather than authorizing a resend.
 
+For a failed segment with retained agent-turn provenance, explicit Retry can recover from the latest observed turn in that same Isagi agent session without resending the prompt. Routing receives the selected turn's event; a matching `getConversationHistory` read is restricted to the selected completed response. This does not apply to Resume, automatic re-entry, other sessions, or a segment that already saved its producer result or routing decision. See [Workflow recovery](workflow-recovery.md) for the exact boundary.
+
 Read [Workflow recovery](workflow-recovery.md) when editing code for saved runs, writing retry-specific behavior, or dealing with interrupted/uncertain work.
 
 ## Completion and evidence

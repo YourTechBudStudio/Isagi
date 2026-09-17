@@ -6,6 +6,7 @@ import { evaluatePure } from '../../state/pure.js';
 import { isPlainObject, reduceState } from '../../state/reducers.js';
 import type { AnyGraphDefinition } from '../../structure/loader.js';
 import type { NodeEvent, SubgraphResult } from '../../types.js';
+import { attemptTurnRecovery, recoveryWaitDeclaration } from '../../waits/turn-recovery.js';
 import { captureLabel } from '../labels.js';
 import { destinationKindOf, edgeFromNode, nodeKindOf, nodeOf } from '../structure.js';
 import { recordLabelDiagnostic } from './diagnostics.js';
@@ -176,7 +177,7 @@ function chooseDestination(
   },
 ): Effect.Effect<AcceptedDecision, SegmentFault | SegmentFailure> {
   return Effect.gen(function* () {
-    const event = yield* resolveEvent(deps, input.execution);
+    const event = yield* resolveEvent(deps, ctx, input.execution);
     const edge = edgeFromNode(input.graph, input.execution.nodeId)!;
     const chosen = evaluatePure({
       what: `Edge '${input.edgeId}'`,
@@ -207,9 +208,19 @@ function chooseDestination(
  */
 function resolveEvent(
   deps: EngineDeps,
+  ctx: SegmentContext,
   execution: WorkflowExecutionRecord,
 ): Effect.Effect<NodeEvent, SegmentFault | SegmentFailure> {
   return Effect.gen(function* () {
+    if (ctx.attempt.input) {
+      const attemptInput = yield* resolveSlot(
+        deps,
+        ctx.attempt.input,
+        `Input of attempt ${ctx.attempt.id}`,
+      );
+      const recovery = attemptTurnRecovery(attemptInput);
+      if (recovery) return recovery.event;
+    }
     if (execution.childFrameId !== null) {
       const child = yield* requireFrame(deps, execution.childFrameId);
       if (child.status !== 'completed' || child.outcomeId === null || child.outcomeKind === null) {
@@ -248,11 +259,17 @@ function resolveEvent(
 
 /** The wait this visit is routing out of, if it suspended at all. */
 function deliveredWaitOf(deps: EngineDeps, executionId: number) {
-  return deps.runs
-    .listWaitsForExecution(executionId)
-    .pipe(
-      Effect.map((waits) => waits.filter((wait) => wait.status === 'delivered').at(-1) ?? null),
-    );
+  return Effect.gen(function* () {
+    const waits = yield* deps.runs.listWaitsForExecution(executionId);
+    for (const wait of [...waits].reverse()) {
+      if (wait.status !== 'delivered' || !wait.condition) continue;
+      const condition = yield* deps.payloads
+        .resolve(wait.condition)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (!recoveryWaitDeclaration(condition)) return wait;
+    }
+    return null;
+  });
 }
 
 function reuseDecision(

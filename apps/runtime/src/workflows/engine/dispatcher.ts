@@ -5,6 +5,8 @@ import type { WorkflowRunRecord } from '../persistence/records.js';
 import type { ClaimPreparation } from '../persistence/runs.repository.js';
 import type { WorkflowArtifactCatalogService } from '../structure/artifact-catalog.js';
 import type { LoadedWorkflowArtifact } from '../structure/loader.js';
+import type { AgentTurnEvent } from '../types.js';
+import { recoveryWaitDeclaration, type AttemptTurnRecovery } from '../waits/turn-recovery.js';
 import { runGraphEntry } from './segments/graph-entry.js';
 import { runGraphOutput } from './segments/graph-output.js';
 import { runNodeCallback } from './segments/node-callback.js';
@@ -360,6 +362,7 @@ function prepareClaim(
         const owning = yield* stateOf(position.frameId);
         const execution = yield* deps.runs.findExecution(position.executionId);
         if (!owning.frame || !execution) return null;
+        const agentTurnRecovery = yield* recoveryInputOf(deps, run);
         return {
           input: defined({
             ...base,
@@ -367,6 +370,7 @@ function prepareClaim(
             nodeId: execution.nodeId,
             visitIndex: execution.visitIndex,
             state: owning.value,
+            agentTurnRecovery,
           }),
           preparation: { position, artifactHash: run.artifactHash, frameStates: sources },
         };
@@ -375,6 +379,7 @@ function prepareClaim(
         const owning = yield* stateOf(position.frameId);
         const execution = yield* deps.runs.findExecution(position.executionId);
         if (!owning.frame || !execution) return null;
+        const agentTurnRecovery = yield* recoveryInputOf(deps, run);
         return {
           input: defined({
             ...base,
@@ -382,6 +387,7 @@ function prepareClaim(
             nodeId: execution.nodeId,
             edgeId: position.edgeId,
             state: owning.value,
+            agentTurnRecovery,
           }),
           preparation: { position, artifactHash: run.artifactHash, frameStates: sources },
         };
@@ -419,4 +425,50 @@ function prepareClaim(
         return null;
     }
   });
+}
+
+/** Recovery waits are retained history; only the one resuming this exact saved position is input. */
+function recoveryInputOf(
+  deps: DispatcherDeps,
+  run: WorkflowRunRecord,
+): Effect.Effect<AttemptTurnRecovery | undefined, SegmentFault> {
+  return Effect.gen(function* () {
+    if (run.position.kind !== 'node_callback' && run.position.kind !== 'routing') return undefined;
+    const waits = yield* deps.runs.listWaitsForExecution(run.position.executionId);
+    for (const wait of [...waits].reverse()) {
+      if (wait.status !== 'delivered' || !wait.condition || !wait.event) continue;
+      const declarationValue = yield* deps.payloads
+        .resolve(wait.condition)
+        .pipe(Effect.orElseSucceed(() => null));
+      const declaration = recoveryWaitDeclaration(declarationValue);
+      if (
+        !declaration ||
+        JSON.stringify(declaration.isagiRecovery.resumePosition) !== JSON.stringify(run.position)
+      ) {
+        continue;
+      }
+      const event = yield* deps.payloads.resolve(wait.event).pipe(Effect.orElseSucceed(() => null));
+      if (!isAgentTurnEvent(event)) return undefined;
+      return {
+        waitId: wait.id,
+        agentSessionId: declaration.target.agentSessionId,
+        turn: declaration.isagiRecovery.turn,
+        event,
+      };
+    }
+    return undefined;
+  });
+}
+
+function isAgentTurnEvent(value: unknown): value is AgentTurnEvent {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'kind' in value &&
+    value.kind === 'agent_turn' &&
+    'outcome' in value &&
+    (value.outcome === 'ended' || value.outcome === 'failed' || value.outcome === 'interrupted') &&
+    'recordedAt' in value &&
+    typeof value.recordedAt === 'string'
+  );
 }

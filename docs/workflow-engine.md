@@ -34,6 +34,10 @@ Runtime capabilities record durable operation intents and receipts separately fr
 
 External dispatch and database writes cannot form one atomic transaction. Recovery reconciles durable evidence and blocks dependent work when delivery remains unknown. Retry does not authorize a blind resend. Confirmed success, failure, or interruption can resolve a wait and reach the graph's routing logic; unknown delivery is not an authored failure outcome.
 
+Explicit Retry has one additional authority for agent-turn failures: after forcing a fresh observation of the same durable agent session, it may select the latest exact native turn. The selection is persisted as a runtime-owned `agent_turn` wait before the run moves. An open selected turn remains waiting without another prompt; a completed or failed selected turn is delivered immediately. The resumed routing segment sees that exact event, and a resumed response-reading callback reads only that exact completed turn. Missing selected content fails visibly rather than falling back to another response. A refresh failure leaves the failed run and its pin unchanged.
+
+The selected recovery event is bound to the next attempt's recorded input. It does not replace a producer result or routing decision that an earlier attempt already captured, so reduction recovery continues from its saved operand. Recovery waits are retained as history but are not treated as authored waits by later routing segments.
+
 A recorded headless launch whose runtime capture owner was lost is interrupted unless a result was already committed. A launch whose outcome was never recorded can remain uncertain. Neither interruption nor cancellation proves that external effects were rolled back or every process stopped. Arbitrary filesystem and process effects performed directly by author code remain the author's retry-safety responsibility.
 
 On restart, unfinished runs are parked before graph dispatch begins. The runtime reconciles operations and waits against durable evidence, and continuation requires explicit Resume. A human gate still requires its own explicit answer.

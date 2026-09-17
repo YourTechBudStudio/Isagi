@@ -34,6 +34,7 @@ declare global {
       getDesktopUpdate?: () => Promise<DesktopUpdateSnapshot>;
       subscribeDesktopUpdate?: (listener: (snapshot: DesktopUpdateSnapshot) => void) => () => void;
       checkForUpdates?: () => Promise<void>;
+      downloadUpdate?: () => Promise<void>;
       requestUpdateRestart?: () => Promise<void>;
       confirmUpdateRestart?: () => Promise<void>;
       cancelUpdateRestart?: () => Promise<void>;

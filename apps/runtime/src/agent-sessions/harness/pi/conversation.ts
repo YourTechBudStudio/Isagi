@@ -4,10 +4,12 @@ import { join } from 'node:path';
 
 import { Effect } from 'effect';
 
+import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
 
 export function readPiConversation(input: {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly cwd?: string | null | undefined;
   readonly harnessSessionId?: string | null | undefined;
@@ -22,6 +24,7 @@ export function readPiConversation(input: {
       agentSessionId: input.agentSessionId,
       paths: yield* nativePiTranscriptPaths(input),
       missingIsExpected: true,
+      turn: input.turn,
     });
     if (nativeEntries.foundReadable) return conversationFromPiEntries(nativeEntries.entries);
     return [];
@@ -155,6 +158,7 @@ function isPiTranscriptFile(name: string, harnessSessionId: string) {
 }
 
 function readPiEntriesFromPaths(input: {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly paths: readonly PiTranscriptPath[];
   readonly missingIsExpected: boolean;
@@ -174,7 +178,23 @@ function readPiEntriesFromPaths(input: {
       });
       if (raw === null) continue;
       foundReadable = true;
-      entries.push(...activePiTranscriptEntries(parsePiTranscriptEntries(raw)));
+      const parsed = parsePiTranscriptEntries(raw);
+      const turn = input.turn;
+      // Cut before branch reconstruction: a later branch must not replace the
+      // response selected by Retry. Native entry timestamps fence transcript IO.
+      const throughCompletion = turn
+        ? parsed.filter(
+            (entry) => typeof entry.timestamp === 'string' && entry.timestamp <= turn.completedAt,
+          )
+        : parsed;
+      const active = activePiTranscriptEntries(throughCompletion);
+      entries.push(
+        ...(turn
+          ? active.filter(
+              (entry) => typeof entry.timestamp === 'string' && entry.timestamp >= turn.startedAt,
+            )
+          : active),
+      );
     }
     return { entries, foundReadable };
   });

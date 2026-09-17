@@ -18,6 +18,13 @@ export type DesktopUpdateState =
   | { readonly kind: 'idle' }
   | { readonly kind: 'checking' }
   | { readonly kind: 'up-to-date' }
+  /**
+   * Found, and nothing fetched for it yet. The one state this surface exists to
+   * make visible: before it existed, an update the user had not been told about
+   * was indistinguishable from being up to date, because both rendered as a bare
+   * version number.
+   */
+  | { readonly kind: 'update-available'; readonly version: string }
   | { readonly kind: 'downloading'; readonly version: string; readonly percent: number }
   | { readonly kind: 'ready'; readonly version: string }
   | { readonly kind: 'installing'; readonly version: string }
@@ -50,10 +57,11 @@ export interface RailUpdateFooterProps {
    */
   readonly restartPending?: boolean;
   readonly onCheck: () => void;
+  /** Starts the fetch, and restarts it after a failure — the same operation. */
+  readonly onDownload: () => void;
   readonly onRestart: () => void;
   readonly onCancelRestart: () => void;
   readonly onConfirmRestart: () => void;
-  readonly onRetryDownload: () => void;
   readonly onOpenDownloadPage: () => void;
 }
 
@@ -75,6 +83,13 @@ export interface RailUpdateFooterProps {
  * Errors stay at the interaction site. A scheduled check that fails never
  * reaches this component (it stays `idle`); what surfaces here is a failure the
  * user asked for, which is why it is allowed to spend the reserved red.
+ *
+ * The version token carries the news. Whenever a target version is known it
+ * renders as a delta — `v0.0.1 → 0.0.3` — with the target in the accent that
+ * matches what the update is currently doing. That is the whole announcement:
+ * no banner, no extra row, no change of height. The trailing label says what
+ * pressing would do, and {@link ../../copy/updates} defines the one rule that
+ * separates a label you press from a token you only read.
  */
 export function RailUpdateFooter({
   state,
@@ -82,10 +97,10 @@ export function RailUpdateFooter({
   confirmRestart = null,
   restartPending = false,
   onCheck,
+  onDownload,
   onRestart,
   onCancelRestart,
   onConfirmRestart,
-  onRetryDownload,
   onOpenDownloadPage,
 }: RailUpdateFooterProps) {
   if (state.kind === 'unsupported') return null;
@@ -94,6 +109,7 @@ export function RailUpdateFooter({
   // work in flight or owns its own action, and a second entry point into the
   // same operation is how duplicate checks happen.
   const versionInteractive = state.kind === 'idle';
+  const target = targetVersion(state);
 
   return (
     <div data-update-footer data-update-state={state.kind}>
@@ -111,12 +127,33 @@ export function RailUpdateFooter({
           aria-label={
             versionInteractive
               ? updateCopy.actions.check
-              : updateCopy.described.installed(installedVersion)
+              : target
+                ? updateCopy.described.available(installedVersion, target)
+                : updateCopy.described.installed(installedVersion)
           }
           data-version-control
-          className="rounded-sm font-mono text-[11px] text-fg-subtle opacity-50 transition-opacity duration-micro ease-expo not-disabled:hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-line/60"
+          // Two treatments, because a delta must not be dimmed. Without a target
+          // the whole token is ambient at half opacity; with one, the installed
+          // version keeps that weight through its own colour while the target
+          // paints at full strength — opacity on the parent would halve the
+          // accent too, which is the one thing here that has to be seen.
+          className={`flex items-center gap-1.5 rounded-sm font-mono text-[11px] transition-opacity duration-micro ease-expo focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-line/60 ${
+            target
+              ? ''
+              : 'text-fg-subtle opacity-50 not-disabled:hover:opacity-90 focus-visible:opacity-90'
+          }`}
         >
-          v{installedVersion}
+          <span className={target ? 'text-fg-subtle/55' : undefined}>{`v${installedVersion}`}</span>
+          {target && (
+            <>
+              <span aria-hidden className="text-fg-subtle/55">
+                →
+              </span>
+              <span data-target-version className={DELTA_TONE[state.kind] ?? 'text-fg-muted'}>
+                {target}
+              </span>
+            </>
+          )}
         </button>
         {/* Polite, because none of these transitions are worth interrupting
             whatever the user is reading in the work surface. */}
@@ -126,10 +163,10 @@ export function RailUpdateFooter({
             confirmRestart={confirmRestart}
             restartPending={restartPending}
             onCheck={onCheck}
+            onDownload={onDownload}
             onRestart={onRestart}
             onCancelRestart={onCancelRestart}
             onConfirmRestart={onConfirmRestart}
-            onRetryDownload={onRetryDownload}
             onOpenDownloadPage={onOpenDownloadPage}
           />
         </span>
@@ -145,20 +182,20 @@ function Trailing({
   confirmRestart,
   restartPending,
   onCheck,
+  onDownload,
   onRestart,
   onCancelRestart,
   onConfirmRestart,
-  onRetryDownload,
   onOpenDownloadPage,
 }: {
   state: DesktopUpdateState;
   confirmRestart: RestartActivity | null;
   restartPending: boolean;
   onCheck: () => void;
+  onDownload: () => void;
   onRestart: () => void;
   onCancelRestart: () => void;
   onConfirmRestart: () => void;
-  onRetryDownload: () => void;
   onOpenDownloadPage: () => void;
 }) {
   switch (state.kind) {
@@ -170,6 +207,19 @@ function Trailing({
       return <Token>{updateCopy.status.checking}</Token>;
     case 'up-to-date':
       return <Token tone="muted">{updateCopy.status.upToDate}</Token>;
+    case 'update-available':
+      // The version is already on the line, two inches to the left, so the label
+      // does not repeat it — the delta and this word are one sentence.
+      return (
+        <Control
+          tone="accent"
+          onClick={onDownload}
+          label={updateCopy.described.download(state.version)}
+          data-download-control
+        >
+          {updateCopy.actions.download}
+        </Control>
+      );
     case 'downloading':
       return (
         <Token
@@ -217,6 +267,10 @@ function Trailing({
           }
         />
       );
+    // Every failure below is a button, so every failure below is named as an
+    // action. What went wrong is carried by the red and by the assistive text;
+    // the label spends its few characters on the remedy instead, because that is
+    // the part the user can do something with.
     case 'check-failed':
       return (
         <Control
@@ -225,18 +279,18 @@ function Trailing({
           label={updateCopy.described.checkFailed}
           data-retry-control
         >
-          {updateCopy.status.checkFailed}
+          {updateCopy.actions.checkAgain}
         </Control>
       );
     case 'download-failed':
       return (
         <Control
           tone="error"
-          onClick={onRetryDownload}
+          onClick={onDownload}
           label={updateCopy.described.downloadFailed(state.version)}
           data-retry-control
         >
-          {updateCopy.status.downloadFailed}
+          {updateCopy.actions.tryAgain}
         </Control>
       );
     case 'manual-required':
@@ -255,13 +309,33 @@ function Trailing({
           data-manual-control
           data-open-failed={state.openFailed || undefined}
         >
-          {state.openFailed
-            ? updateCopy.status.downloadPageFailed
-            : updateCopy.status.manualRequired}
+          {state.openFailed ? updateCopy.actions.tryAgain : updateCopy.actions.openDownloadPage}
         </Control>
       );
   }
 }
+
+/**
+ * The version this state is about, or `''` when it is about no version at all.
+ * A provider event can omit it, and a blank delta would be worse than none.
+ */
+function targetVersion(state: DesktopUpdateState): string {
+  if (!('version' in state)) return '';
+  return state.version.trim().length > 0 ? state.version : '';
+}
+
+/**
+ * What the target version is painted in — one accent per phase, never two on the
+ * line at once. Blue offers, cyan waits on the user, red failed, and a download
+ * in flight stays neutral because the hairline underneath is already carrying it.
+ */
+const DELTA_TONE: Partial<Record<DesktopUpdateState['kind'], string>> = {
+  'update-available': 'text-blue',
+  downloading: 'text-fg-muted',
+  ready: 'text-waiting',
+  installing: 'text-waiting',
+  'download-failed': 'text-error',
+};
 
 /**
  * The hairline on the rail's bottom edge. The track is always rendered, even
@@ -304,6 +378,7 @@ function Hairline({ state }: { state: DesktopUpdateState }) {
 }
 
 const HAIRLINE_FILL: Partial<Record<DesktopUpdateState['kind'], string>> = {
+  'update-available': 'bg-blue/45',
   ready: 'bg-waiting/45',
   installing: 'bg-waiting/25',
   'check-failed': 'bg-error/45',
@@ -334,10 +409,14 @@ function Token({
   );
 }
 
+// Colour only. Every control is sans Title Case regardless of tone — the mono
+// face is reserved for status, and a failure that wore it would read as a
+// caption rather than as the retry it is.
 const CONTROL_TONE = {
+  accent: 'text-blue focus-visible:outline-blue/60',
   waiting: 'text-waiting focus-visible:outline-waiting/60',
-  error: 'font-mono text-error focus-visible:outline-error/60',
-  amber: 'font-mono text-amber focus-visible:outline-amber/60',
+  error: 'text-error focus-visible:outline-error/60',
+  amber: 'text-amber focus-visible:outline-amber/60',
 } as const;
 
 /**
@@ -368,7 +447,7 @@ function Control({
       {...rest}
       // Dimmed, not restyled: the control is briefly unavailable, not a
       // different control, and the line must not change metrics.
-      className={`-mx-1.5 -my-1 rounded-sm px-1.5 py-1 text-[11.5px] transition-opacity duration-micro ease-expo not-disabled:hover:opacity-75 disabled:opacity-45 focus-visible:outline-1 focus-visible:outline-offset-2 ${CONTROL_TONE[tone]}`}
+      className={`-mx-1.5 -my-1 rounded-sm px-1.5 py-1 text-[11.5px] font-medium transition-opacity duration-micro ease-expo not-disabled:hover:opacity-75 disabled:opacity-45 focus-visible:outline-1 focus-visible:outline-offset-2 ${CONTROL_TONE[tone]}`}
     >
       {children}
     </button>

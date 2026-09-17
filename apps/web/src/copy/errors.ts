@@ -226,6 +226,8 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       // would be the one thing the runtime refuses to guess.
       workflow_operation_uncertain:
         "Isagi can't tell whether that external step went through, so the run is holding.",
+      workflow_agent_observation_unavailable:
+        "Isagi couldn't refresh that agent session, so the retry didn't change the run.",
       workflow_stale_control: 'This workflow moved on. Try that again.',
       workflow_environment_unavailable:
         "This workflow's worktree isn't available, so it can't carry on.",

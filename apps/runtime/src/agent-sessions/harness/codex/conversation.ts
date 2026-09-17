@@ -1,5 +1,6 @@
 import { Effect } from 'effect';
 
+import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
 import {
@@ -11,6 +12,7 @@ import {
 } from './native-artifacts.js';
 
 export function readCodexConversation(input: {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly cwd?: string | null | undefined;
   readonly harnessSessionId?: string | null | undefined;
@@ -27,15 +29,42 @@ export function readCodexConversation(input: {
       codexDirectory: input.codexDirectory,
       missingIsExpected: true,
     });
-    if (nativeEntries.foundReadable) return conversationFromCodexEntries(nativeEntries.entries);
+    if (nativeEntries.foundReadable)
+      return conversationFromCodexEntries(completedTurnEntries(nativeEntries.entries, input.turn));
     const hookEntries = yield* readCodexConversationEntries({
       agentSessionId: input.agentSessionId,
       paths: hookCodexRolloutPaths(input.streams),
       codexDirectory: input.codexDirectory,
       missingIsExpected: false,
     });
-    return conversationFromCodexEntries(hookEntries.entries);
+    return conversationFromCodexEntries(completedTurnEntries(hookEntries.entries, input.turn));
   });
+}
+
+function completedTurnEntries(
+  entries: readonly CodexRolloutEntry[],
+  turn?: HarnessConversationTurn,
+) {
+  if (!turn) return entries;
+  if (!turn.completedAt) return [];
+  const start = entries.findIndex(
+    (entry) =>
+      entry.type === 'event_msg' &&
+      entry.timestamp === turn.startedAt &&
+      object(entry.payload).type === 'task_started',
+  );
+  if (start < 0) return [];
+  const turnId = object(entries[start]?.payload).turn_id;
+  if (typeof turnId !== 'string') return [];
+  const end = entries.findIndex(
+    (entry, index) =>
+      index > start &&
+      entry.type === 'event_msg' &&
+      entry.timestamp === turn.completedAt &&
+      object(entry.payload).type === 'task_complete' &&
+      object(entry.payload).turn_id === turnId,
+  );
+  return end < 0 ? [] : entries.slice(start, end + 1);
 }
 
 export function parseCodexTranscript(raw: string): readonly ConversationMessage[] {

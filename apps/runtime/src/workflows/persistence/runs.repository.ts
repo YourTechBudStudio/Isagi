@@ -336,7 +336,7 @@ export interface FailSegmentInput extends AttemptFence {
   readonly detail?: RecordedValue | undefined;
 }
 
-export interface DeliverWaitInput {
+export type DeliverWaitInput = {
   readonly waitId: number;
   readonly event: RecordedValue;
   /**
@@ -348,8 +348,10 @@ export interface DeliverWaitInput {
    * thing the position union exists to forbid: a `routing` position naming no edge. The resolver
    * and startup recovery both already hold the pin, so neither has to guess.
    */
-  readonly edgeId: string;
-}
+} & (
+  | { readonly edgeId: string; readonly resumePosition?: never }
+  | { readonly edgeId?: never; readonly resumePosition: WorkflowRunPosition }
+);
 
 export interface WaitDelivery {
   readonly wait: WorkflowWaitRecord;
@@ -387,6 +389,14 @@ export interface AdoptRetryPinInput extends ControlInput {
   /** The failed position the decision was prepared against, rechecked before adoption. */
   readonly expectedPosition: WorkflowRunPosition;
   readonly expectedOwner: string | null;
+  /** An exact agent turn Retry must observe before returning to the failed segment. */
+  readonly recovery?:
+    | {
+        readonly frameId: number;
+        readonly executionId: number;
+        readonly condition: RecordedValue;
+      }
+    | undefined;
 }
 
 export interface DiagnosticInput {
@@ -562,7 +572,7 @@ export interface WorkflowRunsRepositoryService {
   ) => Effect.Effect<WorkflowWriteResult<void>, DatabaseError>;
   readonly adoptRetryPin: (
     input: AdoptRetryPinInput,
-  ) => Effect.Effect<WorkflowWriteResult<void>, DatabaseError>;
+  ) => Effect.Effect<WorkflowWriteResult<void>, DatabaseError | PayloadPublishError>;
   /** `detached: false` means the run had no attachment left, which is a repeat rather than a fault. */
   readonly detachRun: (
     input: ControlInput,
@@ -2005,57 +2015,102 @@ export function makeWorkflowRunsRepository(
       ),
 
     adoptRetryPin: (input) =>
-      database.transaction('workflow_adopt_retry_pin', (db) =>
-        withControlFence(db, input.runId, input.controlRevision, (run, now) => {
-          // Retry adoption is additionally fenced on the exact failed position and the same
-          // ownership it was prepared against, so a run that moved on cannot be repinned by a stale
-          // decision.
-          if (
-            encodeRunPosition(run.position) !== encodeRunPosition(input.expectedPosition) ||
-            run.owner !== input.expectedOwner
-          ) {
-            return rejected<void>({ kind: 'position_mismatch' });
-          }
-          db.insert(workflowVersionAdoptions)
-            .values({
-              runId: run.id,
-              artifactHash: input.artifactHash,
-              reason: 'retry',
-              attemptId: null,
-              adoptedAt: now,
-            })
-            .run();
-          db.update(workflowRuns)
-            .set({
-              artifactHash: input.artifactHash,
-              status: 'ready',
-              failureCode: null,
-              failureMessage: null,
-              failureAttemptId: null,
-              endedAt: null,
-              controlRevision: run.controlRevision + 1,
-              // No attempt is allocated here. The next claim stamps it, so a crash between adoption
-              // and dispatch leaves an ordinary ready run with a new pin rather than a half-owned
-              // attempt.
-              pendingInvocationKind: 'retry',
-              updatedAt: now,
-            })
-            .where(eq(workflowRuns.id, run.id))
-            .run();
+      Effect.gen(function* () {
+        const recoveryCondition = input.recovery ? yield* publish(input.recovery.condition) : null;
+        return yield* database.transaction('workflow_adopt_retry_pin', (db) =>
+          withControlFence(db, input.runId, input.controlRevision, (run, now) => {
+            // Retry adoption is additionally fenced on the exact failed position and the same
+            // ownership it was prepared against, so a run that moved on cannot be repinned by a stale
+            // decision.
+            if (
+              encodeRunPosition(run.position) !== encodeRunPosition(input.expectedPosition) ||
+              run.owner !== input.expectedOwner
+            ) {
+              return rejected<void>({ kind: 'position_mismatch' });
+            }
+            db.insert(workflowVersionAdoptions)
+              .values({
+                runId: run.id,
+                artifactHash: input.artifactHash,
+                reason: 'retry',
+                attemptId: null,
+                adoptedAt: now,
+              })
+              .run();
+            let recoveryWaitId: number | null = null;
+            if (input.recovery && recoveryCondition) {
+              const conditionColumns = slotColumns(recoveryCondition);
+              const wait = db
+                .insert(workflowWaits)
+                .values({
+                  runId: run.id,
+                  executionId: input.recovery.executionId,
+                  waitKind: 'agent_turn',
+                  conditionInline: conditionColumns.inline,
+                  conditionRef: conditionColumns.ref,
+                  status: 'armed',
+                  armedAt: now,
+                })
+                .returning()
+                .get();
+              recoveryWaitId = wait.id;
+              db.update(workflowNodeExecutions)
+                .set({ status: 'awaiting' })
+                .where(eq(workflowNodeExecutions.id, input.recovery.executionId))
+                .run();
+            }
+            db.update(workflowRuns)
+              .set({
+                artifactHash: input.artifactHash,
+                status: recoveryWaitId === null ? 'ready' : 'waiting',
+                ...(recoveryWaitId === null
+                  ? {}
+                  : {
+                      positionJson: encodeRunPosition({
+                        kind: 'awaiting_wait',
+                        frameId: input.recovery!.frameId,
+                        executionId: input.recovery!.executionId,
+                        waitId: recoveryWaitId,
+                      }),
+                    }),
+                failureCode: null,
+                failureMessage: null,
+                failureAttemptId: null,
+                endedAt: null,
+                controlRevision: run.controlRevision + 1,
+                // No attempt is allocated here. The next claim stamps it, so a crash between adoption
+                // and dispatch leaves an ordinary ready run with a new pin rather than a half-owned
+                // attempt.
+                pendingInvocationKind: 'retry',
+                updatedAt: now,
+              })
+              .where(eq(workflowRuns.id, run.id))
+              .run();
 
-          const drafts: TransitionDraft[] = [
-            { kind: 'retry_pin_adopted', artifactHash: input.artifactHash },
-            {
-              kind: 'control_applied',
-              detail: { inline: JSON.stringify({ control: 'retry' }), ref: null },
-            },
-          ];
-          // Adoption is not a Resume. A run that was paused when it failed stays paused, and its
-          // band re-opens here because the terminal transition that closed it has been undone.
-          if (run.paused) drafts.unshift(...openPause(db, run.id, 'control', now));
-          return { value: undefined as void, drafts };
-        }),
-      ),
+            const drafts: TransitionDraft[] = [
+              { kind: 'retry_pin_adopted', artifactHash: input.artifactHash },
+              ...(recoveryWaitId === null
+                ? []
+                : [
+                    {
+                      kind: 'wait_armed' as const,
+                      frameId: input.recovery!.frameId,
+                      executionId: input.recovery!.executionId,
+                      waitId: recoveryWaitId,
+                    },
+                  ]),
+              {
+                kind: 'control_applied',
+                detail: { inline: JSON.stringify({ control: 'retry' }), ref: null },
+              },
+            ];
+            // Adoption is not a Resume. A run that was paused when it failed stays paused, and its
+            // band re-opens here because the terminal transition that closed it has been undone.
+            if (run.paused) drafts.unshift(...openPause(db, run.id, 'control', now));
+            return { value: undefined as void, drafts };
+          }),
+        );
+      }),
 
     detachRun: ({ runId, controlRevision }) =>
       database.transaction('workflow_detach_run', (db) =>
@@ -2929,22 +2984,26 @@ function deliverWaitInternal(
           .from(workflowNodeExecutions)
           .where(eq(workflowNodeExecutions.id, wait.executionId))
           .get()!;
-        db.update(workflowNodeExecutions)
-          .set({ status: 'routing' })
-          .where(eq(workflowNodeExecutions.id, execution.id))
-          .run();
+        if (input.resumePosition === undefined) {
+          db.update(workflowNodeExecutions)
+            .set({ status: 'routing' })
+            .where(eq(workflowNodeExecutions.id, execution.id))
+            .run();
+        }
         // Readiness is unconditional: `paused` gates the dispatcher's claim, not the status, so a
         // wait that resolves during a pause reaches `ready` and simply waits for the gate to lift
         // rather than stranding at `waiting`.
         db.update(workflowRuns)
           .set({
             status: 'ready',
-            positionJson: encodeRunPosition({
-              kind: 'routing',
-              frameId: execution.frameId,
-              executionId: execution.id,
-              edgeId: input.edgeId,
-            }),
+            positionJson: encodeRunPosition(
+              input.resumePosition ?? {
+                kind: 'routing',
+                frameId: execution.frameId,
+                executionId: execution.id,
+                edgeId: input.edgeId,
+              },
+            ),
             updatedAt: now,
           })
           .where(eq(workflowRuns.id, row.id))

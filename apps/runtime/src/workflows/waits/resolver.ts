@@ -13,17 +13,13 @@ import type {
 import type { WorkflowOperationRecord, WorkflowWaitRecord } from '../persistence/records.js';
 import type { WorkflowRunsRepositoryService } from '../persistence/runs.repository.js';
 import type { WorkflowArtifactCatalogService } from '../structure/artifact-catalog.js';
-import type {
-  AgentTurnEvent,
-  HeadlessOperationResult,
-  NodeEvent,
-  WaitDeclaration,
-} from '../types.js';
+import type { HeadlessOperationResult, NodeEvent, WaitDeclaration } from '../types.js';
 import {
   selectTurnAssociation,
   terminalForFixedAssociation,
   type WorkflowObservedTurnEdge,
 } from './conditions.js';
+import { recoveryWaitDeclaration, terminalForRecovery, turnEventOf } from './turn-recovery.js';
 
 /**
  * The only writer of wait delivery.
@@ -173,7 +169,18 @@ function deliver(
   return Effect.gen(function* () {
     const run = yield* deps.runs.findRun(wait.runId);
     const execution = yield* deps.runs.findExecution(wait.executionId);
-    if (!run || !execution) return false;
+    if (!run || !execution || !wait.condition) return false;
+    const storedDeclaration = yield* deps.payloads.resolve(wait.condition).pipe(Effect.either);
+    const recovery =
+      storedDeclaration._tag === 'Right' ? recoveryWaitDeclaration(storedDeclaration.right) : null;
+    if (recovery) {
+      const delivery = yield* deps.runs.deliverWait({
+        waitId: wait.id,
+        event: { value: event },
+        resumePosition: recovery.isagiRecovery.resumePosition,
+      });
+      return delivery.ok && delivery.value.outcome === 'advanced';
+    }
     const frame = yield* deps.runs.findFrame(execution.frameId);
     if (!frame) return false;
 
@@ -224,6 +231,14 @@ function agentTurnEvent(
   declaration: Extract<WaitDeclaration, { kind: 'agent_turn' }>,
 ): Effect.Effect<NodeEvent | null, unknown> {
   return Effect.gen(function* () {
+    const recovery = recoveryWaitDeclaration(declaration);
+    if (recovery) {
+      const edges = yield* deps
+        .turnEdges(recovery.target.agentSessionId)
+        .pipe(Effect.orElseSucceed(() => [] as readonly WorkflowObservedTurnEdge[]));
+      const terminal = terminalForRecovery(recovery, edges);
+      return terminal ? turnEventOf(terminal) : null;
+    }
     const boundary = {
       agentSessionId: declaration.target.agentSessionId,
       sentAt: declaration.target.sentAt,
@@ -301,41 +316,6 @@ function agentTurnEvent(
     }
     return event;
   });
-}
-
-function turnEventOf(terminal: {
-  readonly type: 'turn_ended' | 'turn_failed';
-  readonly recordedAt: string;
-  readonly reason?: string | undefined;
-}): AgentTurnEvent {
-  if (terminal.type === 'turn_ended') {
-    return { kind: 'agent_turn', outcome: 'ended', recordedAt: terminal.recordedAt };
-  }
-  // A confirmed interruption is a different fact from a failure, and the harness distinguishes them:
-  // a turn superseded by a new start, or a session that died, are both interruptions the author's
-  // edge can route on rather than execution failures.
-  if (terminal.reason === 'new_start_supersedes') {
-    return {
-      kind: 'agent_turn',
-      outcome: 'interrupted',
-      recordedAt: terminal.recordedAt,
-      reason: 'superseded_by_new_turn',
-    };
-  }
-  if (terminal.reason === 'session_died') {
-    return {
-      kind: 'agent_turn',
-      outcome: 'interrupted',
-      recordedAt: terminal.recordedAt,
-      reason: 'session_died',
-    };
-  }
-  return {
-    kind: 'agent_turn',
-    outcome: 'failed',
-    recordedAt: terminal.recordedAt,
-    reason: terminal.reason ?? 'harness_error',
-  };
 }
 
 /**

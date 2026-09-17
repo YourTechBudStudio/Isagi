@@ -14,6 +14,7 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import type { Effect } from 'effect';
 
+import type { HarnessConversationTurn } from '../../../agent-sessions/harness/definition-types.js';
 import type { PtyTerminateOutcome } from '../../../pty-processes/index.js';
 import type { PtyProcessAllocation } from '../../../pty-processes/types.js';
 import type { WorkflowObservedTurnEdge } from '../../waits/conditions.js';
@@ -115,6 +116,7 @@ export interface AgentSessionOperationAdapter {
   ) => Effect.Effect<readonly WorkflowObservedTurnEdge[], Error>;
   readonly conversationHistory: (
     agentSessionId: number,
+    turn?: HarnessConversationTurn | undefined,
   ) => Effect.Effect<readonly WorkflowConversationMessage[], Error>;
 }
 

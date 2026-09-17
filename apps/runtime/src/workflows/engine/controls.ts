@@ -11,8 +11,20 @@ import type {
 import type { WorkflowExecutionRecord, WorkflowRunRecord } from '../persistence/records.js';
 import { isPlainObject } from '../state/reducers.js';
 import { validateSavedPositions } from '../structure/retry-validation.js';
-import { WorkflowEngineError, type WorkflowUserInputAnswers } from '../types.js';
+import {
+  WorkflowEngineError,
+  type AgentTurnEvent,
+  type WaitDeclaration,
+  type WorkflowUserInputAnswers,
+} from '../types.js';
+import { selectTurnAssociation, type WorkflowObservedTurnEdge } from '../waits/conditions.js';
 import type { WaitResolver } from '../waits/resolver.js';
+import {
+  latestObservedTurn,
+  recoveryWaitDeclaration,
+  sameTurn,
+  type RecoveryWaitDeclaration,
+} from '../waits/turn-recovery.js';
 import {
   validateWorkflowUserInputAnswers,
   WorkflowUserInputValidationError,
@@ -54,6 +66,10 @@ export interface ControlDeps extends LaunchDeps {
     'reconcileExecution' | 'stopOwnedOperations'
   >;
   readonly waits: WaitResolver;
+  /** Forces fresh native turn evidence before Retry decides whether a newer turn exists. */
+  readonly refreshTurnEdges: (
+    agentSessionId: number,
+  ) => Effect.Effect<readonly WorkflowObservedTurnEdge[], unknown>;
   /** Wakes the dispatcher after a control made a run dispatchable again. */
   readonly poke: Effect.Effect<void>;
   /**
@@ -223,17 +239,180 @@ function retry(deps: ControlDeps, runId: number): Effect.Effect<ControlResult, C
       );
     }
 
+    const recovery = yield* prepareTurnRecovery(deps, run);
     const applied = yield* deps.runs.adoptRetryPin({
       runId,
       controlRevision: run.controlRevision,
       artifactHash: artifact.artifactHash,
       expectedPosition: run.position,
       expectedOwner: run.owner,
+      ...(recovery
+        ? {
+            recovery: {
+              frameId: recovery.frameId,
+              executionId: recovery.executionId,
+              condition: { value: recovery.declaration },
+            },
+          }
+        : {}),
     });
-    const result = yield* resultOf(deps, run, applied);
-    if (result.accepted) yield* deps.poke;
-    return result;
+    if (applied.ok) {
+      const current = yield* deps.runs.findRun(run.id);
+      if (current?.position.kind === 'awaiting_wait') {
+        yield* deps.waits.reconcileWait(current.position.waitId);
+      }
+      yield* deps.poke;
+    }
+    return yield* resultOf(deps, run, applied);
   });
+}
+
+/**
+ * Find the authored agent-turn wait whose event the failed segment was consuming, then bind Retry
+ * to the latest exact native turn visible after a forced observer refresh.
+ */
+function prepareTurnRecovery(
+  deps: ControlDeps,
+  run: WorkflowRunRecord,
+): Effect.Effect<
+  {
+    readonly frameId: number;
+    readonly executionId: number;
+    readonly declaration: RecoveryWaitDeclaration;
+  } | null,
+  ControlError
+> {
+  return Effect.gen(function* () {
+    if (run.position.kind !== 'node_callback' && run.position.kind !== 'routing') return null;
+
+    const saved = yield* deps.runs.findProducerOutput({
+      frameId: run.position.frameId,
+      executionId: run.position.executionId,
+      segmentKind: run.position.kind,
+      segmentRef: run.position.kind === 'routing' ? run.position.edgeId : null,
+    });
+    // Reduction recovery consumes the already-saved producer operand. It must not substitute a new
+    // event or transcript underneath a decision/result the failed attempt already produced.
+    if (saved) return null;
+
+    const sourceExecution =
+      run.position.kind === 'routing'
+        ? yield* deps.runs.findExecution(run.position.executionId)
+        : yield* previousExecution(deps, run.position.frameId, run.position.executionId);
+    if (!sourceExecution) return null;
+
+    const waits = yield* deps.runs.listWaitsForExecution(sourceExecution.id);
+    let source: {
+      readonly waitId: number;
+      readonly declaration: Extract<WaitDeclaration, { kind: 'agent_turn' }>;
+      readonly event: AgentTurnEvent;
+    } | null = null;
+    for (const wait of [...waits].reverse()) {
+      if (
+        (wait.status !== 'delivered' && wait.status !== 'consumed') ||
+        !wait.condition ||
+        !wait.event
+      )
+        continue;
+      const [condition, event] = yield* Effect.all([
+        deps.payloads.resolve(wait.condition).pipe(Effect.orElseSucceed(() => null)),
+        deps.payloads.resolve(wait.event).pipe(Effect.orElseSucceed(() => null)),
+      ]);
+      if (
+        recoveryWaitDeclaration(condition) ||
+        !isPlainObject(condition) ||
+        condition.kind !== 'agent_turn' ||
+        !isPlainObject(condition.target) ||
+        typeof condition.target.agentSessionId !== 'number' ||
+        typeof condition.target.sentAt !== 'string' ||
+        !isAgentTurnEvent(event)
+      ) {
+        continue;
+      }
+      source = {
+        waitId: wait.id,
+        declaration: condition as unknown as Extract<WaitDeclaration, { kind: 'agent_turn' }>,
+        event,
+      };
+      break;
+    }
+    if (!source) return null;
+    // A callback after the wait is only a response-read recovery when the source turn completed.
+    if (run.position.kind === 'node_callback' && source.event.outcome !== 'ended') return null;
+
+    const agentSessionId = source.declaration.target.agentSessionId;
+    const refreshed = yield* deps.refreshTurnEdges(agentSessionId).pipe(Effect.either);
+    if (refreshed._tag === 'Left') {
+      return yield* Effect.fail(
+        new WorkflowEngineError({
+          code: 'workflow_agent_observation_unavailable',
+          message: `The agent session could not be refreshed, so Retry left the run unchanged.`,
+          workflowRunId: run.id,
+          agentSessionId,
+        }),
+      );
+    }
+    const latest = latestObservedTurn(agentSessionId, refreshed.right);
+    if (!latest) return null;
+
+    const records = yield* deps.operationRecords.listForExecution(sourceExecution.id);
+    const submission = records.find(
+      (record) =>
+        record.submissionWatermark === source!.declaration.target.sentAt &&
+        (record.capability === 'send_agent_prompt' || record.capability === 'spawn_agent_session'),
+    );
+    const inferred = selectTurnAssociation(
+      { agentSessionId, sentAt: source.declaration.target.sentAt },
+      refreshed.right,
+    );
+    const original =
+      submission?.correlatedHarnessSessionId !== null &&
+      submission?.correlatedHarnessSessionId !== undefined &&
+      typeof submission.correlatedStartSeq === 'number'
+        ? {
+            harnessSessionId: submission.correlatedHarnessSessionId,
+            seq: submission.correlatedStartSeq,
+          }
+        : inferred.kind === 'fixed' && typeof inferred.startSeq === 'number'
+          ? { harnessSessionId: inferred.harnessSessionId, seq: inferred.startSeq }
+          : null;
+    // Retrying the same failed/interrupted source turn is ordinary segment retry. A later human
+    // turn is the only evidence that can replace that event.
+    if (source.event.outcome !== 'ended' && sameTurn(original, latest)) return null;
+
+    return {
+      frameId: run.position.frameId,
+      executionId: run.position.executionId,
+      declaration: {
+        kind: 'agent_turn',
+        target: { agentSessionId, sentAt: latest.startedAt },
+        isagiRecovery: {
+          kind: 'explicit_retry',
+          sourceWaitId: source.waitId,
+          resumePosition: run.position,
+          turn: latest,
+        },
+      },
+    };
+  });
+}
+
+function previousExecution(deps: ControlDeps, frameId: number, executionId: number) {
+  return deps.runs.listExecutions(frameId).pipe(
+    Effect.map((executions) => {
+      const index = executions.findIndex((execution) => execution.id === executionId);
+      return index > 0 ? executions[index - 1]! : null;
+    }),
+  );
+}
+
+function isAgentTurnEvent(value: unknown): value is AgentTurnEvent {
+  return (
+    isPlainObject(value) &&
+    value.kind === 'agent_turn' &&
+    (value.outcome === 'ended' || value.outcome === 'failed' || value.outcome === 'interrupted') &&
+    typeof value.recordedAt === 'string'
+  );
 }
 
 /**

@@ -78,6 +78,7 @@ function exposeHostBridge() {
     // Each action is zero-argument and builds its own intent here. The renderer
     // never supplies an intent value, a version, a URL, or a channel name.
     checkForUpdates: () => sendUpdateIntent({ type: 'check_for_updates' }),
+    downloadUpdate: () => sendUpdateIntent({ type: 'download_update' }),
     requestUpdateRestart: () => sendUpdateIntent({ type: 'request_restart' }),
     confirmUpdateRestart: () => sendUpdateIntent({ type: 'confirm_restart' }),
     cancelUpdateRestart: () => sendUpdateIntent({ type: 'cancel_restart' }),

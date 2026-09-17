@@ -210,7 +210,7 @@ export function makeAgentSessionAdapter(
         Error
       >,
 
-    conversationHistory: (agentSessionId) =>
+    conversationHistory: (agentSessionId, turn) =>
       asError(
         Effect.gen(function* () {
           const session = yield* agents.get(agentSessionId);
@@ -218,7 +218,7 @@ export function makeAgentSessionAdapter(
             artifacts,
             agentSessionId,
           );
-          return yield* readConversationHistory({ ...session, harnessSessionId }).pipe(
+          return yield* readConversationHistory({ ...session, harnessSessionId }, turn).pipe(
             Effect.provideService(HarnessLedgerObserver, observer),
           );
         }),

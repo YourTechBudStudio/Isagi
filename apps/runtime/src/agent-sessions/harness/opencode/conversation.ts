@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import BetterSqlite from 'better-sqlite3';
 import { Effect } from 'effect';
 
+import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
 
 export function readOpenCodeConversation(input: {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly cwd?: string | null | undefined;
   readonly harnessSessionId?: string | null | undefined;
@@ -28,9 +30,28 @@ export function readOpenCodeConversation(input: {
         opencodeDirectory,
       });
       if (!rows) continue;
-      return conversationFromOpenCodeRows(rows);
+      return conversationFromOpenCodeRows(completedTurnRows(rows, input.turn));
     }
     return [];
+  });
+}
+
+function completedTurnRows(rows: readonly OpenCodeRow[], turn?: HarnessConversationTurn) {
+  if (!turn) return rows;
+  if (!turn.completedAt) return [];
+  const start = Date.parse(turn.startedAt);
+  const end = Date.parse(turn.completedAt);
+  return rows.filter((row) => {
+    const data = objectValue(parseJson(row.messageData));
+    const completed = objectValue(data.time).completed;
+    return (
+      data.role === 'assistant' &&
+      typeof completed === 'number' &&
+      completed >= start &&
+      completed <= end &&
+      row.messageCreatedAt <= end &&
+      (row.partCreatedAt === null || row.partCreatedAt <= end)
+    );
   });
 }
 

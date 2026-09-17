@@ -462,6 +462,8 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_user_input_invalid',
   'workflow_version_not_adopted',
   'workflow_operation_uncertain',
+  /** Retry could not establish a fresh view of the durable agent-turn evidence. */
+  'workflow_agent_observation_unavailable',
   'workflow_stale_control',
   'workflow_environment_unavailable',
   /** The workflow's `environment` hook threw, or returned a value the placement schema refuses. */

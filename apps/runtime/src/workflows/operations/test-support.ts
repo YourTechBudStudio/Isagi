@@ -9,6 +9,7 @@ import { Cause, Context, Effect, Exit, Layer, Option, Scope } from 'effect';
 
 import type { WorkflowOperationStage } from '@isagi/contracts';
 
+import type { HarnessConversationTurn } from '../../agent-sessions/harness/definition-types.js';
 import { DatabaseError } from '../../persistence/index.js';
 import type { PtyTerminateOutcome } from '../../pty-processes/index.js';
 import type { PtyProcessAllocation, PtyProcessLaunchMetadata } from '../../pty-processes/types.js';
@@ -77,6 +78,8 @@ export interface FakeAdapterState {
   /** Consumed in order; the last entry repeats once exhausted. */
   launchOutcomes: FakeLaunchOutcome[];
   turnEdges: Map<number, WorkflowObservedTurnEdge[]>;
+  conversationHistory: readonly WorkflowConversationMessage[];
+  conversationTurns: (HarnessConversationTurn | null)[];
   sessionHarness: WorkflowAgentHarness;
   capturedOutput: Map<number, { raw: string; output: string }>;
   terminateOutcome: (ptyProcessId: number) => PtyTerminateOutcome | Error;
@@ -131,6 +134,8 @@ export function makeFakeAdapterState(): FakeAdapterState {
     },
     launchOutcomes: [{ kind: 'spawned' }],
     turnEdges: new Map(),
+    conversationHistory: [],
+    conversationTurns: [],
     sessionHarness: 'claude',
     capturedOutput: new Map(),
     terminateOutcome: () => 'terminated_live',
@@ -224,10 +229,11 @@ export function makeFakeAdapters(state: FakeAdapterState): OperationAdapters {
         yield* failIfConfigured(state, 'turnEdges');
         return (state.turnEdges.get(agentSessionId) ?? []) as readonly WorkflowObservedTurnEdge[];
       }),
-    conversationHistory: () =>
+    conversationHistory: (_agentSessionId, turn) =>
       Effect.gen(function* () {
         yield* failIfConfigured(state, 'conversationHistory');
-        return [] as readonly WorkflowConversationMessage[];
+        state.conversationTurns.push(turn ?? null);
+        return state.conversationHistory;
       }),
   };
   const keyedSessions = new Map<

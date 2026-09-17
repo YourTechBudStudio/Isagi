@@ -14,7 +14,7 @@ Read [Workflow authoring](workflows.md) for graph structure and package checks. 
 | `setUiFeedback`          | Meaningful phase/message for the user                     |
 | `log`                    | Durable diagnostic context                                |
 
-Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success.
+Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success. If a routing or response-reading segment fails after this wait, a human-triggered Retry may select the latest observed turn in the same durable agent session; workflow code still uses only the Isagi session handle and ordinary event/conversation APIs.
 
 ## Interactive turn and observation
 

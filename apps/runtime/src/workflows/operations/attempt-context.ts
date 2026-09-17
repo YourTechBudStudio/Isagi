@@ -29,6 +29,7 @@ import {
 } from '../persistence/runs.repository.js';
 import { renderWorkflowPromptEffect } from '../prompt-renderer.js';
 import { canonicalJson } from '../state/serializable.js';
+import type { AttemptTurnRecovery } from '../waits/turn-recovery.js';
 import type { OperationAdapters } from './adapters/types.js';
 import type { CaptureRegistry } from './capture.js';
 import { classifySubmissionEvidence } from './classify.js';
@@ -65,6 +66,7 @@ export interface OperationAttemptIdentity {
   readonly attemptIndex: number;
   readonly invocationKind: WorkflowInvocationKind;
   readonly artifactHash: string;
+  readonly agentTurnRecovery?: AttemptTurnRecovery | null | undefined;
   readonly destination: WorkflowDestination;
 }
 
@@ -127,7 +129,9 @@ export function makeAttemptContextFactory(dependencies: {
     Effect.scopedWith((attemptScope) =>
       Effect.gen(function* () {
         const gate = yield* Effect.makeSemaphore(1);
+        const conversationGate = yield* Effect.makeSemaphore(1);
         const state = { nextCallIndex: 0, consumed: 0, closed: false };
+        const recoveredConversation = new Map<number, readonly WorkflowConversationMessage[]>();
 
         const reject = (
           input: ConstructorParameters<typeof OperationRejection>[0],
@@ -791,15 +795,54 @@ export function makeAttemptContextFactory(dependencies: {
             // A scoped read: no call position, no receipt. A repaired segment simply reads again and
             // may legitimately observe a different answer.
             runVerb(
-              Effect.gen(function* () {
-                if (state.closed) {
-                  return yield* reject({
-                    code: 'operation_context_closed',
-                    message: `Operation context for attempt ${identity.attemptId} is closed.`,
-                  });
-                }
-                return yield* adapters.agentSessions.conversationHistory(agentSessionId);
-              }),
+              conversationGate.withPermits(1)(
+                Effect.gen(function* () {
+                  if (state.closed) {
+                    return yield* reject({
+                      code: 'operation_context_closed',
+                      message: `Operation context for attempt ${identity.attemptId} is closed.`,
+                    });
+                  }
+                  const recovery = identity.agentTurnRecovery;
+                  if (recovery?.agentSessionId !== agentSessionId) {
+                    return yield* adapters.agentSessions.conversationHistory(agentSessionId);
+                  }
+                  const cached = recoveredConversation.get(agentSessionId);
+                  if (cached) return cached;
+                  if (recovery.event.outcome !== 'ended') {
+                    return yield* reject({
+                      code: 'workflow_operation_failed',
+                      message: `The exact agent turn selected by Retry ${recovery.event.outcome}; it has no completed response to read.`,
+                      detail: { waitId: recovery.waitId, outcome: recovery.event.outcome },
+                    });
+                  }
+                  const messages = yield* adapters.agentSessions.conversationHistory(
+                    agentSessionId,
+                    {
+                      ...recovery.turn,
+                      completedAt: recovery.event.recordedAt,
+                    },
+                  );
+                  const hasAssistantContent = messages.some(
+                    (message) =>
+                      message.role === 'assistant' &&
+                      message.parts.some((part) => part.type === 'text' && part.text.length > 0),
+                  );
+                  if (!hasAssistantContent) {
+                    return yield* reject({
+                      code: 'workflow_operation_failed',
+                      message: `The exact agent turn selected by Retry has no readable assistant response.`,
+                      detail: {
+                        waitId: recovery.waitId,
+                        harnessSessionId: recovery.turn.harnessSessionId,
+                        seq: recovery.turn.seq,
+                      },
+                    });
+                  }
+                  recoveredConversation.set(agentSessionId, messages);
+                  return messages;
+                }),
+              ),
             ) as Promise<readonly WorkflowConversationMessage[]>,
 
           runHeadlessAgent: (input: WorkflowHeadlessAgentInput) =>

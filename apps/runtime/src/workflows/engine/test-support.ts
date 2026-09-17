@@ -457,13 +457,14 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
           unsubscribe: Effect.void,
         }),
     };
+    const adapterServices = makeFakeAdapters(adapters);
     const operations = await Effect.runPromise(
       Scope.extend(
         makeWorkflowOperationService({
           operations: fixture.operations,
           runs,
           payloads: fixture.payloads,
-          adapters: makeFakeAdapters(adapters),
+          adapters: adapterServices,
           eventBus,
           now,
         }),
@@ -501,6 +502,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
       operationRecords: fixture.operations,
       operations,
       waits,
+      refreshTurnEdges: adapterServices.agentSessions.turnEdges,
       poke: Effect.void,
       runPreparation,
     });

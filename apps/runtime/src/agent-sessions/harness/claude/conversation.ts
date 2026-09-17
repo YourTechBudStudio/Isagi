@@ -4,11 +4,13 @@ import { join } from 'node:path';
 
 import { Effect } from 'effect';
 
+import type { HarnessConversationTurn } from '../definition-types.js';
 import type { HarnessObservationRecord } from '../projection.js';
 import type { ConversationMessage } from '../types.js';
 import { reduceClaudeLifecycle } from './lifecycle.js';
 
 export function readClaudeConversation(input: {
+  readonly turn?: HarnessConversationTurn | undefined;
   readonly agentSessionId: number;
   readonly cwd?: string | null | undefined;
   readonly harnessSessionId?: string | null | undefined;
@@ -19,6 +21,7 @@ export function readClaudeConversation(input: {
   ][];
 }): Effect.Effect<readonly ConversationMessage[]> {
   return Effect.gen(function* () {
+    if (input.turn) return completedClaudeTurn(input.streams, input.turn);
     const nativePaths = directNativeTranscriptPaths(input);
     const nativeEntries = yield* readClaudeEntriesFromPaths({
       agentSessionId: input.agentSessionId,
@@ -44,6 +47,24 @@ export function readClaudeConversation(input: {
       latestTerminalMessage(input.streams),
     );
   });
+}
+
+function completedClaudeTurn(
+  streams: readonly [string, readonly HarnessObservationRecord[]][],
+  turn: HarnessConversationTurn,
+): readonly ConversationMessage[] {
+  if (!turn.completedAt) return [];
+  const records = streams.find(([id]) => id === turn.harnessSessionId)?.[1] ?? [];
+  const terminal = reduceClaudeLifecycle(records).terminalEdges.find(
+    (edge) =>
+      edge.type === 'turn_ended' && edge.seq === turn.seq && edge.recordedAt === turn.completedAt,
+  );
+  if (!terminal) return [];
+  const stop = records.find(
+    (record) => record.nativeEvent === 'Stop' && record.recordedAt === terminal.recordedAt,
+  );
+  const text = stringField(stop?.event, 'last_assistant_message');
+  return text?.trim() ? [{ role: 'assistant', parts: [{ type: 'text', text }] }] : [];
 }
 
 export function parseClaudeTranscript(raw: string): readonly ConversationMessage[] {

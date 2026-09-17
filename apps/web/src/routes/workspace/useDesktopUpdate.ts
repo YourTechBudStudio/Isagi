@@ -31,10 +31,10 @@ export type DesktopUpdateView =
       readonly confirmRestart: RestartActivity | null;
       readonly restartPending: boolean;
       readonly onCheck: () => void;
+      readonly onDownload: () => void;
       readonly onRestart: () => void;
       readonly onCancelRestart: () => void;
       readonly onConfirmRestart: () => void;
-      readonly onRetryDownload: () => void;
       readonly onOpenDownloadPage: () => void;
     };
 
@@ -56,6 +56,8 @@ export function toDesktopUpdateState(snapshot: DesktopUpdateSnapshot): DesktopUp
       return { kind: 'checking' };
     case 'up_to_date':
       return { kind: 'up-to-date' };
+    case 'update_available':
+      return { kind: 'update-available', version: snapshot.targetVersion };
     case 'downloading':
       return {
         kind: 'downloading',
@@ -129,6 +131,7 @@ export function desktopUpdateReducer(
 
 export interface DesktopUpdateHandlers {
   readonly onCheck: () => void;
+  readonly onDownload: () => void;
   readonly onRestart: () => void;
   readonly onCancelRestart: () => void;
   readonly onConfirmRestart: () => void;
@@ -154,10 +157,6 @@ export function resolveDesktopUpdateView(
     confirmRestart: toRestartActivity(state.snapshot),
     restartPending: state.restartPending,
     ...handlers,
-    // Retrying a download restarts the whole check/download lifecycle; there is
-    // no separate resume operation, and the updater downloads automatically once
-    // it finds the update again.
-    onRetryDownload: handlers.onCheck,
   };
 }
 
@@ -189,6 +188,7 @@ export function useDesktopUpdate(): DesktopUpdateView {
   }, []);
 
   const onCheck = useCallback(() => void desktopUpdateActions.check(), []);
+  const onDownload = useCallback(() => void desktopUpdateActions.download(), []);
   const onCancelRestart = useCallback(() => void desktopUpdateActions.cancelRestart(), []);
   const onConfirmRestart = useCallback(() => void desktopUpdateActions.confirmRestart(), []);
   const onOpenDownloadPage = useCallback(() => void desktopUpdateActions.openDownloadPage(), []);
@@ -196,6 +196,6 @@ export function useDesktopUpdate(): DesktopUpdateView {
   return resolveDesktopUpdateView(
     hosted,
     { snapshot, restartPending },
-    { onCheck, onRestart, onCancelRestart, onConfirmRestart, onOpenDownloadPage },
+    { onCheck, onDownload, onRestart, onCancelRestart, onConfirmRestart, onOpenDownloadPage },
   );
 }
