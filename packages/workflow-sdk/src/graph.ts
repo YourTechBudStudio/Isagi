@@ -8,8 +8,10 @@ import type {
 import type {
   WorkflowCommandManifest,
   WorkflowDestination,
+  WorkflowEnvironmentContext,
   WorkflowInputs,
   WorkflowOrigin,
+  WorkflowPlacementRequest,
 } from './launch.js';
 import type { GraphNode } from './nodes.js';
 import type { NodeEvent } from './operations.js';
@@ -125,6 +127,14 @@ export interface WorkflowDefinition<Inputs extends WorkflowInputs, Output> exten
   readonly isagiKind: 'workflow';
   readonly command: (origin: WorkflowOrigin) => MaybePromise<WorkflowCommandManifest>;
   readonly validate: (origin: WorkflowOrigin, inputs: Inputs) => MaybePromise<void>;
+  /**
+   * Optional. Chooses the worktree and surface the run executes in. Omitted means the current
+   * worktree and surface. Not called when the caller supplies a placement. Read-only: it may derive
+   * names from `inputs` and list rows through `ctx`; it cannot create anything.
+   */
+  readonly environment?:
+    | ((ctx: WorkflowEnvironmentContext, inputs: Inputs) => MaybePromise<WorkflowPlacementRequest>)
+    | undefined;
   /** The root graph. Its parameters type *is* `Inputs`: validated launch inputs need no mapping. */
   readonly graph: GraphDefinition<any, any, Inputs, Output>;
 }

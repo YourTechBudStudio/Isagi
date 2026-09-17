@@ -149,7 +149,7 @@ function structureFor(artifactHash: string, pinOrdinal = 1): GetWorkflowStructur
     adoptedAt: '2026-09-15T10:00:00.000Z',
     descriptor: {
       descriptorVersion: 1,
-      workflowContractVersion: 2,
+      workflowContractVersion: 3,
       rootGraphKey: 'root',
       graphs: [],
     },

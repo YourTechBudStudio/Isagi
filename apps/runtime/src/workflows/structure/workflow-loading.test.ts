@@ -84,7 +84,7 @@ test('live registry captures configured sources once at layer construction', asy
  * honest about that — recognition has to work on plain data or it does not work at all.
  */
 function bundleSource(input: { readonly graphKey: string; readonly nodes: string }): string {
-  return `const brand = (kind) => ({ isagiContract: 2, isagiKind: kind });
+  return `const brand = (kind) => ({ isagiContract: 3, isagiKind: kind });
 export default {
   ...brand('workflow'),
   command: () => ({ title: 'Packaged workflow' }),
@@ -489,7 +489,7 @@ test('distinguishes unsupported manifest, unsupported contract, and invalid pack
       // The versions this release replaced. An old package must be rebuilt, never interpreted
       // loosely, so both produce their own reason rather than a generic parse failure.
       ['manifest', 'manifestVersion', 1, 'unsupported_manifest'],
-      ['contract', 'workflowContractVersion', 1, 'unsupported_contract'],
+      ['contract', 'workflowContractVersion', 2, 'unsupported_contract'],
     ] as const) {
       const packageRoot = join(workflows, key);
       await writePackage(packageRoot, artifact);

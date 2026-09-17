@@ -8,8 +8,8 @@ import {
   workflowContractVersion,
 } from './brand.js';
 
-test('the contract version is 2', () => {
-  assert.equal(workflowContractVersion, 2);
+test('the contract version is 3', () => {
+  assert.equal(workflowContractVersion, 3);
 });
 
 test('recognition reads plain data, so a separately bundled copy is still recognized', () => {
@@ -29,9 +29,9 @@ test('recognition rejects the wrong kind, a bare object, and the primitives', ()
 });
 
 test('a stale bundle is not branded, but its contract version stays readable for diagnostics', () => {
-  const stale = { isagiContract: 1, isagiKind: 'workflow' };
+  const stale = { isagiContract: 2, isagiKind: 'workflow' };
   assert.equal(isWorkflowBranded(stale, 'workflow'), false);
-  assert.equal(readWorkflowContractVersion(stale), 1);
+  assert.equal(readWorkflowContractVersion(stale), 2);
   assert.equal(readWorkflowContractVersion({}), null);
   assert.equal(readWorkflowContractVersion(null), null);
 });

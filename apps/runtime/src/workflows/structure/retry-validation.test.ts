@@ -28,7 +28,7 @@ function graph(overrides: Partial<GraphDescriptor> & { key: string }): GraphDesc
 function descriptor(graphs: readonly GraphDescriptor[]): WorkflowStructureDescriptor {
   return {
     descriptorVersion: 1,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     rootGraphKey: graphs[0]!.key,
     graphs,
   };

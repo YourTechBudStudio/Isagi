@@ -99,7 +99,7 @@ export function descriptorFor(pin: string): WorkflowStructureDescriptorDto {
   const withRetryNode = pin === PIN_TWO;
   return {
     descriptorVersion: 1,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     rootGraphKey: 'release',
     graphs: [
       {

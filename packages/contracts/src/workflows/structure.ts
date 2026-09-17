@@ -129,7 +129,7 @@ export const workflowGraphDescriptorSchema = Schema.Struct({
 
 export const workflowStructureDescriptorSchema = Schema.Struct({
   descriptorVersion: Schema.Literal(1),
-  workflowContractVersion: Schema.Literal(2),
+  workflowContractVersion: Schema.Literal(3),
   rootGraphKey: nonEmptyString,
   graphs: Schema.Array(workflowGraphDescriptorSchema),
 });

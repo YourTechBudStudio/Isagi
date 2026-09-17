@@ -10,11 +10,11 @@
     "verify": "isagi-workflow-verify --workflow ."
   },
   "dependencies": {
-    "@yourtechbudstudio/isagi-workflow-sdk": "0.1.0"
+    "@yourtechbudstudio/isagi-workflow-sdk": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
-    "@yourtechbudstudio/isagi-workflow-verifier": "0.1.0",
+    "@yourtechbudstudio/isagi-workflow-verifier": "0.2.0",
     "esbuild": "0.28.0",
     "tsx": "4.21.0",
     "typescript": "7.0.2"

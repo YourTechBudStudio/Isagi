@@ -23,7 +23,7 @@ const INCARNATION = 'incarnation-1';
 /** The candidate structure a Retry would adopt: it no longer declares the node the run sits on. */
 const incompatible: WorkflowStructureDescriptor = {
   descriptorVersion: 1,
-  workflowContractVersion: 2,
+  workflowContractVersion: 3,
   rootGraphKey: 'root',
   graphs: [
     {

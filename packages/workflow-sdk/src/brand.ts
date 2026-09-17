@@ -2,7 +2,7 @@
  * The workflow authoring contract version. A bundle built against a different major contract is
  * rejected by the verifier and the runtime loader rather than being interpreted loosely.
  */
-export const workflowContractVersion = 2 as const;
+export const workflowContractVersion = 3 as const;
 
 export const workflowBrandKinds = [
   'workflow',

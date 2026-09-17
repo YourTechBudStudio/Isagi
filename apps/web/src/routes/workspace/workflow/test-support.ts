@@ -38,7 +38,7 @@ export function descriptorFixture(
   graphs: readonly WorkflowGraphDescriptorDto[],
   rootGraphKey = graphs[0]?.key ?? 'root',
 ): WorkflowStructureDescriptorDto {
-  return { descriptorVersion: 1, workflowContractVersion: 2, rootGraphKey, graphs };
+  return { descriptorVersion: 1, workflowContractVersion: 3, rootGraphKey, graphs };
 }
 
 export function runStateFixture(input: {

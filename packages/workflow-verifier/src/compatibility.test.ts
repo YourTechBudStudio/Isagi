@@ -72,7 +72,7 @@ test('the receipt binds the descriptor version the structure module produces', (
   // other would let a receipt certify a descriptor shape this release does not produce.
   const manifest: WorkflowBuildManifest = {
     manifestVersion: 2,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     sdk: { name: workflowSdkPackage, version: workflowSdkVersion },
     verifier: { name: workflowVerifierPackage, version: workflowVerifierVersion },
     source: { sha256: 'a'.repeat(64) },

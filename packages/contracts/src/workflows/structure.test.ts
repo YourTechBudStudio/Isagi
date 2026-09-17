@@ -141,7 +141,7 @@ test('a checkpoint descriptor also decodes, so an unlaunchable package is still 
       state: { note: reduce.replace<string>() },
       entry: 'pause',
       nodes: {
-        pause: { isagiContract: 2, isagiKind: 'checkpoint-node', caption: 'Review' } as never,
+        pause: { isagiContract: 3, isagiKind: 'checkpoint-node', caption: 'Review' } as never,
       },
       edges: { fromPause: edge({ from: 'pause', to: ['done'], choose: () => ({ to: 'done' }) }) },
       outcomes: { done: outcome({ kind: 'success', output: (s) => s.note }) },
@@ -158,7 +158,7 @@ test('a checkpoint descriptor also decodes, so an unlaunchable package is still 
 test('the schema rejects a descriptor from an unsupported contract or descriptor version', () => {
   const valid = {
     descriptorVersion: 1,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     rootGraphKey: 'Root',
     graphs: [],
   };
@@ -169,7 +169,7 @@ test('the schema rejects a descriptor from an unsupported contract or descriptor
   assert.throws(() =>
     Schema.decodeUnknownSync(workflowStructureDescriptorSchema)({
       ...valid,
-      workflowContractVersion: 1,
+      workflowContractVersion: 2,
     }),
   );
 });

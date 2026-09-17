@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto';
 import { workflowStructureDescriptorVersion } from './structure.js';
 
 export const workflowBuildManifestVersion = 2 as const;
-export const supportedWorkflowContractVersion = 2 as const;
+export const supportedWorkflowContractVersion = 3 as const;
 export const workflowSdkPackage = '@yourtechbudstudio/isagi-workflow-sdk' as const;
 export const workflowVerifierPackage = '@yourtechbudstudio/isagi-workflow-verifier' as const;
-export const workflowSdkVersion = '0.1.0' as const;
-export const workflowVerifierVersion = '0.1.0' as const;
+export const workflowSdkVersion = '0.2.0' as const;
+export const workflowVerifierVersion = '0.2.0' as const;
 export const workflowBuilderPackage = 'esbuild' as const;
 export const workflowBuilderVersion = '0.28.0' as const;
 export const workflowBuildCommand =

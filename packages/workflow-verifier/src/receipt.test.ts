@@ -39,7 +39,7 @@ test('owns source inclusion and reserved path policy', () => {
 test('parses and canonically serializes manifest format 2', () => {
   const manifest = {
     manifestVersion: 2,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -62,7 +62,7 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
   // structure that artifact declares.
   const { structure, ...withoutStructure } = {
     manifestVersion: 2,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -76,7 +76,7 @@ test('a receipt without a structure block is not a version 2 receipt', () => {
 test('the structure block is parsed with exact keys and checked values', () => {
   const base = {
     manifestVersion: 2,
-    workflowContractVersion: 2,
+    workflowContractVersion: 3,
     sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.1.0' },
     verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.1.0' },
     source: { sha256: 'a'.repeat(64) },
@@ -108,12 +108,12 @@ test('the structure block is parsed with exact keys and checked values', () => {
   );
 });
 
-test('a contract-version-1 receipt is refused outright', () => {
+test('a contract-version-2 receipt is refused outright', () => {
   assert.throws(
     () =>
       parseWorkflowBuildManifest({
         manifestVersion: 1,
-        workflowContractVersion: 1,
+        workflowContractVersion: 2,
         sdk: { name: '@yourtechbudstudio/isagi-workflow-sdk', version: '0.0.1' },
         verifier: { name: '@yourtechbudstudio/isagi-workflow-verifier', version: '0.0.1' },
         source: { sha256: 'a'.repeat(64) },

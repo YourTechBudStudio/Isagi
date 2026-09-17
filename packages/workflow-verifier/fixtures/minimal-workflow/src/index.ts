@@ -77,6 +77,8 @@ export const MinimalGraph = createGraph<State, {}, Parameters, { readonly note: 
   },
 });
 
+// `environment` is optional. Omitting it places the run in the current worktree and surface; declare
+// it to choose a different one.
 export default defineWorkflow<Inputs, { readonly note: string }>({
   command: () => ({
     title: 'Minimal workflow',

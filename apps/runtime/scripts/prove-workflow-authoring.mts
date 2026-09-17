@@ -29,6 +29,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { supportedWorkflowContractVersion } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
+
 const packageOnly = process.argv.includes('--package-only');
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
@@ -132,8 +134,15 @@ async function main() {
     const workflow = artifact.default;
     for (const name of ['command', 'validate'])
       if (typeof workflow?.[name] !== 'function') throw new Error(`artifact missing ${name}()`);
-    if (workflow?.isagiContract !== 2 || workflow?.isagiKind !== 'workflow')
-      throw new Error('artifact default export is not a contract-version-2 workflow definition');
+    // Follows the release constant rather than a literal, so a contract bump never leaves this
+    // proof asserting the version it replaced.
+    if (
+      workflow?.isagiContract !== supportedWorkflowContractVersion ||
+      workflow?.isagiKind !== 'workflow'
+    )
+      throw new Error(
+        `artifact default export is not a contract-version-${supportedWorkflowContractVersion} workflow definition`,
+      );
     if (workflow?.graph?.isagiKind !== 'graph')
       throw new Error('artifact default export carries no root graph');
     const directManifest = await workflow.command({

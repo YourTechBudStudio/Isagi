@@ -72,7 +72,7 @@ function brokenGraph(overrides: Record<string, unknown>) {
 test('a valid module produces a descriptor at the current descriptor and contract versions', () => {
   const descriptor = describeOrThrow(leafGraph('Root'));
   assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
-  assert.equal(descriptor.workflowContractVersion, 2);
+  assert.equal(descriptor.workflowContractVersion, 3);
   assert.equal(descriptor.rootGraphKey, 'Root');
   assert.deepEqual(
     descriptor.graphs.map((graph) => graph.key),
@@ -90,13 +90,13 @@ test('a missing or unbranded default export is invalid_export, not a crash', () 
 
 test('a bundle built against another contract reports the real cause', () => {
   const result = describeWorkflowModule({
-    default: { isagiContract: 1, isagiKind: 'workflow', command() {}, validate() {} },
+    default: { isagiContract: 2, isagiKind: 'workflow', command() {}, validate() {} },
   });
   assert.equal(result.ok, false);
   assert.equal(result.ok ? null : result.diagnostics[0]?.code, 'unsupported_contract');
   assert.match(
     result.ok ? '' : (result.diagnostics[0]?.message ?? ''),
-    /contract version 1; this release supports version 2/,
+    /contract version 2; this release supports version 3/,
   );
 });
 
@@ -111,6 +111,31 @@ test('a workflow missing command or validate names the missing callback', () => 
   });
   assert.equal(result.ok, false);
   assert.ok(!result.ok && result.diagnostics.some((d) => d.code === 'missing_callback'));
+});
+
+test('environment is optional, and a declared one must be a function', () => {
+  const workflow = defineWorkflow({
+    command: () => ({ title: 'Test' }),
+    validate: () => {},
+    graph: leafGraph('Root') as never,
+  });
+
+  // Absent: the run is placed in the current worktree and surface, and nothing is diagnosed.
+  assert.equal(describeWorkflowModule({ default: workflow }).ok, true);
+
+  assert.equal(
+    describeWorkflowModule({ default: { ...workflow, environment: () => ({}) } }).ok,
+    true,
+  );
+
+  const malformed = describeWorkflowModule({
+    default: { ...workflow, environment: 'current' },
+  });
+  assert.equal(malformed.ok, false);
+  const diagnostics = malformed.ok ? [] : malformed.diagnostics;
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0]?.code, 'missing_callback');
+  assert.equal(diagnostics[0]?.at.field, 'environment');
 });
 
 test('a workflow whose graph is not a graph is rejected before any walk', () => {
@@ -703,7 +728,7 @@ test('extraction reads registration data without invoking any author callback', 
     invoked.push(name);
     throw new Error(`${name} was invoked during extraction`);
   };
-  const branded = (kind: string) => ({ isagiContract: 2, isagiKind: kind });
+  const branded = (kind: string) => ({ isagiContract: 3, isagiKind: kind });
 
   const child = {
     ...branded('graph'),
