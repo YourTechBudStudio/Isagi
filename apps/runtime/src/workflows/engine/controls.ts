@@ -336,6 +336,7 @@ function prepareTurnRecovery(
         ? waits
         : yield* deps.runs.listWaitsForExecution(run.position.executionId);
     const existingRecoveries = (yield* resolveTurnWaitEvidence(deps, currentWaits))
+      .filter((wait) => wait.status === 'delivered')
       .map((wait) => recoveryWaitDeclaration(wait.condition))
       .filter((declaration): declaration is RecoveryWaitDeclaration => declaration !== null);
     const plan = selectRetryTurnRecovery({
