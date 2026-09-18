@@ -1,6 +1,12 @@
+import type { WorkflowAgentHarness } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Schema } from 'effect';
 
-import { workflowRunPositionSchema, type WorkflowRunPosition } from '@isagi/contracts';
+import {
+  agentHarnessSchema,
+  workflowRunPositionSchema,
+  type WorkflowOperationUsage,
+  type WorkflowRunPosition,
+} from '@isagi/contracts';
 
 import type {
   workflowArtifacts,
@@ -280,9 +286,58 @@ export function operationRecord(row: OperationRow): WorkflowOperationRecord {
       row.lateEvidenceInline,
       row.lateEvidenceRef,
     ),
+    harness: harnessFromColumn(row.harness),
+    model: row.model,
+    effort: row.effort,
+    cwd: row.cwd,
+    runtimeId: row.runtimeId,
+    incarnationId: row.incarnationId,
+    usage: usageFromColumn(row.usageJson),
     createdAt: row.createdAt,
     dispatchedAt: row.dispatchedAt,
     settledAt: row.settledAt,
+  };
+}
+
+const agentHarnesses = agentHarnessSchema.literals;
+
+/**
+ * The harness column is plain `text`, not an enum, because it is provenance about a past operation.
+ *
+ * A harness the product no longer recognises must still read back as *something honest*, and the
+ * honest answer is "unknown" rather than a value the rest of the system would treat as live.
+ */
+export function harnessFromColumn(value: string | null): WorkflowAgentHarness | null {
+  return (agentHarnesses as readonly string[]).includes(value ?? '')
+    ? (value as WorkflowAgentHarness)
+    : null;
+}
+
+/**
+ * Usage as the provider reported it, or nothing.
+ *
+ * Every field is read independently and a non-numeric one becomes `null`, so a provider that
+ * renames or drops a field degrades that field alone instead of discarding the whole record. No
+ * total is computed: `inputTokens` is the bare uncached input, and a presentation that wants a true
+ * total must account for the cache counts itself rather than have the runtime invent one.
+ */
+export function usageFromColumn(value: string | null): WorkflowOperationUsage | null {
+  if (value === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const fields = parsed as Record<string, unknown>;
+  const numberAt = (key: string) => (typeof fields[key] === 'number' ? fields[key] : null);
+  return {
+    inputTokens: numberAt('inputTokens'),
+    cacheReadInputTokens: numberAt('cacheReadInputTokens'),
+    cacheCreationInputTokens: numberAt('cacheCreationInputTokens'),
+    outputTokens: numberAt('outputTokens'),
+    costUsd: numberAt('costUsd'),
   };
 }
 

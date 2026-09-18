@@ -321,6 +321,7 @@ async function proveEngineLaunch(input: {
           payloads: fixture.payloads,
           adapters: adapters as never,
           eventBus: eventBus as never,
+          runtimeId: 'runtime-prove',
         }),
         scope,
       ),

@@ -28,6 +28,7 @@ import {
 import {
   makeFakeAdapters,
   makeFakeAdapterState,
+  RUNTIME,
   type FakeAdapterState,
 } from '../operations/test-support.js';
 import type {
@@ -479,6 +480,7 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
           adapters: adapterServices,
           eventBus,
           now,
+          runtimeId: RUNTIME,
         }),
         scope,
       ),

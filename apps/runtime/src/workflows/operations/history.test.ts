@@ -9,6 +9,7 @@ import {
   makeOperationHarness,
   run,
   runCallback,
+  RUNTIME,
   type OperationHarness,
 } from './test-support.js';
 
@@ -251,3 +252,207 @@ async function settled(harness: OperationHarness, key: string, within = 2_000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+/**
+ * Criterion 6: every operation records who ran it, where, and with what.
+ *
+ * The distinctions being asserted are the ones that would be invisible if provenance were guessed
+ * from the run rather than recorded per operation. A send's `cwd` is the *session's*, not the run
+ * destination's, because a send runs where the session it targets runs. Its model and effort are
+ * `null` rather than the spawn's values, because the session's spawn settings apply and are not
+ * knowable at the call site — recording a guess there would make a wrong answer indistinguishable
+ * from a right one.
+ */
+test('a send records the session it targets, not the run it belongs to', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    harness.state.sessionHarness = 'codex';
+    harness.state.sessionCwd = '/repo/some-other-place';
+    await invoke(harness, (ctx) => ctx.sendAgentPrompt({ agentSessionId: 42, prompt: 'go' }));
+
+    const [operation] = await run(
+      harness.fixture.operations.listForExecution(harness.identity.executionId),
+    );
+    assert.ok(operation);
+    assert.equal(operation.harness, 'codex');
+    assert.equal(operation.cwd, '/repo/some-other-place');
+    assert.notEqual(
+      operation.cwd,
+      harness.identity.destination.worktreePath,
+      'A send must not borrow the run destination as its working directory.',
+    );
+    assert.equal(operation.model, null);
+    assert.equal(operation.effort, null);
+    assert.equal(operation.runtimeId, RUNTIME);
+    assert.ok(operation.incarnationId);
+    // The submission's turn, correlated by watermark once the turn is observed.
+    assert.equal(operation.attribution, 'not_applicable');
+    // Nothing reported usage: a PTY submission has no provider result to read one from.
+    assert.equal(operation.usage, null);
+  } finally {
+    harness.close();
+  }
+});
+
+test('a spawn records what it was asked to launch, in the run destination', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    await invoke(harness, (ctx) =>
+      ctx.spawnAgentSession({
+        harness: 'claude',
+        prompt: 'seed',
+        model: 'claude-opus-5',
+        effort: 'high',
+      }),
+    );
+
+    const [operation] = await run(
+      harness.fixture.operations.listForExecution(harness.identity.executionId),
+    );
+    assert.ok(operation);
+    assert.equal(operation.harness, 'claude');
+    assert.equal(operation.model, 'claude-opus-5');
+    assert.equal(operation.effort, 'high');
+    assert.equal(operation.cwd, harness.identity.destination.worktreePath);
+    assert.equal(operation.runtimeId, RUNTIME);
+  } finally {
+    harness.close();
+  }
+});
+
+/**
+ * A headless run learns two things only once the process has finished saying what it did.
+ *
+ * `correlated_harness_session_id` is written at settlement while `attribution` stays
+ * `not_applicable`, and that pairing is accurate rather than an oversight: the provider *told* us
+ * the id, so nothing was inferred by watermark. Attribution describes how a turn was matched, not
+ * whether one is known.
+ */
+test('a headless settlement records the session id and usage the provider reported', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    harness.state.headlessProvenance = {
+      harnessSessionId: 'claude-session-abc',
+      usage: {
+        inputTokens: 2,
+        cacheReadInputTokens: 10118,
+        cacheCreationInputTokens: 10019,
+        outputTokens: 4,
+        costUsd: 0.105359,
+      },
+    };
+    // Driven to a real settlement rather than through `invoke`: these two facts are written *at*
+    // settlement, so an operation that never finished would have nothing to assert.
+    const built = await harness.service();
+    let key = '';
+    try {
+      const outcome = await runCallback(
+        built.service.withAttemptContext(harness.identity, (ctx) =>
+          Effect.tryPromise({ try: () => ctx.runHeadlessAgent(prompt), catch: (c) => c }),
+        ),
+      );
+      key = outcome.value.operationId;
+      const record = (await run(harness.fixture.operations.findByKey(key)))!;
+      harness.state.capturedOutput.set(record.ptyProcessId!, { raw: 'done', output: 'done' });
+      await Effect.runPromise(
+        built.bus.publish({
+          type: 'pty_process_exited',
+          status: 'exited',
+          ptyProcessId: record.ptyProcessId!,
+          exitCode: 0,
+          signal: null,
+        }),
+      );
+      await settled(harness, key);
+    } finally {
+      await built.close();
+    }
+
+    const operation = (await run(harness.fixture.operations.findByKey(key)))!;
+    assert.equal(operation.state, 'completed');
+    assert.equal(operation.harness, 'claude');
+    assert.equal(operation.cwd, harness.identity.destination.worktreePath);
+    assert.equal(operation.correlatedHarnessSessionId, 'claude-session-abc');
+    assert.equal(operation.attribution, 'not_applicable');
+    // All five counts survive the round trip through `usage_json`, uncomputed. `inputTokens` is the
+    // bare uncached input and is meant to look small beside the cache counts.
+    assert.deepEqual(operation.usage, {
+      inputTokens: 2,
+      cacheReadInputTokens: 10118,
+      cacheCreationInputTokens: 10019,
+      outputTokens: 4,
+      costUsd: 0.105359,
+    });
+  } finally {
+    harness.close();
+  }
+});
+
+/**
+ * An operation recorded before these columns existed must read as *unknown*, not as anything else.
+ *
+ * This is the honest-behaviour half of criterion 6. A seeded pre-migration row is simulated here by
+ * clearing the columns directly, because that is exactly the state the `0012` migration leaves
+ * every historical row in.
+ */
+test('an operation with no recorded provenance reads back as explicitly unknown', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    await invoke(harness, (ctx) => ctx.runHeadlessAgent(prompt));
+    const [recorded] = await run(
+      harness.fixture.operations.listForExecution(harness.identity.executionId),
+    );
+    assert.ok(recorded);
+
+    harness.fixture.client
+      .prepare(
+        `UPDATE workflow_operations
+            SET harness = NULL, model = NULL, effort = NULL, cwd = NULL,
+                runtime_id = NULL, incarnation_id = NULL, usage_json = NULL
+          WHERE id = ?`,
+      )
+      .run(recorded.id);
+
+    const operation = (await run(harness.fixture.operations.findById(recorded.id)))!;
+    assert.deepEqual(
+      {
+        harness: operation.harness,
+        model: operation.model,
+        effort: operation.effort,
+        cwd: operation.cwd,
+        runtimeId: operation.runtimeId,
+        incarnationId: operation.incarnationId,
+        usage: operation.usage,
+      },
+      {
+        harness: null,
+        model: null,
+        effort: null,
+        cwd: null,
+        runtimeId: null,
+        incarnationId: null,
+        usage: null,
+      },
+    );
+  } finally {
+    harness.close();
+  }
+});
+
+/** Unparsable usage is unknown usage. A half-read record would be worse than none. */
+test('usage that does not parse reads as no usage at all', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    await invoke(harness, (ctx) => ctx.runHeadlessAgent(prompt));
+    const [recorded] = await run(
+      harness.fixture.operations.listForExecution(harness.identity.executionId),
+    );
+    assert.ok(recorded);
+    harness.fixture.client
+      .prepare(`UPDATE workflow_operations SET usage_json = ? WHERE id = ?`)
+      .run('{ not json', recorded.id);
+    assert.equal((await run(harness.fixture.operations.findById(recorded.id)))!.usage, null);
+  } finally {
+    harness.close();
+  }
+});

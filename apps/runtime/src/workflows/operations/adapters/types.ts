@@ -14,10 +14,18 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import type { Effect } from 'effect';
 
+import type { WorkflowOperationUsage } from '@isagi/contracts';
+
 import type { HarnessConversationTurn } from '../../../agent-sessions/harness/definition-types.js';
 import type { PtyTerminateOutcome } from '../../../pty-processes/index.js';
 import type { PtyProcessAllocation } from '../../../pty-processes/types.js';
 import type { WorkflowObservedTurnEdge } from '../../waits/conditions.js';
+
+/** What a headless provider reported about its own run. Every unknown is an explicit `null`. */
+export interface HeadlessProvenance {
+  readonly harnessSessionId: string | null;
+  readonly usage: WorkflowOperationUsage | null;
+}
 
 /** A session and the live process behind it, resolved before any durable marker is written. */
 export interface PreparedSubmission {
@@ -36,6 +44,11 @@ export interface CreatedKeyedSession {
   readonly surfaceId: number;
   readonly paneId: number;
   readonly agentSessionId: number;
+}
+
+export interface SessionFacts {
+  readonly harness: WorkflowAgentHarness;
+  readonly cwd: string;
 }
 
 export interface CapturedOutput {
@@ -104,12 +117,14 @@ export interface AgentSessionOperationAdapter {
     readonly ptyProcessId: number;
   }) => Effect.Effect<string, Error>;
   /**
-   * The harness a durable session was created with.
+   * The durable facts of an existing session: what it was created with, and where it runs.
    *
-   * Prompt rendering depends on it, and the *session's* harness is the authority — an author cannot
-   * change how a prompt renders by naming a different one at the call site.
+   * Prompt rendering depends on the harness, and the *session's* harness is the authority — an
+   * author cannot change how a prompt renders by naming a different one at the call site. The `cwd`
+   * travels with it because a send's working directory belongs to the session being sent to, not to
+   * the run's destination worktree, and both come from the same row read.
    */
-  readonly sessionHarness: (agentSessionId: number) => Effect.Effect<WorkflowAgentHarness, Error>;
+  readonly sessionFacts: (agentSessionId: number) => Effect.Effect<SessionFacts, Error>;
   /** Raw turn evidence from the harness ledger. Durable, so recovery reads the same thing. */
   readonly turnEdges: (
     agentSessionId: number,
@@ -157,4 +172,15 @@ export interface HeadlessOperationAdapter {
     readonly harness: WorkflowAgentHarness;
     readonly raw: string;
   }) => string | null;
+  /**
+   * The native session id and usage the provider reported, read out of the captured output.
+   *
+   * Pure, like `semanticError`: it interprets bytes the adapter already holds and touches nothing.
+   * It runs at settlement rather than at dispatch because neither fact exists until the process has
+   * finished saying what it did.
+   */
+  readonly headlessProvenance: (input: {
+    readonly harness: WorkflowAgentHarness;
+    readonly raw: string;
+  }) => HeadlessProvenance;
 }

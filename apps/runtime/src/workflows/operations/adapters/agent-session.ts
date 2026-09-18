@@ -201,8 +201,13 @@ export function makeAgentSessionAdapter(
         ),
       ),
 
-    sessionHarness: (agentSessionId) =>
-      asError(Effect.map(agents.get(agentSessionId), (session) => session.harness)),
+    sessionFacts: (agentSessionId) =>
+      asError(
+        Effect.map(agents.get(agentSessionId), (session) => ({
+          harness: session.harness,
+          cwd: session.cwd,
+        })),
+      ),
 
     turnEdges: (agentSessionId) =>
       asError(observer.getTurnEdges(agentSessionId)) as Effect.Effect<

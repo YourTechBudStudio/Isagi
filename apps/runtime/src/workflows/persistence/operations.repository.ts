@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, asc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import type { WorkflowAgentHarness } from '@yourtechbudstudio/isagi-workflow-sdk';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
   WorkflowCapability,
   WorkflowOperationStage,
   WorkflowOperationState,
+  WorkflowOperationUsage,
   WorkflowStopState,
 } from '@isagi/contracts';
 
@@ -19,6 +21,7 @@ import { committed, rejected, type WorkflowWriteResult } from './outcomes.js';
 import {
   WorkflowPayloadStore,
   type PayloadPublishError,
+  type PayloadSlot,
   type WorkflowPayloadStoreService,
 } from './payload-store.js';
 import type {
@@ -35,6 +38,8 @@ import {
   WorkflowWriteWake,
   type WorkflowWriteWakeService,
 } from './write-wake.js';
+
+type OperationRow = typeof workflowOperations.$inferSelect;
 
 /**
  * States from which an operation can still move.
@@ -90,6 +95,30 @@ export interface RecordOperationIntentInput {
   readonly fingerprintOf: RecordedValue;
   readonly artifactHash: string;
   readonly operationKey?: string;
+  /**
+   * Who is about to run this, where, and with what.
+   *
+   * Written on the **insert only**. An adopted existing row keeps the provenance of its first
+   * intent, because that describes the same operation: a redispatch is not a second operation and
+   * must not read as one.
+   */
+  readonly provenance?: OperationIntentProvenance | undefined;
+}
+
+/** Recorded at intent, before any boundary is crossed. Unknowns are `null`, never omitted. */
+export interface OperationIntentProvenance {
+  readonly harness: WorkflowAgentHarness | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly cwd: string | null;
+  readonly runtimeId: string;
+  readonly incarnationId: string;
+}
+
+/** Learned at settlement, from whatever the provider reported about the work it did. */
+export interface OperationSettlementProvenance {
+  readonly correlatedHarnessSessionId?: string | null | undefined;
+  readonly usage?: WorkflowOperationUsage | null | undefined;
 }
 
 export interface RecordOperationReceiptInput {
@@ -113,6 +142,7 @@ export interface SettleOperationInput {
   readonly result?: RecordedValue | undefined;
   readonly uncertaintyDetail?: string | null | undefined;
   readonly stage?: WorkflowOperationStage | undefined;
+  readonly provenance?: OperationSettlementProvenance | undefined;
 }
 
 export interface RecordStopOutcomeInput {
@@ -187,6 +217,23 @@ export interface WorkflowOperationsRepositoryService {
   readonly findByPtyProcessId: (
     ptyProcessId: number,
   ) => Effect.Effect<WorkflowOperationRecord | null, DatabaseError>;
+  /**
+   * The most recent submission **in this run** that targeted an agent session.
+   *
+   * Scoped to the run deliberately, and that scoping is the load-bearing part: the caller uses this
+   * to attribute captured evidence to the turn that produced it, and an operation from a *different*
+   * run targeting the same session would produce a confident false claim about provenance. An honest
+   * "unresolved" is strictly better than a wrong "exact", so the filter is not an optimisation.
+   *
+   * With `submissionWatermark` it answers "which submission was this exact turn?"; without one it
+   * answers "what was the latest thing we sent this session?". Highest id wins, because ids are
+   * allocated in creation order. Index-assisted by `workflow_operations_target_idx`.
+   */
+  readonly findSubmission: (input: {
+    readonly runId: number;
+    readonly agentSessionId: number;
+    readonly submissionWatermark?: string | undefined;
+  }) => Effect.Effect<WorkflowOperationRecord | null, DatabaseError>;
   readonly listByCaptureOwner: (
     captureOwner: string,
   ) => Effect.Effect<readonly WorkflowOperationRecord[], DatabaseError>;
@@ -342,6 +389,12 @@ export function makeWorkflowOperationsRepository(
               targetKind: 'none',
               attribution: 'not_applicable',
               stopState: 'not_requested',
+              harness: input.provenance?.harness ?? null,
+              model: input.provenance?.model ?? null,
+              effort: input.provenance?.effort ?? null,
+              cwd: input.provenance?.cwd ?? null,
+              runtimeId: input.provenance?.runtimeId ?? null,
+              incarnationId: input.provenance?.incarnationId ?? null,
               createdAt: now,
             })
             .returning()
@@ -443,48 +496,21 @@ export function makeWorkflowOperationsRepository(
       Effect.gen(function* () {
         const result = input.result ? yield* payloads.publish(input.result.value) : null;
         return yield* database.transaction('workflow_settle_operation', (db) => {
-          const now = new Date().toISOString();
           const row = find(db, input.operationId);
           if (!row) return rejected<WorkflowOperationRecord>({ kind: 'run_not_found' });
-          if (!(movableStates as readonly string[]).includes(row.state)) {
-            // Already settled. Duplicate settlement is harmless and deliberately a no-op rather
-            // than an error: the same evidence can reach this from several directions.
-            return rejected<WorkflowOperationRecord>({
-              kind: 'operation_state_conflict',
-              state: row.state,
-            });
-          }
-          const columns = slotColumns(result);
-          const updated = db
-            .update(workflowOperations)
-            .set({
-              state: input.state,
-              ...(input.stage === undefined ? {} : { stage: input.stage }),
-              ...(result ? { resultInline: columns.inline, resultRef: columns.ref } : {}),
-              ...(input.uncertaintyDetail === undefined
-                ? {}
-                : { uncertaintyDetail: input.uncertaintyDetail }),
-              settledAt: now,
-            })
-            .where(eq(workflowOperations.id, row.id))
-            .returning()
-            .get();
-          const transitions = appendTransitions(
-            db,
-            row.runId,
-            [
-              {
-                kind: 'operation_settled',
-                frameId: row.frameId,
-                executionId: row.executionId,
-                attemptId: row.originAttemptId,
-                operationId: row.id,
-                detail: result,
-              },
-            ],
-            now,
-          );
-          return committed(operationRecord(updated), transitions);
+          // Never `reopenAbandoned`. Reviving a settled-as-never-sent operation is a capability
+          // only the evidence capture commit has, and it has it by passing the flag explicitly.
+          return settleOperationWithin(db, {
+            row,
+            state: input.state,
+            result,
+            ...(input.uncertaintyDetail === undefined
+              ? {}
+              : { uncertaintyDetail: input.uncertaintyDetail }),
+            ...(input.stage === undefined ? {} : { stage: input.stage }),
+            ...(input.provenance ? { provenance: input.provenance } : {}),
+            now: new Date().toISOString(),
+          });
         });
       }),
 
@@ -651,6 +677,27 @@ export function makeWorkflowOperationsRepository(
         return row ? operationRecord(row) : null;
       }),
 
+    findSubmission: (input) =>
+      database.use('workflow_find_submission_operation', (db) => {
+        const row = db
+          .select()
+          .from(workflowOperations)
+          .where(
+            and(
+              eq(workflowOperations.runId, input.runId),
+              eq(workflowOperations.targetKind, 'agent_session'),
+              eq(workflowOperations.targetId, input.agentSessionId),
+              ...(input.submissionWatermark === undefined
+                ? []
+                : [eq(workflowOperations.submissionWatermark, input.submissionWatermark)]),
+            ),
+          )
+          .orderBy(desc(workflowOperations.id))
+          .limit(1)
+          .get();
+        return row ? operationRecord(row) : null;
+      }),
+
     listByCaptureOwner: (captureOwner) =>
       database.use('workflow_list_operations_by_capture_owner', (db) =>
         db
@@ -725,6 +772,103 @@ export function makeWorkflowOperationsRepository(
           .map(operationRecord),
       ),
   } satisfies WorkflowOperationsRepositoryService;
+}
+
+/**
+ * The settlement itself, as a fragment of an already-open transaction.
+ *
+ * Exported as a plain function rather than a service method, following `appendTransitions`: it is
+ * synchronous and only meaningful inside a transaction, so a second entry point would be a lie
+ * about how it may be called. It exists so the evidence repository can commit an evidence row and
+ * settle its capture operation in **one** transaction while the operations repository keeps sole
+ * ownership of writes to its own table. It is deliberately the only code that writes the settlement
+ * columns.
+ *
+ * `reopenAbandoned` widens the movable set to include `abandoned`, and does nothing else. It mirrors
+ * the escape `receiptAdvanceableStates` already gives a redispatched operation, and for the same
+ * reason: `abandoned` is the one settlement that means the effect provably never left, so
+ * re-entering that call position and completing it is the honest outcome rather than a conflict.
+ * Only the capture commit passes it; `settle` never does, so nothing else can revive an abandoned
+ * row.
+ */
+export function settleOperationWithin(
+  db: RuntimeDrizzleDatabase,
+  input: {
+    readonly row: OperationRow;
+    readonly state: Exclude<WorkflowOperationState, 'intended' | 'dispatched'>;
+    readonly result: PayloadSlot | null;
+    readonly uncertaintyDetail?: string | null | undefined;
+    readonly stage?: WorkflowOperationStage | undefined;
+    readonly provenance?: OperationSettlementProvenance | undefined;
+    readonly reopenAbandoned?: boolean | undefined;
+    readonly now: string;
+  },
+): WorkflowWriteResult<WorkflowOperationRecord> {
+  const { row, result, now } = input;
+  // Reviving a row *and* leaving its previous result in place would produce a record that reads as
+  // completed while still carrying the reason it was abandoned. Unreachable on the only path that
+  // passes the flag — a capture commit always has an evidence key to record — so this is a
+  // precondition, not a fallback: it fails loudly instead of writing the contradiction.
+  if (input.reopenAbandoned && result === null) {
+    throw new Error(
+      `Operation ${row.operationKey} cannot be reopened from ${row.state} without a result; a revived row must say what settled it.`,
+    );
+  }
+  // Spelled out rather than borrowing `receiptAdvanceableStates`, which happens to hold the same
+  // three states today. That set answers a different question — which states a *receipt* may
+  // advance out of — and a state added to it for receipt reasons would silently widen the one fence
+  // that keeps every caller but the evidence capture commit from reviving a settled row.
+  const movable = input.reopenAbandoned
+    ? ([...movableStates, 'abandoned'] as const)
+    : movableStates;
+  if (!(movable as readonly string[]).includes(row.state)) {
+    // Already settled. Duplicate settlement is harmless and deliberately a no-op rather
+    // than an error: the same evidence can reach this from several directions.
+    return rejected<WorkflowOperationRecord>({
+      kind: 'operation_state_conflict',
+      state: row.state,
+    });
+  }
+  const columns = slotColumns(result);
+  const updated = db
+    .update(workflowOperations)
+    .set({
+      state: input.state,
+      ...(input.stage === undefined ? {} : { stage: input.stage }),
+      ...(result ? { resultInline: columns.inline, resultRef: columns.ref } : {}),
+      ...(input.uncertaintyDetail === undefined
+        ? {}
+        : { uncertaintyDetail: input.uncertaintyDetail }),
+      // Settlement-time provenance: what the provider reported about work that has now finished.
+      // Absent keys are left alone rather than nulled, so a settlement that learned nothing does
+      // not erase what an earlier receipt correlated.
+      ...(input.provenance?.correlatedHarnessSessionId === undefined
+        ? {}
+        : { correlatedHarnessSessionId: input.provenance.correlatedHarnessSessionId }),
+      ...(input.provenance?.usage === undefined
+        ? {}
+        : { usageJson: input.provenance.usage ? canonicalJson(input.provenance.usage) : null }),
+      settledAt: now,
+    })
+    .where(eq(workflowOperations.id, row.id))
+    .returning()
+    .get();
+  const transitions = appendTransitions(
+    db,
+    row.runId,
+    [
+      {
+        kind: 'operation_settled',
+        frameId: row.frameId,
+        executionId: row.executionId,
+        attemptId: row.originAttemptId,
+        operationId: row.id,
+        detail: result,
+      },
+    ],
+    now,
+  );
+  return committed(operationRecord(updated), transitions);
 }
 
 function sha256Hex(value: string): string {

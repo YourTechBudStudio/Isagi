@@ -48,6 +48,7 @@ import {
   DataDirectory,
   DataDirectoryLive,
   RuntimeDatabaseLive,
+  RuntimeIdentityLive,
   StateFileLive,
 } from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
@@ -108,6 +109,8 @@ import {
 import { WorktreeSetupRepositoryLive, WorktreeSetupServiceLive } from './worktree-setup/index.js';
 
 const DatabaseLive = RuntimeDatabaseLive.pipe(Layer.provide(DataDirectoryLive));
+/** Read (or minted) once per process, so every operation this runtime records carries one id. */
+const RuntimeIdentityLayer = RuntimeIdentityLive.pipe(Layer.provide(DatabaseLive));
 const StateLive = StateFileLive.pipe(Layer.provide(DataDirectoryLive));
 const RuntimeConfigLayer = RuntimeConfigLive.pipe(Layer.provide(DataDirectoryLive));
 const HostInventoryLayer = HostInventoryLive;
@@ -277,6 +280,7 @@ const WorkflowOperationServiceLayer = WorkflowOperationServiceLive.pipe(
   Layer.provide(HarnessLedgerObserverLayer),
   Layer.provide(HarnessAdapterRegistryLayer),
   Layer.provide(HarnessControlPlaneLayer),
+  Layer.provide(RuntimeIdentityLayer),
 );
 const CommandServiceLayer = CommandServiceLive.pipe(
   Layer.provide(CommandRepositoryLayer),

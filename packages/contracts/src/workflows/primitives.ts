@@ -10,6 +10,8 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { Schema } from 'effect';
 
+import { agentHarnessSchema } from '../surfaces/types.js';
+
 /** Shared scalars and value shapes for the workflow wire surface. */
 
 export const positiveInteger = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -411,16 +413,20 @@ export const workflowInvocationKindSchema = Schema.Literal('initial', 'resumed',
 export const workflowRecoveryModeSchema = Schema.Literal('reuse_producer_output', 'rerun_producer');
 
 /**
- * The capabilities the runtime journals as durable operations — the four that cross an external
- * boundary and therefore need an intent, a receipt and recovery. Reading conversation history,
- * logging and UI feedback are scoped reads and diagnostics, not journaled effects, and author-owned
- * IO is neither journaled nor invented.
+ * The capabilities the runtime journals as durable operations: four that cross an external boundary,
+ * and evidence capture, which takes a call position so a repaired segment reuses its recorded
+ * reference.
+ *
+ * The four boundary-crossing capabilities need an intent, a receipt and recovery. Reading
+ * conversation history, logging and UI feedback are scoped reads and diagnostics, not journaled
+ * effects, and author-owned IO is neither journaled nor invented.
  */
 export const workflowCapabilitySchema = Schema.Literal(
   'spawn_agent_session',
   'send_agent_prompt',
   'close_pane',
   'run_headless_agent',
+  'capture_evidence',
 );
 
 /**
@@ -494,6 +500,73 @@ export const workflowOperationTargetSchema = Schema.Struct({
   turnId: Schema.NullOr(nonEmptyString),
 });
 
+/**
+ * What a headless provider reported about the work it did, read verbatim.
+ *
+ * Every field is nullable and every field is the provider's own number: no total is computed here,
+ * because a computed total would be a figure the provider never reported. `inputTokens` is
+ * therefore the bare uncached input only — Claude reports cache reads and cache writes as separate
+ * counts, and for a cached prompt they dwarf it. A presentation that wants "input" must account for
+ * all three; the runtime does not choose on its behalf. `costUsd` is the provider's own charge and
+ * is the one figure that already reflects caching.
+ */
+export const workflowOperationUsageSchema = Schema.Struct({
+  inputTokens: Schema.NullOr(Schema.Number),
+  cacheReadInputTokens: Schema.NullOr(Schema.Number),
+  cacheCreationInputTokens: Schema.NullOr(Schema.Number),
+  outputTokens: Schema.NullOr(Schema.Number),
+  costUsd: Schema.NullOr(Schema.Number),
+});
+
+/** The runtime and process that recorded an operation's intent. */
+export const workflowOperationRuntimeSchema = Schema.Struct({
+  /** Stable for the life of the runtime database file, so a copied database is self-describing. */
+  runtimeId: nonEmptyString,
+  /** Fresh per runtime process. Two incarnations under one runtime id is the ordinary case. */
+  incarnationId: nonEmptyString,
+});
+
+/**
+ * Where a native transcript for this operation would be, and whether it is there right now.
+ *
+ * Derived at read time from the operation's recorded harness session id and cwd, never stored: a
+ * stored locator would be a second authority for a value that goes stale when a provider rotates
+ * its transcripts. `available` is the result of one `stat`, so a path that was constructed but
+ * never written reads as `false` rather than as a reference that looks live (ADR 0007).
+ */
+export const workflowOperationTranscriptSchema = Schema.Struct({
+  locator: nonEmptyString,
+  available: Schema.Boolean,
+});
+
+/**
+ * Who ran an operation, where, and with what.
+ *
+ * Every unknown is an explicit `null` rather than an omission or a fabricated value, so an
+ * operation recorded before this block existed reads as wholly unknown instead of wrongly
+ * attributed. Projected from dedicated columns rather than from the recorded request, because a
+ * rendered prompt over the inline threshold pushes the whole request envelope out of line and would
+ * make harness and model read as unknown for exactly the long prompts an analysis cares about.
+ */
+export const workflowOperationProvenanceSchema = Schema.Struct({
+  harness: Schema.NullOr(agentHarnessSchema),
+  /** `null` on a send: the session's spawn settings apply and are not known at the call site. */
+  model: Schema.NullOr(Schema.String),
+  effort: Schema.NullOr(Schema.String),
+  harnessSessionId: Schema.NullOr(Schema.String),
+  attribution: Schema.Literal('not_applicable', 'inferred_by_watermark', 'ambiguous'),
+  cwd: Schema.NullOr(Schema.String),
+  runtime: Schema.NullOr(workflowOperationRuntimeSchema),
+  usage: Schema.NullOr(workflowOperationUsageSchema),
+  /** The verified workflow definition version pinned at intent. Always recorded. */
+  artifactHash: nonEmptyString,
+  /**
+   * Present only on `getOperation`, which is the one route that may touch the filesystem. Absent
+   * means "not evaluated on this route"; `null` means no locator could be built.
+   */
+  transcript: Schema.optional(Schema.NullOr(workflowOperationTranscriptSchema)),
+});
+
 export type WorkflowPayloadRef = typeof workflowPayloadRefSchema.Type;
 export type WorkflowPayloadSlot = typeof workflowPayloadSlotSchema.Type;
 export type WorkflowPlacement = typeof workflowPlacementSchema.Type;
@@ -525,6 +598,8 @@ export type WorkflowOperationStage = typeof workflowOperationStageSchema.Type;
 export type WorkflowStopState = typeof workflowStopStateSchema.Type;
 export type WorkflowStopReport = typeof workflowStopReportSchema.Type;
 export type WorkflowOperationTarget = typeof workflowOperationTargetSchema.Type;
+export type WorkflowOperationUsage = typeof workflowOperationUsageSchema.Type;
+export type WorkflowOperationProvenance = typeof workflowOperationProvenanceSchema.Type;
 export type WorkflowCommandManifestDto = typeof workflowCommandManifestSchema.Type;
 export type WorkflowQuestionOptionDto = typeof workflowQuestionOptionSchema.Type;
 export type WorkflowQuestionSpecDto = typeof workflowQuestionSpecSchema.Type;

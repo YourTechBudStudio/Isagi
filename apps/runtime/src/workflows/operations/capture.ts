@@ -130,7 +130,15 @@ export function makeCaptureRegistry(dependencies: {
         ...(error === undefined ? {} : { error }),
         exitCode,
       };
-      return result;
+      // Read from the same captured bytes the result came from, so provenance describes exactly the
+      // run being settled. A failed or timed-out run is read too: a process that died after
+      // reporting its session id and usage still told us those facts, and discarding them would
+      // lose provenance precisely for the runs a postmortem cares about most.
+      const provenance = adapters.headless.headlessProvenance({
+        harness: input.harness,
+        raw: captured.raw,
+      });
+      return { result, provenance };
     });
 
   const settleFromTerminal = (input: {
@@ -143,7 +151,7 @@ export function makeCaptureRegistry(dependencies: {
         yield* untrack(input.tracked.operationId);
         return;
       }
-      const result = yield* captureResult({
+      const { result, provenance } = yield* captureResult({
         record,
         harness: input.tracked.harness,
         ptyProcessId: input.tracked.ptyProcessId,
@@ -165,6 +173,14 @@ export function makeCaptureRegistry(dependencies: {
         record,
         state: result.status === 'completed' ? 'completed' : 'failed',
         result,
+        // A headless row's correlated session id is written at settlement while its `attribution`
+        // stays `not_applicable`, and that is accurate: the provider *told* us the id, so nothing
+        // was inferred by watermark. Attribution describes how a turn was matched, not whether one
+        // is known.
+        provenance: {
+          correlatedHarnessSessionId: provenance.harnessSessionId,
+          usage: provenance.usage,
+        },
       });
       yield* untrack(input.tracked.operationId);
     });
@@ -186,12 +202,15 @@ export function makeCaptureRegistry(dependencies: {
       if (!record || !isSettled(record.state)) return;
       const parsed = yield* headlessReceiptOf(record);
       if (!parsed) return;
-      const result = yield* captureResult({
+      const { result } = yield* captureResult({
         record,
         harness: parsed.harness,
         ptyProcessId: input.ptyProcessId,
         terminal: input.terminal,
       });
+      // No provenance is written here: this operation is already settled, and provenance about a
+      // finished run is not grounds to reopen it. What the process finally did is retained as late
+      // evidence, which is the channel that never rewrites an outcome.
       yield* retainLateEvidence({ record, result });
     });
 

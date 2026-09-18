@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
+
+import { workflowOperations } from '../../persistence/schema.js';
+import { settleOperationWithin } from './operations.repository.js';
 import type { WorkflowWriteResult } from './outcomes.js';
 import {
   createPlacedRun,
@@ -960,3 +964,266 @@ function revisionCount(fixture: WorkflowPersistenceFixture, runId: number): numb
     .get(runId) as { total: number };
   return row.total;
 }
+
+/**
+ * The one escape from "abandoned is settled", and the fence around it.
+ *
+ * `abandoned` means the effect provably never left, so re-entering that call position and
+ * completing it is honest rather than a conflict — but only for the caller that asks for it by
+ * name. `settle` never passes the flag, which is what keeps every ordinary settlement path unable
+ * to revive a row. The abandonment stays in the transition history either way: the row reads as
+ * completed, and the record of what happened to it stays intact.
+ */
+test('only an explicit reopen can revive an abandoned operation', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const ctx = await insideCallback(fixture);
+    const operation = value(
+      await run(
+        fixture.operations.recordIntent({
+          runId: ctx.runId,
+          frameId: ctx.frameId,
+          executionId: ctx.executionId,
+          originAttemptId: ctx.attemptId,
+          capability: 'capture_evidence',
+          callIndex: 0,
+          request: { value: { title: 'round two' } },
+          fingerprintOf: { value: { title: 'round two' } },
+          artifactHash: PIN,
+        }),
+      ),
+    );
+
+    // Intent recorded, nothing committed: reconciliation settles the position `abandoned` with the
+    // reason as its result, which is the convention the headless abandon branch already uses.
+    const abandoned = value(
+      await run(
+        fixture.operations.settle({
+          operationId: operation.id,
+          state: 'abandoned',
+          result: { value: { reason: 'capture_not_committed' } },
+        }),
+      ),
+    );
+    assert.equal(abandoned.state, 'abandoned');
+
+    // The ordinary path still refuses it. Nothing but the capture commit may move this row.
+    assert.deepEqual(
+      rejection(
+        await run(
+          fixture.operations.settle({
+            operationId: operation.id,
+            state: 'completed',
+            result: { value: { evidenceKey: 'wev_1' } },
+          }),
+        ),
+      ),
+      { kind: 'operation_state_conflict', state: 'abandoned' },
+    );
+
+    const result = await run(fixture.payloads.publish({ evidenceKey: 'wev_1' }));
+    // An injected clock, not the wall one. The reopen and the abandonment it overwrites are
+    // milliseconds apart, so asserting the timestamp merely *changed* would be a race: two
+    // `new Date()` readings can legitimately land on the same millisecond, and a test that passes
+    // by luck reads as coverage without being any.
+    const reopenedAt = '2099-01-01T00:00:00.000Z';
+    const reopened = value(
+      await run(
+        fixture.database.transaction('test_reopen', (db) => {
+          const row = db
+            .select()
+            .from(workflowOperations)
+            .where(eq(workflowOperations.id, operation.id))
+            .get()!;
+          return settleOperationWithin(db, {
+            row,
+            state: 'completed',
+            result,
+            reopenAbandoned: true,
+            now: reopenedAt,
+          });
+        }),
+      ),
+    );
+    assert.equal(reopened.state, 'completed');
+    // `settled_at` is rewritten, not merely still set: the row now names when it *completed*, and
+    // the abandonment's own timestamp does not survive as the settlement time of a finished row.
+    assert.equal(reopened.settledAt, reopenedAt);
+    assert.notEqual(reopened.settledAt, abandoned.settledAt);
+    // The *new* result, not the abandonment's reason: a revived row must say what settled it.
+    assert.deepEqual(await run(fixture.payloads.resolve(reopened.result!)), {
+      evidenceKey: 'wev_1',
+    });
+
+    // Two settlements in history, in order. The abandonment was not rewritten away.
+    const transitions = fixture.client
+      .prepare(`SELECT kind FROM workflow_transitions WHERE operation_id = ? ORDER BY id ASC`)
+      .all(operation.id) as { kind: string }[];
+    assert.deepEqual(
+      transitions.map((row) => row.kind),
+      ['operation_recorded', 'operation_settled', 'operation_settled'],
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
+/**
+ * Reviving a row without saying what settled it would write a self-contradiction: a `completed`
+ * operation still carrying the reason it was abandoned. The only caller that passes the flag always
+ * has an evidence key to record, so this is a precondition rather than a fallback — it fails loudly
+ * instead of quietly producing a record nobody could interpret.
+ */
+test('reopening an abandoned operation without a result is a defect, not a silent overwrite', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const ctx = await insideCallback(fixture);
+    const operation = value(
+      await run(
+        fixture.operations.recordIntent({
+          runId: ctx.runId,
+          frameId: ctx.frameId,
+          executionId: ctx.executionId,
+          originAttemptId: ctx.attemptId,
+          capability: 'capture_evidence',
+          callIndex: 0,
+          request: { value: { title: 'no result' } },
+          fingerprintOf: { value: { title: 'no result' } },
+          artifactHash: PIN,
+        }),
+      ),
+    );
+    await run(
+      fixture.operations.settle({
+        operationId: operation.id,
+        state: 'abandoned',
+        result: { value: { reason: 'capture_not_committed' } },
+      }),
+    );
+
+    await assert.rejects(
+      run(
+        fixture.database.transaction('test_reopen_without_result', (db) => {
+          const row = db
+            .select()
+            .from(workflowOperations)
+            .where(eq(workflowOperations.id, operation.id))
+            .get()!;
+          return settleOperationWithin(db, {
+            row,
+            state: 'completed',
+            result: null,
+            reopenAbandoned: true,
+            now: new Date().toISOString(),
+          });
+        }),
+      ),
+      /cannot be reopened from abandoned without a result/,
+    );
+
+    // And it really did not move.
+    assert.equal((await run(fixture.operations.findById(operation.id)))!.state, 'abandoned');
+  } finally {
+    fixture.close();
+  }
+});
+
+/**
+ * `findSubmission` is how captured evidence is attributed to the turn that produced it.
+ *
+ * The run scoping is the part that matters most. Two runs can legitimately drive the same agent
+ * session, and an operation borrowed from the other run would make the evidence claim a provenance
+ * that never happened — a confident false statement, which is strictly worse than the honest
+ * `unresolved` the caller records when nothing matches.
+ */
+test('a submission lookup is scoped to its run, its session and its watermark', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    const first = await insideCallback(fixture);
+    const second = await insideCallback(fixture);
+    assert.notEqual(first.runId, second.runId, 'The two runs must really be distinct.');
+
+    const submit = async (
+      ctx: Awaited<ReturnType<typeof insideCallback>>,
+      callIndex: number,
+      watermark: string,
+    ) => {
+      const operation = value(
+        await run(
+          fixture.operations.recordIntent({
+            runId: ctx.runId,
+            frameId: ctx.frameId,
+            executionId: ctx.executionId,
+            originAttemptId: ctx.attemptId,
+            capability: 'send_agent_prompt',
+            callIndex,
+            request: { value: { prompt: watermark } },
+            fingerprintOf: { value: { prompt: watermark } },
+            artifactHash: PIN,
+          }),
+        ),
+      );
+      return value(
+        await run(
+          fixture.operations.recordReceipt({
+            operationId: operation.id,
+            stage: 'submitted',
+            targetKind: 'agent_session',
+            targetId: 42,
+            submissionWatermark: watermark,
+          }),
+        ),
+      );
+    };
+
+    const older = await submit(first, 0, '2026-01-01T00:00:00.000Z');
+    const newer = await submit(first, 1, '2026-01-02T00:00:00.000Z');
+    const otherRun = await submit(second, 0, '2026-01-03T00:00:00.000Z');
+
+    // Without a watermark: the latest submission this run made to that session.
+    assert.equal(
+      (await run(fixture.operations.findSubmission({ runId: first.runId, agentSessionId: 42 })))!
+        .id,
+      newer.id,
+    );
+    // With one: that exact turn, even though a later submission exists.
+    assert.equal(
+      (await run(
+        fixture.operations.findSubmission({
+          runId: first.runId,
+          agentSessionId: 42,
+          submissionWatermark: '2026-01-01T00:00:00.000Z',
+        }),
+      ))!.id,
+      older.id,
+    );
+    // The other run's submission is the newest row overall and must never be returned here.
+    assert.equal(
+      (await run(fixture.operations.findSubmission({ runId: second.runId, agentSessionId: 42 })))!
+        .id,
+      otherRun.id,
+    );
+    assert.notEqual(
+      (await run(fixture.operations.findSubmission({ runId: first.runId, agentSessionId: 42 })))!
+        .id,
+      otherRun.id,
+    );
+    // A session nobody sent to, and a watermark nobody recorded, are both honest misses.
+    assert.equal(
+      await run(fixture.operations.findSubmission({ runId: first.runId, agentSessionId: 99 })),
+      null,
+    );
+    assert.equal(
+      await run(
+        fixture.operations.findSubmission({
+          runId: first.runId,
+          agentSessionId: 42,
+          submissionWatermark: 'never-sent',
+        }),
+      ),
+      null,
+    );
+  } finally {
+    fixture.close();
+  }
+});

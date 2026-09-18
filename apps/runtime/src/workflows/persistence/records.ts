@@ -1,3 +1,5 @@
+import type { WorkflowAgentHarness } from '@yourtechbudstudio/isagi-workflow-sdk';
+
 import type {
   WorkflowAttemptStatus,
   WorkflowCapability,
@@ -9,6 +11,7 @@ import type {
   WorkflowNodeKind,
   WorkflowOperationStage,
   WorkflowOperationState,
+  WorkflowOperationUsage,
   WorkflowOutcomeKind,
   WorkflowPlacementRequestDto,
   WorkflowPlacementSource,
@@ -37,6 +40,17 @@ import type { PayloadSlot } from './payload-store.js';
 
 export type WorkflowOperationTargetKind = 'agent_session' | 'pane' | 'pty_process' | 'none';
 export type WorkflowOperationAttribution = 'not_applicable' | 'inferred_by_watermark' | 'ambiguous';
+export type WorkflowEvidenceContentKind = 'text' | 'json' | 'file' | 'bytes';
+export type WorkflowEvidenceSourceKind =
+  | 'none'
+  | 'agent_turn'
+  | 'headless_operation'
+  | 'agent_session';
+export type WorkflowEvidenceSourceAttribution =
+  | 'none'
+  | 'exact'
+  | 'inferred_latest_operation'
+  | 'unresolved';
 export type WorkflowVersionAdoptionReason = 'launch' | 'retry';
 export type WorkflowPauseReason = 'control' | 'environment_deleted' | 'runtime_restart';
 
@@ -232,9 +246,55 @@ export interface WorkflowOperationRecord {
   readonly stopSettledAt: string | null;
   readonly uncertaintyDetail: string | null;
   readonly lateEvidence: PayloadSlot | null;
+  /**
+   * Who ran this operation, where, and with what. Every unknown is an explicit `null`, so an
+   * operation recorded before these columns existed reads as unknown rather than misattributed.
+   */
+  readonly harness: WorkflowAgentHarness | null;
+  readonly model: string | null;
+  readonly effort: string | null;
+  readonly cwd: string | null;
+  readonly runtimeId: string | null;
+  readonly incarnationId: string | null;
+  /** Parsed from `usage_json`; `null` when the column is null or does not parse. */
+  readonly usage: WorkflowOperationUsage | null;
   readonly createdAt: string;
   readonly dispatchedAt: string | null;
   readonly settledAt: string | null;
+}
+
+/**
+ * Evidence an author deliberately kept.
+ *
+ * Distinct from `WorkflowOperationRecord.lateEvidence`, which is the engine recording what it
+ * learned about an operation. The spelling rule holds everywhere: engine facts are `lateEvidence`,
+ * author-selected evidence is the bare word.
+ */
+export interface WorkflowEvidenceRecord {
+  readonly id: number;
+  readonly evidenceKey: string;
+  readonly runId: number;
+  readonly frameId: number;
+  readonly executionId: number;
+  readonly attemptId: number;
+  /** The capture call position. One capture operation holds at most one evidence row. */
+  readonly operationId: number;
+  readonly artifactHash: string;
+  readonly title: string;
+  readonly role: string;
+  /** Decoded from `labels_json`; `{}` when none were given. */
+  readonly labels: Readonly<Record<string, string | number | boolean>>;
+  readonly contentKind: WorkflowEvidenceContentKind;
+  readonly mediaType: string;
+  readonly byteSize: number;
+  readonly contentRef: string;
+  /** Worktree-relative, `file` captures only. */
+  readonly sourcePath: string | null;
+  readonly sourceKind: WorkflowEvidenceSourceKind;
+  readonly sourceAgentSessionId: number | null;
+  readonly sourceOperationId: number | null;
+  readonly sourceAttribution: WorkflowEvidenceSourceAttribution;
+  readonly capturedAt: string;
 }
 
 export interface WorkflowArtifactRecord {

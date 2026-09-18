@@ -21,7 +21,10 @@ import type {
   WorkflowInvocationKind,
 } from '@isagi/contracts';
 
-import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
+import type {
+  OperationIntentProvenance,
+  WorkflowOperationsRepositoryService,
+} from '../persistence/operations.repository.js';
 import type { WorkflowOperationRecord } from '../persistence/records.js';
 import {
   isTerminalRunStatus,
@@ -106,9 +109,10 @@ export function makeAttemptContextFactory(dependencies: {
   readonly captures: CaptureRegistry;
   readonly stop: OperationStopPolicy;
   readonly incarnationId: string;
+  readonly runtimeId: string;
   readonly now: () => string;
 }): WithAttemptContext {
-  const { operations, runs, adapters, captures, incarnationId, now } = dependencies;
+  const { operations, runs, adapters, captures, incarnationId, runtimeId, now } = dependencies;
   const { advanceStage, receipt, envelopeOf, settle } = dependencies.settlement;
   const { reconcileSubmission } = dependencies.reconciler;
   const { requestStop } = dependencies.stop;
@@ -150,6 +154,22 @@ export function makeAttemptContextFactory(dependencies: {
           readonly request: NormalizedRequest;
           readonly dispatch?: OperationRequestEnvelope['dispatch'] | undefined;
           readonly metadata?: OperationRequestEnvelope['metadata'] | undefined;
+          /**
+           * Who is about to run this, where, and with what.
+           *
+           * **Required**, and required on purpose. A verb that genuinely does not know a field
+           * passes `null` — `close_pane` crosses no harness boundary, and a send inherits its model
+           * from the session's spawn settings, which are not knowable at the call site. Making it
+           * optional would let a future verb omit the argument and write a row byte-identical to a
+           * pre-`0012` historical one, which every reader in this design is told to interpret as
+           * "recorded before these facts were kept". This whole phase exists to make unknowns
+           * honest; an omitted field and a genuine unknown must not become the same bytes, so the
+           * compiler enforces the rule rather than a comment asserting it.
+           *
+           * The runtime and incarnation ids are stamped below for every verb, so no caller supplies
+           * — or can forget — those two.
+           */
+          readonly provenance: Omit<OperationIntentProvenance, 'runtimeId' | 'incarnationId'>;
         }) =>
           gate.withPermits(1)(
             Effect.gen(function* () {
@@ -218,6 +238,7 @@ export function makeAttemptContextFactory(dependencies: {
                       },
                       fingerprintOf: { value: input.request },
                       artifactHash: identity.artifactHash,
+                      provenance: { ...input.provenance, runtimeId, incarnationId },
                     }),
                   );
                   if (!written.ok) {
@@ -703,6 +724,12 @@ export function makeAttemptContextFactory(dependencies: {
                 const claimed = yield* claimPosition({
                   capability: 'spawn_agent_session',
                   request,
+                  provenance: {
+                    harness: input.harness,
+                    model: input.model ?? null,
+                    effort: input.effort ?? null,
+                    cwd: identity.destination.worktreePath,
+                  },
                   ...(input.modifiers ? { metadata: { modifiers: input.modifiers } } : {}),
                 });
                 let record = claimed.record;
@@ -739,7 +766,8 @@ export function makeAttemptContextFactory(dependencies: {
                 // Rendering needs the *session's* harness, so it is read from the owner rather than
                 // taken from the call site. It is also part of the request identity, which is why it
                 // is resolved before the call position is claimed.
-                const harness = yield* adapters.agentSessions.sessionHarness(input.agentSessionId);
+                const session = yield* adapters.agentSessions.sessionFacts(input.agentSessionId);
+                const harness = session.harness;
                 const renderedPrompt = yield* renderWorkflowPromptEffect({
                   harness,
                   promptInput: input,
@@ -753,6 +781,16 @@ export function makeAttemptContextFactory(dependencies: {
                 const claimed = yield* claimPosition({
                   capability: 'send_agent_prompt',
                   request,
+                  provenance: {
+                    harness,
+                    // The session's spawn settings apply and are not visible from here. `null` says
+                    // "unknown", which is true; repeating the spawn's values would be a guess.
+                    model: null,
+                    effort: null,
+                    // The *session's* cwd, not the run's destination: a send runs where the session
+                    // it targets runs, and those are not always the same directory.
+                    cwd: session.cwd,
+                  },
                   ...(input.modifiers ? { metadata: { modifiers: input.modifiers } } : {}),
                 });
                 let record = claimed.record;
@@ -776,7 +814,13 @@ export function makeAttemptContextFactory(dependencies: {
             runVerb(
               Effect.gen(function* () {
                 const request: NormalizedRequest = { capability: 'close_pane', paneId };
-                const claimed = yield* claimPosition({ capability: 'close_pane', request });
+                // Nothing about a harness is involved in closing a pane, so every field is null
+                // rather than inherited from the run.
+                const claimed = yield* claimPosition({
+                  capability: 'close_pane',
+                  request,
+                  provenance: { harness: null, model: null, effort: null, cwd: null },
+                });
                 if (claimed.kind === 'reuse') return;
                 yield* assertDispatchable('close a pane');
                 yield* adapters.panes.closePane({
@@ -871,6 +915,12 @@ export function makeAttemptContextFactory(dependencies: {
                 const claimed = yield* claimPosition({
                   capability: 'run_headless_agent',
                   request,
+                  provenance: {
+                    harness: input.harness,
+                    model: input.model ?? null,
+                    effort: input.effort ?? null,
+                    cwd: identity.destination.worktreePath,
+                  },
                   dispatch: { effectiveTimeoutMs: input.timeoutMs ?? defaultHeadlessTimeoutMs },
                   ...(input.modifiers ? { metadata: { modifiers: input.modifiers } } : {}),
                 });

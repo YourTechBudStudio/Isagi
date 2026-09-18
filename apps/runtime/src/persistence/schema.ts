@@ -1064,8 +1064,47 @@ export const workflowOperations = sqliteTable(
     stopRequestedAt: text('stop_requested_at'),
     stopSettledAt: text('stop_settled_at'),
     uncertaintyDetail: text('uncertainty_detail'),
+    /**
+     * Facts the engine learned about this operation *after* it settled. Retained, never a revival.
+     *
+     * Spelling rule for this whole subsystem: engine facts about an operation are always
+     * `lateEvidence` / `late_evidence`; author-selected evidence (`workflow_evidence`) is always
+     * the bare word `evidence`, and no new name may use it for anything else.
+     */
     lateEvidenceInline: text('late_evidence_inline'),
     lateEvidenceRef: text('late_evidence_ref'),
+    /*
+     * Provenance: who ran this operation, where, and with what.
+     *
+     * All nullable, so every operation recorded before these columns existed reads back as
+     * explicitly unknown rather than wrongly attributed. `harness`, `model`, `effort`, `cwd`,
+     * `runtime_id` and `incarnation_id` are written once at intent and never rewritten — an adopted
+     * row keeps the provenance of its first intent, because that describes the same operation.
+     * `usage_json` is written at settlement from whatever the headless provider reported.
+     *
+     * These are columns rather than fields inside the recorded request because a rendered prompt
+     * over the inline threshold pushes the whole request envelope out of line, and a read cannot
+     * resolve a referenced slot — so harness and model would read as unknown for exactly the long
+     * prompts an analysis cares about.
+     */
+    harness: text('harness'),
+    /** Null on a send: the session's spawn settings apply and are not known at the call site. */
+    model: text('model'),
+    effort: text('effort'),
+    /** The destination worktree for spawn/headless/capture; the *session's* own cwd for a send. */
+    cwd: text('cwd'),
+    /**
+     * The runtime that recorded this intent, stable for the life of the database file.
+     *
+     * Stamped on every row rather than exposed once, so a copied database is self-describing. Two
+     * distinct values in one database always mean two runtimes: the id changes only when the
+     * database is recreated, in which case no operation rows precede it.
+     */
+    runtimeId: text('runtime_id'),
+    /** The runtime *process*. Fresh per start, so many incarnations under one runtime is ordinary. */
+    incarnationId: text('incarnation_id'),
+    /** Canonical JSON of what the provider reported. Null when nothing was reported or parsed. */
+    usageJson: text('usage_json'),
     createdAt: text('created_at').notNull(),
     dispatchedAt: text('dispatched_at'),
     settledAt: text('settled_at'),
@@ -1141,4 +1180,123 @@ export const workflowPauseIntervals = sqliteTable(
       .on(table.runId)
       .where(sql`${table.resumedAt} IS NULL`),
   ],
+);
+
+/**
+ * Evidence an author deliberately chose to keep.
+ *
+ * Distinct from `workflow_operations.late_evidence_*` in both name and meaning: that is the engine
+ * recording something it learned about an operation, this is the author saying "keep this exact
+ * thing". The spelling rule is absolute — engine facts are always `lateEvidence` / `late_evidence`,
+ * author-selected evidence is always the bare word `evidence`, and no new name may use it for
+ * anything else. "Artifact" keeps its two existing meanings (a verified definition version, and the
+ * per-agent-session harness directory) and is not given a third.
+ *
+ * One row per capture call position: `operation_id` is unique, so a repaired segment re-entering
+ * the same position finds the evidence it already captured rather than capturing a second copy,
+ * while a later visit to the node creates a new position and therefore new evidence.
+ *
+ * Placement identities (`run_id`, `frame_id`, `execution_id`, `attempt_id`, `artifact_hash`) are
+ * copied from the operation row rather than joined, so a list query is a single indexed scan and
+ * the row reads as evidence on its own.
+ *
+ * Content is always referenced, never inline: one read path regardless of size or kind, and no
+ * binary in a TEXT column. Retention follows every other workflow table — history, never deleted.
+ */
+export const workflowEvidence = sqliteTable(
+  'workflow_evidence',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** The public opaque id (`wev_<uuid>`). */
+    evidenceKey: text('evidence_key').notNull(),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    frameId: integer('frame_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowGraphFrames.id, { onDelete: 'cascade' }),
+    executionId: integer('execution_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowNodeExecutions.id, { onDelete: 'cascade' }),
+    /** The attempt that captured. Evidence outlives it, so this is provenance, not ownership. */
+    attemptId: integer('attempt_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowSegmentAttempts.id, { onDelete: 'cascade' }),
+    /** The capture call position. Unique: one capture operation holds at most one evidence row. */
+    operationId: integer('operation_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowOperations.id, { onDelete: 'cascade' }),
+    /** The definition version pinned at capture, copied from the operation. */
+    artifactHash: text('artifact_hash')
+      .notNull()
+      .references(() => workflowArtifacts.artifactHash),
+    /** Recorded identity: derived from graph state and handles, never from the captured content. */
+    title: text('title').notNull(),
+    role: text('role').notNull(),
+    /** Canonical JSON object of scalars; `{}` when none. Filtered with `json_extract`. */
+    labelsJson: text('labels_json').notNull(),
+    contentKind: text('content_kind', { enum: ['text', 'json', 'file', 'bytes'] }).notNull(),
+    /** A fact about *this use* of the bytes, not about the digest. The same canonical bytes can
+     * legitimately be a `text/plain` capture and an `application/json` payload slot. */
+    mediaType: text('media_type').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    /** `sha256:<64 hex>`. The catalog row exists by construction: bytes are durable before this. */
+    contentRef: text('content_ref').notNull(),
+    /** Worktree-relative, `file` captures only. */
+    sourcePath: text('source_path'),
+    sourceKind: text('source_kind', {
+      enum: ['none', 'agent_turn', 'headless_operation', 'agent_session'],
+    }).notNull(),
+    /**
+     * No foreign key, deliberately: history outlives environments (see the retention note above),
+     * and deleting a worktree must not erase the record of what was captured from its sessions.
+     */
+    sourceAgentSessionId: integer('source_agent_session_id'),
+    sourceOperationId: integer('source_operation_id').references(
+      (): AnySQLiteColumn => workflowOperations.id,
+      { onDelete: 'set null' },
+    ),
+    /**
+     * How confidently the runtime connected this evidence to an operation it made.
+     *
+     * `unresolved` is recorded, not rejected: the evidence is still saved and the record says the
+     * runtime could not make the connection. A confident false claim about provenance would be
+     * worse than an honest gap.
+     */
+    sourceAttribution: text('source_attribution', {
+      enum: ['none', 'exact', 'inferred_latest_operation', 'unresolved'],
+    }).notNull(),
+    capturedAt: text('captured_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('workflow_evidence_key_unique').on(table.evidenceKey),
+    uniqueIndex('workflow_evidence_operation_unique').on(table.operationId),
+    index('workflow_evidence_run_idx').on(table.runId, table.id),
+    index('workflow_evidence_execution_idx').on(table.executionId, table.id),
+    index('workflow_evidence_run_role_idx').on(table.runId, table.role),
+    index('workflow_evidence_source_operation_idx').on(table.sourceOperationId),
+  ],
+);
+
+/**
+ * This runtime's own durable identity: exactly one row, ever.
+ *
+ * The id lives and dies with the database file. It survives a `state.json` reset and a copy or
+ * restore of the data root, and changes only when the database is recreated — in which case no
+ * operation rows precede it. `state.json` is the wrong owner precisely because it resets itself to
+ * defaults on any parse failure, which would silently mint a second identity for the same data
+ * root; the database is also the artifact that gets copied when someone moves their work.
+ *
+ * `id` is the primary key rather than an autoincrement sequence, so a concurrent second insert
+ * cannot create a second identity.
+ */
+export const runtimeIdentity = sqliteTable(
+  'runtime_identity',
+  {
+    /** Always 1. The constant primary key is what enforces "exactly one row". */
+    id: integer('id').primaryKey(),
+    runtimeId: text('runtime_id').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [uniqueIndex('runtime_identity_runtime_id_unique').on(table.runtimeId)],
 );

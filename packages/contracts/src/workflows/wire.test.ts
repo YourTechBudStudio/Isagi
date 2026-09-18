@@ -71,6 +71,23 @@ function operation(overrides: Record<string, unknown> = {}) {
     receiptRef: null,
     resultRef: null,
     target: { agentSessionId: 7, paneId: 12, ptyProcessId: 29, turnId: 't-88' },
+    provenance: {
+      harness: 'claude',
+      model: 'claude-opus-5',
+      effort: null,
+      harnessSessionId: 'claude-session-1',
+      attribution: 'not_applicable',
+      cwd: '/repo/isagi',
+      runtime: { runtimeId: 'runtime-1', incarnationId: 'incarnation-1' },
+      usage: {
+        inputTokens: 2,
+        cacheReadInputTokens: 10118,
+        cacheCreationInputTokens: 10019,
+        outputTokens: 4,
+        costUsd: 0.105359,
+      },
+      artifactHash: 'sha256:pin-1',
+    },
     stop: { state: 'not_requested', detail: null, requestedAt: null, settledAt: null },
     uncertaintyDetail: null,
     lateEvidenceRef: null,
@@ -823,12 +840,15 @@ test('every launch stage a recovery decision depends on is representable', () =>
   }
 });
 
-test('only capabilities that cross an external boundary are journaled operations', () => {
+test('the journaled capabilities are the four boundary crossings plus evidence capture', () => {
   for (const capability of [
     'spawn_agent_session',
     'send_agent_prompt',
     'close_pane',
     'run_headless_agent',
+    // Crosses no external boundary, and is journaled anyway: it takes a call position so a repaired
+    // segment reuses the reference it already recorded instead of capturing a second copy.
+    'capture_evidence',
   ]) {
     assert.equal(decode(workflowOperationSchema, operation({ capability })).capability, capability);
   }
@@ -836,6 +856,75 @@ test('only capabilities that cross an external boundary are journaled operations
   assert.throws(() =>
     decode(workflowOperationSchema, operation({ capability: 'get_conversation_history' })),
   );
+});
+
+/**
+ * Provenance answers "who ran this, where, and with what" — and must be able to answer "nobody
+ * recorded that" without lying.
+ *
+ * Every field but the artifact hash is nullable, because an operation recorded before these facts
+ * were kept genuinely has none of them, and a wire shape that forced a value there would make a
+ * fabricated answer indistinguishable from a real one.
+ */
+test('provenance can be wholly unknown, and says so in nulls rather than omissions', () => {
+  const unknown = decode(
+    workflowOperationSchema,
+    operation({
+      provenance: {
+        harness: null,
+        model: null,
+        effort: null,
+        harnessSessionId: null,
+        attribution: 'not_applicable',
+        cwd: null,
+        runtime: null,
+        usage: null,
+        artifactHash: 'sha256:pin-1',
+      },
+    }),
+  );
+  assert.equal(unknown.provenance.harness, null);
+  assert.equal(unknown.provenance.runtime, null);
+  assert.equal(unknown.provenance.usage, null);
+  // The code pin is the one fact every operation has: it is written at intent, always.
+  assert.equal(unknown.provenance.artifactHash, 'sha256:pin-1');
+  assert.throws(() =>
+    decode(workflowOperationSchema, operation({ provenance: { artifactHash: 'sha256:pin-1' } })),
+  );
+});
+
+/**
+ * `transcript` is *optional*, not merely nullable, and the distinction carries meaning.
+ *
+ * Absent means "this route did not evaluate it" — the list routes and the delta snapshot cannot,
+ * because the projection they share runs inside write transactions and must stay IO-free. `null`
+ * means a route did look and no locator could be built. Collapsing the two would report "no
+ * transcript exists" for every operation nobody checked.
+ */
+test('a transcript locator is absent when unevaluated and null when it could not be built', () => {
+  const base = operation({}) as { provenance: Record<string, unknown> };
+  assert.equal('transcript' in decode(workflowOperationSchema, base).provenance, false);
+
+  const looked = decode(
+    workflowOperationSchema,
+    operation({ provenance: { ...base.provenance, transcript: null } }),
+  );
+  assert.equal(looked.provenance.transcript, null);
+
+  const found = decode(
+    workflowOperationSchema,
+    operation({
+      provenance: {
+        ...base.provenance,
+        transcript: { locator: '/home/me/.claude/projects/p/s.jsonl', available: false },
+      },
+    }),
+  );
+  // Located but not present: the honest answer for a path the provider never wrote or has rotated.
+  assert.deepEqual(found.provenance.transcript, {
+    locator: '/home/me/.claude/projects/p/s.jsonl',
+    available: false,
+  });
 });
 
 // ---------------------------------------------------------------------------

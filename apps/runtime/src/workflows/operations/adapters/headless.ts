@@ -7,7 +7,7 @@ import { harnessDefinition } from '../../../agent-sessions/harness/definitions.j
 import type { HarnessAdapterRegistryService } from '../../../agent-sessions/harness/index.js';
 import type { HarnessControlPlaneService } from '../../../harness-control-plane/index.js';
 import type { PtyServiceShape } from '../../../pty-processes/index.js';
-import type { HeadlessOperationAdapter } from './types.js';
+import type { HeadlessOperationAdapter, HeadlessProvenance } from './types.js';
 
 export interface HeadlessAdapterDependencies {
   readonly harnesses: HarnessAdapterRegistryService;
@@ -68,6 +68,8 @@ export function makeHeadlessAdapter(
     terminate: (input) => asError(dependencies.pty.terminate(input)),
 
     semanticError: (input) => semanticErrorForHeadlessOutput(input.harness, input.raw),
+
+    headlessProvenance: (input) => headlessProvenanceForOutput(input.harness, input.raw),
   };
 }
 
@@ -80,4 +82,23 @@ export function semanticErrorForHeadlessOutput(
   raw: string,
 ): string | null {
   return harnessDefinition(harness).launch.semanticHeadlessError?.(raw) ?? null;
+}
+
+/**
+ * What the provider said about the run it just finished, or nothing.
+ *
+ * A harness that reports nothing is indistinguishable from one that has not implemented the seam,
+ * and that is correct: both mean the runtime knows nothing, and both are recorded as `null` rather
+ * than guessed at.
+ */
+export function headlessProvenanceForOutput(
+  harness: WorkflowAgentHarness,
+  raw: string,
+): HeadlessProvenance {
+  return (
+    harnessDefinition(harness).launch.extractHeadlessProvenance?.(raw) ?? {
+      harnessSessionId: null,
+      usage: null,
+    }
+  );
 }

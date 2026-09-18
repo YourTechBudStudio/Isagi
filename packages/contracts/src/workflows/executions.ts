@@ -12,6 +12,7 @@ import {
   workflowInvocationKindSchema,
   workflowNodeKindSchema,
   workflowOperationStageSchema,
+  workflowOperationProvenanceSchema,
   workflowOperationStateSchema,
   workflowOperationTargetSchema,
   workflowOutcomeKindSchema,
@@ -87,6 +88,8 @@ export const workflowOperationSchema = Schema.Struct({
   receiptRef: workflowPayloadSlotSchema,
   resultRef: workflowPayloadSlotSchema,
   target: workflowOperationTargetSchema,
+  /** Who ran this, where, and with what. Every unknown is an explicit `null`. */
+  provenance: workflowOperationProvenanceSchema,
   stop: workflowStopReportSchema,
   /** Why delivery could not be established. Present exactly when the state is `uncertain`. */
   uncertaintyDetail: Schema.NullOr(Schema.String),

@@ -2,7 +2,10 @@ import type { HeadlessOperationResult } from '@yourtechbudstudio/isagi-workflow-
 import { Effect } from 'effect';
 
 import type { InternalRuntimeEventBusService } from '../../runtime-events/internal-event-bus.js';
-import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
+import type {
+  OperationSettlementProvenance,
+  WorkflowOperationsRepositoryService,
+} from '../persistence/operations.repository.js';
 import type { PayloadSlot, WorkflowPayloadStoreService } from '../persistence/payload-store.js';
 import type { WorkflowOperationRecord } from '../persistence/records.js';
 import { readRequestEnvelope, type OperationRequestEnvelope } from './correlation.js';
@@ -34,6 +37,8 @@ export interface OperationSettlement {
     readonly result?: unknown;
     readonly uncertaintyDetail?: string | undefined;
     readonly stage?: WorkflowOperationRecord['stage'] | undefined;
+    /** What the provider reported about work that has now finished. Unknown until settlement. */
+    readonly provenance?: OperationSettlementProvenance | undefined;
   }) => Effect.Effect<WorkflowOperationRecord | null, never>;
   readonly retainLateEvidence: (input: {
     readonly record: WorkflowOperationRecord;
@@ -119,6 +124,7 @@ export function makeOperationSettlement(dependencies: {
     readonly result?: unknown;
     readonly uncertaintyDetail?: string | undefined;
     readonly stage?: WorkflowOperationRecord['stage'] | undefined;
+    readonly provenance?: OperationSettlementProvenance | undefined;
   }) =>
     Effect.gen(function* () {
       const written = yield* die(
@@ -130,6 +136,7 @@ export function makeOperationSettlement(dependencies: {
             ? {}
             : { uncertaintyDetail: input.uncertaintyDetail }),
           ...(input.stage === undefined || input.stage === null ? {} : { stage: input.stage }),
+          ...(input.provenance ? { provenance: input.provenance } : {}),
         }),
       );
       if (!written.ok) {

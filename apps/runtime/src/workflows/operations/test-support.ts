@@ -31,6 +31,7 @@ import type { WorkflowObservedTurnEdge } from '../waits/conditions.js';
 import type {
   AgentSessionOperationAdapter,
   HeadlessOperationAdapter,
+  HeadlessProvenance,
   OperationAdapters,
   PaneOperationAdapter,
 } from './adapters/types.js';
@@ -43,6 +44,8 @@ import {
 export const PIN = 'a'.repeat(64);
 const OWNER = 'worker-1';
 const OWNER_INCARNATION = 'incarnation-1';
+/** Fixed, because `runtimeId` has no default: a test must name the runtime it is pretending to be. */
+export const RUNTIME = 'runtime-1';
 
 /**
  * What each fake adapter actually did.
@@ -81,6 +84,10 @@ export interface FakeAdapterState {
   conversationHistory: readonly WorkflowConversationMessage[];
   conversationTurns: (HarnessConversationTurn | null)[];
   sessionHarness: WorkflowAgentHarness;
+  /** The session's own working directory, which a send records rather than the run's destination. */
+  sessionCwd: string;
+  /** What the fake headless provider claims to have reported. Nothing, unless a test says otherwise. */
+  headlessProvenance: HeadlessProvenance;
   capturedOutput: Map<number, { raw: string; output: string }>;
   terminateOutcome: (ptyProcessId: number) => PtyTerminateOutcome | Error;
   /** Rejections injected into an owner call, by name, to drive live failure paths. */
@@ -137,6 +144,8 @@ export function makeFakeAdapterState(): FakeAdapterState {
     conversationHistory: [],
     conversationTurns: [],
     sessionHarness: 'claude',
+    sessionCwd: '/tmp/session-cwd',
+    headlessProvenance: { harnessSessionId: null, usage: null },
     capturedOutput: new Map(),
     terminateOutcome: () => 'terminated_live',
     failures: new Map(),
@@ -223,7 +232,7 @@ export function makeFakeAdapters(state: FakeAdapterState): OperationAdapters {
         state.counters.seedAcknowledgements += 1;
         return 'harness-session-1';
       }),
-    sessionHarness: () => Effect.succeed(state.sessionHarness),
+    sessionFacts: () => Effect.succeed({ harness: state.sessionHarness, cwd: state.sessionCwd }),
     turnEdges: (agentSessionId) =>
       Effect.gen(function* () {
         yield* failIfConfigured(state, 'turnEdges');
@@ -304,6 +313,7 @@ export function makeFakeAdapters(state: FakeAdapterState): OperationAdapters {
         return outcome instanceof Error ? Effect.fail(outcome) : Effect.succeed(outcome);
       }),
     semanticError: () => null,
+    headlessProvenance: () => state.headlessProvenance,
   };
 
   return { agentSessions, panes, headless };
@@ -510,6 +520,7 @@ export async function makeOperationHarness(): Promise<OperationHarness> {
             adapters,
             eventBus: recording,
             now: options?.now ?? defaultNow,
+            runtimeId: RUNTIME,
             ...(options?.incarnationId ? { incarnationId: options.incarnationId } : {}),
           }),
           scope,

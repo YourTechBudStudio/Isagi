@@ -7,6 +7,7 @@ import { HarnessAdapterRegistry } from '../../agent-sessions/harness/index.js';
 import { HarnessLedgerObserver } from '../../agent-sessions/harness/observer.service.js';
 import { AgentSessionArtifacts, AgentSessionService } from '../../agent-sessions/index.js';
 import { HarnessControlPlane } from '../../harness-control-plane/index.js';
+import { RuntimeIdentity } from '../../persistence/index.js';
 import { PtyService } from '../../pty-processes/index.js';
 import {
   InternalRuntimeEventBus,
@@ -96,6 +97,15 @@ export interface OperationServiceDependencies {
   readonly eventBus: InternalRuntimeEventBusService;
   readonly now?: (() => string) | undefined;
   readonly incarnationId?: string | undefined;
+  /**
+   * This runtime's durable identity, stamped on every operation row.
+   *
+   * Required, with no default — unlike `incarnationId`, which may legitimately be minted per
+   * process because a fresh process *is* a fresh incarnation. A fresh runtime id would instead be a
+   * fabricated identity indistinguishable from a real one, and would break the reading the column
+   * exists for: two `runtime_id` values in one database always mean two runtimes.
+   */
+  readonly runtimeId: string;
 }
 
 export function makeWorkflowOperationService(
@@ -139,6 +149,7 @@ export function makeWorkflowOperationService(
       runs,
       stop,
       incarnationId,
+      runtimeId: dependencies.runtimeId,
       now,
     });
 
@@ -209,11 +220,13 @@ export const WorkflowOperationServiceLive = Layer.scoped(
     const observer = yield* HarnessLedgerObserver;
     const harnesses = yield* HarnessAdapterRegistry;
     const controlPlane = yield* HarnessControlPlane;
+    const identity = yield* RuntimeIdentity;
     return yield* makeWorkflowOperationService({
       operations,
       runs,
       payloads,
       eventBus,
+      runtimeId: identity.runtimeId,
       adapters: {
         agentSessions: makeAgentSessionAdapter({ agents, surfaces, pty, artifacts, observer }),
         panes: makePaneAdapter(surfaces),

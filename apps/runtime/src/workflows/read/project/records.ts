@@ -14,6 +14,7 @@ import {
   workflowTransitions,
   workflowVersionAdoptions,
 } from '../../../persistence/schema.js';
+import { harnessFromColumn, usageFromColumn } from '../../persistence/row-mappers.js';
 import { failureOf, recoveryModeOf } from './graph.js';
 import { columnSlotDto } from './payloads.js';
 
@@ -80,6 +81,26 @@ export function operationDto(db: RuntimeDrizzleDatabase, row: OperationRow): Wor
       // to the operation's agent session. It is the only durable turn identity the runtime records
       // (ADR 0007's raw native evidence); no friendlier id is invented for the wire.
       turnId: row.correlatedStartSeq === null ? null : String(row.correlatedStartSeq),
+    },
+    // Projected from columns, never from the recorded request: a rendered prompt over the inline
+    // threshold pushes the whole request envelope out of line, and a read cannot resolve a
+    // referenced slot — so harness and model would read as unknown for exactly the long prompts an
+    // analysis cares about. `transcript` is deliberately omitted rather than nulled: this function
+    // also runs inside write transactions (the delta snapshot), so it must stay IO-free, and
+    // "absent" says "not evaluated on this route" where `null` would claim a lookup was attempted.
+    provenance: {
+      harness: harnessFromColumn(row.harness),
+      model: row.model,
+      effort: row.effort,
+      harnessSessionId: row.correlatedHarnessSessionId,
+      attribution: row.attribution,
+      cwd: row.cwd,
+      runtime:
+        row.runtimeId && row.incarnationId
+          ? { runtimeId: row.runtimeId, incarnationId: row.incarnationId }
+          : null,
+      usage: usageFromColumn(row.usageJson),
+      artifactHash: row.artifactHash,
     },
     stop: {
       state: row.stopState,
