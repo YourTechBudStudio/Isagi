@@ -76,7 +76,12 @@ function twoRegistrations() {
         callbackEndedAt: instant(3),
         endedAt: instant(3),
         status: 'completed',
-        operationSummary: { count: 1, unresolved: 0, capabilities: ['send_agent_prompt'] },
+        operationSummary: {
+          count: 1,
+          unresolved: 0,
+          evidenceCaptured: 2,
+          capabilities: ['send_agent_prompt'],
+        },
       }),
       visit({
         executionId: 21,
@@ -88,7 +93,12 @@ function twoRegistrations() {
         callbackEndedAt: instant(6),
         endedAt: instant(6),
         status: 'completed',
-        operationSummary: { count: 2, unresolved: 0, capabilities: ['run_headless_agent'] },
+        operationSummary: {
+          count: 2,
+          unresolved: 0,
+          evidenceCaptured: 3,
+          capabilities: ['run_headless_agent'],
+        },
       }),
     ],
   });
@@ -115,6 +125,25 @@ test('two registrations of one graph keep two separate histories', () => {
   // Capabilities are recorded facts, so they do not bleed across registrations either.
   assert.deepEqual(first?.capabilities, ['send_agent_prompt']);
   assert.deepEqual(second?.capabilities, ['run_headless_agent']);
+});
+
+test('an element sums the captures of its own visits, and of nothing else', () => {
+  const aggregation = aggregateVisits({ state: twoRegistrations(), topology, now });
+
+  // Safe to sum here because the visits of one element are disjoint executions whose subtrees do
+  // not overlap. Summing the same field across elements is forbidden — the subgraph node's own
+  // count already includes everything beneath it.
+  assert.equal(
+    aggregation.byElement.get(addressKey({ path: ['first'], kind: 'node', id: 'draft' }))
+      ?.evidenceCaptured,
+    2,
+  );
+  assert.equal(
+    aggregation.byElement.get(addressKey({ path: ['second'], kind: 'node', id: 'draft' }))
+      ?.evidenceCaptured,
+    3,
+    'and a second registration keeps its own total rather than inheriting the first',
+  );
 });
 
 test('a subgraph registration counts the executions inside it, and only inside it', () => {
@@ -221,7 +250,12 @@ test('only the addresses a delta touched are recomputed', () => {
     callbackEndedAt: instant(9),
     endedAt: instant(9),
     status: 'completed',
-    operationSummary: { count: 3, unresolved: 0, capabilities: ['run_headless_agent'] },
+    operationSummary: {
+      count: 3,
+      unresolved: 0,
+      evidenceCaptured: 0,
+      capabilities: ['run_headless_agent'],
+    },
   });
   const executions = new Map(before.executions);
   executions.set(21, moved);

@@ -101,7 +101,7 @@ export function workflowExecutionFixture(
     priorFailures: [],
     routing: null,
     wait: null,
-    operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+    operationSummary: { count: 0, unresolved: 0, evidenceCaptured: 0, capabilities: [] },
     stateInRef: null,
     candidateRef: null,
     updateRef: null,

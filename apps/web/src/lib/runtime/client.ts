@@ -3,6 +3,7 @@ import { Effect, Schema } from 'effect';
 import {
   apiBasePath,
   apiEndpoints,
+  workflowContentEndpoints,
   agentSessionPtyWebSocketEndpoint,
   commandLogStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
@@ -11,6 +12,7 @@ import {
   apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
   type ApiEndpoint,
+  type ApiContentEndpointError,
   type ApiEndpointError,
   type ApiEndpointOutput,
   type ApiEndpointParams,
@@ -77,6 +79,10 @@ import {
   type ListWorkflowEventsOutput,
   type ListWorkflowOperationsQuery,
   type ListWorkflowOperationsOutput,
+  type GetWorkflowEvidenceOutput,
+  type GetWorkflowOperationOutput,
+  type ListWorkflowEvidenceOutput,
+  type ListWorkflowEvidenceQuery,
   type ListWorkflowRunsQuery,
   type ListWorkflowRunsOutput,
   type StartWorkflowInput,
@@ -90,6 +96,18 @@ import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './er
 
 type RuntimeEndpointError<Endpoint> =
   | RuntimeApiError<ApiEndpointError<Endpoint> | ApiInfrastructureError>
+  | RuntimeDecodeError
+  | RuntimeTransportError;
+
+/**
+ * The same three failures for a content route.
+ *
+ * A separate alias because `ApiEndpointError` infers from `ApiEndpoint`, which a content endpoint
+ * deliberately is not — it has no output schema. Inferring against it would silently collapse the
+ * declared error union to `never` and leave only the infrastructure arm.
+ */
+type RuntimeContentEndpointError<Endpoint> =
+  | RuntimeApiError<ApiContentEndpointError<Endpoint> | ApiInfrastructureError>
   | RuntimeDecodeError
   | RuntimeTransportError;
 
@@ -403,6 +421,47 @@ export interface RuntimeClient {
     GetWorkflowPayloadOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.getPayload>
   >;
+  readonly listWorkflowEvidence: (
+    runId: number,
+    query: ListWorkflowEvidenceQuery,
+  ) => Effect.Effect<
+    ListWorkflowEvidenceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listEvidence>
+  >;
+  readonly getWorkflowEvidence: (
+    runId: number,
+    evidenceKey: string,
+  ) => Effect.Effect<
+    GetWorkflowEvidenceOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getEvidence>
+  >;
+  readonly getWorkflowOperation: (
+    runId: number,
+    operationKey: string,
+  ) => Effect.Effect<
+    GetWorkflowOperationOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getOperation>
+  >;
+  /**
+   * The bytes of one captured record.
+   *
+   * A raw `fetch` rather than the typed requester, because the success body is not the JSON
+   * envelope every other route returns. A failure still is, so a non-OK response is decoded exactly
+   * as the typed requester decodes one and the caller sees the same error shape.
+   */
+  readonly fetchWorkflowEvidenceContent: (
+    runId: number,
+    evidenceKey: string,
+  ) => Effect.Effect<
+    Blob,
+    RuntimeContentEndpointError<typeof workflowContentEndpoints.getEvidenceContent>
+  >;
+  /** The URL a download action points at. No request is made; anchors and previews use it. */
+  readonly workflowEvidenceContentUrl: (
+    runId: number,
+    evidenceKey: string,
+    options?: { readonly download?: boolean },
+  ) => string;
   readonly listWorkflowDescriptors: (
     input: ListWorkflowDescriptorsInput,
   ) => Effect.Effect<
@@ -561,6 +620,43 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.workflows.listEvents, { runId }, query),
     getWorkflowPayload: (runId, payloadRef) =>
       request(apiEndpoints.workflows.getPayload, { runId, payloadRef }),
+    listWorkflowEvidence: (runId, query) =>
+      request(apiEndpoints.workflows.listEvidence, { runId }, query),
+    getWorkflowEvidence: (runId, evidenceKey) =>
+      request(apiEndpoints.workflows.getEvidence, { runId, evidenceKey }),
+    getWorkflowOperation: (runId, operationKey) =>
+      request(apiEndpoints.workflows.getOperation, { runId, operationKey }),
+    workflowEvidenceContentUrl: (runId, evidenceKey, options) =>
+      evidenceContentUrl(runtimeUrl, runId, evidenceKey, options),
+    fetchWorkflowEvidenceContent: (runId, evidenceKey) =>
+      Effect.gen(function* () {
+        const endpoint = workflowContentEndpoints.getEvidenceContent;
+        const response = yield* Effect.tryPromise({
+          try: (signal) => fetch(evidenceContentUrl(runtimeUrl, runId, evidenceKey), { signal }),
+          catch: (cause) =>
+            new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
+        });
+        if (!response.ok) {
+          const payload = yield* Effect.tryPromise({
+            try: () => response.json() as Promise<unknown>,
+            catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
+          });
+          const decoded = yield* decode(
+            apiErrorResponseSchema(endpoint.errors),
+            payload,
+            endpoint.id,
+          ).pipe(
+            Effect.catchAll(() =>
+              decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
+            ),
+          );
+          return yield* Effect.fail(new RuntimeApiError(decoded.error));
+        }
+        return yield* Effect.tryPromise({
+          try: () => response.blob(),
+          catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
+        });
+      }),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
@@ -650,6 +746,14 @@ function appendQuery(url: URL, query: unknown) {
 
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined) continue;
+    // A repeated parameter is repeated on the wire, not comma-joined: that is the shape HTTP
+    // already has, and joining would make the separator illegal inside a value forever.
+    if (Array.isArray(value)) {
+      for (const entry of value as readonly unknown[]) {
+        url.searchParams.append(key, String(entry));
+      }
+      continue;
+    }
     url.searchParams.set(key, String(value));
   }
 }
@@ -663,6 +767,23 @@ function interpolatePath(path: string, params: unknown) {
     (nextPath, [key, value]) => nextPath.replace(`:${key}`, encodeURIComponent(String(value))),
     path,
   );
+}
+
+function evidenceContentUrl(
+  runtimeUrl: string,
+  runId: number,
+  evidenceKey: string,
+  options?: { readonly download?: boolean },
+): string {
+  const url = new URL(
+    `${apiBasePath}${interpolatePath(workflowContentEndpoints.getEvidenceContent.path, {
+      runId,
+      evidenceKey,
+    })}`,
+    runtimeUrl,
+  );
+  if (options?.download === true) url.searchParams.set('download', 'true');
+  return url.toString();
 }
 
 function decode<Decoded, Encoded>(

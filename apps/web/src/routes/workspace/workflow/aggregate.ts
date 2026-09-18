@@ -46,6 +46,14 @@ export interface ElementAggregate {
   /** Operations recorded across every visit, and how many are still unsettled. */
   readonly operationCount: number;
   readonly unresolvedOperations: number;
+  /**
+   * Captures across every visit of this element, each counted once.
+   *
+   * Safe to sum here, and only here: visits of one element are disjoint executions whose subtrees do
+   * not overlap. Summing the same field *across* elements is forbidden — an element nested inside a
+   * subgraph would be counted again for the subgraph node that contains it.
+   */
+  readonly evidenceCaptured: number;
   /** For a subgraph registration: how many executions happened inside its child frames. */
   readonly nestedExecutionCount: number;
   /** Destinations a routing decision actually chose, for an edge element. */
@@ -99,6 +107,7 @@ const emptyAggregate = (key: string): ElementAggregate => ({
   capabilities: [],
   operationCount: 0,
   unresolvedOperations: 0,
+  evidenceCaptured: 0,
   nestedExecutionCount: 0,
   chosenDestinations: [],
 });
@@ -365,6 +374,7 @@ function deriveAggregate(input: {
   let hasUnknownEnd = false;
   let operationCount = 0;
   let unresolvedOperations = 0;
+  let evidenceCaptured = 0;
   const capabilities: WorkflowCapability[] = [];
 
   for (const visit of visits) {
@@ -378,6 +388,7 @@ function deriveAggregate(input: {
     if (visit.endCertainty === 'unknown' && visit.endedAt === null) hasUnknownEnd = true;
     operationCount += visit.operationSummary.count;
     unresolvedOperations += visit.operationSummary.unresolved;
+    evidenceCaptured += visit.operationSummary.evidenceCaptured;
     for (const capability of visit.operationSummary.capabilities) {
       if (!capabilities.includes(capability)) capabilities.push(capability);
     }
@@ -395,6 +406,7 @@ function deriveAggregate(input: {
     capabilities,
     operationCount,
     unresolvedOperations,
+    evidenceCaptured,
     nestedExecutionCount: input.nested,
     chosenDestinations: chosen,
   };

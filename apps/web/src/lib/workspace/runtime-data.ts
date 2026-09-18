@@ -53,6 +53,8 @@ import type {
   RelocateProjectOutput,
   WorkspaceSnapshot,
   AdvanceWorkflowInput,
+  GetWorkflowEvidenceOutput,
+  GetWorkflowOperationOutput,
   GetWorkflowPayloadOutput,
   GetWorkflowRunOutput,
   GetWorkflowStructureOutput,
@@ -62,6 +64,8 @@ import type {
   ListWorkflowDescriptorsOutput,
   ListWorkflowEventsQuery,
   ListWorkflowEventsOutput,
+  ListWorkflowEvidenceOutput,
+  ListWorkflowEvidenceQuery,
   ListWorkflowOperationsQuery,
   ListWorkflowOperationsOutput,
   ListWorkflowRunsQuery,
@@ -200,6 +204,40 @@ export function getWorkflowPayload(
   payloadRef: string,
 ): Effect.Effect<GetWorkflowPayloadOutput, Error> {
   return getClient().pipe(Effect.flatMap((client) => client.getWorkflowPayload(runId, payloadRef)));
+}
+
+export function listWorkflowEvidence(
+  runId: number,
+  query: ListWorkflowEvidenceQuery,
+): Effect.Effect<ListWorkflowEvidenceOutput, Error> {
+  return getClient().pipe(Effect.flatMap((client) => client.listWorkflowEvidence(runId, query)));
+}
+
+export function getWorkflowEvidence(
+  runId: number,
+  evidenceKey: string,
+): Effect.Effect<GetWorkflowEvidenceOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.getWorkflowEvidence(runId, evidenceKey)),
+  );
+}
+
+export function getWorkflowOperation(
+  runId: number,
+  operationKey: string,
+): Effect.Effect<GetWorkflowOperationOutput, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.getWorkflowOperation(runId, operationKey)),
+  );
+}
+
+export function fetchWorkflowEvidenceContent(
+  runId: number,
+  evidenceKey: string,
+): Effect.Effect<Blob, Error> {
+  return getClient().pipe(
+    Effect.flatMap((client) => client.fetchWorkflowEvidenceContent(runId, evidenceKey)),
+  );
 }
 
 export function advanceWorkflow(

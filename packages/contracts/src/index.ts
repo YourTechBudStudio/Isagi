@@ -85,6 +85,10 @@ export type {
 } from './api/responses.js';
 
 export type {
+  ApiContentEndpoint,
+  ApiContentEndpointError,
+  ApiContentEndpointParams,
+  ApiContentEndpointQuery,
   ApiEndpoint,
   ApiEndpointBody,
   ApiEndpointError,
@@ -258,7 +262,7 @@ export type { HealthOutput } from './health/types.js';
 // The workflow surface is grouped into focused modules behind one barrel, so this index does not
 // have to enumerate every schema and DTO as the read model grows.
 export * from './workflows/types.js';
-export { workflowsEndpoints } from './workflows/api.js';
+export { workflowContentEndpoints, workflowsEndpoints } from './workflows/api.js';
 
 export { pathsEndpoints } from './paths/api.js';
 export {

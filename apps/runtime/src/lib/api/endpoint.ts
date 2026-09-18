@@ -1,9 +1,8 @@
 import { Effect, Either, Schema } from 'effect';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 
 import {
   apiBasePath,
-  apiInfrastructureErrorSchema,
   apiSuccessResponseSchema,
   type ApiEndpoint,
   type ApiEndpointBody,
@@ -21,8 +20,14 @@ import {
   unhandledApiError,
   type ApiRouteContext,
 } from './errors.js';
-
-const slowApiRequestThresholdMs = 1_000;
+import {
+  decodeParams,
+  decodeQuery,
+  logSlowApiRequest,
+  requestInterruptSignal,
+  sendRouteApiError,
+  slowApiRequestThresholdMs,
+} from './route-runtime.js';
 
 export interface RegisterApiEndpointOptions<
   Endpoint extends ApiEndpoint<
@@ -70,11 +75,11 @@ export function registerApiEndpoint<
       if (input.status === 'failed') {
         return sendApiError(reply, input.error);
       }
-      const params = decodeParams(endpoint, request.params, context);
+      const params = decodeParams<ApiEndpointParams<Endpoint>>(endpoint, request.params, context);
       if (params.status === 'failed') {
         return sendApiError(reply, params.error);
       }
-      const query = decodeQuery(endpoint, request.query, context);
+      const query = decodeQuery<ApiEndpointQuery<Endpoint>>(endpoint, request.query, context);
       if (query.status === 'failed') {
         return sendApiError(reply, query.error);
       }
@@ -174,154 +179,6 @@ export function registerApiEndpoint<
       }
     },
   });
-}
-
-function logSlowApiRequest(input: {
-  readonly context: ApiRouteContext;
-  readonly elapsedMs: number;
-  readonly endpointId: string;
-  readonly method: string;
-  readonly outcome: 'aborted' | 'failed' | 'succeeded' | 'threw';
-  readonly slowRequestLogged: boolean;
-  readonly url: string;
-}) {
-  if (!input.slowRequestLogged && input.elapsedMs < slowApiRequestThresholdMs) return;
-  logDiagnosticEvent(
-    'api.request_completed',
-    {
-      endpointId: input.endpointId,
-      requestId: input.context.requestId,
-      method: input.method,
-      url: input.url,
-      outcome: input.outcome,
-      elapsedMs: input.elapsedMs,
-    },
-    input.outcome === 'succeeded' ? 'info' : 'warn',
-  );
-}
-
-function decodeParams<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
->(endpoint: Endpoint, params: unknown, context: ApiRouteContext) {
-  const paramsSchema = endpoint.params as Schema.Schema.AnyNoContext | undefined;
-
-  if (!paramsSchema) {
-    return { status: 'succeeded' as const, value: undefined as ApiEndpointParams<Endpoint> };
-  }
-
-  try {
-    return {
-      status: 'succeeded' as const,
-      value: Schema.decodeUnknownSync(paramsSchema)(
-        coerceRouteParams(params),
-      ) as ApiEndpointParams<Endpoint>,
-    };
-  } catch (error: unknown) {
-    return { status: 'failed' as const, error: requestDecodingFailed(context, error) };
-  }
-}
-
-function decodeQuery<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
->(endpoint: Endpoint, query: unknown, context: ApiRouteContext) {
-  const querySchema = endpoint.query as Schema.Schema.AnyNoContext | undefined;
-
-  if (!querySchema) {
-    return { status: 'succeeded' as const, value: undefined as ApiEndpointQuery<Endpoint> };
-  }
-
-  try {
-    return {
-      status: 'succeeded' as const,
-      value: Schema.decodeUnknownSync(querySchema)(
-        coerceRouteParams(query),
-      ) as ApiEndpointQuery<Endpoint>,
-    };
-  } catch (error: unknown) {
-    return { status: 'failed' as const, error: requestDecodingFailed(context, error) };
-  }
-}
-
-function coerceRouteParams(params: unknown) {
-  if (!params || typeof params !== 'object') {
-    return params;
-  }
-
-  return Object.fromEntries(
-    Object.entries(params).map(([key, value]) => {
-      const numeric = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
-      return [key, numeric];
-    }),
-  );
-}
-
-function requestInterruptSignal(request: FastifyRequest, reply: FastifyReply) {
-  const controller = new AbortController();
-  const abort = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(new Error(`API request interrupted: ${request.method} ${request.url}`));
-    }
-  };
-  const abortOnResponseClose = () => {
-    if (!reply.raw.writableEnded) {
-      abort();
-    }
-  };
-
-  request.raw.once('aborted', abort);
-  request.raw.once('timeout', abort);
-  request.socket.once('timeout', abort);
-  reply.raw.once('close', abortOnResponseClose);
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      request.raw.off('aborted', abort);
-      request.raw.off('timeout', abort);
-      request.socket.off('timeout', abort);
-      reply.raw.off('close', abortOnResponseClose);
-    },
-  };
-}
-
-function sendRouteApiError<
-  Endpoint extends ApiEndpoint<
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext,
-    Schema.Schema.AnyNoContext | undefined,
-    Schema.Schema.AnyNoContext | undefined
-  >,
->(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  endpoint: Endpoint,
-  context: ApiRouteContext,
-  apiError: ApiError,
-) {
-  const errorSchema = apiError.code.startsWith('api_')
-    ? apiInfrastructureErrorSchema
-    : endpoint.errors;
-
-  try {
-    Schema.decodeUnknownSync(errorSchema)(apiError);
-    return sendApiError(reply, apiError);
-  } catch (error: unknown) {
-    request.log.error({ error, endpointId: endpoint.id }, 'API error encoding failed');
-    return sendApiError(reply, responseEncodingFailed(context, error));
-  }
 }
 
 function decodeInput<

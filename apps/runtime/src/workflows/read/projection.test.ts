@@ -7,8 +7,12 @@ import { eq } from 'drizzle-orm';
 import { Effect } from 'effect';
 
 import { workflowRunPreparations } from '../../persistence/schema.js';
+import { contentPathFor } from '../persistence/content-store.js';
+import { inlinePayloadThresholdBytes } from '../persistence/payload-store.js';
+import { canonicalJson } from '../state/serializable.js';
 import type { WorkflowEngineError } from '../types.js';
 import {
+  captureEvidence,
   claim,
   currentRun,
   enterRoot,
@@ -610,6 +614,7 @@ test('a human gate keeps the operations its visit already performed', async () =
     assert.deepEqual(visit.operationSummary, {
       count: 2,
       unresolved: 1,
+      evidenceCaptured: 0,
       capabilities: ['send_agent_prompt', 'spawn_agent_session'],
     });
     assert.equal(visit.wait?.kind, 'user_input');
@@ -764,7 +769,7 @@ test('a subgraph visit carries its child frame inline and counts the work beneat
     assert.equal(subgraph.childFrame?.parentExecutionId, parent.id);
     assert.deepEqual(
       subgraph.operationSummary,
-      { count: 1, unresolved: 1, capabilities: ['run_headless_agent'] },
+      { count: 1, unresolved: 1, evidenceCaptured: 0, capabilities: ['run_headless_agent'] },
       'a subgraph counts the operations beneath it without claiming it called them',
     );
     assert.equal(subgraph.attemptCount, 0, 'entering a subgraph runs no author callback');
@@ -1640,6 +1645,734 @@ test('an inline preparation failure detail is projected whole, and an unreadable
       await readDetailFor('x'.repeat(32 * 1024)),
       null,
       'an offloaded detail is reported as no detail, never as no failure',
+    );
+  });
+});
+
+/**
+ * A run with a root visit that captures twice, and a subgraph visit whose nested execution captures
+ * once and whose own callback captures once. Enough shape to catch every counting mistake the
+ * subtree rule can make.
+ */
+async function seedCaptures(harness: ReadHarness) {
+  const { runId, rootFrameId } = await startRun(harness.fixture);
+  const writer = await enterRoot(harness.fixture, {
+    runId,
+    frameId: rootFrameId,
+    nodeId: 'writer',
+  });
+  const writerCallback = await claim(harness.fixture, runId);
+  const first = await captureEvidence(harness.fixture, {
+    runId,
+    frameId: rootFrameId,
+    executionId: writer.id,
+    attemptId: writerCallback.attempt.id,
+    callIndex: 0,
+    title: 'Round one review',
+    role: 'review',
+    labels: { round: 1, phase: 'draft', approved: false },
+  });
+  const second = await captureEvidence(harness.fixture, {
+    runId,
+    frameId: rootFrameId,
+    executionId: writer.id,
+    attemptId: writerCallback.attempt.id,
+    callIndex: 1,
+    title: 'Round two review',
+    role: 'review',
+    labels: { round: 2, phase: 'draft', approved: true },
+    mediaType: 'application/json',
+    bytes: Buffer.from('{"verdict":"ship"}'),
+  });
+
+  value(
+    await run(
+      harness.fixture.runs.commitNodeResult({
+        ...fence(runId, writerCallback.attempt.id),
+        frameId: rootFrameId,
+        executionId: writer.id,
+        state: { value: { rounds: 1 } },
+        producerOutput: { value: { type: 'route' } },
+        producerArtifactHash: PIN_A,
+        next: { kind: 'routing', edgeId: 'writer-out' },
+      }),
+    ),
+  );
+  const routing = await claim(harness.fixture, runId);
+  value(
+    await run(
+      harness.fixture.runs.commitRouting({
+        ...fence(runId, routing.attempt.id),
+        frameId: rootFrameId,
+        executionId: writer.id,
+        state: { value: { rounds: 1 } },
+        producerOutput: { value: { to: 'review' } },
+        producerArtifactHash: PIN_A,
+        next: { kind: 'node', nodeId: 'review', nodeKind: 'subgraph' },
+      }),
+    ),
+  );
+  const subgraph = (await run(harness.fixture.runs.listExecutions(rootFrameId))).at(-1)!;
+  const before = await currentRun(harness.fixture, runId);
+  const childFrameId = value(
+    await run(
+      harness.fixture.runs.enterSubgraph({
+        runId,
+        controlRevision: before.controlRevision,
+        expectedPosition: before.position,
+        artifactHash: PIN_A,
+        parentExecutionId: subgraph.id,
+        childGraphKey: 'review',
+        childDisplayName: 'review round 0',
+      }),
+    ),
+  ).childFrameId;
+  const childEntry = await claim(harness.fixture, runId);
+  value(
+    await run(
+      harness.fixture.runs.commitGraphEntry({
+        ...fence(runId, childEntry.attempt.id),
+        frameId: childFrameId,
+        parameters: { value: { draft: 'v1' } },
+        state: { value: { verdict: null } },
+        entryNode: { nodeId: 'judge', nodeKind: 'operation' },
+      }),
+    ),
+  );
+  const nested = (await run(harness.fixture.runs.listExecutions(childFrameId))).at(-1)!;
+  const nestedCallback = await claim(harness.fixture, runId);
+  const third = await captureEvidence(harness.fixture, {
+    runId,
+    frameId: childFrameId,
+    executionId: nested.id,
+    attemptId: nestedCallback.attempt.id,
+    callIndex: 0,
+    title: 'Judge verdict',
+    role: 'verdict',
+    // `signed` is the *string* "true", not a boolean. An author writing
+    // `labels: { signed: String(flag) }` produces exactly this, and it is the value a partial
+    // representation collapse would make unreachable by any spelling.
+    labels: { round: 1, signed: 'true' },
+    bytes: Buffer.from('the judge said ship it'),
+  });
+
+  return {
+    runId,
+    rootFrameId,
+    childFrameId,
+    writer,
+    subgraph,
+    nested,
+    subgraphAttemptId: nestedCallback.attempt.id,
+    keys: {
+      first: first.evidence!.evidenceKey,
+      second: second.evidence!.evidenceKey,
+      third: third.evidence!.evidenceKey,
+    },
+  };
+}
+
+test('an evidence listing answers by run, by frame, by execution and by subtree', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+
+    const all = await read(harness.projection.listEvidence(seeded.runId, {}));
+    assert.deepEqual(
+      all.items.map((item) => item.evidenceKey),
+      [seeded.keys.first, seeded.keys.second, seeded.keys.third],
+      'the run listing is every record in capture order',
+    );
+    assert.equal(all.nextCursor, null);
+
+    const byFrame = await read(
+      harness.projection.listEvidence(seeded.runId, { frameId: seeded.childFrameId }),
+    );
+    assert.deepEqual(
+      byFrame.items.map((item) => item.evidenceKey),
+      [seeded.keys.third],
+    );
+
+    const byExecution = await read(
+      harness.projection.listEvidence(seeded.runId, { executionId: seeded.writer.id }),
+    );
+    assert.deepEqual(
+      byExecution.items.map((item) => item.evidenceKey),
+      [seeded.keys.first, seeded.keys.second],
+    );
+
+    const ownCallback = await read(
+      harness.projection.listEvidence(seeded.runId, { executionId: seeded.subgraph.id }),
+    );
+    assert.deepEqual(
+      ownCallback.items.map((item) => item.evidenceKey),
+      [],
+      'a subgraph visit captured nothing itself',
+    );
+
+    const subtree = await read(
+      harness.projection.listEvidence(seeded.runId, {
+        executionId: seeded.subgraph.id,
+        subtree: 'true',
+      }),
+    );
+    assert.deepEqual(
+      subtree.items.map((item) => item.evidenceKey),
+      [seeded.keys.third],
+      'the subtree of a subgraph visit reaches the executions inside its child frame',
+    );
+  });
+});
+
+test('an evidence listing filters by role and by label, comparing label values as text', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+
+    const reviews = await read(harness.projection.listEvidence(seeded.runId, { role: 'review' }));
+    assert.deepEqual(
+      reviews.items.map((item) => item.evidenceKey),
+      [seeded.keys.first, seeded.keys.second],
+    );
+
+    const roundTwo = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['round:2'] }),
+    );
+    assert.deepEqual(
+      roundTwo.items.map((item) => item.evidenceKey),
+      [seeded.keys.second],
+      'a numeric label matches the text a person typed',
+    );
+
+    const both = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['round:1', 'phase:draft'] }),
+    );
+    assert.deepEqual(
+      both.items.map((item) => item.evidenceKey),
+      [seeded.keys.first],
+      'repeated label filters intersect rather than union',
+    );
+
+    const approved = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['approved:true'] }),
+    );
+    assert.deepEqual(
+      approved.items.map((item) => item.evidenceKey),
+      [seeded.keys.second],
+      'a boolean label is reachable by the spelling an author wrote',
+    );
+
+    // SQLite extracts a JSON `true` as the integer 1, so this is the same record under the other
+    // spelling. Both must reach it, or one of them is a dead end nothing announces.
+    const approvedAsOne = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['approved:1'] }),
+    );
+    assert.deepEqual(
+      approvedAsOne.items.map((item) => item.evidenceKey),
+      [seeded.keys.second],
+      'and by the spelling the storage engine actually holds',
+    );
+
+    // The case the collapse has to be *total* for: a label whose value is the string "true" is
+    // stored as the text `true`, which the boolean rewrite alone would look straight past — matched
+    // by neither `signed:true` (rewritten to 1) nor `signed:1` (never equal to it).
+    const signed = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['signed:true'] }),
+    );
+    assert.deepEqual(
+      signed.items.map((item) => item.evidenceKey),
+      [seeded.keys.third],
+      'a string label spelling a boolean is reachable, not stranded',
+    );
+
+    const absent = await read(
+      harness.projection.listEvidence(seeded.runId, { label: ['nothing:here'] }),
+    );
+    assert.deepEqual(absent.items, [], 'a label no record carries matches nothing');
+  });
+});
+
+test('an evidence listing carries metadata and never content', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+    const listing = await read(harness.projection.listEvidence(seeded.runId, {}));
+
+    const record = listing.items[0]!;
+    assert.equal(record.title, 'Round one review');
+    assert.equal(record.role, 'review');
+    assert.deepEqual(record.labels, { round: 1, phase: 'draft', approved: false });
+    assert.equal(record.executionId, seeded.writer.id);
+    assert.equal(record.frameId, seeded.rootFrameId);
+    assert.equal(record.artifactHash, PIN_A);
+    assert.ok(record.operationKey.length > 0, 'a record names the call position that made it');
+    assert.deepEqual(record.source, { kind: 'none' });
+    assert.ok(record.content.contentRef.startsWith('sha256:'));
+    assert.equal(record.content.mediaType, 'text/plain');
+    assert.equal(record.content.byteSize, Buffer.from('Round one review').byteLength);
+
+    // Asserted over the serialized body, not by reading fields: the guarantee is that no listing can
+    // ever carry bytes, and an inspection of the shape would miss a field added later.
+    const serialized = JSON.stringify(listing);
+    assert.ok(
+      !serialized.includes('Round one review'.split('').reverse().join('')),
+      'a sanity check that this assertion can fail',
+    );
+    for (const captured of ['{"verdict":"ship"}', 'the judge said ship it']) {
+      assert.ok(
+        !serialized.includes(captured),
+        `the listing body must not contain captured content (${captured})`,
+      );
+    }
+    assert.ok(
+      !serialized.includes('"value"') && !serialized.includes('"inline"'),
+      'the listing carries no inline value of any kind',
+    );
+  });
+});
+
+test('an evidence listing pages every row, and refuses a cursor from another listing', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const page: Awaited<ReturnType<typeof harness.projection.listEvidence>> extends never
+        ? never
+        : { items: readonly { evidenceKey: string }[]; nextCursor: string | null } = await read(
+        harness.projection.listEvidence(seeded.runId, {
+          limit: 2,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      );
+      pages += 1;
+      walked.push(...page.items.map((item) => item.evidenceKey));
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+
+    assert.equal(pages, 2);
+    assert.deepEqual(walked, [seeded.keys.first, seeded.keys.second, seeded.keys.third]);
+
+    const first = await read(harness.projection.listEvidence(seeded.runId, { limit: 2 }));
+    const refused = await rejection(
+      harness.projection.listEvidence(seeded.runId, {
+        limit: 2,
+        cursor: first.nextCursor!,
+        role: 'review',
+      }),
+    );
+    assert.equal(
+      refused.code,
+      'workflow_cursor_invalid',
+      'a continuation taken under one filter set is not a continuation of another',
+    );
+  });
+});
+
+test('one record is fetched by key, and another run cannot fetch it', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+    const { evidence } = await read(
+      harness.projection.getEvidence(seeded.runId, seeded.keys.second),
+    );
+    assert.equal(evidence.title, 'Round two review');
+    assert.equal(evidence.content.mediaType, 'application/json');
+
+    const other = await startRun(harness.fixture, { workflowKey: 'other' });
+    const refused = await rejection(
+      harness.projection.getEvidence(other.runId, seeded.keys.second),
+    );
+    assert.equal(refused.code, 'workflow_evidence_not_found');
+    assert.equal(refused.evidenceKey, seeded.keys.second);
+  });
+});
+
+test('evidence content streams, and reports honestly once its bytes are gone', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+    const opened = await read(
+      harness.projection.openEvidenceContent(seeded.runId, seeded.keys.first),
+    );
+    assert.equal(opened.mediaType, 'text/plain');
+    assert.equal(opened.byteSize, Buffer.from('Round one review').byteLength);
+    assert.equal(
+      opened.filename,
+      'round-one-review-review.txt',
+      'the download name is derived from the recorded identity, not from the bytes',
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened.stream) chunks.push(chunk as Buffer);
+    assert.equal(Buffer.concat(chunks).toString('utf8'), 'Round one review');
+
+    const { evidence } = await read(
+      harness.projection.getEvidence(seeded.runId, seeded.keys.first),
+    );
+    await rm(contentPathFor(harness.fixture.contentRoot, evidence.content.contentRef));
+    const refused = await rejection(
+      harness.projection.openEvidenceContent(seeded.runId, seeded.keys.first),
+    );
+    assert.equal(refused.code, 'workflow_evidence_content_unavailable');
+    assert.equal(refused.payloadCause, 'missing');
+    assert.equal(refused.evidenceKey, seeded.keys.first);
+
+    // The metadata is still readable, which is the whole point of the metadata-first split.
+    const still = await read(harness.projection.getEvidence(seeded.runId, seeded.keys.first));
+    assert.equal(still.evidence.title, 'Round one review');
+  });
+});
+
+test('a capture counts toward the summary only once its evidence row exists', async () => {
+  await withHarness(async (harness) => {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    const writer = await enterRoot(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      nodeId: 'writer',
+    });
+    const callback = await claim(harness.fixture, runId);
+
+    const summaryOf = async (executionId: number) => {
+      const executions = await read(harness.projection.listRunExecutions(runId, {}));
+      return executions.items.find((item) => item.executionId === executionId)!.operationSummary;
+    };
+
+    const { operation } = await captureEvidence(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      executionId: writer.id,
+      attemptId: callback.attempt.id,
+      callIndex: 0,
+      title: 'Draft',
+      role: 'draft',
+      settle: false,
+    });
+    assert.equal(
+      (await summaryOf(writer.id)).evidenceCaptured,
+      0,
+      'an intended capture has produced nothing to count',
+    );
+
+    value(
+      await run(
+        harness.fixture.operations.settle({
+          operationId: operation.id,
+          state: 'abandoned',
+          result: { value: null },
+        }),
+      ),
+    );
+    const abandoned = await summaryOf(writer.id);
+    assert.equal(
+      abandoned.evidenceCaptured,
+      0,
+      'an abandoned capture is not a capture, though `unresolved` cannot tell them apart',
+    );
+    assert.equal(abandoned.unresolved, 0);
+    assert.equal(abandoned.count, 1);
+
+    const published = await run(
+      harness.fixture.content.put({ source: Buffer.from('Draft'), mediaTypeHint: 'text/plain' }),
+    );
+    value(
+      await run(
+        harness.fixture.evidence.commitCapture({
+          operation,
+          attemptId: callback.attempt.id,
+          title: 'Draft',
+          role: 'draft',
+          labels: null,
+          contentKind: 'text',
+          mediaType: 'text/plain',
+          byteSize: published.byteSize,
+          contentRef: published.contentRef,
+          sourcePath: null,
+          source: { kind: 'none', agentSessionId: null, operationId: null, attribution: 'none' },
+          now: new Date().toISOString(),
+        }),
+      ),
+    );
+    const settled = await summaryOf(writer.id);
+    assert.equal(settled.evidenceCaptured, 1, 'the reopening commit is what moves the count');
+    assert.equal(settled.count, 1, 'and it is the only count that moved');
+    assert.equal(settled.unresolved, 0);
+  });
+});
+
+test('the captured count is subtree-inclusive at every level, and counts each capture once', async () => {
+  await withHarness(async (harness) => {
+    const seeded = await seedCaptures(harness);
+    // The subgraph visit's own capture, so the parent has both a direct record and a nested one and
+    // the difference between "mine" and "mine and below" is actually observable.
+    await captureEvidence(harness.fixture, {
+      runId: seeded.runId,
+      frameId: seeded.rootFrameId,
+      executionId: seeded.subgraph.id,
+      attemptId: seeded.subgraphAttemptId,
+      callIndex: 0,
+      title: 'Mapped output',
+      role: 'output',
+    });
+
+    // A *second* execution inside the same child frame, also capturing. One nested execution would
+    // let an accumulation that folded in only the first of them pass unnoticed.
+    value(
+      await run(
+        harness.fixture.runs.commitNodeResult({
+          ...fence(seeded.runId, seeded.subgraphAttemptId),
+          frameId: seeded.childFrameId,
+          executionId: seeded.nested.id,
+          state: { value: { verdict: 'ship' } },
+          producerOutput: { value: { type: 'route' } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'routing', edgeId: 'judge-out' },
+        }),
+      ),
+    );
+    const nestedRouting = await claim(harness.fixture, seeded.runId);
+    value(
+      await run(
+        harness.fixture.runs.commitRouting({
+          ...fence(seeded.runId, nestedRouting.attempt.id),
+          frameId: seeded.childFrameId,
+          executionId: seeded.nested.id,
+          state: { value: { verdict: 'ship' } },
+          producerOutput: { value: { to: 'scribe' } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'node', nodeId: 'scribe', nodeKind: 'operation' },
+        }),
+      ),
+    );
+    const sibling = (await run(harness.fixture.runs.listExecutions(seeded.childFrameId))).at(-1)!;
+    const siblingCallback = await claim(harness.fixture, seeded.runId);
+    await captureEvidence(harness.fixture, {
+      runId: seeded.runId,
+      frameId: seeded.childFrameId,
+      executionId: sibling.id,
+      attemptId: siblingCallback.attempt.id,
+      callIndex: 0,
+      title: 'Scribe notes',
+      role: 'notes',
+    });
+
+    const executions = await read(harness.projection.listRunExecutions(seeded.runId, {}));
+    const summaryOf = (executionId: number) =>
+      executions.items.find((item) => item.executionId === executionId)!.operationSummary
+        .evidenceCaptured;
+
+    assert.equal(summaryOf(seeded.writer.id), 2, 'a leaf visit reports its own captures');
+    assert.equal(summaryOf(seeded.nested.id), 1, 'so does a nested one');
+    assert.equal(summaryOf(sibling.id), 1, 'and so does its sibling, independently');
+    assert.equal(
+      summaryOf(seeded.subgraph.id),
+      3,
+      'a subgraph visit reports its own capture and both beneath it, and nothing else',
+    );
+
+    // Summing root-frame executions is the run total; summing every execution would count the two
+    // nested captures twice, which is exactly the mistake the rule exists to prevent.
+    const rootFrameTotal = executions.items
+      .filter((item) => item.frameId === seeded.rootFrameId)
+      .reduce((total, item) => total + item.operationSummary.evidenceCaptured, 0);
+    assert.equal(rootFrameTotal, 5, 'every capture in the run, counted once');
+    assert.equal(
+      executions.items.reduce((total, item) => total + item.operationSummary.evidenceCaptured, 0),
+      7,
+      'and summing every execution instead double-counts both nested captures',
+    );
+  });
+});
+
+test('getOperation reports provenance, and says honestly when no transcript can be located', async () => {
+  const harness = makeReadHarness({
+    locateTranscript: (input) =>
+      Effect.succeed(
+        input.harnessSessionId === 'session-live'
+          ? { locator: `/transcripts/${input.harnessSessionId}.jsonl`, available: true }
+          : { locator: `/transcripts/${input.harnessSessionId}.jsonl`, available: false },
+      ),
+  });
+  try {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    const writer = await enterRoot(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      nodeId: 'writer',
+    });
+    const callback = await claim(harness.fixture, runId);
+    const headless = value(
+      await run(
+        harness.fixture.operations.recordIntent({
+          runId,
+          frameId: rootFrameId,
+          executionId: writer.id,
+          originAttemptId: callback.attempt.id,
+          capability: 'run_headless_agent',
+          callIndex: 0,
+          request: { value: { prompt: 'judge' } },
+          fingerprintOf: { value: { prompt: 'judge' } },
+          artifactHash: PIN_A,
+          provenance: {
+            harness: 'claude',
+            model: 'opus',
+            effort: null,
+            cwd: '/work/tree',
+            runtimeId: 'runtime-1',
+            incarnationId: 'incarnation-1',
+          },
+        }),
+      ),
+    );
+    value(
+      await run(
+        harness.fixture.operations.settle({
+          operationId: headless.id,
+          state: 'completed',
+          result: { value: { text: 'done' } },
+          provenance: { correlatedHarnessSessionId: 'session-gone' },
+        }),
+      ),
+    );
+
+    const { operation } = await read(harness.projection.getOperation(runId, headless.operationKey));
+    assert.equal(operation.provenance.harness, 'claude');
+    assert.equal(operation.provenance.model, 'opus');
+    assert.equal(operation.provenance.cwd, '/work/tree');
+    assert.deepEqual(operation.provenance.runtime, {
+      runtimeId: 'runtime-1',
+      incarnationId: 'incarnation-1',
+    });
+    assert.deepEqual(
+      operation.provenance.transcript,
+      { locator: '/transcripts/session-gone.jsonl', available: false },
+      'a transcript that is not there reads as unavailable, not as a live reference',
+    );
+
+    const listing = await read(harness.projection.listOperations(runId, {}));
+    assert.ok(
+      !Object.hasOwn(listing.items[0]!.provenance, 'transcript'),
+      'a listing does not evaluate a locator at all, and must not imply it did',
+    );
+
+    const missing = await rejection(harness.projection.getOperation(runId, 'wop_nothing'));
+    assert.equal(missing.code, 'workflow_operation_not_found');
+  } finally {
+    harness.close();
+  }
+});
+
+test('getOperation omits the transcript when the operation records no session or cwd', async () => {
+  const harness = makeReadHarness({
+    locateTranscript: () => Effect.die(new Error('a locator must not be consulted without inputs')),
+  });
+  try {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    const writer = await enterRoot(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      nodeId: 'writer',
+    });
+    const callback = await claim(harness.fixture, runId);
+    const capture = await captureEvidence(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      executionId: writer.id,
+      attemptId: callback.attempt.id,
+      callIndex: 0,
+      title: 'Draft',
+      role: 'draft',
+    });
+
+    const { operation } = await read(
+      harness.projection.getOperation(runId, capture.operation.operationKey),
+    );
+    assert.equal(operation.capability, 'capture_evidence');
+    assert.equal(operation.provenance.harness, null);
+    assert.equal(
+      operation.provenance.transcript,
+      null,
+      'no locator could be built, which is a fact rather than an omission',
+    );
+  } finally {
+    harness.close();
+  }
+});
+
+test('the same bytes read as one media type as evidence and another as a payload slot', async () => {
+  await withHarness(async (harness) => {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    const writer = await enterRoot(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      nodeId: 'writer',
+    });
+    const callback = await claim(harness.fixture, runId);
+
+    // Large enough to be referenced rather than inlined, so both stores name the same blob.
+    const verdict = { verdict: 'ship', notes: 'n'.repeat(inlinePayloadThresholdBytes) };
+
+    // Captured first as plain text: the author labelled these bytes as something they are not, and
+    // the runtime records what they said rather than second-guessing it.
+    const capture = await captureEvidence(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      executionId: writer.id,
+      attemptId: callback.attempt.id,
+      callIndex: 0,
+      title: 'Verdict',
+      role: 'verdict',
+      mediaType: 'text/plain',
+      bytes: Buffer.from(canonicalJson(verdict), 'utf8'),
+    });
+
+    // The identical canonical bytes then reach a payload slot through the ordinary write path.
+    value(
+      await run(
+        harness.fixture.runs.commitNodeResult({
+          ...fence(runId, callback.attempt.id),
+          frameId: rootFrameId,
+          executionId: writer.id,
+          state: { value: { rounds: 1 } },
+          producerOutput: { value: verdict },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'routing', edgeId: 'writer-out' },
+        }),
+      ),
+    );
+
+    const { evidence } = await read(
+      harness.projection.getEvidence(runId, capture.evidence!.evidenceKey),
+    );
+    assert.equal(
+      evidence.content.mediaType,
+      'text/plain',
+      'media type is a fact about this use of the bytes, not about the digest that names them',
+    );
+
+    const payload = await read(harness.projection.getPayload(runId, evidence.content.contentRef));
+    assert.equal(
+      payload.mediaType,
+      'application/json',
+      'and the payload route says what a payload slot is, whoever published the bytes first',
+    );
+    assert.deepEqual(payload.value, verdict);
+
+    // The same answer from the slot projection, which is the read path a dock actually renders.
+    // `slotDto` must reach it from the catalog row's size and *not* from its `media_type` column —
+    // that column is the publisher's hint about one use of the bytes, and here it says `text/plain`.
+    const executions = await read(harness.projection.listRunExecutions(runId, {}));
+    const candidate = executions.items.find((item) => item.executionId === writer.id)!.candidateRef;
+    assert.ok(
+      candidate !== null && 'payloadRef' in candidate,
+      'the operand is referenced, not inline',
+    );
+    assert.equal(
+      candidate.payloadRef,
+      evidence.content.contentRef,
+      'one digest, named identically by both stores',
+    );
+    assert.equal(
+      candidate.mediaType,
+      'application/json',
+      'and a slot is always JSON, however the bytes behind it were first published',
     );
   });
 });

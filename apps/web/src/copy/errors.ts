@@ -222,6 +222,11 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
       workflow_version_not_adopted: 'This run never ran that version of the workflow.',
       workflow_payload_unavailable: "Isagi couldn't read that recorded value.",
+      workflow_operation_not_found: "That recorded step isn't part of this run.",
+      workflow_evidence_not_found: "That capture isn't part of this run.",
+      // The metadata is still on screen when this shows, so it says the content is unreadable
+      // rather than that the record is gone — the record is right there.
+      workflow_evidence_content_unavailable: "Isagi couldn't read what that capture saved.",
       // Deliberately not "it failed": nobody knows whether the work landed, and saying either way
       // would be the one thing the runtime refuses to guess.
       workflow_operation_uncertain:

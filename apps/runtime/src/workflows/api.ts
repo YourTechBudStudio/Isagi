@@ -1,11 +1,12 @@
 import { Effect, type ManagedRuntime } from 'effect';
 import type { FastifyInstance } from 'fastify';
 
-import { apiEndpoints, type ApiError } from '@isagi/contracts';
+import { apiEndpoints, workflowContentEndpoints, type ApiError } from '@isagi/contracts';
 
 import {
   infrastructureApiError,
   registerApiEndpoint,
+  registerContentEndpoint,
   type ApiRouteContext,
   errorMessage,
 } from '../lib/api/index.js';
@@ -162,6 +163,47 @@ export function registerWorkflowApi(
     ),
   );
 
+  // --- evidence -------------------------------------------------------------
+
+  register(endpoints.getOperation, (_input, _context, params) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.getOperation(params.runId, params.operationKey),
+    ),
+  );
+
+  register(endpoints.listEvidence, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.listEvidence(params.runId, query),
+    ),
+  );
+
+  register(endpoints.getEvidence, (_input, _context, params) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.getEvidence(params.runId, params.evidenceKey),
+    ),
+  );
+
+  /**
+   * The one route in the runtime whose success body is not the JSON envelope.
+   *
+   * It is a declared content endpoint rather than a hand-rolled raw route, so its params, query and
+   * error contract are checked exactly like every other route's, and every non-200 it can send is
+   * still the envelope a client already knows how to read.
+   */
+  registerContentEndpoint<typeof workflowContentEndpoints.getEvidenceContent, RuntimeServices>(
+    fastify,
+    workflowContentEndpoints.getEvidenceContent,
+    {
+      handle: (_context, params) =>
+        Effect.flatMap(WorkflowRunProjection, (projection) =>
+          projection.openEvidenceContent(params.runId, params.evidenceKey),
+        ),
+      attachment: (query) => query?.download === 'true',
+      mapError: toWorkflowApiError,
+      run,
+    },
+  );
+
   // --- controls -------------------------------------------------------------
 
   register(endpoints.pause, (_input, _context, params) =>
@@ -224,6 +266,7 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
         : {}),
       ...(error.artifactHash ? { artifactHash: error.artifactHash } : {}),
       ...(error.operationKey ? { operationKey: error.operationKey } : {}),
+      ...(error.evidenceKey ? { evidenceKey: error.evidenceKey } : {}),
       ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
       ...(error.collision ? { collision: error.collision } : {}),
       ...(error.branch ? { branch: error.branch } : {}),
@@ -246,7 +289,14 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
                 cause: error.payloadCause ?? 'missing',
                 ...identities,
               }
-            : { reason: error.code, ...identities },
+            : error.code === 'workflow_evidence_content_unavailable'
+              ? {
+                  reason: error.code,
+                  evidenceKey: error.evidenceKey ?? '',
+                  cause: error.payloadCause ?? 'missing',
+                  ...identities,
+                }
+              : { reason: error.code, ...identities },
     };
   }
 

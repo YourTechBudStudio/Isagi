@@ -402,7 +402,12 @@ test('gap recovery restores capability names and frame output facts, not just ex
           workflowExecutionFixture({
             executionId: 7,
             startedAt: t(7),
-            operationSummary: { count: 1, unresolved: 0, capabilities: ['run_headless_agent'] },
+            operationSummary: {
+              count: 1,
+              unresolved: 0,
+              evidenceCaptured: 0,
+              capabilities: ['run_headless_agent'],
+            },
           }),
         ],
         highWaterRevision: 9,

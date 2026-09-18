@@ -18,6 +18,8 @@ import type { EvidenceLabels } from '@yourtechbudstudio/isagi-workflow-sdk';
 import { eq } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
+import type { WorkflowEvidenceContentKind } from '@isagi/contracts';
+
 import {
   DatabaseError,
   RuntimeDatabase,
@@ -26,11 +28,7 @@ import {
 import { workflowEvidence, workflowOperations } from '../../persistence/schema.js';
 import { settleOperationWithin } from '../persistence/operations.repository.js';
 import { committed, rejected, type WorkflowWriteResult } from '../persistence/outcomes.js';
-import type {
-  WorkflowEvidenceContentKind,
-  WorkflowEvidenceRecord,
-  WorkflowOperationRecord,
-} from '../persistence/records.js';
+import type { WorkflowEvidenceRecord, WorkflowOperationRecord } from '../persistence/records.js';
 import {
   silentWriteWake,
   wakingDatabase,

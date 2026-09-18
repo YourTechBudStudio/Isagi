@@ -186,6 +186,43 @@ test('mandatory failure context cannot be omitted or invented', () => {
   assert.throws(() => decode(rejection({ reason: 'workflow_structure_validation_failed' })));
 });
 
+test('unreachable captured content names the record and why, and both survive decoding', () => {
+  const error = decode(
+    rejection({
+      reason: 'workflow_evidence_content_unavailable',
+      workflowRunId: 1,
+      evidenceKey: 'wev_abc',
+      cause: 'missing',
+    }),
+  );
+  const data = (error as { data: { evidenceKey?: string; cause?: string } }).data;
+  assert.equal(data.evidenceKey, 'wev_abc');
+  assert.equal(data.cause, 'missing');
+
+  // The same two omissions the payload reason refuses. A record a client cannot name is a message
+  // it cannot render beside the metadata it already has.
+  assert.throws(() => decode(rejection({ reason: 'workflow_evidence_content_unavailable' })));
+  assert.throws(() =>
+    decode(rejection({ reason: 'workflow_evidence_content_unavailable', evidenceKey: 'wev_abc' })),
+  );
+});
+
+test('a missing record and a missing operation are told apart, and each names its key', () => {
+  const missingEvidence = decode(
+    rejection({ reason: 'workflow_evidence_not_found', workflowRunId: 1, evidenceKey: 'wev_abc' }),
+  );
+  assert.equal((missingEvidence as { data: { evidenceKey?: string } }).data.evidenceKey, 'wev_abc');
+
+  const missingOperation = decode(
+    rejection({ reason: 'workflow_operation_not_found', workflowRunId: 1, operationKey: 'wop_1' }),
+  );
+  assert.equal(
+    (missingOperation as { data: { operationKey?: string } }).data.operationKey,
+    'wop_1',
+    'saying the run was not found would be a false statement about a run that exists',
+  );
+});
+
 test('a stale control, an unadopted version and an uncertain operation each carry their context', () => {
   assert.doesNotThrow(() =>
     decode(rejection({ reason: 'workflow_stale_control', workflowRunId: 1 })),
@@ -245,14 +282,21 @@ test('the exported reason set cannot drift from the set the error data accepts',
     'workflow_base_ref_not_found',
     'workflow_environment_collision',
     'workflow_run_preparing',
+    'workflow_operation_not_found',
+    'workflow_evidence_not_found',
+    'workflow_evidence_content_unavailable',
   ]);
-  assert.equal(every.length, 33);
+  assert.equal(every.length, 36);
 
   for (const reason of every) {
     const data: Record<string, unknown> = { reason };
     if (reason === 'workflow_structure_validation_failed') data.diagnostics = [];
     if (reason === 'workflow_payload_unavailable') {
       data.payloadRef = 'sha256:abc';
+      data.cause = 'missing';
+    }
+    if (reason === 'workflow_evidence_content_unavailable') {
+      data.evidenceKey = 'wev_abc';
       data.cause = 'missing';
     }
     assert.doesNotThrow(() => decode(rejection(data)), `${reason} is advertised but not accepted`);

@@ -1,8 +1,13 @@
-import { and, asc, desc, eq, gt, or, sql, type SQL } from 'drizzle-orm';
+import type { Readable } from 'node:stream';
+
+import { aliasedTable, and, asc, desc, eq, gt, or, sql, type SQL } from 'drizzle-orm';
 import { Context, Effect, Layer } from 'effect';
 
 import type {
+  AgentHarness,
   GetWorkflowAttemptOutput,
+  GetWorkflowEvidenceOutput,
+  GetWorkflowOperationOutput,
   GetWorkflowPayloadOutput,
   GetWorkflowRunOutput,
   GetWorkflowStructureOutput,
@@ -14,6 +19,8 @@ import type {
   ListWorkflowAttemptsQuery,
   ListWorkflowEventsOutput,
   ListWorkflowEventsQuery,
+  ListWorkflowEvidenceOutput,
+  ListWorkflowEvidenceQuery,
   ListWorkflowFramesOutput,
   ListWorkflowFramesQuery,
   ListWorkflowOperationsOutput,
@@ -29,10 +36,12 @@ import type {
   WorkflowStructureQuery,
 } from '@isagi/contracts';
 
+import { harnessDefinition } from '../../agent-sessions/harness/definitions.js';
 import type { RuntimeDrizzleDatabase } from '../../persistence/database.service.js';
 import { DatabaseError, RuntimeDatabase } from '../../persistence/index.js';
 import {
   workflowArtifacts,
+  workflowEvidence,
   workflowGraphFrames,
   workflowNodeExecutions,
   workflowOperations,
@@ -42,6 +51,11 @@ import {
   workflowSegmentAttempts,
   workflowVersionAdoptions,
 } from '../../persistence/schema.js';
+import { extensionForMediaType } from '../evidence/media-types.js';
+import {
+  WorkflowContentStore,
+  type WorkflowContentStoreService,
+} from '../persistence/content-store.js';
 import {
   WorkflowPayloadStore,
   workflowPayloadMediaType,
@@ -62,6 +76,12 @@ import {
 } from './cursors.js';
 import { baselineExecutions, boundaryOf, recoveredExecutions } from './executions.js';
 import { payloadBelongsToRun } from './payload-access.js';
+import {
+  evidenceDto,
+  labelPredicates,
+  parseLabelFilters,
+  subtreeExecutionIds,
+} from './project/evidence.js';
 import { attemptDto, versionDto } from './project/records.js';
 import { deltaPage, recordsAt, summaryAt } from './snapshots.js';
 
@@ -122,6 +142,33 @@ export interface WorkflowRunProjectionService {
     runId: number,
     payloadRef: string,
   ) => Effect.Effect<GetWorkflowPayloadOutput, ReadFailure>;
+  readonly listEvidence: (
+    runId: number,
+    query: ListWorkflowEvidenceQuery,
+  ) => Effect.Effect<ListWorkflowEvidenceOutput, ReadFailure>;
+  readonly getEvidence: (
+    runId: number,
+    evidenceKey: string,
+  ) => Effect.Effect<GetWorkflowEvidenceOutput, ReadFailure>;
+  /**
+   * The bytes of one captured record, verified and ready to stream.
+   *
+   * Authorized by the evidence row's own run, not through `payload-access.ts`: a content reference
+   * is not a payload slot, and the payload route's JSON decode would mis-report a PNG as corrupt.
+   */
+  readonly openEvidenceContent: (
+    runId: number,
+    evidenceKey: string,
+  ) => Effect.Effect<EvidenceContentResponse, ReadFailure>;
+  /**
+   * One operation with its provenance, including the transcript locator every other route omits.
+   *
+   * This is the only read that may touch the filesystem, and it does so outside the database read.
+   */
+  readonly getOperation: (
+    runId: number,
+    operationKey: string,
+  ) => Effect.Effect<GetWorkflowOperationOutput, ReadFailure>;
   /**
    * The summaries surface bookkeeping needs: every run currently occupying a surface.
    *
@@ -136,6 +183,45 @@ export interface WorkflowRunProjectionService {
 
 export type ReadFailure = WorkflowEngineError | DatabaseError;
 
+/**
+ * What the content route needs to serve a record.
+ *
+ * Structurally identical to `ContentResponse` in `lib/api/content-endpoint.ts`, and restated rather
+ * than imported so the read layer keeps no dependency on the HTTP layer. The two must change
+ * together; each names the other so that is discoverable rather than discovered.
+ */
+export interface EvidenceContentResponse {
+  readonly stream: Readable;
+  readonly mediaType: string;
+  readonly byteSize: number;
+  readonly filename: string;
+}
+
+/**
+ * Where a harness's native transcript for one operation would be.
+ *
+ * Injected rather than imported at the call site so the read layer's single dependency on the
+ * harness registry is one function a test can replace — and so `getOperation` stays the only read
+ * that can reach a filesystem at all.
+ */
+export interface TranscriptLocator {
+  (input: {
+    readonly harness: AgentHarness;
+    readonly harnessSessionId: string;
+    readonly cwd: string;
+  }): Effect.Effect<{ readonly locator: string; readonly available: boolean } | null>;
+}
+
+const registryTranscriptLocator: TranscriptLocator = (input) =>
+  harnessDefinition(input.harness).observation.locateTranscript?.({
+    harnessSessionId: input.harnessSessionId,
+    cwd: input.cwd,
+  }) ?? Effect.succeed(null);
+
+export interface WorkflowRunProjectionOptions {
+  readonly locateTranscript?: TranscriptLocator | undefined;
+}
+
 export const WorkflowRunProjection = Context.GenericTag<WorkflowRunProjectionService>(
   'isagi/WorkflowRunProjection',
 );
@@ -145,7 +231,8 @@ export const WorkflowRunProjectionLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* RuntimeDatabase;
     const payloads = yield* WorkflowPayloadStore;
-    return makeWorkflowRunProjection(database, payloads);
+    const content = yield* WorkflowContentStore;
+    return makeWorkflowRunProjection(database, payloads, content);
   }),
 );
 
@@ -155,7 +242,10 @@ export function makeWorkflowRunProjection(
     'use' | 'transaction'
   >,
   payloads: WorkflowPayloadStoreService,
+  content: WorkflowContentStoreService,
+  options: WorkflowRunProjectionOptions = {},
 ): WorkflowRunProjectionService {
+  const locateTranscript = options.locateTranscript ?? registryTranscriptLocator;
   /**
    * One read, one consistent view.
    *
@@ -720,6 +810,155 @@ export function makeWorkflowRunProjection(
         };
       }),
 
+    listEvidence: (runId, query) =>
+      read('workflow_list_evidence', (db) => {
+        requireRun(db, runId);
+        const labels = parseLabelFilters(query.label ?? []);
+        const subtree = booleanQuery(query.subtree) ?? false;
+        // The cursor is bound to the normalized filters, so a continuation taken under one filter
+        // set is refused against another rather than quietly serving a different listing.
+        const filters = {
+          frameId: query.frameId,
+          executionId: query.executionId,
+          subtree,
+          role: query.role,
+          labels: labels.map((label) => `${label.key}:${label.value}`),
+        };
+        // Plain keyset paging with no frozen boundary, unlike the recovery reads: evidence rows are
+        // append-only and never mutate, so there is no torn view for a boundary to protect against.
+        const binding: CursorBinding = {
+          route: 'workflows.listEvidence',
+          runId,
+          filters,
+          key: revisionKey,
+        };
+        const limit = limitOf(query.limit);
+        const key = query.cursor === undefined ? null : decodeCursor(query.cursor, binding).key;
+        const capture = aliasedTable(workflowOperations, 'capture_operation');
+        const rows = db
+          .select({
+            evidence: workflowEvidence,
+            operationKey: capture.operationKey,
+            sourceOperationKey: sourceOperationKeyOf(),
+          })
+          .from(workflowEvidence)
+          // Inner: a row cannot exist without its capture operation, which is what writes it.
+          .innerJoin(capture, eq(capture.id, workflowEvidence.operationId))
+          .where(
+            and(
+              eq(workflowEvidence.runId, runId),
+              ...(query.frameId === undefined ? [] : [eq(workflowEvidence.frameId, query.frameId)]),
+              ...(query.executionId === undefined
+                ? []
+                : subtree
+                  ? [
+                      sql`${workflowEvidence.executionId} IN ${subtreeExecutionIds(query.executionId)}`,
+                    ]
+                  : [eq(workflowEvidence.executionId, query.executionId)]),
+              ...(query.role === undefined ? [] : [eq(workflowEvidence.role, query.role)]),
+              ...labelPredicates(labels),
+              ...(key === null ? [] : [gt(workflowEvidence.id, Number(key[0]))]),
+            ),
+          )
+          .orderBy(asc(workflowEvidence.id))
+          .limit(limit + 1)
+          .all();
+        const page = rows.slice(0, limit);
+        const last = page.at(-1);
+        return {
+          items: page.map((row) =>
+            evidenceDto({
+              ...row.evidence,
+              operationKey: row.operationKey,
+              sourceOperationKey: row.sourceOperationKey,
+            }),
+          ),
+          nextCursor:
+            rows.length > limit && last ? encodeCursor(binding, [last.evidence.id]) : null,
+        };
+      }),
+
+    getEvidence: (runId, evidenceKey) =>
+      read('workflow_get_evidence', (db) => {
+        requireRun(db, runId);
+        const row = evidenceRow(db, runId, evidenceKey);
+        return {
+          evidence: evidenceDto({
+            ...row.evidence,
+            operationKey: row.operationKey,
+            sourceOperationKey: row.sourceOperationKey,
+          }),
+        };
+      }),
+
+    openEvidenceContent: (runId, evidenceKey) =>
+      Effect.gen(function* () {
+        const row = yield* read('workflow_open_evidence_content', (db) => {
+          requireRun(db, runId);
+          return evidenceRow(db, runId, evidenceKey).evidence;
+        });
+        const stream = yield* content
+          .open(row.contentRef)
+          .pipe(
+            Effect.catchTag(
+              'ContentUnavailable',
+              evidenceContentUnavailable(runId, row.evidenceKey),
+            ),
+          );
+        return {
+          stream,
+          mediaType: row.mediaType,
+          byteSize: row.byteSize,
+          filename: `${slug(row.title)}-${row.role}${extensionForMediaType(row.mediaType)}`,
+        };
+      }),
+
+    getOperation: (runId, operationKey) =>
+      Effect.gen(function* () {
+        // Projected through the revision snapshot store, exactly as `listOperations` is, so the two
+        // routes can never describe the same operation differently. Reading the live columns here
+        // would make this a second authority for one DTO shape.
+        const dto = yield* read('workflow_get_operation', (db) => {
+          const run = requireRun(db, runId);
+          const row = db
+            .select({ id: workflowOperations.id })
+            .from(workflowOperations)
+            .where(
+              and(
+                eq(workflowOperations.runId, runId),
+                eq(workflowOperations.operationKey, operationKey),
+              ),
+            )
+            .get();
+          const projected =
+            row === undefined
+              ? undefined
+              : recordsAt<WorkflowOperationDto>(db, {
+                  runId,
+                  kind: 'operation',
+                  ids: [row.id],
+                  atRevision: run.revision,
+                }).get(row.id);
+          if (!projected) {
+            throw new WorkflowEngineError({
+              code: 'workflow_operation_not_found',
+              message: `Run ${runId} has no operation ${operationKey}.`,
+              workflowRunId: runId,
+              operationKey,
+            });
+          }
+          return projected;
+        });
+        // Outside the database read on purpose: this is the one route allowed to stat a file, and
+        // `operationDto` also runs inside write transactions, where IO must never happen.
+        const { harness, harnessSessionId, cwd } = dto.provenance;
+        const transcript =
+          harness === null || harnessSessionId === null || cwd === null
+            ? null
+            : yield* locateTranscript({ harness, harnessSessionId, cwd });
+        return { operation: { ...dto, provenance: { ...dto.provenance, transcript } } };
+      }),
+
     listAttachedSummaries: () =>
       read('workflow_list_attached_summaries', (db) => {
         const rows = db
@@ -787,4 +1026,91 @@ function payloadUnavailable(runId: number) {
         payloadCause: error.cause,
       }),
     );
+}
+
+/**
+ * One evidence row with both operation keys, scoped to its run.
+ *
+ * Run-scoped deliberately, exactly as the payload route is: a key another run recorded is not one
+ * this run can serve, and the answer must not distinguish "never existed" from "belongs to somebody
+ * else".
+ */
+/**
+ * The source operation's public key, as a correlated lookup rather than a second join.
+ *
+ * A left join would be the natural expression, but combining one with the inner join above and a
+ * whole-table selection collapses drizzle's row type to `never`. The lookup is a primary-key hit
+ * per row and says the same thing: `null` when nothing resolved, which is a recorded answer rather
+ * than a gap.
+ */
+function sourceOperationKeyOf() {
+  return sql<
+    string | null
+  >`(SELECT op.operation_key FROM workflow_operations op WHERE op.id = ${workflowEvidence.sourceOperationId})`;
+}
+
+interface EvidenceRowWithKeys {
+  readonly evidence: typeof workflowEvidence.$inferSelect;
+  readonly operationKey: string;
+  readonly sourceOperationKey: string | null;
+}
+
+function evidenceRow(
+  db: RuntimeDrizzleDatabase,
+  runId: number,
+  evidenceKey: string,
+): EvidenceRowWithKeys {
+  const capture = aliasedTable(workflowOperations, 'capture_operation');
+  const row = db
+    .select({
+      evidence: workflowEvidence,
+      operationKey: capture.operationKey,
+      sourceOperationKey: sourceOperationKeyOf(),
+    })
+    .from(workflowEvidence)
+    .innerJoin(capture, eq(capture.id, workflowEvidence.operationId))
+    .where(and(eq(workflowEvidence.runId, runId), eq(workflowEvidence.evidenceKey, evidenceKey)))
+    .get();
+  if (!row) {
+    throw new WorkflowEngineError({
+      code: 'workflow_evidence_not_found',
+      message: `Run ${runId} has no captured evidence ${evidenceKey}.`,
+      workflowRunId: runId,
+      evidenceKey,
+    });
+  }
+  return row;
+}
+
+function evidenceContentUnavailable(runId: number, evidenceKey: string) {
+  return (error: { readonly ref: string; readonly cause: 'missing' | 'corrupt' }) =>
+    Effect.fail(
+      new WorkflowEngineError({
+        code: 'workflow_evidence_content_unavailable',
+        message:
+          error.cause === 'missing'
+            ? `Captured content for ${evidenceKey} is no longer stored.`
+            : `Captured content for ${evidenceKey} no longer matches its reference.`,
+        workflowRunId: runId,
+        evidenceKey,
+        payloadCause: error.cause,
+      }),
+    );
+}
+
+/**
+ * The title, reduced to something safe to put in a filename.
+ *
+ * ASCII lowercase, digits and single hyphens only, capped at 64 characters, so the result needs no
+ * RFC 5987 encoding and carries nothing that could break out of a header. A title with nothing
+ * usable in it becomes `evidence` rather than an empty name.
+ */
+function slug(title: string): string {
+  const reduced = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .replace(/-+$/g, '');
+  return reduced.length > 0 ? reduced : 'evidence';
 }

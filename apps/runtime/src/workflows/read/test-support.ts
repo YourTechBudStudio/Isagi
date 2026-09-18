@@ -9,6 +9,7 @@ import type {
 } from '@isagi/contracts';
 
 import type { RuntimeEventBusService } from '../../runtime-events/event-bus.js';
+import type { ResolvedSource } from '../evidence/source.js';
 import type { WorkflowWriteResult } from '../persistence/outcomes.js';
 import {
   createPlacedRun,
@@ -18,7 +19,10 @@ import {
   run,
   type WorkflowPersistenceFixture,
 } from '../persistence/test-support.js';
-import { makeWorkflowRunProjection } from './projection.service.js';
+import {
+  makeWorkflowRunProjection,
+  type WorkflowRunProjectionOptions,
+} from './projection.service.js';
 import { makeWorkflowDeltaPublisher } from './publisher.js';
 
 /**
@@ -44,7 +48,7 @@ export interface ReadHarness {
   readonly close: () => void;
 }
 
-export function makeReadHarness(): ReadHarness {
+export function makeReadHarness(options: WorkflowRunProjectionOptions = {}): ReadHarness {
   const fixture = makeWorkflowPersistenceFixture();
   const events: RuntimeEvent[] = [];
   const bus: Pick<RuntimeEventBusService, 'publish'> = {
@@ -55,7 +59,12 @@ export function makeReadHarness(): ReadHarness {
   };
   return {
     fixture,
-    projection: makeWorkflowRunProjection(fixture.database, fixture.payloads),
+    projection: makeWorkflowRunProjection(
+      fixture.database,
+      fixture.payloads,
+      fixture.content,
+      options,
+    ),
     publisher: makeWorkflowDeltaPublisher(fixture.database, bus, 0),
     events,
     close: fixture.close,
@@ -179,6 +188,92 @@ export async function enterRoot(
   );
   const executions = await run(fixture.runs.listExecutions(input.frameId));
   return executions.at(-1)!;
+}
+
+/**
+ * One capture, driven through the same two writes the verb makes.
+ *
+ * Deliberately not a direct insert into `workflow_evidence`: the guarantee under test is that a row
+ * exists exactly when its operation is `completed`, and only `commitCapture` establishes it. The
+ * intent is recorded first so the operation sits at `intended`, then the bytes are published, then
+ * the capture transaction settles the operation and writes the row together.
+ */
+export async function captureEvidence(
+  fixture: WorkflowPersistenceFixture,
+  input: {
+    readonly runId: number;
+    readonly frameId: number;
+    readonly executionId: number;
+    readonly attemptId: number;
+    readonly callIndex: number;
+    readonly title: string;
+    readonly role: string;
+    readonly labels?: Readonly<Record<string, string | number | boolean>> | undefined;
+    readonly bytes?: Buffer | undefined;
+    readonly mediaType?: string | undefined;
+    readonly source?: ResolvedSource | undefined;
+    readonly artifactHash?: string | undefined;
+    /** Stop after the intent, leaving the capture `intended` with no evidence row. */
+    readonly settle?: boolean | undefined;
+  },
+) {
+  const artifactHash = input.artifactHash ?? PIN_A;
+  const operation = value(
+    await run(
+      fixture.operations.recordIntent({
+        runId: input.runId,
+        frameId: input.frameId,
+        executionId: input.executionId,
+        originAttemptId: input.attemptId,
+        capability: 'capture_evidence',
+        callIndex: input.callIndex,
+        request: { value: { title: input.title, role: input.role } },
+        fingerprintOf: { value: { title: input.title, role: input.role } },
+        artifactHash,
+        provenance: {
+          harness: null,
+          model: null,
+          effort: null,
+          cwd: null,
+          runtimeId: 'runtime-1',
+          incarnationId: INCARNATION,
+        },
+      }),
+    ),
+  );
+  if (input.settle === false) return { operation, evidence: null };
+
+  const mediaType = input.mediaType ?? 'text/plain';
+  const published = await run(
+    fixture.content.put({
+      source: input.bytes ?? Buffer.from(input.title),
+      mediaTypeHint: mediaType,
+    }),
+  );
+  const evidence = value(
+    await run(
+      fixture.evidence.commitCapture({
+        operation,
+        attemptId: input.attemptId,
+        title: input.title,
+        role: input.role,
+        labels: input.labels ?? null,
+        contentKind: 'text',
+        mediaType,
+        byteSize: published.byteSize,
+        contentRef: published.contentRef,
+        sourcePath: null,
+        source: input.source ?? {
+          kind: 'none',
+          agentSessionId: null,
+          operationId: null,
+          attribution: 'none',
+        },
+        now: new Date().toISOString(),
+      }),
+    ),
+  );
+  return { operation, evidence };
 }
 
 export { run, makeWorkflowPersistenceFixture, type WorkflowPersistenceFixture };

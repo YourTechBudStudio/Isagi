@@ -94,7 +94,12 @@ test('a human wait keeps the operation cards instead of replacing them', () => {
         executionId: 1,
         nodeId: 'writer',
         status: 'awaiting',
-        operationSummary: { count: 2, unresolved: 0, capabilities: ['send_agent_prompt'] },
+        operationSummary: {
+          count: 2,
+          unresolved: 0,
+          evidenceCaptured: 0,
+          capabilities: ['send_agent_prompt'],
+        },
         wait: {
           waitId: 9,
           kind: 'user_input',
@@ -331,7 +336,12 @@ test('a subgraph reports its nested totals rather than inventing operations of i
         frameId: 2,
         graphKey: 'review',
         nodeId: 'read',
-        operationSummary: { count: 4, unresolved: 1, capabilities: ['send_agent_prompt'] },
+        operationSummary: {
+          count: 4,
+          unresolved: 1,
+          evidenceCaptured: 0,
+          capabilities: ['send_agent_prompt'],
+        },
       }),
     ],
   });

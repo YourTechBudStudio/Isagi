@@ -336,7 +336,12 @@ export function buildWorld(options: BuildOptions): FixtureWorld {
         endedAt: at(3.5),
         failure: null,
       },
-      operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+      operationSummary: {
+        count: 0,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: [],
+      },
       stateInRef: { payloadRef: 'p:state-in', byteSize: 412, mediaType: 'application/json' },
       candidateRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
       updateRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
@@ -415,6 +420,7 @@ export function buildWorld(options: BuildOptions): FixtureWorld {
       operationSummary: {
         count: triageOperations,
         unresolved: scenario === 'blocked_operation' ? 1 : 0,
+        evidenceCaptured: 0,
         capabilities: ['send_agent_prompt', 'run_headless_agent'],
       },
       stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4', verdict: null } },
@@ -528,7 +534,12 @@ export function buildWorld(options: BuildOptions): FixtureWorld {
           firstArtifactHash: pin,
           latestArtifactHash: pin,
           latestAttempt: attempt(1, pin, 'succeeded'),
-          operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+          operationSummary: {
+            count: 0,
+            unresolved: 0,
+            evidenceCaptured: 0,
+            capabilities: [],
+          },
         }),
       );
     }
@@ -645,7 +656,12 @@ function addReviewPass(input: {
       firstArtifactHash: pin,
       latestArtifactHash: pin,
       latestAttempt: null,
-      operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+      operationSummary: {
+        count: 0,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: [],
+      },
       stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4' } },
     }),
   );
@@ -740,6 +756,7 @@ function addReviewPass(input: {
         operationSummary: {
           count: 1,
           unresolved: 0,
+          evidenceCaptured: 0,
           capabilities: ['send_agent_prompt'],
         },
         stateInRef: { inline: { draft: 'Bump the runtime to 0.0.4', findings: [] } },
@@ -815,7 +832,12 @@ function addReviewPass(input: {
       firstArtifactHash: pin,
       latestArtifactHash: pin,
       latestAttempt: null,
-      operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+      operationSummary: {
+        count: 0,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: [],
+      },
     }),
     workflowExecutionFixture({
       executionId: subgraphExecutionId + 4,
@@ -832,7 +854,12 @@ function addReviewPass(input: {
       firstArtifactHash: pin,
       latestArtifactHash: pin,
       latestAttempt: attempt(1, pin, 'succeeded'),
-      operationSummary: { count: 1, unresolved: 0, capabilities: ['run_headless_agent'] },
+      operationSummary: {
+        count: 1,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: ['run_headless_agent'],
+      },
       stateInRef: { inline: { findings: [] } },
       stateOutRef: { inline: { findings: [] } },
       routing: {
@@ -893,7 +920,12 @@ function addReviewPass(input: {
       firstArtifactHash: pin,
       latestArtifactHash: pin,
       latestAttempt: null,
-      operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+      operationSummary: {
+        count: 0,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: [],
+      },
     }),
     workflowExecutionFixture({
       executionId: subgraphExecutionId + 6,
@@ -910,7 +942,12 @@ function addReviewPass(input: {
       firstArtifactHash: pin,
       latestArtifactHash: pin,
       latestAttempt: attempt(1, pin, 'succeeded'),
-      operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+      operationSummary: {
+        count: 0,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: [],
+      },
       stateInRef: { inline: { findings: [] } },
       stateOutRef: { inline: { findings: [] } },
       routing: {

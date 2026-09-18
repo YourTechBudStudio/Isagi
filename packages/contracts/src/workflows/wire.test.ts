@@ -7,12 +7,14 @@ import { Schema } from 'effect';
 
 import type { ApiEndpoint } from '../api/types.js';
 import { runtimeEventSchema } from '../runtime-events/types.js';
-import { workflowsEndpoints } from './api.js';
+import { workflowContentEndpoints, workflowsEndpoints } from './api.js';
+import { listWorkflowEvidenceQuerySchema, workflowEvidenceSchema } from './evidence.js';
 import {
   workflowAttemptSchema,
   workflowExecutionSchema,
   workflowFrameSchema,
   workflowOperationSchema,
+  workflowOperationSummarySchema,
   workflowTransitionSchema,
 } from './executions.js';
 import {
@@ -297,7 +299,12 @@ const execution = {
     armedAt: at,
     deliveredAt: null,
   },
-  operationSummary: { count: 2, unresolved: 1, capabilities: ['run_headless_agent'] },
+  operationSummary: {
+    count: 2,
+    unresolved: 1,
+    evidenceCaptured: 0,
+    capabilities: ['run_headless_agent'],
+  },
   stateInRef: { inline: { reviewRound: 1 } },
   candidateRef: null,
   updateRef: null,
@@ -318,7 +325,12 @@ test('an execution summarizes capabilities it actually called, not invented ones
   assert.throws(() =>
     decode(workflowExecutionSchema, {
       ...execution,
-      operationSummary: { count: 1, unresolved: 0, capabilities: ['http.get'] },
+      operationSummary: {
+        count: 1,
+        unresolved: 0,
+        evidenceCaptured: 0,
+        capabilities: ['http.get'],
+      },
     }),
   );
 });
@@ -984,7 +996,7 @@ test('a freshly dispatched first visit crosses the wire', () => {
     callbackEndedAt: null,
     waitArmedAt: null,
     waitDeliveredAt: null,
-    operationSummary: { count: 0, unresolved: 0, capabilities: [] },
+    operationSummary: { count: 0, unresolved: 0, evidenceCaptured: 0, capabilities: [] },
     stateInRef: null,
   });
   assert.equal(fresh.visitIndex, 0);
@@ -1548,4 +1560,116 @@ test('preparation is required on every summary, and its status is a closed set',
       preparation: { ...summary.preparation, status: 'in_progress' },
     }),
   );
+});
+
+const evidence = {
+  evidenceKey: 'wev_1',
+  frameId: 1,
+  executionId: 2,
+  attemptId: 3,
+  operationKey: 'wop_capture',
+  title: 'Round two review',
+  role: 'review',
+  labels: { round: 2, phase: 'draft', approved: true },
+  content: {
+    kind: 'text',
+    mediaType: 'text/markdown',
+    byteSize: 512,
+    contentRef: 'sha256:abc',
+    sourcePath: null,
+  },
+  source: {
+    kind: 'agent_turn',
+    agentSessionId: 9,
+    operationKey: 'wop_send',
+    attribution: 'exact',
+  },
+  artifactHash: 'pin-a',
+  capturedAt: at,
+};
+
+test('an evidence record carries its identity, its content reference and its source', () => {
+  const decoded = decode(workflowEvidenceSchema, evidence);
+  assert.equal(decoded.content.contentRef, 'sha256:abc');
+  assert.deepEqual(decoded.labels, { round: 2, phase: 'draft', approved: true });
+  assert.equal(decoded.source.kind, 'agent_turn');
+
+  // A record whose content is gone still decodes: the DTO deliberately makes no availability claim,
+  // because a listing of a thousand rows must not stat a thousand files.
+  assert.ok(!Object.hasOwn(decoded.content, 'available'));
+});
+
+test('an unresolved source is expressible, and `none` cannot carry an attribution', () => {
+  assert.doesNotThrow(() =>
+    decode(workflowEvidenceSchema, {
+      ...evidence,
+      source: {
+        kind: 'agent_session',
+        agentSessionId: 9,
+        operationKey: null,
+        attribution: 'unresolved',
+      },
+    }),
+  );
+  assert.doesNotThrow(() =>
+    decode(workflowEvidenceSchema, { ...evidence, source: { kind: 'none' } }),
+  );
+  // `none` is the attribution of the `none` kind alone. Allowing it on a session-bearing source
+  // would give a record two ways to say "no source" and let a client render neither honestly.
+  assert.throws(() =>
+    decode(workflowEvidenceSchema, {
+      ...evidence,
+      source: {
+        kind: 'agent_turn',
+        agentSessionId: 9,
+        operationKey: null,
+        attribution: 'none',
+      },
+    }),
+  );
+});
+
+test('a label filter is always a list on the wire, however many times it was sent', () => {
+  assert.deepEqual(
+    [...decode(listWorkflowEvidenceQuerySchema, { label: 'round:2' }).label!],
+    ['round:2'],
+    'one occurrence arrives as a bare string and is normalized',
+  );
+  assert.deepEqual(
+    [...decode(listWorkflowEvidenceQuerySchema, { label: ['round:2', 'phase:draft'] }).label!],
+    ['round:2', 'phase:draft'],
+  );
+});
+
+test('a subtree flag with nothing to walk from is refused rather than ignored', () => {
+  assert.doesNotThrow(() =>
+    decode(listWorkflowEvidenceQuerySchema, { executionId: 4, subtree: 'true' }),
+  );
+  assert.doesNotThrow(() => decode(listWorkflowEvidenceQuerySchema, { subtree: 'false' }));
+  // Silently ignoring it would return the run's whole evidence list under a query that asked for one
+  // execution's subtree — a wider answer than the client asked for, with nothing to say so.
+  assert.throws(() => decode(listWorkflowEvidenceQuerySchema, { subtree: 'true' }));
+});
+
+test('the content route is declared beside the JSON routes, not inside them', () => {
+  // A content endpoint has no output schema, so it cannot be a member of the endpoint collection
+  // without breaking that collection's declaration-site check and the typed client's inference.
+  assert.ok(!Object.hasOwn(workflowsEndpoints, 'getEvidenceContent'));
+  const content = workflowContentEndpoints.getEvidenceContent;
+  assert.equal(content.method, 'GET');
+  assert.equal(content.path, '/workflows/runs/:runId/evidence/:evidenceKey/content');
+  assert.ok(!Object.hasOwn(content, 'output'));
+  assert.deepEqual(decode(content.query, { download: 'true' }), { download: 'true' });
+  // `download=1` would arrive as the number 1 after route coercion and match no literal, so one
+  // spelling is declared and it is the one that survives the wire.
+  assert.throws(() => decode(content.query, { download: '1' }));
+});
+
+test('the operation summary reports captured evidence, and it is required', () => {
+  const summaryShape = { count: 2, unresolved: 0, evidenceCaptured: 1, capabilities: [] };
+  assert.equal(decode(workflowOperationSummarySchema, summaryShape).evidenceCaptured, 1);
+  // Optional would let a runtime omit it and leave the client unable to tell "nothing captured"
+  // from "this runtime does not report captures", which is exactly the refresh signal it depends on.
+  const { evidenceCaptured: _omitted, ...without } = summaryShape;
+  assert.throws(() => decode(workflowOperationSummarySchema, without));
 });

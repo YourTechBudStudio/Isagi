@@ -439,11 +439,24 @@ function operationSummary(
   );
   const capabilities = new Set<WorkflowCapability>();
   let unresolved = 0;
+  let evidenceCaptured = 0;
   for (const operation of rows) {
     capabilities.add(operation.capability);
     if (isUnresolved(operation.state)) unresolved += 1;
+    // The one fact that moves exactly when an evidence row exists, which is what makes it usable as
+    // the client's refresh signal. `unresolved` cannot serve: it treats `abandoned` and `completed`
+    // alike, and the ordinary retry path is `intended` -> `abandoned` -> `completed`, across which
+    // `count`, `unresolved` and `capabilities` are all unchanged at the commit that writes the row.
+    if (operation.capability === 'capture_evidence' && operation.state === 'completed') {
+      evidenceCaptured += 1;
+    }
   }
-  return { count: rows.length, unresolved, capabilities: [...capabilities].sort() };
+  return {
+    count: rows.length,
+    unresolved,
+    evidenceCaptured,
+    capabilities: [...capabilities].sort(),
+  };
 }
 
 /** Settled states that still hold the run — `uncertain` above all — are not resolved. */

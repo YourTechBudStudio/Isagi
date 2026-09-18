@@ -31,10 +31,16 @@ import {
 
 /** Route inputs, queries and outputs. */
 
-const booleanStringSchema = Schema.Union(Schema.Boolean, Schema.Literal('true', 'false'));
+/**
+ * Shared query vocabulary.
+ *
+ * Exported rather than private because `evidence.ts` declares its own route inputs and must page
+ * and decode booleans identically; a second copy of either is exactly the drift these represent.
+ */
+export const booleanStringSchema = Schema.Union(Schema.Boolean, Schema.Literal('true', 'false'));
 
 /** Opaque and bound to its run, filters and snapshot boundary. Clients never construct one. */
-const cursorSchema = nonEmptyString;
+export const cursorSchema = nonEmptyString;
 
 /**
  * Every list route pages the same way: default 100, hard maximum 500. The maximum is part of the
@@ -43,7 +49,7 @@ const cursorSchema = nonEmptyString;
  */
 export const workflowListPageLimitMaximum = 500;
 
-const paginationQuerySchema = Schema.Struct({
+export const paginationQuerySchema = Schema.Struct({
   limit: Schema.optional(
     Schema.Number.pipe(
       Schema.int(),
@@ -282,6 +288,22 @@ export const listWorkflowOperationsQuerySchema = Schema.extend(
   }),
 );
 
+/**
+ * One operation by its opaque key.
+ *
+ * Exists so a client can follow an evidence record's `source.operationKey` to the provenance block
+ * without paging `listOperations`. It is also the one read route permitted to touch the filesystem,
+ * for the transcript locator `operationDto` deliberately omits.
+ */
+export const workflowOperationRouteParamsSchema = Schema.Struct({
+  runId: positiveInteger,
+  operationKey: nonEmptyString,
+});
+
+export const getWorkflowOperationOutputSchema = Schema.Struct({
+  operation: workflowOperationSchema,
+});
+
 export const listWorkflowOperationsOutputSchema = Schema.Struct({
   items: Schema.Array(workflowOperationSchema),
   nextCursor: Schema.NullOr(cursorSchema),
@@ -363,6 +385,8 @@ export type ListWorkflowAttemptsOutput = typeof listWorkflowAttemptsOutputSchema
 export type GetWorkflowAttemptOutput = typeof getWorkflowAttemptOutputSchema.Type;
 export type ListWorkflowOperationsQuery = typeof listWorkflowOperationsQuerySchema.Type;
 export type ListWorkflowOperationsOutput = typeof listWorkflowOperationsOutputSchema.Type;
+export type GetWorkflowOperationOutput = typeof getWorkflowOperationOutputSchema.Type;
+export type WorkflowOperationRouteParams = typeof workflowOperationRouteParamsSchema.Type;
 export type ListWorkflowEventsQuery = typeof listWorkflowEventsQuerySchema.Type;
 export type ListWorkflowEventsOutput = typeof listWorkflowEventsOutputSchema.Type;
 export type GetWorkflowPayloadOutput = typeof getWorkflowPayloadOutputSchema.Type;

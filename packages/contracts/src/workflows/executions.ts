@@ -152,6 +152,16 @@ export const workflowPriorFailureSchema = Schema.Struct({
 export const workflowOperationSummarySchema = Schema.Struct({
   count: nonNegativeInteger,
   unresolved: nonNegativeInteger,
+  /**
+   * Completed `capture_evidence` operations across this execution and every execution beneath its
+   * child frame — subtree-inclusive, like the other counts here.
+   *
+   * Because it is subtree-inclusive, nothing may sum it across nesting levels: a visit reads its own
+   * value, and a run-wide total sums only the executions of the root frame, whose subtrees partition
+   * the run. It moves exactly when an evidence row is written, which is what makes it the signal a
+   * client refetches an evidence list on.
+   */
+  evidenceCaptured: nonNegativeInteger,
   /** The capabilities this execution actually called. Recorded facts, never inferred from source. */
   capabilities: Schema.Array(workflowCapabilitySchema),
 });

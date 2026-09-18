@@ -47,3 +47,18 @@ const byExtension: Readonly<Record<string, string>> = {
 export function mediaTypeForExtension(path: string): string {
   return byExtension[posix.extname(path).toLowerCase()] ?? 'application/octet-stream';
 }
+
+/**
+ * A filename extension for a media type, for the download header alone.
+ *
+ * The inverse of the table above, first spelling wins. An unmapped type gets no extension rather
+ * than a guessed one: a name without a suffix is honest, a wrong suffix is not. Parameters are
+ * dropped, so `text/plain; charset=utf-8` is still `.txt`.
+ */
+export function extensionForMediaType(mediaType: string): string {
+  const base = mediaType.split(';')[0]?.trim().toLowerCase() ?? '';
+  for (const [extension, type] of Object.entries(byExtension)) {
+    if (type === base) return extension;
+  }
+  return '';
+}

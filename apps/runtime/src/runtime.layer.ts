@@ -321,6 +321,9 @@ const WorkflowEngineLayer = WorkflowEngineLive.pipe(
 const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowPayloadStoreLayer),
+  // The byte store, for the evidence content route. JSON payload values still go through the
+  // payload store above; this is the layer underneath it, which serves any media type.
+  Layer.provide(WorkflowContentStoreLayer),
 );
 /**
  * The delta publisher, built alongside the API services so it is running before a route can be

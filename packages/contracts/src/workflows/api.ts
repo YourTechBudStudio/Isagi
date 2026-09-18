@@ -1,8 +1,10 @@
 import { workflowApiErrorSchema } from '../api/errors.js';
-import type { ApiEndpoint } from '../api/types.js';
+import type { ApiContentEndpoint, ApiEndpoint } from '../api/types.js';
 import {
   advanceWorkflowInputSchema,
   getWorkflowAttemptOutputSchema,
+  getWorkflowEvidenceOutputSchema,
+  getWorkflowOperationOutputSchema,
   getWorkflowPayloadOutputSchema,
   getWorkflowRunOutputSchema,
   getWorkflowStructureOutputSchema,
@@ -16,6 +18,8 @@ import {
   listWorkflowDescriptorsOutputSchema,
   listWorkflowEventsOutputSchema,
   listWorkflowEventsQuerySchema,
+  listWorkflowEvidenceOutputSchema,
+  listWorkflowEvidenceQuerySchema,
   listWorkflowFramesOutputSchema,
   listWorkflowFramesQuerySchema,
   listWorkflowOperationsOutputSchema,
@@ -27,7 +31,10 @@ import {
   startWorkflowInputSchema,
   startWorkflowOutputSchema,
   workflowAttemptRouteParamsSchema,
+  workflowEvidenceContentQuerySchema,
+  workflowEvidenceRouteParamsSchema,
   workflowFrameRouteParamsSchema,
+  workflowOperationRouteParamsSchema,
   workflowPayloadRouteParamsSchema,
   workflowRunControlOutputSchema,
   workflowRunRouteParamsSchema,
@@ -155,6 +162,31 @@ export const workflowsEndpoints = {
     output: listWorkflowEventsOutputSchema,
     errors: workflowApiErrorSchema,
   },
+  getOperation: {
+    id: 'workflows.getOperation',
+    method: 'GET',
+    path: '/workflows/runs/:runId/operations/:operationKey',
+    params: workflowOperationRouteParamsSchema,
+    output: getWorkflowOperationOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listEvidence: {
+    id: 'workflows.listEvidence',
+    method: 'GET',
+    path: '/workflows/runs/:runId/evidence',
+    params: workflowRunRouteParamsSchema,
+    query: listWorkflowEvidenceQuerySchema,
+    output: listWorkflowEvidenceOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  getEvidence: {
+    id: 'workflows.getEvidence',
+    method: 'GET',
+    path: '/workflows/runs/:runId/evidence/:evidenceKey',
+    params: workflowEvidenceRouteParamsSchema,
+    output: getWorkflowEvidenceOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
   getPayload: {
     id: 'workflows.getPayload',
     method: 'GET',
@@ -217,3 +249,23 @@ export const workflowsEndpoints = {
   // `satisfies` keeps the declaration-site check that every entry is a legal endpoint — method,
   // path shape, and the schema slots — without having to restate each endpoint's generic arguments.
 } as const satisfies Record<string, ApiEndpoint<any, any, any, any, any>>;
+
+/**
+ * Content routes: a sibling export, deliberately not a member of `workflowsEndpoints`.
+ *
+ * A content route has no `output` schema, because what it returns is a stream. Folding it into the
+ * collection above would break that collection's `satisfies Record<string, ApiEndpoint>` check and
+ * the typed web requester's output inference, both of which exist to catch real mistakes. Keeping
+ * it beside them instead means the next non-JSON body is a declaration rather than another
+ * exception.
+ */
+export const workflowContentEndpoints = {
+  getEvidenceContent: {
+    id: 'workflows.getEvidenceContent',
+    method: 'GET',
+    path: '/workflows/runs/:runId/evidence/:evidenceKey/content',
+    params: workflowEvidenceRouteParamsSchema,
+    query: workflowEvidenceContentQuerySchema,
+    errors: workflowApiErrorSchema,
+  },
+} as const satisfies Record<string, ApiContentEndpoint<any, any, any>>;

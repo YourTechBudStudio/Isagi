@@ -160,6 +160,78 @@ test('a stale control refusal keeps its own reason rather than collapsing to a g
   );
 });
 
+test('an evidence listing repeats its label parameter instead of joining it', async () => {
+  const recorded = await capture({ items: [], nextCursor: null }, (client) =>
+    client.listWorkflowEvidence(77, {
+      executionId: 12,
+      subtree: 'true',
+      role: 'review',
+      label: ['round:2', 'phase:draft'],
+    }),
+  );
+  const url = new URL(recorded.url);
+  assert.equal(url.pathname, '/api/v1/workflows/runs/77/evidence');
+  assert.deepEqual(
+    url.searchParams.getAll('label'),
+    ['round:2', 'phase:draft'],
+    'a comma-joined value would make the separator illegal inside a label forever',
+  );
+  assert.equal(url.searchParams.get('executionId'), '12');
+  assert.equal(url.searchParams.get('subtree'), 'true');
+});
+
+test('evidence content is fetched as bytes, with the download variant available as a URL', async () => {
+  let seen: string | null = null;
+  globalThis.fetch = ((input) => {
+    seen = String(input);
+    return Promise.resolve(new Response('round one verdict', { status: 200 }));
+  }) as typeof fetch;
+
+  const client = createRuntimeClient(runtimeUrl);
+  const blob = await Effect.runPromise(
+    client.fetchWorkflowEvidenceContent(77, 'wev_abc') as Effect.Effect<Blob, never>,
+  );
+  assert.equal(await blob.text(), 'round one verdict');
+  assert.equal(seen, `${runtimeUrl}/api/v1/workflows/runs/77/evidence/wev_abc/content`);
+  assert.equal(
+    client.workflowEvidenceContentUrl(77, 'wev_abc', { download: true }),
+    `${runtimeUrl}/api/v1/workflows/runs/77/evidence/wev_abc/content?download=true`,
+  );
+});
+
+test('an unreadable capture comes back as the structured rejection, not as empty bytes', async () => {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'workflow_rejected',
+            status: 400,
+            message: 'Captured content for wev_abc is no longer stored.',
+            requestId: 'req',
+            data: {
+              reason: 'workflow_evidence_content_unavailable',
+              evidenceKey: 'wev_abc',
+              cause: 'missing',
+            },
+          },
+        }),
+        { status: 400 },
+      ),
+    )) as typeof fetch;
+
+  const failure = await Effect.runPromise(
+    Effect.either(createRuntimeClient(runtimeUrl).fetchWorkflowEvidenceContent(77, 'wev_abc')),
+  );
+  assert.ok(failure._tag === 'Left');
+  const error = failure.left as RuntimeApiError<never>;
+  assert.deepEqual(apiErrorData(error), {
+    reason: 'workflow_evidence_content_unavailable',
+    evidenceKey: 'wev_abc',
+    cause: 'missing',
+  });
+});
+
 async function capture<Output>(
   data: unknown,
   call: (client: ReturnType<typeof createRuntimeClient>) => Effect.Effect<Output, unknown>,

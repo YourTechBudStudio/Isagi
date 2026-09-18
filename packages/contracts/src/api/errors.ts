@@ -408,6 +408,8 @@ const workflowRejectionContextFields = {
   artifactHash: Schema.optional(Schema.String),
   /** The operation holding a blocked run, for `workflow_operation_uncertain`. */
   operationKey: Schema.optional(Schema.String),
+  /** Which captured record, for `workflow_evidence_not_found`. */
+  evidenceKey: Schema.optional(Schema.String),
   /** Which way a placement is unusable, for `workflow_placement_invalid`. */
   placementIssue: Schema.optional(
     Schema.Literal('surface_not_on_worktree', 'worktree_not_in_project', 'invalid_surface_title'),
@@ -426,6 +428,12 @@ const workflowRejectionContextFields = {
 const workflowContextualRejectionReasonSchema = Schema.Literal(
   'workflow_structure_validation_failed',
   'workflow_payload_unavailable',
+  /**
+   * Captured evidence exists as a record, but its bytes could not be served. Contextual for the
+   * same reason `workflow_payload_unavailable` is: a client that cannot say *which* record and
+   * *why* has nothing honest to render beside the metadata it already has.
+   */
+  'workflow_evidence_content_unavailable',
 );
 
 /** Reasons that carry no mandatory context of their own. */
@@ -481,6 +489,22 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_environment_collision',
   /** Pause and Resume are refused while a run is still preparing its environment. */
   'workflow_run_preparing',
+  /**
+   * No operation with that key belongs to this run.
+   *
+   * Distinct from `workflow_run_not_found`, which would be a false statement about a run that does
+   * exist, and the difference matters: one means "start again from the run list", the other means
+   * "that key is stale".
+   */
+  'workflow_operation_not_found',
+  /**
+   * No evidence record with that key belongs to this run.
+   *
+   * Scoped to the run deliberately, exactly as the payload route is: an evidence key another run
+   * recorded is not one this run can serve, and the answer must not distinguish "never existed"
+   * from "belongs to somebody else".
+   */
+  'workflow_evidence_not_found',
 );
 
 /**
@@ -519,6 +543,16 @@ export const workflowRejectionDataSchema = Schema.Union(
     payloadRef: Schema.String.pipe(Schema.minLength(1)),
     cause: Schema.Literal('missing', 'corrupt'),
     ...workflowRejectionContextFields,
+  }),
+  Schema.Struct({
+    // The spread comes first so the mandatory `evidenceKey` below overrides the optional one the
+    // shared context fields carry for `workflow_evidence_not_found`. This variant exists precisely
+    // to make the key non-optional.
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_evidence_content_unavailable'),
+    /** Which captured record could not be served, and why. */
+    evidenceKey: Schema.String.pipe(Schema.minLength(1)),
+    cause: Schema.Literal('missing', 'corrupt'),
   }),
   Schema.Struct({
     reason: workflowPlainRejectionReasonSchema,

@@ -1,5 +1,7 @@
 export { registerApiEndpoint } from './endpoint.js';
 export type { RegisterApiEndpointOptions } from './endpoint.js';
+export { registerContentEndpoint } from './content-endpoint.js';
+export type { ContentResponse, RegisterContentEndpointOptions } from './content-endpoint.js';
 export {
   errorMessage,
   requestDecodingFailed,

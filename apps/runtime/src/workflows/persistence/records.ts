@@ -4,6 +4,9 @@ import type {
   WorkflowAttemptStatus,
   WorkflowCapability,
   WorkflowEndCertainty,
+  WorkflowEvidenceContentKind,
+  WorkflowEvidenceSourceAttribution,
+  WorkflowEvidenceSourceKind,
   WorkflowExecutionStatus,
   WorkflowFailureCode,
   WorkflowFrameStatus,
@@ -40,17 +43,6 @@ import type { PayloadSlot } from './payload-store.js';
 
 export type WorkflowOperationTargetKind = 'agent_session' | 'pane' | 'pty_process' | 'none';
 export type WorkflowOperationAttribution = 'not_applicable' | 'inferred_by_watermark' | 'ambiguous';
-export type WorkflowEvidenceContentKind = 'text' | 'json' | 'file' | 'bytes';
-export type WorkflowEvidenceSourceKind =
-  | 'none'
-  | 'agent_turn'
-  | 'headless_operation'
-  | 'agent_session';
-export type WorkflowEvidenceSourceAttribution =
-  | 'none'
-  | 'exact'
-  | 'inferred_latest_operation'
-  | 'unresolved';
 export type WorkflowVersionAdoptionReason = 'launch' | 'retry';
 export type WorkflowPauseReason = 'control' | 'environment_deleted' | 'runtime_restart';
 

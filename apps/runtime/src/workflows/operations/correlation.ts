@@ -12,12 +12,13 @@ import type {
   WorkflowPromptModifiers,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
-import type { WorkflowCapability, WorkflowOperationState } from '@isagi/contracts';
-
 import type {
+  WorkflowCapability,
   WorkflowEvidenceContentKind,
-  WorkflowOperationRecord,
-} from '../persistence/records.js';
+  WorkflowOperationState,
+} from '@isagi/contracts';
+
+import type { WorkflowOperationRecord } from '../persistence/records.js';
 
 /**
  * The author's intent for one call, and the only thing the fingerprint covers.

@@ -14,12 +14,13 @@
 
 import { Effect } from 'effect';
 
-import type { NormalizedEvidenceSource } from '../operations/correlation.js';
-import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
 import type {
   WorkflowEvidenceSourceAttribution,
   WorkflowEvidenceSourceKind,
-} from '../persistence/records.js';
+} from '@isagi/contracts';
+
+import type { NormalizedEvidenceSource } from '../operations/correlation.js';
+import type { WorkflowOperationsRepositoryService } from '../persistence/operations.repository.js';
 
 export interface ResolvedSource {
   readonly kind: WorkflowEvidenceSourceKind;

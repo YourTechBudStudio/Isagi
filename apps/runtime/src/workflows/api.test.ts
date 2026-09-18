@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 
 import { Effect, Either } from 'effect';
@@ -752,4 +753,275 @@ test('a Git failure under a launch is reported as a Git failure, not as an unhan
     'origin/main^{commit}',
   ]);
   assert.equal(decoded.error.data.cwd, '/repo');
+});
+
+test('the evidence content route sends bytes with the headers a client needs', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        openEvidenceContent: (runId: number, evidenceKey: string) =>
+          Effect.sync(() => {
+            seen = { runId, evidenceKey };
+            return {
+              stream: Readable.from([Buffer.from('round one'), Buffer.from(' verdict')]),
+              mediaType: 'text/plain',
+              byteSize: 17,
+              filename: 'round-one-review.txt',
+            };
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence/wev_abc/content',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, { runId: 7, evidenceKey: 'wev_abc' });
+  assert.equal(response.body, 'round one verdict', 'the body is the bytes, not an envelope');
+  assert.equal(response.headers['content-type'], 'text/plain');
+  assert.equal(response.headers['content-length'], '17');
+  assert.equal(response.headers['cache-control'], 'private, immutable');
+  assert.equal(
+    response.headers['content-disposition'],
+    undefined,
+    'an inline view is not an attachment',
+  );
+});
+
+test('download=true asks for an attachment, and a hostile title cannot break the header', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        openEvidenceContent: () =>
+          Effect.succeed({
+            stream: Readable.from([Buffer.from('x')]),
+            mediaType: 'text/plain',
+            byteSize: 1,
+            // What a slug would never produce, so the header's own guard is what is under test.
+            filename: 'ship"it\r\nX-Injected: yes\r\n-review.txt',
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence/wev_abc/content?download=true',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(
+    response.headers['content-disposition'],
+    'attachment; filename="shipitX-Injected: yes-review.txt"',
+    'quotes and line breaks are removed, so the value stays one well-formed header line',
+  );
+  assert.equal(
+    response.headers['x-injected'],
+    undefined,
+    'and nothing in the title became a header of its own',
+  );
+});
+
+test('a content failure before the first byte is the ordinary JSON error envelope', async () => {
+  for (const cause of ['missing', 'corrupt'] as const) {
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(
+      fastify,
+      withServices({
+        projection: {
+          openEvidenceContent: () =>
+            Effect.fail(
+              new WorkflowEngineError({
+                code: 'workflow_evidence_content_unavailable',
+                message: 'Captured content is unreadable.',
+                workflowRunId: 7,
+                evidenceKey: 'wev_abc',
+                payloadCause: cause,
+              }),
+            ),
+        },
+      }),
+    );
+
+    const response = await fastify.inject({
+      method: 'GET',
+      url: '/api/v1/workflows/runs/7/evidence/wev_abc/content',
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.headers['content-type']?.toString().startsWith('application/json'), true);
+    const decoded = body<{ error: { code: string; data: Record<string, unknown> } }>(response.body);
+    assert.equal(decoded.error.code, 'workflow_rejected');
+    assert.deepEqual(decoded.error.data, {
+      reason: 'workflow_evidence_content_unavailable',
+      evidenceKey: 'wev_abc',
+      cause,
+      workflowRunId: 7,
+    });
+  }
+});
+
+test('an evidence key another run recorded is refused, and says nothing more', async () => {
+  const fastify = Fastify({ logger: false });
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        getEvidence: () =>
+          Effect.fail(
+            new WorkflowEngineError({
+              code: 'workflow_evidence_not_found',
+              message: 'Run 7 has no captured evidence wev_other.',
+              workflowRunId: 7,
+              evidenceKey: 'wev_other',
+            }),
+          ),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence/wev_other',
+  });
+
+  assert.equal(response.statusCode, 400);
+  const decoded = body<{ error: { data: Record<string, unknown> } }>(response.body);
+  assert.deepEqual(decoded.error.data, {
+    reason: 'workflow_evidence_not_found',
+    workflowRunId: 7,
+    evidenceKey: 'wev_other',
+  });
+});
+
+test('the listing route sends the record and never hydrates its content on the way out', async () => {
+  const fastify = Fastify({ logger: false });
+  // Bytes the route could only include by fetching them, which is exactly the tempting optimisation
+  // the metadata-first split forbids: "the list is small, hydrate it so the UI needs no second call".
+  const captured = 'the judge said ship it';
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listEvidence: () =>
+          Effect.succeed({
+            items: [
+              {
+                evidenceKey: 'wev_abc',
+                frameId: 1,
+                executionId: 12,
+                attemptId: 3,
+                operationKey: 'wop_capture',
+                title: 'Judge verdict',
+                role: 'verdict',
+                labels: { round: 2 },
+                content: {
+                  kind: 'text',
+                  mediaType: 'text/plain',
+                  byteSize: captured.length,
+                  contentRef: 'sha256:abc',
+                  sourcePath: null,
+                },
+                source: { kind: 'none' },
+                artifactHash: 'pin-a',
+                capturedAt: '2026-01-01T00:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence',
+  });
+
+  assert.equal(response.statusCode, 200);
+  const decoded = body<{ data: { items: readonly { evidenceKey: string }[] } }>(response.body);
+  assert.equal(decoded.data.items[0]?.evidenceKey, 'wev_abc', 'the record itself is delivered');
+  assert.ok(
+    !response.body.includes(captured),
+    'and its bytes are not, at any point between the projection and the wire',
+  );
+});
+
+test('the evidence listing passes its filters through, repeated labels included', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listEvidence: (runId: number, query: unknown) =>
+          Effect.sync(() => {
+            seen = { runId, query };
+            return { items: [], nextCursor: null };
+          }),
+      },
+    }),
+  );
+
+  const response = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence?executionId=12&subtree=true&role=review&label=round%3A2&label=phase%3Adraft',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, {
+    runId: 7,
+    query: {
+      executionId: 12,
+      subtree: 'true',
+      role: 'review',
+      label: ['round:2', 'phase:draft'],
+    },
+  });
+});
+
+test('one label arrives as a list too, and subtree without an execution is refused', async () => {
+  const fastify = Fastify({ logger: false });
+  let seen: unknown = null;
+  registerWorkflowApi(
+    fastify,
+    withServices({
+      projection: {
+        listEvidence: (_runId: number, query: unknown) =>
+          Effect.sync(() => {
+            seen = query;
+            return { items: [], nextCursor: null };
+          }),
+      },
+    }),
+  );
+
+  const single = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence?label=round%3A2',
+  });
+  assert.equal(single.statusCode, 200);
+  assert.deepEqual(
+    seen,
+    { label: ['round:2'] },
+    'HTTP gives one occurrence as a bare string; the contract normalizes it',
+  );
+
+  const orphaned = await fastify.inject({
+    method: 'GET',
+    url: '/api/v1/workflows/runs/7/evidence?subtree=true',
+  });
+  assert.equal(
+    orphaned.statusCode,
+    400,
+    'a subtree flag with nothing to walk from is a decoding failure, not a silently ignored flag',
+  );
 });

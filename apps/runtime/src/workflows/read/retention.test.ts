@@ -45,7 +45,11 @@ function read<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
 }
 
 function projectionOf(harness: EngineHarness) {
-  return makeWorkflowRunProjection(harness.fixture.database, harness.fixture.payloads);
+  return makeWorkflowRunProjection(
+    harness.fixture.database,
+    harness.fixture.payloads,
+    harness.fixture.content,
+  );
 }
 
 /**

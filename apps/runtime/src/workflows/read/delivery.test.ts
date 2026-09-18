@@ -11,8 +11,10 @@ import { makeWorkflowRunsRepository } from '../persistence/runs.repository.js';
 import type { WorkflowWriteWakeService } from '../persistence/write-wake.js';
 import { makeWorkflowDeltaPublisher } from './publisher.js';
 import {
+  captureEvidence,
   claim,
   enterRoot,
+  fence,
   makeReadHarness,
   PIN_A,
   run,
@@ -320,6 +322,153 @@ test('surface bookkeeping announces a released attachment once, when it is relea
       harness.events.filter((event) => event.type === 'workflow_run_detached').length,
       1,
       'detachment is an edge, not a state the stream repeats',
+    );
+  });
+});
+
+test('a completed capture re-delivers its execution, and every ancestor of a nested one', async () => {
+  await withHarness(async (harness) => {
+    const { runId, rootFrameId } = await startRun(harness.fixture);
+    const writer = await enterRoot(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      nodeId: 'writer',
+    });
+    await read(harness.publisher.drainOnce);
+
+    /** The captured counts this drain delivered, per execution. */
+    const delivered = async () => {
+      harness.events.length = 0;
+      await read(harness.publisher.drainOnce);
+      const counts = new Map<number, number>();
+      for (const event of harness.events) {
+        if (event.type !== 'workflow_run_transition') continue;
+        for (const execution of event.payload.changes.executions) {
+          counts.set(execution.executionId, execution.operationSummary.evidenceCaptured);
+        }
+      }
+      return counts;
+    };
+
+    const callback = await claim(harness.fixture, runId);
+    const intent = await captureEvidence(harness.fixture, {
+      runId,
+      frameId: rootFrameId,
+      executionId: writer.id,
+      attemptId: callback.attempt.id,
+      callIndex: 0,
+      title: 'Draft',
+      role: 'draft',
+      settle: false,
+    });
+    assert.equal(
+      (await delivered()).get(writer.id),
+      0,
+      'recording the intent delivers the execution with nothing captured yet',
+    );
+
+    const published = await run(
+      harness.fixture.content.put({ source: Buffer.from('Draft'), mediaTypeHint: 'text/plain' }),
+    );
+    value(
+      await run(
+        harness.fixture.evidence.commitCapture({
+          operation: intent.operation,
+          attemptId: callback.attempt.id,
+          title: 'Draft',
+          role: 'draft',
+          labels: null,
+          contentKind: 'text',
+          mediaType: 'text/plain',
+          byteSize: published.byteSize,
+          contentRef: published.contentRef,
+          sourcePath: null,
+          source: { kind: 'none', agentSessionId: null, operationId: null, attribution: 'none' },
+          now: new Date().toISOString(),
+        }),
+      ),
+    );
+    assert.equal(
+      (await delivered()).get(writer.id),
+      1,
+      'the commit that writes the evidence row is the one that moves the count on the wire',
+    );
+
+    // A capture inside a child frame must re-deliver the ancestor whose subtree count it changed —
+    // otherwise a dock showing the parent would keep an out-of-date number with nothing to correct it.
+    value(
+      await run(
+        harness.fixture.runs.commitNodeResult({
+          ...fence(runId, callback.attempt.id),
+          frameId: rootFrameId,
+          executionId: writer.id,
+          state: { value: { rounds: 1 } },
+          producerOutput: { value: { type: 'route' } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'routing', edgeId: 'writer-out' },
+        }),
+      ),
+    );
+    const routing = await claim(harness.fixture, runId);
+    value(
+      await run(
+        harness.fixture.runs.commitRouting({
+          ...fence(runId, routing.attempt.id),
+          frameId: rootFrameId,
+          executionId: writer.id,
+          state: { value: { rounds: 1 } },
+          producerOutput: { value: { to: 'review' } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'node', nodeId: 'review', nodeKind: 'subgraph' },
+        }),
+      ),
+    );
+    const subgraph = (await run(harness.fixture.runs.listExecutions(rootFrameId))).at(-1)!;
+    const before = await run(harness.fixture.runs.findRun(runId));
+    const childFrameId = value(
+      await run(
+        harness.fixture.runs.enterSubgraph({
+          runId,
+          controlRevision: before!.controlRevision,
+          expectedPosition: before!.position,
+          artifactHash: PIN_A,
+          parentExecutionId: subgraph.id,
+          childGraphKey: 'review',
+          childDisplayName: 'review round 0',
+        }),
+      ),
+    ).childFrameId;
+    const childEntry = await claim(harness.fixture, runId);
+    value(
+      await run(
+        harness.fixture.runs.commitGraphEntry({
+          ...fence(runId, childEntry.attempt.id),
+          frameId: childFrameId,
+          parameters: { value: { draft: 'v1' } },
+          state: { value: { verdict: null } },
+          entryNode: { nodeId: 'judge', nodeKind: 'operation' },
+        }),
+      ),
+    );
+    const nested = (await run(harness.fixture.runs.listExecutions(childFrameId))).at(-1)!;
+    const nestedCallback = await claim(harness.fixture, runId);
+    await read(harness.publisher.drainOnce);
+
+    await captureEvidence(harness.fixture, {
+      runId,
+      frameId: childFrameId,
+      executionId: nested.id,
+      attemptId: nestedCallback.attempt.id,
+      callIndex: 0,
+      title: 'Verdict',
+      role: 'verdict',
+    });
+    const counts = await delivered();
+    assert.equal(counts.get(nested.id), 1, 'the nested execution reports its own capture');
+    assert.equal(
+      counts.get(subgraph.id),
+      1,
+      'and its ancestor is re-delivered with the subtree-inclusive total',
     );
   });
 });

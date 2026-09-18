@@ -34,7 +34,11 @@ function inspect(harness: EngineHarness) {
       }),
   };
   return {
-    projection: makeWorkflowRunProjection(harness.fixture.database, harness.fixture.payloads),
+    projection: makeWorkflowRunProjection(
+      harness.fixture.database,
+      harness.fixture.payloads,
+      harness.fixture.content,
+    ),
     publisher: makeWorkflowDeltaPublisher(harness.fixture.database, bus, 0),
     events,
   };

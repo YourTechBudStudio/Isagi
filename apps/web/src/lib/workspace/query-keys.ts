@@ -99,3 +99,32 @@ export const workflowPayloadQueryKey = (
   runId: number | null,
   payloadRef: string | null,
 ) => ['workflows', runtimeIdentity, 'payload', runId, payloadRef] as const;
+
+/**
+ * One evidence listing.
+ *
+ * `signal` is the run's completed-capture count under the requested scope, not a clock: a list is
+ * refetched exactly when a capture commits, and nothing else moves it. The filters are in the key
+ * because a different filter set is a different listing, not a stale view of this one.
+ */
+export const workflowEvidenceListQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  scope: string,
+  filters: string,
+  signal: number,
+) => ['workflows', runtimeIdentity, 'evidence', runId, scope, filters, signal] as const;
+
+/** Immutable once written, like a payload: the bytes a reference names cannot change. */
+export const workflowEvidenceContentQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  evidenceKey: string | null,
+) => ['workflows', runtimeIdentity, 'evidence-content', runId, evidenceKey] as const;
+
+/** One operation with its provenance, read on demand from an evidence record's source. */
+export const workflowOperationQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  operationKey: string | null,
+) => ['workflows', runtimeIdentity, 'operation', runId, operationKey] as const;

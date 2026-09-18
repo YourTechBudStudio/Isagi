@@ -5,8 +5,10 @@ import type {
   AdvanceWorkflowInput,
   GetWorkflowStructureOutput,
   ListWorkflowEventsOutput,
+  ListWorkflowEvidenceOutput,
   StartWorkflowInput,
   WorkflowLaunchOrigin,
+  WorkflowEvidenceDto,
   WorkflowOperationDto,
   WorkflowRunSummary,
 } from '@isagi/contracts';
@@ -22,16 +24,22 @@ import {
   workflowCurrentStructureQueryKey,
   workflowDescriptorQueryKey,
   workflowExecutionOperationsQueryKey,
+  workflowEvidenceContentQueryKey,
+  workflowEvidenceListQueryKey,
+  workflowOperationQueryKey,
 } from '../query-keys.js';
 import {
   advanceWorkflow,
   cancelWorkflow,
   dismissWorkflow,
+  fetchWorkflowEvidenceContent,
+  getWorkflowOperation,
   getWorkflowPayload,
   getWorkflowRun,
   getWorkflowStructure,
   listWorkflowDescriptors,
   listWorkflowEvents,
+  listWorkflowEvidence,
   listWorkflowOperations,
   pauseWorkflow,
   resolveRuntimeIdentity,
@@ -42,6 +50,13 @@ import {
 import { requestAttachedWorkflowRuns } from '../runtime-events.js';
 import { AttachedRunsSync, attachedRunForSurface, type AttachedRuns } from './attached.js';
 import { RunSynchronizer } from './coordinator.js';
+import {
+  evidenceListQuery,
+  evidenceQueryIdentity,
+  evidenceRefreshSignal,
+  type EvidenceFilters,
+  type EvidenceScope,
+} from './evidence.js';
 import { isDiagnosticTransition, workflowLogLine, type WorkflowLogLine } from './log.js';
 import { emptyRunState, selectOperations, type WorkflowRunState } from './model.js';
 import { hydrateExecutionOperations, runStateAccessors } from './operations.js';
@@ -577,6 +592,102 @@ export function useWorkflowPayloadQuery(
         throw new Error('A workflow payload read needs a run and a reference.');
       }
       return runRuntimeEffect(getWorkflowPayload(runId, payloadRef), { signal });
+    },
+  });
+}
+
+/**
+ * Every page of one evidence listing, in one query.
+ *
+ * Paged completely before anything is returned, following `hydrateExecutionOperations`: a partial
+ * read is not an answer, and a list that stopped at page one would understate what a run captured.
+ *
+ * The key carries the refresh signal rather than a clock, so this refetches exactly when a capture
+ * commits. Evidence rows are immutable once written, so nothing else can change a page.
+ */
+export function useWorkflowEvidenceList(
+  state: WorkflowRunState | null,
+  scope: EvidenceScope,
+  filters: EvidenceFilters = {},
+) {
+  const runtimeIdentity = useRuntimeIdentity();
+  const runId = state?.runId ?? null;
+  const signal = evidenceRefreshSignal(state, scope);
+  const identity = evidenceQueryIdentity(scope, filters);
+  const enabled = runId !== null && runtimeIdentity !== null;
+
+  return useQuery({
+    queryKey: workflowEvidenceListQueryKey(runtimeIdentity, runId, scope.kind, identity, signal),
+    enabled,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: async ({ signal: abort }): Promise<readonly WorkflowEvidenceDto[]> => {
+      if (runId === null) throw new Error('An evidence listing needs a run.');
+      const items: WorkflowEvidenceDto[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: ListWorkflowEvidenceOutput = await runRuntimeEffect(
+          listWorkflowEvidence(runId, evidenceListQuery(scope, filters, { limit: 100, cursor })),
+          { signal: abort },
+        );
+        items.push(...page.items);
+        cursor = page.nextCursor;
+        abort.throwIfAborted();
+      } while (cursor !== null);
+      return items;
+    },
+  });
+}
+
+/**
+ * The bytes of one record, fetched only when someone asks to see them.
+ *
+ * `retry: false` and a preserved error for the same reason the payload read keeps them: content
+ * that is gone or no longer matches its reference is a fact about the run, and showing an empty
+ * preview instead would hide it.
+ */
+export function useWorkflowEvidenceContent(
+  runId: number | null,
+  evidenceKey: string | null,
+  options: { readonly enabled?: boolean | undefined } = {},
+) {
+  const runtimeIdentity = useRuntimeIdentity();
+  return useQuery({
+    queryKey: workflowEvidenceContentQueryKey(runtimeIdentity, runId, evidenceKey),
+    enabled: (options.enabled ?? false) && runId !== null && evidenceKey !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    queryFn: ({ signal }) => {
+      if (runId === null || evidenceKey === null) {
+        throw new Error('An evidence content read needs a run and a key.');
+      }
+      return runRuntimeEffect(fetchWorkflowEvidenceContent(runId, evidenceKey), { signal });
+    },
+  });
+}
+
+/** One operation's provenance, followed from an evidence record's source. */
+export function useWorkflowOperationQuery(
+  runId: number | null,
+  operationKey: string | null,
+  options: { readonly enabled?: boolean | undefined } = {},
+) {
+  const runtimeIdentity = useRuntimeIdentity();
+  return useQuery({
+    queryKey: workflowOperationQueryKey(runtimeIdentity, runId, operationKey),
+    enabled: (options.enabled ?? false) && runId !== null && operationKey !== null,
+    // Not immutable: an operation settles, and its provenance gains a native session id and usage
+    // when it does. Short rather than infinite, so a card opened mid-flight does not stay stale.
+    staleTime: 5_000,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) => {
+      if (runId === null || operationKey === null) {
+        throw new Error('An operation read needs a run and an operation key.');
+      }
+      return runRuntimeEffect(getWorkflowOperation(runId, operationKey), { signal });
     },
   });
 }
