@@ -14,6 +14,8 @@ export type OperationRejectionCode =
       | 'operation_request_changed'
       | 'operation_uncertain'
       | 'operation_context_closed'
+      /** `ctx.captureEvidence` refused the call; `detail.reason` names which rule it broke. */
+      | 'evidence_capture_rejected'
     >
   | 'workflow_operation_launch_failed'
   | 'workflow_operation_failed'

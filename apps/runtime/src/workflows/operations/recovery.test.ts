@@ -1216,3 +1216,158 @@ test('a settled operation publishes exactly one settlement notification', async 
     harness.close();
   }
 });
+
+// --- evidence capture: abandon after intent, then reopen ------------------------------------------
+
+const capture = {
+  title: 'Reviewer feedback',
+  role: 'review-feedback',
+  content: { kind: 'text' as const, text: 'round one' },
+};
+
+const evidenceRows = (harness: OperationHarness) =>
+  harness.fixture.client
+    .prepare('SELECT evidence_key, operation_id, attempt_id FROM workflow_evidence')
+    .all() as { evidence_key: string; operation_id: number; attempt_id: number }[];
+
+test('a capture that fails after intent is abandoned, then reopened and completed under the same key', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    // Publication fails after the position is claimed: the one window that leaves an operation with
+    // no evidence row, which is what the recovery rules exist for.
+    harness.fixture.failNextPut();
+    const first = await attempt(harness, (ctx) =>
+      ctx.captureEvidence(capture).catch((cause: unknown) => cause),
+    );
+    const rejection = (first as { value: unknown }).value;
+    assert.ok(rejection instanceof OperationRejection);
+    assert.equal(rejection.code, 'evidence_capture_rejected');
+    assert.equal(rejection.detail.reason, 'content_unavailable');
+
+    const intended = await onlyOperation(harness);
+    assert.equal(intended.state, 'intended');
+    assert.deepEqual(evidenceRows(harness), [], 'nothing was captured, so nothing is recorded');
+
+    // A new incarnation reconciles the execution — which is also what happens before every callback
+    // re-entry, so this is the ordinary path and not only the restart one.
+    await reconcile(harness, 'incarnation-b');
+    const abandoned = await onlyOperation(harness);
+    assert.equal(abandoned.state, 'abandoned');
+    assert.equal(abandoned.uncertaintyDetail, null, 'the reason belongs in the result, not here');
+    assert.deepEqual(await run(harness.fixture.payloads.resolve(abandoned.result!)), {
+      reason: 'capture_not_committed',
+    });
+
+    const second = await attempt(harness, (ctx) => ctx.captureEvidence(capture), {
+      incarnationId: 'incarnation-b',
+    });
+    const handle = (second as { value: { evidenceId: string } }).value;
+    assert.match(handle.evidenceId, /^wev_/);
+
+    const reopened = await onlyOperation(harness);
+    assert.equal(reopened.state, 'completed');
+    // The *same* operation key: a repaired capture is the same operation, not a second one.
+    assert.equal(reopened.operationKey, abandoned.operationKey);
+    assert.deepEqual(await run(harness.fixture.payloads.resolve(reopened.result!)), {
+      evidenceKey: handle.evidenceId,
+    });
+
+    const rows = evidenceRows(harness);
+    assert.equal(rows.length, 1, 'exactly one evidence row at this position');
+    assert.equal(rows[0]!.evidence_key, handle.evidenceId);
+    assert.equal(rows[0]!.operation_id, reopened.id);
+
+    // The abandonment stays visible: the row reads as completed, and history still says it was
+    // abandoned once. Two settlements is the honest record, not a defect.
+    const settlements = harness.fixture.client
+      .prepare(
+        `SELECT COUNT(*) AS n FROM workflow_transitions
+         WHERE kind = 'operation_settled' AND operation_id = ?`,
+      )
+      .get(reopened.id) as { n: number };
+    assert.equal(settlements.n, 2);
+  } finally {
+    harness.close();
+  }
+});
+
+test('a recorded capture is reused without reading its source again', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    const first = await attempt(harness, (ctx) => ctx.captureEvidence(capture));
+    const original = (first as { value: { evidenceId: string } }).value.evidenceId;
+
+    // The content is not part of the call identity, so a re-entry whose callback now holds *newer*
+    // text lands on the same recorded position — and must be handed back what was actually judged.
+    const second = await attempt(harness, (ctx) =>
+      ctx.captureEvidence({ ...capture, content: { kind: 'text', text: 'round two, newer' } }),
+    );
+    assert.equal((second as { value: { evidenceId: string } }).value.evidenceId, original);
+    assert.equal(evidenceRows(harness).length, 1, 'no second capture at the same position');
+  } finally {
+    harness.close();
+  }
+});
+
+test('a changed title at a recorded position is a changed request, not a re-capture', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    await attempt(harness, (ctx) => ctx.captureEvidence(capture));
+    const second = await attempt(harness, (ctx) =>
+      ctx.captureEvidence({ ...capture, title: 'Something else' }).catch((cause: unknown) => cause),
+    );
+    const rejection = (second as { value: unknown }).value;
+    assert.ok(rejection instanceof OperationRejection);
+    // The whole authoring rule in one assertion: title, role, labels and source are the recorded
+    // identity, so deriving them from the captured content would break every Retry.
+    assert.equal(rejection.code, 'operation_request_changed');
+    assert.equal(evidenceRows(harness).length, 1);
+  } finally {
+    harness.close();
+  }
+});
+
+test('a rejected capture carries its own reason, not a detail key that shadowed it', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    // `invalid_title` is the case that regressed: its detail once used a key called `reason`, and
+    // the verb composed the detail with the spread last, so the author received free English text
+    // where the contract promises a member of a closed set. Asserted here rather than in
+    // `input.test.ts` because the defect lived in the *composition*, which only the verb performs.
+    const rejected = await attempt(harness, (ctx) =>
+      ctx.captureEvidence({ ...capture, title: '   ' }).catch((cause: unknown) => cause),
+    );
+    const rejection = (rejected as { value: unknown }).value;
+    assert.ok(rejection instanceof OperationRejection);
+    assert.equal(rejection.code, 'evidence_capture_rejected');
+    assert.equal(rejection.detail.reason, 'invalid_title');
+    assert.equal(rejection.detail.note, 'empty after trim', 'the specifics still travel');
+
+    // Nothing durable: a syntactic refusal happens before the position is claimed.
+    const records = await run(
+      harness.fixture.operations.listForExecution(harness.identity.executionId),
+    );
+    assert.deepEqual(records, []);
+  } finally {
+    harness.close();
+  }
+});
+
+test('a capture with no usable content reports invalid_content, not invalid_media_type', async () => {
+  const harness = await makeOperationHarness();
+  try {
+    // An author who forgets `content` was previously told their media type was invalid, which sends
+    // them to a field they never set.
+    const rejected = await attempt(harness, (ctx) =>
+      (ctx.captureEvidence as (input: unknown) => Promise<unknown>)({
+        title: 'T',
+        role: 'plan',
+      }).catch((cause: unknown) => cause),
+    );
+    const rejection = (rejected as { value: unknown }).value;
+    assert.ok(rejection instanceof OperationRejection);
+    assert.equal(rejection.detail.reason, 'invalid_content');
+  } finally {
+    harness.close();
+  }
+});

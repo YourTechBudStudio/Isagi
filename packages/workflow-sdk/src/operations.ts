@@ -1,4 +1,5 @@
 import { brand, type WorkflowBrand } from './brand.js';
+import type { EvidenceCaptureInput, EvidenceHandle } from './evidence.js';
 import type { WorkflowOutcomeId } from './identifiers.js';
 import type {
   WorkflowAgentHarness,
@@ -213,10 +214,12 @@ export interface OperationInvocation {
  * What an operation callback may do. The verbs do not all carry the same guarantee, and the
  * difference decides what a repaired segment repeats.
  *
- * `spawnAgentSession`, `sendAgentPrompt`, `closePane` and `runHeadlessAgent` cross an external
- * boundary and are **durable recorded operations**: each takes a call position, and a re-entered
- * callback reaching a recorded position with the same request reuses that receipt instead of
- * repeating the effect.
+ * `spawnAgentSession`, `sendAgentPrompt`, `closePane`, `runHeadlessAgent` and `captureEvidence` are
+ * **durable recorded operations**: each takes a call position, and a re-entered callback reaching a
+ * recorded position with the same request reuses that receipt instead of repeating the effect. The
+ * first four cross an external boundary; `captureEvidence` crosses none, but carries the same
+ * guarantee for the same reason — a repaired segment must get back the thing that was judged, not a
+ * newer one read on the way past.
  *
  * `getConversationHistory` is a **scoped read**. It takes no call position and has no receipt, so a
  * repaired segment normally reads again and may observe a different answer. When an explicit Retry
@@ -248,6 +251,16 @@ export interface OperationContext {
   readonly runHeadlessAgent: (
     input: WorkflowHeadlessAgentInput,
   ) => Promise<HeadlessOperationHandle>;
+  /**
+   * Keep this exact thing, immutably, as evidence of what this run produced.
+   *
+   * Returns a durable reference. `title`, `role`, `labels` and `source` are the recorded identity of
+   * the call, so derive them from graph state and from handles you already hold, never from the
+   * content being captured. Capturing a newly produced judgment belongs in a later visit to the
+   * node; a second call at the same position with the same identity is a different call position,
+   * not a re-capture.
+   */
+  readonly captureEvidence: (input: EvidenceCaptureInput) => Promise<EvidenceHandle>;
   readonly log: (level: WorkflowLogLevel, message: string) => Promise<void>;
   readonly setUiFeedback: (feedback: WorkflowUiFeedback) => Promise<void>;
 }

@@ -243,12 +243,38 @@ export function makeOperationReconciler(dependencies: {
       return null;
     });
 
-  const reconcileRecord = (record: WorkflowOperationRecord) =>
+  /**
+   * An unsettled capture means intent was recorded and nothing was committed.
+   *
+   * Named `reconcileEvidenceCapture` rather than `reconcileCapture` because "capture" already means
+   * something else next door: `operations/capture.ts` is the registry that captures a *headless
+   * process's output*, and the `evidence` local inside `reconcileHeadless` above is launch
+   * evidence, not author-selected evidence. Author-selected evidence always carries the bare word.
+   *
+   * The reason goes in the result slot, not `uncertaintyDetail`, which the operation DTO documents
+   * as present exactly when the state is `uncertain` — the same convention the headless abandon
+   * branch follows with `launch_never_crossed_boundary`.
+   *
+   * This is not only a restart path. `reconcileExecution` runs before every callback re-entry and
+   * on Resume, so this branch is what a retried capture callback almost always meets: the row is
+   * `abandoned`, `decidePrefix` still answers `dispatch` with it, and the commit reopens it. The
+   * abandonment is therefore the honest durable record of "intent recorded, nothing committed"
+   * rather than a rare artefact of a crash.
+   */
+  const reconcileEvidenceCapture = (record: WorkflowOperationRecord) =>
+    Effect.gen(function* () {
+      yield* settle({ record, state: 'abandoned', result: { reason: 'capture_not_committed' } });
+      return null;
+    });
+
+  const reconcileRecord = (record: WorkflowOperationRecord): Effect.Effect<number | null> =>
     record.capability === 'run_headless_agent'
       ? reconcileHeadless(record)
       : record.capability === 'close_pane'
         ? Effect.succeed<number | null>(null)
-        : reconcileSubmission(record);
+        : record.capability === 'capture_evidence'
+          ? reconcileEvidenceCapture(record)
+          : reconcileSubmission(record);
 
   /**
    * Make sure an uncertain operation is reflected on its run.

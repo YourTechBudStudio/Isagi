@@ -87,6 +87,9 @@ const workflowFailureHeadlines = {
   operation_prefix_unconsumed: 'A repeated step skipped external calls it made before.',
   operation_request_changed: 'A repeated step asked for something different the second time.',
   operation_context_closed: 'A step tried to call out after it had already finished.',
+  // Nothing was captured, and nothing half-captured was left behind. The reason travels on the
+  // failure detail; this is the one line for a run that only shows a code.
+  evidence_capture_rejected: 'A step tried to keep something as evidence and was refused.',
 
   payload_unavailable: 'A value this run recorded earlier could not be read back.',
 

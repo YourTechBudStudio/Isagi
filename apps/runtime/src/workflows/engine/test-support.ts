@@ -101,6 +101,23 @@ export interface EngineHarness {
    */
   readonly crashNext: (commit: CommitName, skip?: number) => void;
   /**
+   * Script what `getConversationHistory` answers for one session, replacing anything set before.
+   *
+   * Per session rather than globally so a fixture driving an implementer and a reviewer can move
+   * one of them forward without touching the other — and so a Retry test can prove that a recorded
+   * capture is reused by making the *second* pass return different text.
+   */
+  readonly conversation: {
+    readonly set: (agentSessionId: number, text: string) => void;
+  };
+  /**
+   * Make exactly the next content publication fail, then behave normally again.
+   *
+   * The failure a capture meets between recording intent and committing, which leaves an operation
+   * with no evidence row — the state the recovery rules exist for.
+   */
+  readonly content: { readonly failNextPut: () => void };
+  /**
    * Make the next artifact resolution fail, as an unverified or tampered build does.
    *
    * A real `WorkflowLoadError` with a real reason, so the launch path's mapping to
@@ -202,7 +219,9 @@ export type CommitName =
   | 'publishChildOutput'
   | 'completeRun'
   | 'enterSubgraph'
-  | 'appendDiagnostic';
+  | 'appendDiagnostic'
+  /** Not on the runs repository: the evidence capture transaction, proxied the same way. */
+  | 'commitCapture';
 
 const commitNames = new Set<CommitName>([
   // Not a commit, but the same kind of seam: it is the transaction a Retry crashes *inside* when it
@@ -218,6 +237,7 @@ const commitNames = new Set<CommitName>([
   'completeRun',
   'enterSubgraph',
   'appendDiagnostic',
+  'commitCapture',
 ]);
 
 /**
@@ -268,32 +288,41 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
    * operand, a published payload — is exactly what a killed process would have left behind. Mocking
    * the recovery input instead would let a test assert against a durable state no crash can produce.
    */
-  const runs = new Proxy(fixture.runs, {
-    get(target, property: string) {
-      const original = Reflect.get(target, property) as unknown;
-      if (!commitNames.has(property as CommitName) || typeof original !== 'function') {
-        return original;
-      }
-      return (...args: readonly unknown[]) => {
-        const name = property as CommitName;
-        const remaining = failOnce.get(name);
-        if (remaining === undefined) {
-          return (original as (...a: readonly unknown[]) => unknown)(...args);
+  /**
+   * One crash seam over any repository, because one `failOnce` map is the whole bookkeeping.
+   *
+   * `commitCapture` lives on the evidence repository rather than on `runs`, and giving it its own
+   * counter would mean two places that have to agree on what "crash the next one" means.
+   */
+  const crashable = <Repository extends object>(repository: Repository): Repository =>
+    new Proxy(repository, {
+      get(target, property: string) {
+        const original = Reflect.get(target, property) as unknown;
+        if (!commitNames.has(property as CommitName) || typeof original !== 'function') {
+          return original;
         }
-        if (remaining > 0) {
-          failOnce.set(name, remaining - 1);
-          return (original as (...a: readonly unknown[]) => unknown)(...args);
-        }
-        failOnce.delete(name);
-        return Effect.fail(
-          new DatabaseError({
-            operation: property,
-            cause: new Error(`simulated crash during ${property}`),
-          }),
-        );
-      };
-    },
-  }) as WorkflowPersistenceFixture['runs'];
+        return (...args: readonly unknown[]) => {
+          const name = property as CommitName;
+          const remaining = failOnce.get(name);
+          if (remaining === undefined) {
+            return (original as (...a: readonly unknown[]) => unknown)(...args);
+          }
+          if (remaining > 0) {
+            failOnce.set(name, remaining - 1);
+            return (original as (...a: readonly unknown[]) => unknown)(...args);
+          }
+          failOnce.delete(name);
+          return Effect.fail(
+            new DatabaseError({
+              operation: property,
+              cause: new Error(`simulated crash during ${property}`),
+            }),
+          );
+        };
+      },
+    }) as Repository;
+  const runs = crashable(fixture.runs);
+  const evidence = crashable(fixture.evidence);
   const adapters = makeFakeAdapterState();
   const events: InternalRuntimeEvent[] = [];
 
@@ -477,6 +506,8 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
           operations: fixture.operations,
           runs,
           payloads: fixture.payloads,
+          evidence,
+          content: fixture.content,
           adapters: adapterServices,
           eventBus,
           now,
@@ -582,6 +613,14 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     crashNext: (commit, skip = 0) => {
       failOnce.set(commit, skip);
     },
+    conversation: {
+      set: (agentSessionId, text) => {
+        adapters.conversationBySession.set(agentSessionId, [
+          { role: 'assistant', parts: [{ type: 'text', text, state: 'done' }] },
+        ]);
+      },
+    },
+    content: { failNextPut: fixture.failNextPut },
     breakNextLoad: (reason = 'stale_source') => {
       brokenLoad = reason;
     },

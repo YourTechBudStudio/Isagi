@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 
 import type {
   AgentSessionHandle,
   AgentTurnTarget,
+  EvidenceCaptureInput,
+  EvidenceHandle,
   HeadlessOperationHandle,
   HeadlessOperationResult,
   OperationContext,
@@ -21,6 +24,11 @@ import type {
   WorkflowInvocationKind,
 } from '@isagi/contracts';
 
+import type { WorkflowEvidenceRepositoryService } from '../evidence/evidence.repository.js';
+import { normalizeCaptureInput } from '../evidence/input.js';
+import { resolveWithinWorktree } from '../evidence/paths.js';
+import { resolveEvidenceSource } from '../evidence/source.js';
+import type { WorkflowContentStoreService } from '../persistence/content-store.js';
 import type {
   OperationIntentProvenance,
   WorkflowOperationsRepositoryService,
@@ -43,7 +51,12 @@ import {
   type OperationRequestEnvelope,
 } from './correlation.js';
 import { OperationRejection } from './errors.js';
-import { readAgentTurnReceipt, readSpawnSessionReceipt, type HeadlessReceipt } from './receipts.js';
+import {
+  readAgentTurnReceipt,
+  readEvidenceResult,
+  readSpawnSessionReceipt,
+  type HeadlessReceipt,
+} from './receipts.js';
 import type { OperationReconciler } from './reconcile.js';
 import type { OperationSettlement } from './settlement.js';
 import type { OperationStopPolicy } from './stop.js';
@@ -103,6 +116,8 @@ export type WithAttemptContext = <A, E, R>(
 export function makeAttemptContextFactory(dependencies: {
   readonly operations: WorkflowOperationsRepositoryService;
   readonly runs: WorkflowRunsRepositoryService;
+  readonly evidence: WorkflowEvidenceRepositoryService;
+  readonly content: WorkflowContentStoreService;
   readonly adapters: OperationAdapters;
   readonly settlement: OperationSettlement;
   readonly reconciler: OperationReconciler;
@@ -112,8 +127,14 @@ export function makeAttemptContextFactory(dependencies: {
   readonly runtimeId: string;
   readonly now: () => string;
 }): WithAttemptContext {
-  const { operations, runs, adapters, captures, incarnationId, runtimeId, now } = dependencies;
-  const { advanceStage, receipt, envelopeOf, settle } = dependencies.settlement;
+  // Bound as `evidenceRepository`, not `evidence`: `reuseSubmission` below already has a local
+  // called `evidence` meaning *submission* evidence — what the engine learned about a PTY crossing.
+  // Author-selected evidence keeps the bare word in its own names; here the longer one is what
+  // stops two unrelated meanings sharing an identifier inside one file.
+  const { operations, runs, content, adapters, captures, incarnationId, runtimeId, now } =
+    dependencies;
+  const evidenceRepository = dependencies.evidence;
+  const { advanceStage, receipt, resolveSlot, envelopeOf, settle } = dependencies.settlement;
   const { reconcileSubmission } = dependencies.reconciler;
   const { requestStop } = dependencies.stop;
 
@@ -945,6 +966,173 @@ export function makeAttemptContextFactory(dependencies: {
                   renderedPrompt,
                   effectiveTimeoutMs,
                 });
+              }),
+            ),
+
+          captureEvidence: (input: EvidenceCaptureInput) =>
+            runVerb(
+              Effect.gen(function* () {
+                // Strictly before `claimPosition`. An author error must leave nothing durable
+                // behind — no `intended` row for a reconciler to abandon and a reader to explain.
+                const normalized = normalizeCaptureInput(input);
+                if (!normalized.ok) {
+                  return yield* reject({
+                    code: 'evidence_capture_rejected',
+                    message: `captureEvidence was refused: ${normalized.reason}.`,
+                    // `reason` last, deliberately. It is the field the contract names and the one
+                    // author code and the inspector switch on, so a detail key that happened to be
+                    // called `reason` must not be able to overwrite it.
+                    detail: { ...normalized.detail, reason: normalized.reason },
+                  });
+                }
+                const { request, body } = normalized.value;
+                const claimed = yield* claimPosition({
+                  capability: 'capture_evidence',
+                  request,
+                  // A capture crosses no harness boundary, so every harness fact is genuinely
+                  // unknown rather than inherited. The cwd is real: it is the directory a `file`
+                  // capture's relative path is resolved against.
+                  provenance: {
+                    harness: null,
+                    model: null,
+                    effort: null,
+                    cwd: identity.destination.worktreePath,
+                  },
+                });
+                if (claimed.kind === 'reuse') {
+                  // Returns **before** any filesystem access, deliberately. This is what makes a
+                  // recorded capture reusable after its source file was edited, replaced or
+                  // deleted, and what stops a reread agent response being substituted for the one
+                  // that was actually judged.
+                  const saved = readEvidenceResult(yield* resolveSlot(claimed.record.result));
+                  if (saved) return { evidenceId: saved.evidenceKey } satisfies EvidenceHandle;
+                  return yield* reject({
+                    code: 'workflow_operation_failed',
+                    message: `Capture ${claimed.record.operationKey} is recorded as settled but its evidence reference cannot be read; it will not be re-captured from a source that may have changed.`,
+                    operationId: claimed.record.id,
+                  });
+                }
+
+                const source = yield* resolveEvidenceSource(
+                  operations,
+                  identity.runId,
+                  request.source,
+                );
+
+                // Outside the claim gate, so two captures in one callback overlap the way two
+                // headless launches do.
+                const published = yield* (
+                  body.kind === 'buffer'
+                    ? content.put({ source: body.bytes, mediaTypeHint: request.mediaType })
+                    : resolveWithinWorktree(
+                        identity.destination.worktreePath,
+                        body.relativePath,
+                      ).pipe(
+                        Effect.flatMap(({ absolute }) =>
+                          content.put({
+                            source: createReadStream(absolute),
+                            mediaTypeHint: request.mediaType,
+                          }),
+                        ),
+                      )
+                ).pipe(
+                  // Split by cause, because these are two different kinds of thing wearing one
+                  // `catchAll`. A bad path or an unreadable file is the author's world going wrong
+                  // and is theirs to see; a database failure is the runtime's own, and folding it
+                  // into `content_unavailable` would tell an author their file vanished when the
+                  // truth is that Isagi could not write a row. `commitCapture` three lines below
+                  // already dies on that class, so classifying it the same way here is what makes
+                  // one verb answer one way.
+                  Effect.catchTag('DatabaseError', (cause) => die(Effect.fail(cause))),
+                  Effect.catchAll((cause) =>
+                    Effect.gen(function* () {
+                      // `EvidencePathError` is a plain reason-carrying shape rather than a tagged
+                      // error, so the discriminator is the field itself.
+                      const pathFailure = 'reason' in cause;
+                      if (!pathFailure && cause.cause !== undefined) {
+                        // The errno — `ENOSPC`, `EACCES` — is the whole diagnosis and has nowhere to
+                        // live on the author-facing reason, so it is said out loud rather than
+                        // dropped on the floor.
+                        yield* Effect.sync(() => {
+                          console.warn(
+                            '[runtime] Workflow evidence content could not be published',
+                            {
+                              operationKey: claimed.record.operationKey,
+                              runId: identity.runId,
+                              cause: cause.cause,
+                            },
+                          );
+                        });
+                      }
+                      return yield* reject({
+                        code: 'evidence_capture_rejected',
+                        message: `captureEvidence could not publish its content: ${
+                          pathFailure ? cause.reason : cause.message
+                        }.`,
+                        operationId: claimed.record.id,
+                        detail: {
+                          operationKey: claimed.record.operationKey,
+                          // A path failure keeps its own reason; a publication failure is
+                          // `content_unavailable` — the file was there when it was checked and went
+                          // away underneath the stream.
+                          reason: pathFailure ? cause.reason : 'content_unavailable',
+                        },
+                      });
+                    }),
+                  ),
+                );
+
+                const written = yield* die(
+                  evidenceRepository
+                    .commitCapture({
+                      operation: claimed.record,
+                      // The committing attempt, not the operation's origin attempt: after a
+                      // redispatch those differ, and what captured is the one that made bytes durable.
+                      attemptId: identity.attemptId,
+                      title: request.title,
+                      role: request.role,
+                      labels: request.labels,
+                      contentKind: request.contentKind,
+                      mediaType: request.mediaType,
+                      byteSize: published.byteSize,
+                      contentRef: published.contentRef,
+                      sourcePath: request.sourcePath,
+                      source,
+                      now: now(),
+                    })
+                    .pipe(
+                      // Said out loud before the defect, not folded into it. The bytes are durable
+                      // and nothing will ever reference them: there is no sweeper and no
+                      // enumeration path, so this line is the only thing that makes the orphan
+                      // traceable. It is also the one call in this file that has just written bytes
+                      // whose owning record failed, which is why it warns where its neighbours do
+                      // not — the defect itself stays byte-identical to every other repository call.
+                      Effect.tapError((cause) =>
+                        Effect.sync(() => {
+                          console.warn(
+                            '[runtime] Workflow evidence capture committed no record for published content',
+                            {
+                              operationKey: claimed.record.operationKey,
+                              runId: identity.runId,
+                              contentRef: published.contentRef,
+                              cause,
+                            },
+                          );
+                        }),
+                      ),
+                    ),
+                );
+                if (!written.ok) {
+                  return yield* reject({
+                    code: 'workflow_operation_failed',
+                    message: `captureEvidence could not commit: ${written.rejection.kind}.`,
+                    operationId: claimed.record.id,
+                    // The reference is the diagnosable half of a blob now referenced by nothing.
+                    // There is no sweeper; naming it here is what makes the orphan traceable.
+                    detail: { rejection: written.rejection, contentRef: published.contentRef },
+                  });
+                }
+                return { evidenceId: written.value.evidenceKey } satisfies EvidenceHandle;
               }),
             ),
 

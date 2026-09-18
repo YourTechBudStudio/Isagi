@@ -73,3 +73,23 @@ export function readHeadlessReceipt(value: unknown): HeadlessReceipt | null {
       : { launchFailureCause: candidate.launchFailureCause }),
   };
 }
+
+/**
+ * What a settled `capture_evidence` operation writes into its **result** slot, not its receipt.
+ *
+ * A capture has no receipt stage — nothing crosses a boundary and nothing comes back — so the
+ * evidence key is recorded where the settlement puts it. Tolerant like the decoders above, and for
+ * a sharper reason: this value is what a re-entered callback is handed instead of re-reading the
+ * bytes, so an unreadable one must be visible as a failure rather than silently become a re-capture
+ * of whatever the source says now.
+ */
+export interface EvidenceResult {
+  readonly evidenceKey: string;
+}
+
+export function readEvidenceResult(value: unknown): EvidenceResult | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as Partial<EvidenceResult>;
+  if (typeof candidate.evidenceKey !== 'string' || candidate.evidenceKey.length === 0) return null;
+  return { evidenceKey: candidate.evidenceKey };
+}

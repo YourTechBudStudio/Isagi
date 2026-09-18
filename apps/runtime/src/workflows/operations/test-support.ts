@@ -82,6 +82,16 @@ export interface FakeAdapterState {
   launchOutcomes: FakeLaunchOutcome[];
   turnEdges: Map<number, WorkflowObservedTurnEdge[]>;
   conversationHistory: readonly WorkflowConversationMessage[];
+  /**
+   * Per-session assistant text, when a test needs `getConversationHistory` to answer differently
+   * per session or per pass.
+   *
+   * The flat `conversationHistory` above stays the default for the many tests that only need *a*
+   * conversation. This map is what a Retry test needs: the claim being proven is that a recorded
+   * capture is **not** re-read, and that claim is vacuous unless the second pass genuinely returns
+   * something else. A session with an entry here takes precedence over the flat list.
+   */
+  conversationBySession: Map<number, readonly WorkflowConversationMessage[]>;
   conversationTurns: (HarnessConversationTurn | null)[];
   sessionHarness: WorkflowAgentHarness;
   /** The session's own working directory, which a send records rather than the run's destination. */
@@ -142,6 +152,7 @@ export function makeFakeAdapterState(): FakeAdapterState {
     launchOutcomes: [{ kind: 'spawned' }],
     turnEdges: new Map(),
     conversationHistory: [],
+    conversationBySession: new Map(),
     conversationTurns: [],
     sessionHarness: 'claude',
     sessionCwd: '/tmp/session-cwd',
@@ -238,11 +249,11 @@ export function makeFakeAdapters(state: FakeAdapterState): OperationAdapters {
         yield* failIfConfigured(state, 'turnEdges');
         return (state.turnEdges.get(agentSessionId) ?? []) as readonly WorkflowObservedTurnEdge[];
       }),
-    conversationHistory: (_agentSessionId, turn) =>
+    conversationHistory: (agentSessionId, turn) =>
       Effect.gen(function* () {
         yield* failIfConfigured(state, 'conversationHistory');
         state.conversationTurns.push(turn ?? null);
-        return state.conversationHistory;
+        return state.conversationBySession.get(agentSessionId) ?? state.conversationHistory;
       }),
   };
   const keyedSessions = new Map<
@@ -517,6 +528,8 @@ export async function makeOperationHarness(): Promise<OperationHarness> {
             operations: options?.operations ?? fixture.operations,
             runs: fixture.runs,
             payloads: fixture.payloads,
+            evidence: fixture.evidence,
+            content: fixture.content,
             adapters,
             eventBus: recording,
             now: options?.now ?? defaultNow,

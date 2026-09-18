@@ -7,13 +7,17 @@
  */
 
 import type {
+  EvidenceLabels,
   WorkflowAgentHarness,
   WorkflowPromptModifiers,
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 import type { WorkflowCapability, WorkflowOperationState } from '@isagi/contracts';
 
-import type { WorkflowOperationRecord } from '../persistence/records.js';
+import type {
+  WorkflowEvidenceContentKind,
+  WorkflowOperationRecord,
+} from '../persistence/records.js';
 
 /**
  * The author's intent for one call, and the only thing the fingerprint covers.
@@ -51,7 +55,47 @@ export type NormalizedRequest =
       readonly timeoutMs: number | null;
       readonly renderedPrompt: string;
     }
-  | { readonly capability: 'close_pane'; readonly paneId: number };
+  | { readonly capability: 'close_pane'; readonly paneId: number }
+  /**
+   * The whole fingerprinted identity of a capture — and note what is *not* in it: the bytes.
+   *
+   * That absence is the point. The story's own scenario reads the reviewer's latest turn with
+   * `getConversationHistory` (a scoped read, so a second pass may see something newer), captures
+   * it, then fails before the node commits. If the bytes were in the identity, the re-entered
+   * position would be rejected as `operation_request_changed` and the run could never be repaired.
+   * As it stands the position matches, the recorded evidence is reused, and the newer text is never
+   * substituted for the one that was judged.
+   *
+   * Everything here *is* compared, so a changed title, role, label set, path or source at a
+   * recorded position is a different intended effect and is refused exactly as a changed prompt is.
+   * A deliberate re-capture therefore belongs in a later visit to the node.
+   */
+  | {
+      readonly capability: 'capture_evidence';
+      readonly title: string;
+      readonly role: string;
+      readonly labels: EvidenceLabels | null;
+      readonly contentKind: WorkflowEvidenceContentKind;
+      readonly mediaType: string;
+      /** Normalised worktree-relative, `file` captures only. What the author named. */
+      readonly sourcePath: string | null;
+      /**
+       * Projected down to the identity-bearing fields, never the author's object as handed in.
+       *
+       * `AgentSessionHandle` extends `AgentTurnTarget` with a `paneId`, so the natural authoring
+       * shape — passing back the handle `spawnAgentSession` returned — would otherwise smuggle
+       * environment-lifetime data into a durable call identity. The schema is explicit that history
+       * must not depend on worktrees, surfaces or panes; a pane id deciding whether a Retry can
+       * repair a run is exactly that coupling, in the one field where it would hurt most.
+       */
+      readonly source: NormalizedEvidenceSource | null;
+    };
+
+/** The projected, identity-bearing form of the author's `EvidenceSource`. */
+export type NormalizedEvidenceSource =
+  | { readonly kind: 'agent_turn'; readonly agentSessionId: number; readonly sentAt: string }
+  | { readonly kind: 'headless_operation'; readonly operationId: string }
+  | { readonly kind: 'agent_session'; readonly agentSessionId: number };
 
 /** Runtime-chosen dispatch configuration: durable, reused on redispatch, never part of identity. */
 export interface OperationDispatchConfig {

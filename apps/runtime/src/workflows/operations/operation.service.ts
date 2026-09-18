@@ -15,6 +15,14 @@ import {
 } from '../../runtime-events/internal-event-bus.js';
 import { SurfaceService } from '../../surfaces/index.js';
 import {
+  WorkflowEvidenceRepository,
+  type WorkflowEvidenceRepositoryService,
+} from '../evidence/evidence.repository.js';
+import {
+  WorkflowContentStore,
+  type WorkflowContentStoreService,
+} from '../persistence/content-store.js';
+import {
   WorkflowOperationsRepository,
   type WorkflowOperationsRepositoryService,
 } from '../persistence/operations.repository.js';
@@ -93,6 +101,9 @@ export interface OperationServiceDependencies {
   readonly operations: WorkflowOperationsRepositoryService;
   readonly runs: WorkflowRunsRepositoryService;
   readonly payloads: WorkflowPayloadStoreService;
+  readonly evidence: WorkflowEvidenceRepositoryService;
+  /** Where captured bytes are published. Byte-level, so a capture is not limited to JSON. */
+  readonly content: WorkflowContentStoreService;
   readonly adapters: OperationAdapters;
   readonly eventBus: InternalRuntimeEventBusService;
   readonly now?: (() => string) | undefined;
@@ -112,7 +123,7 @@ export function makeWorkflowOperationService(
   dependencies: OperationServiceDependencies,
 ): Effect.Effect<WorkflowOperationServiceShape, never, import('effect').Scope.Scope> {
   return Effect.gen(function* () {
-    const { operations, runs, payloads, adapters, eventBus } = dependencies;
+    const { operations, runs, payloads, evidence, content, adapters, eventBus } = dependencies;
     // The scope this service was built in. Everything it owns beyond a single callback — result
     // capture, timeouts, the PTY-terminal subscriber — is forked into it, so "the incarnation ended"
     // is a single structural fact rather than several bookkeeping ones.
@@ -142,6 +153,8 @@ export function makeWorkflowOperationService(
 
     const withAttemptContext = makeAttemptContextFactory({
       operations,
+      evidence,
+      content,
       adapters,
       settlement,
       reconciler,
@@ -221,10 +234,14 @@ export const WorkflowOperationServiceLive = Layer.scoped(
     const harnesses = yield* HarnessAdapterRegistry;
     const controlPlane = yield* HarnessControlPlane;
     const identity = yield* RuntimeIdentity;
+    const evidence = yield* WorkflowEvidenceRepository;
+    const content = yield* WorkflowContentStore;
     return yield* makeWorkflowOperationService({
       operations,
       runs,
       payloads,
+      evidence,
+      content,
       eventBus,
       runtimeId: identity.runtimeId,
       adapters: {

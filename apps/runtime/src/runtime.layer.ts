@@ -88,6 +88,7 @@ import {
   WorkflowContentStoreLive,
   WorkflowDeltaPublisherLive,
   WorkflowEngineLive,
+  WorkflowEvidenceRepositoryLive,
   WorkflowHistoryRepositoryLive,
   WorkflowOperationServiceLive,
   WorkflowOperationsRepositoryLive,
@@ -169,6 +170,10 @@ const WorkflowRunsRepositoryLayer = WorkflowRunsRepositoryLive.pipe(
 const WorkflowOperationsRepositoryLayer = WorkflowOperationsRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowWriteWakeLayer),
+);
+const WorkflowEvidenceRepositoryLayer = WorkflowEvidenceRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
   Layer.provide(WorkflowWriteWakeLayer),
 );
 const WorkflowHistoryRepositoryLayer = WorkflowHistoryRepositoryLive.pipe(
@@ -273,6 +278,8 @@ const WorkflowOperationServiceLayer = WorkflowOperationServiceLive.pipe(
   Layer.provide(WorkflowOperationsRepositoryLayer),
   Layer.provide(WorkflowRunsRepositoryLayer),
   Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowEvidenceRepositoryLayer),
+  Layer.provide(WorkflowContentStoreLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(PtyServiceLayer),

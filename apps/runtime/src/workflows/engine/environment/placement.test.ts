@@ -225,7 +225,7 @@ test('with no hook and no override the placement is the unchanged current/curren
     assert.deepEqual(harness.owning.calls, [], 'and the preflight is not consulted at all');
     assert.deepEqual(launched.destination, {
       worktreeId: harness.placement.worktreeId,
-      worktreePath: '/repo/fixture',
+      worktreePath: harness.fixture.worktreeDirectory,
       surfaceId: harness.placement.surfaceId,
     });
 

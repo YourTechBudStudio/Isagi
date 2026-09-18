@@ -54,6 +54,14 @@ export {
 } from './operations/operation.service.js';
 
 export {
+  makeWorkflowEvidenceRepository,
+  WorkflowEvidenceRepository,
+  WorkflowEvidenceRepositoryLive,
+  type CommitCaptureInput,
+  type WorkflowEvidenceRepositoryService,
+} from './evidence/evidence.repository.js';
+
+export {
   ContentPublishError,
   ContentUnavailable,
   makeWorkflowContentStore,

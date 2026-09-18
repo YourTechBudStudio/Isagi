@@ -388,6 +388,8 @@ export const workflowFailureCodeSchema = Schema.Literal(
   'operation_request_changed',
   'operation_uncertain',
   'operation_context_closed',
+  /** `ctx.captureEvidence` refused the call. `detail.reason` names which rule it broke. */
+  'evidence_capture_rejected',
   'unsupported_node_kind',
   'payload_unavailable',
 );

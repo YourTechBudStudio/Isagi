@@ -146,7 +146,7 @@ test('a default launch reuses its origin, writes no receipt, and initializes aga
     const placed = await harness.runOf(started.id);
     assert.deepEqual(placed.destination, {
       worktreeId: harness.placement.worktreeId,
-      worktreePath: '/repo/fixture',
+      worktreePath: harness.fixture.worktreeDirectory,
       surfaceId: harness.placement.surfaceId,
     });
     assert.ok(await run(harness.fixture.runs.findAttachment(started.id)));
@@ -185,7 +185,7 @@ test('a default launch reuses its origin, writes no receipt, and initializes aga
     assert.deepEqual(seen.destinations, [
       {
         worktreeId: harness.placement.worktreeId,
-        worktreePath: '/repo/fixture',
+        worktreePath: harness.fixture.worktreeDirectory,
         surfaceId: harness.placement.surfaceId,
       },
     ]);

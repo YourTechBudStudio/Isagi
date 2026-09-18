@@ -263,6 +263,10 @@ function callbackRejection(cause: unknown): PureFailure {
       case 'operation_prefix_unresolved':
       case 'operation_uncertain':
       case 'operation_context_closed':
+      // Passed through rather than folded into `node_callback_failed` so `detail.reason` survives
+      // to the inspector and to author code catching the rejection: which rule a capture broke is
+      // the whole diagnostic, and a generic callback failure would erase it.
+      case 'evidence_capture_rejected':
         return { code: cause.code, message: cause.message, detail: { ...cause.detail } };
       default:
         return {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,10 @@ import {
 } from '../../persistence/database.service.js';
 import { migrationsDirectory } from '../../persistence/migrations.js';
 import * as schema from '../../persistence/schema.js';
+import {
+  makeWorkflowEvidenceRepository,
+  type WorkflowEvidenceRepositoryService,
+} from '../evidence/evidence.repository.js';
 import {
   ContentPublishError,
   makeWorkflowContentStore,
@@ -35,12 +39,15 @@ export interface WorkflowPersistenceFixture {
   readonly root: string;
   /** Where the content store writes. What `contentPathFor` resolves references against. */
   readonly contentRoot: string;
+  /** The real directory backing the first placement, which is every launch's default destination. */
+  readonly worktreeDirectory: string;
   readonly client: BetterSqlite.Database;
   readonly database: RuntimeDatabaseService;
   readonly content: WorkflowContentStoreService;
   readonly payloads: WorkflowPayloadStoreService;
   readonly runs: WorkflowRunsRepositoryService;
   readonly operations: WorkflowOperationsRepositoryService;
+  readonly evidence: WorkflowEvidenceRepositoryService;
   /** Registers a catalog row, so a run or attempt has a real pin to reference. */
   readonly seedArtifact: (artifactHash: string, rootGraphKey?: string) => void;
   /** Seeds a worktree and surface, so the claim's live-placement re-check can pass. */
@@ -109,12 +116,14 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
   return {
     root,
     contentRoot,
+    worktreeDirectory: join(root, 'worktrees', '1'),
     client,
     database,
     content,
     payloads,
     runs: makeWorkflowRunsRepository(database, payloads),
     operations: makeWorkflowOperationsRepository(database, payloads),
+    evidence: makeWorkflowEvidenceRepository(database),
     seedArtifact: (artifactHash, rootGraphKey = 'root') => {
       client
         .prepare(
@@ -131,7 +140,12 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
     },
     seedPlacement: () => {
       placements += 1;
-      const path = placements === 1 ? '/repo/fixture' : `/repo/fixture-${placements}`;
+      // A **real** directory, not a plausible-looking string. `destination.worktreePath` is what a
+      // `file` evidence capture resolves its relative path against and realpaths for containment,
+      // so a fictional path would make every such test unrunnable — and one fixture inventing its
+      // own real directory beside this one is how the two drift.
+      const path = join(root, 'worktrees', String(placements));
+      mkdirSync(path, { recursive: true });
       const project = client
         .prepare(
           `INSERT INTO projects (name, root_path, kind, status, sort_order, created_at, updated_at)
