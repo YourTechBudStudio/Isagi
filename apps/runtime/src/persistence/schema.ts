@@ -483,6 +483,15 @@ export const workflowArtifacts = sqliteTable(
 export const workflowPayloads = sqliteTable('workflow_payloads', {
   payloadRef: text('payload_ref').primaryKey(),
   byteSize: integer('byte_size').notNull(),
+  /**
+   * The first publisher's hint, recorded for diagnostics. **No read path consults this column.**
+   *
+   * Media type is a fact about a *use* of bytes, not about a digest: identical canonical bytes can
+   * be an `application/json` payload slot and a `text/plain` captured evidence blob at the same
+   * time, and they deduplicate to one row. Whoever published first would otherwise decide what
+   * every later reader is told. JSON slots report the payload store's constant; evidence reports
+   * the media type recorded on its own row.
+   */
   mediaType: text('media_type').notNull(),
   createdAt: text('created_at').notNull(),
 });

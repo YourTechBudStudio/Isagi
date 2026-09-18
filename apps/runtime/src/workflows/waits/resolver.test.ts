@@ -17,7 +17,7 @@ import {
 
 import { makeEngineHarness, type EngineHarness } from '../engine/test-support.js';
 import { inlinePayloadThresholdBytes } from '../persistence/payload-store.js';
-import { run } from '../persistence/test-support.js';
+import { contentPathFor, run } from '../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
 import type { WaitDeclaration } from '../types.js';
 
@@ -163,7 +163,7 @@ test('a wait declaration that cannot be read is reported, not silently ignored',
 
     const armed = (await run(harness.fixture.runs.listArmedWaits(launched.id)))[0]!;
     assert.ok(armed.condition?.ref, 'the declaration is large enough to be a reference');
-    rmSync(harness.fixture.payloads.pathOf(armed.condition!.ref!));
+    rmSync(contentPathFor(harness.fixture.contentRoot, armed.condition!.ref!));
 
     assert.equal(await harness.deliver(launched.id), 0, 'nothing is delivered');
     const stillArmed = (await run(harness.fixture.runs.findWait(armed.id)))!;
@@ -201,7 +201,7 @@ test('an unreadable operation result is never replaced with a fabricated success
     });
     const settled = (await run(harness.fixture.operations.findById(record.id)))!;
     assert.ok(settled.result?.ref, 'the result is stored as a reference');
-    rmSync(harness.fixture.payloads.pathOf(settled.result!.ref!));
+    rmSync(contentPathFor(harness.fixture.contentRoot, settled.result!.ref!));
 
     assert.equal(await harness.deliver(launched.id), 0, 'the wait is not satisfied');
     assert.equal(
@@ -378,7 +378,7 @@ test('a permanently unreadable payload is reported once, not on every wake-up', 
     await harness.drain();
 
     const armed = (await run(harness.fixture.runs.listArmedWaits(launched.id)))[0]!;
-    rmSync(harness.fixture.payloads.pathOf(armed.condition!.ref!));
+    rmSync(contentPathFor(harness.fixture.contentRoot, armed.condition!.ref!));
 
     await harness.deliver(launched.id);
     const afterFirst = await harness.runOf(launched.id);
@@ -413,7 +413,7 @@ test('a degradation whose diagnostic could not be written is reported on the nex
     await harness.drain();
 
     const armed = (await run(harness.fixture.runs.listArmedWaits(launched.id)))[0]!;
-    rmSync(harness.fixture.payloads.pathOf(armed.condition!.ref!));
+    rmSync(contentPathFor(harness.fixture.contentRoot, armed.condition!.ref!));
 
     // The first attempt to record the degradation fails to persist. Suppressing every later attempt
     // because of it would leave the wait visibly unresolved with nothing on record saying why —

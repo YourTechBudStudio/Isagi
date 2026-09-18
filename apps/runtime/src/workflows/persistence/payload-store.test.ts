@@ -5,8 +5,9 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
-import { inlinePayloadThresholdBytes, PayloadUnavailable } from './payload-store.js';
-import { makeWorkflowPersistenceFixture, run } from './test-support.js';
+import { ContentUnavailable } from './content-store.js';
+import { inlinePayloadThresholdBytes } from './payload-store.js';
+import { contentPathFor, makeWorkflowPersistenceFixture, run } from './test-support.js';
 
 /** A value whose canonical JSON is exactly `bytes` long, so the threshold is tested at its edge. */
 function valueOfExactSize(bytes: number): { readonly v: string } {
@@ -44,7 +45,7 @@ test('identical content is published once and reused', async () => {
   try {
     const value = valueOfExactSize(20_000);
     const first = await run(fixture.payloads.publish(value));
-    const path = fixture.payloads.pathOf(first.ref!);
+    const path = contentPathFor(fixture.contentRoot, first.ref!);
     const originalMtime = readFileSync(path);
 
     // Key insertion order differs; canonicalization makes it the same content.
@@ -69,10 +70,10 @@ test('a read verifies the bytes and reports missing and corrupt differently', as
     assert.deepEqual(await run(fixture.payloads.read(ref)), valueOfExactSize(20_000));
 
     // Tampered: the file exists and parses, but it is no longer the bytes the reference names.
-    writeFileSync(fixture.payloads.pathOf(ref), JSON.stringify({ v: 'tampered' }));
+    writeFileSync(contentPathFor(fixture.contentRoot, ref), JSON.stringify({ v: 'tampered' }));
     const corrupt = await Effect.runPromise(Effect.either(fixture.payloads.read(ref)));
     assert.equal(corrupt._tag, 'Left');
-    assert.ok(corrupt._tag === 'Left' && corrupt.left instanceof PayloadUnavailable);
+    assert.ok(corrupt._tag === 'Left' && corrupt.left instanceof ContentUnavailable);
     assert.equal(corrupt._tag === 'Left' ? corrupt.left.cause : null, 'corrupt');
 
     const absent = await Effect.runPromise(

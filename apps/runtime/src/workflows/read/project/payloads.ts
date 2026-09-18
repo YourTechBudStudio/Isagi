@@ -4,7 +4,7 @@ import type { WorkflowPayloadSlot } from '@isagi/contracts';
 
 import type { RuntimeDrizzleDatabase } from '../../../persistence/database.service.js';
 import { workflowPayloads } from '../../../persistence/schema.js';
-import type { PayloadSlot } from '../../persistence/payload-store.js';
+import { workflowPayloadMediaType, type PayloadSlot } from '../../persistence/payload-store.js';
 import { slotFromColumns } from '../../persistence/slots.js';
 
 /**
@@ -50,7 +50,14 @@ export function slotDto(
     .where(eq(workflowPayloads.payloadRef, slot.ref))
     .get();
   if (!meta) throw new MissingPayloadMetadataError(slot.ref);
-  return { payloadRef: meta.payloadRef, byteSize: meta.byteSize, mediaType: meta.mediaType };
+  // The catalog row answers for size and for the guard above, never for media type: `media_type` is
+  // the publisher's hint about one *use* of those bytes, and the same digest can be a JSON slot here
+  // and a `text/plain` evidence capture elsewhere. A slot is always JSON, so it says so.
+  return {
+    payloadRef: meta.payloadRef,
+    byteSize: meta.byteSize,
+    mediaType: workflowPayloadMediaType,
+  };
 }
 
 export function columnSlotDto(

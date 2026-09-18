@@ -15,6 +15,11 @@ import {
 import { migrationsDirectory } from '../../persistence/migrations.js';
 import * as schema from '../../persistence/schema.js';
 import {
+  ContentPublishError,
+  makeWorkflowContentStore,
+  type WorkflowContentStoreService,
+} from './content-store.js';
+import {
   makeWorkflowOperationsRepository,
   type WorkflowOperationsRepositoryService,
 } from './operations.repository.js';
@@ -28,8 +33,11 @@ import {
 
 export interface WorkflowPersistenceFixture {
   readonly root: string;
+  /** Where the content store writes. What `contentPathFor` resolves references against. */
+  readonly contentRoot: string;
   readonly client: BetterSqlite.Database;
   readonly database: RuntimeDatabaseService;
+  readonly content: WorkflowContentStoreService;
   readonly payloads: WorkflowPayloadStoreService;
   readonly runs: WorkflowRunsRepositoryService;
   readonly operations: WorkflowOperationsRepositoryService;
@@ -37,6 +45,15 @@ export interface WorkflowPersistenceFixture {
   readonly seedArtifact: (artifactHash: string, rootGraphKey?: string) => void;
   /** Seeds a worktree and surface, so the claim's live-placement re-check can pass. */
   readonly seedPlacement: () => { readonly worktreeId: number; readonly surfaceId: number };
+  /**
+   * Makes exactly the next content publication fail, then restores normal behaviour.
+   *
+   * A publication failure is otherwise only reachable by making the filesystem refuse a write,
+   * which is coarse: it fails every subsequent write too, and on some platforms it is not
+   * reproducible at all. This seam lets a test fail one capture in the middle of a run and then
+   * watch the run carry on.
+   */
+  readonly failNextPut: () => void;
   readonly close: () => void;
 }
 
@@ -71,15 +88,30 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
       }),
   };
 
-  const payloads = makeWorkflowPayloadStore(join(root, 'workflow-payloads'), database);
+  const contentRoot = join(root, 'workflow-payloads');
+  const underlying = makeWorkflowContentStore(contentRoot, database);
+  let failNext = false;
+  const content: WorkflowContentStoreService = {
+    ...underlying,
+    put: (input) => {
+      if (!failNext) return underlying.put(input);
+      failNext = false;
+      return Effect.fail(
+        new ContentPublishError({ message: 'Injected publication failure.', cause: undefined }),
+      );
+    },
+  };
+  const payloads = makeWorkflowPayloadStore(content);
   // Each placement gets its own project path: `projects.root_path` is uniquely indexed, and a test
   // that needs two independent runs would otherwise collide on the second seed.
   let placements = 0;
 
   return {
     root,
+    contentRoot,
     client,
     database,
+    content,
     payloads,
     runs: makeWorkflowRunsRepository(database, payloads),
     operations: makeWorkflowOperationsRepository(database, payloads),
@@ -93,6 +125,9 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
            ) VALUES (?, 'fixture', 2, 2, 1, '0.1.0', '0.1.0', ?, ?, ?, '{}', '2026-01-01T00:00:00.000Z')`,
         )
         .run(artifactHash, 's'.repeat(64), 'h'.repeat(64), rootGraphKey);
+    },
+    failNextPut: () => {
+      failNext = true;
     },
     seedPlacement: () => {
       placements += 1;
@@ -279,3 +314,12 @@ export async function prepareClaim(fixture: WorkflowPersistenceFixture, runId: n
 export function run<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
   return Effect.runPromise(effect as Effect.Effect<A, never>);
 }
+
+/**
+ * Where a reference's bytes live, for tests that need to delete or corrupt a blob.
+ *
+ * Re-exported from the adapter that owns the layout rather than restated here, so a test cannot
+ * drift from where the store actually writes. Production code resolves references through the
+ * store, never through a path, because a path read would skip verification.
+ */
+export { contentPathFor } from './content-store.js';

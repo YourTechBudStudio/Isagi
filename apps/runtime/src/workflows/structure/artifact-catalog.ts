@@ -13,10 +13,10 @@ import { Context, Effect, Layer } from 'effect';
 
 import { DatabaseError, RuntimeDatabase } from '../../persistence/index.js';
 import { workflowArtifacts } from '../../persistence/schema.js';
+import type { ContentUnavailable } from '../persistence/content-store.js';
 import {
   WorkflowPayloadStore,
   type PayloadPublishError,
-  type PayloadUnavailable,
   type WorkflowPayloadStoreService,
 } from '../persistence/payload-store.js';
 import type { WorkflowArtifactRecord } from '../persistence/records.js';
@@ -58,7 +58,7 @@ export interface WorkflowArtifactCatalogService {
   /** Structure as data. Never imports executable code, so an old version is safe to inspect. */
   readonly readDescriptor: (
     artifactHash: string,
-  ) => Effect.Effect<WorkflowStructureDescriptor | null, DatabaseError | PayloadUnavailable>;
+  ) => Effect.Effect<WorkflowStructureDescriptor | null, DatabaseError | ContentUnavailable>;
   readonly findRecord: (
     artifactHash: string,
   ) => Effect.Effect<WorkflowArtifactRecord | null, DatabaseError>;

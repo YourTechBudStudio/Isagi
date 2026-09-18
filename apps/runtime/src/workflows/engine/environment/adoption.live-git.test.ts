@@ -15,6 +15,7 @@ import {
 } from '../../../workspace/tests/live-git-support.js';
 import { WorkspaceRepository } from '../../../workspace/workspace.repository.js';
 import { WorkspaceService } from '../../../workspace/workspace.service.js';
+import { makeWorkflowContentStore } from '../../persistence/content-store.js';
 import { makeWorkflowPayloadStore } from '../../persistence/payload-store.js';
 import { makeWorkflowRunsRepository } from '../../persistence/runs.repository.js';
 import { prepareEnvironment } from './preparation.js';
@@ -60,7 +61,7 @@ interface Fixtures {
 
 function makeWorkflowFixtures(database: RuntimeDatabaseService): Fixtures {
   const payloadRoot = mkdtempSync(join(tmpdir(), 'isagi-live-adoption-payloads-'));
-  const payloads = makeWorkflowPayloadStore(payloadRoot, database);
+  const payloads = makeWorkflowPayloadStore(makeWorkflowContentStore(payloadRoot, database));
   return { database, runs: makeWorkflowRunsRepository(database, payloads), payloadRoot };
 }
 

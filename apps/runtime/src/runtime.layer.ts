@@ -84,6 +84,7 @@ import {
 } from './terminal-sessions/index.js';
 import {
   WorkflowArtifactCatalogLive,
+  WorkflowContentStoreLive,
   WorkflowDeltaPublisherLive,
   WorkflowEngineLive,
   WorkflowHistoryRepositoryLive,
@@ -147,9 +148,12 @@ const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(Datab
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowPayloadStoreLayer = WorkflowPayloadStoreLive.pipe(
+const WorkflowContentStoreLayer = WorkflowContentStoreLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(DataDirectoryLive),
+);
+const WorkflowPayloadStoreLayer = WorkflowPayloadStoreLive.pipe(
+  Layer.provide(WorkflowContentStoreLayer),
 );
 // One wake, shared by the two repositories that write and by the publisher that listens. Built
 // once, so every committed workflow transaction reaches the same drainer.

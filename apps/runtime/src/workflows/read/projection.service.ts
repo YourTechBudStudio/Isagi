@@ -44,6 +44,7 @@ import {
 } from '../../persistence/schema.js';
 import {
   WorkflowPayloadStore,
+  workflowPayloadMediaType,
   type WorkflowPayloadStoreService,
 } from '../persistence/payload-store.js';
 import { slotFromColumns } from '../persistence/slots.js';
@@ -321,7 +322,7 @@ export function makeWorkflowRunProjection(
             ? null
             : yield* payloads
                 .resolve(resolved.descriptorSlot)
-                .pipe(Effect.catchTag('PayloadUnavailable', payloadUnavailable(runId)));
+                .pipe(Effect.catchTag('ContentUnavailable', payloadUnavailable(runId)));
         if (descriptor === null) {
           return yield* Effect.fail(
             new WorkflowEngineError({
@@ -703,7 +704,7 @@ export function makeWorkflowRunProjection(
         });
         const value = yield* payloads
           .read(payloadRef)
-          .pipe(Effect.catchTag('PayloadUnavailable', payloadUnavailable(runId)));
+          .pipe(Effect.catchTag('ContentUnavailable', payloadUnavailable(runId)));
         const meta = yield* read('workflow_read_payload_meta', (db) =>
           db
             .select()
@@ -713,7 +714,7 @@ export function makeWorkflowRunProjection(
         );
         return {
           payloadRef,
-          mediaType: meta?.mediaType ?? 'application/json',
+          mediaType: workflowPayloadMediaType,
           byteSize: meta?.byteSize ?? 0,
           value,
         };

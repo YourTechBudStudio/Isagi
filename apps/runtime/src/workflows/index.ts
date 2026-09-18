@@ -54,12 +54,20 @@ export {
 } from './operations/operation.service.js';
 
 export {
+  ContentPublishError,
+  ContentUnavailable,
+  makeWorkflowContentStore,
+  WorkflowContentStore,
+  WorkflowContentStoreLive,
+  type WorkflowContentStoreService,
+} from './persistence/content-store.js';
+
+export {
   WorkflowPayloadStore,
   WorkflowPayloadStoreLive,
   inlinePayloadThresholdBytes,
   makeWorkflowPayloadStore,
   PayloadPublishError,
-  PayloadUnavailable,
   workflowPayloadMediaType,
   type PayloadSlot,
   type WorkflowPayloadStoreService,

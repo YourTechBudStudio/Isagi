@@ -8,6 +8,7 @@ import type { WorkflowPlacementRequestDto } from '@isagi/contracts';
 import type { WorkflowWriteResult } from './outcomes.js';
 import type { WorkflowAttemptRecord, WorkflowRunRecord } from './records.js';
 import {
+  contentPathFor,
   createPlacedRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
@@ -1349,7 +1350,7 @@ test('payload storage lives outside any worktree and survives the worktree being
   try {
     const entered = await enterRootGraph(fixture);
     const slot = await run(fixture.payloads.publish({ note: 'x'.repeat(20_000) }));
-    const path = fixture.payloads.pathOf(slot.ref!);
+    const path = contentPathFor(fixture.contentRoot, slot.ref!);
 
     const worktreePath = (await run(fixture.runs.findRun(entered.run.id)))!.destination
       .worktreePath!;

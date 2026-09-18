@@ -16,7 +16,7 @@ import {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 import { inlinePayloadThresholdBytes } from '../persistence/payload-store.js';
-import { run } from '../persistence/test-support.js';
+import { contentPathFor, run } from '../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
 import { makeEngineHarness, type EngineHarness } from './test-support.js';
 
@@ -405,7 +405,7 @@ test('a payload the interpreter needs but cannot read parks the run instead of i
     const frame = (await run(harness.fixture.runs.findFrame(parked.activeFrameId!)))!;
     assert.ok(frame.state?.ref, 'the state boundary is a reference');
 
-    rmSync(harness.fixture.payloads.pathOf(frame.state!.ref!));
+    rmSync(contentPathFor(harness.fixture.contentRoot, frame.state!.ref!));
 
     await harness.drain();
     const failed = await harness.runOf(launched.id);
