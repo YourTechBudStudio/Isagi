@@ -1,6 +1,6 @@
 {
   "name": "@yourtechbudstudio/isagi-workflow-sdk",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Public authoring contract for Isagi workflows.",
   "license": "Apache-2.0",
   "author": "YourTechBud",
@@ -27,10 +27,13 @@
   },
   "scripts": {
     "build": "vite build && tsc -b tsconfig.json --force",
-    "check": "pnpm typecheck && pnpm build && pnpm pack --dry-run",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.type-tests.json"
+    "check": "pnpm typecheck && pnpm test && pnpm pack --dry-run",
+    "test": "pnpm build && node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.type-tests.json"
   },
   "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.0.14"
   },

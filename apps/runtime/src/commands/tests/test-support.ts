@@ -745,6 +745,8 @@ export function commandLaunchAllocation(input: {
     args: ['-lc', 'pnpm dev'],
     cwd: input.cwd,
     logPath: input.logPath ?? null,
+    launchOutcome: 'spawned',
+    launchFailureCause: null,
   };
   input.calls?.push('allocate');
   return fakePtyAllocation({

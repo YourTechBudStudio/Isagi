@@ -5,7 +5,6 @@ import {
   apiEndpoints,
   agentSessionPtyWebSocketEndpoint,
   commandLogStreamWebSocketEndpoint,
-  workflowEventsStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
   apiErrorResponseSchema,
@@ -67,8 +66,19 @@ import {
   type CommandLogMetadataOutput,
   type ClientSettingsOutput,
   type AdvanceWorkflowInput,
+  type GetWorkflowPayloadOutput,
+  type GetWorkflowRunOutput,
+  type GetWorkflowStructureOutput,
+  type ListRunExecutionsQuery,
+  type ListRunExecutionsOutput,
   type ListWorkflowDescriptorsInput,
   type ListWorkflowDescriptorsOutput,
+  type ListWorkflowEventsQuery,
+  type ListWorkflowEventsOutput,
+  type ListWorkflowOperationsQuery,
+  type ListWorkflowOperationsOutput,
+  type ListWorkflowRunsQuery,
+  type ListWorkflowRunsOutput,
   type StartWorkflowInput,
   type StartWorkflowOutput,
   type WorkflowRunControlOutput,
@@ -110,10 +120,6 @@ export interface RuntimeClient {
     RuntimeEndpointError<typeof apiEndpoints.commands.logMetadata>
   >;
   readonly resolveCommandLogStreamWebSocketUrl: (worktreeId: number, commandName: string) => string;
-  readonly resolveWorkflowEventsStreamWebSocketUrl: (
-    runId: number,
-    options?: { readonly includeChildren?: boolean | undefined },
-  ) => string;
   readonly runCommand: (
     worktreeId: number,
     commandName: string,
@@ -320,17 +326,25 @@ export interface RuntimeClient {
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.resume>
   >;
-  readonly clearWorkflow: (
-    runId: number,
-  ) => Effect.Effect<
-    WorkflowRunControlOutput,
-    RuntimeEndpointError<typeof apiEndpoints.workflows.clear>
-  >;
   readonly retryWorkflow: (
     runId: number,
   ) => Effect.Effect<
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.retry>
+  >;
+  /** Stops graph work and new effects. History is retained and the run stays inspectable. */
+  readonly cancelWorkflow: (
+    runId: number,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.cancel>
+  >;
+  /** Releases a terminal run's surface attachment. It removes the bar, never the history. */
+  readonly dismissWorkflow: (
+    runId: number,
+  ) => Effect.Effect<
+    WorkflowRunControlOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.dismiss>
   >;
   readonly advanceWorkflow: (
     runId: number,
@@ -338,6 +352,56 @@ export interface RuntimeClient {
   ) => Effect.Effect<
     WorkflowRunControlOutput,
     RuntimeEndpointError<typeof apiEndpoints.workflows.advance>
+  >;
+  readonly getWorkflowRun: (
+    runId: number,
+  ) => Effect.Effect<
+    GetWorkflowRunOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getRun>
+  >;
+  readonly listWorkflowRuns: (
+    query: ListWorkflowRunsQuery,
+  ) => Effect.Effect<
+    ListWorkflowRunsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listRuns>
+  >;
+  /**
+   * Always called without `artifactHash`: the client draws the run's current pin and nothing else.
+   * The parameter stays in the contract for API consumers.
+   */
+  readonly getWorkflowStructure: (
+    runId: number,
+  ) => Effect.Effect<
+    GetWorkflowStructureOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getStructure>
+  >;
+  readonly listWorkflowExecutions: (
+    runId: number,
+    query: ListRunExecutionsQuery,
+  ) => Effect.Effect<
+    ListRunExecutionsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listExecutions>
+  >;
+  readonly listWorkflowOperations: (
+    runId: number,
+    query: ListWorkflowOperationsQuery,
+  ) => Effect.Effect<
+    ListWorkflowOperationsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listOperations>
+  >;
+  readonly listWorkflowEvents: (
+    runId: number,
+    query: ListWorkflowEventsQuery,
+  ) => Effect.Effect<
+    ListWorkflowEventsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listEvents>
+  >;
+  readonly getWorkflowPayload: (
+    runId: number,
+    payloadRef: string,
+  ) => Effect.Effect<
+    GetWorkflowPayloadOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getPayload>
   >;
   readonly listWorkflowDescriptors: (
     input: ListWorkflowDescriptorsInput,
@@ -405,15 +469,6 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
         runtimeUrl,
       );
       httpUrl.searchParams.set('commandName', commandName);
-      httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-      return httpUrl.toString();
-    },
-    resolveWorkflowEventsStreamWebSocketUrl: (runId, options = {}) => {
-      const httpUrl = new URL(
-        `${apiBasePath}${interpolatePath(workflowEventsStreamWebSocketEndpoint.path, { runId })}`,
-        runtimeUrl,
-      );
-      if (options.includeChildren) httpUrl.searchParams.set('includeChildren', 'true');
       httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
       return httpUrl.toString();
     },
@@ -491,9 +546,21 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
       request(apiEndpoints.paths.suggestions, { input, limit }),
     pauseWorkflow: (runId) => request(apiEndpoints.workflows.pause, { runId }),
     resumeWorkflow: (runId) => request(apiEndpoints.workflows.resume, { runId }),
-    clearWorkflow: (runId) => request(apiEndpoints.workflows.clear, { runId }),
     retryWorkflow: (runId) => request(apiEndpoints.workflows.retry, { runId }),
+    cancelWorkflow: (runId) => request(apiEndpoints.workflows.cancel, { runId }),
+    dismissWorkflow: (runId) => request(apiEndpoints.workflows.dismiss, { runId }),
     advanceWorkflow: (runId, input) => request(apiEndpoints.workflows.advance, { runId }, input),
+    getWorkflowRun: (runId) => request(apiEndpoints.workflows.getRun, { runId }),
+    listWorkflowRuns: (query) => request(apiEndpoints.workflows.listRuns, query),
+    getWorkflowStructure: (runId) => request(apiEndpoints.workflows.getStructure, { runId }, {}),
+    listWorkflowExecutions: (runId, query) =>
+      request(apiEndpoints.workflows.listExecutions, { runId }, query),
+    listWorkflowOperations: (runId, query) =>
+      request(apiEndpoints.workflows.listOperations, { runId }, query),
+    listWorkflowEvents: (runId, query) =>
+      request(apiEndpoints.workflows.listEvents, { runId }, query),
+    getWorkflowPayload: (runId, payloadRef) =>
+      request(apiEndpoints.workflows.getPayload, { runId, payloadRef }),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),

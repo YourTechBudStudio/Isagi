@@ -29,11 +29,24 @@ export const worktreeBaseRefSchema = Schema.Union(
     kind: Schema.Literal('detached_worktree'),
     worktreeId: positiveIntegerSchema,
   }),
+  // An already-resolved commit. A caller that resolved a ref itself branches from the commit it
+  // actually saw, rather than re-resolving a moving ref and silently branching from somewhere else.
+  // Caller-supplied and crossing a trust boundary, so the shape is validated here.
+  Schema.Struct({
+    kind: Schema.Literal('commit'),
+    commit: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
+  }),
 );
 
 export const openWorktreeInputSchema = Schema.Struct({
   branch: Schema.String.pipe(Schema.minLength(1)),
   base: Schema.optional(worktreeBaseRefSchema),
+  /**
+   * `open` (default) adopts an existing worktree or branch; `create_new` refuses both. A caller that
+   * has already decided it is creating something wants the collision reported, not absorbed into a
+   * silent reuse of somebody else's checkout.
+   */
+  mode: Schema.optional(Schema.Literal('open', 'create_new')),
 });
 
 export const checkoutRemovalModeSchema = Schema.Literal('normal', 'force');

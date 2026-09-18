@@ -255,76 +255,10 @@ export { healthEndpoint } from './health/api.js';
 export { healthOutputSchema } from './health/types.js';
 export type { HealthOutput } from './health/types.js';
 
-export {
-  advanceWorkflowInputSchema,
-  getWorkflowRunOutputSchema,
-  listWorkflowDescriptorsInputSchema,
-  listWorkflowDescriptorsOutputSchema,
-  listWorkflowRunsOutputSchema,
-  listWorkflowRunsQuerySchema,
-  startWorkflowInputSchema,
-  startWorkflowOutputSchema,
-  workflowEventsQuerySchema,
-  workflowCommandManifestSchema,
-  workflowBlockingWaitSchema,
-  workflowDescriptorResultSchema,
-  workflowEventAppendedMessageSchema,
-  workflowEventSchema,
-  workflowEventsReplayOutputSchema,
-  workflowEventsRequestedMessageSchema,
-  workflowEventsSnapshotMessageSchema,
-  workflowEventsStreamErrorCodeSchema,
-  workflowEventsStreamErrorMessageSchema,
-  workflowEventsStreamInputMessageSchema,
-  workflowEventsStreamOutputMessageSchema,
-  workflowLifecycleEventEnvelopeSchema,
-  workflowLifecycleEventSchema,
-  workflowLogEventSchema,
-  workflowLogLevelSchema,
-  workflowRunControlOutputSchema,
-  workflowRunRouteParamsSchema,
-  workflowRunStatusSchema,
-  workflowLoadFailureReasonSchema,
-  workflowRunSummarySchema,
-  workflowInputKindSchema,
-  workflowQuestionOptionSchema,
-  workflowQuestionSpecSchema,
-  workflowStartContextSchema,
-  workflowUiFeedbackSchema,
-  workflowWaitKindSchema,
-} from './workflows/types.js';
-export type {
-  AdvanceWorkflowInput,
-  GetWorkflowRunOutput,
-  ListWorkflowDescriptorsInput,
-  ListWorkflowDescriptorsOutput,
-  ListWorkflowRunsOutput,
-  ListWorkflowRunsQuery,
-  StartWorkflowInput,
-  StartWorkflowOutput,
-  WorkflowBlockingWait,
-  WorkflowCommandManifestDto,
-  WorkflowDescriptorResult,
-  WorkflowEvent,
-  WorkflowEventsReplayOutput,
-  WorkflowEventsStreamErrorCode,
-  WorkflowEventsStreamInputMessage,
-  WorkflowEventsStreamOutputMessage,
-  WorkflowInputKind,
-  WorkflowLifecycleEvent,
-  WorkflowLogLevelDto,
-  WorkflowQuestionOptionDto,
-  WorkflowQuestionSpecDto,
-  WorkflowRunControlOutput,
-  WorkflowRunRouteParams,
-  WorkflowRunStatus,
-  WorkflowLoadFailureReason,
-  WorkflowRunSummary,
-  WorkflowEventsQuery,
-  WorkflowStartContext,
-  WorkflowUiFeedbackDto,
-} from './workflows/types.js';
-export { workflowEventsStreamWebSocketEndpoint, workflowsEndpoints } from './workflows/api.js';
+// The workflow surface is grouped into focused modules behind one barrel, so this index does not
+// have to enumerate every schema and DTO as the read model grows.
+export * from './workflows/types.js';
+export { workflowsEndpoints } from './workflows/api.js';
 
 export { pathsEndpoints } from './paths/api.js';
 export {
@@ -388,7 +322,8 @@ export {
   durableSessionDeletedEventSchema,
   editorContextChangedEventSchema,
   workflowRunChangedEventSchema,
-  workflowRunClearedEventSchema,
+  workflowRunDetachedEventSchema,
+  workflowRunTransitionEventSchema,
   workflowRunSnapshotEventSchema,
   terminalAttentionStateSchema,
   agentSessionChangedEventSchema,
@@ -420,7 +355,8 @@ export type {
   SurfaceChangedEvent,
   TerminalSessionChangedEvent,
   WorkflowRunChangedEvent,
-  WorkflowRunClearedEvent,
+  WorkflowRunDetachedEvent,
+  WorkflowRunTransitionEvent,
   WorkflowRunSnapshotEvent,
 } from './runtime-events/types.js';
 export { editorEndpoints } from './editor/api.js';

@@ -381,6 +381,69 @@ test('order routes map database failures to the shared runtime envelope', async 
   );
 });
 
+/**
+ * The two collision rejections `mode: "create_new"` introduces. Pinned at the boundary and not only
+ * in the service, because three separate facts a client depends on are decided here and nowhere
+ * else: that the reason survives as itself rather than degrading through
+ * `worktreeRejectionReason`'s catch-all default, that a collision answers 409 rather than 400, and
+ * that the identifiers a person needs to act on it are carried through.
+ */
+const worktreeOpenCollisions = [
+  {
+    label: 'branch_exists',
+    error: new WorkspaceError({
+      branch: 'feature/new',
+      code: 'branch_exists' as const,
+      message: 'Branch feature/new already exists in project 1.',
+      projectId: 1,
+    }),
+    expected: { reason: 'branch_exists', projectId: 1, branch: 'feature/new' },
+  },
+  {
+    label: 'worktree_exists',
+    error: new WorkspaceError({
+      branch: 'feature/new',
+      code: 'worktree_exists' as const,
+      message: 'Worktree 11 is already checked out on branch feature/new.',
+      path: '/data/worktrees/1/abc123',
+      projectId: 1,
+      worktreeId: 11,
+    }),
+    expected: {
+      reason: 'worktree_exists',
+      projectId: 1,
+      worktreeId: 11,
+      branch: 'feature/new',
+      path: '/data/worktrees/1/abc123',
+    },
+  },
+];
+
+for (const collision of worktreeOpenCollisions) {
+  test(`worktrees.open answers 409 and carries the identifiers for ${collision.label}`, async () => {
+    await withWorkspaceApi(
+      fakeWorkspaceService({ openWorktree: () => Effect.fail(collision.error) }),
+      async (fastify) => {
+        const response = await fastify.inject({
+          method: 'POST',
+          url: '/api/v1/projects/1/worktrees/open',
+          payload: { branch: 'feature/new', mode: 'create_new' },
+        });
+        const body = response.json() as {
+          readonly error?: {
+            readonly code?: string;
+            readonly data?: Record<string, unknown>;
+          };
+        };
+
+        assert.equal(response.statusCode, 409);
+        assert.equal(body.error?.code, 'worktree_open_rejected');
+        assert.deepEqual(body.error?.data, collision.expected);
+      },
+    );
+  });
+}
+
 // Command cleanup gates three flows beyond an explicit worktree delete, because
 // `cleanupBeforeWorktreePrune` runs inside project reconciliation. Each already
 // declares `command_cleanup_failed` in its contract; this pins that the runtime
@@ -465,6 +528,10 @@ function fakeWorkspaceService(
       Effect.succeed({ projectId: input.projectId, status: 'not_configured', summary: [] }),
     trustWorktreeSetup: () => Effect.die('trustWorktreeSetup is not used by workspace API tests'),
     openWorktree: () => Effect.die('openWorktree is not used by workspace API tests'),
+    preflightWorktreeCreation: () =>
+      Effect.die('preflightWorktreeCreation has no route and is not used by API tests'),
+    runWorktreeSetup: () =>
+      Effect.die('runWorktreeSetup has no route and is not used by API tests'),
     preflightDeleteWorktree: (input) =>
       Effect.succeed({
         projectId: input.projectId,

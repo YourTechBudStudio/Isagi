@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Queue } from 'effect';
 
-import type { SessionStatus, SurfaceChangedEvent, WorkflowEvent } from '@isagi/contracts';
+import type { SessionStatus, SurfaceChangedEvent } from '@isagi/contracts';
 import type { DurableSessionIdentity } from '@isagi/contracts';
 
 type SurfaceChangedPayload = SurfaceChangedEvent['payload'];
@@ -69,6 +69,29 @@ export type InternalRuntimeEvent =
       readonly payload: SurfaceChangedPayload;
     }
   | {
+      /**
+       * A worktree row and everything cascading from it are gone.
+       *
+       * Published after the delete commits, like every other deletion notification here, which is
+       * why a consumer cannot find affected work through anything that cascaded: workflow runs are
+       * matched by their retained destination identity instead.
+       */
+      readonly type: 'worktree_deleted';
+      readonly worktreeId: number;
+      readonly projectId: number;
+    }
+  | {
+      /**
+       * A project and its worktrees are gone.
+       *
+       * `worktreeIds` is read **before** the cascade, because `worktrees.project_id` cascades from
+       * `projects` and those rows cannot be enumerated afterwards.
+       */
+      readonly type: 'project_deleted';
+      readonly projectId: number;
+      readonly worktreeIds: readonly number[];
+    }
+  | {
       readonly type: 'pty_process_started';
       readonly ptyProcessId: number;
       readonly status: SessionStatus;
@@ -101,36 +124,28 @@ export type InternalRuntimeEvent =
       readonly ptyProcessId: number;
     }
   | {
-      readonly type: 'headless_op_completed';
+      /**
+       * A durable workflow operation reached a settled state.
+       *
+       * A wake-up, never the authority: the operation row is what says *what* it settled as, and a
+       * dropped notification costs a delay rather than a fact, because the wait resolver's own
+       * reconciliation reads the same rows. It replaces the old `headless_op_completed`, which named
+       * only one of the four capabilities that can settle.
+       */
+      readonly type: 'workflow_operation_settled';
       readonly runId: number;
-      readonly opId: string;
-    }
-  | {
-      readonly type: 'workflow_run_terminal';
-      readonly runId: number;
-      readonly status: 'done' | 'failed';
-    }
-  | {
-      // Internal repository→projection trigger: "a run row was touched, recompute its
-      // root summary". Distinct from the public `workflow_run_changed` contract event
-      // (payload = full WorkflowRunSummary) the projection emits on the public bus.
-      readonly type: 'workflow_run_touched';
-      readonly runId: number;
-      readonly rootRunId: number | null;
-      readonly surfaceId: number | null;
-    }
-  | {
-      readonly type: 'workflow_run_recompute_requested';
-      readonly rootRunId: number;
-      readonly surfaceId: number | null;
-    }
-  | {
-      readonly type: 'workflow_event_appended';
-      readonly surfaceId: number | null;
-      readonly rootRunId: number | null;
-      readonly runId: number;
-      readonly event: WorkflowEvent;
+      readonly operationId: number;
+      readonly operationKey: string;
     };
+
+/*
+ * `workflow_run_terminal`, `workflow_run_touched` and `workflow_run_recompute_requested` are gone
+ * with the v1 projection that was their only consumer. The first was never published at all; the
+ * other two carried `rootRunId`, a child-run identity this story retired. Nothing recomputes a
+ * summary from a notification any more: a committed transition captures its own read model, and the
+ * publisher drains it from the database. A variant nobody produces or consumes is not a seam kept
+ * open for later — it is a claim about the runtime that is not true.
+ */
 
 export interface InternalRuntimeEventSubscription {
   readonly take: Effect.Effect<InternalRuntimeEvent>;

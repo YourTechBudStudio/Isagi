@@ -288,6 +288,29 @@ describe('removing a folder project', () => {
         [false, false],
       );
 
+      // The project's worktrees are announced too, and the ids have to have been read *before* the
+      // delete: `worktrees.project_id` cascades from `projects`, so afterwards there is nothing left
+      // to enumerate. Retained workflow history has no foreign key to either row, so this event is
+      // the only way anything holding placement in that worktree learns it is gone.
+      const projectDeletions = bus.observations.filter(
+        (observation) => observation.event.type === 'project_deleted',
+      );
+      assert.deepEqual(
+        projectDeletions.map((observation) => observation.event),
+        [
+          {
+            type: 'project_deleted',
+            projectId: seeded.projectId,
+            worktreeIds: [seeded.worktreeId],
+          },
+        ],
+      );
+      assert.deepEqual(
+        projectDeletions.map((observation) => observation.projectRowStillPresent),
+        [false],
+        'announced only after the cascade committed',
+      );
+
       // Publishing is where this suite's claim stops. Nothing here establishes
       // that a subscriber handled the event or that any process was disposed:
       // `runtime-events/projection.service.ts` forwards it to the public bus and

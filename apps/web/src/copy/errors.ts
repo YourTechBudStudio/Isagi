@@ -13,6 +13,7 @@ import type {
   WorktreeDeleteRejectionReason,
   WorktreeOperationRejectionReason,
   WorktreeOrderRejectionReason,
+  WorkflowRejectionReason,
   WorktreeSetupRejectionReason,
 } from '@isagi/contracts';
 
@@ -35,6 +36,14 @@ const setupTrustMismatch = 'The setup hooks changed since you last trusted them.
 // A folder project maintains its own single environment, so every checkout
 // management family refuses with the same fact.
 const folderProjectNoWorktrees = 'This project is a plain folder, so it has no worktrees.';
+// The same two Git facts refuse a worktree the person opened by hand and a
+// worktree a workflow asked for, so they read identically in both places.
+const branchNameRejected = "Git won't accept that branch name.";
+const baseRefMissing = "Couldn't find the base ref to branch from.";
+// A create that found the thing already there. The same two facts refuse a
+// worktree the person asked for by hand and one a workflow's placement asked for.
+const branchAlreadyExists = 'That branch already exists.';
+const worktreeAlreadyExists = "There's already a worktree for that branch.";
 const harnessLaunchBlockCopy = {
   onboarding_incomplete: 'Harness setup is incomplete, so Isagi cannot start this session.',
   config_invalid: 'Harness configuration is invalid, so Isagi cannot start this session.',
@@ -112,8 +121,8 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       project_not_present: projectFilesGone,
       branch_not_found: "Git doesn't have that branch.",
       new_branch_requires_base: 'A new branch needs a base ref to grow from.',
-      invalid_branch_name: "Git won't accept that branch name.",
-      base_ref_not_found: "Couldn't find the base ref to branch from.",
+      invalid_branch_name: branchNameRejected,
+      base_ref_not_found: baseRefMissing,
       checkout_path_exists: "Something's already sitting at that checkout path.",
       checkout_path_registered: 'Another worktree already claims that checkout path.',
       checkout_parent_unavailable: "The folder that should hold this worktree isn't there.",
@@ -122,6 +131,10 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       setup_trust_required: 'These setup hooks need your OK before they can run.',
       setup_trust_mismatch: setupTrustMismatch,
       worktrees_not_supported: folderProjectNoWorktrees,
+      // Only reachable when the caller asked to create rather than adopt, so
+      // "already exists" is the refusal, not a state to work with.
+      branch_exists: branchAlreadyExists,
+      worktree_exists: worktreeAlreadyExists,
     }),
   },
   worktree_setup_rejected: {
@@ -179,27 +192,58 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
   },
   workflow_rejected: {
     summary: "Isagi couldn't complete that workflow action.",
-    byReason: {
+    byReason: byReason<WorkflowRejectionReason>({
       unknown_workflow_key: "Isagi doesn't recognize that workflow.",
       workflow_discovery_failed: "Couldn't read a workflow source path.",
       workflow_load_failed: "Couldn't load that workflow's code.",
+      no_active_worktree: 'Pick a worktree before starting a workflow.',
       worktree_not_found: worktreeGone,
       surface_not_found: surfaceGone,
       surface_worktree_mismatch: 'That surface belongs to a different worktree.',
       pane_not_found: "That pane isn't here anymore.",
       agent_session_not_on_surface: "That agent session isn't on this surface.",
       workflow_launch_context_mismatch: "That pane and agent session don't match.",
-      validation_failed: "Those answers didn't pass the workflow's checks.",
+      workflow_command_failed: "That workflow couldn't describe itself, so Isagi can't start it.",
+      workflow_inputs_rejected: "Those answers didn't pass the workflow's checks.",
       workflow_root_surface_required: 'A workflow needs a surface to run on.',
-      workflow_root_run_required: 'That action needs the main workflow run.',
-      workflow_surface_busy: 'This surface already has a workflow running.',
+      // Destination wording: the busy surface is the one the run was aimed at, which
+      // is not necessarily the one the person is looking at.
+      workflow_surface_attached: 'That surface already has a workflow on it.',
       workflow_run_not_found: "That workflow run isn't here anymore.",
-      workflow_run_not_failed: "That workflow isn't in a failed state.",
-      workflow_wait_not_satisfiable: "That workflow can't be advanced right now.",
+      workflow_run_not_retryable: "There's nothing to retry on this run right now.",
+      workflow_run_not_cancellable:
+        "That workflow has already stopped, so there's nothing to cancel.",
+      workflow_run_not_dismissible: 'Cancel this workflow before dismissing it.',
+      workflow_wait_not_found: "That question isn't waiting for an answer anymore.",
+      workflow_wait_already_resolved: 'That question was already answered.',
+      workflow_cursor_invalid: 'That view moved on. Reopen it to pick up the latest.',
       workflow_user_input_invalid:
         "Those answers didn't go through. Check the fields and try again.",
-      workflow_event_ledger_failed: "Couldn't read the workflow's event log.",
-    },
+      workflow_structure_validation_failed: "That workflow's graph didn't pass verification.",
+      workflow_version_not_adopted: 'This run never ran that version of the workflow.',
+      workflow_payload_unavailable: "Isagi couldn't read that recorded value.",
+      // Deliberately not "it failed": nobody knows whether the work landed, and saying either way
+      // would be the one thing the runtime refuses to guess.
+      workflow_operation_uncertain:
+        "Isagi can't tell whether that external step went through, so the run is holding.",
+      workflow_agent_observation_unavailable:
+        "Isagi couldn't refresh that agent session, so the retry didn't change the run.",
+      workflow_stale_control: 'This workflow moved on. Try that again.',
+      workflow_environment_unavailable:
+        "This workflow's worktree isn't available, so it can't carry on.",
+      // Selection, then validation, then the two Git facts, then the collision, then the refusal
+      // to act on a run that is still setting itself up. Each says what stopped the launch and
+      // leaves the raw Git or hook output to the diagnostic panel below it.
+      workflow_environment_selection_failed:
+        "This workflow couldn't decide where to run, so nothing was started.",
+      workflow_placement_invalid: "That isn't a place this workflow can run.",
+      workflow_worktree_creation_unsupported: folderProjectNoWorktrees,
+      workflow_branch_invalid: branchNameRejected,
+      workflow_base_ref_not_found: baseRefMissing,
+      workflow_environment_collision:
+        'Something already sits where this workflow wanted to set up.',
+      workflow_run_preparing: "This run is still setting up where it'll work. Give it a moment.",
+    }),
   },
   worktree_commands_rejected: {
     summary: "Isagi couldn't complete that command action.",

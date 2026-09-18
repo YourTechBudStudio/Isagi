@@ -157,6 +157,10 @@ function startAllocation(
     args: input.args,
     cwd: input.cwd,
     logPath: null,
+    // Overwritten at whichever of the three return sites below is reached. A resolved `start` is
+    // not evidence of a launch, so the outcome is reported rather than left for the caller to guess.
+    launchOutcome: 'spawned',
+    launchFailureCause: null,
   };
 
   return Effect.uninterruptibleMask((restore) =>
@@ -183,7 +187,13 @@ function startAllocation(
           ptyProcessId,
           `[runtime] Could not mark failed PTY launch ptyProcessId=${ptyProcessId}`,
         );
-        return yield* withPersistedLogPath(deps, metadata);
+        // Genuinely pre-boundary: `prepareLaunch` resolved a backend and may have created an empty
+        // log file, but nothing reached a backend, so no session can ever materialize for this row.
+        return yield* withPersistedLogPath(deps, {
+          ...metadata,
+          launchOutcome: 'preparation_failed',
+          launchFailureCause: describeLaunchFailure(prepared.left),
+        });
       }
 
       const spawned = yield* restore(spawnBackendProcess(deps, prepared.right, metadata)).pipe(
@@ -192,7 +202,16 @@ function startAllocation(
       );
       if (Either.isLeft(spawned)) {
         yield* foldSpawnFailure(deps, metadata, spawned.left);
-        return yield* withPersistedLogPath(deps, metadata);
+        // Post-boundary. `NodePtyBackend.launch` wraps the spawn, the live-session registration, the
+        // shell-integration parser and both listener registrations in one `Effect.try`, so a throw
+        // in any of those surfaces here with the process already spawned and running. Marking the
+        // durable row terminal does not make that untrue, which is exactly why this is reported as a
+        // different outcome from a preparation failure.
+        return yield* withPersistedLogPath(deps, {
+          ...metadata,
+          launchOutcome: 'spawn_failed',
+          launchFailureCause: describeLaunchFailure(spawned.left),
+        });
       }
 
       // Past this point nothing is load-bearing for ownership: the process is
@@ -439,4 +458,30 @@ function withPersistedLogPath(
     ),
     Effect.map((row) => ({ ...metadata, logPath: row?.logPath ?? null })),
   );
+}
+
+/**
+ * The owner's own description of why a launch failed, carried across the boundary.
+ *
+ * Callers need the cause to report honestly — a workflow operation records it on the operation row
+ * rather than inferring one from a process status, which proves neither a spawn nor a stop.
+ */
+function describeLaunchFailure(cause: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = cause;
+  // Tagged errors carry their detail in a nested `cause` and often have an empty own message, so
+  // the chain is walked rather than stringified at the top. The caller records this verbatim on a
+  // durable operation, and "DatabaseError" on its own tells a person nothing about what went wrong.
+  for (let depth = 0; depth < 4 && current !== null && current !== undefined; depth += 1) {
+    const record = current as { readonly _tag?: unknown; readonly message?: unknown };
+    if (typeof record._tag === 'string' && !parts.includes(record._tag)) parts.push(record._tag);
+    if (typeof record.message === 'string' && record.message.length > 0) {
+      parts.push(record.message);
+      break;
+    }
+    const next = (current as { readonly cause?: unknown }).cause;
+    if (next === current) break;
+    current = next;
+  }
+  return parts.length > 0 ? parts.join(': ') : String(cause);
 }

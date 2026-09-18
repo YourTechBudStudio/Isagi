@@ -173,6 +173,25 @@
   --command-sweep-to: var(--color-error);
 }
 
+/* An edge function on the Declared canvas reads as an arrow, not as a card.
+   A routing decision is a different kind of thing from a step or a graph, and at a
+   glance the shape should say so before the label does. Clip-path cannot be
+   combined with a border, so the outline is a second layer behind the face: the
+   shell carries the edge colour, the face sits 1px inside it, and the 1px gap
+   between their two polygons is the border. Both are here rather than in Tailwind
+   arbitrary values because the two polygons have to stay in step with each other,
+   and that is only readable written out. */
+.workflow-edge-shell {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%);
+}
+.workflow-edge-face {
+  position: absolute;
+  inset: 1px;
+  clip-path: polygon(0 0, calc(100% - 21px) 0, 100% 50%, calc(100% - 21px) 100%, 0 100%);
+}
+
 /* Pinned to the bottom edge of the surface that owns the action, rather than
    sitting in its flow. This positioning lives here rather than in Tailwind
    utilities on the element: these rules are unlayered, so `position: relative`

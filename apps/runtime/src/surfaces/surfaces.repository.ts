@@ -45,6 +45,7 @@ import type {
   CreateSinglePaneSurfaceOutput,
   DeleteSurfaceRowsOutput,
   EnvironmentFocusRow,
+  KeyedCreationState,
   RenameSurfaceOutput,
   SetSurfaceLayoutOutput,
   SurfaceDeleteTarget,
@@ -108,10 +109,22 @@ export interface SurfaceRepositoryService {
   }) => Effect.Effect<DeleteSurfaceRowsOutput, DatabaseError>;
   readonly createSinglePaneSurface: (
     input: CreateSinglePaneSurfaceInput,
-  ) => Effect.Effect<CreateSinglePaneSurfaceOutput, DatabaseError>;
+  ) => Effect.Effect<CreateSinglePaneSurfaceResult, DatabaseError>;
+  /**
+   * The surface a creation key names, or null. Deliberately separate from `findKeyedCreation`:
+   * that one resolves a pane or agent-session key, and `worktree_surfaces.creation_key` is its own
+   * keyspace (see the column's own comment).
+   */
+  readonly findSurfaceByCreationKey: (
+    creationKey: string,
+  ) => Effect.Effect<KeyedSurfaceCreation | null, DatabaseError>;
   readonly splitSurfacePane: (
     input: SplitSurfacePaneInput,
   ) => Effect.Effect<SplitSurfacePaneOutput | null, DatabaseError>;
+  /** How far a keyed compound creation got, resolved from the rows this service owns. */
+  readonly findKeyedCreation: (
+    creationKey: string,
+  ) => Effect.Effect<KeyedCreationState, DatabaseError>;
   readonly setSurfaceLayout: (input: {
     readonly surfaceId: number;
     readonly layout: SurfaceLayoutNode;
@@ -161,6 +174,34 @@ export class SurfaceRepositoryWorktreeMissing extends Error {
  * and later operate on a different worktree's durable editor.
  */
 export type InitialSessionRejectionReason = 'missing' | 'foreign_worktree' | 'already_placed';
+
+/** The surface a creation key already names, resolved to everything a re-entering caller needs. */
+export interface KeyedSurfaceCreation {
+  readonly worktreeId: number;
+  readonly surfaceId: number;
+  /** The surface's first surviving pane, which need not be the one it was created with. */
+  readonly paneId: number;
+  readonly title: string;
+  readonly cwd: string;
+}
+
+/**
+ * Returned rather than thrown, like `SurfaceOrderMoveResult` and for the same reason:
+ * `database.transaction` wraps its body in `Effect.try`, so a throw would be laundered into a
+ * `DatabaseError` and an expected rejection would be reported as an ordinary database fault.
+ *
+ * `adopted` is not a degraded `created`. It means the key already named a surface in this worktree
+ * and nothing was inserted, which is what lets a caller publish `surface_changed: created` only
+ * when a surface really was created.
+ */
+export type CreateSinglePaneSurfaceResult =
+  | { readonly status: 'created'; readonly output: CreateSinglePaneSurfaceOutput }
+  | { readonly status: 'adopted'; readonly output: CreateSinglePaneSurfaceOutput }
+  | {
+      readonly status: 'creation_key_mismatch';
+      readonly surfaceId: number;
+      readonly worktreeId: number;
+    };
 
 export class SurfaceRepositoryInitialSessionRejected extends Error {
   constructor(
@@ -339,6 +380,29 @@ export const SurfaceRepositoryLive = Layer.effect(
               .where(eq(worktrees.id, input.worktreeId))
               .get();
             if (!worktree) throw new SurfaceRepositoryWorktreeMissing(input.worktreeId);
+            // Resolved inside the transaction that would insert, so adoption and creation cannot
+            // interleave: a re-entry either finds the surface this key already names or is the one
+            // call that creates it.
+            if (input.creationKey !== undefined) {
+              const keyed = findSurfaceByCreationKeyRows(db, input.creationKey);
+              if (keyed) {
+                return keyed.worktreeId === input.worktreeId
+                  ? ({
+                      status: 'adopted' as const,
+                      output: {
+                        surfaceId: keyed.surfaceId,
+                        paneId: keyed.paneId,
+                        title: keyed.title,
+                        cwd: keyed.cwd,
+                      },
+                    } as const)
+                  : ({
+                      status: 'creation_key_mismatch' as const,
+                      surfaceId: keyed.surfaceId,
+                      worktreeId: keyed.worktreeId,
+                    } as const);
+              }
+            }
             const rejection = input.initialSession
               ? rejectInitialSession(db, input.worktreeId, input.initialSession)
               : null;
@@ -371,21 +435,30 @@ export const SurfaceRepositoryLive = Layer.effect(
           })
           .pipe(
             Effect.flatMap((result) =>
-              result.status === 'created'
-                ? Effect.succeed(result.output)
-                : // Converted to a defect out here rather than thrown inside the
+              result.status === 'rejected'
+                ? // Converted to a defect out here rather than thrown inside the
                   // transaction: `database.transaction` wraps its body in
                   // `Effect.try`, so a throw would be laundered into a
                   // `DatabaseError` and reported as an ordinary database fault.
+                  // A defect and not a failure because the per-worktree editor
+                  // lock plus the caller's own placement check make it
+                  // unreachable; `creation_key_mismatch` travels the same way
+                  // out of the transaction but is an ordinary expected failure,
+                  // so it stays in the result for the service to map.
                   Effect.die(
                     new SurfaceRepositoryInitialSessionRejected(
                       input.worktreeId,
                       input.initialSession?.sessionId ?? null,
                       result.reason,
                     ),
-                  ),
+                  )
+                : Effect.succeed(result satisfies CreateSinglePaneSurfaceResult),
             ),
           ),
+      findSurfaceByCreationKey: (creationKey) =>
+        database.use('find_surface_by_creation_key', (db) =>
+          findSurfaceByCreationKeyRows(db, creationKey),
+        ),
       splitSurfacePane: (input) =>
         database.transaction('split_surface_pane', (db) => {
           const surface = db
@@ -417,6 +490,7 @@ export const SurfaceRepositoryLive = Layer.effect(
               sortOrder,
               sessionKind: null,
               sessionId: null,
+              creationKey: input.creationKey ?? null,
               createdAt: now,
               updatedAt: now,
             })
@@ -433,6 +507,47 @@ export const SurfaceRepositoryLive = Layer.effect(
             .where(eq(worktreeSurfaces.id, input.surfaceId))
             .run();
           return { surfaceId: input.surfaceId, paneId: pane.id, title };
+        }),
+      findKeyedCreation: (creationKey) =>
+        database.use('find_keyed_surface_creation', (db) => {
+          const pane = db
+            .select()
+            .from(surfacePanes)
+            .where(eq(surfacePanes.creationKey, creationKey))
+            .get();
+          const session = db
+            // The harness comes back with the id: a caller re-entering under this key has to be
+            // able to tell whether what was created is what it is now asking for.
+            .select({ id: agentSessions.id, harness: agentSessions.harness })
+            .from(agentSessions)
+            .where(eq(agentSessions.creationKey, creationKey))
+            .get();
+          // Resolved from the durable rows rather than from an in-memory record of what this
+          // process did, so it converges the same way after a restart as after a retry.
+          // No pane means nothing usable exists under this key, even if a stray session row does:
+          // a session with nowhere to live cannot satisfy the caller, so the compound starts over.
+          if (!pane) return { kind: 'absent' } as const satisfies KeyedCreationState;
+          if (!session) {
+            return {
+              kind: 'pane_only',
+              surfaceId: pane.surfaceId,
+              paneId: pane.id,
+            } as const satisfies KeyedCreationState;
+          }
+          const identity = {
+            kind: 'agent_session',
+            sessionId: session.id,
+            harness: session.harness,
+          } as const;
+          // Association is the postcondition, so a created-but-unassigned session is its own state:
+          // the repair is the assignment, never a second session.
+          const associated = pane.sessionKind === 'agent_session' && pane.sessionId === session.id;
+          return {
+            kind: associated ? 'complete' : 'session_unassigned',
+            surfaceId: pane.surfaceId,
+            paneId: pane.id,
+            session: identity,
+          } as const satisfies KeyedCreationState;
         }),
       setSurfaceLayout: (input) =>
         database.use('set_surface_layout', (db) => {
@@ -757,6 +872,49 @@ function listPaneSessionBindings(database: RuntimeDatabaseService) {
   );
 }
 
+/**
+ * Shared by the keyed branch of the create transaction and by the standalone read, so the two
+ * cannot disagree about what a key resolves to.
+ *
+ * The pane it reports is the surface's first surviving one. A keyed surface is created with a
+ * single pane, but the key outlives that pane: splitting appends siblings and closing a pane
+ * removes exactly its row, so by the time a re-entry resolves the key the original pane may be
+ * gone. Adoption still has to succeed — the surface is the thing the key names.
+ */
+function findSurfaceByCreationKeyRows(
+  db: RuntimeDatabaseConnection,
+  creationKey: string,
+): KeyedSurfaceCreation | null {
+  const row = db
+    .select({
+      surfaceId: worktreeSurfaces.id,
+      worktreeId: worktreeSurfaces.worktreeId,
+      title: worktreeSurfaces.title,
+      cwd: worktrees.path,
+    })
+    .from(worktreeSurfaces)
+    .innerJoin(worktrees, eq(worktrees.id, worktreeSurfaces.worktreeId))
+    .where(eq(worktreeSurfaces.creationKey, creationKey))
+    .get();
+  if (!row) return null;
+  // The first surviving pane, by the same `(sortOrder, id)` order every other pane read uses — not
+  // the pane at sort order 0. `deleteSurfacePane` removes one row without renumbering its
+  // siblings, so a surface that was split and then had its original pane closed legitimately has
+  // no pane at 0. Keying on 0 would turn a supported edit into a failed adoption.
+  const pane = db
+    .select({ id: surfacePanes.id })
+    .from(surfacePanes)
+    .where(eq(surfacePanes.surfaceId, row.surfaceId))
+    .orderBy(surfacePanes.sortOrder, surfacePanes.id)
+    .get();
+  // A surface always keeps at least one pane — deleting the last one deletes the surface — so no
+  // pane at all means the rows were edited outside this owner. Returning null instead would send a
+  // re-entry on to create a second surface under a key that is already taken, which is the one
+  // outcome the key exists to prevent.
+  if (!pane) throw new Error(`Surface ${row.surfaceId} carries a creation key but has no panes.`);
+  return { ...row, paneId: pane.id };
+}
+
 export function duplicateSafeTitle(titleBase: string, existingTitles: readonly string[]) {
   const used = new Set(existingTitles);
   if (!used.has(titleBase)) return titleBase;
@@ -819,6 +977,10 @@ function createSinglePaneSurfaceRows(
       title,
       layoutJson: '{}',
       sortOrder,
+      // The surface row is the only place this key is written. The pane below stays unkeyed: pane
+      // keys are `splitPane`'s keyspace, and writing both would make one string resolvable through
+      // two different lookups.
+      creationKey: input.creationKey ?? null,
       createdAt: now,
       updatedAt: now,
     })

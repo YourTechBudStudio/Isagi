@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { scanDeferredExecutableDependencies } from './closed-bundle.js';
 import {
   hashArtifact,
   hashWorkflowInputs,
@@ -20,6 +31,13 @@ import {
   type HashInput,
   type WorkflowBuildManifest,
 } from './receipt.js';
+import {
+  canonicalizeDescriptor,
+  describeCapabilities,
+  hashDescriptor,
+  type StructureDiagnostic,
+  type WorkflowStructureDescriptor,
+} from './structure.js';
 
 const outputLimit = 128 * 1024;
 const subprocessTimeoutMs = 120_000;
@@ -130,12 +148,37 @@ export async function verifyWorkflow(
   runner: ProcessRunner = runProcess,
 ): Promise<void> {
   const root = resolve(workflowArgument);
+  // Remove any receipt an earlier run left behind before any work that can fail, so a failed
+  // verification can never leave a previous success standing as if it certified this attempt. The
+  // explicit --workflow argument already scopes this to one path, and nothing else is touched.
+  await removeStaleReceipt(root);
   const packageJson = await readPackageJson(root);
   requirePins(packageJson);
   const sourceHash = hashWorkflowInputs(await readSourceInputs(root));
   const artifactPath = join(root, 'dist', 'index.js');
   const artifactBytes = await readArtifact(artifactPath);
-  await validateArtifact(root, artifactPath, runner);
+  requireClosedBundle(artifactBytes);
+  const descriptor = await validateArtifact(root, artifactPath, runner);
+  const structureHash = hashDescriptor(descriptor);
+
+  // The structure file is written for every structurally valid bundle, including one this release
+  // cannot launch, so an author always has a machine-readable description of what they built.
+  await writeAtomic(
+    join(root, 'dist', 'isagi-workflow-structure.json'),
+    `${canonicalizeDescriptor(descriptor)}\n`,
+    'the workflow structure description',
+  );
+
+  const capabilities = describeCapabilities(descriptor);
+  if (!capabilities.launchable) {
+    const offenders = capabilities.unsupported
+      .map((entry) => `  ${entry.graphKey}.${entry.nodeId} — ${entry.caption}`)
+      .join('\n');
+    throw new VerificationError(
+      `This release recognizes the checkpoint node kind but cannot execute checkpoint capture, so the package is not launchable yet:\n${offenders}\nNo build receipt was written. Remove the checkpoint node(s) to produce a launchable package.`,
+    );
+  }
+
   const manifest: WorkflowBuildManifest = {
     manifestVersion: workflowBuildManifestVersion,
     workflowContractVersion: supportedWorkflowContractVersion,
@@ -143,8 +186,72 @@ export async function verifyWorkflow(
     verifier: { name: workflowVerifierPackage, version: workflowVerifierVersion },
     source: { sha256: sourceHash },
     artifact: { entry: 'dist/index.js', sha256: hashArtifact(artifactBytes) },
+    structure: {
+      descriptorVersion: descriptor.descriptorVersion,
+      sha256: structureHash,
+      rootGraphKey: descriptor.rootGraphKey,
+      graphCount: descriptor.graphs.length,
+    },
   };
-  await writeReceipt(root, manifest);
+  // The receipt is written last, so a receipt never exists without its structure description.
+  await writeAtomic(
+    join(root, 'dist', 'isagi-workflow-build.json'),
+    serializeWorkflowBuildManifest(manifest),
+    'the build receipt',
+  );
+}
+
+function receiptPath(root: string): string {
+  return join(root, 'dist', 'isagi-workflow-build.json');
+}
+
+async function removeStaleReceipt(root: string): Promise<void> {
+  try {
+    await unlink(receiptPath(root));
+  } catch (cause) {
+    // Absence is the normal case. Anything else — a permission problem, a directory in its place —
+    // must fail here rather than leave a misleading receipt in reach.
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new VerificationError(
+      `Could not remove the previous build receipt ${receiptPath(root)}: ${message(cause)}`,
+    );
+  }
+}
+
+function requireClosedBundle(artifactBytes: Buffer): void {
+  const diagnostics = scanDeferredExecutableDependencies(artifactBytes.toString('utf8'));
+  if (diagnostics.length === 0) return;
+  throw new VerificationError(
+    `dist/index.js is not a closed bundle. One artifact hash must pin one executable structure, so everything the artifact runs has to be inside it:\n${formatDiagnostics(diagnostics)}`,
+  );
+}
+
+function formatDiagnostics(diagnostics: readonly StructureDiagnostic[]): string {
+  return diagnostics
+    .map((diagnostic) => {
+      const at = [
+        diagnostic.at.graphKey && `graph ${diagnostic.at.graphKey}`,
+        diagnostic.at.nodeId && `node ${diagnostic.at.nodeId}`,
+        diagnostic.at.edgeId && `edge ${diagnostic.at.edgeId}`,
+        diagnostic.at.outcomeId && `outcome ${diagnostic.at.outcomeId}`,
+        diagnostic.at.field && `field ${diagnostic.at.field}`,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return `  [${diagnostic.code}]${at ? ` ${at}:` : ''} ${diagnostic.message}`;
+    })
+    .join('\n');
+}
+
+async function writeAtomic(path: string, contents: string, what: string): Promise<void> {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, contents, { flag: 'wx' });
+    await rename(temporary, path);
+  } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw new VerificationError(`Could not write ${what} ${path}: ${message(cause)}`);
+  }
 }
 
 async function readPackageJson(root: string): Promise<Record<string, any>> {
@@ -256,23 +363,26 @@ async function readArtifact(path: string): Promise<Buffer> {
 }
 
 /**
- * Imports the built artifact in an isolated child process the way the runtime loader will, and
- * checks the exported workflow definition and its command() manifest. The child reports through a
- * result file rather than stdout, so workflow code that logs during import or command() cannot
- * corrupt the report.
+ * Imports the built artifact in an isolated child process the way the runtime loader will, reads
+ * its declared structure, and checks the exported workflow definition and its command() manifest.
+ * The child reports through a result file rather than stdout, so workflow code that logs during
+ * import or command() cannot corrupt the report.
  */
 async function validateArtifact(
   root: string,
   artifact: string,
   runner: ProcessRunner,
-): Promise<void> {
+): Promise<WorkflowStructureDescriptor> {
   const isolatedRoot = await mkdtemp(join(tmpdir(), 'isagi-workflow-validation-'));
   try {
     const isolatedArtifact = join(isolatedRoot, 'index.mjs');
     await writeFile(isolatedArtifact, await readFile(artifact));
     const resultPath = join(isolatedRoot, 'result.json');
     const validatorPath = join(isolatedRoot, 'validate.mjs');
-    await writeFile(validatorPath, validatorSource(isolatedArtifact, resultPath, root));
+    await writeFile(
+      validatorPath,
+      validatorSource(isolatedArtifact, resultPath, root, structureModulePath()),
+    );
     try {
       await runner({
         command: process.execPath,
@@ -293,31 +403,62 @@ async function validateArtifact(
         'dist/index.js failed the artifact check: the bundle terminated the validation process (for example via process.exit) before the check finished. Workflow code must not exit the process.',
       );
     }
-    if (!report || typeof report !== 'object' || (report as { ok?: unknown }).ok !== true)
+    if (!report || typeof report !== 'object' || (report as { ok?: unknown }).ok !== true) {
+      const diagnostics = (report as { diagnostics?: readonly StructureDiagnostic[] })?.diagnostics;
+      const detail =
+        Array.isArray(diagnostics) && diagnostics.length > 0
+          ? formatDiagnostics(diagnostics)
+          : String((report as { error?: unknown })?.error ?? 'The validation report is malformed.');
       throw new VerificationError(
-        `dist/index.js failed the artifact check that mirrors how the Isagi runtime loads workflows:\n${String((report as { error?: unknown })?.error ?? 'The validation report is malformed.')}\nFix the workflow source, rebuild, and re-run verification.`,
+        `dist/index.js failed the artifact check that mirrors how the Isagi runtime loads workflows:\n${detail}\nFix the workflow source, rebuild, and re-run verification.`,
       );
+    }
+    // The child returns the descriptor as data. The parent canonicalizes and hashes it itself
+    // rather than trusting a hash produced inside the process that imported workflow code.
+    const descriptor = (report as { descriptor?: unknown }).descriptor;
+    if (!descriptor || typeof descriptor !== 'object') {
+      throw new VerificationError(
+        'dist/index.js failed the artifact check: the validation process reported success without a structure description.',
+      );
+    }
+    return descriptor as WorkflowStructureDescriptor;
   } finally {
     await rm(isolatedRoot, { recursive: true, force: true });
   }
 }
 
-function validatorSource(artifactPath: string, resultPath: string, worktreePath: string): string {
+/**
+ * The installed structure module, resolved as a real file URL so a packed installation works
+ * outside this monorepo. The validator child is a plain Node process, so it imports this path
+ * directly; CLI integration tests therefore run against the built CLI, whose sibling is `dist`.
+ */
+function structureModulePath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), 'structure.js');
+}
+
+function validatorSource(
+  artifactPath: string,
+  resultPath: string,
+  worktreePath: string,
+  structurePath: string,
+): string {
   return [
     `import { writeFileSync } from 'node:fs';`,
     `const finish = (report) => { writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(report)); process.exit(0); };`,
     `const describe = (value) => (Array.isArray(value) ? 'an array' : value === null ? 'null' : typeof value);`,
     `const cause = (error) => String((error && error.stack) || error);`,
+    `let structure;`,
+    `try { structure = await import(${JSON.stringify(pathToFileURL(structurePath).href)}); }`,
+    `catch (error) { finish({ ok: false, error: 'The verifier could not load its own structure module:\\n' + cause(error) }); }`,
     `let artifact;`,
     `try { artifact = await import(${JSON.stringify(pathToFileURL(artifactPath).href)}); }`,
     `catch (error) { finish({ ok: false, error: 'Importing the bundle threw before any workflow definition could be read:\\n' + cause(error) }); }`,
+    `const result = structure.describeWorkflowModule(artifact);`,
+    `if (!result.ok) finish({ ok: false, error: 'The bundle does not declare a valid workflow structure.', diagnostics: result.diagnostics });`,
     `const workflow = artifact.default;`,
-    `if (!workflow || typeof workflow !== 'object') finish({ ok: false, error: 'The bundle must default-export the workflow definition object returned by defineWorkflow(); its default export is ' + describe(workflow) + '.' });`,
-    `const missing = ['command', 'validate', 'init', 'step'].filter((name) => typeof workflow[name] !== 'function');`,
-    `if (missing.length) finish({ ok: false, error: 'The default-exported workflow definition is missing required function(s): ' + missing.join(', ') + '. Default-export the object returned by defineWorkflow() from src/index.ts.' });`,
     `let manifest;`,
     `try { manifest = await workflow.command({ worktreeId: 0, worktreePath: ${JSON.stringify(worktreePath)}, surfaceId: 0, paneId: null, agentSessionId: null }); }`,
-    `catch (error) { finish({ ok: false, error: 'command() threw when called with a minimal launch context. command() must succeed without optional pane or agent-session context.\\n' + cause(error) }); }`,
+    `catch (error) { finish({ ok: false, error: 'command() threw when called with a minimal origin. command() must succeed without optional pane or agent-session context.\\n' + cause(error) }); }`,
     `const problems = [];`,
     `if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) problems.push('command() must return a manifest object; it returned ' + describe(manifest) + '.');`,
     `else {`,
@@ -336,23 +477,9 @@ function validatorSource(artifactPath: string, resultPath: string, worktreePath:
     `    }`,
     `  }`,
     `}`,
-    `finish(problems.length ? { ok: false, error: problems.join('\\n') } : { ok: true });`,
+    `finish(problems.length ? { ok: false, error: problems.join('\\n') } : { ok: true, descriptor: result.descriptor });`,
     ``,
   ].join('\n');
-}
-
-async function writeReceipt(root: string, manifest: WorkflowBuildManifest): Promise<void> {
-  const receiptPath = join(root, 'dist', 'isagi-workflow-build.json');
-  const temporary = `${receiptPath}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, serializeWorkflowBuildManifest(manifest), { flag: 'wx' });
-    await rename(temporary, receiptPath);
-  } catch (cause) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw new VerificationError(
-      `Could not write the build receipt ${receiptPath}: ${message(cause)}`,
-    );
-  }
 }
 
 async function exists(path: string): Promise<boolean> {

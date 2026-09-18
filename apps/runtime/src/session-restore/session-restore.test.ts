@@ -402,6 +402,8 @@ function fakeSurfaceRepository(
   bindings: readonly PaneSessionBinding[] | DatabaseError,
 ): SurfaceRepositoryService {
   return {
+    findKeyedCreation: () => Effect.succeed({ kind: 'absent' as const }),
+    findSurfaceByCreationKey: () => Effect.succeed(null),
     listPaneSessionBindings:
       bindings instanceof DatabaseError ? Effect.fail(bindings) : Effect.succeed([...bindings]),
     worktreeExists: () => Effect.die('worktreeExists is not used'),

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import { Effect, Layer } from 'effect';
 
 import {
@@ -42,7 +44,12 @@ import {
 } from './host-inventory/index.js';
 import { EntityLockLive } from './lib/locks/entity-lock.js';
 import { LoopbackPortProbeLive } from './lib/net/loopback-port-probe.js';
-import { DataDirectoryLive, RuntimeDatabaseLive, StateFileLive } from './persistence/index.js';
+import {
+  DataDirectory,
+  DataDirectoryLive,
+  RuntimeDatabaseLive,
+  StateFileLive,
+} from './persistence/index.js';
 import { StateFile } from './persistence/index.js';
 import {
   NodePtyBackendLive,
@@ -58,10 +65,10 @@ import {
   InternalRuntimeEventBus,
   InternalRuntimeEventBusLive,
   RuntimeEventBusLive,
-  RuntimeEventProjectionLive,
   type InternalRuntimeEventBusService,
   type RuntimeEventBusService,
 } from './runtime-events/index.js';
+import { RuntimeEventProjectionLive } from './runtime-events/projection.service.js';
 import { SessionGcLive, type SessionGcService } from './session-gc/index.js';
 import { SessionLifecycleLive, type SessionLifecycleService } from './session-lifecycle/index.js';
 import {
@@ -76,15 +83,19 @@ import {
   type TerminalSessionServiceShape,
 } from './terminal-sessions/index.js';
 import {
-  WorkflowCapabilitiesLive,
+  WorkflowArtifactCatalogLive,
+  WorkflowDeltaPublisherLive,
   WorkflowEngineLive,
-  WorkflowEventLedgerLive,
-  WorkflowHeadlessLive,
-  WorkflowRunProjectionLive,
+  WorkflowHistoryRepositoryLive,
+  WorkflowOperationServiceLive,
+  WorkflowOperationsRepositoryLive,
+  WorkflowPayloadStoreLive,
   WorkflowRegistryLive,
-  WorkflowRepositoryLive,
+  WorkflowRunProjectionLive,
+  WorkflowRunsRepositoryLive,
+  WorkflowWriteWakeLive,
+  type WorkflowDeltaPublisherService,
   type WorkflowEngineService,
-  type WorkflowEventLedgerService,
   type WorkflowRunProjectionService,
 } from './workflows/index.js';
 import {
@@ -136,10 +147,45 @@ const SetupRepositoryLive = WorktreeSetupRepositoryLive.pipe(Layer.provide(Datab
 const SetupServiceLive = WorktreeSetupServiceLive.pipe(Layer.provide(SetupRepositoryLive));
 const PtyRepositoryLayer = PtyRepositoryLive.pipe(Layer.provide(DatabaseLive));
 const CommandRepositoryLayer = CommandRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowRepositoryLayer = WorkflowRepositoryLive.pipe(Layer.provide(DatabaseLive));
-const WorkflowEventLedgerLayer = WorkflowEventLedgerLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
+const WorkflowPayloadStoreLayer = WorkflowPayloadStoreLive.pipe(
+  Layer.provide(DatabaseLive),
   Layer.provide(DataDirectoryLive),
+);
+// One wake, shared by the two repositories that write and by the publisher that listens. Built
+// once, so every committed workflow transaction reaches the same drainer.
+const WorkflowWriteWakeLayer = WorkflowWriteWakeLive;
+const WorkflowRunsRepositoryLayer = WorkflowRunsRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowWriteWakeLayer),
+);
+const WorkflowOperationsRepositoryLayer = WorkflowOperationsRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowWriteWakeLayer),
+);
+const WorkflowHistoryRepositoryLayer = WorkflowHistoryRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+);
+const WorkflowRegistryLayer = WorkflowRegistryLive.pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(RuntimeConfigLayer),
+);
+// The catalog and the registry must publish into and load from the *same* cache root, or a pin
+// published at launch would not be loadable at the next dispatch. The shared definition cache is
+// what keeps one artifact one imported module for the life of the process.
+const WorkflowArtifactCatalogLayer = Layer.unwrapEffect(
+  Effect.gen(function* () {
+    const directory = yield* DataDirectory;
+    return WorkflowArtifactCatalogLive({
+      cacheRoot: join(directory.paths.root, 'workflow-artifacts'),
+      definitionCache: new Map(),
+    });
+  }),
+).pipe(
+  Layer.provide(DataDirectoryLive),
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowPayloadStoreLayer),
 );
 const PtyServiceLayer = PtyServiceLive.pipe(
   Layer.provide(PtyRepositoryLayer),
@@ -153,11 +199,6 @@ const PtyServiceLayer = PtyServiceLive.pipe(
 const HarnessAdapterRegistryLayer = HarnessAdapterRegistryLive.pipe(
   Layer.provide(DataDirectoryLive),
   Layer.provide(AgentSessionArtifactsLayer),
-);
-const WorkflowHeadlessLayer = WorkflowHeadlessLive.pipe(
-  Layer.provide(HarnessAdapterRegistryLayer),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(HarnessControlPlaneLayer),
 );
 const AgentSessionRepositoryLayer = AgentSessionRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -213,31 +254,66 @@ const SurfaceServiceLayer = SurfaceServiceLive.pipe(
   Layer.provide(EntityLockLayer),
 );
 const SurfaceAndPtyServiceLayer = Layer.mergeAll(SurfaceServiceLayer, PtyServiceLayer);
-const WorkflowCapabilitiesLayer = WorkflowCapabilitiesLive.pipe(
+/**
+ * One scoped operation service per runtime incarnation.
+ *
+ * Bound once, and shared by every consumer below, because its incarnation id, capture tracker, PTY
+ * subscriber and timeout fibers all belong to that one scope. Two independently constructed
+ * services would give one process two incarnation ids, and a capture this process owns would then
+ * classify as abandoned on the next reconciliation.
+ */
+const WorkflowOperationServiceLayer = WorkflowOperationServiceLive.pipe(
+  Layer.provide(WorkflowOperationsRepositoryLayer),
+  Layer.provide(WorkflowRunsRepositoryLayer),
+  Layer.provide(WorkflowPayloadStoreLayer),
   Layer.provide(AgentSessionServiceLayer),
   Layer.provide(SurfaceServiceLayer),
   Layer.provide(PtyServiceLayer),
   Layer.provide(AgentSessionArtifactsLayer),
   Layer.provide(HarnessLedgerObserverLayer),
-  Layer.provide(WorkflowHeadlessLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
+  Layer.provide(HarnessAdapterRegistryLayer),
+  Layer.provide(HarnessControlPlaneLayer),
+);
+const CommandServiceLayer = CommandServiceLive.pipe(
+  Layer.provide(CommandRepositoryLayer),
+  Layer.provide(RepositoryLive),
+  Layer.provide(PtyServiceLayer),
+  Layer.provide(PtyRepositoryLayer),
+  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
+  Layer.provide(DataDirectoryLive),
+);
+const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
+  Layer.provide(SurfaceRepositoryLayer),
+  Layer.provide(SurfaceAndPtyServiceLayer),
+  Layer.provide(CommandServiceLayer),
 );
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
-  Layer.provide(
-    WorkflowRegistryLive.pipe(Layer.provide(DataDirectoryLive), Layer.provide(RuntimeConfigLayer)),
-  ),
+  Layer.provide(WorkflowRunsRepositoryLayer),
+  Layer.provide(WorkflowOperationsRepositoryLayer),
+  Layer.provide(WorkflowPayloadStoreLayer),
+  Layer.provide(WorkflowHistoryRepositoryLayer),
+  Layer.provide(WorkflowArtifactCatalogLayer),
+  Layer.provide(WorkflowRegistryLayer),
+  Layer.provide(WorkflowOperationServiceLayer),
   Layer.provide(RepositoryLive),
   Layer.provide(SurfaceServiceLayer),
-  Layer.provide(AgentSessionArtifactsLayer),
+  Layer.provide(SurfaceRepositoryLayer),
+  // The launch path's worktree-creation preflight: the one owning-service call it makes, and the
+  // only reason the engine depends on the workspace *service* rather than only its repository.
+  Layer.provide(WorkspaceServiceLayer),
   Layer.provide(HarnessLedgerObserverLayer),
-  Layer.provide(WorkflowHeadlessLayer),
-  Layer.provide(WorkflowCapabilitiesLayer),
 );
 const WorkflowRunProjectionLayer = WorkflowRunProjectionLive.pipe(
-  Layer.provide(WorkflowRepositoryLayer),
-  Layer.provide(WorkflowEventLedgerLayer),
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowPayloadStoreLayer),
+);
+/**
+ * The delta publisher, built alongside the API services so it is running before a route can be
+ * called. It needs the same wake the repositories signal and the public bus every client reads.
+ */
+const WorkflowDeltaPublisherLayer = WorkflowDeltaPublisherLive.pipe(
+  Layer.provide(DatabaseLive),
+  Layer.provide(WorkflowWriteWakeLayer),
 );
 const SessionGcLayer = SessionGcLive.pipe(
   Layer.provide(AgentSessionRepositoryLayer),
@@ -256,25 +332,12 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionServicesLayer,
   EventProjectionLayer,
   WorkflowRunProjectionLayer,
-  WorkflowEventLedgerLayer,
+  WorkflowDeltaPublisherLayer,
   AgentSessionAttentionProjectionLayer,
   SessionLifecycleLayer,
   SessionGcLayer,
   EditorProvisioningLayer,
   EditorContextServiceLayer,
-);
-const CommandServiceLayer = CommandServiceLive.pipe(
-  Layer.provide(CommandRepositoryLayer),
-  Layer.provide(RepositoryLive),
-  Layer.provide(PtyServiceLayer),
-  Layer.provide(PtyRepositoryLayer),
-  Layer.provide(CommandPortProbeLive.pipe(Layer.provide(LoopbackPortProbeLayer))),
-  Layer.provide(DataDirectoryLive),
-);
-const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
-  Layer.provide(SurfaceRepositoryLayer),
-  Layer.provide(SurfaceAndPtyServiceLayer),
-  Layer.provide(CommandServiceLayer),
 );
 const StartupActivationLayer = Layer.scopedDiscard(
   Effect.gen(function* () {
@@ -310,8 +373,8 @@ export type RuntimeServices =
   | SessionGcService
   | SurfaceRepositoryService
   | WorkflowEngineService
-  | WorkflowEventLedgerService
   | WorkflowRunProjectionService
+  | WorkflowDeltaPublisherService
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService

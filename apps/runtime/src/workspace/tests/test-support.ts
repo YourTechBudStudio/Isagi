@@ -82,6 +82,8 @@ export const testWorktreeSetupRepository = {
 } satisfies WorktreeSetupRepositoryService;
 
 export const testSurfaceRepository = {
+  findKeyedCreation: () => Effect.succeed({ kind: 'absent' as const }),
+  findSurfaceByCreationKey: () => Effect.succeed(null),
   worktreeExists: () => Effect.succeed(false),
   findSurface: () => Effect.succeed(null),
   findPane: () => Effect.succeed(null),
@@ -109,6 +111,7 @@ export const testSurfaceRepository = {
 } satisfies SurfaceRepositoryService;
 
 export const testSurfaceService = {
+  findByCreationKey: () => Effect.succeed({ kind: 'absent' as const }),
   getSurfaceDetail: () => Effect.die('surface detail is not used by workspace tests'),
   renameSurface: () => Effect.die('surface rename is not used by workspace tests'),
   deleteSurface: () => Effect.die('surface delete is not used by workspace tests'),

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 
-export const workflowBuildManifestVersion = 1 as const;
-export const supportedWorkflowContractVersion = 1 as const;
+import { workflowStructureDescriptorVersion } from './structure.js';
+
+export const workflowBuildManifestVersion = 2 as const;
+export const supportedWorkflowContractVersion = 3 as const;
 export const workflowSdkPackage = '@yourtechbudstudio/isagi-workflow-sdk' as const;
 export const workflowVerifierPackage = '@yourtechbudstudio/isagi-workflow-verifier' as const;
-export const workflowSdkVersion = '0.0.1' as const;
-export const workflowVerifierVersion = '0.0.1' as const;
+export const workflowSdkVersion = '0.2.0' as const;
+export const workflowVerifierVersion = '0.2.0' as const;
 export const workflowBuilderPackage = 'esbuild' as const;
 export const workflowBuilderVersion = '0.28.0' as const;
 export const workflowBuildCommand =
@@ -20,6 +22,17 @@ export interface WorkflowBuildManifest {
   readonly verifier: { readonly name: typeof workflowVerifierPackage; readonly version: string };
   readonly source: { readonly sha256: string };
   readonly artifact: { readonly entry: 'dist/index.js'; readonly sha256: string };
+  /**
+   * The structure the artifact actually declares. The runtime re-derives this from the imported
+   * bundle and compares hashes, so an edited receipt cannot describe a different graph than the one
+   * that will execute.
+   */
+  readonly structure: {
+    readonly descriptorVersion: typeof workflowStructureDescriptorVersion;
+    readonly sha256: string;
+    readonly rootGraphKey: string;
+    readonly graphCount: number;
+  };
 }
 
 export interface HashInput {
@@ -79,7 +92,15 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
   if (!isRecord(input)) throw new Error('Build manifest must be an object.');
   assertExactKeys(
     input,
-    ['manifestVersion', 'workflowContractVersion', 'sdk', 'verifier', 'source', 'artifact'],
+    [
+      'manifestVersion',
+      'workflowContractVersion',
+      'sdk',
+      'verifier',
+      'source',
+      'artifact',
+      'structure',
+    ],
     'manifest',
   );
   if (input.manifestVersion !== workflowBuildManifestVersion)
@@ -100,6 +121,7 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
   const artifactHash = requiredString(input.artifact.sha256, 'artifact.sha256');
   if (!sha256Pattern.test(artifactHash))
     throw new Error('artifact.sha256 must be a lowercase SHA-256 digest.');
+  const structure = structureIdentity(input.structure);
   return {
     manifestVersion: workflowBuildManifestVersion,
     workflowContractVersion: supportedWorkflowContractVersion,
@@ -107,6 +129,7 @@ export function parseWorkflowBuildManifest(input: unknown): WorkflowBuildManifes
     verifier,
     source,
     artifact: { entry: 'dist/index.js', sha256: artifactHash },
+    structure,
   };
 }
 
@@ -131,6 +154,31 @@ function packageIdentity<Name extends string>(
   if (value.name !== expectedName) throw new Error(`${field}.name must be ${expectedName}.`);
   return { name: expectedName, version: requiredString(value.version, `${field}.version`) };
 }
+function structureIdentity(value: unknown): WorkflowBuildManifest['structure'] {
+  if (!isRecord(value)) throw new Error('structure must be an object.');
+  assertExactKeys(
+    value,
+    ['descriptorVersion', 'sha256', 'rootGraphKey', 'graphCount'],
+    'structure',
+  );
+  if (value.descriptorVersion !== workflowStructureDescriptorVersion)
+    throw new Error(
+      `Unsupported structure.descriptorVersion ${JSON.stringify(value.descriptorVersion)}; this verifier supports ${workflowStructureDescriptorVersion}.`,
+    );
+  const sha256 = requiredString(value.sha256, 'structure.sha256');
+  if (!sha256Pattern.test(sha256))
+    throw new Error('structure.sha256 must be a lowercase SHA-256 digest.');
+  const graphCount = value.graphCount;
+  if (typeof graphCount !== 'number' || !Number.isInteger(graphCount) || graphCount < 1)
+    throw new Error('structure.graphCount must be a positive integer.');
+  return {
+    descriptorVersion: workflowStructureDescriptorVersion,
+    sha256,
+    rootGraphKey: requiredString(value.rootGraphKey, 'structure.rootGraphKey'),
+    graphCount,
+  };
+}
+
 function digestObject(value: unknown, field: string) {
   if (!isRecord(value)) throw new Error(`${field} must be an object.`);
   assertExactKeys(value, ['sha256'], field);

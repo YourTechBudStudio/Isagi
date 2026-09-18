@@ -9,6 +9,7 @@ import {
   blockedHarnessControlPlaneLayer,
 } from '../../harness-control-plane/test-support.js';
 import { EntityLockLive } from '../../lib/locks/entity-lock.js';
+import { DatabaseError } from '../../persistence/index.js';
 import { PtyService, type PtyServiceShape } from '../../pty-processes/index.js';
 import type { PtyProcessRow } from '../../pty-processes/index.js';
 import { InternalRuntimeEventBusLive } from '../../runtime-events/index.js';
@@ -346,6 +347,7 @@ function fakeRepository(
           }),
         };
       }),
+    findByCreationKey: () => Effect.succeed(null),
     find: () => Effect.sync(() => state.session),
     findByActivePtyProcessId: () => Effect.die('findByActivePtyProcessId is not used'),
     listOrphans: () => Effect.die('listOrphans is not used'),
@@ -368,6 +370,8 @@ function fakePtyService(
           args: input.args,
           cwd: input.cwd,
           logPath: null,
+          launchOutcome: 'spawned' as const,
+          launchFailureCause: null,
         };
       }),
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),
@@ -437,6 +441,20 @@ function mutableAgentSession(
   };
 }
 
+/** A session row as the repository would hand one back, for the keyed-reuse cases. */
+function keyedAgentSession(input: {
+  readonly id: number;
+  readonly harness: AgentSessionRow['harness'];
+  readonly cwd: string;
+}): AgentSessionRow {
+  return {
+    ...mutableAgentSession({}).session,
+    id: input.id,
+    harness: input.harness,
+    cwd: input.cwd,
+  };
+}
+
 function ptyProcess(input: {
   readonly id: number;
   readonly status: PtyProcessRow['status'];
@@ -467,3 +485,152 @@ function ptyProcess(input: {
     lastSeenAt: null,
   };
 }
+
+test('a keyed startFresh that loses the unique race converges on the winner', async () => {
+  const state = mutableAgentSession({});
+  const winner = keyedAgentSession({ id: 41, harness: 'pi', cwd: '/repo/isagi' });
+  let createCalls = 0;
+  let sawConflict = false;
+
+  // The repository behaves as the real one does under a lost race: the key reads as absent, and the
+  // insert then fails on the unique index because another caller got there first. The service must
+  // treat that as a signal to re-read and complete, not as an error to surface to a caller that did
+  // nothing wrong. Forced rather than scheduled, so the conflict path is exercised every run.
+  const racing: AgentSessionRepositoryService = {
+    ...fakeRepository(state),
+    findByCreationKey: () => Effect.succeed(sawConflict ? winner : null),
+    create: () =>
+      Effect.gen(function* () {
+        createCalls += 1;
+        sawConflict = true;
+        return yield* Effect.fail(
+          new DatabaseError({
+            operation: 'create_agent_session',
+            cause: Object.assign(
+              new Error('UNIQUE constraint failed: agent_sessions.creation_key'),
+              {
+                code: 'SQLITE_CONSTRAINT_UNIQUE',
+              },
+            ),
+          }),
+        );
+      }),
+  };
+
+  const created = await Effect.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* AgentSessionService;
+      return yield* sessions.startFresh({
+        worktreeId: 1,
+        harness: 'pi',
+        cwd: '/repo/isagi',
+        creationKey: 'wop_race',
+      });
+    }).pipe(
+      Effect.provide(
+        AgentSessionServiceLive.pipe(
+          Layer.provide(Layer.succeed(AgentSessionRepository, racing)),
+          Layer.provide(Layer.succeed(PtyService, fakePtyService([]))),
+          Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses([]))),
+          Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
+          Layer.provide(InternalRuntimeEventBusLive),
+          Layer.provide(AllowAllHarnessControlPlaneLayer),
+        ),
+      ),
+    ),
+  );
+
+  assert.equal(createCalls, 1, 'the loser tried exactly once and did not retry blindly');
+  assert.equal(created.agentSessionId, winner.id, 'and completed against the winner');
+});
+
+test('a keyed startFresh refuses a winner that does not match the request', async () => {
+  const state = mutableAgentSession({});
+  // The race was lost to a session created for a *different* harness. Adopting it would hand back a
+  // live agent of the wrong kind while reporting a successful recovery.
+  const winner = keyedAgentSession({ id: 42, harness: 'codex', cwd: '/repo/isagi' });
+  let sawConflict = false;
+
+  const racing: AgentSessionRepositoryService = {
+    ...fakeRepository(state),
+    findByCreationKey: () => Effect.succeed(sawConflict ? winner : null),
+    create: () =>
+      Effect.gen(function* () {
+        sawConflict = true;
+        return yield* Effect.fail(
+          new DatabaseError({
+            operation: 'create_agent_session',
+            cause: Object.assign(new Error('UNIQUE constraint failed'), {
+              code: 'SQLITE_CONSTRAINT_UNIQUE',
+            }),
+          }),
+        );
+      }),
+  };
+
+  const result = await Effect.runPromise(
+    Effect.either(
+      Effect.gen(function* () {
+        const sessions = yield* AgentSessionService;
+        return yield* sessions.startFresh({
+          worktreeId: 1,
+          harness: 'pi',
+          cwd: '/repo/isagi',
+          creationKey: 'wop_race',
+        });
+      }).pipe(
+        Effect.provide(
+          AgentSessionServiceLive.pipe(
+            Layer.provide(Layer.succeed(AgentSessionRepository, racing)),
+            Layer.provide(Layer.succeed(PtyService, fakePtyService([]))),
+            Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses([]))),
+            Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
+            Layer.provide(InternalRuntimeEventBusLive),
+            Layer.provide(AllowAllHarnessControlPlaneLayer),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  assert.equal(result._tag, 'Left');
+  assert.equal(
+    result._tag === 'Left' ? (result.left as AgentSessionError).code : null,
+    'harness_mismatch',
+  );
+});
+
+test('a keyed startFresh refuses an existing session in a different directory', async () => {
+  const state = mutableAgentSession({});
+  const existing = keyedAgentSession({ id: 43, harness: 'pi', cwd: '/repo/elsewhere' });
+  const result = await Effect.runPromise(
+    Effect.either(
+      Effect.gen(function* () {
+        const sessions = yield* AgentSessionService;
+        return yield* sessions.startFresh({
+          worktreeId: 1,
+          harness: 'pi',
+          cwd: '/repo/isagi',
+          creationKey: 'wop_cwd',
+        });
+      }).pipe(
+        Effect.provide(
+          AgentSessionServiceLive.pipe(
+            Layer.provide(
+              Layer.succeed(AgentSessionRepository, {
+                ...fakeRepository(state),
+                findByCreationKey: () => Effect.succeed(existing),
+              }),
+            ),
+            Layer.provide(Layer.succeed(PtyService, fakePtyService([]))),
+            Layer.provide(Layer.succeed(HarnessAdapterRegistry, fakeHarnesses([]))),
+            Layer.provide(SessionLifecycleLive.pipe(Layer.provide(EntityLockLive))),
+            Layer.provide(InternalRuntimeEventBusLive),
+            Layer.provide(AllowAllHarnessControlPlaneLayer),
+          ),
+        ),
+      ),
+    ),
+  );
+  assert.equal(result._tag, 'Left');
+});

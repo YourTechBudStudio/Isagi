@@ -19,7 +19,12 @@ import {
   type InternalRuntimeEventBusService,
 } from '../../runtime-events/index.js';
 import { SurfaceRepository } from '../../surfaces/index.js';
-import { WorktreeSetupRepository, WorktreeSetupService } from '../../worktree-setup/index.js';
+import {
+  WorktreeSetupRepository,
+  type WorktreeSetupRepositoryService,
+  WorktreeSetupService,
+} from '../../worktree-setup/index.js';
+import type { WorktreeSetupService as WorktreeSetupServiceShape } from '../../worktree-setup/worktree-setup.service.js';
 import {
   WorkspaceRepository,
   WorkspaceRepositoryLive,
@@ -63,6 +68,14 @@ export interface LiveWorkspaceOptions {
    * to look.
    */
   readonly internalEvents?: InternalRuntimeEventBusService | undefined;
+  /**
+   * Replaces the `not_configured` trust stub. Setup outcomes are decided by trust state and hook
+   * config, neither of which a real Git repository can express, so a test that wants `configured`
+   * or `setup_trust_required` supplies the service that answers it.
+   */
+  readonly worktreeSetup?: WorktreeSetupServiceShape | undefined;
+  /** Replaces the setup-run recording stub, for tests that assert on the recorded run. */
+  readonly worktreeSetupRepository?: WorktreeSetupRepositoryService | undefined;
 }
 
 const baseCommands = {
@@ -96,6 +109,11 @@ export function runWithLiveWorkspace<A, E>(
     RuntimeDatabaseService | WorkspaceRepositoryService | WorkspaceService
   >,
 ) {
+  // Deliberately *not* canonicalized here. `os.tmpdir()` is a symlink on macOS, so this root is a
+  // genuine instance of the case the product has to handle, and `makeTestDataDirectory` resolves it
+  // through the same derivation the runtime uses. Normalizing it in the fixture would make the one
+  // test that checks Isagi's paths against Git's pass for the fixture's reason rather than the
+  // product's.
   const dataRoot = mkdtempSync(join(tmpdir(), `isagi-${name}-`));
   return Effect.runPromise(
     build.pipe(Effect.provide(liveWorkspaceLayer(dataRoot, options))),
@@ -142,8 +160,11 @@ export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptio
           StateFile,
           stateFileWithWriteCounter(() => {}),
         ),
-        Layer.succeed(WorktreeSetupService, testWorktreeSetup),
-        Layer.succeed(WorktreeSetupRepository, testWorktreeSetupRepository),
+        Layer.succeed(WorktreeSetupService, options.worktreeSetup ?? testWorktreeSetup),
+        Layer.succeed(
+          WorktreeSetupRepository,
+          options.worktreeSetupRepository ?? testWorktreeSetupRepository,
+        ),
       ),
     ),
   );

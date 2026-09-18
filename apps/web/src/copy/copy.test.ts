@@ -6,6 +6,7 @@ import type {
   ApiError,
   TerminalSessionStatusReason,
 } from '@isagi/contracts';
+import { workflowRejectionReasonSchema } from '@isagi/contracts';
 
 import { ptyCopy, ptySocketErrorCopy, runtimeErrorCopy } from './index.js';
 
@@ -67,9 +68,9 @@ test('workflow API error reasons map to web-owned copy', () => {
       status: 400,
       message: 'diagnostic message from runtime',
       requestId: 'copy-test',
-      data: { reason: 'workflow_root_run_required', workflowRunId: 10 },
+      data: { reason: 'workflow_run_not_dismissible', workflowRunId: 10 },
     } satisfies ApiError),
-    'That action needs the main workflow run.',
+    'Cancel this workflow before dismissing it.',
   );
   assert.equal(
     runtimeErrorCopy.fromApiError({
@@ -85,6 +86,29 @@ test('workflow API error reasons map to web-owned copy', () => {
     } satisfies ApiError),
     'This workflow changed after its last verified build.',
   );
+});
+
+test('every workflow rejection reason has its own line, not the generic summary', () => {
+  // Spot checks go stale as the contract grows. This one fails the moment a reason is added
+  // without copy, which is the only way the bar keeps explaining refusals it did not anticipate.
+  // The union is two literal schemas (plain reasons and the two that carry mandatory context), so
+  // the reasons are read from its members rather than from one `literals` list.
+  const reasons = workflowRejectionReasonSchema.members.flatMap((member) => [...member.literals]);
+  assert.ok(reasons.length > 20, 'the reason union should not have collapsed to a handful');
+  for (const reason of reasons) {
+    const copy = runtimeErrorCopy.fromApiError({
+      code: 'workflow_rejected',
+      status: 400,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason },
+    } as ApiError);
+    assert.notEqual(
+      copy,
+      "Isagi couldn't complete that workflow action.",
+      `missing copy: ${reason}`,
+    );
+  }
 });
 
 test('session status reasons produce degraded pane status labels', () => {
@@ -161,3 +185,18 @@ function surfaceRejected(reason: 'surface_not_found' | 'pane_not_found' | 'inval
 function exit() {
   return { exitCode: null, signal: null };
 }
+
+test('the two create-only worktree refusals have their own lines', () => {
+  // Unreachable until a caller asks to create rather than adopt, which is what a workflow placement
+  // does. Without copy they fall back to the family summary and say nothing about what is in the way.
+  for (const reason of ['branch_exists', 'worktree_exists'] as const) {
+    const copy = runtimeErrorCopy.fromApiError({
+      code: 'worktree_open_rejected',
+      status: 409,
+      message: 'diagnostic message from runtime',
+      requestId: 'copy-test',
+      data: { reason, projectId: 2, branch: 'feat/x' },
+    } as ApiError);
+    assert.notEqual(copy, "Couldn't open that worktree.", `missing copy: ${reason}`);
+  }
+});

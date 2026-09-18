@@ -8,7 +8,8 @@ import type {
 } from '@isagi/contracts';
 
 import type { Project, Surface, Worktree } from './types.js';
-import { workflowRunAttention } from './workflow-derive.js';
+import type { AttachedRuns } from './workflow/attached.js';
+import { workflowRunAttention } from './workflow/derive.js';
 
 interface AttentionStore {
   readonly sourcesByKey: Readonly<Record<string, AttentionSource>>;
@@ -60,14 +61,19 @@ export function attentionForPane(
 export function applyAttentionToProjects(
   projects: readonly Project[],
   sourcesByKey: Readonly<Record<string, AttentionSource>>,
-  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>> = {},
-  rootRunIdBySurfaceId: Readonly<Record<number, number>> = {},
+  attachedRuns: AttachedRuns = [],
 ): readonly Project[] {
   const sources = Object.values(sourcesByKey);
+  // Indexed once per pass rather than scanned per surface: the same attached-run cache the bar and
+  // the palette read, folded into the shape this traversal needs.
+  const runBySurfaceId = new Map<number, WorkflowRunSummary>();
+  for (const run of attachedRuns) {
+    if (run.attachment?.surfaceId != null) runBySurfaceId.set(run.attachment.surfaceId, run);
+  }
   return projects.map((project) => ({
     ...project,
     worktrees: project.worktrees.map((worktree) =>
-      applyAttentionToWorktree(worktree, sources, workflowRunsById, rootRunIdBySurfaceId),
+      applyAttentionToWorktree(worktree, sources, runBySurfaceId),
     ),
   }));
 }
@@ -75,11 +81,10 @@ export function applyAttentionToProjects(
 function applyAttentionToWorktree(
   worktree: Worktree,
   sources: readonly AttentionSource[],
-  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
-  rootRunIdBySurfaceId: Readonly<Record<number, number>>,
+  runBySurfaceId: ReadonlyMap<number, WorkflowRunSummary>,
 ): Worktree {
   const resolved = worktree.surfaces.map((surface) =>
-    applyAttentionToSurface(surface, sources, workflowRunsById, rootRunIdBySurfaceId),
+    applyAttentionToSurface(surface, sources, runBySurfaceId),
   );
   return {
     ...worktree,
@@ -109,13 +114,9 @@ interface ResolvedSurfaceAttention {
 function applyAttentionToSurface(
   surface: Surface,
   sources: readonly AttentionSource[],
-  workflowRunsById: Readonly<Record<number, WorkflowRunSummary>>,
-  rootRunIdBySurfaceId: Readonly<Record<number, number>>,
+  runBySurfaceId: ReadonlyMap<number, WorkflowRunSummary>,
 ): ResolvedSurfaceAttention {
-  const rootRunId = rootRunIdBySurfaceId[surface.id];
-  const workflowAttention = workflowRunAttention(
-    rootRunId === undefined ? undefined : workflowRunsById[rootRunId],
-  );
+  const workflowAttention = workflowRunAttention(runBySurfaceId.get(surface.id));
   const paneAttention = aggregateAttention(
     sources.filter((source) => source.surfaceId === surface.id).map((source) => source.attention),
   );

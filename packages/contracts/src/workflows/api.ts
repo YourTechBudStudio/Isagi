@@ -2,30 +2,46 @@ import { workflowApiErrorSchema } from '../api/errors.js';
 import type { ApiEndpoint } from '../api/types.js';
 import {
   advanceWorkflowInputSchema,
+  getWorkflowAttemptOutputSchema,
+  getWorkflowPayloadOutputSchema,
   getWorkflowRunOutputSchema,
+  getWorkflowStructureOutputSchema,
+  listFrameExecutionsOutputSchema,
+  listFrameExecutionsQuerySchema,
+  listRunExecutionsOutputSchema,
+  listRunExecutionsQuerySchema,
+  listWorkflowAttemptsOutputSchema,
+  listWorkflowAttemptsQuerySchema,
   listWorkflowDescriptorsInputSchema,
   listWorkflowDescriptorsOutputSchema,
+  listWorkflowEventsOutputSchema,
+  listWorkflowEventsQuerySchema,
+  listWorkflowFramesOutputSchema,
+  listWorkflowFramesQuerySchema,
+  listWorkflowOperationsOutputSchema,
+  listWorkflowOperationsQuerySchema,
   listWorkflowRunsOutputSchema,
   listWorkflowRunsQuerySchema,
+  listWorkflowVersionsOutputSchema,
+  listWorkflowVersionsQuerySchema,
   startWorkflowInputSchema,
   startWorkflowOutputSchema,
-  workflowEventsQuerySchema,
-  workflowEventsReplayOutputSchema,
-  workflowEventsStreamInputMessageSchema,
-  workflowEventsStreamOutputMessageSchema,
+  workflowAttemptRouteParamsSchema,
+  workflowFrameRouteParamsSchema,
+  workflowPayloadRouteParamsSchema,
   workflowRunControlOutputSchema,
   workflowRunRouteParamsSchema,
+  workflowStructureQuerySchema,
 } from './types.js';
 
-export const workflowEventsStreamWebSocketEndpoint = {
-  id: 'workflows.eventsStream',
-  path: '/workflows/runs/:runId/events-stream',
-  params: workflowRunRouteParamsSchema,
-  query: workflowEventsQuerySchema,
-  clientMessages: workflowEventsStreamInputMessageSchema,
-  serverMessages: workflowEventsStreamOutputMessageSchema,
-} as const;
-
+/**
+ * The retained workflow read and control surface.
+ *
+ * Every route here is part of the contract even where the shipped web client does not call it:
+ * version history and per-attempt access stay available to API consumers and tests. There is no
+ * per-run websocket — committed transitions reach clients on the shared runtime event bus, and a
+ * client that misses one recovers through the paginated history routes.
+ */
 export const workflowsEndpoints = {
   descriptors: {
     id: 'workflows.descriptors',
@@ -59,13 +75,92 @@ export const workflowsEndpoints = {
     output: getWorkflowRunOutputSchema,
     errors: workflowApiErrorSchema,
   },
-  runEvents: {
-    id: 'workflows.runEvents',
+  getStructure: {
+    id: 'workflows.getStructure',
+    method: 'GET',
+    path: '/workflows/runs/:runId/structure',
+    params: workflowRunRouteParamsSchema,
+    query: workflowStructureQuerySchema,
+    output: getWorkflowStructureOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listVersions: {
+    id: 'workflows.listVersions',
+    method: 'GET',
+    path: '/workflows/runs/:runId/versions',
+    params: workflowRunRouteParamsSchema,
+    query: listWorkflowVersionsQuerySchema,
+    output: listWorkflowVersionsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listFrames: {
+    id: 'workflows.listFrames',
+    method: 'GET',
+    path: '/workflows/runs/:runId/frames',
+    params: workflowRunRouteParamsSchema,
+    query: listWorkflowFramesQuerySchema,
+    output: listWorkflowFramesOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listFrameExecutions: {
+    id: 'workflows.listFrameExecutions',
+    method: 'GET',
+    path: '/workflows/runs/:runId/frames/:frameId/executions',
+    params: workflowFrameRouteParamsSchema,
+    query: listFrameExecutionsQuerySchema,
+    output: listFrameExecutionsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listExecutions: {
+    id: 'workflows.listExecutions',
+    method: 'GET',
+    path: '/workflows/runs/:runId/executions',
+    params: workflowRunRouteParamsSchema,
+    query: listRunExecutionsQuerySchema,
+    output: listRunExecutionsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listAttempts: {
+    id: 'workflows.listAttempts',
+    method: 'GET',
+    path: '/workflows/runs/:runId/attempts',
+    params: workflowRunRouteParamsSchema,
+    query: listWorkflowAttemptsQuerySchema,
+    output: listWorkflowAttemptsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  getAttempt: {
+    id: 'workflows.getAttempt',
+    method: 'GET',
+    path: '/workflows/runs/:runId/attempts/:attemptId',
+    params: workflowAttemptRouteParamsSchema,
+    output: getWorkflowAttemptOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listOperations: {
+    id: 'workflows.listOperations',
+    method: 'GET',
+    path: '/workflows/runs/:runId/operations',
+    params: workflowRunRouteParamsSchema,
+    query: listWorkflowOperationsQuerySchema,
+    output: listWorkflowOperationsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  listEvents: {
+    id: 'workflows.listEvents',
     method: 'GET',
     path: '/workflows/runs/:runId/events',
     params: workflowRunRouteParamsSchema,
-    query: workflowEventsQuerySchema,
-    output: workflowEventsReplayOutputSchema,
+    query: listWorkflowEventsQuerySchema,
+    output: listWorkflowEventsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  getPayload: {
+    id: 'workflows.getPayload',
+    method: 'GET',
+    path: '/workflows/runs/:runId/payloads/:payloadRef',
+    params: workflowPayloadRouteParamsSchema,
+    output: getWorkflowPayloadOutputSchema,
     errors: workflowApiErrorSchema,
   },
   pause: {
@@ -84,18 +179,28 @@ export const workflowsEndpoints = {
     output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
   },
-  clear: {
-    id: 'workflows.clear',
-    method: 'POST',
-    path: '/workflows/runs/:runId/clear',
-    params: workflowRunRouteParamsSchema,
-    output: workflowRunControlOutputSchema,
-    errors: workflowApiErrorSchema,
-  },
   retry: {
     id: 'workflows.retry',
     method: 'POST',
     path: '/workflows/runs/:runId/retry',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  /** Stops successors and new effects, retains every record, and reports stopping honestly. */
+  cancel: {
+    id: 'workflows.cancel',
+    method: 'POST',
+    path: '/workflows/runs/:runId/cancel',
+    params: workflowRunRouteParamsSchema,
+    output: workflowRunControlOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  /** Releases the surface attachment of a terminal run. The run stays listed and inspectable. */
+  dismiss: {
+    id: 'workflows.dismiss',
+    method: 'POST',
+    path: '/workflows/runs/:runId/dismiss',
     params: workflowRunRouteParamsSchema,
     output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
@@ -109,65 +214,6 @@ export const workflowsEndpoints = {
     output: workflowRunControlOutputSchema,
     errors: workflowApiErrorSchema,
   },
-} as const satisfies {
-  readonly descriptors: ApiEndpoint<
-    typeof listWorkflowDescriptorsInputSchema,
-    typeof listWorkflowDescriptorsOutputSchema,
-    typeof workflowApiErrorSchema
-  >;
-  readonly start: ApiEndpoint<
-    typeof startWorkflowInputSchema,
-    typeof startWorkflowOutputSchema,
-    typeof workflowApiErrorSchema
-  >;
-  readonly listRuns: ApiEndpoint<
-    undefined,
-    typeof listWorkflowRunsOutputSchema,
-    typeof workflowApiErrorSchema,
-    undefined,
-    typeof listWorkflowRunsQuerySchema
-  >;
-  readonly getRun: ApiEndpoint<
-    undefined,
-    typeof getWorkflowRunOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-  readonly runEvents: ApiEndpoint<
-    undefined,
-    typeof workflowEventsReplayOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema,
-    typeof workflowEventsQuerySchema
-  >;
-  readonly pause: ApiEndpoint<
-    undefined,
-    typeof workflowRunControlOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-  readonly resume: ApiEndpoint<
-    undefined,
-    typeof workflowRunControlOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-  readonly clear: ApiEndpoint<
-    undefined,
-    typeof workflowRunControlOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-  readonly retry: ApiEndpoint<
-    undefined,
-    typeof workflowRunControlOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-  readonly advance: ApiEndpoint<
-    typeof advanceWorkflowInputSchema,
-    typeof workflowRunControlOutputSchema,
-    typeof workflowApiErrorSchema,
-    typeof workflowRunRouteParamsSchema
-  >;
-};
+  // `satisfies` keeps the declaration-site check that every entry is a legal endpoint — method,
+  // path shape, and the schema slots — without having to restate each endpoint's generic arguments.
+} as const satisfies Record<string, ApiEndpoint<any, any, any, any, any>>;

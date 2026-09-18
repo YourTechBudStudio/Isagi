@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -65,7 +73,11 @@ test('explicit turn refresh tails native events without waiting for the backgrou
         const unavailable = yield* observer.refreshTurnEdges(10).pipe(Effect.either);
         assert.ok(Either.isLeft(unavailable));
         assert.ok(unavailable.left instanceof HarnessObserverRefreshError);
-        assert.ok(unavailable.left.failedSources.includes(path));
+        assert.ok(
+          unavailable.left.failedSources.includes(
+            realpathSync.native(directory) + path.slice(directory.length),
+          ),
+        );
       }).pipe(Effect.provide(testLayer(root))),
     );
   } finally {

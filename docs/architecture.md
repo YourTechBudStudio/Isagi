@@ -35,6 +35,7 @@ The server/runtime owns the operational side of Isagi:
 - PTY management
 - command execution
 - agent session lifecycle
+- workflow execution and recovery
 - runtime status
 - state persistence
 - integration boundaries with harnesses and future tool systems
@@ -42,6 +43,8 @@ The server/runtime owns the operational side of Isagi:
 - cached host inventory, harness launch policy, and explicit Docs reconciliation
 
 The runtime is the place where Isagi understands what is running, where it is running, and which worktree/worktree environment it belongs to.
+
+[Workflows](./workflow-engine.md) execute declared nested graphs within one durable run. The runtime owns their saved continuation, code versions, and external-operation evidence; the client presents execution history and controls. Workflow continuity survives runtime restarts independently of the processes doing the work.
 
 ## Why server/client
 

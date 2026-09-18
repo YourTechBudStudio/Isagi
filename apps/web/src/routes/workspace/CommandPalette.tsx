@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 
-import type { WorkflowStartContext } from '@isagi/contracts';
+import type { WorkflowLaunchOrigin } from '@isagi/contracts';
 
 import { Chip } from '../../components/Chip.js';
 import {
@@ -18,10 +18,7 @@ import { useKeyboardSelection } from '../../hooks/useKeyboardSelection.js';
 import { useEditorAvailable, useLaunchableHarnesses } from '../../lib/control-plane/queries.js';
 import { surfaceTransition, uiTransition } from '../../lib/motion.js';
 import { configuredCommandSection } from '../../lib/palette/configured-commands.js';
-import {
-  buildPaletteContext,
-  workflowContextFromSurfaceDetail,
-} from '../../lib/palette/context.js';
+import { buildPaletteContext, workflowOriginFromSurfaceDetail } from '../../lib/palette/context.js';
 import {
   commandForWorkbenchActionId,
   resolveStateCommand,
@@ -32,8 +29,10 @@ import { commandStepToInputFlowScreen } from '../../lib/palette/input-flow.js';
 import {
   currentStep,
   initialPaletteState,
+  inlineError,
   isBusy,
   paletteReducer,
+  callerRunningCopy,
 } from '../../lib/palette/machine.js';
 import {
   commandForEntryId,
@@ -46,19 +45,21 @@ import { usePaletteStore } from '../../lib/palette/store.js';
 import type { ArgSpec, PaletteEntry, ReviewChoice } from '../../lib/palette/types.js';
 import {
   workflowFailurePresentation,
-  workflowStartFailureContent,
+  workflowLaunchOutcome,
+  type WorkflowLaunchDeps,
 } from '../../lib/palette/workflow-failure.js';
 import { isPlatformModifierShortcut, modKey } from '../../lib/platform.js';
 import { restoreWorkbenchFocus } from '../../lib/workspace/activation.js';
 import { useWorkspace } from '../../lib/workspace/hooks.js';
-import {
-  useStartWorkflowMutation,
-  useSurfaceDetailQuery,
-  useWorkflowDescriptorsQuery,
-  useWorktreeCommandsQuery,
-} from '../../lib/workspace/queries.js';
+import { useSurfaceDetailQuery, useWorktreeCommandsQuery } from '../../lib/workspace/queries.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
-import { selectRootRunForSurface, useWorkflowRunStore } from '../../lib/workspace/workflow-runs.js';
+import {
+  useAttachedWorkflowRun,
+  useStartWorkflowMutation,
+  useWorkflowDescriptorsQuery,
+  useWorkflowRetryByIdMutation,
+  useWorkflowRunSummaryMutation,
+} from '../../lib/workspace/workflow/queries.js';
 import { EntryList, OutcomePanel, RunningPanel, Tip } from './CommandPaletteViews.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
@@ -112,16 +113,14 @@ export function CommandPalette() {
       activePaneBySurfaceId,
     ],
   );
-  const activeSurfaceWorkflowSummary = useWorkflowRunStore(
-    selectRootRunForSurface(baseCtx.activeSurface?.id),
-  );
+  const activeSurfaceWorkflowSummary = useAttachedWorkflowRun(baseCtx.activeSurface?.id);
   const activeSurfaceDetail = useSurfaceDetailQuery(baseCtx.activeSurface?.id ?? null, {
     enabled: open && baseCtx.activeSurface !== null,
   });
-  const workflowLaunchContext = useMemo(
-    (): WorkflowStartContext | null =>
+  const workflowLaunchOrigin = useMemo(
+    (): WorkflowLaunchOrigin | null =>
       baseCtx.activeWorktree && baseCtx.activeSurface && activeSurfaceDetail.data
-        ? workflowContextFromSurfaceDetail({
+        ? workflowOriginFromSurfaceDetail({
             worktreeId: baseCtx.activeWorktree.id,
             surfaceId: baseCtx.activeSurface.id,
             activePaneId: baseCtx.activePaneId,
@@ -130,17 +129,17 @@ export function CommandPalette() {
         : null,
     [activeSurfaceDetail.data, baseCtx.activePaneId, baseCtx.activeSurface, baseCtx.activeWorktree],
   );
-  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchContext, { enabled: open });
+  const workflowDescriptors = useWorkflowDescriptorsQuery(workflowLaunchOrigin, { enabled: open });
   // A whole-list discovery failure is derived only from the current enabled query
   // state: no launch context or a merely-pending query yields no failure row; a
   // terminal error (including a failed refetch over stale data) overrides the
   // cached descriptors via `assembleEntries` suppression.
   const workflowFailure = useMemo(
     () =>
-      workflowLaunchContext !== null && workflowDescriptors.isError
+      workflowLaunchOrigin !== null && workflowDescriptors.isError
         ? workflowFailurePresentation(workflowDescriptors.error)
         : undefined,
-    [workflowLaunchContext, workflowDescriptors.isError, workflowDescriptors.error],
+    [workflowLaunchOrigin, workflowDescriptors.isError, workflowDescriptors.error],
   );
   // Override the shared 10 s staleTime for this observer so each open, and each
   // worktree switch while open, starts a read; cached data may render meanwhile.
@@ -188,6 +187,22 @@ export function CommandPalette() {
   const [machine, send] = useReducer(paletteReducer, initialPaletteState);
   const [workflowFormEntryId, setWorkflowFormEntryId] = useState<string | null>(null);
   const startWorkflowMutation = useStartWorkflowMutation();
+  const retryWorkflowMutation = useWorkflowRetryByIdMutation();
+  const runSummaryMutation = useWorkflowRunSummaryMutation();
+  // The three runtime calls the workflow adapter needs, and nothing else: the palette
+  // hands over the transport and the adapter owns every sentence formed from it. They
+  // stay separate because which one failed changes what is true about the run.
+  const startWorkflow = startWorkflowMutation.mutateAsync;
+  const retryWorkflow = retryWorkflowMutation.mutateAsync;
+  const readWorkflowRun = runSummaryMutation.mutateAsync;
+  const workflowLaunchDeps = useMemo(
+    (): WorkflowLaunchDeps => ({
+      start: startWorkflow,
+      retry: retryWorkflow,
+      readSummary: readWorkflowRun,
+    }),
+    [startWorkflow, retryWorkflow, readWorkflowRun],
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Live highlight index for event-time handlers (defined before the selection
@@ -209,7 +224,7 @@ export function CommandPalette() {
   // would keep rendering the frozen list/wizard with no sign of progress.
   // Declared here rather than beside the view because the global-hotkey effect
   // below depends on it.
-  const running = isBusy(machine) || startWorkflowMutation.isPending;
+  const running = isBusy(machine);
 
   useEffect(() => {
     if (!open || machine.kind !== 'closed' || lastOpenRequest.current === null) {
@@ -301,11 +316,19 @@ export function CommandPalette() {
   }, [open, machine.kind, autostartEntryId, autostartValues, allEntries, ctx]);
 
   const command = useMemo(() => resolveStateCommand(machine, allEntries), [machine, allEntries]);
+  // The entry whose input form is open, kept while its launch runs so the surface
+  // stays named in the chip instead of falling back to the generic label.
+  const workflowFormEntry = useMemo(
+    () =>
+      workflowFormEntryId === null
+        ? null
+        : (allEntries.find((candidate) => candidate.id === workflowFormEntryId) ?? null),
+    [workflowFormEntryId, allEntries],
+  );
   const args = command?.args ?? [];
   const spec = currentStep(command, machine);
   const query = machine.kind === 'search' || machine.kind === 'step' ? machine.query : '';
-  const commandError =
-    machine.kind === 'search' || machine.kind === 'step' ? machine.inlineError : null;
+  const commandError = inlineError(machine);
 
   useEffect(() => {
     if (machine.kind !== 'step' || (command && spec)) {
@@ -322,9 +345,13 @@ export function CommandPalette() {
 
   const view = useMemo(() => {
     if (running) {
+      // Three sources, in the order that knows most about the work: a run the
+      // caller started with its own status copy, the command's declared copy,
+      // then the generic fallback.
       return {
         kind: 'running' as const,
-        content: command?.running ?? { title: paletteCopy.running.title },
+        content: callerRunningCopy(machine) ??
+          command?.running ?? { title: paletteCopy.running.title },
       };
     }
     if (machine.kind === 'result') {
@@ -333,11 +360,12 @@ export function CommandPalette() {
     if (machine.kind === 'error') {
       return { kind: 'error' as const, content: machine.content };
     }
-    if (workflowFormEntryId) {
-      const entry = allEntries.find((candidate) => candidate.id === workflowFormEntryId);
-      if (entry?.workflow) {
-        return { kind: 'workflow-form' as const, entry, workflow: entry.workflow };
-      }
+    if (workflowFormEntry?.workflow) {
+      return {
+        kind: 'workflow-form' as const,
+        entry: workflowFormEntry,
+        workflow: workflowFormEntry.workflow,
+      };
     }
     if (machine.kind === 'step' && command && spec) {
       // The shape is selection-free; the live index is injected at render via
@@ -359,7 +387,7 @@ export function CommandPalette() {
       ? filterEntries(allEntries, searchQuery)
       : recencyView(allEntries, recents);
     return { kind: 'list' as const, items };
-  }, [running, machine, workflowFormEntryId, allEntries, command, spec, recents]);
+  }, [running, machine, workflowFormEntry, allEntries, command, spec, recents]);
   const acceptsInput =
     !running &&
     view.kind !== 'workflow-form' &&
@@ -453,7 +481,8 @@ export function CommandPalette() {
   }, [open, machine.kind, running, acceptsInput, view, viewKey]);
 
   const startWorkflowEntry = (entry: PaletteEntry, answers: WorkflowInputAnswers) => {
-    if (!entry.workflow || !workflowLaunchContext) {
+    const workflow = entry.workflow;
+    if (!workflow || !workflowLaunchOrigin) {
       send({
         type: 'flow-failed',
         entryId: entry.id,
@@ -465,27 +494,19 @@ export function CommandPalette() {
       return;
     }
 
-    startWorkflowMutation.mutate(
-      {
-        workflowKey: entry.workflow.workflowKey,
-        variables: answers,
-        context: workflowLaunchContext,
-      },
-      {
-        onSuccess: () => {
-          pushRecent(entry.id);
-          closeCurrentPalette();
-        },
-        onError: (error) => {
-          setWorkflowFormEntryId(null);
-          send({
-            type: 'flow-failed',
-            entryId: entry.id,
-            content: workflowStartFailureContent(error),
-          });
-        },
-      },
-    );
+    send({
+      type: 'start-run',
+      run: () =>
+        workflowLaunchOutcome(
+          {
+            workflowKey: workflow.workflowKey,
+            inputs: answers,
+            origin: workflowLaunchOrigin,
+          },
+          { ...workflowLaunchDeps, onPrepared: () => pushRecent(entry.id) },
+        ),
+      running: paletteCopy.workflows.preparing,
+    });
   };
 
   const runEntry = (entry: PaletteEntry) => {
@@ -493,9 +514,6 @@ export function CommandPalette() {
       return;
     }
     if (entry.workflow) {
-      if (startWorkflowMutation.isPending) {
-        return;
-      }
       const questions = entry.workflow.manifest.inputs ?? [];
       if (questions.length === 0) {
         startWorkflowEntry(entry, {});
@@ -582,7 +600,7 @@ export function CommandPalette() {
     } else if (view.kind === 'result' || view.kind === 'error') {
       const action = outcomeActions(view.content)[index ?? 0];
       if (action) {
-        send({ type: 'outcome-action', value: action.value });
+        send({ type: 'outcome-action', action });
       }
     } else {
       acceptText();
@@ -698,7 +716,9 @@ export function CommandPalette() {
           >
             <div className="flex flex-wrap items-center gap-1.5 border-b border-line/16 px-4 py-3.5">
               {running ? (
-                <Chip tone="command">{command?.label ?? paletteCopy.running.chip}</Chip>
+                <Chip tone="command">
+                  {command?.label ?? workflowFormEntry?.label ?? paletteCopy.running.chip}
+                </Chip>
               ) : view.kind === 'workflow-form' ? (
                 <Chip tone="command">{view.workflow.manifest.title}</Chip>
               ) : command ? (
@@ -786,7 +806,7 @@ export function CommandPalette() {
                 <div>
                   <WorkflowInputFlow
                     questions={view.workflow.manifest.inputs ?? []}
-                    disabled={startWorkflowMutation.isPending}
+                    disabled={running}
                     autoFocus
                     onBack={() => setWorkflowFormEntryId(null)}
                     onSubmit={(answers) => startWorkflowEntry(view.entry, answers)}
@@ -816,14 +836,14 @@ export function CommandPalette() {
                   content={view.content}
                   kind="result"
                   sel={sel}
-                  onAction={(value) => send({ type: 'outcome-action', value })}
+                  onAction={(action) => send({ type: 'outcome-action', action })}
                 />
               ) : view.kind === 'error' ? (
                 <OutcomePanel
                   content={view.content}
                   kind="error"
                   sel={sel}
-                  onAction={(value) => send({ type: 'outcome-action', value })}
+                  onAction={(action) => send({ type: 'outcome-action', action })}
                 />
               ) : (
                 <EntryList

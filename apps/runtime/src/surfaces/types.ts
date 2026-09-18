@@ -118,6 +118,13 @@ export interface CreateSinglePaneSurfaceInput {
   readonly initialSession?:
     | { readonly kind: 'editor_context'; readonly sessionId: number }
     | undefined;
+  /**
+   * Names the surface this call intends to create, so a re-entry adopts it instead of creating a
+   * second. Written to `worktree_surfaces.creation_key`, which is its own keyspace: the pane this
+   * call creates stays unkeyed, and surface re-entry resolves through `findSurfaceByCreationKey`
+   * rather than `findKeyedCreation`.
+   */
+  readonly creationKey?: string | undefined;
 }
 
 export interface CreateSinglePaneSurfaceOutput {
@@ -132,6 +139,50 @@ export interface SplitSurfacePaneInput {
   readonly sourcePaneId: number;
   readonly titleBase: string;
   readonly direction: SplitPaneDirection;
+  /** Names the pane this call intends to create, so a re-entry after a crash can adopt it. */
+  readonly creationKey?: string | undefined;
+}
+
+/**
+ * How far a keyed compound creation actually got.
+ *
+ * Creating a pane, creating its session and associating the two are three separate writes, so a
+ * crash can land between any of them. "Return the existing row" satisfies neither the caller nor
+ * this service's own postcondition in the middle states, which is why each one is named: recovery
+ * resumes from where it stopped rather than starting over or declaring success early.
+ *
+ * A component the key names but that no longer exists — a pane the person closed between the crash
+ * and the recovery — resolves to `absent` and is recreated. The key describes intent, not a live
+ * handle.
+ */
+export type KeyedCreationState =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'pane_only'; readonly surfaceId: number; readonly paneId: number }
+  | {
+      readonly kind: 'session_unassigned';
+      readonly surfaceId: number;
+      readonly paneId: number;
+      readonly session: KeyedSessionIdentity;
+    }
+  | {
+      readonly kind: 'complete';
+      readonly surfaceId: number;
+      readonly paneId: number;
+      readonly session: KeyedSessionIdentity;
+    };
+
+/**
+ * A recovered session, carrying enough of what it *is* to be checked against what a re-entering
+ * caller is asking for.
+ *
+ * The harness is part of the identity rather than a detail: adopting a session created for one
+ * harness into a request for another would hand the caller a live agent of the wrong kind while
+ * reporting a successful recovery.
+ */
+export interface KeyedSessionIdentity {
+  readonly kind: 'agent_session';
+  readonly sessionId: number;
+  readonly harness: AgentHarness;
 }
 
 export interface SplitSurfacePaneOutput {
