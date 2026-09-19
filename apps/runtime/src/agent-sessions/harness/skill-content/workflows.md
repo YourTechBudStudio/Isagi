@@ -90,7 +90,7 @@ For a failed segment with retained agent-turn provenance, explicit Retry can rec
 
 Read [Workflow recovery](workflow-recovery.md) when editing code for saved runs, writing retry-specific behavior, or dealing with interrupted/uncertain work.
 
-## Completion and evidence
+## Completion and verification
 
 Keep tests hermetic with stubbed capabilities. Exercise the routes and updates that determine behavior: meaningful success, failure/interruption, exhausted budgets, human escalation, and child output mapping as applicable. The scaffold demonstrates direct graph tests without a live runtime or provider.
 

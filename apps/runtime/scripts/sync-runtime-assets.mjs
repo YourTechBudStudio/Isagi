@@ -60,6 +60,7 @@ function syncAssets(assetRoot) {
     'workflow-environments.md',
     'workflow-agents.md',
     'workflow-recovery.md',
+    'workflow-evidence.md',
   ]) {
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }

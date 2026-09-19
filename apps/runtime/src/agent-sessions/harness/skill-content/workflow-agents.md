@@ -4,15 +4,16 @@ Read [Workflow authoring](workflows.md) for graph structure and package checks. 
 
 ## Choose a capability
 
-| Capability on `ctx`      | Returns / use                                             |
-| ------------------------ | --------------------------------------------------------- |
-| `spawnAgentSession`      | Interactive session handle with pane ID and turn target   |
-| `sendAgentPrompt`        | Turn target for an existing session                       |
-| `runHeadlessAgent`       | Operation handle, not its completed output                |
-| `getConversationHistory` | Role-tagged messages for a session                        |
-| `closePane`              | Closes a pane owned by the workflow when no longer needed |
-| `setUiFeedback`          | Meaningful phase/message for the user                     |
-| `log`                    | Durable diagnostic context                                |
+| Capability on `ctx`      | Returns / use                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `spawnAgentSession`      | Interactive session handle with pane ID and turn target                                        |
+| `sendAgentPrompt`        | Turn target for an existing session                                                            |
+| `runHeadlessAgent`       | Operation handle, not its completed output                                                     |
+| `captureEvidence`        | Durable reference to selected immutable content; see [Workflow evidence](workflow-evidence.md) |
+| `getConversationHistory` | Role-tagged messages for a session                                                             |
+| `closePane`              | Closes a pane owned by the workflow when no longer needed                                      |
+| `setUiFeedback`          | Meaningful phase/message for the user                                                          |
+| `log`                    | Durable diagnostic context                                                                     |
 
 Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success. If a routing or response-reading segment fails after this wait, a human-triggered Retry may select the latest observed turn in the same durable agent session; workflow code still uses only the Isagi session handle and ordinary event/conversation APIs.
 
@@ -142,7 +143,7 @@ For several headless tasks, launch them and pass their handles to `wait.headless
 
 Give unattended agents a goal, relevant inputs, constraints, acceptance criteria, and stop conditions. Give them a path for uncertainty that does not depend on someone answering mid-turn; place required human decisions in graph waits. Keep authorization boundaries explicit when the requested work can have external effects.
 
-Read the latest complete assistant turn across its messages and parts. Validate the evidence or structured output needed for the next route. A separate judgment agent is useful when a semantic decision is needed, but is not required for every workflow. When using structured judgments, keep the prompt, parser, and result type coherent; cover each meaningful outcome, including work completed beyond the requested phase when that changes what follows. Test invalid responses and consequential routes. Log parse failures with enough context to diagnose them.
+Read the latest complete assistant turn across its messages and parts. Capture the response before building the judgment prompt, passing the retained turn target as its source; [Workflow evidence](workflow-evidence.md) explains Retry reuse and later-visit recapture. Validate the evidence or structured output needed for the next route. A separate judgment agent is useful when a semantic decision is needed, but is not required for every workflow. When using structured judgments, keep the prompt, parser, and result type coherent; cover each meaningful outcome, including work completed beyond the requested phase when that changes what follows. Test invalid responses and consequential routes. Log parse failures with enough context to diagnose them.
 
 Change feedback when the business-facing phase changes rather than at every internal transition. Before intentional failure or human escalation, explain the problem and next action through feedback and log the relevant evidence from an operation. Pure routing cannot call these capabilities.
 
