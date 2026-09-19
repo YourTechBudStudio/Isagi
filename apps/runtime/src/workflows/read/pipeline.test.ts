@@ -7,7 +7,8 @@ import type { RuntimeEvent, WorkflowExecutionDto } from '@isagi/contracts';
 
 import type { RuntimeEventBusService } from '../../runtime-events/event-bus.js';
 import type { EngineHarness } from '../engine/test-support.js';
-import { drivePipeline, publishFixture, withHarness } from '../fixtures/reviewed-document/drive.js';
+import { drivePipeline, withHarness } from '../fixtures/drive.js';
+import { publishFixture } from '../fixtures/reviewed-document/drive.js';
 import { run } from '../persistence/test-support.js';
 import { makeWorkflowRunProjection } from './projection.service.js';
 import { makeWorkflowDeltaPublisher } from './publisher.js';

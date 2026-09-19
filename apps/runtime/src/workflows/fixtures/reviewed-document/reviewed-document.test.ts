@@ -4,7 +4,8 @@ import test from 'node:test';
 import { run } from '../../persistence/test-support.js';
 import type { AnyWorkflowDefinition } from '../../structure/loader.js';
 import type { WaitDeclaration } from '../../types.js';
-import { drivePipeline, publishFixture, withHarness, World } from './drive.js';
+import { drivePipeline, withHarness, World } from '../drive.js';
+import { publishFixture } from './drive.js';
 import { makeReviewedDocumentWorkflow } from './index.js';
 
 /**

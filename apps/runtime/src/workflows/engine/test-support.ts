@@ -31,6 +31,7 @@ import {
   RUNTIME,
   type FakeAdapterState,
 } from '../operations/test-support.js';
+import type { OperationSettlementProvenance } from '../persistence/operations.repository.js';
 import type {
   WorkflowArtifactRecord,
   WorkflowRunPreparationRecord,
@@ -180,6 +181,14 @@ export interface EngineHarness {
     readonly operationId: number;
     readonly state: 'completed' | 'failed' | 'interrupted' | 'uncertain';
     readonly result?: unknown;
+    /**
+     * What the provider reported about the work that just finished.
+     *
+     * Present because settlement is where a real headless capture records it, so a fixture that
+     * asserts recorded provenance has to arrive through the same argument rather than writing the
+     * columns behind the repository's back.
+     */
+    readonly provenance?: OperationSettlementProvenance | undefined;
   }) => Promise<void>;
   /** Runs inside the window between a suspend committing and its arm-time reconciliation. */
   readonly onArmTimeReconcile: (hook: (waitId: number) => Promise<void> | void) => void;
@@ -650,12 +659,13 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     retry: (runId) => run(incarnation.controls.retry(runId)),
     drain,
     deliver: (runId) => run(incarnation.waits.reconcileWaits(runId)),
-    settleOperation: async ({ operationId, state, result }) => {
+    settleOperation: async ({ operationId, state, result, provenance }) => {
       const settled = await run(
         fixture.operations.settle({
           operationId,
           state,
           ...(result === undefined ? {} : { result: { value: result } }),
+          ...(provenance === undefined ? {} : { provenance }),
         }),
       );
       if (!settled.ok) return;
