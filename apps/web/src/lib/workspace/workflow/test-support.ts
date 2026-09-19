@@ -1,6 +1,7 @@
 import type {
   ListRunExecutionsOutput,
   ListWorkflowEventsOutput,
+  WorkflowEvidenceDto,
   WorkflowExecutionDto,
   WorkflowFrameDto,
   WorkflowOperationDto,
@@ -106,6 +107,38 @@ export function workflowExecutionFixture(
     candidateRef: null,
     updateRef: null,
     stateOutRef: null,
+    ...overrides,
+  };
+}
+
+/**
+ * One captured record.
+ *
+ * Defaults to the plainest thing a capture can be — a text record with no source — so a test that
+ * cares about attribution, labels or a media type states only the part it is about.
+ */
+export function workflowEvidenceFixture(
+  overrides: Partial<WorkflowEvidenceDto> = {},
+): WorkflowEvidenceDto {
+  return {
+    evidenceKey: 'wev_1',
+    frameId: 1,
+    executionId: 1,
+    attemptId: 1,
+    operationKey: 'wop_1',
+    title: 'A captured thing',
+    role: 'note',
+    labels: {},
+    content: {
+      kind: 'text',
+      mediaType: 'text/markdown',
+      byteSize: 120,
+      contentRef: 'sha256:aaaa',
+      sourcePath: null,
+    },
+    source: { kind: 'none' },
+    artifactHash: 'sha256:pin-1',
+    capturedAt: at,
     ...overrides,
   };
 }

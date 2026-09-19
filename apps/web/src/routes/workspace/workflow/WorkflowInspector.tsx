@@ -1,10 +1,12 @@
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowEvidenceDto, WorkflowRunSummary } from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
+import type { EvidenceScope } from '../../../lib/workspace/workflow/evidence.js';
 import {
+  useWorkflowEvidenceList,
   useWorkflowExecutionOperations,
   useWorkflowRunState,
   useWorkflowStructureQuery,
@@ -14,6 +16,7 @@ import { aggregateVisits, emptyAggregation, type VisitAggregation } from './aggr
 import { executionAddressKey } from './ancestry.js';
 import { inspectorCopy } from './copy.js';
 import { buildDockView } from './dock.js';
+import { noEvidenceFilters, type EvidenceSelectedFilters } from './evidence-view.js';
 import { dockMaxHeight, dockMinHeight } from './format.js';
 import { selectionResolves, selectedExecutionId, type InspectorSelection } from './selection.js';
 import { buildTopology } from './topology.js';
@@ -21,16 +24,18 @@ import { buildTraceModel } from './trace.js';
 import type { LayoutEngineFactory } from './useGraphLayout.js';
 import { useRunClock } from './useRunClock.js';
 import { WorkflowDeclaredCanvas } from './WorkflowDeclaredCanvas.js';
-import { WorkflowDock } from './WorkflowDock.js';
+import { WorkflowDock, type DockEvidenceRows } from './WorkflowDock.js';
+import { WorkflowEvidencePanel } from './WorkflowEvidencePanel.js';
 import { WorkflowInspectorHeader } from './WorkflowInspectorHeader.js';
 import { WorkflowTraceWaterfall } from './WorkflowTraceWaterfall.js';
 
 /**
  * The read-only inspector, opened from the workflow bar and closed with Escape.
  *
- * Two tabs answering two different questions — Declared is a snapshot of the pin the run is on now,
- * Trace is the record of what actually ran — over one shared dock. Mounting this is what starts the
- * run's coordinator, so the expensive half of inspection costs nothing until somebody looks.
+ * Three tabs answering three different questions — Declared is a snapshot of the pin the run is on
+ * now, Trace is the record of what actually ran, and Evidence is what the run deliberately kept —
+ * over one shared dock. Mounting this is what starts the run's coordinator, so the expensive half
+ * of inspection costs nothing until somebody looks.
  *
  * It drives nothing. There is no Pause, Resume, Retry, Cancel, Dismiss or Advance here, no gate form
  * and no per-node action; the bar stays reachable behind the overlay and remains the only place a
@@ -57,7 +62,19 @@ export function WorkflowInspector({
 }) {
   const runId = summary.runId;
   const state = useWorkflowRunState(runId);
-  const [tab, setTab] = useState<'declared' | 'trace'>('declared');
+  const [tab, setTab] = useState<'declared' | 'trace' | 'evidence'>('declared');
+  /**
+   * The Evidence tab's own state, held here rather than in the panel.
+   *
+   * The panel unmounts whenever another tab is shown, and a record chosen from the dock's Evidence
+   * column — which is on every tab — has to still be the chosen one when the Evidence tab is opened
+   * next. Owning it here is what makes "the selection survives" true across the tab strip as well
+   * as across dock selection changes.
+   */
+  const [evidenceScope, setEvidenceScope] = useState<EvidenceScope>({ kind: 'run' });
+  const [evidenceFilters, setEvidenceFilters] =
+    useState<EvidenceSelectedFilters>(noEvidenceFilters);
+  const [selectedEvidenceKey, setSelectedEvidenceKey] = useState<string | null>(null);
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedTraceRows, setCollapsedTraceRows] = useState<ReadonlySet<number>>(
@@ -154,6 +171,9 @@ export function WorkflowInspector({
     setSelection(null);
     setExpanded(new Set());
     setCollapsedTraceRows(new Set());
+    setEvidenceScope({ kind: 'run' });
+    setEvidenceFilters(noEvidenceFilters);
+    setSelectedEvidenceKey(null);
   }, [runId]);
 
   const dockView = useMemo(
@@ -161,6 +181,62 @@ export function WorkflowInspector({
     [selection, state, topology, now],
   );
   const operations = useWorkflowExecutionOperations(state, selectedExecutionId(selection, state));
+
+  /**
+   * What the selected visit captured — one query, serving two surfaces.
+   *
+   * The dock's Evidence column and the Evidence tab's visit scope are the *same* listing, and they
+   * get it from the same call shape so React Query resolves them to one cache entry. Neither
+   * derives its rows from the other, so there is no arrangement in which the column and the list it
+   * opens can disagree about what a visit kept.
+   */
+  const dockExecutionId = selectedExecutionId(selection, state);
+  // `null`, not a fallback to run scope. A declared node nobody has visited and a frame's own setup
+  // segment both produce a full dock view and no execution, and answering them with the run's
+  // listing would put other nodes' records under a heading that says "this visit and below".
+  const dockEvidence = useWorkflowEvidenceList(
+    state,
+    dockExecutionId === null
+      ? null
+      : { kind: 'visit', executionId: dockExecutionId, subtree: true },
+  );
+
+  const dockEvidenceRows: DockEvidenceRows =
+    dockExecutionId === null
+      ? { kind: 'no_visit' }
+      : dockEvidence.error !== null
+        ? { kind: 'failed' }
+        : dockEvidence.data === undefined
+          ? { kind: 'loading' }
+          : { kind: 'ready', records: dockEvidence.data };
+
+  const selectEvidence = useCallback((record: WorkflowEvidenceDto) => {
+    setSelectedEvidenceKey(record.evidenceKey);
+    // The dock follows the record to the visit that captured it, so everything below the panel is
+    // describing the same step the record came from.
+    setSelection({ kind: 'execution', executionId: record.executionId });
+  }, []);
+
+  /**
+   * Entering the Evidence tab from the dock's link.
+   *
+   * Always a question about one visit, so the scope is that visit with the subtree switch on:
+   * exactly the column's contents, and exactly what `evidenceCaptured` counts. Entering from the
+   * tab strip asks about the run instead, and seeds run scope there.
+   *
+   * Null when there is no visit, which is also when the link is not rendered — so the tab and the
+   * column can never be opened into disagreement.
+   */
+  const openEvidenceTab = useMemo(
+    () =>
+      dockExecutionId === null
+        ? null
+        : () => {
+            setEvidenceScope({ kind: 'visit', executionId: dockExecutionId, subtree: true });
+            setTab('evidence');
+          },
+    [dockExecutionId],
+  );
 
   /**
    * Focus moves into the overlay on open and back where it came from on close.
@@ -251,9 +327,24 @@ export function WorkflowInspector({
             <TabButton active={tab === 'trace'} onClick={() => setTab('trace')}>
               {inspectorCopy.traceTab}
             </TabButton>
+            <TabButton
+              active={tab === 'evidence'}
+              onClick={() => {
+                // From the tab strip the question is about the run, not about whatever happens to
+                // be selected below. The dock's link is the way into one visit.
+                setEvidenceScope({ kind: 'run' });
+                setTab('evidence');
+              }}
+            >
+              {inspectorCopy.evidenceTab}
+            </TabButton>
           </div>
           <p className="font-mono text-[11px] text-fg-subtle opacity-70">
-            {tab === 'declared' ? inspectorCopy.declaredHint : inspectorCopy.traceHint}
+            {tab === 'declared'
+              ? inspectorCopy.declaredHint
+              : tab === 'trace'
+                ? inspectorCopy.traceHint
+                : inspectorCopy.evidenceHint}
           </p>
         </div>
 
@@ -291,6 +382,19 @@ export function WorkflowInspector({
                 engineFactory={engineFactory}
               />
             ) : null
+          ) : tab === 'evidence' ? (
+            <WorkflowEvidencePanel
+              runId={runId}
+              state={state}
+              scope={evidenceScope}
+              onScopeChange={setEvidenceScope}
+              filters={evidenceFilters}
+              onFiltersChange={setEvidenceFilters}
+              selectedKey={selectedEvidenceKey}
+              onSelect={selectEvidence}
+              dockExecutionId={dockExecutionId}
+              liveExecutionId={runSummary.activeNode?.executionId ?? null}
+            />
           ) : traceModel ? (
             <WorkflowTraceWaterfall
               model={traceModel}
@@ -306,6 +410,13 @@ export function WorkflowInspector({
             view={dockView}
             runId={runId}
             operations={operations}
+            tab={tab}
+            evidence={{
+              rows: dockEvidenceRows,
+              selectedKey: selectedEvidenceKey,
+              onSelect: selectEvidence,
+              onOpenAll: openEvidenceTab,
+            }}
             height={dockHeight}
             onHeightChange={clampDock}
             onSelect={setSelection}

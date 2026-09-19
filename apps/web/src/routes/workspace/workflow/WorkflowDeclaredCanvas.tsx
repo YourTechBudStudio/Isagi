@@ -738,6 +738,7 @@ function GraphNode({
                 unresolvedGraphKey={unresolved?.graphKey ?? null}
               />
             </span>
+            <EvidenceCount element={element} aggregate={aggregate} />
             <TimeBadge aggregate={aggregate} now={now} />
           </span>
           <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
@@ -773,12 +774,15 @@ function GraphNode({
           </span>
           <TimeBadge aggregate={aggregate} now={now} />
         </span>
-        <span className="mt-1.5 block truncate font-mono text-[10.5px] text-fg-subtle">
-          <NodeSubline
-            element={element}
-            aggregate={aggregate}
-            unresolvedGraphKey={unresolved?.graphKey ?? null}
-          />
+        <span className="mt-1.5 flex items-center gap-2 font-mono text-[10.5px] text-fg-subtle">
+          <span className="min-w-0 truncate">
+            <NodeSubline
+              element={element}
+              aggregate={aggregate}
+              unresolvedGraphKey={unresolved?.graphKey ?? null}
+            />
+          </span>
+          <EvidenceCount element={element} aggregate={aggregate} />
         </span>
       </button>
       <VisitPips aggregate={aggregate} selection={selection} onSelect={onSelect} />
@@ -828,6 +832,38 @@ function VisitPips({
           </button>
         );
       })}
+    </span>
+  );
+}
+
+/**
+ * How much this element's visits kept, as a count rather than a control.
+ *
+ * Its own component because a collapsed subgraph card and an operation card are two renderers in
+ * this file, and a badge added to one of them is a badge a subgraph silently never shows.
+ *
+ * The number is `ElementAggregate.evidenceCaptured`: the sum over this element's visits, which is
+ * safe only because visits of one element are disjoint executions whose subtrees do not overlap.
+ * Summing the same field across *elements* is forbidden — a nested capture would be counted once
+ * for its own node and again for every subgraph containing it. A subgraph therefore spells it
+ * `n inside`, matching its trace row, so nobody adds two figures that already contain each other.
+ *
+ * Clicking the node still selects its latest visit; this changes nothing.
+ */
+function EvidenceCount({
+  element,
+  aggregate,
+}: {
+  readonly element: DeclaredElement;
+  readonly aggregate: ElementAggregate;
+}) {
+  if (aggregate.evidenceCaptured === 0) return null;
+  const inside = element.kind === 'node' && element.descriptor.kind === 'subgraph';
+  return (
+    <span className="ml-auto flex-none rounded-full border border-cyan/35 px-1.5 font-mono text-[10px] leading-4 text-cyan">
+      {inside
+        ? inspectorCopy.evidenceInside(aggregate.evidenceCaptured)
+        : aggregate.evidenceCaptured}
     </span>
   );
 }

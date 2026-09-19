@@ -88,6 +88,13 @@ export interface TraceExecutionRow {
   /** True when this node ran more than once in its frame, so the ordinal is worth showing. */
   readonly repeated: boolean;
   readonly status: WorkflowExecutionDto['status'];
+  /**
+   * Captures in this visit and everything beneath it.
+   *
+   * Subtree-inclusive, so a subgraph row's number covers its whole child frame — which is why the
+   * row spells it `n inside` rather than as a bare count. Never summed across rows.
+   */
+  readonly evidenceCaptured: number;
   readonly isSubgraph: boolean;
   readonly expandable: boolean;
   readonly expanded: boolean;
@@ -204,6 +211,7 @@ export function buildTraceModel(input: {
       visitIndex: execution.visitIndex,
       repeated: (repeats.get(`${execution.frameId}:${execution.nodeId}`) ?? 0) > 1,
       status: execution.status,
+      evidenceCaptured: execution.operationSummary.evidenceCaptured,
       isSubgraph: execution.nodeKind === 'subgraph',
       expandable: execution.nodeKind === 'subgraph' && execution.childFrameId !== null,
       expanded: !collapsed.has(execution.executionId),

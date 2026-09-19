@@ -299,6 +299,9 @@ function Row({
         {row.displayName && (
           <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{row.displayName}</span>
         )}
+        {row.evidenceCaptured > 0 && (
+          <EvidenceCount count={row.evidenceCaptured} inside={row.isSubgraph} />
+        )}
         {row.labelDiagnostic && (
           <span
             className="flex-none font-mono text-[10.5px] text-amber"
@@ -531,6 +534,21 @@ function FrameRow({
         )}
       </span>
     </div>
+  );
+}
+
+/**
+ * How much this row kept, as a count rather than a control.
+ *
+ * Clicking the row still selects the visit; the badge changes nothing. A subgraph spells it
+ * `n inside` because the number covers the whole child frame, and a bare number beside a nested
+ * row's own bare number would invite a reader to add two figures that already contain each other.
+ */
+function EvidenceCount({ count, inside }: { readonly count: number; readonly inside: boolean }) {
+  return (
+    <span className="flex-none rounded-full border border-cyan/35 px-1.5 font-mono text-[10px] leading-4 text-cyan">
+      {inside ? inspectorCopy.evidenceInside(count) : count}
+    </span>
   );
 }
 

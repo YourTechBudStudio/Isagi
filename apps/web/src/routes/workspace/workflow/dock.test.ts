@@ -11,6 +11,7 @@ import {
   operationDataTabs,
   operationTabKey,
   shortHash,
+  type DockDataTab,
   type DockRow,
 } from './dock.js';
 import {
@@ -300,7 +301,9 @@ test('a produced value, an absent one and a JSON null are three different tabs',
     now,
   });
 
-  const tabs = new Map(view!.data.map((tab) => [tab.name, tab.slot]));
+  const tabs = new Map(
+    view!.data.map((tab) => [tab.name, tab.kind === 'payload' ? tab.slot : undefined]),
+  );
   assert.deepEqual(tabs.get('candidate'), { inline: null });
   assert.equal(tabs.get('update'), null);
   assert.deepEqual(tabs.get('state.in'), {
@@ -430,9 +433,9 @@ test('an operation contributes a tab for every payload it actually produced, and
     ],
   );
   // A recorded null is still selectable and still a value.
-  assert.deepEqual(tabs[2]?.slot, { inline: null });
+  assert.deepEqual(slotOf(tabs[2]), { inline: null });
   // A stored request keeps its reference and size, so nothing is fetched to show a tab.
-  assert.deepEqual(tabs[0]?.slot, {
+  assert.deepEqual(slotOf(tabs[0]), {
     payloadRef: 'p:req',
     byteSize: 2_180,
     mediaType: 'text/plain',
@@ -520,3 +523,8 @@ test('a subgraph that has not opened its graph says so rather than showing an em
   assert.deepEqual(view!.nested?.children, []);
   assert.equal(view!.nested?.executions, 0);
 });
+
+/** Operation tabs are always payload tabs; this narrows the union without asserting it twice. */
+function slotOf(tab: DockDataTab | undefined) {
+  return tab !== undefined && tab.kind === 'payload' ? tab.slot : undefined;
+}

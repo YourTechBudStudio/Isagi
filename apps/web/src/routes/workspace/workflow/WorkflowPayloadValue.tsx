@@ -125,7 +125,14 @@ function PayloadBody({ value }: { readonly value: unknown }) {
   return <JsonTree value={value} depth={0} />;
 }
 
-function TextValue({ text }: { readonly text: string }) {
+/**
+ * Text with line numbers.
+ *
+ * Exported because captured evidence renders through it too: a `text/markdown` capture and a text
+ * payload are the same thing on screen, and a second implementation of "text with line numbers" is
+ * exactly the drift the reuse lens exists to stop.
+ */
+export function TextValue({ text }: { readonly text: string }) {
   const lines = useMemo(() => text.split('\n'), [text]);
   return (
     <pre className="m-0 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-muted">
@@ -142,7 +149,8 @@ function TextValue({ text }: { readonly text: string }) {
   );
 }
 
-function JsonTree({ value, depth }: { readonly value: unknown; readonly depth: number }) {
+/** The collapsible JSON view. Exported for the same reason `TextValue` is. */
+export function JsonTree({ value, depth }: { readonly value: unknown; readonly depth: number }) {
   const [open, setOpen] = useState(depth < 2);
 
   if (value === null) return <span className="font-mono text-[11.5px] text-fg-subtle">null</span>;

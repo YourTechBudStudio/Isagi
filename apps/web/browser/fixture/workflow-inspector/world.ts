@@ -13,6 +13,7 @@ import {
   workflowOperationFixture,
   workflowSummaryFixture,
 } from '../../../src/lib/workspace/workflow/test-support.js';
+import { withEvidenceCounts } from './evidence.js';
 
 /**
  * One run, as the runtime would actually describe it.
@@ -549,7 +550,9 @@ export function buildWorld(options: BuildOptions): FixtureWorld {
     summary: summaryFor(scenario, pin, options.longHistory),
     descriptor: descriptorFor(pin),
     artifactHash: pin,
-    executions,
+    // Counts derived from the records themselves, so the badge on a row and the length of the list
+    // it opens cannot drift apart for a reason that is only in the fixture.
+    executions: withEvidenceCounts(executions, frames),
     frames,
     operations,
     events: eventsFor(scenario),

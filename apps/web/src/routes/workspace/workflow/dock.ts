@@ -1,4 +1,5 @@
 import type {
+  WorkflowEvidenceDto,
   WorkflowExecutionDto,
   WorkflowFrameDto,
   WorkflowFrameSegmentDto,
@@ -16,7 +17,7 @@ import { formatClock, formatDuration, executionTiming, intervalDuration } from '
 import { ancestorKeys, type DeclaredElement, type DeclaredTopology } from './topology.js';
 
 /**
- * The four columns, as data.
+ * The five columns, as data.
  *
  * Deriving them here rather than inside JSX is what makes the honesty rules testable: that a
  * historical node absent from the current pin says so instead of borrowing another node's
@@ -25,6 +26,22 @@ import { ancestorKeys, type DeclaredElement, type DeclaredTopology } from './top
  */
 
 export type FieldTone = 'default' | 'dim' | 'warn' | 'bad' | 'ok';
+
+/** The one place a tone becomes a colour, so a provenance row and a recorded row dim alike. */
+export function toneClass(tone: FieldTone | undefined): string {
+  switch (tone) {
+    case 'dim':
+      return 'text-fg-subtle';
+    case 'warn':
+      return 'text-amber';
+    case 'bad':
+      return 'text-error';
+    case 'ok':
+      return 'text-green';
+    default:
+      return 'text-fg';
+  }
+}
 
 export interface DockField {
   readonly label: string;
@@ -38,7 +55,7 @@ export type DockRow = DockField | { readonly gap: true };
 
 export const gap: DockRow = { gap: true };
 
-export interface DockDataTab {
+interface DockDataTabBase {
   /**
    * Stable identity, so a tab survives anything that renames it.
    *
@@ -49,8 +66,28 @@ export interface DockDataTab {
    */
   readonly key: string;
   readonly name: string;
-  readonly slot: WorkflowPayloadSlot;
 }
+
+/**
+ * A tab in the Data column, of which there are now two kinds.
+ *
+ * A **payload** tab shows a recorded slot, whose absence is itself a fact the viewer has to tell
+ * apart from an unreadable one. An **evidence** tab shows bytes a capture kept: it has no slot and
+ * cannot be absent — evidence exists only because a capture committed — but it does carry a media
+ * type, because the same bytes are rendered differently depending on what they are *for*.
+ *
+ * Discriminated rather than merged with an optional slot: a shape where `slot: null` could mean
+ * either "never produced" or "this is not that kind of tab" is exactly the conflation the payload
+ * viewer exists to prevent.
+ */
+export type DockDataTab =
+  | (DockDataTabBase & { readonly kind: 'payload'; readonly slot: WorkflowPayloadSlot })
+  | (DockDataTabBase & {
+      readonly kind: 'evidence';
+      readonly evidenceKey: string;
+      readonly mediaType: string;
+      readonly byteSize: number;
+    });
 
 /** One execution inside a subgraph's child frame, reachable from the dock. */
 export interface DockChildExecution {
@@ -94,6 +131,7 @@ export function operationDataTabs(
   for (const operation of operations) {
     const ordinal = operation.callIndex + 1;
     tabs.push({
+      kind: 'payload',
       key: operationTabKey(operation.operationKey, 'request'),
       name: `op${ordinal}.request`,
       slot: operation.requestRef,
@@ -105,6 +143,7 @@ export function operationDataTabs(
     ] as const) {
       if (slot === null) continue;
       tabs.push({
+        kind: 'payload',
         key: operationTabKey(operation.operationKey, suffix),
         name: `op${ordinal}.${suffix}`,
         slot,
@@ -112,6 +151,29 @@ export function operationDataTabs(
     }
   }
   return tabs;
+}
+
+/**
+ * The Data tabs a visit's captures contribute.
+ *
+ * Named by position in the Evidence column beside them — `ev1 · content` — because that is the
+ * number a person just clicked, and keyed by the record's own immutable key for the reason an
+ * operation tab is keyed by its operation: a position is an ordinal, and a cache-bearing tab keyed
+ * on an ordinal follows the position rather than the thing.
+ */
+export function evidenceDataTabs(records: readonly WorkflowEvidenceDto[]): readonly DockDataTab[] {
+  return records.map((record, index) => ({
+    kind: 'evidence',
+    key: evidenceTabKey(record.evidenceKey),
+    name: `ev${index + 1} \u00b7 content`,
+    evidenceKey: record.evidenceKey,
+    mediaType: record.content.mediaType,
+    byteSize: record.content.byteSize,
+  }));
+}
+
+export function evidenceTabKey(evidenceKey: string): string {
+  return `evidence::${evidenceKey}`;
 }
 
 export function operationTabKey(operationKey: string, slot: string): string {
@@ -348,21 +410,41 @@ function executionView(
   }
 
   const data: DockDataTab[] = [
-    { key: 'state.in', name: 'state.in', slot: execution.stateInRef },
-    { key: 'candidate', name: 'candidate', slot: execution.candidateRef },
-    { key: 'update', name: 'update', slot: execution.updateRef },
-    { key: 'state.out', name: 'state.out', slot: execution.stateOutRef },
+    { kind: 'payload', key: 'state.in', name: 'state.in', slot: execution.stateInRef },
+    { kind: 'payload', key: 'candidate', name: 'candidate', slot: execution.candidateRef },
+    { kind: 'payload', key: 'update', name: 'update', slot: execution.updateRef },
+    { kind: 'payload', key: 'state.out', name: 'state.out', slot: execution.stateOutRef },
   ];
   if (execution.routing?.updateRef !== undefined && execution.routing.updateRef !== null) {
-    data.push({ key: 'routing.update', name: 'routing.update', slot: execution.routing.updateRef });
+    data.push({
+      kind: 'payload',
+      key: 'routing.update',
+      name: 'routing.update',
+      slot: execution.routing.updateRef,
+    });
   }
   if (childFrame) {
-    data.push({ key: 'parameters', name: 'parameters', slot: childFrame.parametersRef });
+    data.push({
+      kind: 'payload',
+      key: 'parameters',
+      name: 'parameters',
+      slot: childFrame.parametersRef,
+    });
     if (childFrame.output)
-      data.push({ key: 'output', name: 'output', slot: childFrame.output.producedRef });
+      data.push({
+        kind: 'payload',
+        key: 'output',
+        name: 'output',
+        slot: childFrame.output.producedRef,
+      });
   }
   if (execution.wait?.answers) {
-    data.push({ key: 'answers', name: 'answers', slot: { inline: execution.wait.answers } });
+    data.push({
+      kind: 'payload',
+      key: 'answers',
+      name: 'answers',
+      slot: { inline: execution.wait.answers },
+    });
   }
 
   return {
@@ -530,7 +612,14 @@ function routingView(
     data:
       routing.updateRef === null
         ? []
-        : [{ key: 'routing.update', name: 'routing.update', slot: routing.updateRef }],
+        : [
+            {
+              kind: 'payload',
+              key: 'routing.update',
+              name: 'routing.update',
+              slot: routing.updateRef,
+            },
+          ],
     executionId: null,
     nested: null,
   };
@@ -653,10 +742,10 @@ function frameSegmentView(
     data:
       which === 'entry'
         ? [
-            { key: 'parameters', name: 'parameters', slot: frame.parametersRef },
-            { key: 'state', name: 'state', slot: frame.stateRef },
+            { kind: 'payload', key: 'parameters', name: 'parameters', slot: frame.parametersRef },
+            { kind: 'payload', key: 'state', name: 'state', slot: frame.stateRef },
           ]
-        : [{ key: 'state', name: 'state', slot: frame.stateRef }],
+        : [{ kind: 'payload', key: 'state', name: 'state', slot: frame.stateRef }],
     executionId: null,
     nested: null,
   };
@@ -696,8 +785,8 @@ function frameOutputView(frame: WorkflowFrameDto, state: WorkflowRunState, now: 
     ],
     operations: { kind: 'none', reason: inspectorCopy.outcomesCannotCall },
     data: [
-      { key: 'produced', name: 'produced', slot: output.producedRef },
-      { key: 'state', name: 'state', slot: frame.stateRef },
+      { kind: 'payload', key: 'produced', name: 'produced', slot: output.producedRef },
+      { kind: 'payload', key: 'state', name: 'state', slot: frame.stateRef },
     ],
     executionId: null,
     nested: null,

@@ -1,28 +1,58 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import type { WorkflowOperationDto } from '@isagi/contracts';
+import type { WorkflowEvidenceDto, WorkflowOperationDto } from '@isagi/contracts';
 
 import type { WorkflowOperationsView } from '../../../lib/workspace/workflow/queries.js';
 import { inspectorCopy } from './copy.js';
 import {
+  evidenceDataTabs,
+  evidenceTabKey,
   operationDataTabs,
   operationTabKey,
   shortHash,
+  toneClass,
   type DockChildExecution,
+  type DockDataTab,
   type DockRow,
   type DockView,
   type FieldTone,
 } from './dock.js';
+import { Fields } from './DockFields.js';
 import { dockMaxHeight, dockMinHeight, formatBytes } from './format.js';
 import type { InspectorSelection } from './selection.js';
 import { formatClock } from './timing.js';
+import { WorkflowEvidenceCard } from './WorkflowEvidenceCard.js';
+import { WorkflowEvidenceContent } from './WorkflowEvidenceContent.js';
+import { WorkflowOperationProvenance } from './WorkflowOperationProvenance.js';
 import { WorkflowPayloadValue } from './WorkflowPayloadValue.js';
 
 /**
- * The shared detail surface, filled by whatever is selected in either tab.
+ * What the selected visit captured, as the dock receives it.
  *
- * Four dense columns that scroll horizontally rather than reflowing: this is reference material a
- * person scans, and a responsive stack would turn one glance into four. The resize is bounded and
+ * `no_visit` is a state, not an absence. A declared node nobody has visited and a frame's own setup
+ * segment are both legitimate selections with a full dock view — and neither is a visit, so neither
+ * has an evidence question. Substituting the run's listing there would put other nodes' records
+ * under a heading reading "this visit and below", which is the one thing this column may never do.
+ */
+export type DockEvidenceRows =
+  | { readonly kind: 'no_visit' }
+  | { readonly kind: 'loading' }
+  | { readonly kind: 'failed' }
+  | { readonly kind: 'ready'; readonly records: readonly WorkflowEvidenceDto[] };
+
+export interface DockEvidenceView {
+  readonly rows: DockEvidenceRows;
+  readonly selectedKey: string | null;
+  readonly onSelect: (record: WorkflowEvidenceDto) => void;
+  /** Opens the Evidence tab in visit scope. Null when there is no visit to open it on. */
+  readonly onOpenAll: (() => void) | null;
+}
+
+/**
+ * The shared detail surface, filled by whatever is selected in any of the three tabs.
+ *
+ * Five dense columns that scroll horizontally rather than reflowing: this is reference material a
+ * person scans, and a responsive stack would turn one glance into five. The resize is bounded and
  * keyboard-operable, because a panel you can only drag is a panel some people cannot move.
  *
  * Read-only throughout. Nothing here dispatches, answers, retries or cancels — the workflow bar is
@@ -32,6 +62,8 @@ export function WorkflowDock({
   view,
   runId,
   operations,
+  evidence,
+  tab,
   height,
   onHeightChange,
   onSelect,
@@ -39,20 +71,31 @@ export function WorkflowDock({
   readonly view: DockView | null;
   readonly runId: number;
   readonly operations: WorkflowOperationsView;
+  readonly evidence: DockEvidenceView;
+  /** Which inspector tab is above. Only the provenance disclosure's default depends on it. */
+  readonly tab: 'declared' | 'trace' | 'evidence';
   readonly height: number;
   readonly onHeightChange: (height: number) => void;
   /** The inspector's own selection, so the dock can move it without owning it. */
   readonly onSelect: (selection: InspectorSelection) => void;
 }) {
   const [dataTab, setDataTab] = useState<string | null>(null);
+  // Data tabs and the `capture_evidence` card's back-link read the same set the column shows, so a
+  // selection with no visit contributes neither rather than borrowing another visit's records.
+  const records = evidence.rows.kind === 'ready' ? evidence.rows.records : empty;
 
-  // The selection's own payloads, then whatever its operations recorded. Operations arrive after the
-  // view does, so their tabs are composed here rather than baked into it.
+  // The selection's own payloads, then whatever its operations recorded, then what it captured.
+  // Operations and evidence arrive after the view does, so their tabs are composed here rather than
+  // baked into it.
   const tabs = useMemo(
-    () => [...(view?.data ?? []), ...operationDataTabs(operations.operations)],
-    [view?.data, operations.operations],
+    () => [
+      ...(view?.data ?? []),
+      ...operationDataTabs(operations.operations),
+      ...evidenceDataTabs(records),
+    ],
+    [view?.data, operations.operations, records],
   );
-  const activeTab = tabs.find((tab) => tab.key === dataTab) ?? tabs[0] ?? null;
+  const activeTab = tabs.find((entry) => entry.key === dataTab) ?? tabs[0] ?? null;
 
   useEffect(() => {
     setDataTab(null);
@@ -122,9 +165,20 @@ export function WorkflowDock({
               <OperationsColumn
                 view={view}
                 operations={operations}
+                tab={tab}
+                records={records}
+                onSelectEvidence={evidence.onSelect}
                 onOpenTab={setDataTab}
                 onSelect={onSelect}
               />
+            </Column>
+            <Column
+              title={inspectorCopy.columnEvidence}
+              subtitle={records.length === 0 ? null : inspectorCopy.evidenceColumnSubtitle}
+              rule="bg-cyan/70"
+              width="flex-[0_0_22rem]"
+            >
+              <EvidenceColumn evidence={evidence} onOpenTab={setDataTab} />
             </Column>
             <Column title={inspectorCopy.columnData} rule="bg-cyan/70" width="flex-1 min-w-[26rem]">
               {tabs.length === 0 ? (
@@ -134,24 +188,23 @@ export function WorkflowDock({
               ) : (
                 <>
                   <div className="mb-1.5 flex flex-wrap gap-0.5">
-                    {tabs.map((tab) => {
-                      const absent = tab.slot === null;
-                      const size =
-                        tab.slot !== null && 'byteSize' in tab.slot ? tab.slot.byteSize : null;
+                    {tabs.map((entry) => {
+                      const absent = entry.kind === 'payload' && entry.slot === null;
+                      const size = tabByteSize(entry);
                       return (
                         <button
-                          key={tab.key}
+                          key={entry.key}
                           type="button"
-                          aria-pressed={tab === activeTab}
-                          data-tab={tab.key}
-                          onClick={() => setDataTab(tab.key)}
+                          aria-pressed={entry === activeTab}
+                          data-tab={entry.key}
+                          onClick={() => setDataTab(entry.key)}
                           className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition duration-micro ease-expo ${
-                            tab === activeTab
+                            entry === activeTab
                               ? 'border-cyan/50 bg-cyan/8 text-fg'
                               : 'border-line/30 bg-canvas/60 text-fg-subtle hover:text-fg'
                           } ${absent ? 'opacity-50' : ''}`}
                         >
-                          {tab.name}
+                          {entry.name}
                           {size !== null && (
                             <span className="ml-1.5 opacity-55">{formatBytes(size)}</span>
                           )}
@@ -159,13 +212,21 @@ export function WorkflowDock({
                       );
                     })}
                   </div>
-                  {activeTab && (
-                    <WorkflowPayloadValue
-                      key={`${view.executionId}-${activeTab.key}`}
-                      runId={runId}
-                      slot={activeTab.slot}
-                    />
-                  )}
+                  {activeTab &&
+                    (activeTab.kind === 'payload' ? (
+                      <WorkflowPayloadValue
+                        key={`${view.executionId}-${activeTab.key}`}
+                        runId={runId}
+                        slot={activeTab.slot}
+                      />
+                    ) : (
+                      <EvidenceTabBody
+                        key={activeTab.key}
+                        runId={runId}
+                        evidenceKey={activeTab.evidenceKey}
+                        records={records}
+                      />
+                    ))}
                 </>
               )}
             </Column>
@@ -240,11 +301,14 @@ function DockGrip({
 
 function Column({
   title,
+  subtitle = null,
   rule,
   width,
   children,
 }: {
   readonly title: string;
+  /** A qualifier on the heading, lower-case and unshouted, for a column whose scope is not obvious. */
+  readonly subtitle?: string | null;
   readonly rule: string;
   readonly width: string;
   readonly children: React.ReactNode;
@@ -257,6 +321,9 @@ function Column({
       <h3 className="flex flex-none items-center gap-2 px-4 pt-2 pb-1.5 text-[10.5px] font-semibold tracking-[0.09em] text-fg-subtle uppercase">
         <span aria-hidden className={`h-0.5 w-3.5 rounded-full ${rule}`} />
         {title}
+        {subtitle !== null && (
+          <span className="font-normal tracking-normal normal-case opacity-70">· {subtitle}</span>
+        )}
       </h3>
       <div data-dock-column-scroll className="min-h-0 flex-1 overflow-auto px-4 pt-0.5 pb-3.5">
         {children}
@@ -265,49 +332,131 @@ function Column({
   );
 }
 
-function Fields({
-  rows,
+const empty: readonly WorkflowEvidenceDto[] = [];
+
+function tabByteSize(tab: DockDataTab): number | null {
+  if (tab.kind === 'evidence') return tab.byteSize;
+  return tab.slot !== null && 'byteSize' in tab.slot ? tab.slot.byteSize : null;
+}
+
+/**
+ * What the selected visit kept, and everything beneath it.
+ *
+ * The column is here rather than only on the Evidence tab because a person inspecting a node or a
+ * trace row wants its evidence where they already are; a count alone would send them to another
+ * surface for every look. It lists the same set `evidenceCaptured` counts, through the same query
+ * the Evidence tab makes in visit scope, so the two cannot disagree about what a visit captured.
+ */
+function EvidenceColumn({
+  evidence,
   onOpenTab,
 }: {
-  readonly rows: readonly DockRow[];
-  readonly onOpenTab?: ((tab: string) => void) | undefined;
+  readonly evidence: DockEvidenceView;
+  readonly onOpenTab: (tab: string) => void;
 }) {
+  const { rows } = evidence;
+  if (rows.kind === 'no_visit') {
+    return (
+      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
+        {inspectorCopy.evidenceColumnNoVisit}
+      </p>
+    );
+  }
+  if (rows.kind === 'failed') {
+    return (
+      <p className="py-1.5 font-mono text-[11.5px] text-amber">
+        {inspectorCopy.evidenceListFailed}
+      </p>
+    );
+  }
+  if (rows.kind === 'loading') {
+    return (
+      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
+        {inspectorCopy.evidenceListLoading}
+      </p>
+    );
+  }
+  if (rows.records.length === 0) {
+    return (
+      <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
+        {inspectorCopy.evidenceColumnEmpty}
+      </p>
+    );
+  }
   return (
-    <dl className="grid grid-cols-[max-content_1fr] items-baseline gap-x-4 gap-y-1.5 font-mono text-[12px]">
-      {rows.map((row, index) =>
-        'gap' in row ? (
-          <span key={index} aria-hidden className="col-span-2 h-1.5" />
-        ) : (
-          <div key={`${row.label}-${index}`} className="contents">
-            <dt className="whitespace-nowrap text-fg-subtle">{row.label}</dt>
-            <dd className={`m-0 wrap-break-word ${toneClass(row.tone)}`}>
-              {row.dataTab && onOpenTab ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenTab(row.dataTab!)}
-                  className="text-cyan underline decoration-dotted underline-offset-[3px] transition duration-micro ease-expo hover:text-fg"
-                >
-                  {row.value}
-                </button>
-              ) : (
-                row.value
-              )}
-            </dd>
-          </div>
-        ),
+    <>
+      {rows.records.map((record) => (
+        <WorkflowEvidenceCard
+          key={record.evidenceKey}
+          record={record}
+          selected={record.evidenceKey === evidence.selectedKey}
+          onSelect={() => {
+            evidence.onSelect(record);
+            onOpenTab(evidenceTabKey(record.evidenceKey));
+          }}
+        />
+      ))}
+      {evidence.onOpenAll !== null && (
+        <button
+          type="button"
+          data-evidence-open-all
+          onClick={evidence.onOpenAll}
+          className="font-mono text-[11.5px] text-cyan underline decoration-dotted underline-offset-[3px] transition duration-micro ease-expo hover:text-fg"
+        >
+          {inspectorCopy.evidenceOpenAll}
+        </button>
       )}
-    </dl>
+    </>
+  );
+}
+
+/**
+ * A capture's bytes in the Data column, through the same component the detail pane uses.
+ *
+ * Keyed off the record rather than the tab so the viewer is handed the metadata it needs to be
+ * honest — a media type, a size and a reference to name if the bytes turn out to be gone. A card
+ * that looked perfectly ordinary in the column beside this one is exactly where that happens.
+ */
+function EvidenceTabBody({
+  runId,
+  evidenceKey,
+  records,
+}: {
+  readonly runId: number;
+  readonly evidenceKey: string;
+  readonly records: readonly WorkflowEvidenceDto[];
+}) {
+  const record = records.find((item) => item.evidenceKey === evidenceKey) ?? null;
+  if (record === null) return null;
+  return (
+    <>
+      <Fields
+        rows={[
+          { label: 'role', value: record.role },
+          { label: 'title', value: record.title },
+        ]}
+      />
+      <div className="mt-2">
+        <WorkflowEvidenceContent runId={runId} record={record} compact />
+      </div>
+    </>
   );
 }
 
 function OperationsColumn({
   view,
   operations,
+  tab,
+  records,
+  onSelectEvidence,
   onOpenTab,
   onSelect,
 }: {
   readonly view: DockView;
   readonly operations: WorkflowOperationsView;
+  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly records: readonly WorkflowEvidenceDto[];
+  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
   readonly onOpenTab: (tab: string) => void;
   readonly onSelect: (selection: InspectorSelection) => void;
 }) {
@@ -327,7 +476,13 @@ function OperationsColumn({
           <Fields rows={view.operations.waitFields} onOpenTab={onOpenTab} />
         </div>
       )}
-      <OperationCards operations={operations} onOpenTab={onOpenTab} />
+      <OperationCards
+        operations={operations}
+        tab={tab}
+        records={records}
+        onSelectEvidence={onSelectEvidence}
+        onOpenTab={onOpenTab}
+      />
     </>
   );
 }
@@ -421,9 +576,15 @@ function statusTone(status: DockChildExecution['status']): FieldTone {
  */
 function OperationCards({
   operations,
+  tab,
+  records,
+  onSelectEvidence,
   onOpenTab,
 }: {
   readonly operations: WorkflowOperationsView;
+  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly records: readonly WorkflowEvidenceDto[];
+  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
   readonly onOpenTab: (tab: string) => void;
 }) {
   if (operations.error) {
@@ -464,6 +625,11 @@ function OperationCards({
           key={operation.operationKey}
           operation={operation}
           index={index}
+          tab={tab}
+          captured={
+            records.find((record) => record.operationKey === operation.operationKey) ?? null
+          }
+          onSelectEvidence={onSelectEvidence}
           onOpenTab={onOpenTab}
         />
       ))}
@@ -477,10 +643,17 @@ function OperationCards({
 function OperationCard({
   operation,
   index,
+  tab,
+  captured,
+  onSelectEvidence,
   onOpenTab,
 }: {
   readonly operation: WorkflowOperationDto;
   readonly index: number;
+  readonly tab: 'declared' | 'trace' | 'evidence';
+  /** The record this call produced, when it was a capture and the listing has reached it. */
+  readonly captured: WorkflowEvidenceDto | null;
+  readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
   readonly onOpenTab: (tab: string) => void;
 }) {
   const rows: DockRow[] = [
@@ -533,6 +706,16 @@ function OperationCard({
       dataTab: operationTabKey(operation.operationKey, 'lateEvidence'),
     });
   }
+  if (captured !== null) {
+    // The record itself, not a second rendering of it: the row is a way back to the card in the
+    // column beside this one, which is where a capture actually reads.
+    rows.push({
+      label: 'evidence',
+      value: captured.evidenceKey,
+      tone: 'ok',
+      dataTab: evidenceTabKey(captured.evidenceKey),
+    });
+  }
   rows.push({ label: 'created', value: formatClock(operation.createdAt) });
   if (operation.dispatchedAt) {
     rows.push({ label: 'dispatched', value: formatClock(operation.dispatchedAt) });
@@ -556,7 +739,39 @@ function OperationCard({
           {operation.state}
         </span>
       </header>
-      <Fields rows={rows} onOpenTab={onOpenTab} />
+      <Fields
+        rows={rows}
+        onOpenTab={(target) => {
+          if (captured !== null && target === evidenceTabKey(captured.evidenceKey)) {
+            onSelectEvidence(captured);
+          }
+          onOpenTab(target);
+        }}
+      />
+      {/*
+        On every card, in every tab. Only whether it starts open varies.
+
+        It is ten rows, so opening it on each card of a visit that made three calls is thirty rows in
+        a twenty-four-character column — unreadable, which defeats the point of showing provenance at
+        all. The first card starts open because the common case is a single call, where a disclosure
+        would be pure ceremony.
+
+        Under Evidence it starts closed, because the detail pane above is already showing this block
+        for the record in question. It is *not* removed there: the pane shows provenance for that
+        record's **source** operation alone, so withholding the disclosure would leave every other
+        operation of the visit with no provenance anywhere in the product.
+      */}
+      <details
+        open={index === 0 && tab !== 'evidence'}
+        className="mt-1.5 border-t border-dashed border-line/25 pt-1.5"
+      >
+        <summary className="cursor-pointer font-mono text-[11px] text-fg-subtle marker:content-none">
+          {inspectorCopy.provenanceLabel}
+        </summary>
+        <div className="mt-1.5">
+          <WorkflowOperationProvenance operation={operation} />
+        </div>
+      </details>
     </article>
   );
 }
@@ -626,19 +841,4 @@ function Chip({
       {children}
     </span>
   );
-}
-
-function toneClass(tone: FieldTone | undefined): string {
-  switch (tone) {
-    case 'dim':
-      return 'text-fg-subtle';
-    case 'warn':
-      return 'text-amber';
-    case 'bad':
-      return 'text-error';
-    case 'ok':
-      return 'text-green';
-    default:
-      return 'text-fg';
-  }
 }

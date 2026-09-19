@@ -1,5 +1,6 @@
 import type { WorkspaceSnapshot, SurfaceDetail, ControlPlaneSnapshot } from '@isagi/contracts';
 
+import { evidenceBytes, evidenceRecords, listEvidence } from './evidence.js';
 import {
   buildWorld,
   PIN_ONE,
@@ -153,6 +154,64 @@ export function installFakeRuntime(): InspectorRuntimeControls {
       return success({ payloadRef: ref, ...record });
     }
 
+    if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/evidence`) {
+      // Unpaged on purpose: the client pages every page into one array regardless, and the
+      // scoping — visit, and visit-and-below — is the part a UI test can actually get wrong.
+      return success({ ...listEvidence(url.searchParams), nextCursor: null });
+    }
+
+    const evidence = /^\/workflows\/runs\/\d+\/evidence\/([^/]+)$/.exec(path);
+    if (method === 'GET' && evidence) {
+      const key = decodeURIComponent(evidence[1]!);
+      const found = evidenceRecords.find((item) => item.evidenceKey === key);
+      if (found === undefined) return failure(404, 'workflow_evidence_not_found');
+      return success({ evidence: found });
+    }
+
+    const content = /^\/workflows\/runs\/\d+\/evidence\/([^/]+)\/content$/.exec(path);
+    if (method === 'GET' && content) {
+      const key = decodeURIComponent(content[1]!);
+      const record = evidenceRecords.find((item) => item.evidenceKey === key);
+      const bytes = evidenceBytes.get(key);
+      if (record === undefined || bytes === undefined) {
+        return failure(404, 'workflow_evidence_not_found');
+      }
+      if (bytes.kind === 'unavailable') return contentUnavailable(key, bytes.cause);
+      const body =
+        bytes.kind === 'text'
+          ? new Blob([bytes.text], { type: record.content.mediaType })
+          : new Blob([Uint8Array.from(atob(bytes.base64), (c) => c.charCodeAt(0))], {
+              type: record.content.mediaType,
+            });
+      return Promise.resolve(
+        new Response(body, {
+          status: 200,
+          headers: { 'content-type': record.content.mediaType },
+        }),
+      );
+    }
+
+    const operation = /^\/workflows\/runs\/\d+\/operations\/([^/]+)$/.exec(path);
+    if (method === 'GET' && operation) {
+      const key = decodeURIComponent(operation[1]!);
+      const found = world.operations.find((row) => row.operationKey === key);
+      if (found === undefined) return failure(404, 'workflow_operation_not_found');
+      // `getOperation` is the one read permitted to touch the filesystem, so it is also the only
+      // one that answers the transcript question at all. The listing leaves it absent.
+      return success({
+        operation: {
+          ...found,
+          provenance: {
+            ...found.provenance,
+            transcript:
+              found.capability === 'run_headless_agent'
+                ? { locator: '~/.claude/projects/fixture/d02f91ee.jsonl', available: false }
+                : null,
+          },
+        },
+      });
+    }
+
     const control = /^\/workflows\/runs\/\d+\/(pause|resume|retry|cancel|dismiss|advance)$/.exec(
       path,
     );
@@ -202,6 +261,30 @@ export function installFakeRuntime(): InspectorRuntimeControls {
         status: 200,
         headers: { 'content-type': 'application/json' },
       }),
+    );
+  }
+
+  /** The runtime's own rejection for captured bytes the content store cannot serve. */
+  function contentUnavailable(evidenceKey: string, cause: 'missing' | 'corrupt') {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'workflow_rejected',
+            status: 409,
+            message: 'raw runtime diagnostic text that must not be voiced',
+            requestId: `req-${nextRequestId++}`,
+            data: {
+              reason: 'workflow_evidence_content_unavailable',
+              evidenceKey,
+              cause,
+              workflowRunId: RUN_ID,
+            },
+          },
+          meta: { requestId: `req-${nextRequestId++}` },
+        }),
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      ),
     );
   }
 

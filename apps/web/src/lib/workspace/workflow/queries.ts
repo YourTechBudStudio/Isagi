@@ -607,23 +607,38 @@ export function useWorkflowPayloadQuery(
  */
 export function useWorkflowEvidenceList(
   state: WorkflowRunState | null,
-  scope: EvidenceScope,
+  /**
+   * `null` when there is nothing to ask about.
+   *
+   * A representable state rather than a fallback scope. Substituting the run's listing for a
+   * selection that has no visit would answer a question nobody asked, under a heading that says
+   * "this visit and below" — and the caller has no way to tell that answer from a real one.
+   */
+  scope: EvidenceScope | null,
   filters: EvidenceFilters = {},
 ) {
   const runtimeIdentity = useRuntimeIdentity();
   const runId = state?.runId ?? null;
-  const signal = evidenceRefreshSignal(state, scope);
-  const identity = evidenceQueryIdentity(scope, filters);
-  const enabled = runId !== null && runtimeIdentity !== null;
+  const signal = scope === null ? 0 : evidenceRefreshSignal(state, scope);
+  const identity = scope === null ? 'none' : evidenceQueryIdentity(scope, filters);
+  const enabled = runId !== null && runtimeIdentity !== null && scope !== null;
 
   return useQuery({
-    queryKey: workflowEvidenceListQueryKey(runtimeIdentity, runId, scope.kind, identity, signal),
+    queryKey: workflowEvidenceListQueryKey(
+      runtimeIdentity,
+      runId,
+      scope?.kind ?? 'none',
+      identity,
+      signal,
+    ),
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 5 * 60_000,
     retry: false,
     queryFn: async ({ signal: abort }): Promise<readonly WorkflowEvidenceDto[]> => {
-      if (runId === null) throw new Error('An evidence listing needs a run.');
+      if (runId === null || scope === null) {
+        throw new Error('An evidence listing needs a run and a scope.');
+      }
       const items: WorkflowEvidenceDto[] = [];
       let cursor: string | null = null;
       do {
@@ -656,8 +671,13 @@ export function useWorkflowEvidenceContent(
   return useQuery({
     queryKey: workflowEvidenceContentQueryKey(runtimeIdentity, runId, evidenceKey),
     enabled: (options.enabled ?? false) && runId !== null && evidenceKey !== null,
+    // Immutable, so it never goes stale — but immutability is a statement about freshness, not
+    // about retention. Unlike a payload's bounded JSON these are arbitrary bytes: a preview
+    // auto-fetches at up to 256 KB and a download pulls the whole object at any size, so keeping
+    // every one for the life of the session would pin a run's worth of blobs in renderer memory.
+    // Re-reading immutable bytes is cheap; holding them forever is not.
     staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
     retry: false,
     queryFn: ({ signal }) => {
       if (runId === null || evidenceKey === null) {

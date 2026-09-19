@@ -16,14 +16,17 @@ export const inspectorCopy = {
   closeLabel: 'Close inspector',
   declaredTab: 'Declared',
   traceTab: 'Trace',
+  evidenceTab: 'Evidence',
   declaredHint: 'The graph this run is pinned to, and where it is now.',
   traceHint: 'Every execution, in the order it ran.',
+  evidenceHint: 'What the workflow chose to keep, and where each piece came from.',
 
   // Columns
   columnDeclared: 'Declared',
   columnRecorded: 'Recorded',
   columnOperations: 'Operations',
   columnWait: 'Wait',
+  columnEvidence: 'Evidence',
   columnData: 'Data',
 
   // Declared column
@@ -78,6 +81,85 @@ export const inspectorCopy = {
     `The step produced this value and the run kept a reference to it (${ref}), but the payload store reports it ${cause}. Nothing else about this step is affected.`,
   payloadUnavailableFallback: (ref: string) =>
     `The step produced this value and the run kept a reference to it (${ref}), but it could not be read back. Nothing else about this step is affected.`,
+
+  // Evidence column, and the Evidence tab's list
+  //
+  // Two spellings of one sentence, deliberately. The column's is a standalone line in an empty
+  // column and is punctuated as one; the tree's sits under a group heading that already names the
+  // visit, so it reads as a continuation of it rather than as its own statement.
+  evidenceColumnSubtitle: 'this visit and below',
+  evidenceColumnEmpty: 'Nothing captured here yet.',
+  // Not "nothing captured here": the selection is a declared node nobody has visited, or a frame's
+  // own setup or result code. Neither is a visit, and only a visit captures anything — so saying
+  // the column is empty would answer a question this selection does not ask.
+  evidenceColumnNoVisit: 'Evidence belongs to a node visit. This selection is not one.',
+  evidenceGroupEmpty: 'nothing captured here yet',
+  evidenceOpenAll: 'Open all of them in the Evidence tab.',
+  evidenceRunEmpty: 'This run has not captured anything yet.',
+  evidenceVisitEmpty: 'This visit has not captured anything yet.',
+  evidenceFilteredEmpty: 'Nothing here matches those filters.',
+  evidenceScopeRun: 'run',
+  evidenceScopeVisit: 'visit',
+  evidenceSubtree: 'and below',
+  evidenceAllRoles: 'all roles',
+  evidenceListLoading: 'Reading what this run captured\u2026',
+  evidenceListFailed: "Isagi couldn't read what this run captured.",
+  evidenceListRetry: 'Try again',
+  evidenceRunCount: (count: number) =>
+    `${count} captured \u00b7 in capture order, grouped by where it ran`,
+  evidenceVisitCount: (count: number) => `${count} captured in this visit and below`,
+  evidenceInside: (count: number) => `${count} inside`,
+  evidenceNoLabels: 'none',
+
+  // Evidence detail
+  evidenceDownload: 'Download',
+  evidenceCapturedAt: (at: string, pin: string) => `captured ${at} \u00b7 under ${pin}`,
+  evidenceSourceNone: 'none',
+  evidenceSourceNoneNote: 'the author gave no source; nothing is inferred',
+  evidenceSourceInferred: 'inferred, latest operation',
+  evidenceSourceUnresolvedOperation: 'unresolved \u00b7 no operation in this run matched the turn',
+  // A file capture is bytes as they were at one instant, not a live window onto the path. Saying so
+  // beside the path is what stops the path reading as somewhere to look for the current contents.
+  evidenceFromPath: (at: string) => `bytes as they were at ${at}`,
+
+  // Evidence content
+  evidenceContentHeading: 'Content',
+  evidenceContentLoading: 'Reading\u2026',
+  evidenceContentLoad: 'Show content',
+  evidenceHtmlSource: 'Source',
+  evidenceHtmlRender: 'Render preview',
+  evidenceHtmlSourceHint: 'Source is the default. Rendering is opt-in.',
+  evidenceHtmlRenderHint:
+    'Rendered in isolation: no scripts run, and nothing it links to will load.',
+  evidenceTruncated: 'Preview stops at 256 KB. Download for the whole thing.',
+  evidenceDownloadOnly: (mediaType: string) => `Isagi doesn't preview ${mediaType}. Download.`,
+  evidenceUnavailableHeading: "Captured, but Isagi can't read it back.",
+  evidenceUnavailableBody: (ref: string, cause: string) =>
+    `The workflow saved this and the run kept a reference to it (${ref}), but the content store reports it ${cause}. The record above is still true; only the bytes are gone.`,
+  evidenceUnavailableFallback: (ref: string) =>
+    `The workflow saved this and the run kept a reference to it (${ref}), but it could not be read back. The record above is still true; only the bytes are gone.`,
+
+  // Provenance
+  //
+  // Every unknown is a sentence about *why* it is unknown wherever the runtime knows why. A blank
+  // cell would read as a value nobody bothered to show; these say which of several different things
+  // actually happened.
+  provenanceLabel: 'provenance',
+  provenanceOnDemand: 'provenance, read on demand',
+  provenanceLoading: 'Reading provenance\u2026',
+  provenanceFailed: "Isagi couldn't read this operation.",
+  provenanceUnknown: 'unknown',
+  provenanceModelInherited: 'unknown \u00b7 inherited from the session',
+  provenanceSessionUncorrelated: 'not correlated',
+  provenanceTranscriptNotChecked: 'not checked',
+  provenanceTranscriptNoLocator: 'no locator',
+  provenanceTranscriptAvailable: 'available',
+  provenanceTranscriptUnavailable: 'unavailable',
+  // No total is computed. The provider reports uncached input, cache reads and cache writes
+  // separately, and any single "input" figure would be one this run never reported.
+  provenanceUsageNone: 'unknown',
+  provenanceRuntime: (runtimeId: string, incarnationId: string) =>
+    `${runtimeId} \u00b7 incarnation ${incarnationId}`,
 
   // Canvas
   catchingUp: 'Catching up with this run’s current definition…',

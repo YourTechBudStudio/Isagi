@@ -803,7 +803,7 @@ test('a subgraph that has not opened its graph says so', async ({ page }) => {
   await expect(dialog(page).getByRole('region', { name: 'Selection details' })).toBeVisible();
 });
 
-test('the dock stays four dense columns and scrolls rather than reflowing', async ({ page }) => {
+test('the dock stays five dense columns and scrolls rather than reflowing', async ({ page }) => {
   // Narrow enough that a responsive layout would be tempted to stack. Behaviour is asserted, not
   // pixels: the columns keep their dense widths and the dock scrolls to reach them.
   await page.setViewportSize({ width: 900, height: 800 });
@@ -814,7 +814,8 @@ test('the dock stays four dense columns and scrolls rather than reflowing', asyn
 
   const details = dialog(page).getByRole('region', { name: 'Selection details' });
   const strip = details.locator('[data-testid="dock-columns"]');
-  await expect(details.locator('[data-dock-column]')).toHaveCount(4);
+  // Five since captured evidence gained a column of its own, between Operations and Data.
+  await expect(details.locator('[data-dock-column]')).toHaveCount(5);
 
   // Overflow rather than reflow: the columns are wider than the dock, and it scrolls horizontally.
   const overflow = await strip.evaluate((node) => ({
@@ -849,10 +850,12 @@ test('the dock stays four dense columns and scrolls rather than reflowing', asyn
   const grip = details.getByRole('slider', { name: 'Resize details' });
   await grip.focus();
   await page.keyboard.press('End');
-  await expect(details.locator('[data-dock-column]')).toHaveCount(4);
+  // Five since captured evidence gained a column of its own, between Operations and Data.
+  await expect(details.locator('[data-dock-column]')).toHaveCount(5);
   await expect(details.locator('[data-dock-column="Data"]')).toBeVisible();
   await page.keyboard.press('Home');
-  await expect(details.locator('[data-dock-column]')).toHaveCount(4);
+  // Five since captured evidence gained a column of its own, between Operations and Data.
+  await expect(details.locator('[data-dock-column]')).toHaveCount(5);
   await expect(grip).toBeFocused();
 });
 
