@@ -11,7 +11,7 @@ Titles are bare product outcomes with no type prefix; suffix a candidate epic wi
 | Epic  | `type: epic`                                                               | Either `epic: candidate` or `epic: committed` |
 | Story | `type: story` and exactly one of `story: implementation` or `story: spike` | —                                             |
 
-An epic without a commitment label is undecided. Each story belongs to one epic through GitHub's native parent/sub-issue relationship. Use native blocked-by relationships for dependencies rather than restating them in bodies; bodies carry only the nuance a bare relationship cannot express, such as what a dependency does and does not gate.
+An epic without a commitment label is undecided. Stories contributing to an epic belong to it through GitHub's native parent/sub-issue relationship. Standalone stories are allowed when no meaningful larger epic is needed; do not create an epic solely to wrap one story. Use native blocked-by relationships for dependencies, including between standalone stories and epic-owned stories, rather than restating them in bodies; bodies carry only the nuance a bare relationship cannot express, such as what a dependency does and does not gate.
 
 Create candidates only when explicitly requested. Record their possible outcome, value, deferral reason, and resumption context; give them no stories. After shaping and approval, replace `epic: candidate` with `epic: committed`.
 
