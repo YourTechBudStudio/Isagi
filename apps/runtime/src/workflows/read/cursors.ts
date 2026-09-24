@@ -36,6 +36,8 @@ export type CursorKeyShape = readonly ('string' | 'number')[];
 export const revisionKey: CursorKeyShape = ['number'];
 /** An execution and a call index: the durable call position operations page by. */
 export const callPositionKey: CursorKeyShape = ['number', 'number'];
+/** A checkpoint manifest item: the layer's checkpoint row id, then -1 for the layer or the row's seq. */
+export const layerEntryKey: CursorKeyShape = ['number', 'number'];
 /** A start timestamp and an execution id: the waterfall's stable order. */
 export const startedAtKey: CursorKeyShape = ['string', 'number'];
 

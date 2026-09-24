@@ -93,10 +93,14 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly diagnostics?: readonly StructureDiagnostic[] | undefined;
   /** Which recorded value could not be served, for `workflow_payload_unavailable`. */
   readonly payloadRef?: string | undefined;
-  /** Shared by `workflow_payload_unavailable` and `workflow_evidence_content_unavailable`. */
+  /** Shared by the payload, evidence-content and checkpoint-content unavailable reasons. */
   readonly payloadCause?: 'missing' | 'corrupt' | undefined;
   /** Which captured record, for the two evidence reasons. */
   readonly evidenceKey?: string | undefined;
+  /** Which checkpoint, for the three checkpoint reasons. */
+  readonly checkpointId?: string | undefined;
+  /** Which checkpoint file, for the file-not-found and content-unavailable reasons. */
+  readonly fileId?: string | undefined;
   /**
    * Which way a placement is unusable, for `workflow_placement_invalid`.
    *

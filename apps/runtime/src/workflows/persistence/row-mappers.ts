@@ -3,6 +3,7 @@ import { Schema } from 'effect';
 
 import {
   agentHarnessSchema,
+  workflowCheckpointWarningGroupSchema,
   workflowRunPositionSchema,
   type WorkflowOperationUsage,
   type WorkflowRunPosition,
@@ -436,8 +437,28 @@ export function checkpointRecord(row: CheckpointRow): WorkflowCheckpointRecord {
       absences: row.absentCount,
       warnings: row.warningCount,
     },
+    warningGroups: readWarningGroups(row.warningGroupsJson, corrupt),
     createdAt: row.createdAt,
   };
+}
+
+const decodeWarningGroups = Schema.decodeUnknownEither(
+  Schema.Array(workflowCheckpointWarningGroupSchema),
+);
+
+function readWarningGroups(
+  value: string,
+  corrupt: (detail: string) => Error,
+): WorkflowCheckpointRecord['warningGroups'] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw corrupt('warning_groups_json is not JSON');
+  }
+  const decoded = decodeWarningGroups(parsed);
+  if (decoded._tag === 'Left') throw corrupt('warning_groups_json is not a warning-group list');
+  return decoded.right;
 }
 
 export function checkpointEntryRecord(row: CheckpointEntryRow): WorkflowCheckpointEntryRecord {

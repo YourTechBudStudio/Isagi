@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { aliasedTable, and, asc, desc, eq, gt, or, sql, type SQL } from 'drizzle-orm';
@@ -6,6 +7,7 @@ import { Context, Effect, Layer } from 'effect';
 import type {
   AgentHarness,
   GetWorkflowAttemptOutput,
+  GetWorkflowCheckpointOutput,
   GetWorkflowEvidenceOutput,
   GetWorkflowOperationOutput,
   GetWorkflowPayloadOutput,
@@ -17,6 +19,10 @@ import type {
   ListRunExecutionsQuery,
   ListWorkflowAttemptsOutput,
   ListWorkflowAttemptsQuery,
+  ListWorkflowCheckpointInventoryOutput,
+  ListWorkflowCheckpointManifestOutput,
+  ListWorkflowCheckpointsOutput,
+  ListWorkflowCheckpointsQuery,
   ListWorkflowEventsOutput,
   ListWorkflowEventsQuery,
   ListWorkflowEvidenceOutput,
@@ -29,6 +35,7 @@ import type {
   ListWorkflowRunsQuery,
   ListWorkflowVersionsOutput,
   ListWorkflowVersionsQuery,
+  PaginationQuery,
   WorkflowExecutionDto,
   WorkflowFrameDto,
   WorkflowOperationDto,
@@ -41,6 +48,7 @@ import type { RuntimeDrizzleDatabase } from '../../persistence/database.service.
 import { DatabaseError, RuntimeDatabase } from '../../persistence/index.js';
 import {
   workflowArtifacts,
+  workflowCheckpoints,
   workflowEvidence,
   workflowGraphFrames,
   workflowNodeExecutions,
@@ -61,6 +69,7 @@ import {
   workflowPayloadMediaType,
   type WorkflowPayloadStoreService,
 } from '../persistence/payload-store.js';
+import { checkpointRecord } from '../persistence/row-mappers.js';
 import { slotFromColumns } from '../persistence/slots.js';
 import { WorkflowEngineError } from '../types.js';
 import {
@@ -69,6 +78,7 @@ import {
   decodeCursor,
   decodeSnapshotToken,
   encodeCursor,
+  layerEntryKey,
   revisionKey,
   startedAtKey,
   WorkflowCursorRejected,
@@ -76,6 +86,14 @@ import {
 } from './cursors.js';
 import { baselineExecutions, boundaryOf, recoveredExecutions } from './executions.js';
 import { payloadBelongsToRun } from './payload-access.js';
+import {
+  checkpointDto,
+  checkpointFileInRun,
+  checkpointInRun,
+  checkpointSummaryDto,
+  inventoryPage,
+  manifestPage,
+} from './project/checkpoints.js';
 import {
   evidenceDto,
   labelPredicates,
@@ -159,7 +177,35 @@ export interface WorkflowRunProjectionService {
   readonly openEvidenceContent: (
     runId: number,
     evidenceKey: string,
-  ) => Effect.Effect<EvidenceContentResponse, ReadFailure>;
+  ) => Effect.Effect<WorkflowContentResponse, ReadFailure>;
+  /** A run's saved checkpoints, oldest first, optionally narrowed to one visit or its subtree. */
+  readonly listCheckpoints: (
+    runId: number,
+    query: ListWorkflowCheckpointsQuery,
+  ) => Effect.Effect<ListWorkflowCheckpointsOutput, ReadFailure>;
+  /** One checkpoint's stored facts. Probes neither Git nor the filesystem. */
+  readonly getCheckpoint: (
+    runId: number,
+    checkpointId: string,
+  ) => Effect.Effect<GetWorkflowCheckpointOutput, ReadFailure>;
+  /** One page of a checkpoint's already-resolved final state. */
+  readonly listCheckpointInventory: (
+    runId: number,
+    checkpointId: string,
+    query: PaginationQuery,
+  ) => Effect.Effect<ListWorkflowCheckpointInventoryOutput, ReadFailure>;
+  /** One page of a checkpoint's lineage: each layer's own scopes, changes and observations. */
+  readonly listCheckpointManifest: (
+    runId: number,
+    checkpointId: string,
+    query: PaginationQuery,
+  ) => Effect.Effect<ListWorkflowCheckpointManifestOutput, ReadFailure>;
+  /** The verified bytes of one saved file, authorized by its checkpoint's run. */
+  readonly openCheckpointFileContent: (
+    runId: number,
+    checkpointId: string,
+    fileId: string,
+  ) => Effect.Effect<WorkflowContentResponse, ReadFailure>;
   /**
    * One operation with its provenance, including the transcript locator every other route omits.
    *
@@ -184,13 +230,13 @@ export interface WorkflowRunProjectionService {
 export type ReadFailure = WorkflowEngineError | DatabaseError;
 
 /**
- * What the content route needs to serve a record.
+ * What a content route needs to serve stored bytes: an evidence record or a checkpoint file.
  *
  * Structurally identical to `ContentResponse` in `lib/api/content-endpoint.ts`, and restated rather
  * than imported so the read layer keeps no dependency on the HTTP layer. The two must change
  * together; each names the other so that is discoverable rather than discovered.
  */
-export interface EvidenceContentResponse {
+export interface WorkflowContentResponse {
   readonly stream: Readable;
   readonly mediaType: string;
   readonly byteSize: number;
@@ -913,6 +959,144 @@ export function makeWorkflowRunProjection(
         };
       }),
 
+    listCheckpoints: (runId, query) =>
+      read('workflow_list_checkpoints', (db) => {
+        requireRun(db, runId);
+        const descendants = booleanQuery(query.descendants) ?? false;
+        // Bound to the normalized filters, as evidence is, so a continuation cannot quietly switch
+        // listings. Rows are append-only and immutable, so no frozen boundary is needed.
+        const binding: CursorBinding = {
+          route: 'workflows.listCheckpoints',
+          runId,
+          filters: { executionId: query.executionId, descendants },
+          key: revisionKey,
+        };
+        const limit = limitOf(query.limit);
+        const key = query.cursor === undefined ? null : decodeCursor(query.cursor, binding).key;
+        const rows = db
+          .select()
+          .from(workflowCheckpoints)
+          .where(
+            and(
+              eq(workflowCheckpoints.runId, runId),
+              ...(query.executionId === undefined
+                ? []
+                : descendants
+                  ? [
+                      sql`${workflowCheckpoints.executionId} IN ${subtreeExecutionIds(query.executionId)}`,
+                    ]
+                  : [eq(workflowCheckpoints.executionId, query.executionId)]),
+              ...(key === null ? [] : [gt(workflowCheckpoints.id, Number(key[0]))]),
+            ),
+          )
+          .orderBy(asc(workflowCheckpoints.id))
+          .limit(limit + 1)
+          .all()
+          .map(checkpointRecord);
+        const page = rows.slice(0, limit);
+        const last = page.at(-1);
+        return {
+          items: page.map(checkpointSummaryDto),
+          nextCursor: rows.length > limit && last ? encodeCursor(binding, [last.id]) : null,
+        };
+      }),
+
+    getCheckpoint: (runId, checkpointId) =>
+      read('workflow_get_checkpoint', (db) => {
+        requireRun(db, runId);
+        return { checkpoint: checkpointDto(requireCheckpoint(db, runId, checkpointId)) };
+      }),
+
+    listCheckpointInventory: (runId, checkpointId, query) =>
+      read('workflow_list_checkpoint_inventory', (db) => {
+        requireRun(db, runId);
+        const { checkpoint } = requireCheckpoint(db, runId, checkpointId);
+        const binding: CursorBinding = {
+          route: 'workflows.listCheckpointInventory',
+          runId,
+          filters: { checkpointId },
+          key: revisionKey,
+        };
+        const limit = limitOf(query.limit);
+        const key = query.cursor === undefined ? null : decodeCursor(query.cursor, binding).key;
+        const rows = inventoryPage(db, {
+          checkpointRowId: checkpoint.id,
+          afterSeq: key === null ? null : Number(key[0]),
+          take: limit + 1,
+        });
+        const page = rows.slice(0, limit);
+        const last = page.at(-1);
+        return {
+          checkpointId,
+          entries: page.map((row) => row.entry),
+          nextCursor: rows.length > limit && last ? encodeCursor(binding, [last.seq]) : null,
+        };
+      }),
+
+    listCheckpointManifest: (runId, checkpointId, query) =>
+      read('workflow_list_checkpoint_manifest', (db) => {
+        requireRun(db, runId);
+        const { checkpoint } = requireCheckpoint(db, runId, checkpointId);
+        const binding: CursorBinding = {
+          route: 'workflows.listCheckpointManifest',
+          runId,
+          filters: { checkpointId },
+          key: layerEntryKey,
+        };
+        const limit = limitOf(query.limit);
+        const key = query.cursor === undefined ? null : decodeCursor(query.cursor, binding).key;
+        const items = manifestPage(db, {
+          runId,
+          selectedRowId: checkpoint.id,
+          after: key === null ? null : [Number(key[0]), Number(key[1])],
+          take: limit + 1,
+        });
+        const page = items.slice(0, limit);
+        const last = page.at(-1);
+        return {
+          checkpointId,
+          entries: page.map((item) => item.entry),
+          nextCursor: items.length > limit && last ? encodeCursor(binding, [...last.key]) : null,
+        };
+      }),
+
+    openCheckpointFileContent: (runId, checkpointId, fileId) =>
+      Effect.gen(function* () {
+        const file = yield* read('workflow_open_checkpoint_file_content', (db) => {
+          requireRun(db, runId);
+          const found = checkpointFileInRun(db, {
+            runId,
+            checkpointKey: checkpointId,
+            fileKey: fileId,
+          });
+          if (found) return found;
+          // Only on a miss: which of the two identities was wrong is the client's next step.
+          requireCheckpoint(db, runId, checkpointId);
+          throw new WorkflowEngineError({
+            code: 'workflow_checkpoint_file_not_found',
+            message: `Checkpoint ${checkpointId} has no saved file ${fileId}.`,
+            workflowRunId: runId,
+            checkpointId,
+            fileId,
+          });
+        });
+        const stream = yield* content
+          .open(file.contentRef)
+          .pipe(
+            Effect.catchTag(
+              'ContentUnavailable',
+              checkpointContentUnavailable(runId, checkpointId, fileId),
+            ),
+          );
+        return {
+          stream,
+          // The route never claims a type the capture did not record; clients choose presentation.
+          mediaType: 'application/octet-stream',
+          byteSize: file.byteSize,
+          filename: posix.basename(file.path),
+        };
+      }),
+
     getOperation: (runId, operationKey) =>
       Effect.gen(function* () {
         // Projected through the revision snapshot store, exactly as `listOperations` is, so the two
@@ -1080,6 +1264,36 @@ function evidenceRow(
     });
   }
   return row;
+}
+
+function requireCheckpoint(db: RuntimeDrizzleDatabase, runId: number, checkpointId: string) {
+  const found = checkpointInRun(db, runId, checkpointId);
+  if (!found) {
+    throw new WorkflowEngineError({
+      code: 'workflow_checkpoint_not_found',
+      message: `Run ${runId} has no saved checkpoint ${checkpointId}.`,
+      workflowRunId: runId,
+      checkpointId,
+    });
+  }
+  return found;
+}
+
+function checkpointContentUnavailable(runId: number, checkpointId: string, fileId: string) {
+  return (error: { readonly ref: string; readonly cause: 'missing' | 'corrupt' }) =>
+    Effect.fail(
+      new WorkflowEngineError({
+        code: 'workflow_checkpoint_content_unavailable',
+        message:
+          error.cause === 'missing'
+            ? `Saved file ${fileId} of ${checkpointId} is no longer stored.`
+            : `Saved file ${fileId} of ${checkpointId} no longer matches its reference.`,
+        workflowRunId: runId,
+        checkpointId,
+        fileId,
+        payloadCause: error.cause,
+      }),
+    );
 }
 
 function evidenceContentUnavailable(runId: number, evidenceKey: string) {

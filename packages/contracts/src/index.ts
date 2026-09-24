@@ -12,7 +12,27 @@ import { workflowsEndpoints } from './workflows/api.js';
 import { workspaceEndpoints } from './workspace/api.js';
 import { worktreesEndpoints } from './worktrees/api.js';
 
-export const apiEndpoints = {
+/**
+ * Annotated with `typeof` references rather than inferred, so the emitted declaration names each
+ * collection instead of inlining every endpoint's schemas, which exceeds the compiler's limit.
+ */
+export interface ApiEndpoints {
+  readonly agentSessions: typeof agentSessionsEndpoints;
+  readonly commands: typeof commandsEndpoints;
+  readonly clientSettings: typeof clientSettingsEndpoint;
+  readonly controlPlane: typeof controlPlaneEndpoints;
+  readonly editor: typeof editorEndpoints;
+  readonly health: typeof healthEndpoint;
+  readonly workspace: typeof workspaceEndpoints;
+  readonly projects: typeof projectsEndpoints;
+  readonly runtimeEvents: typeof runtimeEventsWebSocketEndpoint;
+  readonly worktrees: typeof worktreesEndpoints;
+  readonly surfaces: typeof surfacesEndpoints;
+  readonly workflows: typeof workflowsEndpoints;
+  readonly paths: typeof pathsEndpoints;
+}
+
+export const apiEndpoints: ApiEndpoints = {
   agentSessions: agentSessionsEndpoints,
   commands: commandsEndpoints,
   clientSettings: clientSettingsEndpoint,
@@ -26,7 +46,7 @@ export const apiEndpoints = {
   surfaces: surfacesEndpoints,
   workflows: workflowsEndpoints,
   paths: pathsEndpoints,
-} as const;
+};
 
 export {
   agentSessionActivityApiErrorSchema,

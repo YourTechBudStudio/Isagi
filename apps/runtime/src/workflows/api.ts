@@ -204,6 +204,45 @@ export function registerWorkflowApi(
     },
   );
 
+  // --- checkpoints ----------------------------------------------------------
+
+  register(endpoints.listCheckpoints, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.listCheckpoints(params.runId, query),
+    ),
+  );
+
+  register(endpoints.getCheckpoint, (_input, _context, params) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.getCheckpoint(params.runId, params.checkpointId),
+    ),
+  );
+
+  register(endpoints.listCheckpointInventory, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.listCheckpointInventory(params.runId, params.checkpointId, query),
+    ),
+  );
+
+  register(endpoints.listCheckpointManifest, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.listCheckpointManifest(params.runId, params.checkpointId, query),
+    ),
+  );
+
+  registerContentEndpoint<
+    typeof workflowContentEndpoints.getCheckpointFileContent,
+    RuntimeServices
+  >(fastify, workflowContentEndpoints.getCheckpointFileContent, {
+    handle: (_context, params) =>
+      Effect.flatMap(WorkflowRunProjection, (projection) =>
+        projection.openCheckpointFileContent(params.runId, params.checkpointId, params.fileId),
+      ),
+    attachment: (query) => query?.download === 'true',
+    mapError: toWorkflowApiError,
+    run,
+  });
+
   // --- controls -------------------------------------------------------------
 
   register(endpoints.pause, (_input, _context, params) =>
@@ -267,6 +306,8 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       ...(error.artifactHash ? { artifactHash: error.artifactHash } : {}),
       ...(error.operationKey ? { operationKey: error.operationKey } : {}),
       ...(error.evidenceKey ? { evidenceKey: error.evidenceKey } : {}),
+      ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
+      ...(error.fileId ? { fileId: error.fileId } : {}),
       ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
       ...(error.collision ? { collision: error.collision } : {}),
       ...(error.branch ? { branch: error.branch } : {}),
@@ -296,7 +337,15 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
                   cause: error.payloadCause ?? 'missing',
                   ...identities,
                 }
-              : { reason: error.code, ...identities },
+              : error.code === 'workflow_checkpoint_content_unavailable'
+                ? {
+                    reason: error.code,
+                    checkpointId: error.checkpointId ?? '',
+                    fileId: error.fileId ?? '',
+                    cause: error.payloadCause ?? 'missing',
+                    ...identities,
+                  }
+                : { reason: error.code, ...identities },
     };
   }
 

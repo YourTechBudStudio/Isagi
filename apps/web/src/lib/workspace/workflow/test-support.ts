@@ -103,6 +103,7 @@ export function workflowExecutionFixture(
     routing: null,
     wait: null,
     operationSummary: { count: 0, unresolved: 0, evidenceCaptured: 0, capabilities: [] },
+    checkpoint: null,
     stateInRef: null,
     candidateRef: null,
     updateRef: null,

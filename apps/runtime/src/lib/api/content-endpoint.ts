@@ -38,7 +38,7 @@ import {
  */
 
 /**
- * Structurally identical to `EvidenceContentResponse` in `workflows/read/projection.service.ts`,
+ * Structurally identical to `WorkflowContentResponse` in `workflows/read/projection.service.ts`,
  * which restates it rather than importing this module so the read layer stays free of HTTP. The two
  * must change together.
  */
@@ -236,14 +236,34 @@ export function registerContentEndpoint<
 /**
  * A single-line `attachment` header, whatever the filename came from.
  *
- * The name is derived from author-supplied text, so it crosses a trust boundary into a response
- * header. Quotes, backslashes and control characters — CR and LF above all — are removed rather
- * than escaped, which keeps the result unambiguously one header line and keeps it inside the
- * `quoted-string` grammar. Non-ASCII is already excluded upstream, so no RFC 5987 `filename*` form
- * is needed.
+ * The name is derived from author- or workspace-supplied text, so it crosses a trust boundary into
+ * a response header. Quotes, backslashes and control characters — CR and LF above all — are removed
+ * rather than escaped, which keeps the result unambiguously one header line and keeps it inside the
+ * `quoted-string` grammar.
+ *
+ * An ASCII name is sent exactly as `filename="…"`. A name with anything else (a checkpoint file
+ * keeps its real basename, which may be any Unicode) also carries RFC 6266's `filename*` with the
+ * UTF-8 bytes percent-encoded, and its `filename` becomes an ASCII fallback with each non-ASCII
+ * character replaced by `_`. Node refuses a header value outside Latin-1, so sending the raw name
+ * would fail the response rather than merely garble it.
  */
-function contentDisposition(filename: string): string {
-  // eslint-disable-next-line no-control-regex -- control characters are exactly what is removed.
-  const safe = filename.replace(/["\\]/g, '').replace(/[\u0000-\u001f\u007f]/g, '');
-  return `attachment; filename="${safe.length > 0 ? safe : 'download'}"`;
+export function contentDisposition(filename: string): string {
+  // Well-formed first, so a lone surrogate cannot make the UTF-8 encoding below throw.
+  const safe = filename
+    .toWellFormed()
+    .replace(/["\\]/g, '')
+    // eslint-disable-next-line no-control-regex -- control characters are exactly what is removed.
+    .replace(/[\u0000-\u001f\u007f]/g, '');
+  const ascii = safe.replace(/[^\u0020-\u007e]/gu, '_');
+  const fallback = `attachment; filename="${ascii.length > 0 ? ascii : 'download'}"`;
+  if (ascii === safe) return fallback;
+  return `${fallback}; filename*=UTF-8''${encodeRfc5987(safe)}`;
+}
+
+/** `attr-char` from RFC 5987: everything else, including `'`, `(`, `)` and `*`, is percent-encoded. */
+function encodeRfc5987(value: string): string {
+  return encodeURIComponent(value).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }

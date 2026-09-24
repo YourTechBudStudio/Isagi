@@ -27,6 +27,7 @@ import {
   workflowWaits,
 } from '../../../persistence/schema.js';
 import { slotFromColumns } from '../../persistence/slots.js';
+import { checkpointOfExecution } from './checkpoints.js';
 import { decodeDiagnosticDetail } from './diagnostics.js';
 import { columnSlotDto, inlineValue, isRecord } from './payloads.js';
 
@@ -237,6 +238,9 @@ export function executionDto(db: RuntimeDrizzleDatabase, row: ExecutionRow): Wor
     routing: routingAttempt ? routingDto(db, routingAttempt) : null,
     wait: wait ? waitDto(db, wait) : null,
     operationSummary: operationSummary(db, row),
+    // One unique-index lookup, and only for a checkpoint visit. No row means nothing was saved:
+    // the visit has not captured yet, or its capture failed.
+    checkpoint: row.nodeKind === 'checkpoint' ? checkpointOfExecution(db, row.id) : null,
     // The Data slots. `stateIn` is the frame's committed state boundary as this visit began, which
     // is a fact of the frame's history rather than a column on the visit; `candidate` is the
     // producer operand the callback recorded before reduction; `update` is the update inside that

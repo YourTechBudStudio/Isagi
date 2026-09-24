@@ -79,7 +79,13 @@ import {
   type ListWorkflowEventsOutput,
   type ListWorkflowOperationsQuery,
   type ListWorkflowOperationsOutput,
+  type GetWorkflowCheckpointOutput,
   type GetWorkflowEvidenceOutput,
+  type ListWorkflowCheckpointInventoryOutput,
+  type ListWorkflowCheckpointManifestOutput,
+  type ListWorkflowCheckpointsOutput,
+  type ListWorkflowCheckpointsQuery,
+  type PaginationQuery,
   type GetWorkflowOperationOutput,
   type ListWorkflowEvidenceOutput,
   type ListWorkflowEvidenceQuery,
@@ -462,6 +468,51 @@ export interface RuntimeClient {
     evidenceKey: string,
     options?: { readonly download?: boolean },
   ) => string;
+  readonly listWorkflowCheckpoints: (
+    runId: number,
+    query: ListWorkflowCheckpointsQuery,
+  ) => Effect.Effect<
+    ListWorkflowCheckpointsOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpoints>
+  >;
+  readonly getWorkflowCheckpoint: (
+    runId: number,
+    checkpointId: string,
+  ) => Effect.Effect<
+    GetWorkflowCheckpointOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.getCheckpoint>
+  >;
+  readonly listWorkflowCheckpointInventory: (
+    runId: number,
+    checkpointId: string,
+    query: PaginationQuery,
+  ) => Effect.Effect<
+    ListWorkflowCheckpointInventoryOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpointInventory>
+  >;
+  readonly listWorkflowCheckpointManifest: (
+    runId: number,
+    checkpointId: string,
+    query: PaginationQuery,
+  ) => Effect.Effect<
+    ListWorkflowCheckpointManifestOutput,
+    RuntimeEndpointError<typeof apiEndpoints.workflows.listCheckpointManifest>
+  >;
+  /** The verified bytes of one saved checkpoint file; a raw `fetch`, as for evidence. */
+  readonly fetchWorkflowCheckpointFileContent: (
+    runId: number,
+    checkpointId: string,
+    fileId: string,
+  ) => Effect.Effect<
+    Blob,
+    RuntimeContentEndpointError<typeof workflowContentEndpoints.getCheckpointFileContent>
+  >;
+  readonly workflowCheckpointFileContentUrl: (
+    runId: number,
+    checkpointId: string,
+    fileId: string,
+    options?: { readonly download?: boolean },
+  ) => string;
   readonly listWorkflowDescriptors: (
     input: ListWorkflowDescriptorsInput,
   ) => Effect.Effect<
@@ -627,36 +678,44 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     getWorkflowOperation: (runId, operationKey) =>
       request(apiEndpoints.workflows.getOperation, { runId, operationKey }),
     workflowEvidenceContentUrl: (runId, evidenceKey, options) =>
-      evidenceContentUrl(runtimeUrl, runId, evidenceKey, options),
+      contentUrl(
+        runtimeUrl,
+        workflowContentEndpoints.getEvidenceContent,
+        { runId, evidenceKey },
+        options,
+      ),
     fetchWorkflowEvidenceContent: (runId, evidenceKey) =>
-      Effect.gen(function* () {
-        const endpoint = workflowContentEndpoints.getEvidenceContent;
-        const response = yield* Effect.tryPromise({
-          try: (signal) => fetch(evidenceContentUrl(runtimeUrl, runId, evidenceKey), { signal }),
-          catch: (cause) =>
-            new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
-        });
-        if (!response.ok) {
-          const payload = yield* Effect.tryPromise({
-            try: () => response.json() as Promise<unknown>,
-            catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-          });
-          const decoded = yield* decode(
-            apiErrorResponseSchema(endpoint.errors),
-            payload,
-            endpoint.id,
-          ).pipe(
-            Effect.catchAll(() =>
-              decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
-            ),
-          );
-          return yield* Effect.fail(new RuntimeApiError(decoded.error));
-        }
-        return yield* Effect.tryPromise({
-          try: () => response.blob(),
-          catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-        });
-      }),
+      fetchContent(
+        workflowContentEndpoints.getEvidenceContent,
+        contentUrl(runtimeUrl, workflowContentEndpoints.getEvidenceContent, {
+          runId,
+          evidenceKey,
+        }),
+      ),
+    listWorkflowCheckpoints: (runId, query) =>
+      request(apiEndpoints.workflows.listCheckpoints, { runId }, query),
+    getWorkflowCheckpoint: (runId, checkpointId) =>
+      request(apiEndpoints.workflows.getCheckpoint, { runId, checkpointId }),
+    listWorkflowCheckpointInventory: (runId, checkpointId, query) =>
+      request(apiEndpoints.workflows.listCheckpointInventory, { runId, checkpointId }, query),
+    listWorkflowCheckpointManifest: (runId, checkpointId, query) =>
+      request(apiEndpoints.workflows.listCheckpointManifest, { runId, checkpointId }, query),
+    workflowCheckpointFileContentUrl: (runId, checkpointId, fileId, options) =>
+      contentUrl(
+        runtimeUrl,
+        workflowContentEndpoints.getCheckpointFileContent,
+        { runId, checkpointId, fileId },
+        options,
+      ),
+    fetchWorkflowCheckpointFileContent: (runId, checkpointId, fileId) =>
+      fetchContent(
+        workflowContentEndpoints.getCheckpointFileContent,
+        contentUrl(runtimeUrl, workflowContentEndpoints.getCheckpointFileContent, {
+          runId,
+          checkpointId,
+          fileId,
+        }),
+      ),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
@@ -769,21 +828,60 @@ function interpolatePath(path: string, params: unknown) {
   );
 }
 
-function evidenceContentUrl(
+type WorkflowContentEndpoint =
+  (typeof workflowContentEndpoints)[keyof typeof workflowContentEndpoints];
+
+function contentUrl(
   runtimeUrl: string,
-  runId: number,
-  evidenceKey: string,
+  endpoint: WorkflowContentEndpoint,
+  params: Record<string, string | number>,
   options?: { readonly download?: boolean },
 ): string {
-  const url = new URL(
-    `${apiBasePath}${interpolatePath(workflowContentEndpoints.getEvidenceContent.path, {
-      runId,
-      evidenceKey,
-    })}`,
-    runtimeUrl,
-  );
+  const url = new URL(`${apiBasePath}${interpolatePath(endpoint.path, params)}`, runtimeUrl);
   if (options?.download === true) url.searchParams.set('download', 'true');
   return url.toString();
+}
+
+/**
+ * One content route's bytes.
+ *
+ * A raw `fetch` rather than the typed requester, because the success body is not the JSON envelope.
+ * A failure still is, so a non-OK response is decoded exactly as the typed requester decodes one
+ * and the caller sees the same error shape whichever content route it called.
+ */
+function fetchContent<Endpoint extends WorkflowContentEndpoint>(
+  endpoint: Endpoint,
+  url: string,
+): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.tryPromise({
+      try: (signal) => fetch(url, { signal }),
+      catch: (cause) =>
+        new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
+    });
+    if (!response.ok) {
+      const payload = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<unknown>,
+        catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
+      });
+      const decoded = yield* decode(
+        apiErrorResponseSchema(endpoint.errors),
+        payload,
+        endpoint.id,
+      ).pipe(
+        Effect.catchAll(() =>
+          decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
+        ),
+      );
+      return yield* Effect.fail(
+        new RuntimeApiError(decoded.error as ApiContentEndpointError<Endpoint>),
+      );
+    }
+    return yield* Effect.tryPromise({
+      try: () => response.blob(),
+      catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
+    });
+  });
 }
 
 function decode<Decoded, Encoded>(

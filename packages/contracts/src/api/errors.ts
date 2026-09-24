@@ -410,6 +410,10 @@ const workflowRejectionContextFields = {
   operationKey: Schema.optional(Schema.String),
   /** Which captured record, for `workflow_evidence_not_found`. */
   evidenceKey: Schema.optional(Schema.String),
+  /** Which checkpoint, for `workflow_checkpoint_not_found` and `workflow_checkpoint_file_not_found`. */
+  checkpointId: Schema.optional(Schema.String),
+  /** Which checkpoint file, for `workflow_checkpoint_file_not_found`. */
+  fileId: Schema.optional(Schema.String),
   /** Which way a placement is unusable, for `workflow_placement_invalid`. */
   placementIssue: Schema.optional(
     Schema.Literal('surface_not_on_worktree', 'worktree_not_in_project', 'invalid_surface_title'),
@@ -424,7 +428,7 @@ const workflowRejectionContextFields = {
   projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 } as const;
 
-/** The two reasons whose context is mandatory; each has its own data variant below. */
+/** The reasons whose context is mandatory; each has its own data variant below. */
 const workflowContextualRejectionReasonSchema = Schema.Literal(
   'workflow_structure_validation_failed',
   'workflow_payload_unavailable',
@@ -434,6 +438,12 @@ const workflowContextualRejectionReasonSchema = Schema.Literal(
    * *why* has nothing honest to render beside the metadata it already has.
    */
   'workflow_evidence_content_unavailable',
+  /**
+   * A checkpoint file exists in its inventory, but its saved bytes could not be served. Contextual
+   * for the same reason as evidence: the client keeps the file's metadata and says which file and
+   * why.
+   */
+  'workflow_checkpoint_content_unavailable',
 );
 
 /** Reasons that carry no mandatory context of their own. */
@@ -505,6 +515,13 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
    * from "belongs to somebody else".
    */
   'workflow_evidence_not_found',
+  /**
+   * No checkpoint with that id belongs to this run. Run-scoped like evidence: the answer never
+   * distinguishes "never existed" from "another run's".
+   */
+  'workflow_checkpoint_not_found',
+  /** The checkpoint exists, but no file with that id belongs to its inventory. */
+  'workflow_checkpoint_file_not_found',
 );
 
 /**
@@ -525,7 +542,7 @@ export const workflowRejectionReasonSchema = Schema.Union(
 );
 
 /**
- * The rejection payload, discriminated by reason so the two reasons with mandatory context cannot
+ * The rejection payload, discriminated by reason so the reasons with mandatory context cannot
  * be sent without it. A flat struct of optional fields would let a runtime emit
  * `workflow_payload_unavailable` with nothing to render, which is the failure this contract exists
  * to prevent.
@@ -552,6 +569,15 @@ export const workflowRejectionDataSchema = Schema.Union(
     reason: Schema.Literal('workflow_evidence_content_unavailable'),
     /** Which captured record could not be served, and why. */
     evidenceKey: Schema.String.pipe(Schema.minLength(1)),
+    cause: Schema.Literal('missing', 'corrupt'),
+  }),
+  Schema.Struct({
+    // Context first, as for evidence, so the mandatory identities override the optional ones.
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_checkpoint_content_unavailable'),
+    /** Which saved file could not be served, and why. */
+    checkpointId: Schema.String.pipe(Schema.minLength(1)),
+    fileId: Schema.String.pipe(Schema.minLength(1)),
     cause: Schema.Literal('missing', 'corrupt'),
   }),
   Schema.Struct({

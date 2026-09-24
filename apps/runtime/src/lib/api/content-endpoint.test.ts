@@ -8,7 +8,11 @@ import Fastify from 'fastify';
 
 import { apiInfrastructureErrorSchema, type ApiContentEndpoint } from '@isagi/contracts';
 
-import { registerContentEndpoint, type ContentResponse } from './content-endpoint.js';
+import {
+  contentDisposition,
+  registerContentEndpoint,
+  type ContentResponse,
+} from './content-endpoint.js';
 
 /**
  * The branch no other test can reach: a stream that fails *after* a 200 is committed.
@@ -122,4 +126,71 @@ test('a handler that fails before the first byte still gets the JSON envelope', 
   assert.equal(response.headers['content-type']?.toString().startsWith('application/json'), true);
   const decoded = JSON.parse(response.body) as { error: { code: string } };
   assert.equal(decoded.error.code, 'api_unhandled_error');
+});
+
+test('an ASCII filename keeps the plain quoted header, byte for byte', () => {
+  assert.equal(
+    contentDisposition('review-notes-output.md'),
+    'attachment; filename="review-notes-output.md"',
+  );
+  assert.equal(contentDisposition(''), 'attachment; filename="download"');
+});
+
+test('a Unicode filename carries an ASCII fallback and the exact UTF-8 name', () => {
+  assert.equal(
+    contentDisposition('café.md'),
+    `attachment; filename="caf_.md"; filename*=UTF-8''caf%C3%A9.md`,
+  );
+  assert.equal(
+    contentDisposition('日本.txt'),
+    `attachment; filename="__.txt"; filename*=UTF-8''%E6%97%A5%E6%9C%AC.txt`,
+  );
+  // One astral character is one replacement, and characters RFC 5987 excludes are encoded.
+  assert.equal(
+    contentDisposition("🙂 it's (1)*.md"),
+    `attachment; filename="_ it's (1)*.md"; filename*=UTF-8''%F0%9F%99%82%20it%27s%20%281%29%2A.md`,
+  );
+  // A lone surrogate cannot make encoding throw.
+  assert.match(contentDisposition('a\uD800.md'), /filename\*=UTF-8''a%EF%BF%BD\.md$/);
+});
+
+test('neither form of the name can break out of its header line or quoted string', () => {
+  for (const name of ['a"\r\nSet-Cookie: x=1.md', 'é"\r\nSet-Cookie: x=1;\\.md']) {
+    const header = contentDisposition(name);
+    // Every character is printable ASCII: no CR, LF or other control character, and no backslash.
+    assert.ok(
+      [...header].every((char) => char >= ' ' && char <= '~' && char !== '\\'),
+      header,
+    );
+    const quoted = /filename="([^"]*)"/.exec(header)?.[1];
+    assert.ok(quoted !== undefined && !quoted.includes('"'), header);
+    const extended = /filename\*=UTF-8''(.*)$/.exec(header)?.[1];
+    if (extended !== undefined) assert.match(extended, /^[A-Za-z0-9%!#$&+.^_`|~-]*$/);
+  }
+});
+
+test('a Unicode filename reaches the client as a valid attachment header', async () => {
+  const fastify = Fastify({ logger: false });
+  registerContentEndpoint(fastify, endpoint, {
+    handle: () =>
+      Effect.succeed({
+        stream: Readable.from([Buffer.from('ok')]),
+        mediaType: 'application/octet-stream',
+        byteSize: 2,
+        filename: 'résumé.md',
+      }),
+    attachment: () => true,
+    run: (effect) => Effect.runPromise(effect as Effect.Effect<never, never, never>),
+  });
+  try {
+    const response = await fastify.inject({ method: 'GET', url: '/api/v1/test/content' });
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      response.headers['content-disposition'],
+      `attachment; filename="r_sum_.md"; filename*=UTF-8''r%C3%A9sum%C3%A9.md`,
+    );
+    assert.equal(response.body, 'ok');
+  } finally {
+    await fastify.close();
+  }
 });

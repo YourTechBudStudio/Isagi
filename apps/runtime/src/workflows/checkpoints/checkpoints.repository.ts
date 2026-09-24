@@ -41,6 +41,7 @@ import type {
   ScopeBinding,
   StoredWarning,
 } from './resolve.js';
+import { warningGroupsOf } from './warning-groups.js';
 
 export interface CommitCheckpointInput {
   readonly runId: number;
@@ -220,6 +221,8 @@ export function makeWorkflowCheckpointRepository(
             fileCount: input.counts.files,
             absentCount: input.counts.absences,
             warningCount: input.counts.warnings,
+            // Derived from the entries below, in this transaction, so it cannot disagree with them.
+            warningGroupsJson: canonicalJson(warningGroupsOf(input.entries, input.checkpointKey)),
             createdAt: input.now,
           })
           .returning()

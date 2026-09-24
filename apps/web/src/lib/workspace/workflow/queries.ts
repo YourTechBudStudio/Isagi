@@ -4,9 +4,13 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import type {
   AdvanceWorkflowInput,
   GetWorkflowStructureOutput,
+  ListWorkflowCheckpointInventoryOutput,
+  ListWorkflowCheckpointsOutput,
   ListWorkflowEventsOutput,
   ListWorkflowEvidenceOutput,
   StartWorkflowInput,
+  WorkflowCheckpointInventoryEntry,
+  WorkflowCheckpointSummaryDto,
   WorkflowLaunchOrigin,
   WorkflowEvidenceDto,
   WorkflowOperationDto,
@@ -17,6 +21,10 @@ import { runRuntimeEffect } from '../../runtime/run.js';
 import {
   runtimeIdentityQueryKey,
   workflowAttachedRunsQueryKey,
+  workflowCheckpointFileContentQueryKey,
+  workflowCheckpointInventoryQueryKey,
+  workflowCheckpointListQueryKey,
+  workflowCheckpointQueryKey,
   workflowDescriptorsQueryKey,
   workflowLogQueryKey,
   workflowPayloadQueryKey,
@@ -32,11 +40,15 @@ import {
   advanceWorkflow,
   cancelWorkflow,
   dismissWorkflow,
+  fetchWorkflowCheckpointFileContent,
   fetchWorkflowEvidenceContent,
+  getWorkflowCheckpoint,
   getWorkflowOperation,
   getWorkflowPayload,
   getWorkflowRun,
   getWorkflowStructure,
+  listWorkflowCheckpointInventory,
+  listWorkflowCheckpoints,
   listWorkflowDescriptors,
   listWorkflowEvents,
   listWorkflowEvidence,
@@ -49,6 +61,7 @@ import {
 } from '../runtime-data.js';
 import { requestAttachedWorkflowRuns } from '../runtime-events.js';
 import { AttachedRunsSync, attachedRunForSurface, type AttachedRuns } from './attached.js';
+import { checkpointRefreshSignal } from './checkpoints.js';
 import { RunSynchronizer } from './coordinator.js';
 import {
   evidenceListQuery,
@@ -684,6 +697,130 @@ export function useWorkflowEvidenceContent(
         throw new Error('An evidence content read needs a run and a key.');
       }
       return runRuntimeEffect(fetchWorkflowEvidenceContent(runId, evidenceKey), { signal });
+    },
+  });
+}
+
+/**
+ * Every checkpoint a run saved, oldest first, in one query.
+ *
+ * Paged to the end before anything is returned, as the evidence list is. Keyed on the run state's
+ * checkpoint signal, so it refetches exactly when a visit commits a checkpoint.
+ */
+export function useWorkflowCheckpointList(state: WorkflowRunState | null) {
+  const runtimeIdentity = useRuntimeIdentity();
+  const runId = state?.runId ?? null;
+  return useQuery({
+    queryKey: workflowCheckpointListQueryKey(
+      runtimeIdentity,
+      runId,
+      checkpointRefreshSignal(state),
+    ),
+    enabled: runId !== null && runtimeIdentity !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: async ({ signal }): Promise<readonly WorkflowCheckpointSummaryDto[]> => {
+      if (runId === null) throw new Error('A checkpoint listing needs a run.');
+      const items: WorkflowCheckpointSummaryDto[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: ListWorkflowCheckpointsOutput = await runRuntimeEffect(
+          listWorkflowCheckpoints(runId, { limit: 100, ...(cursor === null ? {} : { cursor }) }),
+          { signal },
+        );
+        items.push(...page.items);
+        cursor = page.nextCursor;
+        signal.throwIfAborted();
+      } while (cursor !== null);
+      return items;
+    },
+  });
+}
+
+/** One checkpoint's detail. Immutable once saved, so it never goes stale. */
+export function useWorkflowCheckpoint(runId: number | null, checkpointId: string | null) {
+  const runtimeIdentity = useRuntimeIdentity();
+  return useQuery({
+    queryKey: workflowCheckpointQueryKey(runtimeIdentity, runId, checkpointId),
+    enabled: runId !== null && checkpointId !== null && runtimeIdentity !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) => {
+      if (runId === null || checkpointId === null) {
+        throw new Error('A checkpoint read needs a run and a checkpoint.');
+      }
+      return runRuntimeEffect(getWorkflowCheckpoint(runId, checkpointId), { signal });
+    },
+  });
+}
+
+/**
+ * A checkpoint's whole final inventory, followed to the last page.
+ *
+ * The runtime stores it already resolved, so this is the complete answer with no ancestor to
+ * replay. A partial read is not an answer: a tree built from page one would silently omit files.
+ */
+export function useWorkflowCheckpointInventory(runId: number | null, checkpointId: string | null) {
+  const runtimeIdentity = useRuntimeIdentity();
+  return useQuery({
+    queryKey: workflowCheckpointInventoryQueryKey(runtimeIdentity, runId, checkpointId),
+    enabled: runId !== null && checkpointId !== null && runtimeIdentity !== null,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: async ({ signal }): Promise<readonly WorkflowCheckpointInventoryEntry[]> => {
+      if (runId === null || checkpointId === null) {
+        throw new Error('A checkpoint inventory needs a run and a checkpoint.');
+      }
+      const entries: WorkflowCheckpointInventoryEntry[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: ListWorkflowCheckpointInventoryOutput = await runRuntimeEffect(
+          listWorkflowCheckpointInventory(runId, checkpointId, {
+            limit: 500,
+            ...(cursor === null ? {} : { cursor }),
+          }),
+          { signal },
+        );
+        entries.push(...page.entries);
+        cursor = page.nextCursor;
+        signal.throwIfAborted();
+      } while (cursor !== null);
+      return entries;
+    },
+  });
+}
+
+/**
+ * The bytes of one saved file, fetched only when someone asks to see them.
+ *
+ * Kept as an error rather than retried or emptied for the evidence content's reason: missing or
+ * corrupt saved bytes are a fact about the checkpoint, shown beside its metadata.
+ */
+export function useWorkflowCheckpointFileContent(
+  runId: number | null,
+  checkpointId: string | null,
+  fileId: string | null,
+  options: { readonly enabled?: boolean | undefined } = {},
+) {
+  const runtimeIdentity = useRuntimeIdentity();
+  return useQuery({
+    queryKey: workflowCheckpointFileContentQueryKey(runtimeIdentity, runId, checkpointId, fileId),
+    enabled:
+      (options.enabled ?? false) && runId !== null && checkpointId !== null && fileId !== null,
+    // Immutable, with the same bounded retention as evidence bytes.
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) => {
+      if (runId === null || checkpointId === null || fileId === null) {
+        throw new Error('A checkpoint file read needs a run, a checkpoint and a file.');
+      }
+      return runRuntimeEffect(fetchWorkflowCheckpointFileContent(runId, checkpointId, fileId), {
+        signal,
+      });
     },
   });
 }

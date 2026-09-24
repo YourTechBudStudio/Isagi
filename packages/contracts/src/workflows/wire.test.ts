@@ -8,6 +8,10 @@ import { Schema } from 'effect';
 import type { ApiEndpoint } from '../api/types.js';
 import { runtimeEventSchema } from '../runtime-events/types.js';
 import { workflowContentEndpoints, workflowsEndpoints } from './api.js';
+import {
+  getWorkflowCheckpointOutputSchema,
+  listWorkflowCheckpointManifestOutputSchema,
+} from './checkpoints.js';
 import { listWorkflowEvidenceQuerySchema, workflowEvidenceSchema } from './evidence.js';
 import {
   workflowAttemptSchema,
@@ -305,6 +309,7 @@ const execution = {
     evidenceCaptured: 0,
     capabilities: ['run_headless_agent'],
   },
+  checkpoint: null,
   stateInRef: { inline: { reviewRound: 1 } },
   candidateRef: null,
   updateRef: null,
@@ -1672,4 +1677,150 @@ test('the operation summary reports captured evidence, and it is required', () =
   // from "this runtime does not report captures", which is exactly the refresh signal it depends on.
   const { evidenceCaptured: _omitted, ...without } = summaryShape;
   assert.throws(() => decode(workflowOperationSummarySchema, without));
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoints
+// ---------------------------------------------------------------------------
+
+const checkpointBase = { kind: 'git', repositoryId: 2, commitSha: 'a'.repeat(40) } as const;
+const checkpointCounts = { scopes: 2, files: 3, absences: 1, warnings: 2 };
+
+test('an execution carries its committed checkpoint inline, and the field is required', () => {
+  const visit = decode(workflowExecutionSchema, {
+    ...execution,
+    nodeKind: 'checkpoint',
+    checkpoint: {
+      checkpointId: 'wcp_1',
+      title: 'Phase 1 saved',
+      base: checkpointBase,
+      counts: checkpointCounts,
+    },
+  });
+  assert.equal(visit.checkpoint?.checkpointId, 'wcp_1');
+  assert.equal(decode(workflowExecutionSchema, execution).checkpoint, null);
+  // Optional would let a runtime omit it and leave the dock unable to tell "nothing was saved"
+  // from "this runtime does not report checkpoints".
+  const { checkpoint: _omitted, ...without } = execution;
+  assert.throws(() => decode(workflowExecutionSchema, without));
+});
+
+test('the four checkpoint reads are JSON routes and the file bytes are a content route', () => {
+  const byId = new Map<string, { readonly path: string }>(
+    Object.values(workflowsEndpoints).map((endpoint) => [endpoint.id, endpoint]),
+  );
+  assert.equal(byId.get('workflows.listCheckpoints')?.path, '/workflows/runs/:runId/checkpoints');
+  assert.equal(
+    byId.get('workflows.getCheckpoint')?.path,
+    '/workflows/runs/:runId/checkpoints/:checkpointId',
+  );
+  assert.equal(
+    byId.get('workflows.listCheckpointInventory')?.path,
+    '/workflows/runs/:runId/checkpoints/:checkpointId/inventory',
+  );
+  assert.equal(
+    byId.get('workflows.listCheckpointManifest')?.path,
+    '/workflows/runs/:runId/checkpoints/:checkpointId/manifest',
+  );
+  assert.ok(!Object.hasOwn(workflowsEndpoints, 'getCheckpointFileContent'));
+  const content = workflowContentEndpoints.getCheckpointFileContent;
+  assert.equal(content.id, 'workflows.getCheckpointFileContent');
+  assert.equal(
+    content.path,
+    '/workflows/runs/:runId/checkpoints/:checkpointId/files/:fileId/content',
+  );
+  assert.ok(!Object.hasOwn(content, 'output'));
+  assert.deepEqual(decode(content.query, { download: 'true' }), { download: 'true' });
+  assert.throws(() => decode(workflowsEndpoints.listCheckpointInventory.query, { limit: 501 }));
+});
+
+test('checkpoint detail carries base, lineage, counts, bounded warning groups and links', () => {
+  const detail = {
+    checkpointId: 'wcp_2',
+    runId: 1,
+    frameId: 1,
+    executionId: 4,
+    attemptId: 5,
+    nodeId: 'save',
+    title: 'Phase 2 saved',
+    createdAt: at,
+    base: checkpointBase,
+    parentCheckpointId: 'wcp_1',
+    artifactHash: 'sha256:pin',
+    provenance: { repositoryRootPath: '/repo' },
+    counts: checkpointCounts,
+    warningGroups: [
+      { reason: 'uncaptured_dirty_path', count: 1012, samples: ['a', 'b', 'c', 'd', 'e'] },
+      { reason: 'ignored_paths_not_surveyed', count: 1, samples: [] },
+    ],
+    links: {
+      inventory: '/api/v1/workflows/runs/1/checkpoints/wcp_2/inventory',
+      manifest: '/api/v1/workflows/runs/1/checkpoints/wcp_2/manifest',
+    },
+  };
+  const decoded = decode(getWorkflowCheckpointOutputSchema, { checkpoint: detail });
+  assert.equal(decoded.checkpoint.warningGroups[0]?.count, 1012);
+  assert.throws(() =>
+    decode(getWorkflowCheckpointOutputSchema, {
+      checkpoint: {
+        ...detail,
+        warningGroups: [
+          { reason: 'uncaptured_dirty_path', count: 6, samples: ['a', 'b', 'c', 'd', 'e', 'f'] },
+        ],
+      },
+    }),
+  );
+  // The truncation sentinel is folded into `uncaptured_dirty_path`, never a group of its own.
+  assert.throws(() =>
+    decode(getWorkflowCheckpointOutputSchema, {
+      checkpoint: {
+        ...detail,
+        warningGroups: [{ reason: 'warnings_truncated', count: 12, samples: [] }],
+      },
+    }),
+  );
+});
+
+test('every manifest entry names its layer, and only change rows carry optional content facts', () => {
+  const page = decode(listWorkflowCheckpointManifestOutputSchema, {
+    checkpointId: 'wcp_2',
+    entries: [
+      {
+        kind: 'layer',
+        checkpointId: 'wcp_1',
+        parentCheckpointId: null,
+        title: 'Phase 1 saved',
+        createdAt: at,
+        base: { kind: 'none', reason: 'folder_project' },
+      },
+      {
+        kind: 'scope',
+        checkpointId: 'wcp_1',
+        scopeId: 'docs',
+        scopeKind: 'directory',
+        path: 'docs',
+        exclusions: [],
+      },
+      { kind: 'change', checkpointId: 'wcp_1', operation: 'delete', path: 'docs/old.md' },
+      {
+        kind: 'change',
+        checkpointId: 'wcp_1',
+        operation: 'add',
+        path: 'docs/new.md',
+        sha256: 'c'.repeat(64),
+        sizeBytes: 4,
+        executable: false,
+      },
+      {
+        kind: 'warning',
+        checkpointId: 'wcp_1',
+        reason: 'warnings_truncated',
+        path: null,
+        scopeId: null,
+        detail: { omitted: 12 },
+      },
+    ],
+    nextCursor: 'c',
+  });
+  assert.ok(page.entries.every((entry) => entry.checkpointId === 'wcp_1'));
 });

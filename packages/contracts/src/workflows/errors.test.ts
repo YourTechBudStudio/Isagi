@@ -207,6 +207,48 @@ test('unreachable captured content names the record and why, and both survive de
   );
 });
 
+test('unreachable checkpoint bytes name the checkpoint, the file and why', () => {
+  const error = decode(
+    rejection({
+      reason: 'workflow_checkpoint_content_unavailable',
+      workflowRunId: 1,
+      checkpointId: 'wcp_1',
+      fileId: 'wcf_1',
+      cause: 'corrupt',
+    }),
+  );
+  const data = (error as { data: { checkpointId?: string; fileId?: string; cause?: string } }).data;
+  assert.deepEqual([data.checkpointId, data.fileId, data.cause], ['wcp_1', 'wcf_1', 'corrupt']);
+
+  const base = { reason: 'workflow_checkpoint_content_unavailable', cause: 'missing' };
+  assert.throws(() => decode(rejection(base)));
+  assert.throws(() => decode(rejection({ ...base, checkpointId: 'wcp_1' })));
+  assert.throws(() => decode(rejection({ ...base, fileId: 'wcf_1' })));
+  assert.throws(() => decode(rejection({ ...base, checkpointId: '', fileId: 'wcf_1' })));
+  assert.throws(() =>
+    decode(
+      rejection({
+        reason: 'workflow_checkpoint_content_unavailable',
+        checkpointId: 'wcp_1',
+        fileId: 'wcf_1',
+      }),
+    ),
+  );
+});
+
+test('a missing checkpoint and a missing checkpoint file each name what was asked for', () => {
+  const missing = decode(
+    rejection({
+      reason: 'workflow_checkpoint_file_not_found',
+      checkpointId: 'wcp_1',
+      fileId: 'wcf_9',
+    }),
+  );
+  const data = (missing as { data: { checkpointId?: string; fileId?: string } }).data;
+  assert.deepEqual([data.checkpointId, data.fileId], ['wcp_1', 'wcf_9']);
+  assert.doesNotThrow(() => decode(rejection({ reason: 'workflow_checkpoint_not_found' })));
+});
+
 test('a missing record and a missing operation are told apart, and each names its key', () => {
   const missingEvidence = decode(
     rejection({ reason: 'workflow_evidence_not_found', workflowRunId: 1, evidenceKey: 'wev_abc' }),
@@ -285,8 +327,11 @@ test('the exported reason set cannot drift from the set the error data accepts',
     'workflow_operation_not_found',
     'workflow_evidence_not_found',
     'workflow_evidence_content_unavailable',
+    'workflow_checkpoint_not_found',
+    'workflow_checkpoint_file_not_found',
+    'workflow_checkpoint_content_unavailable',
   ]);
-  assert.equal(every.length, 36);
+  assert.equal(every.length, 39);
 
   for (const reason of every) {
     const data: Record<string, unknown> = { reason };
@@ -298,6 +343,11 @@ test('the exported reason set cannot drift from the set the error data accepts',
     if (reason === 'workflow_evidence_content_unavailable') {
       data.evidenceKey = 'wev_abc';
       data.cause = 'missing';
+    }
+    if (reason === 'workflow_checkpoint_content_unavailable') {
+      data.checkpointId = 'wcp_1';
+      data.fileId = 'wcf_1';
+      data.cause = 'corrupt';
     }
     assert.doesNotThrow(() => decode(rejection(data)), `${reason} is advertised but not accepted`);
   }

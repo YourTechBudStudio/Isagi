@@ -1,5 +1,6 @@
 import { Schema } from 'effect';
 
+import { workflowExecutionCheckpointSchema } from './checkpoints.js';
 import {
   nonEmptyString,
   nonNegativeInteger,
@@ -282,6 +283,11 @@ export const workflowExecutionSchema = Schema.Struct({
   routing: Schema.NullOr(workflowExecutionRoutingSchema),
   wait: Schema.NullOr(workflowExecutionWaitSchema),
   operationSummary: workflowOperationSummarySchema,
+  /**
+   * The checkpoint this visit committed. Null for every other node kind, for a checkpoint visit
+   * that has not captured yet, and for one whose capture failed: a failed capture saves no record.
+   */
+  checkpoint: Schema.NullOr(workflowExecutionCheckpointSchema),
   /** The payload slots the dock offers. A null slot means the step never produced that value. */
   stateInRef: workflowPayloadSlotSchema,
   candidateRef: workflowPayloadSlotSchema,

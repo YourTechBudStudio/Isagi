@@ -7,6 +7,7 @@ import type {
   WorkflowCheckpointChangeOperation,
   WorkflowCheckpointCounts,
   WorkflowCheckpointScopeKind,
+  WorkflowCheckpointWarningGroup,
   WorkflowCheckpointWarningReason,
   WorkflowEndCertainty,
   WorkflowEvidenceContentKind,
@@ -315,6 +316,8 @@ export interface WorkflowCheckpointRecord {
   readonly repositoryProjectId: number;
   readonly repositoryRootPath: string;
   readonly counts: WorkflowCheckpointCounts;
+  /** This checkpoint's own warnings, summarized at commit. */
+  readonly warningGroups: readonly WorkflowCheckpointWarningGroup[];
   readonly createdAt: string;
 }
 

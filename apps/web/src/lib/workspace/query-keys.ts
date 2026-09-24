@@ -122,6 +122,39 @@ export const workflowEvidenceContentQueryKey = (
   evidenceKey: string | null,
 ) => ['workflows', runtimeIdentity, 'evidence-content', runId, evidenceKey] as const;
 
+/**
+ * A run's checkpoint listing.
+ *
+ * `signal` is how many visits the run state says committed a checkpoint, so the list refetches
+ * exactly when one is saved. Checkpoint rows are immutable, so nothing else moves it.
+ */
+export const workflowCheckpointListQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  signal: number,
+) => ['workflows', runtimeIdentity, 'checkpoints', runId, signal] as const;
+
+/** Immutable once written: a checkpoint's detail and inventory never change after capture. */
+export const workflowCheckpointQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  checkpointId: string | null,
+) => ['workflows', runtimeIdentity, 'checkpoint', runId, checkpointId] as const;
+
+export const workflowCheckpointInventoryQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  checkpointId: string | null,
+) => ['workflows', runtimeIdentity, 'checkpoint-inventory', runId, checkpointId] as const;
+
+/** Immutable once written, like evidence content. */
+export const workflowCheckpointFileContentQueryKey = (
+  runtimeIdentity: string | null,
+  runId: number | null,
+  checkpointId: string | null,
+  fileId: string | null,
+) => ['workflows', runtimeIdentity, 'checkpoint-content', runId, checkpointId, fileId] as const;
+
 /** One operation with its provenance, read on demand from an evidence record's source. */
 export const workflowOperationQueryKey = (
   runtimeIdentity: string | null,

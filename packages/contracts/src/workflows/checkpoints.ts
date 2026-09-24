@@ -1,8 +1,8 @@
 import { Schema } from 'effect';
 
 import { workflowEvidenceContentQuerySchema } from './evidence.js';
+import { booleanStringSchema, cursorSchema, paginationQuerySchema } from './pagination.js';
 import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitives.js';
-import { booleanStringSchema, cursorSchema, paginationQuerySchema } from './requests.js';
 
 /**
  * Checkpoints: the wire shape of an immutable, destination-root-relative filesystem boundary saved by
@@ -103,7 +103,9 @@ export const workflowCheckpointCountsSchema = Schema.Struct({
 /** One group per reason this checkpoint itself observed; inherited region warnings are excluded. */
 export const workflowCheckpointWarningGroupSchema = Schema.Struct({
   /** Never `warnings_truncated`: its `omitted` count is folded into `uncaptured_dirty_path`. */
-  reason: workflowCheckpointWarningReasonSchema,
+  reason: workflowCheckpointWarningReasonSchema.pipe(
+    Schema.filter((reason) => reason !== 'warnings_truncated'),
+  ),
   count: positiveInteger,
   /** The first paths by inventory order; empty for path-less reasons. */
   samples: Schema.Array(nonEmptyString).pipe(Schema.maxItems(5)),

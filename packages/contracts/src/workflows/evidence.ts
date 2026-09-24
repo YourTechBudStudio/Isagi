@@ -1,7 +1,7 @@
 import { Schema } from 'effect';
 
+import { booleanStringSchema, cursorSchema, paginationQuerySchema } from './pagination.js';
 import { nonEmptyString, nonNegativeInteger, positiveInteger } from './primitives.js';
-import { booleanStringSchema, cursorSchema, paginationQuerySchema } from './requests.js';
 
 /**
  * Author-selected evidence: the wire shape of a `ctx.captureEvidence` record.

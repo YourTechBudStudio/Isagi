@@ -6,6 +6,7 @@ import {
   workflowFrameSchema,
   workflowOperationSchema,
 } from './executions.js';
+import { booleanStringSchema, cursorSchema, paginationQuerySchema } from './pagination.js';
 import {
   nonEmptyString,
   nonNegativeInteger,
@@ -31,34 +32,15 @@ import {
 
 /** Route inputs, queries and outputs. */
 
-/**
- * Shared query vocabulary.
- *
- * Exported rather than private because `evidence.ts` declares its own route inputs and must page
- * and decode booleans identically; a second copy of either is exactly the drift these represent.
- */
-export const booleanStringSchema = Schema.Union(Schema.Boolean, Schema.Literal('true', 'false'));
-
-/** Opaque and bound to its run, filters and snapshot boundary. Clients never construct one. */
-export const cursorSchema = nonEmptyString;
-
-/**
- * Every list route pages the same way: default 100, hard maximum 500. The maximum is part of the
- * schema rather than prose, so an over-large request is rejected at the boundary instead of being
- * silently clamped or honoured.
- */
-export const workflowListPageLimitMaximum = 500;
-
-export const paginationQuerySchema = Schema.Struct({
-  limit: Schema.optional(
-    Schema.Number.pipe(
-      Schema.int(),
-      Schema.positive(),
-      Schema.lessThanOrEqualTo(workflowListPageLimitMaximum),
-    ),
-  ),
-  cursor: Schema.optional(cursorSchema),
-});
+// The shared paging vocabulary lives in `pagination.ts` so record modules can page without importing
+// this module, which depends on the execution records; re-exported so route inputs read as one set.
+export {
+  booleanStringSchema,
+  cursorSchema,
+  paginationQuerySchema,
+  workflowListPageLimitMaximum,
+  type PaginationQuery,
+} from './pagination.js';
 
 export const workflowLaunchOriginSchema = Schema.Struct({
   worktreeId: positiveInteger,

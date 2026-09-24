@@ -232,6 +232,114 @@ test('an unreadable capture comes back as the structured rejection, not as empty
   });
 });
 
+test('the four checkpoint reads reach their routes with their queries', async () => {
+  const listed = await capture({ items: [], nextCursor: null }, (client) =>
+    client.listWorkflowCheckpoints(77, { executionId: 12, descendants: 'true', limit: 50 }),
+  );
+  const listUrl = new URL(listed.url);
+  assert.equal(listUrl.pathname, '/api/v1/workflows/runs/77/checkpoints');
+  assert.equal(listUrl.searchParams.get('executionId'), '12');
+  assert.equal(listUrl.searchParams.get('descendants'), 'true');
+
+  const base = { kind: 'none', reason: 'folder_project' } as const;
+  const detail = await capture(
+    {
+      checkpoint: {
+        checkpointId: 'wcp_1',
+        runId: 77,
+        frameId: 1,
+        executionId: 12,
+        attemptId: 3,
+        nodeId: 'save',
+        title: 'Saved',
+        createdAt: '2026-09-23T00:00:00.000Z',
+        base,
+        parentCheckpointId: null,
+        artifactHash: 'sha256:pin',
+        provenance: { repositoryRootPath: null },
+        counts: { scopes: 0, files: 0, absences: 0, warnings: 0 },
+        warningGroups: [],
+        links: { inventory: '/i', manifest: '/m' },
+      },
+    },
+    (client) => client.getWorkflowCheckpoint(77, 'wcp_1'),
+  );
+  assert.equal(new URL(detail.url).pathname, '/api/v1/workflows/runs/77/checkpoints/wcp_1');
+
+  const inventory = await capture(
+    { checkpointId: 'wcp_1', entries: [], nextCursor: null },
+    (client) => client.listWorkflowCheckpointInventory(77, 'wcp_1', { cursor: 'next', limit: 500 }),
+  );
+  const inventoryUrl = new URL(inventory.url);
+  assert.equal(inventoryUrl.pathname, '/api/v1/workflows/runs/77/checkpoints/wcp_1/inventory');
+  assert.equal(inventoryUrl.searchParams.get('cursor'), 'next');
+
+  const manifest = await capture(
+    { checkpointId: 'wcp_1', entries: [], nextCursor: null },
+    (client) => client.listWorkflowCheckpointManifest(77, 'wcp_1', {}),
+  );
+  assert.equal(
+    new URL(manifest.url).pathname,
+    '/api/v1/workflows/runs/77/checkpoints/wcp_1/manifest',
+  );
+});
+
+test('checkpoint file bytes are fetched raw, with the download variant available as a URL', async () => {
+  let seen: string | null = null;
+  globalThis.fetch = ((input) => {
+    seen = String(input);
+    return Promise.resolve(new Response('saved bytes', { status: 200 }));
+  }) as typeof fetch;
+
+  const client = createRuntimeClient(runtimeUrl);
+  const blob = await Effect.runPromise(
+    client.fetchWorkflowCheckpointFileContent(77, 'wcp_1', 'wcf_2') as Effect.Effect<Blob, never>,
+  );
+  assert.equal(await blob.text(), 'saved bytes');
+  assert.equal(
+    seen,
+    `${runtimeUrl}/api/v1/workflows/runs/77/checkpoints/wcp_1/files/wcf_2/content`,
+  );
+  assert.equal(
+    client.workflowCheckpointFileContentUrl(77, 'wcp_1', 'wcf_2', { download: true }),
+    `${runtimeUrl}/api/v1/workflows/runs/77/checkpoints/wcp_1/files/wcf_2/content?download=true`,
+  );
+});
+
+for (const cause of ['missing', 'corrupt'] as const) {
+  test(`${cause} checkpoint bytes come back as the structured rejection naming the file`, async () => {
+    const data = {
+      reason: 'workflow_checkpoint_content_unavailable',
+      checkpointId: 'wcp_1',
+      fileId: 'wcf_2',
+      cause,
+    };
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'workflow_rejected',
+              status: 400,
+              message: 'gone',
+              requestId: 'r',
+              data,
+            },
+          }),
+          { status: 400 },
+        ),
+      )) as typeof fetch;
+
+    const failure = await Effect.runPromise(
+      Effect.either(
+        createRuntimeClient(runtimeUrl).fetchWorkflowCheckpointFileContent(77, 'wcp_1', 'wcf_2'),
+      ),
+    );
+    assert.ok(failure._tag === 'Left');
+    assert.deepEqual(apiErrorData(failure.left as RuntimeApiError<never>), data);
+  });
+}
+
 async function capture<Output>(
   data: unknown,
   call: (client: ReturnType<typeof createRuntimeClient>) => Effect.Effect<Output, unknown>,

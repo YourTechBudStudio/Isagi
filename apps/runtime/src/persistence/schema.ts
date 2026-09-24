@@ -1295,7 +1295,8 @@ export const workflowEvidence = sqliteTable(
  * `base_*` is the base union flattened: a `git` base names the exact commit HEAD pointed at, a
  * historical fact rather than a retained ref. `repository_*` is descriptive provenance with no
  * foreign key, because history outlives projects and worktrees (the posture of
- * `workflow_runs.destination_*`). Counts let a detail read skip the entries entirely.
+ * `workflow_runs.destination_*`). Counts and warning groups let a detail read skip the entries
+ * entirely.
  *
  * Only `WorkflowCheckpointRepository` writes this table and `workflow_checkpoint_entries`.
  */
@@ -1337,6 +1338,15 @@ export const workflowCheckpoints = sqliteTable(
     absentCount: integer('absent_count').notNull(),
     /** The resolved warning set: inherited region warnings plus this checkpoint's own. */
     warningCount: integer('warning_count').notNull(),
+    /**
+     * Canonical JSON of the detail's `warningGroups`: this checkpoint's own warnings, one group per
+     * reason with at most five sample paths. Computed from the committed entries in the same
+     * transaction, so a detail read is one row however many warnings the capture recorded.
+     *
+     * The default exists only because SQLite cannot add a `NOT NULL` column without one; no
+     * checkpoint could be committed before this column did, and the repository always writes it.
+     */
+    warningGroupsJson: text('warning_groups_json').notNull().default('[]'),
     createdAt: text('created_at').notNull(),
   },
   (table) => [
