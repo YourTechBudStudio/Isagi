@@ -6,7 +6,7 @@ The public TypeScript contract for authoring Isagi workflows.
 import { createGraph, defineWorkflow, operation } from '@yourtechbudstudio/isagi-workflow-sdk';
 ```
 
-Pin this package exactly. The current release is `0.3.0`, paired with
+Pin this package exactly. The current release is `0.4.0`, paired with
 `@yourtechbudstudio/isagi-workflow-verifier` at the version that package documents. The workflow
 contract version is exported as `workflowContractVersion`; package semver and the workflow contract
 version are separate axes.

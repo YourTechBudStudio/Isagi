@@ -62,6 +62,20 @@ export {
 } from './evidence/evidence.repository.js';
 
 export {
+  makeWorkflowCheckpointRepository,
+  WorkflowCheckpointRepository,
+  WorkflowCheckpointRepositoryLive,
+  type WorkflowCheckpointRepositoryService,
+} from './checkpoints/checkpoints.repository.js';
+
+export {
+  makeWorkflowCheckpointCapture,
+  WorkflowCheckpointCapture,
+  WorkflowCheckpointCaptureLive,
+  type WorkflowCheckpointCaptureService,
+} from './checkpoints/capture.service.js';
+
+export {
   ContentPublishError,
   ContentUnavailable,
   makeWorkflowContentStore,
@@ -114,6 +128,8 @@ export type {
 export type {
   WorkflowArtifactRecord,
   WorkflowAttemptRecord,
+  WorkflowCheckpointEntryRecord,
+  WorkflowCheckpointRecord,
   WorkflowExecutionRecord,
   WorkflowFrameRecord,
   WorkflowOperationRecord,

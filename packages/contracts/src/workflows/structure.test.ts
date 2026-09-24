@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  checkpoint,
   complete,
   createGraph,
   defineWorkflow,
@@ -132,18 +133,16 @@ test('a descriptor produced by the real extractor decodes through the contracts 
   assert.equal(decoded.graphs[1]?.nodes[0]?.kind, 'subgraph');
 });
 
-test('a checkpoint descriptor also decodes, so an unlaunchable package is still inspectable', () => {
+test('a checkpoint descriptor decodes with its static metadata and no caption', () => {
   const descriptor = describeOrThrow(
     createGraph<State, {}, { readonly note: string }, string>({
       key: 'WithCheckpoint',
       title: 'With checkpoint',
       init: (_destination, parameters) => ({ note: parameters.note }),
       state: { note: reduce.replace<string>() },
-      entry: 'pause',
-      nodes: {
-        pause: { isagiContract: 3, isagiKind: 'checkpoint-node', caption: 'Review' } as never,
-      },
-      edges: { fromPause: edge({ from: 'pause', to: ['done'], choose: () => ({ to: 'done' }) }) },
+      entry: 'save',
+      nodes: { save: checkpoint({ title: 'Save notes', prepare: () => ({ capture: [] }) }) },
+      edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
       outcomes: { done: outcome({ kind: 'success', output: (s) => s.note }) },
     }),
   );
@@ -151,8 +150,7 @@ test('a checkpoint descriptor also decodes, so an unlaunchable package is still 
     JSON.parse(JSON.stringify(descriptor)),
   );
   const node = decoded.graphs[0]?.nodes[0];
-  assert.equal(node?.kind, 'checkpoint');
-  assert.equal(node?.kind === 'checkpoint' ? node.caption : null, 'Review');
+  assert.deepEqual(node, { id: 'save', kind: 'checkpoint', title: 'Save notes' });
 });
 
 test('the schema rejects a descriptor from an unsupported contract or descriptor version', () => {
@@ -209,7 +207,6 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
     'too_many_outcomes',
     'containment_too_deep',
     'deferred_executable_dependency',
-    'checkpoint_not_launchable',
     'graph_missing',
     'subgraph_registration_changed',
     'node_missing',
@@ -222,7 +219,7 @@ test('the contracts diagnostic codes are exactly the codes the verifier can emit
   // Assignable both ways: neither set may gain a member the other lacks.
   const mirrored: readonly WorkflowStructureDiagnosticCode[] = verifierCodes;
   const back: readonly StructureDiagnosticCode[] = mirrored;
-  assert.equal(back.length, 40);
+  assert.equal(back.length, 39);
 
   for (const code of verifierCodes) {
     assert.equal(Schema.decodeUnknownSync(workflowStructureDiagnosticCodeSchema)(code), code);

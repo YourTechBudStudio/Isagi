@@ -67,7 +67,6 @@ export type NodeDescriptor =
   | {
       readonly id: string;
       readonly kind: 'checkpoint';
-      readonly caption: string;
       readonly title?: string;
       readonly description?: string;
     };
@@ -119,7 +118,6 @@ export type StructureDiagnosticCode =
   | 'too_many_outcomes'
   | 'containment_too_deep'
   | 'deferred_executable_dependency'
-  | 'checkpoint_not_launchable'
   // Saved-position validation (§6.4): a pinned structure that no longer fits the position a
   // run is parked at. Reported through the same diagnostic shape, so they share the set.
   | 'graph_missing'
@@ -148,16 +146,6 @@ export interface StructureDiagnostic {
 export type StructureResult =
   | { readonly ok: true; readonly descriptor: WorkflowStructureDescriptor }
   | { readonly ok: false; readonly diagnostics: readonly StructureDiagnostic[] };
-
-export interface CapabilityReport {
-  readonly launchable: boolean;
-  readonly unsupported: readonly {
-    readonly capability: 'checkpoint';
-    readonly graphKey: string;
-    readonly nodeId: string;
-    readonly caption: string;
-  }[];
-}
 
 const identifierPattern = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
@@ -659,12 +647,13 @@ function validateNode(
     return;
   }
   if (isBranded(node, 'checkpoint-node')) {
-    // A checkpoint carries a static caption, never a label callback, so the label rule does not
-    // reach it and a valid checkpoint bundle proceeds to its capability report.
-    if (typeof node.caption !== 'string' || node.caption.length === 0) {
+    // A checkpoint has no `label`: its instance title comes from what `prepare` returns at run
+    // time, so the label rule does not reach it. `prepare` is only checked to be a function; the
+    // verifier never calls it, because what a visit captures depends on state it does not have.
+    if (typeof node.prepare !== 'function') {
       diagnostics.add(
         'missing_callback',
-        `Checkpoint node "${id}" needs a non-empty caption.`,
+        `Checkpoint node "${id}" needs a prepare() function.`,
         at({ nodeId: id }),
       );
     }
@@ -941,7 +930,7 @@ function describeNode(id: string, node: Unknown): NodeDescriptor {
     return { ...shared, kind: 'subgraph', graphKey: String((node.graph as Unknown).key) };
   }
   if (node.isagiKind === 'checkpoint-node') {
-    return { ...shared, kind: 'checkpoint', caption: String(node.caption) };
+    return { ...shared, kind: 'checkpoint' };
   }
   return { ...shared, kind: 'operation' };
 }
@@ -994,7 +983,6 @@ export function canonicalizeDescriptor(descriptor: WorkflowStructureDescriptor):
         id: node.id,
         kind: node.kind,
         ...(node.kind === 'subgraph' ? { graphKey: node.graphKey } : {}),
-        ...(node.kind === 'checkpoint' ? { caption: node.caption } : {}),
         ...optional('title', node.title),
         ...optional('description', node.description),
       })),
@@ -1016,23 +1004,4 @@ export function canonicalizeDescriptor(descriptor: WorkflowStructureDescriptor):
 
 export function hashDescriptor(descriptor: WorkflowStructureDescriptor): string {
   return createHash('sha256').update(canonicalizeDescriptor(descriptor), 'utf8').digest('hex');
-}
-
-/**
- * Which declared node kinds this release can actually execute. A structurally valid bundle can
- * still be unlaunchable; the verifier withholds the receipt and the runtime checks independently,
- * so a forged receipt cannot launch one either.
- */
-export function describeCapabilities(descriptor: WorkflowStructureDescriptor): CapabilityReport {
-  const unsupported = descriptor.graphs.flatMap((graph) =>
-    graph.nodes
-      .filter((node) => node.kind === 'checkpoint')
-      .map((node) => ({
-        capability: 'checkpoint' as const,
-        graphKey: graph.key,
-        nodeId: node.id,
-        caption: node.kind === 'checkpoint' ? node.caption : '',
-      })),
-  );
-  return { launchable: unsupported.length === 0, unsupported };
 }

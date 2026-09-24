@@ -3,6 +3,8 @@ import { Effect } from 'effect';
 import type { WorkflowRunPosition, WorkflowSegmentKind } from '@isagi/contracts';
 
 import type { DatabaseError } from '../../../persistence/index.js';
+import type { WorkflowCheckpointCaptureService } from '../../checkpoints/capture.service.js';
+import type { WorkflowCheckpointRepositoryService } from '../../checkpoints/checkpoints.repository.js';
 import type { WorkflowOperationServiceShape } from '../../operations/operation.service.js';
 import type { WorkflowOperationsRepositoryService } from '../../persistence/operations.repository.js';
 import type { SegmentCommitOutcome, WorkflowWriteResult } from '../../persistence/outcomes.js';
@@ -56,6 +58,14 @@ export interface EngineDeps {
    * wait stays authoritative and event, Resume and startup reconciliation all retry it.
    */
   readonly reconcileWait: (waitId: number) => Effect.Effect<boolean>;
+  /**
+   * Read composition over the checkpoint repository, for a checkpoint segment's receipt check.
+   *
+   * Only reads: the capture service is the one writer of checkpoint rows.
+   */
+  readonly checkpoints: Pick<WorkflowCheckpointRepositoryService, 'findByExecution'>;
+  /** Saves one checkpoint visit's files and commits its row, or refuses with a named reason. */
+  readonly checkpointCapture: WorkflowCheckpointCaptureService;
   /** Identifies this worker, which is half of the attempt-ownership fence. */
   readonly owner: string;
   readonly ownerIncarnation: string;

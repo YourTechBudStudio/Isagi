@@ -11,6 +11,7 @@ import {
   recoveryWaitDeclaration,
   type AttemptTurnRecovery,
 } from '../waits/turn-recovery.js';
+import { runCheckpoint } from './segments/checkpoint.js';
 import { runGraphEntry } from './segments/graph-entry.js';
 import { runGraphOutput } from './segments/graph-output.js';
 import { runNodeCallback } from './segments/node-callback.js';
@@ -19,6 +20,8 @@ import { runRouting } from './segments/routing.js';
 import {
   advanced,
   halted,
+  recordSegmentFailure,
+  requireExecution,
   resolveSlot,
   type EngineDeps,
   type SegmentContext,
@@ -201,7 +204,16 @@ function runSegment(
     case 'graph_entry':
       return runGraphEntry(deps, ctx);
     case 'node_callback':
-      return runNodeCallback(deps, ctx);
+      // The execution row is read once, here. Its durable `node_kind` — written by routing and
+      // kept in step with the pin by saved-position validation — picks the handler.
+      return requireExecution(deps, ctx.run.position.executionId).pipe(
+        Effect.flatMap((execution) =>
+          execution.nodeKind === 'checkpoint'
+            ? runCheckpoint(deps, ctx, execution)
+            : runNodeCallback(deps, ctx, execution),
+        ),
+        Effect.catchTag('WorkflowSegmentFailure', recordSegmentFailure(deps, ctx)),
+      );
     case 'routing':
       return runRouting(deps, ctx);
     case 'graph_output':

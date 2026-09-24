@@ -15,7 +15,6 @@ import {
 
 import {
   canonicalizeDescriptor,
-  describeCapabilities,
   describeWorkflowModule,
   hashDescriptor,
   workflowStructureDescriptorVersion,
@@ -401,39 +400,52 @@ test('two different graphs claiming one key is duplicate_graph_key', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Checkpoint: structurally valid, not launchable
+// Checkpoint: static metadata only
 // ---------------------------------------------------------------------------
 
-test('a checkpoint node passes structural validation and reaches the capability report', () => {
+test('a checkpoint node verifies and describes only its static metadata', () => {
+  let prepared = 0;
   const graph = createGraph<State, {}, { readonly note: string }, string>({
     key: 'WithCheckpoint',
     title: 'With checkpoint',
     init: (_destination, parameters) => ({ note: parameters.note }),
     state: { note: reduce.replace<string>() },
-    entry: 'pause',
-    nodes: { pause: checkpoint({ caption: 'Review the diff' }) },
-    edges: { fromPause: edge({ from: 'pause', to: ['done'], choose: () => ({ to: 'done' }) }) },
+    entry: 'save',
+    nodes: {
+      save: checkpoint({
+        title: 'Save notes',
+        description: 'After review.',
+        prepare: () => {
+          prepared += 1;
+          return { capture: [{ scope: 'notes', directory: 'notes' }] };
+        },
+      }),
+    },
+    edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
     outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
   });
-  // It must not fail invalid_label: a checkpoint has a static caption, not a label callback.
+  // It must not fail invalid_label: a checkpoint's instance title comes from `prepare`, not a label.
   const descriptor = describeOrThrow(graph);
-  const capabilities = describeCapabilities(descriptor);
-  assert.equal(capabilities.launchable, false);
-  assert.deepEqual(capabilities.unsupported, [
-    {
-      capability: 'checkpoint',
-      graphKey: 'WithCheckpoint',
-      nodeId: 'pause',
-      caption: 'Review the diff',
-    },
+  assert.deepEqual(descriptor.graphs[0]!.nodes, [
+    { id: 'save', kind: 'checkpoint', title: 'Save notes', description: 'After review.' },
   ]);
+  assert.doesNotMatch(canonicalizeDescriptor(descriptor), /caption/);
+  assert.equal(prepared, 0, 'verification never evaluates prepare');
 });
 
-test('a graph with no checkpoint is launchable', () => {
-  assert.deepEqual(describeCapabilities(describeOrThrow(leafGraph('Root'))), {
-    launchable: true,
-    unsupported: [],
+test('a checkpoint without a prepare function is refused', () => {
+  const graph = createGraph<State, {}, { readonly note: string }, string>({
+    key: 'WithCheckpoint',
+    title: 'With checkpoint',
+    init: (_destination, parameters) => ({ note: parameters.note }),
+    state: { note: reduce.replace<string>() },
+    entry: 'save',
+    nodes: { save: checkpoint({ prepare: () => ({ capture: [] }) }) },
+    edges: { fromSave: edge({ from: 'save', to: ['done'], choose: () => ({ to: 'done' }) }) },
+    outcomes: { done: outcome({ kind: 'success', output: (state) => state.note }) },
   });
+  const withoutPrepare = { ...graph, nodes: { save: { ...graph.nodes.save, prepare: undefined } } };
+  assert.deepEqual(codesFor(withoutPrepare), ['missing_callback']);
 });
 
 // ---------------------------------------------------------------------------
@@ -786,7 +798,6 @@ test('extraction reads registration data without invoking any author callback', 
   assert.deepEqual(invoked, [], 'no author callback was invoked');
 
   // The derived products read the descriptor, so they must not reach a callback either.
-  describeCapabilities(result.descriptor);
   hashDescriptor(result.descriptor);
   canonicalizeDescriptor(result.descriptor);
   assert.deepEqual(

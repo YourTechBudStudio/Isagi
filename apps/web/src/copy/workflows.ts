@@ -90,6 +90,9 @@ const workflowFailureHeadlines = {
   // Nothing was captured, and nothing half-captured was left behind. The reason travels on the
   // failure detail; this is the one line for a run that only shows a code.
   evidence_capture_rejected: 'A step tried to keep something as evidence and was refused.',
+  // Both mean nothing was saved: a failed checkpoint leaves no half-written record behind.
+  checkpoint_prepare_failed: 'A checkpoint could not decide what to capture.',
+  checkpoint_capture_failed: 'A checkpoint could not capture its files.',
 
   payload_unavailable: 'A value this run recorded earlier could not be read back.',
 
@@ -130,12 +133,11 @@ const workflowLoadFailureCopy = {
   stale_source: 'This workflow changed after its last verified build.',
   artifact_tampered: "This workflow's built artifact no longer matches its manifest.",
   artifact_load_failed: "Couldn't load this workflow's verified artifact.",
-  // The three structural reasons. A graph that does not verify, a build whose recorded structure no
-  // longer matches its code, and a workflow asking for something this runtime cannot provide are
-  // three different problems, and collapsing them would send a person looking in the wrong place.
+  // The two structural reasons. A graph that does not verify and a build whose recorded structure
+  // no longer matches its code are different problems, and collapsing them would send a person
+  // looking in the wrong place.
   invalid_structure: "This workflow's graph didn't pass verification.",
   structure_mismatch: "This workflow's recorded structure no longer matches its build.",
-  unsupported_capability: 'This workflow uses a capability this runtime does not provide.',
   invalid_export: "This workflow's artifact does not export a valid workflow.",
   pinned_artifact_unavailable: "This run's verified workflow artifact is unavailable.",
 } as const satisfies Record<WorkflowLoadFailureReason, string>;

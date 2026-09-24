@@ -132,11 +132,11 @@ test('a subgraph whose graph the descriptor omits is reported, not silently empt
   ]);
 });
 
-test('a checkpoint node is drawn defensively rather than crashing the drawing', () => {
+test('a checkpoint node is drawn as a node of its own kind', () => {
   const graph = graphFixture({
     key: 'root',
     entry: 'hold',
-    nodes: [{ id: 'hold', kind: 'checkpoint', caption: 'waiting for #46' }],
+    nodes: [{ id: 'hold', kind: 'checkpoint', title: 'Save the phase' }],
     edges: [{ id: 'done', from: 'hold', to: ['ok'] }],
     outcomes: [{ id: 'ok', kind: 'success' }],
   });

@@ -26,7 +26,7 @@ test('every registration constructor brands its result', () => {
   assert.ok(isWorkflowBranded(noteGraph.nodes.ack, 'operation-node'));
   assert.ok(isWorkflowBranded(noteGraph.edges.fromAck, 'edge'));
   assert.ok(isWorkflowBranded(noteGraph.outcomes.done, 'outcome'));
-  assert.ok(isWorkflowBranded(checkpoint({ caption: 'Review the diff' }), 'checkpoint-node'));
+  assert.ok(isWorkflowBranded(checkpoint({ prepare: () => ({ capture: [] }) }), 'checkpoint-node'));
   assert.ok(
     isWorkflowBranded(
       subgraph({
@@ -69,10 +69,17 @@ test('constructors preserve the author-declared destination order and optional m
   );
 });
 
-test('a checkpoint carries a static caption, not a dynamic display-name callback', () => {
-  const reserved = checkpoint({ caption: 'Review the diff', title: 'Checkpoint' });
-  assert.equal(reserved.caption, 'Review the diff');
-  assert.equal('label' in reserved, false);
+test('a checkpoint carries a pure prepare and static metadata, not a display-name callback', () => {
+  const prepare = (state: State) => ({
+    title: state.note,
+    capture: [{ scope: 'notes', directory: 'notes', exclude: undefined }],
+  });
+  const node = checkpoint({ prepare, title: 'Save notes', description: 'After review.' });
+  assert.equal(node.prepare, prepare);
+  assert.equal(node.title, 'Save notes');
+  assert.equal(node.description, 'After review.');
+  assert.equal('label' in node, false);
+  assert.equal('caption' in node, false);
 });
 
 test('defineWorkflow brands the definition and keeps the launch surface callable', async () => {

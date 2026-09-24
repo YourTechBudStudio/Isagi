@@ -3,8 +3,11 @@
  *
  * Pure and synchronous: it runs after `prepare` and before anything touches the filesystem, so an
  * author mistake fails the segment with `checkpoint_prepare_failed` and a named reason while no
- * byte has been published. The value arriving here has already passed the serializability gate
- * but is otherwise untrusted — authors write plans in plain JavaScript as often as TypeScript.
+ * byte has been published. The value arriving here is untrusted — authors write plans in plain
+ * JavaScript as often as TypeScript — and has not been through the serializability gate: it is never
+ * stored as returned, only the normalized result is. So this reads only the fields a plan has,
+ * refuses any of them with the wrong type, and treats an optional field set to `undefined` (which
+ * the SDK types allow) as absent.
  *
  * Every rule refuses rather than repairs, the posture evidence already takes: a silently trimmed
  * scope list or a dropped exclusion would save something other than what the author asked for.

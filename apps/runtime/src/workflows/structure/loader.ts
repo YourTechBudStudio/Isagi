@@ -17,7 +17,6 @@ import {
   type WorkflowBuildManifest,
 } from '@yourtechbudstudio/isagi-workflow-verifier/receipt';
 import {
-  describeCapabilities,
   describeWorkflowModule,
   hashDescriptor,
   type StructureDiagnostic,
@@ -141,8 +140,8 @@ export function loadPinnedWorkflowArtifact(input: {
       if (hashArtifact(bytes) !== input.artifactHash) {
         throw failure('pinned_artifact_unavailable', input, 'Pinned workflow artifact is corrupt.');
       }
-      // The same three structural steps run on the pinned bytes, so a corrupt or
-      // capability-invalid pin fails closed instead of executing.
+      // The same structural steps run on the pinned bytes, so a corrupt pin fails closed
+      // instead of executing.
       return await importCachedArtifact(
         input.cacheRoot,
         input.artifactHash,
@@ -377,15 +376,11 @@ async function importCachedArtifact(
 /**
  * Turns an imported module namespace into a usable artifact, or refuses.
  *
- * All three structural steps live here rather than at the two call sites, so the pinned path cannot
+ * Both structural steps live here rather than at the two call sites, so the pinned path cannot
  * drift into accepting something the publishing path rejects:
  *
  * 1. the module is structurally a workflow, reported per node and edge rather than as one verdict;
- * 2. every graph it declares is reachable as a live object by its key;
- * 3. it contains no node kind this release cannot execute.
- *
- * Step 3 is what keeps `checkpoint()` a real extension seam and an unlaunchable one at the same
- * time: it validates, it gets a descriptor, and it is still refused at load.
+ * 2. every graph it declares is reachable as a live object by its key.
  */
 export function describeWorkflowArtifact(
   loaded: unknown,
@@ -404,18 +399,6 @@ export function describeWorkflowArtifact(
       artifactHash: hash,
       diagnostics: structure.diagnostics,
     });
-  }
-
-  const capabilities = describeCapabilities(structure.descriptor);
-  if (!capabilities.launchable) {
-    const unsupported = capabilities.unsupported[0];
-    throw failure(
-      'unsupported_capability',
-      { ...input, artifactHash: hash },
-      unsupported
-        ? `This release cannot execute a ${unsupported.capability} node (${unsupported.graphKey}.${unsupported.nodeId}).`
-        : 'This release cannot execute one of this workflow\u2019s node kinds.',
-    );
   }
 
   const definition = (loaded as { default: AnyWorkflowDefinition }).default;

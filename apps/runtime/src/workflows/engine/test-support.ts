@@ -12,6 +12,7 @@ import type {
 } from '@isagi/contracts';
 
 import { HarnessObserverRefreshError } from '../../agent-sessions/harness/observer.service.js';
+import { Git, GitLive } from '../../git/git.command.js';
 import { DatabaseError } from '../../persistence/index.js';
 import type { InternalRuntimeEvent } from '../../runtime-events/internal-event-bus.js';
 import { duplicateSafeTitle, SurfaceError, validateSurfaceTitle } from '../../surfaces/index.js';
@@ -21,6 +22,12 @@ import type {
 } from '../../surfaces/index.js';
 import type { SurfaceServiceError } from '../../surfaces/surfaces.service.js';
 import { WorkspaceError, type WorkspaceServiceError } from '../../workspace/workspace.service.js';
+import {
+  makeWorkflowCheckpointCapture,
+  type CaptureCheckpointInput,
+  type WorkflowCheckpointCaptureService,
+} from '../checkpoints/capture.service.js';
+import { makeWorkflowCheckpointRepository } from '../checkpoints/checkpoints.repository.js';
 import {
   makeWorkflowOperationService,
   type WorkflowOperationServiceShape,
@@ -190,6 +197,14 @@ export interface EngineHarness {
      */
     readonly provenance?: OperationSettlementProvenance | undefined;
   }) => Promise<void>;
+  /**
+   * Runs after a checkpoint's row has committed and before the segment commits its result.
+   *
+   * The one window a Cancel can land in to leave a saved checkpoint on a visit that never advanced.
+   */
+  readonly onCheckpointCaptured: (
+    hook: (input: CaptureCheckpointInput) => Promise<void> | void,
+  ) => void;
   /** Runs inside the window between a suspend committing and its arm-time reconciliation. */
   readonly onArmTimeReconcile: (hook: (waitId: number) => Promise<void> | void) => void;
   /**
@@ -332,6 +347,27 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     }) as Repository;
   const runs = crashable(fixture.runs);
   const evidence = crashable(fixture.evidence);
+  /**
+   * The real capture service over real Git, the fixture's content store and its database.
+   *
+   * Not proxied by `crashable`: its repository's `commitCapture` shares a name with the evidence
+   * transaction, and "crash the next capture" must not mean two different writes. A crash between
+   * the checkpoint row and the segment commit is `crashNext('commitNodeResult')`.
+   */
+  const checkpoints = makeWorkflowCheckpointRepository(fixture.database);
+  let afterCheckpointCapture: (input: CaptureCheckpointInput) => Promise<void> | void = () => {};
+  const capture = makeWorkflowCheckpointCapture({
+    git: Effect.runSync(Git.pipe(Effect.provide(GitLive))),
+    content: fixture.content,
+    checkpoints,
+    database: fixture.database,
+  });
+  const checkpointCapture: WorkflowCheckpointCaptureService = {
+    capture: (input) =>
+      capture
+        .capture(input)
+        .pipe(Effect.tap(() => Effect.promise(async () => afterCheckpointCapture(input)))),
+  };
   const adapters = makeFakeAdapterState();
   const events: InternalRuntimeEvent[] = [];
 
@@ -538,6 +574,8 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
       payloads: fixture.payloads,
       operations,
       operationRecords: fixture.operations,
+      checkpoints,
+      checkpointCapture,
       catalog,
       owner: `worker:${Math.random().toString(16).slice(2)}`,
       ownerIncarnation: operations.incarnationId,
@@ -675,6 +713,9 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
         operationId: settled.value.id,
         operationKey: settled.value.operationKey,
       });
+    },
+    onCheckpointCaptured: (hook) => {
+      afterCheckpointCapture = hook;
     },
     onArmTimeReconcile: (hook) => {
       beforeArmTimeReconcile = hook;

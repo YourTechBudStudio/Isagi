@@ -33,7 +33,6 @@ import {
 } from './receipt.js';
 import {
   canonicalizeDescriptor,
-  describeCapabilities,
   hashDescriptor,
   type StructureDiagnostic,
   type WorkflowStructureDescriptor,
@@ -161,23 +160,13 @@ export async function verifyWorkflow(
   const descriptor = await validateArtifact(root, artifactPath, runner);
   const structureHash = hashDescriptor(descriptor);
 
-  // The structure file is written for every structurally valid bundle, including one this release
-  // cannot launch, so an author always has a machine-readable description of what they built.
+  // The structure file is written for every structurally valid bundle, so an author always has a
+  // machine-readable description of what they built.
   await writeAtomic(
     join(root, 'dist', 'isagi-workflow-structure.json'),
     `${canonicalizeDescriptor(descriptor)}\n`,
     'the workflow structure description',
   );
-
-  const capabilities = describeCapabilities(descriptor);
-  if (!capabilities.launchable) {
-    const offenders = capabilities.unsupported
-      .map((entry) => `  ${entry.graphKey}.${entry.nodeId} — ${entry.caption}`)
-      .join('\n');
-    throw new VerificationError(
-      `This release recognizes the checkpoint node kind but cannot execute checkpoint capture, so the package is not launchable yet:\n${offenders}\nNo build receipt was written. Remove the checkpoint node(s) to produce a launchable package.`,
-    );
-  }
 
   const manifest: WorkflowBuildManifest = {
     manifestVersion: workflowBuildManifestVersion,

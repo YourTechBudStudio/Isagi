@@ -41,7 +41,7 @@ Use `subgraph({ graph, parameters, onResult })` to register a child. `parameters
 
 One definition can be reused by several subgraph registrations. Routing loops are supported; recursive graph containment is not. Graph execution is sequential, although one headless wait can join several operations. There is no separate child-workflow launch or workflow-join wait.
 
-Graph keys and node, edge, and outcome IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`. Keep node and outcome IDs distinct within a graph. Use stable IDs for structure, titles/descriptions for purpose, and optional pure `label` callbacks for names captured at graph or node entry. The exported `checkpoint` node is reserved; this release rejects it during verification.
+Graph keys and node, edge, and outcome IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`. Keep node and outcome IDs distinct within a graph. Use stable IDs for structure, titles/descriptions for purpose, and optional pure `label` callbacks for names captured at graph or node entry. The `checkpoint` node saves a filesystem boundary of the run's destination; see [Workflow checkpoints](workflow-checkpoints.md).
 
 ## Operations, waits, and routing
 

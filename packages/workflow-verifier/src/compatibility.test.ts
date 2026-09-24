@@ -49,6 +49,17 @@ test('the receipt pair matches the published SDK and verifier package manifests'
   assert.equal(verifierPkg.name, workflowVerifierPackage);
   assert.equal(verifierPkg.version, workflowVerifierVersion);
   assert.equal(verifierPkg.peerDependencies?.[workflowSdkPackage], workflowSdkVersion);
+  // The workspace pins are exact too, so the verifier's own tests and the contracts mirror always
+  // build against the pair this release names.
+  assert.equal(
+    verifierPkg.devDependencies?.[workflowSdkPackage],
+    `workspace:${workflowSdkVersion}`,
+  );
+  const contractsPkg = readJson(resolve(repoRoot, 'packages/contracts/package.json'));
+  assert.equal(
+    contractsPkg.devDependencies?.[workflowVerifierPackage],
+    `workspace:${workflowVerifierVersion}`,
+  );
 });
 
 test('the canonical scaffold pins the workflow dependencies and commands exactly', () => {

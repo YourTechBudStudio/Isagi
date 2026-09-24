@@ -1,4 +1,5 @@
 import { brand, type WorkflowBrand } from './brand.js';
+import type { CheckpointPlan } from './checkpoints.js';
 import type { GraphDefinition } from './graph.js';
 import type { OperationContext, OperationResult, SubgraphResult } from './operations.js';
 import type { GraphUpdate } from './state.js';
@@ -11,7 +12,7 @@ import type { GraphUpdate } from './state.js';
 export type GraphNode<State, Updates> =
   | OperationNode<State, Updates>
   | SubgraphNode<State, Updates, any, any>
-  | CheckpointNode;
+  | CheckpointNode<State>;
 
 export interface OperationNode<State, Updates> extends WorkflowBrand {
   readonly isagiKind: 'operation-node';
@@ -85,29 +86,31 @@ export function subgraph<ParentState, ParentUpdates, ChildParameters, ChildOutpu
 }
 
 /**
- * Reserved node kind. Checkpoint capture ships in a later story; this release recognizes the
- * discriminant structurally so the extension seam is real, and refuses to launch a bundle that
- * contains one.
+ * A filesystem boundary the runtime captures each time this node is visited.
  *
- * `caption` is deliberately not named `label`: it is a static string, not a dynamic display-name
- * callback evaluated at record creation.
+ * `prepare` is pure and synchronous: it receives a frozen copy of the frame state and returns the
+ * plan for this visit. It runs only when the node is visited, never during verification or
+ * inspection. A checkpoint leaves state unchanged and routes along its single edge.
+ *
+ * A checkpoint has no dynamic `label`: its instance title comes from the plan `prepare` returns,
+ * then this node's static `title`, then its id.
  */
-export interface CheckpointNode extends WorkflowBrand {
+export interface CheckpointNode<State> extends WorkflowBrand {
   readonly isagiKind: 'checkpoint-node';
   readonly title?: string | undefined;
   readonly description?: string | undefined;
-  readonly caption: string;
+  readonly prepare: (state: State) => CheckpointPlan;
 }
 
-export function checkpoint(spec: {
-  readonly caption: string;
+export function checkpoint<State>(spec: {
+  readonly prepare: (state: State) => CheckpointPlan;
   readonly title?: string | undefined;
   readonly description?: string | undefined;
-}): CheckpointNode {
+}): CheckpointNode<State> {
   return {
     ...brand('checkpoint-node'),
     title: spec.title,
     description: spec.description,
-    caption: spec.caption,
+    prepare: spec.prepare,
   };
 }

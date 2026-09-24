@@ -85,6 +85,8 @@ import {
 } from './terminal-sessions/index.js';
 import {
   WorkflowArtifactCatalogLive,
+  WorkflowCheckpointCaptureLive,
+  WorkflowCheckpointRepositoryLive,
   WorkflowContentStoreLive,
   WorkflowDeltaPublisherLive,
   WorkflowEngineLive,
@@ -175,6 +177,17 @@ const WorkflowOperationsRepositoryLayer = WorkflowOperationsRepositoryLive.pipe(
 const WorkflowEvidenceRepositoryLayer = WorkflowEvidenceRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowWriteWakeLayer),
+);
+const WorkflowCheckpointRepositoryLayer = WorkflowCheckpointRepositoryLive.pipe(
+  Layer.provide(DatabaseLive),
+);
+// The one writer of checkpoint rows: it reads the destination with Git, publishes file bytes through
+// the content store, and commits through the checkpoint repository. It creates no Git refs.
+const WorkflowCheckpointCaptureLayer = WorkflowCheckpointCaptureLive.pipe(
+  Layer.provide(GitLive),
+  Layer.provide(WorkflowContentStoreLayer),
+  Layer.provide(WorkflowCheckpointRepositoryLayer),
+  Layer.provide(DatabaseLive),
 );
 const WorkflowHistoryRepositoryLayer = WorkflowHistoryRepositoryLive.pipe(
   Layer.provide(DatabaseLive),
@@ -304,6 +317,8 @@ const WorkspaceServiceLayer = WorkspaceServiceLive.pipe(
 );
 const WorkflowEngineLayer = WorkflowEngineLive.pipe(
   Layer.provide(WorkflowRunsRepositoryLayer),
+  Layer.provide(WorkflowCheckpointRepositoryLayer),
+  Layer.provide(WorkflowCheckpointCaptureLayer),
   Layer.provide(WorkflowOperationsRepositoryLayer),
   Layer.provide(WorkflowPayloadStoreLayer),
   Layer.provide(WorkflowHistoryRepositoryLayer),

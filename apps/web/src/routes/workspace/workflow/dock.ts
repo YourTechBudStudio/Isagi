@@ -296,9 +296,6 @@ function declaredFields(
       rows.push({ label: 'parameters', value: inspectorCopy.parametersRole, tone: 'dim' });
       rows.push({ label: 'output', value: inspectorCopy.outputMappingRole, tone: 'dim' });
     }
-    if (descriptor.kind === 'checkpoint') {
-      rows.push(gap, { label: 'caption', value: descriptor.caption });
-    }
     const outgoing = topology?.links.find(
       (link) => link.fromKey === element.key && link.destinationId === null,
     );

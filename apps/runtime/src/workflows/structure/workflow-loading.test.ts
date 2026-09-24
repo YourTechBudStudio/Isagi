@@ -112,10 +112,10 @@ const operationNodes = `{ work: { ...brand('operation-node'), run: async () => (
 
 const artifact = bundleSource({ graphKey: 'packaged-workflow', nodes: operationNodes });
 
-/** A bundle that validates structurally and still cannot be launched by this release. */
+/** A checkpoint bundle whose `prepare` would throw if loading ever evaluated it. */
 const checkpointArtifact = bundleSource({
   graphKey: 'checkpoint-workflow',
-  nodes: `{ work: { ...brand('checkpoint-node'), caption: 'Review before continuing' } }`,
+  nodes: `{ work: { ...brand('checkpoint-node'), title: 'Save the plan', prepare: () => { throw new Error('prepare ran during load'); } } }`,
 });
 
 /** A bundle whose entry node is not declared: structurally invalid, with a locating diagnostic. */
@@ -572,19 +572,19 @@ test('refuses a bundle whose receipt describes a different structure', async () 
   }
 });
 
-test('refuses to load a checkpoint bundle that is valid but not launchable', async () => {
+test('loads a checkpoint bundle and reports a checkpoint node descriptor', async () => {
   const root = await mkdtemp(join(tmpdir(), 'isagi-workflow-checkpoint-'));
   try {
     const workflows = join(root, 'workflows');
     const registry = createFilesystemWorkflowRegistry(workflows, join(root, 'cache'));
     await writePackage(join(workflows, 'checkpointed'), checkpointArtifact);
 
-    // Structurally valid — it reaches the capability report rather than failing validation — and
-    // still refused, because this release cannot execute a checkpoint node. That is what keeps the
-    // extension seam real without letting it run half-implemented.
-    const error = await failure(discoverAndLoad(registry, 'checkpointed'));
-    assert.equal(error.reason, 'unsupported_capability');
-    assert.match(error.message, /checkpoint/);
+    // Loading describes the structure without running author code: `prepare` runs only when a
+    // run visits the node.
+    const loaded = await Effect.runPromise(discoverAndLoad(registry, 'checkpointed'));
+    assert.deepEqual(loaded.descriptor.graphs[0]?.nodes, [
+      { id: 'work', kind: 'checkpoint', title: 'Save the plan' },
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

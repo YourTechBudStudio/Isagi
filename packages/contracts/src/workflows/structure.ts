@@ -50,7 +50,6 @@ export const workflowStructureDiagnosticCodeSchema = Schema.Literal(
   'too_many_outcomes',
   'containment_too_deep',
   'deferred_executable_dependency',
-  'checkpoint_not_launchable',
   // Saved-position validation, reported when a control is refused because the pinned
   // structure no longer fits where the run is parked.
   'graph_missing',
@@ -92,7 +91,6 @@ export const workflowNodeDescriptorSchema = Schema.Union(
   Schema.Struct({
     id: nonEmptyString,
     kind: Schema.Literal('checkpoint'),
-    caption: nonEmptyString,
     title: Schema.optionalWith(Schema.String, { exact: true }),
     description: Schema.optionalWith(Schema.String, { exact: true }),
   }),

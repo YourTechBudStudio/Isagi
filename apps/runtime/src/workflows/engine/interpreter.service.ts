@@ -8,6 +8,8 @@ import { InternalRuntimeEventBus } from '../../runtime-events/internal-event-bus
 import { SurfaceRepository, SurfaceService } from '../../surfaces/index.js';
 import { WorkspaceService } from '../../workspace/index.js';
 import { WorkspaceRepository } from '../../workspace/index.js';
+import { WorkflowCheckpointCapture } from '../checkpoints/capture.service.js';
+import { WorkflowCheckpointRepository } from '../checkpoints/checkpoints.repository.js';
 import { WorkflowOperationService } from '../operations/operation.service.js';
 import { WorkflowOperationsRepository } from '../persistence/operations.repository.js';
 import { WorkflowPayloadStore, type PayloadPublishError } from '../persistence/payload-store.js';
@@ -93,6 +95,8 @@ export const WorkflowEngineLive = Layer.scoped(
     const runs = yield* WorkflowRunsRepository;
     const operationRecords = yield* WorkflowOperationsRepository;
     const payloads = yield* WorkflowPayloadStore;
+    const checkpoints = yield* WorkflowCheckpointRepository;
+    const checkpointCapture = yield* WorkflowCheckpointCapture;
     const catalog = yield* WorkflowArtifactCatalog;
     const registry = yield* WorkflowRegistry;
     const workspace = yield* WorkspaceRepository;
@@ -123,6 +127,8 @@ export const WorkflowEngineLive = Layer.scoped(
       payloads,
       operations,
       operationRecords,
+      checkpoints,
+      checkpointCapture,
       catalog,
       owner,
       // The incarnation the operation service owns, shared rather than reinvented: it is what

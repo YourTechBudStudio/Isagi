@@ -49,6 +49,7 @@ const templates = {
   'workflow-agents.md': { emittedAs: 'references/workflow-agents.md', tokens: [] },
   'workflow-recovery.md': { emittedAs: 'references/workflow-recovery.md', tokens: [] },
   'workflow-evidence.md': { emittedAs: 'references/workflow-evidence.md', tokens: [] },
+  'workflow-checkpoints.md': { emittedAs: 'references/workflow-checkpoints.md', tokens: [] },
 } as const satisfies Record<
   keyof typeof isagiDocsContentSources,
   { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
@@ -117,6 +118,7 @@ test('the skill package holds exactly the indexed references', () => {
       'references/workflow-agents.md',
       'references/workflow-recovery.md',
       'references/workflow-evidence.md',
+      'references/workflow-checkpoints.md',
       'references/config-global.schema.ts',
       'references/config-project.schema.ts',
       'references/minimal-workflow/package.json',

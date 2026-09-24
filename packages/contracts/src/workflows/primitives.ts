@@ -390,6 +390,13 @@ export const workflowFailureCodeSchema = Schema.Literal(
   'operation_context_closed',
   /** `ctx.captureEvidence` refused the call. `detail.reason` names which rule it broke. */
   'evidence_capture_rejected',
+  /**
+   * A checkpoint's `prepare` threw (`detail.cause`) or returned a plan the runtime refused
+   * (`detail.reason`, with `scopeId`, `field` or `path` where one applies).
+   */
+  'checkpoint_prepare_failed',
+  /** A checkpoint could not save its files. `detail.reason` names why; no checkpoint was saved. */
+  'checkpoint_capture_failed',
   'unsupported_node_kind',
   'payload_unavailable',
 );

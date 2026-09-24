@@ -35,6 +35,13 @@ export const inspectorCopy = {
   absentFromCurrentPin:
     'This node is not in the definition the run is pinned to now. What it recorded is still here.',
   notVisited: 'not visited',
+  // A checkpoint node's one line, from its visits' status and nothing else.
+  checkpointKind: 'checkpoint',
+  checkpointCapturing: 'capturing…',
+  checkpointFailed: 'capture failed',
+  checkpointCaptured: 'captured',
+  checkpointCaptures: (count: number) => `${count} captures`,
+  checkpointNothingSaved: 'nothing saved',
   notAttempted: 'not attempted',
 
   // Recorded column

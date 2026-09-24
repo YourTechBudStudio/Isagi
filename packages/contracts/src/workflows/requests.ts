@@ -62,7 +62,6 @@ export const workflowLoadFailureReasonSchema = Schema.Literal(
   'pinned_artifact_unavailable',
   'invalid_structure',
   'structure_mismatch',
-  'unsupported_capability',
 );
 
 export const workflowDescriptorResultSchema = Schema.Union(

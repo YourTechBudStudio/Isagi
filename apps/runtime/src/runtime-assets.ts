@@ -32,6 +32,7 @@ export const isagiDocsContentSources = {
   'workflow-agents.md': readTextAsset('isagi-docs/workflow-agents.md'),
   'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
   'workflow-evidence.md': readTextAsset('isagi-docs/workflow-evidence.md'),
+  'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
 } as const;
 
 /**

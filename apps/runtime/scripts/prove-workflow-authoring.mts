@@ -341,6 +341,9 @@ async function proveEngineLaunch(input: {
       payloads: fixture.payloads,
       operations,
       operationRecords: fixture.operations,
+      // The canonical scaffold registers no checkpoint, so reaching either would be a defect here.
+      checkpoints: { findByExecution: refuse('findByExecution') },
+      checkpointCapture: { capture: refuse('checkpoint capture') },
       catalog,
       owner: 'authoring-proof',
       ownerIncarnation: operations.incarnationId,

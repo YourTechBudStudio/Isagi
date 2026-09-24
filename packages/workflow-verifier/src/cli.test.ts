@@ -43,7 +43,7 @@ const structureFile = 'dist/isagi-workflow-structure.json';
 function artifact(options: { readonly checkpoint?: boolean; readonly graphKey?: string } = {}) {
   const key = options.graphKey ?? 'Minimal';
   const node = options.checkpoint
-    ? `{ ...brand('checkpoint-node'), caption: 'Review the diff' }`
+    ? `{ ...brand('checkpoint-node'), title: 'Save notes', prepare: () => { throw new Error('prepare ran during verification'); } }`
     : `{ ...brand('operation-node'), run: async () => ({ ...brand('operation-result'), type: 'complete' }) }`;
   return `const brand = (kind) => ({ isagiContract: 3, isagiKind: kind });
 const graph = {
@@ -148,19 +148,15 @@ test('the structure description is written, and the receipt names its hash', asy
   assert.equal(descriptor.descriptorVersion, workflowStructureDescriptorVersion);
 });
 
-test('a checkpoint bundle verifies structurally, is refused, and gets no receipt', async () => {
+test('a checkpoint bundle verifies and gets a receipt without running prepare', async () => {
   const root = await fixture(artifact({ checkpoint: true }));
-  await assert.rejects(verifyWorkflow(root), (error: Error) => {
-    assert.match(error.message, /cannot execute checkpoint capture/);
-    assert.match(error.message, /Minimal\.act — Review the diff/);
-    return true;
-  });
-  assert.ok(await missing(root, receiptFile), 'no receipt is written for an unlaunchable package');
-  // The structure description is still written: it is what the author has to inspect.
-  assert.equal(
-    JSON.parse(await readFile(join(root, structureFile), 'utf8')).rootGraphKey,
-    'Minimal',
-  );
+  await verifyWorkflow(root);
+  const manifest = parseWorkflowBuildManifestJson(await readFile(join(root, receiptFile), 'utf8'));
+  assert.equal(manifest.structure.rootGraphKey, 'Minimal');
+  const descriptor = JSON.parse(await readFile(join(root, structureFile), 'utf8'));
+  assert.deepEqual(descriptor.graphs[0].nodes, [
+    { id: 'act', kind: 'checkpoint', title: 'Save notes' },
+  ]);
 });
 
 test('a failed verification removes a receipt an earlier success left behind', async () => {

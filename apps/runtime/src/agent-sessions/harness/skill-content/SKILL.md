@@ -1,6 +1,6 @@
 ---
 name: isagi-docs
-description: Configure Isagi projects and runtime settings, and author or repair Isagi workflows. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, workflow environments and placement, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
+description: Configure Isagi projects and runtime settings, and author or repair Isagi workflows. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, workflow environments and placement, workflow checkpoints, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
 # Configure Isagi and author workflows
@@ -19,5 +19,6 @@ Read only the references matching the request. Paths in these references are rel
 | Agent sessions, headless work, prompts, or judgments within a workflow                                                                | [Workflow authoring](references/workflows.md) and [Agent work](references/workflow-agents.md)                              |
 | Repairing saved workflow runs or reasoning about Resume and Retry                                                                     | [Workflow recovery](references/workflow-recovery.md); also [Workflow authoring](references/workflows.md) when editing code |
 | Capturing evidence from a workflow, review-round collections, evidence before judgment, or retrieving captured content and its source | [Workflow evidence](references/workflow-evidence.md)                                                                       |
+| Placing checkpoints, capturing directories or files for later reconstruction, layering, Git baselines and their limits              | [Workflow checkpoints](references/workflow-checkpoints.md)                                                                 |
 
 Follow an explicit user-provided target path. Configuration locations and workflow discovery defaults are in the relevant reference. For exact configuration fields, consult its linked schema; for workflow signatures, consult the installed SDK declarations. Report unsupported requests against those sources rather than inferring support from this index alone.

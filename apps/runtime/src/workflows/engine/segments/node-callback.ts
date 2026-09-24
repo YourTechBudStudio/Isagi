@@ -19,7 +19,6 @@ import {
   positionOf,
   ensureRecordable,
   recordSegmentFailure,
-  requireExecution,
   requireFrame,
   requireGraph,
   resolveSlot,
@@ -45,11 +44,11 @@ import {
 export function runNodeCallback(
   deps: EngineDeps,
   ctx: SegmentContext,
+  execution: WorkflowExecutionRecord,
 ): Effect.Effect<SegmentOutcome, SegmentFault> {
   const position = positionOf(ctx, 'node_callback');
   return Effect.gen(function* () {
     const frame = yield* requireFrame(deps, position.frameId);
-    const execution = yield* requireExecution(deps, position.executionId);
     const graph = yield* requireGraph(ctx, frame, 'node_callback_failed');
     const node = nodeOf(graph, execution.nodeId);
 
@@ -64,8 +63,8 @@ export function runNodeCallback(
     }
     if (node.isagiKind !== 'operation-node') {
       // A subgraph node never reaches a claimed segment — the dispatcher enters it structurally,
-      // with no attempt. A checkpoint cannot be in a loadable bundle at all. Either one arriving
-      // here means the pinned structure disagrees with what the dispatcher read, so it fails the
+      // with no attempt — and a checkpoint execution is dispatched to `runCheckpoint`. Either one
+      // arriving here means the execution row and the pinned graph disagree, so it fails the
       // segment rather than running as an operation alias or claiming a successful checkpoint.
       return yield* Effect.fail(
         segmentFailure({

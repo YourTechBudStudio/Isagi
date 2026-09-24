@@ -579,7 +579,7 @@ test('a failed descriptor result carries diagnostics, not one free-text string',
 });
 
 test('the new load failure reasons are part of the contract', () => {
-  for (const reason of ['invalid_structure', 'structure_mismatch', 'unsupported_capability']) {
+  for (const reason of ['invalid_structure', 'structure_mismatch']) {
     assert.doesNotThrow(() =>
       decode(workflowDescriptorResultSchema, {
         ok: false,

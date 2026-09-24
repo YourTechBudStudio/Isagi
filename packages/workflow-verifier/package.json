@@ -1,6 +1,6 @@
 {
   "name": "@yourtechbudstudio/isagi-workflow-verifier",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Verify standalone Isagi workflow artifacts and issue build receipts.",
   "license": "Apache-2.0",
   "author": "YourTechBud",
@@ -49,12 +49,12 @@
   "devDependencies": {
     "@types/eslint-scope": "^8.4.0",
     "@types/node": "^24.10.1",
-    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.3.0",
+    "@yourtechbudstudio/isagi-workflow-sdk": "workspace:0.4.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "@yourtechbudstudio/isagi-workflow-sdk": "0.3.0"
+    "@yourtechbudstudio/isagi-workflow-sdk": "0.4.0"
   },
   "engines": {
     "node": ">=22"

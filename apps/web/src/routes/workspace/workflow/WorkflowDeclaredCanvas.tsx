@@ -13,6 +13,7 @@ import type { InspectorSelection } from './selection.js';
 import { formatDuration } from './timing.js';
 import { ancestorKeys, type DeclaredElement, type DeclaredTopology } from './topology.js';
 import { useGraphLayout, type LayoutEngineFactory } from './useGraphLayout.js';
+import { CheckpointKindTag, CheckpointSubline } from './WorkflowCheckpointNode.js';
 
 /**
  * The graph of the pin the run is on right now, with where it is now drawn on it.
@@ -772,7 +773,15 @@ function GraphNode({
           >
             {element.address.id}
           </span>
-          <TimeBadge aggregate={aggregate} now={now} />
+          {element.kind === 'node' && element.descriptor.kind === 'checkpoint' ? (
+            // The slot a subgraph's violet tag takes, in the cyan the canvas uses for kept things.
+            <span className="ml-auto flex flex-none items-baseline gap-2">
+              <CheckpointKindTag />
+              <TimeBadge aggregate={aggregate} now={now} />
+            </span>
+          ) : (
+            <TimeBadge aggregate={aggregate} now={now} />
+          )}
         </span>
         <span className="mt-1.5 flex items-center gap-2 font-mono text-[10.5px] text-fg-subtle">
           <span className="min-w-0 truncate">
@@ -890,7 +899,7 @@ function NodeSubline({
     return <>{`${executions} execution${executions === 1 ? '' : 's'} inside`}</>;
   }
   if (element.kind === 'node' && element.descriptor.kind === 'checkpoint') {
-    return <>{element.descriptor.caption}</>;
+    return <CheckpointSubline title={element.descriptor.title} aggregate={aggregate} />;
   }
   if (aggregate.visits.length === 0) return <>{inspectorCopy.notVisited}</>;
 
