@@ -1,5 +1,6 @@
 import type { WorkspaceSnapshot, SurfaceDetail, ControlPlaneSnapshot } from '@isagi/contracts';
 
+import { answerCheckpointRoute } from './checkpoints.js';
 import { evidenceBytes, evidenceRecords, listEvidence } from './evidence.js';
 import {
   buildWorld,
@@ -154,6 +155,33 @@ export function installFakeRuntime(): InspectorRuntimeControls {
       return success({ payloadRef: ref, ...record });
     }
 
+    const checkpoint = method === 'GET' ? answerCheckpointRoute(path, url.searchParams) : null;
+    if (checkpoint !== null) {
+      switch (checkpoint.kind) {
+        case 'json':
+          return success(checkpoint.data);
+        case 'not_found':
+          return failure(404, checkpoint.reason);
+        case 'network_error':
+          // No response at all, so no cause: the client must not read this as lost bytes.
+          return Promise.reject(new TypeError('Failed to fetch'));
+        case 'content_unavailable':
+          return rejection(409, {
+            reason: 'workflow_checkpoint_content_unavailable',
+            checkpointId: checkpoint.checkpointId,
+            fileId: checkpoint.fileId,
+            cause: checkpoint.cause,
+          });
+        case 'bytes':
+          return Promise.resolve(
+            new Response(checkpoint.body, {
+              status: 200,
+              headers: { 'content-type': 'application/octet-stream' },
+            }),
+          );
+      }
+    }
+
     if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/evidence`) {
       // Unpaged on purpose: the client pages every page into one array regardless, and the
       // scoping — visit, and visit-and-below — is the part a UI test can actually get wrong.
@@ -284,6 +312,25 @@ export function installFakeRuntime(): InspectorRuntimeControls {
           meta: { requestId: `req-${nextRequestId++}` },
         }),
         { status: 409, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  }
+
+  /** A contextual rejection, in the contract's own shape. */
+  function rejection(status: number, data: Record<string, unknown>) {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'workflow_rejected',
+            status,
+            message: 'raw runtime diagnostic text that must not be voiced',
+            requestId: `req-${nextRequestId++}`,
+            data: { ...data, workflowRunId: RUN_ID },
+          },
+          meta: { requestId: `req-${nextRequestId++}` },
+        }),
+        { status, headers: { 'content-type': 'application/json' } },
       ),
     );
   }

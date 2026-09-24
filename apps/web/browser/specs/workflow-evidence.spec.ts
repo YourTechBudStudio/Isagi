@@ -198,7 +198,7 @@ test('a download is a blob the app made, never a navigation to the runtime', asy
   await spyOnRevoke(page);
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    dialog(page).locator('[data-evidence-download]').first().click(),
+    dialog(page).locator('[data-content-download]').first().click(),
   ]);
 
   // A link to the runtime's `?download=true` route would be a navigation to a non-renderer origin,

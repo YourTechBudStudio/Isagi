@@ -13,6 +13,12 @@ import {
   workflowOperationFixture,
   workflowSummaryFixture,
 } from '../../../src/lib/workspace/workflow/test-support.js';
+import {
+  CHECKPOINT_ROOT_GRAPH,
+  checkpointDescriptor,
+  checkpointExecutions,
+  checkpointFrames,
+} from './checkpoints.js';
 import { withEvidenceCounts } from './evidence.js';
 
 /**
@@ -43,7 +49,8 @@ export type ScenarioKey =
   | 'authored_failure'
   | 'cancelled'
   | 'root_init_failed'
-  | 'interrupted';
+  | 'interrupted'
+  | 'checkpoints';
 
 export const scenarioKeys: readonly ScenarioKey[] = [
   'ready',
@@ -62,6 +69,8 @@ export const scenarioKeys: readonly ScenarioKey[] = [
   'root_init_failed',
   // A run parked after a runtime restart: its callback's owner is gone, so its end is unknown.
   'interrupted',
+  // A different, smaller graph: a loop that saves checkpoints. See `checkpoints.ts`.
+  'checkpoints',
 ];
 
 export interface PayloadFixture {
@@ -230,6 +239,23 @@ interface BuildOptions {
 export function buildWorld(options: BuildOptions): FixtureWorld {
   const { scenario, pin } = options;
   const repaired = pin === PIN_TWO;
+
+  if (scenario === 'checkpoints') {
+    return {
+      summary: {
+        ...summaryFor(scenario, pin, false),
+        rootGraphKey: CHECKPOINT_ROOT_GRAPH,
+        title: 'implement-story',
+      },
+      descriptor: checkpointDescriptor,
+      artifactHash: pin,
+      executions: checkpointExecutions(),
+      frames: checkpointFrames(),
+      operations: [],
+      events: [],
+      payloads: storedPayloads,
+    };
+  }
 
   // A graph whose setup threw has no executions at all: the only thing that happened is the frame's
   // own entry segment, and the inspector has to be able to reach it.
@@ -1124,6 +1150,7 @@ function summaryFor(scenario: ScenarioKey, pin: string, longHistory: boolean): W
         controls: { ...controls, pause: false, cancel: false, retry: true, dismiss: true },
       });
     case 'done':
+    case 'checkpoints':
       return workflowSummaryFixture({
         ...common,
         status: 'done',

@@ -101,6 +101,12 @@ export default defineConfig({
       testMatch: /workflow-evidence\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${fixturePort}/workflow-inspector/` },
     },
+    // Shares the inspector page too: the dock's Checkpoint column, its files tab and the fourth tab.
+    {
+      name: 'workflow-checkpoints',
+      testMatch: /workflow-checkpoints\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${fixturePort}/workflow-inspector/` },
+    },
     // Serves its own document with its own headers through `page.route`, so it belongs to no
     // fixture page. It only needs a Chromium that enforces a content security policy.
     {

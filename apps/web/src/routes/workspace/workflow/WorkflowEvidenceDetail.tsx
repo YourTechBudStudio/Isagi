@@ -7,7 +7,7 @@ import { shortHash } from './dock.js';
 import { Fields } from './DockFields.js';
 import { formatBytes } from './format.js';
 import { formatClock } from './timing.js';
-import { WorkflowEvidenceContent } from './WorkflowEvidenceContent.js';
+import { WorkflowEvidenceContent } from './WorkflowContentViewer.js';
 import { WorkflowOperationProvenance } from './WorkflowOperationProvenance.js';
 
 /**

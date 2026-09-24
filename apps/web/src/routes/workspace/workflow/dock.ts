@@ -1,5 +1,6 @@
 import type {
   WorkflowEvidenceDto,
+  WorkflowExecutionCheckpointDto,
   WorkflowExecutionDto,
   WorkflowFrameDto,
   WorkflowFrameSegmentDto,
@@ -11,6 +12,12 @@ import type {
 import { workflowCopy, workflowFailureHeadline } from '../../../copy/index.js';
 import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
 import { executionAncestry } from './ancestry.js';
+import {
+  checkpointVisitRef,
+  checkpointVisitState,
+  type CheckpointVisitRef,
+  type CheckpointVisitState,
+} from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
 import { visitsOf, type InspectorSelection } from './selection.js';
 import { formatClock, formatDuration, executionTiming, intervalDuration } from './timing.js';
@@ -49,6 +56,8 @@ export interface DockField {
   readonly tone?: FieldTone | undefined;
   /** Jumps the Data column to this tab, for a value that is a recorded payload. */
   readonly dataTab?: string | undefined;
+  /** Moves the dock to another selection, for a value that names a different visit. */
+  readonly selection?: InspectorSelection | undefined;
 }
 
 export type DockRow = DockField | { readonly gap: true };
@@ -87,7 +96,28 @@ export type DockDataTab =
       readonly evidenceKey: string;
       readonly mediaType: string;
       readonly byteSize: number;
+    })
+  | (DockDataTabBase & {
+      /** A saved checkpoint's final file tree. It has no bytes of its own, so it has no size. */
+      readonly kind: 'checkpoint_files';
+      readonly checkpointId: string;
+      readonly fileCount: number;
     });
+
+/** The `files` tab's key, which the Checkpoint column's count opens. */
+export const checkpointFilesTabKey = 'checkpoint.files';
+
+/**
+ * What a checkpoint visit shows in place of Operations and Evidence, which are always empty for it.
+ *
+ * `parent` resolves the saved checkpoint's parent to the visit that saved it. It is a function
+ * rather than a value because the parent is only known once the detail has been read.
+ */
+export interface DockCheckpoint {
+  readonly state: CheckpointVisitState;
+  readonly summary: WorkflowExecutionCheckpointDto | null;
+  readonly parent: (checkpointId: string) => CheckpointVisitRef | null;
+}
 
 /** One execution inside a subgraph's child frame, reachable from the dock. */
 export interface DockChildExecution {
@@ -201,6 +231,8 @@ export interface DockView {
   readonly executionId: number | null;
   /** Nested totals for a subgraph registration, which has no operations of its own. */
   readonly nested: DockNested | null;
+  /** Set only for a visit to a checkpoint node. A declared, unvisited checkpoint keeps the defaults. */
+  readonly checkpoint: DockCheckpoint | null;
 }
 
 export function buildDockView(input: {
@@ -263,6 +295,7 @@ function elementView(
     data: [],
     executionId: null,
     nested: null,
+    checkpoint: null,
   };
 }
 
@@ -443,13 +476,24 @@ function executionView(
       slot: { inline: execution.wait.answers },
     });
   }
+  if (execution.checkpoint !== null) {
+    data.push({
+      kind: 'checkpoint_files',
+      key: checkpointFilesTabKey,
+      name: inspectorCopy.checkpointFilesTab,
+      checkpointId: execution.checkpoint.checkpointId,
+      fileCount: execution.checkpoint.counts.files,
+    });
+  }
 
   return {
     breadcrumb: breadcrumbFor(key, topology, execution),
     kindChip: execution.nodeKind,
     statusChip: statusLabel(execution),
     statusTone: statusTone(execution.status),
-    displayName: execution.displayName,
+    // A checkpoint visit is named by the title its plan returned. That title is the checkpoint's,
+    // not a label the step recorded, so it is read from the summary and never written back.
+    displayName: execution.checkpoint?.title ?? execution.displayName,
     declared: element ? declaredFields(element, topology) : [absentFromPin()],
     recorded,
     operations: operationsMode(execution),
@@ -463,6 +507,14 @@ function executionView(
           children: childFrame === null ? [] : directChildren(state, childFrame.frameId),
         }
       : null,
+    checkpoint:
+      execution.nodeKind === 'checkpoint'
+        ? {
+            state: checkpointVisitState(execution),
+            summary: execution.checkpoint,
+            parent: (checkpointId) => checkpointVisitRef(state, execution, checkpointId),
+          }
+        : null,
   };
 }
 
@@ -619,6 +671,7 @@ function routingView(
           ],
     executionId: null,
     nested: null,
+    checkpoint: null,
   };
 }
 
@@ -656,6 +709,7 @@ function frameSegmentView(
       data: [],
       executionId: null,
       nested: null,
+      checkpoint: null,
     };
   }
 
@@ -745,6 +799,7 @@ function frameSegmentView(
         : [{ kind: 'payload', key: 'state', name: 'state', slot: frame.stateRef }],
     executionId: null,
     nested: null,
+    checkpoint: null,
   };
 }
 
@@ -787,6 +842,7 @@ function frameOutputView(frame: WorkflowFrameDto, state: WorkflowRunState, now: 
     ],
     executionId: null,
     nested: null,
+    checkpoint: null,
   };
 }
 

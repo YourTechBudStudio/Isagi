@@ -1,7 +1,11 @@
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { WorkflowEvidenceDto, WorkflowRunSummary } from '@isagi/contracts';
+import type {
+  WorkflowCheckpointSummaryDto,
+  WorkflowEvidenceDto,
+  WorkflowRunSummary,
+} from '@isagi/contracts';
 
 import { surfaceTransition } from '../../../lib/motion.js';
 import type { EvidenceScope } from '../../../lib/workspace/workflow/evidence.js';
@@ -18,11 +22,17 @@ import { inspectorCopy } from './copy.js';
 import { buildDockView } from './dock.js';
 import { noEvidenceFilters, type EvidenceSelectedFilters } from './evidence-view.js';
 import { dockMaxHeight, dockMinHeight } from './format.js';
-import { selectionResolves, selectedExecutionId, type InspectorSelection } from './selection.js';
+import {
+  selectionResolves,
+  selectedExecutionId,
+  type InspectorSelection,
+  type InspectorTab,
+} from './selection.js';
 import { buildTopology } from './topology.js';
 import { buildTraceModel } from './trace.js';
 import type { LayoutEngineFactory } from './useGraphLayout.js';
 import { useRunClock } from './useRunClock.js';
+import { WorkflowCheckpointsPanel } from './WorkflowCheckpointsPanel.js';
 import { WorkflowDeclaredCanvas } from './WorkflowDeclaredCanvas.js';
 import { WorkflowDock, type DockEvidenceRows } from './WorkflowDock.js';
 import { WorkflowEvidencePanel } from './WorkflowEvidencePanel.js';
@@ -32,9 +42,9 @@ import { WorkflowTraceWaterfall } from './WorkflowTraceWaterfall.js';
 /**
  * The read-only inspector, opened from the workflow bar and closed with Escape.
  *
- * Three tabs answering three different questions — Declared is a snapshot of the pin the run is on
- * now, Trace is the record of what actually ran, and Evidence is what the run deliberately kept —
- * over one shared dock. Mounting this is what starts the run's coordinator, so the expensive half
+ * Four tabs answering four different questions — Declared is a snapshot of the pin the run is on
+ * now, Trace is the record of what actually ran, Evidence is what the run deliberately kept, and
+ * Checkpoints is what an export of each saved checkpoint would contain — over one shared dock. Mounting this is what starts the run's coordinator, so the expensive half
  * of inspection costs nothing until somebody looks.
  *
  * It drives nothing. There is no Pause, Resume, Retry, Cancel, Dismiss or Advance here, no gate form
@@ -62,7 +72,7 @@ export function WorkflowInspector({
 }) {
   const runId = summary.runId;
   const state = useWorkflowRunState(runId);
-  const [tab, setTab] = useState<'declared' | 'trace' | 'evidence'>('declared');
+  const [tab, setTab] = useState<InspectorTab>('declared');
   /**
    * The Evidence tab's own state, held here rather than in the panel.
    *
@@ -75,6 +85,8 @@ export function WorkflowInspector({
   const [evidenceFilters, setEvidenceFilters] =
     useState<EvidenceSelectedFilters>(noEvidenceFilters);
   const [selectedEvidenceKey, setSelectedEvidenceKey] = useState<string | null>(null);
+  /** The Checkpoints tab's choice, held here for the same reason as the Evidence tab's. */
+  const [chosenCheckpointId, setChosenCheckpointId] = useState<string | null>(null);
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [collapsedTraceRows, setCollapsedTraceRows] = useState<ReadonlySet<number>>(
@@ -174,6 +186,7 @@ export function WorkflowInspector({
     setEvidenceScope({ kind: 'run' });
     setEvidenceFilters(noEvidenceFilters);
     setSelectedEvidenceKey(null);
+    setChosenCheckpointId(null);
   }, [runId]);
 
   const dockView = useMemo(
@@ -191,18 +204,20 @@ export function WorkflowInspector({
    * opens can disagree about what a visit kept.
    */
   const dockExecutionId = selectedExecutionId(selection, state);
+  // A checkpoint visit shows its Checkpoint column in place of Evidence, and never captures any.
+  const dockIsCheckpoint = dockView?.checkpoint != null;
   // `null`, not a fallback to run scope. A declared node nobody has visited and a frame's own setup
   // segment both produce a full dock view and no execution, and answering them with the run's
   // listing would put other nodes' records under a heading that says "this visit and below".
   const dockEvidence = useWorkflowEvidenceList(
     state,
-    dockExecutionId === null
+    dockExecutionId === null || dockIsCheckpoint
       ? null
       : { kind: 'visit', executionId: dockExecutionId, subtree: true },
   );
 
   const dockEvidenceRows: DockEvidenceRows =
-    dockExecutionId === null
+    dockExecutionId === null || dockIsCheckpoint
       ? { kind: 'no_visit' }
       : dockEvidence.error !== null
         ? { kind: 'failed' }
@@ -215,6 +230,12 @@ export function WorkflowInspector({
     // The dock follows the record to the visit that captured it, so everything below the panel is
     // describing the same step the record came from.
     setSelection({ kind: 'execution', executionId: record.executionId });
+  }, []);
+
+  const selectCheckpoint = useCallback((checkpoint: WorkflowCheckpointSummaryDto) => {
+    setChosenCheckpointId(checkpoint.checkpointId);
+    // As with evidence, the dock follows the checkpoint to the visit that saved it.
+    setSelection({ kind: 'execution', executionId: checkpoint.executionId });
   }, []);
 
   /**
@@ -338,13 +359,18 @@ export function WorkflowInspector({
             >
               {inspectorCopy.evidenceTab}
             </TabButton>
+            <TabButton active={tab === 'checkpoints'} onClick={() => setTab('checkpoints')}>
+              {inspectorCopy.checkpointsTab}
+            </TabButton>
           </div>
           <p className="font-mono text-[11px] text-fg-subtle opacity-70">
             {tab === 'declared'
               ? inspectorCopy.declaredHint
               : tab === 'trace'
                 ? inspectorCopy.traceHint
-                : inspectorCopy.evidenceHint}
+                : tab === 'evidence'
+                  ? inspectorCopy.evidenceHint
+                  : inspectorCopy.checkpointsHint}
           </p>
         </div>
 
@@ -394,6 +420,15 @@ export function WorkflowInspector({
               onSelect={selectEvidence}
               dockExecutionId={dockExecutionId}
               liveExecutionId={runSummary.activeNode?.executionId ?? null}
+            />
+          ) : tab === 'checkpoints' ? (
+            <WorkflowCheckpointsPanel
+              runId={runId}
+              state={state}
+              chosenId={chosenCheckpointId}
+              dockCheckpointId={dockView?.checkpoint?.summary?.checkpointId ?? null}
+              onSeed={setChosenCheckpointId}
+              onSelect={selectCheckpoint}
             />
           ) : traceModel ? (
             <WorkflowTraceWaterfall

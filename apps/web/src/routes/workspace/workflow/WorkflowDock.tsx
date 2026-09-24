@@ -19,10 +19,12 @@ import {
 } from './dock.js';
 import { Fields } from './DockFields.js';
 import { dockMaxHeight, dockMinHeight, formatBytes } from './format.js';
-import type { InspectorSelection } from './selection.js';
+import type { InspectorSelection, InspectorTab } from './selection.js';
 import { formatClock } from './timing.js';
+import { WorkflowCheckpointColumn } from './WorkflowCheckpointColumn.js';
+import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
+import { WorkflowEvidenceContent } from './WorkflowContentViewer.js';
 import { WorkflowEvidenceCard } from './WorkflowEvidenceCard.js';
-import { WorkflowEvidenceContent } from './WorkflowEvidenceContent.js';
 import { WorkflowOperationProvenance } from './WorkflowOperationProvenance.js';
 import { WorkflowPayloadValue } from './WorkflowPayloadValue.js';
 
@@ -73,7 +75,7 @@ export function WorkflowDock({
   readonly operations: WorkflowOperationsView;
   readonly evidence: DockEvidenceView;
   /** Which inspector tab is above. Only the provenance disclosure's default depends on it. */
-  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly tab: InspectorTab;
   readonly height: number;
   readonly onHeightChange: (height: number) => void;
   /** The inspector's own selection, so the dock can move it without owning it. */
@@ -138,7 +140,8 @@ export function WorkflowDock({
             {view.displayName && (
               <span className="truncate text-[12.5px] text-fg-muted">· {view.displayName}</span>
             )}
-            <Chip tone="kind">{view.kindChip}</Chip>
+            {/* Cyan for a checkpoint, as its canvas tag is: the colour the inspector gives kept things. */}
+            <Chip tone={view.checkpoint === null ? 'kind' : 'kept'}>{view.kindChip}</Chip>
             <Chip tone={view.statusTone}>{view.statusChip}</Chip>
           </header>
 
@@ -153,33 +156,53 @@ export function WorkflowDock({
             <Column title={inspectorCopy.columnRecorded} rule="bg-blue/70" width="flex-[0_0_18rem]">
               <Fields rows={view.recorded} onOpenTab={setDataTab} />
             </Column>
-            <Column
-              title={
-                view.operations.kind === 'wait_and_operations'
-                  ? `${inspectorCopy.columnWait} · ${inspectorCopy.columnOperations}`
-                  : inspectorCopy.columnOperations
-              }
-              rule="bg-amber/70"
-              width="flex-[0_0_24rem]"
-            >
-              <OperationsColumn
-                view={view}
-                operations={operations}
-                tab={tab}
-                records={records}
-                onSelectEvidence={evidence.onSelect}
-                onOpenTab={setDataTab}
-                onSelect={onSelect}
-              />
-            </Column>
-            <Column
-              title={inspectorCopy.columnEvidence}
-              subtitle={records.length === 0 ? null : inspectorCopy.evidenceColumnSubtitle}
-              rule="bg-cyan/70"
-              width="flex-[0_0_22rem]"
-            >
-              <EvidenceColumn evidence={evidence} onOpenTab={setDataTab} />
-            </Column>
+            {view.checkpoint !== null ? (
+              // A checkpoint never calls a capability or captures evidence, so the two columns that
+              // would always be empty give way to the one that says what it saved.
+              <Column
+                title={inspectorCopy.columnCheckpoint}
+                subtitle={inspectorCopy.checkpointColumnSubtitle}
+                rule="bg-cyan/70"
+                width="flex-[0_0_24rem]"
+              >
+                <WorkflowCheckpointColumn
+                  runId={runId}
+                  checkpoint={view.checkpoint}
+                  onOpenTab={setDataTab}
+                  onSelect={onSelect}
+                />
+              </Column>
+            ) : (
+              <>
+                <Column
+                  title={
+                    view.operations.kind === 'wait_and_operations'
+                      ? `${inspectorCopy.columnWait} · ${inspectorCopy.columnOperations}`
+                      : inspectorCopy.columnOperations
+                  }
+                  rule="bg-amber/70"
+                  width="flex-[0_0_24rem]"
+                >
+                  <OperationsColumn
+                    view={view}
+                    operations={operations}
+                    tab={tab}
+                    records={records}
+                    onSelectEvidence={evidence.onSelect}
+                    onOpenTab={setDataTab}
+                    onSelect={onSelect}
+                  />
+                </Column>
+                <Column
+                  title={inspectorCopy.columnEvidence}
+                  subtitle={records.length === 0 ? null : inspectorCopy.evidenceColumnSubtitle}
+                  rule="bg-cyan/70"
+                  width="flex-[0_0_22rem]"
+                >
+                  <EvidenceColumn evidence={evidence} onOpenTab={setDataTab} />
+                </Column>
+              </>
+            )}
             <Column title={inspectorCopy.columnData} rule="bg-cyan/70" width="flex-1 min-w-[26rem]">
               {tabs.length === 0 ? (
                 <p className="py-1.5 font-mono text-[11.5px] text-fg-subtle">
@@ -190,7 +213,7 @@ export function WorkflowDock({
                   <div className="mb-1.5 flex flex-wrap gap-0.5">
                     {tabs.map((entry) => {
                       const absent = entry.kind === 'payload' && entry.slot === null;
-                      const size = tabByteSize(entry);
+                      const size = tabSize(entry);
                       return (
                         <button
                           key={entry.key}
@@ -205,9 +228,7 @@ export function WorkflowDock({
                           } ${absent ? 'opacity-50' : ''}`}
                         >
                           {entry.name}
-                          {size !== null && (
-                            <span className="ml-1.5 opacity-55">{formatBytes(size)}</span>
-                          )}
+                          {size !== null && <span className="ml-1.5 opacity-55">{size}</span>}
                         </button>
                       );
                     })}
@@ -219,14 +240,23 @@ export function WorkflowDock({
                         runId={runId}
                         slot={activeTab.slot}
                       />
-                    ) : (
+                    ) : activeTab.kind === 'evidence' ? (
                       <EvidenceTabBody
                         key={activeTab.key}
                         runId={runId}
                         evidenceKey={activeTab.evidenceKey}
                         records={records}
                       />
-                    ))}
+                    ) : view.checkpoint?.summary ? (
+                      <WorkflowCheckpointFiles
+                        key={activeTab.checkpointId}
+                        runId={runId}
+                        checkpointId={activeTab.checkpointId}
+                        base={view.checkpoint.summary.base}
+                        counts={view.checkpoint.summary.counts}
+                        layout="compact"
+                      />
+                    ) : null)}
                 </>
               )}
             </Column>
@@ -334,9 +364,11 @@ function Column({
 
 const empty: readonly WorkflowEvidenceDto[] = [];
 
-function tabByteSize(tab: DockDataTab): number | null {
-  if (tab.kind === 'evidence') return tab.byteSize;
-  return tab.slot !== null && 'byteSize' in tab.slot ? tab.slot.byteSize : null;
+/** What a tab's chip says beside its name: a payload's size, or how many files a checkpoint kept. */
+function tabSize(tab: DockDataTab): string | null {
+  if (tab.kind === 'checkpoint_files') return String(tab.fileCount);
+  if (tab.kind === 'evidence') return formatBytes(tab.byteSize);
+  return tab.slot !== null && 'byteSize' in tab.slot ? formatBytes(tab.slot.byteSize) : null;
 }
 
 /**
@@ -454,7 +486,7 @@ function OperationsColumn({
 }: {
   readonly view: DockView;
   readonly operations: WorkflowOperationsView;
-  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly tab: InspectorTab;
   readonly records: readonly WorkflowEvidenceDto[];
   readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
   readonly onOpenTab: (tab: string) => void;
@@ -582,7 +614,7 @@ function OperationCards({
   onOpenTab,
 }: {
   readonly operations: WorkflowOperationsView;
-  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly tab: InspectorTab;
   readonly records: readonly WorkflowEvidenceDto[];
   readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
   readonly onOpenTab: (tab: string) => void;
@@ -650,7 +682,7 @@ function OperationCard({
 }: {
   readonly operation: WorkflowOperationDto;
   readonly index: number;
-  readonly tab: 'declared' | 'trace' | 'evidence';
+  readonly tab: InspectorTab;
   /** The record this call produced, when it was a capture and the listing has reached it. */
   readonly captured: WorkflowEvidenceDto | null;
   readonly onSelectEvidence: (record: WorkflowEvidenceDto) => void;
@@ -821,19 +853,21 @@ function Chip({
   tone,
   children,
 }: {
-  readonly tone: FieldTone | 'kind';
+  readonly tone: FieldTone | 'kind' | 'kept';
   readonly children: string;
 }) {
   const styles =
     tone === 'kind'
       ? 'border-violet/28 bg-violet/12 text-violet'
-      : tone === 'ok'
-        ? 'border-green/28 bg-green/13 text-green'
-        : tone === 'bad'
-          ? 'border-error/30 bg-error/13 text-error'
-          : tone === 'warn'
-            ? 'border-amber/30 bg-amber/16 text-amber'
-            : 'border-line/35 bg-line/18 text-fg-subtle';
+      : tone === 'kept'
+        ? 'border-cyan/30 bg-cyan/10 text-cyan'
+        : tone === 'ok'
+          ? 'border-green/28 bg-green/13 text-green'
+          : tone === 'bad'
+            ? 'border-error/30 bg-error/13 text-error'
+            : tone === 'warn'
+              ? 'border-amber/30 bg-amber/16 text-amber'
+              : 'border-line/35 bg-line/18 text-fg-subtle';
   return (
     <span
       className={`flex-none rounded-full border px-2 py-0.5 text-[11px] font-semibold tracking-wider uppercase ${styles}`}

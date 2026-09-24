@@ -3,6 +3,9 @@ import type { WorkflowExecutionDto } from '@isagi/contracts';
 import type { WorkflowRunState } from '../../../lib/workspace/workflow/model.js';
 import { executionAddressKey } from './ancestry.js';
 
+/** The inspector's four tabs, over one shared dock. */
+export type InspectorTab = 'declared' | 'trace' | 'evidence' | 'checkpoints';
+
 /**
  * What the dock is currently describing.
  *
