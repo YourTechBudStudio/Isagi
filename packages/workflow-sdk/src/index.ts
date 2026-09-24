@@ -8,6 +8,13 @@ export {
 } from './brand.js';
 
 export type {
+  CheckpointDirectoryScope,
+  CheckpointFileScope,
+  CheckpointPlan,
+  CheckpointScope,
+} from './checkpoints.js';
+
+export type {
   EvidenceCaptureInput,
   EvidenceContent,
   EvidenceHandle,

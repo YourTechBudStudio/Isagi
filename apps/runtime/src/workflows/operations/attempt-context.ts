@@ -26,8 +26,8 @@ import type {
 
 import type { WorkflowEvidenceRepositoryService } from '../evidence/evidence.repository.js';
 import { normalizeCaptureInput } from '../evidence/input.js';
-import { resolveWithinWorktree } from '../evidence/paths.js';
 import { resolveEvidenceSource } from '../evidence/source.js';
+import { resolveWithinWorktree } from '../paths.js';
 import type { WorkflowContentStoreService } from '../persistence/content-store.js';
 import type {
   OperationIntentProvenance,
@@ -1046,7 +1046,7 @@ export function makeAttemptContextFactory(dependencies: {
                   Effect.catchTag('DatabaseError', (cause) => die(Effect.fail(cause))),
                   Effect.catchAll((cause) =>
                     Effect.gen(function* () {
-                      // `EvidencePathError` is a plain reason-carrying shape rather than a tagged
+                      // `WorktreePathError` is a plain reason-carrying shape rather than a tagged
                       // error, so the discriminator is the field itself.
                       const pathFailure = 'reason' in cause;
                       if (!pathFailure && cause.cause !== undefined) {

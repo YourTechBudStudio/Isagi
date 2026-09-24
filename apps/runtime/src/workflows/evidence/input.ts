@@ -18,9 +18,9 @@ import type {
 } from '@yourtechbudstudio/isagi-workflow-sdk';
 
 import type { NormalizedEvidenceSource, NormalizedRequest } from '../operations/correlation.js';
+import { normalizeWorktreeRelativePath } from '../paths.js';
 import { canonicalBytes, UnserializableValueError } from '../state/serializable.js';
 import { isMediaType, mediaTypeForExtension } from './media-types.js';
-import { normalizeWorktreeRelativePath } from './paths.js';
 
 /**
  * The closed set of reasons a capture is refused, carried as `detail.reason` on the rejection.

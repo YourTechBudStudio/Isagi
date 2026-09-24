@@ -3,6 +3,11 @@ import type { WorkflowAgentHarness } from '@yourtechbudstudio/isagi-workflow-sdk
 import type {
   WorkflowAttemptStatus,
   WorkflowCapability,
+  WorkflowCheckpointBase,
+  WorkflowCheckpointChangeOperation,
+  WorkflowCheckpointCounts,
+  WorkflowCheckpointScopeKind,
+  WorkflowCheckpointWarningReason,
   WorkflowEndCertainty,
   WorkflowEvidenceContentKind,
   WorkflowEvidenceSourceAttribution,
@@ -288,6 +293,74 @@ export interface WorkflowEvidenceRecord {
   readonly sourceAttribution: WorkflowEvidenceSourceAttribution;
   readonly capturedAt: string;
 }
+
+/**
+ * One immutable checkpoint, with its flattened base columns reassembled into the base union.
+ *
+ * `repositoryProjectId` and `repositoryRootPath` are recorded for both project kinds as descriptive
+ * provenance; only a `git` base carries the project id as its `repositoryId`.
+ */
+export interface WorkflowCheckpointRecord {
+  readonly id: number;
+  readonly checkpointKey: string;
+  readonly runId: number;
+  readonly frameId: number;
+  readonly executionId: number;
+  readonly attemptId: number;
+  readonly artifactHash: string;
+  readonly parentCheckpointId: number | null;
+  readonly nodeId: string;
+  readonly title: string;
+  readonly base: WorkflowCheckpointBase;
+  readonly repositoryProjectId: number;
+  readonly repositoryRootPath: string;
+  readonly counts: WorkflowCheckpointCounts;
+  readonly createdAt: string;
+}
+
+interface CheckpointEntryPlacement {
+  readonly checkpointId: number;
+  readonly seq: number;
+}
+
+/** One stored checkpoint row, discriminated on `kind`, mirroring the wire entries. */
+export type WorkflowCheckpointEntryRecord = CheckpointEntryPlacement &
+  (
+    | {
+        readonly kind: 'scope';
+        readonly path: string;
+        readonly scopeId: string;
+        readonly scopeKind: WorkflowCheckpointScopeKind;
+        readonly exclusions: readonly string[];
+        readonly capturedBy: string;
+      }
+    | {
+        readonly kind: 'file';
+        readonly path: string;
+        readonly fileKey: string;
+        readonly contentRef: string;
+        readonly byteSize: number;
+        readonly executable: boolean;
+      }
+    | { readonly kind: 'absent'; readonly path: string }
+    | {
+        readonly kind: 'warning';
+        readonly reason: WorkflowCheckpointWarningReason;
+        readonly path: string | null;
+        readonly scopeId: string | null;
+        readonly detail: Readonly<Record<string, string | number>> | null;
+        readonly observedBy: string;
+      }
+    | {
+        readonly kind: 'change';
+        readonly operation: WorkflowCheckpointChangeOperation;
+        readonly path: string;
+        /** Present for `add` and `modify`. */
+        readonly contentRef: string | null;
+        readonly byteSize: number | null;
+        readonly executable: boolean | null;
+      }
+  );
 
 export interface WorkflowArtifactRecord {
   readonly artifactHash: string;

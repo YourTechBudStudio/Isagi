@@ -11,3 +11,4 @@ export * from './executions.js';
 export * from './runs.js';
 export * from './requests.js';
 export * from './evidence.js';
+export * from './checkpoints.js';

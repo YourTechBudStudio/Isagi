@@ -12,6 +12,10 @@ import {
 import {
   workflowAttemptStatusSchema,
   workflowCapabilitySchema,
+  workflowCheckpointBaseReasonSchema,
+  workflowCheckpointChangeOperationSchema,
+  workflowCheckpointScopeKindSchema,
+  workflowCheckpointWarningReasonSchema,
   workflowEndCertaintySchema,
   workflowExecutionStatusSchema,
   workflowFailureCodeSchema,
@@ -1275,6 +1279,142 @@ export const workflowEvidence = sqliteTable(
     index('workflow_evidence_execution_idx').on(table.executionId, table.id),
     index('workflow_evidence_run_role_idx').on(table.runId, table.role),
     index('workflow_evidence_source_operation_idx').on(table.sourceOperationId),
+  ],
+);
+
+/**
+ * One immutable checkpoint: the filesystem boundary one visit to a checkpoint node saved.
+ *
+ * One row per successful capture: `execution_id` is unique, so a retried segment that finds its
+ * row reuses it instead of capturing twice, while a later visit is a new execution and therefore a
+ * new checkpoint. Placement is copied onto the row, as `workflow_evidence` does, so a listing is one
+ * indexed scan. `parent_checkpoint_id` is the run's previously committed checkpoint, frozen at
+ * capture; it is a self reference with the default NO ACTION, which SQLite checks at statement end,
+ * so a run cascade deletes a whole lineage in one statement.
+ *
+ * `base_*` is the base union flattened: a `git` base names the exact commit HEAD pointed at, a
+ * historical fact rather than a retained ref. `repository_*` is descriptive provenance with no
+ * foreign key, because history outlives projects and worktrees (the posture of
+ * `workflow_runs.destination_*`). Counts let a detail read skip the entries entirely.
+ *
+ * Only `WorkflowCheckpointRepository` writes this table and `workflow_checkpoint_entries`.
+ */
+export const workflowCheckpoints = sqliteTable(
+  'workflow_checkpoints',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** The public opaque id (`wcp_<uuid>`). */
+    checkpointKey: text('checkpoint_key').notNull(),
+    runId: integer('run_id')
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: 'cascade' }),
+    frameId: integer('frame_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowGraphFrames.id, { onDelete: 'cascade' }),
+    executionId: integer('execution_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowNodeExecutions.id, { onDelete: 'cascade' }),
+    /** The attempt that captured. Provenance, like evidence's. */
+    attemptId: integer('attempt_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowSegmentAttempts.id, { onDelete: 'cascade' }),
+    artifactHash: text('artifact_hash')
+      .notNull()
+      .references(() => workflowArtifacts.artifactHash),
+    parentCheckpointId: integer('parent_checkpoint_id').references(
+      (): AnySQLiteColumn => workflowCheckpoints.id,
+    ),
+    nodeId: text('node_id').notNull(),
+    /** The instance title from `prepare`, defaulted at plan normalization. */
+    title: text('title').notNull(),
+    baseKind: text('base_kind', { enum: ['git', 'none'] }).notNull(),
+    baseReason: text('base_reason', { enum: workflowCheckpointBaseReasonSchema.literals }),
+    baseCommitSha: text('base_commit_sha'),
+    repositoryProjectId: integer('repository_project_id').notNull(),
+    repositoryRootPath: text('repository_root_path').notNull(),
+    scopeCount: integer('scope_count').notNull(),
+    fileCount: integer('file_count').notNull(),
+    absentCount: integer('absent_count').notNull(),
+    /** The resolved warning set: inherited region warnings plus this checkpoint's own. */
+    warningCount: integer('warning_count').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('workflow_checkpoints_key_unique').on(table.checkpointKey),
+    uniqueIndex('workflow_checkpoints_execution_unique').on(table.executionId),
+    index('workflow_checkpoints_run_idx').on(table.runId, table.id),
+    // (base_kind = 'git') ⇔ (base_commit_sha is non-null) ⇔ (base_reason is null).
+    check(
+      'workflow_checkpoints_base_shape',
+      sql`(${table.baseKind} = 'git' AND ${table.baseCommitSha} IS NOT NULL AND ${table.baseReason} IS NULL) OR (${table.baseKind} = 'none' AND ${table.baseCommitSha} IS NULL AND ${table.baseReason} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A checkpoint's materialized resolved inventory and its own layer's manifest, in one table.
+ *
+ * `scope`, `file`, `absent` and `warning` rows are the final state a reconstruction applies; this
+ * layer's own `scope` rows (captured by this checkpoint), its `change` rows and its own `warning`
+ * rows (observed by this checkpoint) are the manifest. Rows are written once, in the capture's
+ * transaction, and never updated, so pages read at different times are identical. `seq` is dense
+ * from 0 and fixed by the fold: scopes, files and absences by path, warnings, changes.
+ *
+ * The capturing and observing checkpoints are stored by public key because the entries are built
+ * before their checkpoint has a row id. Bytes live in the content store; `content_ref` reaches them.
+ */
+export const workflowCheckpointEntries = sqliteTable(
+  'workflow_checkpoint_entries',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    checkpointId: integer('checkpoint_id')
+      .notNull()
+      .references((): AnySQLiteColumn => workflowCheckpoints.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    kind: text('kind', { enum: ['scope', 'file', 'absent', 'warning', 'change'] }).notNull(),
+    /** Root-relative directory-entry spelling; null only for path-less warnings. */
+    path: text('path'),
+    /** `wcf_<uuid>`, file rows only: the content route's key. */
+    fileKey: text('file_key'),
+    /** `sha256:<64 hex>`; file rows, and change rows that add or modify. */
+    contentRef: text('content_ref'),
+    byteSize: integer('byte_size'),
+    executable: integer('executable', { mode: 'boolean' }),
+    scopeId: text('scope_id'),
+    scopeKind: text('scope_kind', { enum: workflowCheckpointScopeKindSchema.literals }),
+    /** Canonical JSON `string[]`. */
+    exclusionsJson: text('exclusions_json'),
+    capturedByCheckpointKey: text('captured_by_checkpoint_key'),
+    changeOperation: text('change_operation', {
+      enum: workflowCheckpointChangeOperationSchema.literals,
+    }),
+    warningReason: text('warning_reason', { enum: workflowCheckpointWarningReasonSchema.literals }),
+    /** Canonical JSON object of scalars, e.g. `{"omitted":12}`. */
+    warningDetailJson: text('warning_detail_json'),
+    observedByCheckpointKey: text('observed_by_checkpoint_key'),
+  },
+  (table) => [
+    uniqueIndex('workflow_checkpoint_entries_seq_unique').on(table.checkpointId, table.seq),
+    uniqueIndex('workflow_checkpoint_entries_file_key_unique')
+      .on(table.fileKey)
+      .where(sql`${table.fileKey} IS NOT NULL`),
+    index('workflow_checkpoint_entries_kind_idx').on(table.checkpointId, table.kind, table.seq),
+    // The per-kind representation invariants. The repository validates the same rules before it
+    // writes; this is what stops any writer that bypasses it from storing an unreadable row.
+    check(
+      'workflow_checkpoint_entries_kind_shape',
+      sql`CASE ${table.kind}
+        WHEN 'scope' THEN ${table.path} IS NOT NULL AND ${table.scopeId} IS NOT NULL AND ${table.scopeKind} IS NOT NULL AND ${table.exclusionsJson} IS NOT NULL AND ${table.capturedByCheckpointKey} IS NOT NULL
+        WHEN 'file' THEN ${table.path} IS NOT NULL AND ${table.fileKey} IS NOT NULL AND ${table.contentRef} IS NOT NULL AND ${table.byteSize} IS NOT NULL AND ${table.executable} IS NOT NULL
+        WHEN 'absent' THEN ${table.path} IS NOT NULL
+        WHEN 'warning' THEN ${table.warningReason} IS NOT NULL AND ${table.observedByCheckpointKey} IS NOT NULL
+        WHEN 'change' THEN ${table.path} IS NOT NULL AND ${table.changeOperation} IS NOT NULL AND (${table.changeOperation} = 'delete' OR (${table.contentRef} IS NOT NULL AND ${table.byteSize} IS NOT NULL AND ${table.executable} IS NOT NULL))
+        ELSE 0 END`,
+    ),
+    check(
+      'workflow_checkpoint_entries_file_key_files_only',
+      sql`${table.kind} = 'file' OR ${table.fileKey} IS NULL`,
+    ),
   ],
 );
 

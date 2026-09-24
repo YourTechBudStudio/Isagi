@@ -1351,3 +1351,139 @@ test('the evidence migration adds its tables and leaves historical operations ex
     rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+/** The migration set as it stood before checkpoints. */
+const PRE_CHECKPOINT_TAGS = [...PRE_EVIDENCE_TAGS, '0012_glossy_baron_zemo'] as const;
+
+/** `0013` adds only two new tables — no existing table gains a column. */
+const PRE_CHECKPOINT_ADDED_COLUMNS = {
+  projects: [],
+  worktrees: [],
+  worktree_surfaces: [],
+  workflow_runs: [],
+  workflow_graph_frames: [],
+  workflow_node_executions: [],
+  workflow_segment_attempts: [],
+  workflow_evidence: [],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * Proves the checkpoint migration (`0013`) upgrades a database created before it existed: it adds
+ * its two tables, their indexes and their representation constraints, and touches nothing else.
+ */
+test('the checkpoint migration adds its tables and leaves every historical row untouched', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-checkpoint-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+
+  try {
+    const client = new BetterSqlite(dataDirectory.paths.databasePath);
+    let before: ReturnType<typeof readHistoricalRows<keyof typeof PRE_CHECKPOINT_ADDED_COLUMNS>>;
+    try {
+      client.pragma('foreign_keys = ON');
+      migrate(drizzle(client), {
+        migrationsFolder: historicalMigrationsFolder(dataRoot, PRE_CHECKPOINT_TAGS),
+      });
+      assert.equal(tableExists(client, 'workflow_checkpoints'), false);
+      assert.equal(tableExists(client, 'workflow_checkpoint_entries'), false);
+
+      const at = '2026-09-23T00:00:00.000Z';
+      const artifactHash = 'c'.repeat(64);
+      const db = drizzle(client);
+      db.insert(workflowArtifacts)
+        .values({
+          artifactHash,
+          workflowKey: 'demo',
+          contractVersion: 3,
+          manifestVersion: 1,
+          descriptorVersion: 1,
+          sdkVersion: '0.3.0',
+          verifierVersion: '0.3.0',
+          sourceHash: 'e'.repeat(64),
+          structureHash: 'f'.repeat(64),
+          rootGraphKey: 'root',
+          descriptorInline: '{}',
+          descriptorRef: null,
+          firstSeenAt: at,
+        })
+        .run();
+      const run = db
+        .insert(workflowRuns)
+        .values({
+          workflowKey: 'demo',
+          title: 'Demo run',
+          rootGraphKey: 'root',
+          artifactHash,
+          status: 'ready',
+          positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
+          createdAt: at,
+          updatedAt: at,
+        })
+        .returning({ id: workflowRuns.id })
+        .get();
+      db.insert(workflowGraphFrames)
+        .values({
+          runId: run.id,
+          graphKey: 'root',
+          entryArtifactHash: artifactHash,
+          depth: 0,
+          status: 'active',
+          enteredAt: at,
+        })
+        .run();
+      before = readHistoricalRows(client, PRE_CHECKPOINT_ADDED_COLUMNS);
+      assert.equal(before.workflow_runs.length, 1);
+    } finally {
+      client.close();
+    }
+
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_open_checkpoint_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      assert.equal(tableExists(inspect, 'workflow_checkpoints'), true);
+      assert.equal(tableExists(inspect, 'workflow_checkpoint_entries'), true);
+      for (const index of [
+        'workflow_checkpoints_key_unique',
+        // One checkpoint per visit, enforced by the database rather than the code that writes it.
+        'workflow_checkpoints_execution_unique',
+        'workflow_checkpoints_run_idx',
+        'workflow_checkpoint_entries_seq_unique',
+        'workflow_checkpoint_entries_file_key_unique',
+        'workflow_checkpoint_entries_kind_idx',
+      ]) {
+        assert.equal(indexExists(inspect, index), true, `Expected index ${index}.`);
+      }
+      const ddl = (table: string) =>
+        (
+          inspect
+            .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
+            .get(table) as { readonly sql: string }
+        ).sql;
+      assert.match(ddl('workflow_checkpoints'), /CONSTRAINT "workflow_checkpoints_base_shape"/);
+      assert.match(
+        ddl('workflow_checkpoint_entries'),
+        /CONSTRAINT "workflow_checkpoint_entries_kind_shape"/,
+      );
+      assert.match(
+        ddl('workflow_checkpoint_entries'),
+        /CONSTRAINT "workflow_checkpoint_entries_file_key_files_only"/,
+      );
+      assert.deepEqual(readHistoricalRows(inspect, PRE_CHECKPOINT_ADDED_COLUMNS), before);
+      assert.deepEqual(inspect.pragma('foreign_key_check'), []);
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

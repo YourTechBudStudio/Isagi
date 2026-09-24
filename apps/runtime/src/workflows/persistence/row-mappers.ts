@@ -10,6 +10,8 @@ import {
 
 import type {
   workflowArtifacts,
+  workflowCheckpointEntries,
+  workflowCheckpoints,
   workflowGraphFrames,
   workflowNodeExecutions,
   workflowOperations,
@@ -24,6 +26,8 @@ import type {
 import type {
   WorkflowArtifactRecord,
   WorkflowAttemptRecord,
+  WorkflowCheckpointEntryRecord,
+  WorkflowCheckpointRecord,
   WorkflowExecutionRecord,
   WorkflowFrameRecord,
   WorkflowOperationRecord,
@@ -47,6 +51,8 @@ type OperationRow = typeof workflowOperations.$inferSelect;
 type ArtifactRow = typeof workflowArtifacts.$inferSelect;
 type AdoptionRow = typeof workflowVersionAdoptions.$inferSelect;
 type PauseIntervalRow = typeof workflowPauseIntervals.$inferSelect;
+type CheckpointRow = typeof workflowCheckpoints.$inferSelect;
+type CheckpointEntryRow = typeof workflowCheckpointEntries.$inferSelect;
 
 export class CorruptRunPositionError extends Error {
   readonly _tag = 'CorruptRunPositionError';
@@ -381,4 +387,134 @@ export function pauseIntervalRecord(row: PauseIntervalRow): WorkflowPauseInterva
     pausedAt: row.pausedAt,
     resumedAt: row.resumedAt,
   };
+}
+
+/**
+ * A checkpoint row that breaks the representation invariants its CHECK constraints and repository
+ * enforce. Thrown rather than repaired: a checkpoint read with a guessed base or a dropped exclusion
+ * would describe a different filesystem than the one that was captured.
+ */
+export class CorruptCheckpointRowError extends Error {
+  readonly _tag = 'CorruptCheckpointRowError';
+  constructor(
+    readonly table: 'workflow_checkpoints' | 'workflow_checkpoint_entries',
+    readonly rowId: number,
+    readonly detail: string,
+  ) {
+    super(`${table} row ${rowId} is unreadable: ${detail}`);
+  }
+}
+
+export function checkpointRecord(row: CheckpointRow): WorkflowCheckpointRecord {
+  const corrupt = (detail: string) =>
+    new CorruptCheckpointRowError('workflow_checkpoints', row.id, detail);
+  let base: WorkflowCheckpointRecord['base'];
+  if (row.baseKind === 'git') {
+    if (row.baseCommitSha === null) throw corrupt('a git base has no commit');
+    base = { kind: 'git', repositoryId: row.repositoryProjectId, commitSha: row.baseCommitSha };
+  } else {
+    if (row.baseReason === null) throw corrupt('a none base has no reason');
+    base = { kind: 'none', reason: row.baseReason };
+  }
+  return {
+    id: row.id,
+    checkpointKey: row.checkpointKey,
+    runId: row.runId,
+    frameId: row.frameId,
+    executionId: row.executionId,
+    attemptId: row.attemptId,
+    artifactHash: row.artifactHash,
+    parentCheckpointId: row.parentCheckpointId,
+    nodeId: row.nodeId,
+    title: row.title,
+    base,
+    repositoryProjectId: row.repositoryProjectId,
+    repositoryRootPath: row.repositoryRootPath,
+    counts: {
+      scopes: row.scopeCount,
+      files: row.fileCount,
+      absences: row.absentCount,
+      warnings: row.warningCount,
+    },
+    createdAt: row.createdAt,
+  };
+}
+
+export function checkpointEntryRecord(row: CheckpointEntryRow): WorkflowCheckpointEntryRecord {
+  const corrupt = (detail: string) =>
+    new CorruptCheckpointRowError('workflow_checkpoint_entries', row.id, detail);
+  const placement = { checkpointId: row.checkpointId, seq: row.seq };
+  const required = <T>(value: T | null, column: string): T => {
+    if (value === null) throw corrupt(`a ${row.kind} row has no ${column}`);
+    return value;
+  };
+  switch (row.kind) {
+    case 'scope':
+      return {
+        ...placement,
+        kind: 'scope',
+        path: required(row.path, 'path'),
+        scopeId: required(row.scopeId, 'scope_id'),
+        scopeKind: required(row.scopeKind, 'scope_kind'),
+        exclusions: readStringArray(required(row.exclusionsJson, 'exclusions_json'), corrupt),
+        capturedBy: required(row.capturedByCheckpointKey, 'captured_by_checkpoint_key'),
+      };
+    case 'file':
+      return {
+        ...placement,
+        kind: 'file',
+        path: required(row.path, 'path'),
+        fileKey: required(row.fileKey, 'file_key'),
+        contentRef: required(row.contentRef, 'content_ref'),
+        byteSize: required(row.byteSize, 'byte_size'),
+        executable: required(row.executable, 'executable'),
+      };
+    case 'absent':
+      return { ...placement, kind: 'absent', path: required(row.path, 'path') };
+    case 'warning':
+      return {
+        ...placement,
+        kind: 'warning',
+        reason: required(row.warningReason, 'warning_reason'),
+        path: row.path,
+        scopeId: row.scopeId,
+        detail:
+          row.warningDetailJson === null ? null : readScalarRecord(row.warningDetailJson, corrupt),
+        observedBy: required(row.observedByCheckpointKey, 'observed_by_checkpoint_key'),
+      };
+    case 'change':
+      return {
+        ...placement,
+        kind: 'change',
+        operation: required(row.changeOperation, 'change_operation'),
+        path: required(row.path, 'path'),
+        contentRef: row.contentRef,
+        byteSize: row.byteSize,
+        executable: row.executable,
+      };
+  }
+}
+
+function readStringArray(value: string, corrupt: (detail: string) => Error): readonly string[] {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+    throw corrupt('exclusions_json is not a string array');
+  }
+  return parsed;
+}
+
+function readScalarRecord(
+  value: string,
+  corrupt: (detail: string) => Error,
+): Readonly<Record<string, string | number>> {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    !Object.values(parsed).every((item) => typeof item === 'string' || typeof item === 'number')
+  ) {
+    throw corrupt('warning_detail_json is not an object of scalars');
+  }
+  return parsed as Record<string, string | number>;
 }
