@@ -10,9 +10,11 @@ This overview explains the subsystem's model and guarantees. Concrete authoring 
 
 ## Graphs and runs
 
-A workflow combines its launch inputs and validation with a root graph. Graphs declare operations, nested graphs, routing edges, and completion outcomes. Each graph invocation owns private state; pure per-field reducers apply updates, and mappings pass parameters into children and completed outputs back to parents. Graph execution is sequential, with explicit waits for external work or human input.
+A workflow combines its launch inputs and validation with a root graph. Graphs declare operations, checkpoints, nested graphs, routing edges, and completion outcomes. Each graph invocation owns private state; pure per-field reducers apply updates, and mappings pass parameters into children and completed outputs back to parents. Graph execution is sequential, with explicit waits for external work or human input.
 
 Operations perform work and can complete immediately or return an explicit wait. Pure routing edges consume the resulting event and choose a declared destination. A callback or reducer exception fails the execution segment; an agent reporting failure is an event the graph can handle through ordinary routing. Reducer failures do not partially apply graph state.
+
+Checkpoint nodes save declared files from the run's destination at a point in the graph. The runtime layers each capture over earlier checkpoints in the run and stores a resolved inventory of final files and required absences for inspection and later reconstruction. For Git projects, it also records the current commit as the baseline, which must still be available when reconstruction happens. A checkpoint does not save graph state, agent sessions, or other execution context; durable continuation remains part of the run.
 
 One run contains the whole composed graph. A graph definition describes reusable structure, a frame represents one invocation of that graph, a node execution represents one visit, and an attempt records one try at an execution segment. Repeated visits and retries retain distinct history under the same run.
 
