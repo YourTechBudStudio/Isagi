@@ -1,6 +1,6 @@
 import type {
+  OperationContext,
   WorkflowCommandModifier,
-  WorkflowContext,
   WorkflowPromptInput,
   WorkflowPromptModifier,
   WorkflowPromptModifiers,
@@ -49,10 +49,10 @@ acceptModifiers([
 // @ts-expect-error The broad union array does not prove that every item is a skill.
 acceptModifiers(broadModifiers);
 
-type SpawnAgentSessionInput = Parameters<WorkflowContext['spawnAgentSession']>[0];
-type SendAgentPromptInput = Parameters<WorkflowContext['sendAgentPrompt']>[0];
-type RunHeadlessAgentInput = Parameters<WorkflowContext['runHeadlessAgent']>[0];
-type WorkflowInvocationKind = WorkflowContext['invocation']['kind'];
+type SpawnAgentSessionInput = Parameters<OperationContext['spawnAgentSession']>[0];
+type SendAgentPromptInput = Parameters<OperationContext['sendAgentPrompt']>[0];
+type RunHeadlessAgentInput = Parameters<OperationContext['runHeadlessAgent']>[0];
+type WorkflowInvocationKind = OperationContext['invocation']['kind'];
 
 const spawnWithModifiers = {
   harness: 'codex',

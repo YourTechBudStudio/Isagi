@@ -23,14 +23,6 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
     ['SDK_VERSION', workflowSdkVersion],
     ['VERIFIER_VERSION', workflowVerifierVersion],
     ['BUILDER_VERSION', workflowBuilderVersion],
-    [
-      'RUNTIME_CONFIG_SCHEMA',
-      trimTrailingNewline(configSchemaReferenceSources['runtime-config.schema.ts']),
-    ],
-    [
-      'PROJECT_CONFIG_SCHEMA',
-      trimTrailingNewline(configSchemaReferenceSources['project-config.schema.ts']),
-    ],
   ]);
 
   const files = new Map<string, string>();
@@ -38,6 +30,22 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   files.set('references/config-global.md', render('config-global.md', substitutions));
   files.set('references/config-project.md', render('config-project.md', substitutions));
   files.set('references/workflows.md', render('workflows.md', substitutions));
+  files.set(
+    'references/workflow-environments.md',
+    render('workflow-environments.md', substitutions),
+  );
+  files.set('references/workflow-agents.md', render('workflow-agents.md', substitutions));
+  files.set('references/workflow-recovery.md', render('workflow-recovery.md', substitutions));
+  files.set('references/workflow-evidence.md', render('workflow-evidence.md', substitutions));
+  files.set('references/workflow-checkpoints.md', render('workflow-checkpoints.md', substitutions));
+  files.set(
+    'references/config-global.schema.ts',
+    configSchemaReferenceSources['runtime-config.schema.ts'],
+  );
+  files.set(
+    'references/config-project.schema.ts',
+    configSchemaReferenceSources['project-config.schema.ts'],
+  );
 
   for (const [relativePath, source] of workflowScaffoldSources) {
     // Emitted verbatim (never through render) so the shipped scaffold is byte-identical to the
@@ -61,8 +69,4 @@ function render(
     throw new Error(`Unsubstituted placeholder ${survivor[0]} in skill content ${name}.`);
   }
   return rendered;
-}
-
-function trimTrailingNewline(source: string) {
-  return source.replace(/\n+$/, '');
 }

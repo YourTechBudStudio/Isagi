@@ -25,7 +25,7 @@ export function OutcomePanel({
   content: CommandResultContent | CommandErrorContent;
   kind: 'result' | 'error';
   sel?: number | null;
-  onAction: (value: string) => void;
+  onAction: (action: CommandOutcomeAction) => void;
 }) {
   const tone = kind === 'error' ? (content.tone ?? 'danger') : (content.tone ?? 'info');
   const toneClass = outcomeToneClass(tone);
@@ -34,7 +34,12 @@ export function OutcomePanel({
       <div className={`rounded-md border p-3 ${toneClass.frame}`}>
         <p className={`text-[13.5px] font-medium ${toneClass.title}`}>{content.title}</p>
         {content.body && (
-          <p className="mt-1 text-[12.5px] leading-snug text-fg-muted">{content.body}</p>
+          // Paragraphs, not one run-on sentence: a body may set out what
+          // happened, what exists because of it, and what an action would do,
+          // and those are three separate things a person reads in order.
+          <p className="mt-1 text-[12.5px] leading-snug whitespace-pre-line text-fg-muted">
+            {content.body}
+          </p>
         )}
         {content.diagnostic && (
           <div className="mt-3 rounded-sm border border-line/18 bg-scrim/28 p-2">
@@ -52,7 +57,7 @@ export function OutcomePanel({
           <button
             key={action.value}
             type="button"
-            onClick={() => onAction(action.value)}
+            onClick={() => onAction(action)}
             className={`rounded-sm px-3 py-1.5 text-[12.5px] transition duration-micro ease-expo ${outcomeActionClass(action)} ${
               index === sel ? 'ring-1 ring-line/60' : ''
             }`}

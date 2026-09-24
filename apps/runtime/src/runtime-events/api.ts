@@ -169,7 +169,7 @@ function handleClientMessage(
     case 'workflow_run_snapshot_requested':
       return Effect.gen(function* () {
         const projection = yield* WorkflowRunProjection;
-        const summaries = yield* projection.listSummaries({ rootOnly: true });
+        const summaries = yield* projection.listAttachedSummaries();
         return {
           ...nextRuntimeEventEnvelope(),
           type: 'workflow_run_snapshot',

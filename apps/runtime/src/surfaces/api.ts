@@ -243,6 +243,10 @@ function surfaceRejectionReason(error: SurfaceError) {
     case 'layout_node_stale':
       return error.code;
     default:
+      // `creation_key_mismatch` lands here, and only in theory: a creation key is supplied by the
+      // workflow operation layer, never by an HTTP caller, so no request can produce one. If a
+      // keyed call ever becomes reachable from here, the shared rejection union needs a member
+      // rather than this default quietly relabelling it.
       return 'surface_not_found';
   }
 }

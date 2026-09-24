@@ -17,11 +17,14 @@ import type {
   ArgValues,
   CommandErrorContent,
   CommandOutcome,
+  CommandOutcomeAction,
   CommandResultContent,
+  MaybePromise,
   Option,
   PaletteCommand,
   PaletteContext,
   PaletteEntry,
+  PaletteRunningCopy,
   ReviewChoice,
   ReviewContent,
 } from './types.js';
@@ -102,6 +105,21 @@ export type PaletteEffect =
       readonly kind: 'suggestPaths';
       readonly attemptId: number;
       readonly query: string;
+    }
+  /**
+   * A run the caller handed in as a function, rather than one the palette can
+   * resolve from an entry and a command id.
+   *
+   * The callback is the effect's payload because there is nothing to look it up
+   * by: it closes over the caller's own inputs. Everything after it is the
+   * ordinary run cycle — the same attempt id, the same `run-succeeded` /
+   * `run-failed` reporting, the same outcome rendering.
+   */
+  | {
+      readonly id: number;
+      readonly kind: 'callbackRun';
+      readonly attemptId: number;
+      readonly run: () => MaybePromise<CommandOutcome | void>;
     };
 
 type PaletteEffectInput =
@@ -109,7 +127,8 @@ type PaletteEffectInput =
   | Omit<Extract<PaletteEffect, { kind: 'run' }>, 'id'>
   | Omit<Extract<PaletteEffect, { kind: 'loadOptions' }>, 'id'>
   | Omit<Extract<PaletteEffect, { kind: 'loadReview' }>, 'id'>
-  | Omit<Extract<PaletteEffect, { kind: 'suggestPaths' }>, 'id'>;
+  | Omit<Extract<PaletteEffect, { kind: 'suggestPaths' }>, 'id'>
+  | Omit<Extract<PaletteEffect, { kind: 'callbackRun' }>, 'id'>;
 
 interface BaseState {
   readonly effects: readonly PaletteEffect[];
@@ -127,6 +146,7 @@ type SearchStateBody = {
   readonly inlineError: string | null;
   readonly preflightAttemptId: number | null;
   readonly runAttemptId: number | null;
+  readonly running: PaletteRunningCopy | null;
   readonly viewKey: string;
 };
 
@@ -137,13 +157,26 @@ type StepStateBody = {
   readonly stepData: StepData;
   readonly inlineError: string | null;
   readonly runAttemptId: number | null;
+  readonly running: PaletteRunningCopy | null;
   readonly viewKey: string;
 };
 
+/**
+ * An outcome panel, and anything a follow-up run started from it.
+ *
+ * `runAttemptId`, `running` and `inlineError` are the same three fields the
+ * search and step bodies carry, for the same reason: an outcome action may run
+ * something, and while it does the palette is busy, names the work, and reports
+ * a failure it could not turn into an outcome. One run pipeline, four states
+ * that can hold it.
+ */
 type ResultStateBody = {
   readonly kind: 'result';
   readonly content: CommandResultContent;
   readonly entryId: string | null;
+  readonly inlineError: string | null;
+  readonly runAttemptId: number | null;
+  readonly running: PaletteRunningCopy | null;
   readonly viewKey: string;
 };
 
@@ -151,6 +184,9 @@ type ErrorStateBody = {
   readonly kind: 'error';
   readonly content: CommandErrorContent;
   readonly entryId: string | null;
+  readonly inlineError: string | null;
+  readonly runAttemptId: number | null;
+  readonly running: PaletteRunningCopy | null;
   readonly viewKey: string;
 };
 
@@ -251,7 +287,17 @@ export type PaletteEvent =
       readonly outcome: CommandOutcome | void;
     }
   | { readonly type: 'run-failed'; readonly attemptId: number; readonly error: string }
-  | { readonly type: 'outcome-action'; readonly value: string };
+  /**
+   * A run the caller owns: it supplies the function and the status copy, and the
+   * palette supplies the cycle. The one entry point for work the palette cannot
+   * resolve from an entry, alongside the outcome action's own `run`.
+   */
+  | {
+      readonly type: 'start-run';
+      readonly run: () => MaybePromise<CommandOutcome | void>;
+      readonly running?: PaletteRunningCopy | undefined;
+    }
+  | { readonly type: 'outcome-action'; readonly action: CommandOutcomeAction };
 
 export const initialPaletteState: PaletteState = {
   kind: 'closed',
@@ -349,6 +395,7 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
     case 'flow-failed':
       if (state.kind === 'step') {
         return withBase(state, {
+          ...idleOutcome,
           kind: 'error',
           content: event.content,
           entryId: state.flow.entryId,
@@ -357,6 +404,7 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
       }
       if (state.kind === 'search') {
         return withBase(state, {
+          ...idleOutcome,
           kind: 'error',
           content: event.content,
           entryId: event.entryId ?? null,
@@ -371,8 +419,14 @@ export function paletteReducer(state: PaletteState, event: PaletteEvent): Palett
     case 'run-failed':
       return runFailed(state, event.attemptId, event.error);
 
+    case 'start-run':
+      return startCallbackRun(state, event.run, event.running);
+
     case 'outcome-action':
-      return event.value === 'close' || event.value === 'cancel'
+      if (event.action.run) {
+        return startCallbackRun(state, event.action.run, event.action.running);
+      }
+      return event.action.value === 'close' || event.action.value === 'cancel'
         ? withBase(state, { kind: 'closed' })
         : state;
   }
@@ -411,6 +465,7 @@ function searchState(_state: PaletteState): SearchStateBody {
     inlineError: null,
     preflightAttemptId: null,
     runAttemptId: null,
+    running: null,
     viewKey: 'recent',
   };
 }
@@ -449,6 +504,7 @@ function startPreflight(
       inlineError: null,
       preflightAttemptId: attemptId,
       runAttemptId: null,
+      running: null,
       viewKey: state.kind === 'search' ? state.viewKey : 'recent',
     },
   );
@@ -560,7 +616,7 @@ function enterStep(
   flow: PaletteFlow,
   spec: ArgSpec | undefined,
   query: string,
-  inlineError: string | null,
+  entryInlineError: string | null,
 ): PaletteState {
   const { stepData, effect, nextAttemptId } = makeStepData(state, flow, spec, query);
   const base = withBase(
@@ -570,8 +626,9 @@ function enterStep(
       flow,
       query,
       stepData,
-      inlineError,
+      inlineError: entryInlineError,
       runAttemptId: null,
+      running: null,
       viewKey: `wizard-${flow.stepIndex}`,
     },
   );
@@ -896,6 +953,7 @@ function startRun(
     nextAttemptId,
     inlineError: null,
     runAttemptId: attemptId,
+    running: null,
   };
   return enqueue(next, {
     kind: 'run',
@@ -924,6 +982,7 @@ function runSucceeded(
     return withBase(
       { ...state, effects: [] },
       {
+        ...idleOutcome,
         kind: 'result',
         content: outcome.content,
         entryId: entryIdForOutcome(state),
@@ -935,6 +994,7 @@ function runSucceeded(
   return withBase(
     { ...state, effects: [] },
     {
+      ...idleOutcome,
       kind: 'error',
       content: outcome.content,
       entryId: entryIdForOutcome(state),
@@ -943,25 +1003,76 @@ function runSucceeded(
   );
 }
 
+/** An outcome panel at rest: nothing running, nothing failed since it appeared. */
+const idleOutcome = {
+  inlineError: null,
+  runAttemptId: null,
+  running: null,
+} as const;
+
+/**
+ * A run that could not even produce an outcome.
+ *
+ * Every state that can hold a run reports it the same way: release the palette
+ * and say what happened in the inline error channel. Leaving an outcome panel
+ * busy forever would be the one failure mode a caller-supplied run could
+ * introduce that no command can.
+ */
 function runFailed(state: PaletteState, attemptId: number, error: string): PaletteState {
-  if (!runMatches(state, attemptId)) {
+  if (!holdsRun(state) || state.runAttemptId !== attemptId) {
     return state;
   }
-  if (state.kind === 'search' || state.kind === 'step') {
-    return { ...state, runAttemptId: null, inlineError: error };
-  }
-  return state;
+  return { ...state, runAttemptId: null, running: null, inlineError: error };
 }
 
 function runMatches(state: PaletteState, attemptId: number) {
-  return (state.kind === 'search' || state.kind === 'step') && state.runAttemptId === attemptId;
+  return holdsRun(state) && state.runAttemptId === attemptId;
+}
+
+/** The states that can own a run in flight. `closed` is the only one that cannot. */
+type RunHoldingState = BaseState &
+  (SearchStateBody | StepStateBody | ResultStateBody | ErrorStateBody);
+
+function holdsRun(state: PaletteState): state is RunHoldingState {
+  return state.kind !== 'closed';
 }
 
 function entryIdForOutcome(state: PaletteState) {
   if (state.kind === 'step') {
     return state.flow.entryId;
   }
+  if (state.kind === 'result' || state.kind === 'error') {
+    // A follow-up keeps the outcome's own provenance: it is the same piece of
+    // work continuing, not a new entry the person picked.
+    return state.entryId;
+  }
   return null;
+}
+
+/**
+ * Run a function the caller handed in, from wherever the palette currently is.
+ *
+ * The state body is kept as it is — a follow-up started from an outcome leaves
+ * that outcome in place underneath the running panel, so returning to it after
+ * a failure that produced no outcome shows what was already there.
+ */
+function startCallbackRun(
+  state: PaletteState,
+  run: () => MaybePromise<CommandOutcome | void>,
+  running: PaletteRunningCopy | undefined,
+): PaletteState {
+  if (!holdsRun(state) || isBusy(state)) {
+    return state;
+  }
+  const { attemptId, nextAttemptId } = nextAttempt(state);
+  const next = {
+    ...state,
+    nextAttemptId,
+    inlineError: null,
+    runAttemptId: attemptId,
+    running: running ?? null,
+  };
+  return enqueue(next, { kind: 'callbackRun', attemptId, run });
 }
 
 function updateOptions(
@@ -1075,10 +1186,35 @@ function updatePaths(
   };
 }
 
+/**
+ * Whether the palette is locked to work in flight.
+ *
+ * Any state that can hold a run answers this, not just the two that could
+ * before: an outcome action's follow-up starts from a result or an error panel,
+ * and while it runs the palette must refuse input exactly as it does for a
+ * command.
+ */
 export function isBusy(state: PaletteState) {
+  if (!holdsRun(state)) {
+    return false;
+  }
   return (
-    (state.kind === 'search' &&
-      (state.preflightAttemptId !== null || state.runAttemptId !== null)) ||
-    (state.kind === 'step' && state.runAttemptId !== null)
+    state.runAttemptId !== null || (state.kind === 'search' && state.preflightAttemptId !== null)
   );
+}
+
+/**
+ * The status copy a caller handed in with its run, if it did.
+ *
+ * Named for its one source rather than for the panel: a command's declared `running` and the
+ * generic fallback are the view's other two, and the chain lives there. Widening this to answer for
+ * all three would mean the machine resolving commands, which is the one thing it does not do.
+ */
+export function callerRunningCopy(state: PaletteState): PaletteRunningCopy | null {
+  return holdsRun(state) ? state.running : null;
+}
+
+/** The failure channel shown above the panel, for every state that has one. */
+export function inlineError(state: PaletteState): string | null {
+  return holdsRun(state) ? state.inlineError : null;
 }

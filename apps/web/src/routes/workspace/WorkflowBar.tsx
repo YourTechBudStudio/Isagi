@@ -4,45 +4,74 @@ import {
   ChevronDown,
   ChevronUp,
   CircleAlert,
+  CircleSlash,
   MessageCircle,
+  Network,
   Pause,
   Play,
   RotateCw,
+  ShieldAlert,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WorkflowEvent, WorkflowRunSummary } from '@isagi/contracts';
+import type { WorkflowRunSummary } from '@isagi/contracts';
 
 import { Tooltip } from '../../components/Tooltip.js';
-import { workflowCopy } from '../../copy/index.js';
+import { workflowCopy, workflowFailureHeadline } from '../../copy/index.js';
 import { surfaceTransition } from '../../lib/motion.js';
-import type { PtyStreamConnectionState } from '../../lib/workspace/pty-stream/connection.js';
 import {
   workflowPresentationStatus,
+  workflowReasonLine,
   type WorkflowPresentationStatus,
-} from '../../lib/workspace/workflow-derive.js';
+} from '../../lib/workspace/workflow/derive.js';
+import {
+  workflowLogLineFromPayload,
+  type WorkflowLogLine,
+} from '../../lib/workspace/workflow/log.js';
+import {
+  useWorkflowPayloadQuery,
+  type WorkflowLogView,
+} from '../../lib/workspace/workflow/queries.js';
+import type { RuntimeConnectionPhase } from '../../lib/workspace/workflow/signals.js';
+import { inspectorCopy } from './workflow/copy.js';
 import { WorkflowInputFlow, type WorkflowInputAnswers } from './WorkflowInputFlow.js';
 
 export interface WorkflowBarProps {
   readonly summary: WorkflowRunSummary;
-  readonly events: readonly WorkflowEvent[];
-  readonly eventConnection: PtyStreamConnectionState;
+  readonly log: WorkflowLogView;
+  readonly connection: RuntimeConnectionPhase;
   readonly logExpanded: boolean;
-  readonly busyAction: WorkflowBarAction | null;
+  readonly inspectorOpen: boolean;
+  /**
+   * The bar's own element.
+   *
+   * The inspector overlay stops above the bar rather than covering it, which it can only do if
+   * somebody measures how tall the bar currently is — and it changes, because the log panel and the
+   * question form both grow it. A person answering a question while the inspector is open is the
+   * whole reason this is not a modal.
+   */
+  readonly sectionRef?: React.Ref<HTMLElement> | undefined;
+  /**
+   * True while any control mutation is in flight.
+   *
+   * The whole cluster waits, not just the button that was pressed. These are run-level controls and
+   * issuing two at once means nothing — the runtime fences them on control revision — while leaving
+   * the others live let a fast action clear the indicator with a slower one still outstanding.
+   */
+  readonly actionsLocked: boolean;
   readonly actionError: string | null;
   readonly onToggleLog: () => void;
+  readonly onToggleInspector: () => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
-  readonly onAdvance: (runId: number, answers?: WorkflowInputAnswers) => void;
+  readonly onAdvance: (waitId: number, answers?: WorkflowInputAnswers) => void;
 }
-
-export type WorkflowBarAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'dismiss' | 'advance';
 
 const statusMeta: Record<
   WorkflowPresentationStatus,
@@ -53,46 +82,38 @@ const statusMeta: Record<
     readonly signal: string;
   }
 > = {
-  driving: {
-    icon: Activity,
-    label: 'Driving',
-    tone: 'text-working',
-    signal: 'bg-working',
-  },
+  driving: { icon: Activity, label: 'Driving', tone: 'text-working', signal: 'bg-working' },
   waiting_user: {
     icon: MessageCircle,
     label: 'Waiting',
     tone: 'text-waiting',
     signal: 'bg-waiting',
   },
-  paused: {
-    icon: Pause,
-    label: 'Paused',
+  // Not "waiting": nobody is being asked anything. The run is stuck on something Isagi could not
+  // settle, and it needs a person to look rather than to answer.
+  blocked: { icon: ShieldAlert, label: 'Blocked', tone: 'text-error', signal: 'bg-error' },
+  paused: { icon: Pause, label: 'Paused', tone: 'text-fg-subtle', signal: 'bg-idle' },
+  failed: { icon: CircleAlert, label: 'Failed', tone: 'text-error', signal: 'bg-error' },
+  cancelled: {
+    icon: CircleSlash,
+    label: 'Cancelled',
     tone: 'text-fg-subtle',
     signal: 'bg-idle',
   },
-  failed: {
-    icon: CircleAlert,
-    label: 'Failed',
-    tone: 'text-error',
-    signal: 'bg-error',
-  },
-  done: {
-    icon: Check,
-    label: 'Done',
-    tone: 'text-green',
-    signal: 'bg-green',
-  },
+  done: { icon: Check, label: 'Done', tone: 'text-green', signal: 'bg-green' },
 };
 
 export function WorkflowBar({
   summary,
-  events,
-  eventConnection,
+  log,
+  connection,
   logExpanded,
-  busyAction,
+  inspectorOpen,
+  sectionRef,
+  actionsLocked,
   actionError,
   onToggleLog,
+  onToggleInspector,
   onPause,
   onResume,
   onCancel,
@@ -100,20 +121,43 @@ export function WorkflowBar({
   onDismiss,
   onAdvance,
 }: WorkflowBarProps) {
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  /**
+   * Which run the person confirmed cancelling — not merely that they confirmed something.
+   *
+   * The bar is one component across run swaps, so a boolean here outlives the run it was raised
+   * for. A committed render could then show run 77's confirmation while `onCancel` already pointed
+   * at run 88, and a click in that frame would cancel a workflow nobody confirmed. Comparing the id
+   * during render closes the window; an effect cannot, because it runs a paint too late.
+   */
+  const [confirmingCancelRunId, setConfirmingCancelRunId] = useState<number | null>(null);
   const presentationStatus = workflowPresentationStatus(summary);
   const meta = statusMeta[presentationStatus];
   const StatusIcon = meta.icon;
   const heading = summary.uiFeedback?.phase ?? summary.title;
   const body = summary.uiFeedback?.message;
-  const prompt = presentationStatus === 'waiting_user' ? summary.prompt : undefined;
+  const reason = workflowReasonLine(summary);
+  const wait = summary.blockingWait;
+  // The prompt follows the runtime's own permission, not the presentation status: a paused run may
+  // still accept an answer, and showing the form then is honest as long as it does not imply the
+  // graph resumed.
+  const prompt =
+    summary.controls.advance &&
+    wait &&
+    (wait.kind === 'user_continue' || wait.kind === 'user_input')
+      ? wait
+      : null;
+
+  const confirmingCancel = confirmingCancelRunId === summary.runId;
 
   useEffect(() => {
-    setConfirmingCancel(false);
-  }, [summary.rootRunId, presentationStatus]);
+    // A run that moved on has nothing left to confirm; the render-time comparison already hides it,
+    // and this clears the stale id so it cannot match again if the same run returns.
+    setConfirmingCancelRunId(null);
+  }, [summary.runId, presentationStatus]);
 
   return (
     <motion.section
+      ref={sectionRef}
       key={`workflow-bar-${summary.runId}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -131,31 +175,30 @@ export function WorkflowBar({
             <span className="truncate font-mono text-[10.5px] text-fg-subtle">{meta.label}</span>
           </div>
           {body && <p className="mt-0.5 text-[13.5px] leading-snug text-fg">{body}</p>}
-          {presentationStatus === 'failed' &&
-            summary.error && (
-              // The workflow's own thrown message — diagnostic, not a voiced line (the
-              // "Failed" label above is the voiced status). Muted so it reads as the
-              // raw detail a person can quote in a bug report, never as product copy.
-              <p
-                className="mt-0.5 min-w-0 truncate font-mono text-[10.5px] text-fg-subtle"
-                title={summary.error}
-              >
-                {summary.error}
-              </p>
-            )}
+          {reason && <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">{reason}</p>}
+          <WorkflowOutcomeLine summary={summary} />
         </div>
         <div className="ml-3 flex flex-none items-center gap-0.5">
           <WorkflowBarControls
-            status={presentationStatus}
-            busyAction={busyAction}
+            summary={summary}
+            actionsLocked={actionsLocked}
             confirmingCancel={confirmingCancel}
             onPause={onPause}
             onResume={onResume}
             onRetry={onRetry}
             onDismiss={onDismiss}
-            onCancelIntent={() => setConfirmingCancel(true)}
+            onCancelIntent={() => setConfirmingCancelRunId(summary.runId)}
           />
           <span aria-hidden className="mx-1 h-4 w-px bg-line/20" />
+          {/* Inspection is a read, so it sits after the separator with the log toggle rather than
+              among the controls that change the run. */}
+          <WorkflowBarControl
+            icon={Network}
+            label={inspectorCopy.inspectLabel}
+            onClick={onToggleInspector}
+            active={inspectorOpen}
+            ariaExpanded={inspectorOpen}
+          />
           <WorkflowBarControl
             icon={logExpanded ? ChevronDown : ChevronUp}
             label={logExpanded ? 'Hide log' : 'Show log'}
@@ -170,9 +213,9 @@ export function WorkflowBar({
         {confirmingCancel && (
           <CancelConfirm
             key="cancel-confirm"
-            busy={busyAction === 'cancel'}
+            busy={actionsLocked}
             onCancel={onCancel}
-            onBack={() => setConfirmingCancel(false)}
+            onBack={() => setConfirmingCancelRunId(null)}
           />
         )}
       </AnimatePresence>
@@ -184,24 +227,68 @@ export function WorkflowBar({
       <AnimatePresence initial={false}>
         {prompt && !confirmingCancel && (
           <WorkflowPrompt
+            // One prompt node, deliberately not keyed by wait. Keying it would leave the previous
+            // wait's form on screen — and editable — for the length of its exit animation, which is
+            // a form a person can still type into for a question the run has already left. The
+            // draft's own identity (`draftKey`) is what resets the fields when the wait changes.
             key="prompt"
-            prompt={prompt}
-            busy={busyAction === 'advance'}
+            wait={prompt}
+            paused={summary.paused}
+            busy={actionsLocked}
             onAdvance={onAdvance}
           />
         )}
       </AnimatePresence>
 
       <AnimatePresence initial={false}>
-        {logExpanded && <WorkflowLogPanel key="log" events={events} connection={eventConnection} />}
+        {logExpanded && <WorkflowLogPanel key="log" log={log} connection={connection} />}
       </AnimatePresence>
     </motion.section>
   );
 }
 
+/**
+ * The two different things "failed" can mean, kept apart.
+ *
+ * A workflow that declared a failure outcome finished on purpose and has nothing to repair; a
+ * segment that threw stopped mid-run and is what a Retry would act on. Presenting them the same way
+ * would tell a person to retry something that already ran to completion.
+ */
+function WorkflowOutcomeLine({ summary }: { readonly summary: WorkflowRunSummary }) {
+  if (summary.outcome?.kind === 'failure') {
+    return (
+      <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">
+        {summary.outcome.reason ?? workflowCopy.outcomeFailure}
+      </p>
+    );
+  }
+  if (!summary.failure) return null;
+  return (
+    <>
+      <p className="mt-0.5 text-[12.5px] leading-snug text-fg-muted">
+        {workflowFailureHeadline(summary.failure.code)}
+      </p>
+      {/* The runtime's own text and stable code: diagnostic facts to quote in a bug report, framed
+          as such and never voiced as product copy. */}
+      <p
+        className="mt-0.5 min-w-0 truncate font-mono text-[10.5px] text-fg-subtle"
+        title={`${summary.failure.code}: ${summary.failure.message}`}
+      >
+        {summary.failure.code} · {summary.failure.message}
+      </p>
+    </>
+  );
+}
+
+/**
+ * Availability comes from the runtime, not from the presentation status.
+ *
+ * The summary's `controls` are rechecked at mutation time, so offering exactly what they permit is
+ * what stops the bar from showing a button the runtime is guaranteed to refuse.
+ */
 function WorkflowBarControls({
-  status,
-  busyAction,
+  summary,
+  actionsLocked,
   confirmingCancel,
   onPause,
   onResume,
@@ -209,8 +296,8 @@ function WorkflowBarControls({
   onDismiss,
   onCancelIntent,
 }: {
-  readonly status: WorkflowPresentationStatus;
-  readonly busyAction: WorkflowBarAction | null;
+  readonly summary: WorkflowRunSummary;
+  readonly actionsLocked: boolean;
   readonly confirmingCancel: boolean;
   readonly onPause: () => void;
   readonly onResume: () => void;
@@ -218,76 +305,57 @@ function WorkflowBarControls({
   readonly onDismiss: () => void;
   readonly onCancelIntent: () => void;
 }) {
-  switch (status) {
-    case 'driving':
-    case 'waiting_user':
-      return (
-        <>
-          <WorkflowBarControl
-            icon={Pause}
-            label="Pause"
-            onClick={onPause}
-            busy={busyAction === 'pause'}
-          />
-          <WorkflowBarControl
-            icon={X}
-            label="Cancel"
-            onClick={onCancelIntent}
-            active={confirmingCancel}
-          />
-        </>
-      );
-    case 'paused':
-      return (
-        <>
-          <WorkflowBarControl
-            icon={Play}
-            label="Resume"
-            onClick={onResume}
-            busy={busyAction === 'resume'}
-            accent
-          />
-          <WorkflowBarControl
-            icon={X}
-            label="Cancel"
-            onClick={onCancelIntent}
-            active={confirmingCancel}
-          />
-        </>
-      );
-    case 'failed':
-      return (
-        <>
-          <WorkflowBarControl
-            icon={RotateCw}
-            label="Retry"
-            onClick={onRetry}
-            busy={busyAction === 'retry'}
-            accent
-          />
-          <WorkflowBarControl
-            icon={X}
-            label="Dismiss"
-            onClick={onDismiss}
-            busy={busyAction === 'dismiss'}
-          />
-        </>
-      );
-    case 'done':
-      return (
+  const controls = summary.controls;
+  return (
+    <>
+      {controls.pause && (
+        <WorkflowBarControl icon={Pause} label="Pause" onClick={onPause} busy={actionsLocked} />
+      )}
+      {controls.resume && (
+        <WorkflowBarControl
+          icon={Play}
+          label="Resume"
+          onClick={onResume}
+          busy={actionsLocked}
+          accent
+        />
+      )}
+      {controls.retry && (
+        <WorkflowBarControl
+          icon={RotateCw}
+          label="Retry"
+          hint={workflowCopy.retryPinNote}
+          onClick={onRetry}
+          busy={actionsLocked}
+          accent
+        />
+      )}
+      {controls.cancel && (
         <WorkflowBarControl
           icon={X}
-          label="Dismiss"
-          onClick={onDismiss}
-          busy={busyAction === 'dismiss'}
+          label="Cancel"
+          onClick={onCancelIntent}
+          busy={actionsLocked}
+          active={confirmingCancel}
         />
-      );
-  }
+      )}
+      {controls.dismiss && (
+        <WorkflowBarControl
+          icon={X}
+          label={workflowCopy.dismissLabel}
+          hint={workflowCopy.dismissDetail}
+          onClick={onDismiss}
+          busy={actionsLocked}
+        />
+      )}
+    </>
+  );
 }
 
 function WorkflowBarControl({
   icon: Icon,
   label,
+  hint,
   onClick,
   accent = false,
   active = false,
@@ -296,6 +364,7 @@ function WorkflowBarControl({
 }: {
   readonly icon: LucideIcon;
   readonly label: string;
+  readonly hint?: string | undefined;
   readonly onClick?: () => void;
   readonly accent?: boolean | undefined;
   readonly active?: boolean | undefined;
@@ -303,7 +372,7 @@ function WorkflowBarControl({
   readonly ariaExpanded?: boolean | undefined;
 }) {
   return (
-    <Tooltip label={label}>
+    <Tooltip label={hint ? `${label} — ${hint}` : label}>
       <button
         type="button"
         aria-label={label}
@@ -347,7 +416,7 @@ function CancelConfirm({
           <span className="block font-mono text-[12px] text-error">
             {workflowCopy.cancelConfirm}
           </span>
-          <span className="block font-mono text-[10.5px] text-fg-subtle">
+          <span className="block text-[12px] leading-snug text-fg-muted">
             {workflowCopy.cancelConfirmDetail}
           </span>
         </span>
@@ -375,6 +444,7 @@ function CancelConfirm({
 function ActionError({ message }: { readonly message: string }) {
   return (
     <motion.p
+      role="status"
       initial={{ height: 0, opacity: 0 }}
       animate={{ height: 'auto', opacity: 1 }}
       exit={{ height: 0, opacity: 0 }}
@@ -387,13 +457,15 @@ function ActionError({ message }: { readonly message: string }) {
 }
 
 function WorkflowPrompt({
-  prompt,
+  wait,
+  paused,
   busy,
   onAdvance,
 }: {
-  readonly prompt: NonNullable<WorkflowRunSummary['prompt']>;
+  readonly wait: NonNullable<WorkflowRunSummary['blockingWait']>;
+  readonly paused: boolean;
   readonly busy: boolean;
-  readonly onAdvance: (runId: number, answers?: WorkflowInputAnswers) => void;
+  readonly onAdvance: (waitId: number, answers?: WorkflowInputAnswers) => void;
 }) {
   return (
     <motion.div
@@ -404,12 +476,19 @@ function WorkflowPrompt({
       className="overflow-hidden border-t border-line/12"
     >
       <div className="px-3.5 py-3">
-        {prompt.questions.length === 0 ? (
+        {wait.label && <p className="mb-2 text-[13px] leading-snug text-fg">{wait.label}</p>}
+        {paused && (
+          // Answering while paused records the answer; it does not start the graph moving again.
+          <p className="mb-2 font-mono text-[10.5px] text-fg-subtle">
+            {workflowCopy.pausedAnswerNote}
+          </p>
+        )}
+        {wait.questions === null || wait.questions.length === 0 ? (
           <div className="flex justify-end">
             <button
               type="button"
               disabled={busy}
-              onClick={() => onAdvance(prompt.runId)}
+              onClick={() => onAdvance(wait.waitId)}
               className="rounded-md bg-blue/16 px-3 py-1.5 font-mono text-[11.5px] text-blue transition duration-micro ease-expo hover:bg-blue/22 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {workflowCopy.continuePrompt}
@@ -417,10 +496,14 @@ function WorkflowPrompt({
           </div>
         ) : (
           <WorkflowInputFlow
-            questions={prompt.questions}
+            questions={wait.questions}
+            // The draft belongs to one wait. Keying it means a question that changes under a person
+            // mid-sentence resets the form instead of submitting yesterday's answer to today's
+            // question.
+            draftKey={wait.waitId}
             disabled={busy}
             autoFocus
-            onSubmit={(answers) => onAdvance(prompt.runId, answers)}
+            onSubmit={(answers) => onAdvance(wait.waitId, answers)}
           />
         )}
       </div>
@@ -429,11 +512,11 @@ function WorkflowPrompt({
 }
 
 function WorkflowLogPanel({
-  events,
+  log,
   connection,
 }: {
-  readonly events: readonly WorkflowEvent[];
-  readonly connection: PtyStreamConnectionState;
+  readonly log: WorkflowLogView;
+  readonly connection: RuntimeConnectionPhase;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -441,7 +524,7 @@ function WorkflowLogPanel({
     const element = scrollRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [events.length]);
+  }, [log.lines.length]);
 
   return (
     <motion.div
@@ -452,18 +535,50 @@ function WorkflowLogPanel({
       className="overflow-hidden border-t border-line/12"
     >
       <div ref={scrollRef} className="max-h-56 overflow-y-auto px-3.5 py-2">
-        {events.length === 0 ? (
+        {log.hasOlder && (
+          // The window is bounded at both ends and says so. The old panel silently capped itself
+          // and implied it was showing everything.
+          <div className="flex items-center gap-2 pb-1">
+            <span className="font-mono text-[10.5px] text-fg-subtle">
+              {workflowCopy.logOlderAvailable}
+            </span>
+            <button
+              type="button"
+              onClick={log.loadEarlier}
+              className="rounded-md px-1.5 py-0.5 font-mono text-[10.5px] text-blue transition duration-micro ease-expo hover:bg-blue/12"
+            >
+              {workflowCopy.logLoadEarlier}
+            </button>
+          </div>
+        )}
+        {log.error !== null && log.error !== undefined ? (
+          // A read that failed is not an empty history. Saying "nothing recorded yet" here would be
+          // the panel inventing a fact about the run out of its own inability to read one.
+          <p
+            role="status"
+            className="flex items-center gap-2 py-2 font-mono text-[11px] text-error"
+          >
+            {workflowCopy.logReadFailed}
+            <button
+              type="button"
+              onClick={log.retry}
+              className="rounded-md px-1.5 py-0.5 text-blue transition duration-micro ease-expo hover:bg-blue/12"
+            >
+              {workflowCopy.logRetry}
+            </button>
+          </p>
+        ) : log.lines.length === 0 ? (
           <p className="py-2 font-mono text-[11px] text-fg-subtle opacity-70">
-            {connection.phase === 'connecting'
+            {log.isLoading || connection === 'connecting'
               ? workflowCopy.logConnecting
-              : connection.phase === 'disconnected' || connection.phase === 'errored'
+              : connection === 'disconnected'
                 ? workflowCopy.logDisconnected
                 : workflowCopy.logEmpty}
           </p>
         ) : (
           <div className="space-y-1">
-            {events.map((event, index) => (
-              <WorkflowEventLine key={`${event.ts}-${event.runId}-${index}`} event={event} />
+            {log.lines.map((line) => (
+              <WorkflowLogLineView key={line.revision} line={line} runId={log.runId} />
             ))}
           </div>
         )}
@@ -472,46 +587,61 @@ function WorkflowLogPanel({
   );
 }
 
-function WorkflowEventLine({ event }: { readonly event: WorkflowEvent }) {
+const logToneClass: Record<WorkflowLogLine['tone'], string> = {
+  debug: 'text-fg-subtle',
+  info: 'text-blue',
+  warning: 'text-amber',
+  error: 'text-error',
+};
+
+/**
+ * One line, and — when its detail was too large to travel inline — a way to ask for it.
+ *
+ * The fetch is the person's explicit act: opening the log must not drag a run's stored payloads
+ * across the wire. A failed read stays a failure rather than collapsing into an empty line.
+ */
+function WorkflowLogLineView({
+  line,
+  runId,
+}: {
+  readonly line: WorkflowLogLine;
+  readonly runId: number | null;
+}) {
+  const [requested, setRequested] = useState(false);
+  const payload = useWorkflowPayloadQuery(runId, line.storedDetail?.payloadRef ?? null, {
+    enabled: requested && line.storedDetail !== null,
+  });
+  const resolved =
+    payload.data === undefined ? line : workflowLogLineFromPayload(line, payload.data.value);
+
   return (
     <p className="grid grid-cols-[4.25rem_4.5rem_1fr] gap-2 font-mono text-[10.5px] leading-relaxed">
-      <span className="text-fg-subtle">{formatEventTime(event.ts)}</span>
-      <span className={eventTone(event)}>{eventLabel(event)}</span>
-      <span className="min-w-0 wrap-break-word text-fg-muted">{eventMessage(event)}</span>
+      <span className="text-fg-subtle">{formatLogTime(resolved.recordedAt)}</span>
+      <span className={logToneClass[resolved.tone]}>{resolved.label}</span>
+      <span className="min-w-0 wrap-break-word text-fg-muted">
+        {payload.error ? workflowCopy.logDetailFailed : resolved.body}
+        {resolved.diagnostic && (
+          <span className="block text-fg-subtle opacity-80">{resolved.diagnostic}</span>
+        )}
+        {line.storedDetail && (payload.data === undefined || payload.error) && (
+          <button
+            type="button"
+            onClick={() => {
+              if (payload.error) void payload.refetch();
+              else setRequested(true);
+            }}
+            disabled={payload.isFetching}
+            className="ml-1 rounded-md px-1 text-blue transition duration-micro ease-expo hover:bg-blue/12 disabled:opacity-55"
+          >
+            {payload.error ? workflowCopy.logRetry : workflowCopy.logDetailLoad}
+          </button>
+        )}
+      </span>
     </p>
   );
 }
 
-function eventLabel(event: WorkflowEvent) {
-  if (event.type === 'log') return event.level;
-  if (event.type === 'ui_feedback') return 'feedback';
-  return event.event;
-}
-
-function eventMessage(event: WorkflowEvent) {
-  if (event.type === 'log') return event.message;
-  if (event.type === 'ui_feedback') return event.message ?? event.phase ?? 'ui feedback';
-  return `run ${event.runId}`;
-}
-
-function eventTone(event: WorkflowEvent) {
-  if (event.type === 'log') {
-    if (event.level === 'error') return 'text-error';
-    if (event.level === 'warning') return 'text-amber';
-    if (event.level === 'debug') return 'text-fg-subtle';
-    return 'text-blue';
-  }
-  if (event.type === 'lifecycle') {
-    if (event.event === 'failed') return 'text-error';
-    if (event.event === 'done') return 'text-green';
-    return 'text-cyan';
-  }
-  if (event.kind === 'error') return 'text-error';
-  if (event.kind === 'warning') return 'text-amber';
-  return 'text-fg-subtle';
-}
-
-function formatEventTime(ts: string) {
+function formatLogTime(ts: string) {
   const date = new Date(ts);
   if (Number.isNaN(date.getTime())) return ts;
   return date.toLocaleTimeString([], {

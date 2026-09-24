@@ -6,6 +6,6 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["src", "vite.config.ts", "drizzle.config.ts"],
+  "include": ["src", "scripts", "vite.config.ts", "drizzle.config.ts"],
   "references": [{ "path": "../../packages/workflow-sdk" }, { "path": "../../packages/contracts" }]
 }

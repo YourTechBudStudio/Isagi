@@ -168,6 +168,28 @@ describe('overrides beat the inherited environment', () => {
     assert.ok(!stderr.includes(ambient), `the ambient value leaked through: ${stderr}`);
   });
 
+  test('a variable named in unsetEnv is removed from the inherited environment', () => {
+    const repository = join(root, 'unset-target');
+    mkdirSync(repository, { recursive: true });
+    execFileSync('git', ['init', '--quiet', repository]);
+    const ambient = join(root, 'unset-ambient-git-dir');
+    const result = inAmbientEnvironment(
+      { GIT_DIR: ambient },
+      {
+        op: 'run',
+        args: ['-C', repository, 'rev-parse', '--absolute-git-dir'],
+        unsetEnv: ['GIT_DIR'],
+      },
+    );
+    assert.equal(
+      result.ok,
+      true,
+      `expected the -C repository to be used, got ${JSON.stringify(result)}`,
+    );
+    const value = result.value as { stdout: string };
+    assert.equal(realpathSync(value.stdout.trim()), realpathSync(join(repository, '.git')));
+  });
+
   test('an ambient value survives when the call does not override it', () => {
     const ambient = join(root, 'ambient-only-git-dir');
     const result = inAmbientEnvironment(

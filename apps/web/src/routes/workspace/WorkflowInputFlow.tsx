@@ -12,6 +12,7 @@ import {
   toggleStringValue,
   workflowQuestionToInputFlowScreen,
   workflowSelectableLength,
+  type WorkflowInputAnswer,
   type WorkflowInputAnswers,
 } from '../../lib/palette/workflow-input-flow.js';
 
@@ -19,12 +20,22 @@ export type { WorkflowInputAnswers };
 
 export function WorkflowInputFlow({
   questions,
+  draftKey,
   disabled = false,
   autoFocus = false,
   onSubmit,
   onBack,
 }: {
   readonly questions: readonly WorkflowQuestionSpecDto[];
+  /**
+   * What this draft belongs to.
+   *
+   * When a caller supplies one, the form resets only when the identity changes — not whenever the
+   * question array happens to be a new object. A run's summary is republished on every committed
+   * transition, so without this a person's half-typed answer would be wiped by an unrelated step,
+   * and an answer typed against a wait the run has already left would be carried into the next one.
+   */
+  readonly draftKey?: string | number | undefined;
   readonly disabled?: boolean | undefined;
   readonly autoFocus?: boolean | undefined;
   readonly onSubmit: (answers: WorkflowInputAnswers) => void;
@@ -38,13 +49,20 @@ export function WorkflowInputFlow({
   const question = questions[stepIndex];
   const value = question ? answers[question.key] : undefined;
 
+  // Read through a ref so the reset uses the live questions without making their identity the
+  // trigger. `draftKey ?? defaults` keeps the palette's existing identity-based behaviour, where
+  // one screen's questions are stable for as long as the screen is.
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+  const resetToken = draftKey ?? defaults;
+
   useEffect(() => {
-    setAnswers(defaults);
+    setAnswers(defaultWorkflowAnswers(questionsRef.current));
     setStepIndex(0);
     setError(null);
-  }, [defaults]);
+  }, [resetToken]);
 
-  const updateAnswer = (key: string, next: unknown) => {
+  const updateAnswer = (key: string, next: WorkflowInputAnswer) => {
     setAnswers((current) => ({ ...current, [key]: next }));
     setError(null);
   };

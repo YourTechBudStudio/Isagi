@@ -60,6 +60,14 @@ test('the packaged policy frames loopback and denies the ambient directives', ()
  * `frame-src` is the only reason this policy exists, so its breadth is asserted
  * negatively as well: `localhost` is unused given the runtime's `127.0.0.1`
  * endpoint invariant, and an external runtime never earns the editor capability.
+ *
+ * It is also load-bearing for a surface outside this package. The inspector's
+ * captured-HTML preview mounts an `about:srcdoc` frame, which Chromium treats as
+ * a local scheme inheriting the embedder's policy rather than matching it against
+ * `frame-src` — proved against this exact directive in
+ * `apps/web/browser/specs/sandboxed-html-preview.spec.ts`. If the directive below
+ * ever changes, re-run that spec: the preview's real control is its empty
+ * `sandbox` attribute, which must not be weakened to compensate.
  */
 test('frame-src admits neither localhost, a wildcard, nor an external runtime', () => {
   const policy = policyFor(developmentTarget, ['https://runtime.example', 'wss://runtime.example']);

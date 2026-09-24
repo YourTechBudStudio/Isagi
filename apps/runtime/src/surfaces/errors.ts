@@ -18,6 +18,8 @@ export class SurfaceError extends Data.TaggedError('SurfaceError')<{
     | 'pane_not_found'
     | 'session_not_found'
     | 'session_worktree_mismatch'
+    /** A creation key was reused against a destination it does not name. */
+    | 'creation_key_mismatch'
     | 'invalid_surface_title'
     | 'layout_node_stale';
   readonly message: string;

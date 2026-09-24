@@ -80,11 +80,17 @@ export function openEditor(
         // context is simply left unplaced, which is a normal repairable state a
         // later open resolves through the branch above; what must never happen
         // is a committed surface holding a sessionless editor pane.
-        const created = yield* repository.createSinglePaneSurface({
+        const result = yield* repository.createSinglePaneSurface({
           worktreeId,
           titleBase: 'Editor',
           initialSession: { kind: 'editor_context', sessionId: editorContextId },
         });
+        // No creation key is supplied here, so the transaction has nothing to adopt or refuse.
+        if (result.status !== 'created')
+          return yield* Effect.die(
+            `Editor placement received a keyed creation result: ${result.status}.`,
+          );
+        const created = result.output;
         yield* eventBus.publish({
           type: 'surface_changed',
           payload: { worktreeId, surfaceId: created.surfaceId, change: 'created' },

@@ -22,6 +22,7 @@ import { formatRuntimeError, useWorkspaceQuery } from '../../lib/workspace/queri
 import { useRuntimeEventSubscription } from '../../lib/workspace/runtime-events.js';
 import { useWorkspaceStore } from '../../lib/workspace/store.js';
 import { TerminalPresentationProvider } from '../../lib/workspace/terminal-presentation/TerminalPresentationProvider.js';
+import { useWorkflowRuntimeSync } from '../../lib/workspace/workflow/queries.js';
 import { CommandPalette } from './CommandPalette.js';
 import { Rail } from './Rail.js';
 import { WorkArea } from './WorkArea.js';
@@ -89,6 +90,9 @@ export function WorkspacePage() {
   useWorkspaceSelectionSync();
   usePersistActiveContextSelection();
   useRuntimeEventSubscription();
+  // Owns the attached-run cache for the session: one place applies the runtime's snapshot, changed
+  // and detached facts, and every reader selects from it.
+  useWorkflowRuntimeSync();
 
   // Ask the optional host shell to quiet native chrome in zen. Browser-hosted
   // web builds simply do not provide this bridge.

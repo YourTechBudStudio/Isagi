@@ -279,7 +279,7 @@ test('runtime client calls surface creation endpoint with initial pane', async (
   });
 });
 
-test('runtime client sends workflow start variables in the request body', async () => {
+test('runtime client sends workflow start inputs and origin in the request body', async () => {
   let request: { readonly url: string; readonly method: string; readonly body: string } | null =
     null;
   globalThis.fetch = ((input, init) => {
@@ -291,7 +291,7 @@ test('runtime client sends workflow start variables in the request body', async 
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          data: { workflowRunId: 77, workflowKey: 'argument-probe' },
+          data: { runId: 77, workflowKey: 'argument-probe' },
           meta: { requestId: 'req-workflow-start' },
         }),
         { status: 200 },
@@ -302,29 +302,29 @@ test('runtime client sends workflow start variables in the request body', async 
   const output = await Effect.runPromise(
     createRuntimeClient('http://runtime.test').startWorkflow({
       workflowKey: 'argument-probe',
-      variables: {
+      inputs: {
         text: 'hello',
         select: 'no',
         multi: ['a', 'b'],
         confirm: true,
       },
-      context: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
+      origin: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
     }),
   );
 
-  assert.deepEqual(output, { workflowRunId: 77, workflowKey: 'argument-probe' });
+  assert.deepEqual(output, { runId: 77, workflowKey: 'argument-probe' });
   assert.deepEqual(request, {
     url: 'http://runtime.test/api/v1/workflows/runs',
     method: 'POST',
     body: JSON.stringify({
       workflowKey: 'argument-probe',
-      variables: {
+      inputs: {
         text: 'hello',
         select: 'no',
         multi: ['a', 'b'],
         confirm: true,
       },
-      context: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
+      origin: { worktreeId: 10, surfaceId: 42, paneId: 7, agentSessionId: 99 },
     }),
   });
 });

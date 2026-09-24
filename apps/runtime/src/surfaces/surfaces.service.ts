@@ -56,6 +56,7 @@ import { setNodeWeights } from './layout.js';
 import { openEditor } from './open-editor.js';
 import { deriveAgentSessionState, deriveTerminalSessionState } from './session-status.js';
 import { SurfaceRepository, type SurfaceRepositoryService } from './surfaces.repository.js';
+import type { KeyedCreationState, KeyedSessionIdentity } from './types.js';
 import type {
   AgentSessionRow,
   CreateSinglePaneSurfaceInput,
@@ -76,7 +77,11 @@ type PaneSessionClaimError =
   | SurfaceServiceError
   | PtyLaunchError
   | HarnessAdapterError
-  | HarnessLaunchBlocked;
+  | HarnessLaunchBlocked
+  // A keyed call whose key already names an incompatible session is an expected rejection, not a
+  // fault: the caller asked for something this key cannot deliver, and creating a second session
+  // instead would be the actually dangerous answer.
+  | AgentSessionError;
 
 export interface SurfaceService {
   readonly getSurfaceDetail: (
@@ -104,10 +109,24 @@ export interface SurfaceService {
     readonly worktreeId: number;
     readonly initialPane: PaneSessionSpec;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
+  /**
+   * Splits a pane and places a session in the new one.
+   *
+   * `creationKey` makes the whole compound — pane, session, association — recoverable under one
+   * name. A re-entered keyed call resumes from whatever already exists rather than creating a
+   * second pane or a second agent session, and the unique indexes make that convergence structural
+   * rather than conventional under a concurrent retry. Omitting it is the ordinary path and behaves
+   * exactly as before.
+   */
   readonly splitPane: (input: {
     readonly worktreeId: number;
     readonly split: SplitPaneInput;
+    readonly creationKey?: string | undefined;
   }) => Effect.Effect<CreateSurfaceOutput, PaneSessionClaimError>;
+  /** What already exists under a creation key. Read-only; the repair happens inside the call. */
+  readonly findByCreationKey: (
+    creationKey: string,
+  ) => Effect.Effect<KeyedCreationState, DatabaseError>;
   readonly setSplitWeights: (input: {
     readonly surfaceId: number;
     readonly weights: SetSplitWeightsInput;
@@ -115,6 +134,7 @@ export interface SurfaceService {
   readonly createPaneSession: (input: {
     readonly worktreeId: number;
     readonly create: PaneSessionCreateInput;
+    readonly creationKey?: string | undefined;
   }) => Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError>;
   readonly claimPaneSession: (input: {
     readonly worktreeId: number;
@@ -150,6 +170,64 @@ export const SurfaceServiceLive = Layer.effect(
     // `EditorContextService` are built on, so placement and the editor's own
     // lifecycle genuinely serialize against each other.
     const entityLock = yield* EntityLock;
+
+    /**
+     * Completes a keyed split against a pane that already exists.
+     *
+     * Reached two ways — finding the pane up front, or losing the unique-key race to another caller
+     * — and both must end in the same place, so they share one routine rather than two that drift.
+     */
+    const resumeKeyedSplit = (
+      resumed: Exclude<KeyedCreationState, { readonly kind: 'absent' }>,
+      input: {
+        readonly worktreeId: number;
+        readonly split: SplitPaneInput;
+        readonly creationKey?: string | undefined;
+      },
+    ) =>
+      Effect.gen(function* () {
+        // Checked against the destination the *caller* asked for, before that destination is
+        // replaced by the recovered pane. Resuming rewrites the pane id, so a check made afterwards
+        // would be comparing the recovered pane to itself and would accept a key reused against a
+        // different source pane or surface.
+        const requestedTarget = yield* loadPaneSessionTarget(
+          repository,
+          input.worktreeId,
+          input.split.paneId,
+        );
+        const resumedTarget = yield* loadPaneSessionTarget(
+          repository,
+          input.worktreeId,
+          resumed.paneId,
+        );
+        if (resumedTarget.surface.id !== requestedTarget.surface.id) {
+          return yield* Effect.fail(
+            new SurfaceError({
+              code: 'creation_key_mismatch',
+              message: `Creation key ${input.creationKey} names pane ${resumed.paneId} on surface ${resumedTarget.surface.id}, but this split targets surface ${requestedTarget.surface.id}.`,
+              worktreeId: input.worktreeId,
+              surfaceId: requestedTarget.surface.id,
+              paneId: input.split.paneId,
+            }),
+          );
+        }
+        const output = yield* createPaneSession(
+          repository,
+          agents,
+          terminals,
+          lifecycle,
+          eventBus,
+          input.worktreeId,
+          paneSessionCreateInput(resumed.paneId, input.split.newPane),
+          input.creationKey,
+        );
+        return {
+          worktreeId: input.worktreeId,
+          surfaceId: output.surfaceId,
+          paneId: output.paneId,
+          title: resumedTarget.pane.title,
+        } satisfies CreateSurfaceOutput;
+      });
 
     return {
       getSurfaceDetail: (surfaceId) =>
@@ -262,9 +340,10 @@ export const SurfaceServiceLive = Layer.effect(
             }),
           );
         }),
+      findByCreationKey: (creationKey) => repository.findKeyedCreation(creationKey),
       createSurface: (input) =>
         Effect.gen(function* () {
-          const surface = yield* createSinglePaneSurface(repository, {
+          const { output: surface } = yield* createSinglePaneSurface(repository, {
             worktreeId: input.worktreeId,
             titleBase: titleBaseForInitialPane(input.initialPane),
           });
@@ -291,17 +370,45 @@ export const SurfaceServiceLive = Layer.effect(
         }),
       splitPane: (input) =>
         Effect.gen(function* () {
+          // A keyed re-entry that already has a pane resumes against it. Splitting again would
+          // leave the person with an extra pane they never asked for and no way to tell which one
+          // the workflow is using.
+          const resumed = input.creationKey
+            ? yield* repository.findKeyedCreation(input.creationKey)
+            : ({ kind: 'absent' } as const);
+          if (resumed.kind !== 'absent') return yield* resumeKeyedSplit(resumed, input);
+
           const target = yield* loadPaneSessionTarget(
             repository,
             input.worktreeId,
             input.split.paneId,
           );
-          const split = yield* repository.splitSurfacePane({
-            surfaceId: target.surface.id,
-            sourcePaneId: target.pane.id,
-            titleBase: titleBaseForInitialPane(input.split.newPane),
-            direction: input.split.direction,
-          });
+          const split = yield* repository
+            .splitSurfacePane({
+              surfaceId: target.surface.id,
+              sourcePaneId: target.pane.id,
+              titleBase: titleBaseForInitialPane(input.split.newPane),
+              direction: input.split.direction,
+              ...(input.creationKey === undefined ? {} : { creationKey: input.creationKey }),
+            })
+            .pipe(
+              // Reading the keyed state and then splitting is not atomic: two callers can both see
+              // `absent`, and exactly one wins the pane's unique creation key. Losing that race is
+              // convergence, not failure — the winner is the pane this key names — so the conflict
+              // is a signal to re-read and resume, not an error to surface. Without this, "safely
+              // converges under concurrent calls" would hold only because nothing ever raced.
+              Effect.catchIf(
+                (error) => input.creationKey !== undefined && isUniqueConstraintViolation(error),
+                () => Effect.succeed('lost_race' as const),
+              ),
+            );
+          if (split === 'lost_race') {
+            const winner = yield* repository.findKeyedCreation(input.creationKey!);
+            if (winner.kind === 'absent') {
+              return yield* Effect.die('keyed pane vanished after a unique conflict');
+            }
+            return yield* resumeKeyedSplit(winner, input);
+          }
           if (!split)
             return yield* Effect.fail(
               new SurfaceError({
@@ -320,6 +427,7 @@ export const SurfaceServiceLive = Layer.effect(
             eventBus,
             input.worktreeId,
             paneSessionCreateInput(split.paneId, input.split.newPane),
+            input.creationKey,
           );
           yield* publishSurfaceChanged(eventBus, {
             worktreeId: input.worktreeId,
@@ -375,6 +483,7 @@ export const SurfaceServiceLive = Layer.effect(
             eventBus,
             input.worktreeId,
             input.create,
+            input.creationKey,
           );
           yield* publishSurfaceChanged(eventBus, {
             worktreeId: output.worktreeId,
@@ -403,22 +512,18 @@ export const SurfaceServiceLive = Layer.effect(
         }),
       createSinglePaneSurface: (input) =>
         Effect.gen(function* () {
-          const exists = yield* repository.worktreeExists(input.worktreeId);
-          if (!exists)
-            return yield* Effect.fail(
-              new SurfaceError({
-                code: 'worktree_not_found',
-                message: `Worktree ${input.worktreeId} was not found.`,
-                worktreeId: input.worktreeId,
-              }),
-            );
-          const output = yield* repository.createSinglePaneSurface(input);
-          yield* publishSurfaceChanged(eventBus, {
-            worktreeId: input.worktreeId,
-            surfaceId: output.surfaceId,
-            change: 'created',
-          });
-          return output;
+          // Validated here and not only in `renameSurface`: a title that cannot be set by rename
+          // has no business being created either, and launch-time placement validation calls the
+          // same rule so a title is refused before anything is allocated rather than after.
+          const titleBase = yield* validateSurfaceTitle(input.titleBase);
+          const created = yield* createSinglePaneSurface(repository, { ...input, titleBase });
+          if (created.status === 'created')
+            yield* publishSurfaceChanged(eventBus, {
+              worktreeId: input.worktreeId,
+              surfaceId: created.output.surfaceId,
+              change: 'created',
+            });
+          return created.output;
         }),
       setWorktreeEnvironmentFocus: (input) => setWorktreeEnvironmentFocus(repository, input),
       // Reordering changes no surface's identity, panes, sessions, or layout, so
@@ -466,6 +571,11 @@ function surfaceOrderMessage(reason: SurfaceOrderRejectionReason) {
   }
 }
 
+/**
+ * The one path to a single-pane surface. Returns whether a surface was actually created, because
+ * only a real creation may publish `surface_changed: created` — a keyed re-entry that adopted an
+ * existing surface has changed nothing for any client to refetch.
+ */
 function createSinglePaneSurface(
   repository: SurfaceRepositoryService,
   input: CreateSinglePaneSurfaceInput,
@@ -480,7 +590,39 @@ function createSinglePaneSurface(
           worktreeId: input.worktreeId,
         }),
       );
-    return yield* repository.createSinglePaneSurface(input);
+    const result = yield* repository.createSinglePaneSurface(input).pipe(
+      // The lookup and the insert share one transaction, so within a single connection this cannot
+      // be reached. It is kept because that is an assumption about how the runtime opens SQLite,
+      // not a contract: if a second writer ever exists, losing the key is convergence — the winner
+      // is the surface this key names — and re-reading is the honest answer, not an error.
+      Effect.catchIf(
+        (error) => input.creationKey !== undefined && isUniqueConstraintViolation(error),
+        () => Effect.succeed('lost_race' as const),
+      ),
+    );
+    if (result === 'lost_race') {
+      const winner = yield* repository.findSurfaceByCreationKey(input.creationKey!);
+      if (!winner) return yield* Effect.die('keyed surface vanished after a unique conflict');
+      return winner.worktreeId === input.worktreeId
+        ? ({ status: 'adopted', output: winner } as const)
+        : yield* Effect.fail(creationKeyMismatch(input, winner.surfaceId, winner.worktreeId));
+    }
+    if (result.status === 'creation_key_mismatch')
+      return yield* Effect.fail(creationKeyMismatch(input, result.surfaceId, result.worktreeId));
+    return result;
+  });
+}
+
+function creationKeyMismatch(
+  input: CreateSinglePaneSurfaceInput,
+  surfaceId: number,
+  worktreeId: number,
+) {
+  return new SurfaceError({
+    code: 'creation_key_mismatch',
+    message: `Creation key ${input.creationKey} names surface ${surfaceId} in worktree ${worktreeId}, but this creation targets worktree ${input.worktreeId}.`,
+    worktreeId: input.worktreeId,
+    surfaceId,
   });
 }
 
@@ -507,10 +649,72 @@ function createPaneSession(
   eventBus: import('../runtime-events/index.js').InternalRuntimeEventBusService,
   worktreeId: number,
   create: PaneSessionCreateInput,
+  creationKey?: string | undefined,
 ): Effect.Effect<PaneSessionClaimOutput, PaneSessionClaimError> {
   return Effect.gen(function* () {
     const target = yield* loadPaneSessionTarget(repository, worktreeId, create.paneId);
-    const session = yield* resolveCreatedSession(agents, terminals, worktreeId, target.cwd, create);
+    // Idempotent *completion*, not idempotent creation. A crash between creating the session and
+    // assigning it leaves a keyed pane and a keyed session that are not associated, and "return the
+    // existing row" would satisfy neither the caller nor this service's own postcondition. So the
+    // already-complete case returns unchanged and the unassigned case runs only the assignment —
+    // never a second session because the assignment happened to fail last time.
+    const existing = creationKey ? yield* repository.findKeyedCreation(creationKey) : null;
+    if (existing && existing.kind !== 'absent') {
+      // Validated before any association or focus write, and against the destination the *caller*
+      // asked for rather than only against whether the recovered pane still exists. A key reused
+      // against a different pane, surface or worktree is a mismatched request, not a recovery, and
+      // completing it would associate a session with a pane nobody asked about and move focus to a
+      // surface in another worktree. Both the already-complete path and the repair path answer to
+      // this, so neither can mutate on a mismatch.
+      if (existing.paneId !== target.pane.id || existing.surfaceId !== target.surface.id) {
+        return yield* Effect.fail(
+          new SurfaceError({
+            code: 'creation_key_mismatch',
+            message: `Creation key ${creationKey} names pane ${existing.paneId} on surface ${existing.surfaceId}, not pane ${target.pane.id} on surface ${target.surface.id}.`,
+            worktreeId,
+            surfaceId: target.surface.id,
+            paneId: target.pane.id,
+          }),
+        );
+      }
+      // The session half, checked for both the already-complete and the repair path. Only `absent`
+      // creates, and only `startFresh` validates there — so without this an incompatible reuse in
+      // either recovered state would adopt a session of the wrong kind or harness.
+      const recovered = 'session' in existing ? existing.session : null;
+      if (recovered && !keyedSessionMatchesRequest(recovered, create)) {
+        return yield* Effect.fail(
+          new SurfaceError({
+            code: 'creation_key_mismatch',
+            message: `Creation key ${creationKey} names a ${recovered.kind}${recovered.kind === 'agent_session' ? ` (${recovered.harness})` : ''} that does not match this request.`,
+            worktreeId,
+            surfaceId: target.surface.id,
+            paneId: target.pane.id,
+            sessionId: recovered.sessionId,
+          }),
+        );
+      }
+    }
+    if (existing?.kind === 'complete') {
+      // Attachment tokens and supersession still run: the caller is taking the session over now,
+      // and returning a stale token would hand back a handle nothing is attached to.
+      return yield* assignPaneSession(repository, lifecycle, eventBus, {
+        worktreeId,
+        surfaceId: existing.surfaceId,
+        paneId: existing.paneId,
+        session: existing.session,
+      });
+    }
+    const session =
+      existing?.kind === 'session_unassigned'
+        ? existing.session
+        : yield* resolveCreatedSession(
+            agents,
+            terminals,
+            worktreeId,
+            target.cwd,
+            create,
+            creationKey,
+          );
     const output = yield* assignPaneSession(repository, lifecycle, eventBus, {
       worktreeId,
       surfaceId: target.surface.id,
@@ -634,6 +838,7 @@ function resolveCreatedSession(
   worktreeId: number,
   cwd: string,
   create: PaneSessionCreateInput,
+  creationKey?: string | undefined,
 ): Effect.Effect<
   { readonly kind: 'agent_session' | 'terminal_session'; readonly sessionId: number },
   PaneSessionClaimError
@@ -641,7 +846,14 @@ function resolveCreatedSession(
   return Effect.gen(function* () {
     switch (create.kind) {
       case 'agent_session': {
-        const created = yield* agents.startFresh({ worktreeId, harness: create.harness, cwd });
+        // One key names the whole compound, so the session owner recognizes the same intent this
+        // pane was created under and completes it rather than starting a second agent.
+        const created = yield* agents.startFresh({
+          worktreeId,
+          harness: create.harness,
+          cwd,
+          ...(creationKey === undefined ? {} : { creationKey }),
+        });
         return { kind: 'agent_session' as const, sessionId: created.agentSessionId };
       }
       case 'terminal_session': {
@@ -743,7 +955,7 @@ function sessionSurfaceError(
   });
 }
 
-function validateSurfaceTitle(title: string) {
+export function validateSurfaceTitle(title: string) {
   const trimmed = title.trim();
   if (trimmed.length === 0 || trimmed.length > 80)
     return Effect.fail(
@@ -1158,4 +1370,38 @@ function setWorktreeEnvironmentFocus(
 
 function decodeLayout(layoutJson: string): SurfaceLayoutNode {
   return Schema.decodeUnknownSync(surfaceLayoutNodeSchema)(JSON.parse(layoutJson));
+}
+
+/**
+ * Whether a session recovered under a creation key is the session this request is asking for.
+ *
+ * A creation key is an identity for *one* intent. This owner compares the facts it can actually
+ * see — the session kind and, for an agent, its harness — before adopting any recovered session.
+ *
+ * The rest of the request is checked where it is stored. A keyed call only ever originates from a
+ * workflow operation, and `workflow_record_operation_intent` refuses a recorded call position
+ * re-entered with a different normalized request, so a changed split (a different source pane or
+ * direction, say) is rejected before it can reach this owner at all. Those facts live in the
+ * operation's request; reconstructing them here would duplicate that with a weaker copy, and
+ * deriving them from the surface layout would be worse — a later split or pane close moves the
+ * adjacency, so a legitimate recovery would start failing.
+ */
+/**
+ * A losing insert in a keyed race, as SQLite reports it.
+ *
+ * Recognized by driver code rather than by message text, so an unrelated database fault is never
+ * mistaken for a race and quietly retried.
+ */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  const cause = (error as { readonly cause?: unknown }).cause;
+  const code = (cause as { readonly code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT_UNIQUE');
+}
+
+function keyedSessionMatchesRequest(
+  session: KeyedSessionIdentity,
+  create: PaneSessionCreateInput,
+): boolean {
+  if (create.kind !== session.kind) return false;
+  return create.kind !== 'agent_session' || create.harness === session.harness;
 }

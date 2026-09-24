@@ -252,15 +252,23 @@ test('delete worktree announces every durable session it cascaded away', async (
     ),
   );
 
-  assert.deepEqual(
-    bus.published,
-    doomed.map((identity) => ({ type: 'durable_session_deleted', identity })),
-  );
+  assert.deepEqual(bus.published, [
+    ...doomed.map((identity) => ({ type: 'durable_session_deleted', identity })),
+    // Retained workflow history has no foreign key to the worktree, so it survives the cascade and
+    // has to be told separately. It is matched by destination identity, which is why the id is
+    // carried on the event rather than looked up afterwards.
+    {
+      type: 'worktree_deleted',
+      worktreeId: fixtures.targetWorktree.id,
+      projectId: fixtures.project.id,
+    },
+  ]);
   // Announced only after the cascade committed, so no client can re-fetch the rows back.
   assert.deepEqual(order, [
     'db_delete',
     'publish:durable_session_deleted',
     'publish:durable_session_deleted',
+    'publish:worktree_deleted',
   ]);
   fixtures.cleanup();
 });

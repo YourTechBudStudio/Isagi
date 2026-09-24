@@ -285,12 +285,28 @@ export interface LaunchPtyProcessInput {
 
 export type PtyLaunchMode = 'direct' | 'user_shell';
 
+/**
+ * Which of the three things a resolved `start` actually was.
+ *
+ * `start` is deliberately total, so "the Effect resolved" says nothing about whether a process
+ * exists. The owner is the only party that knows which branch it took, and the difference is not a
+ * detail: `preparation_failed` means nothing ever reached a backend, while `spawn_failed` means the
+ * spawn succeeded and something *after* it threw — the process may be live right now. Callers must
+ * not re-derive this from the durable row's status, because a row marked terminal is not evidence
+ * that nothing executed.
+ */
+export type PtyLaunchOutcome = 'spawned' | 'preparation_failed' | 'spawn_failed';
+
 export interface PtyProcessLaunchMetadata {
   readonly ptyProcessId: number;
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd: string;
   readonly logPath: string | null;
+  readonly launchOutcome: PtyLaunchOutcome;
+  /** The owner's reported cause for a failed launch, carried across the boundary rather than
+   *  inferred by the caller. Null on a successful spawn. */
+  readonly launchFailureCause: string | null;
 }
 
 // One-shot pre-start launch allocation. The durable PTY row exists and is

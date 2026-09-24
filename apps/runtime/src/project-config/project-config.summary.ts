@@ -8,13 +8,18 @@ export function summarizeWorktreeHooks(
   return config.postCreate.map((hook, index) => {
     const oneBased = index + 1;
     switch (hook.type) {
-      case 'copy':
+      case 'copy': {
+        const filters = [
+          ...(hook.include ? [`include ${hook.include.join(', ')}`] : []),
+          ...(hook.exclude?.length ? [`exclude ${hook.exclude.join(', ')}`] : []),
+        ];
         return {
           index: oneBased,
           type: hook.type,
           label: `copy ${hook.src} → ${hook.dest}`,
-          detail: `include ${hook.include.join(', ')}${hook.exclude.length ? ` · exclude ${hook.exclude.join(', ')}` : ''}`,
+          ...(filters.length ? { detail: filters.join(' · ') } : {}),
         } satisfies WorktreeSetupSummary;
+      }
       case 'symlink':
         return {
           index: oneBased,

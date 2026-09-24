@@ -14,7 +14,11 @@ import {
   worktreeEnvironmentStates,
   worktreeSurfaces,
 } from '../../persistence/schema.js';
-import { SurfaceRepository, SurfaceRepositoryInitialSessionRejected } from '../index.js';
+import {
+  type CreateSinglePaneSurfaceResult,
+  SurfaceRepository,
+  SurfaceRepositoryInitialSessionRejected,
+} from '../index.js';
 import { insertWorktree, testLayer } from './test-support.js';
 
 type TestServices = Layer.Layer.Success<ReturnType<typeof testLayer>>;
@@ -65,11 +69,13 @@ test('an editor context is bound to its pane inside the creating transaction', a
       const editors = yield* EditorContextRepository;
       const worktreeId = yield* insertWorktree('/repo/isagi');
       const context = yield* editors.create({ worktreeId });
-      const created = yield* surfaces.createSinglePaneSurface({
-        worktreeId,
-        titleBase: 'Editor',
-        initialSession: { kind: 'editor_context', sessionId: context.id },
-      });
+      const created = createdRows(
+        yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Editor',
+          initialSession: { kind: 'editor_context', sessionId: context.id },
+        }),
+      );
       const database = yield* RuntimeDatabase;
       return {
         output: created,
@@ -200,7 +206,9 @@ test('agent and terminal creation still writes a sessionless pane', async () => 
       const worktreeId = yield* insertWorktree('/repo/isagi');
       // The unchanged two-step ordering: `initialSession` is the editor path's
       // seam only, and this phase deliberately does not repair the other kinds.
-      const output = yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Pi' });
+      const output = createdRows(
+        yield* surfaces.createSinglePaneSurface({ worktreeId, titleBase: 'Pi' }),
+      );
       const database = yield* RuntimeDatabase;
       return yield* database.use('test_read_pane', (db) =>
         db.select().from(surfacePanes).where(eq(surfacePanes.id, output.paneId)).get(),
@@ -219,11 +227,13 @@ test('an editor pane is findable by its session and excluded from the PTY-backed
       const editors = yield* EditorContextRepository;
       const worktreeId = yield* insertWorktree('/repo/isagi');
       const context = yield* editors.create({ worktreeId });
-      const output = yield* surfaces.createSinglePaneSurface({
-        worktreeId,
-        titleBase: 'Editor',
-        initialSession: { kind: 'editor_context', sessionId: context.id },
-      });
+      const output = createdRows(
+        yield* surfaces.createSinglePaneSurface({
+          worktreeId,
+          titleBase: 'Editor',
+          initialSession: { kind: 'editor_context', sessionId: context.id },
+        }),
+      );
       return {
         placement: yield* surfaces.findPaneForSession({
           sessionKind: 'editor_context',
@@ -242,3 +252,13 @@ test('an editor pane is findable by its session and excluded from the PTY-backed
   assert.deepEqual(bindings, []);
   assert.deepEqual(emptyJoin, []);
 });
+
+/**
+ * Every creation in this file is unkeyed, so the transaction can only have created. Asserting that
+ * rather than casting keeps a future keyed regression visible here instead of silently narrowed.
+ */
+function createdRows(result: CreateSinglePaneSurfaceResult) {
+  assert.equal(result.status, 'created');
+  if (result.status !== 'created') throw new Error('unreachable');
+  return result.output;
+}

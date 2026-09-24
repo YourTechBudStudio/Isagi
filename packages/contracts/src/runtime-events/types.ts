@@ -7,7 +7,7 @@ import {
   sessionDiagnosticCodeSchema,
   terminalSessionStatusReasonSchema,
 } from '../surfaces/types.js';
-import { workflowRunSummarySchema } from '../workflows/types.js';
+import { workflowRunSummarySchema, workflowRunTransitionDeltaSchema } from '../workflows/types.js';
 import { durableSessionIdentitySchema } from '../workspace/types.js';
 
 const positiveIntegerSchema = Schema.Number.pipe(Schema.int(), Schema.positive());
@@ -59,7 +59,8 @@ export const runtimeEventTypeSchema = Schema.Literal(
   'attention_source_removed',
   'workflow_run_snapshot',
   'workflow_run_changed',
-  'workflow_run_cleared',
+  'workflow_run_detached',
+  'workflow_run_transition',
   'durable_session_deleted',
   'editor_context_changed',
 );
@@ -212,15 +213,33 @@ export const workflowRunChangedEventSchema = Schema.Struct({
   payload: workflowRunSummarySchema,
 });
 
-export const workflowRunClearedEventSchema = Schema.Struct({
+/**
+ * A run released its surface attachment. The run itself is retained and still inspectable through
+ * the API; only its occupancy of a surface ended.
+ */
+export const workflowRunDetachedEventSchema = Schema.Struct({
   id: Schema.String.pipe(Schema.minLength(1)),
-  type: Schema.Literal('workflow_run_cleared'),
+  type: Schema.Literal('workflow_run_detached'),
   occurredAt: Schema.String.pipe(Schema.minLength(1)),
   payload: Schema.Struct({
     runId: positiveIntegerSchema,
-    rootRunId: positiveIntegerSchema,
     surfaceId: Schema.NullOr(positiveIntegerSchema),
   }),
+});
+
+/**
+ * One committed history transition with every record it changed.
+ *
+ * Exactly one is published per committed transition, after commit, in revision order. A client
+ * applies a delta only when its revision is exactly one past the last one applied; otherwise it
+ * refetches the gap through the paginated history routes. A lost notification therefore cannot lose
+ * history — the store stays the authority.
+ */
+export const workflowRunTransitionEventSchema = Schema.Struct({
+  id: Schema.String.pipe(Schema.minLength(1)),
+  type: Schema.Literal('workflow_run_transition'),
+  occurredAt: Schema.String.pipe(Schema.minLength(1)),
+  payload: workflowRunTransitionDeltaSchema,
 });
 
 export const runtimeEventSchema = Schema.Union(
@@ -233,7 +252,8 @@ export const runtimeEventSchema = Schema.Union(
   attentionSourceRemovedEventSchema,
   workflowRunSnapshotEventSchema,
   workflowRunChangedEventSchema,
-  workflowRunClearedEventSchema,
+  workflowRunDetachedEventSchema,
+  workflowRunTransitionEventSchema,
   durableSessionDeletedEventSchema,
   editorContextChangedEventSchema,
 );
@@ -261,7 +281,10 @@ export type AttentionSourceRemovedEvent = Schema.Schema.Type<
 >;
 export type WorkflowRunSnapshotEvent = Schema.Schema.Type<typeof workflowRunSnapshotEventSchema>;
 export type WorkflowRunChangedEvent = Schema.Schema.Type<typeof workflowRunChangedEventSchema>;
-export type WorkflowRunClearedEvent = Schema.Schema.Type<typeof workflowRunClearedEventSchema>;
+export type WorkflowRunDetachedEvent = Schema.Schema.Type<typeof workflowRunDetachedEventSchema>;
+export type WorkflowRunTransitionEvent = Schema.Schema.Type<
+  typeof workflowRunTransitionEventSchema
+>;
 export type RuntimeEvent = Schema.Schema.Type<typeof runtimeEventSchema>;
 export type DurableSessionDeletedEvent = Schema.Schema.Type<
   typeof durableSessionDeletedEventSchema

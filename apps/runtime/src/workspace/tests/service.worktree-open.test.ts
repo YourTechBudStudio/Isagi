@@ -224,7 +224,11 @@ test('opening a worktree rejects invalid branch names before branch lookup', asy
 
 test('opening an existing local branch rejects an occupied deterministic checkout path', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-dirty-worktree-project-'));
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-dirty-worktree-data-'));
+  // Canonical, like the project root beside it: the runtime resolves its data root, so a fixture
+  // that hand-builds an expected path from an unresolved one is doing different arithmetic from the
+  // code under test. Canonicalizing here keeps that difference out of tests whose subject is the
+  // path *derivation* rather than its resolution.
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-dirty-worktree-data-')));
   const branch = 'feature/dirty';
   const checkoutPath = join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch));
   mkdirSync(checkoutPath, { recursive: true });
@@ -291,7 +295,7 @@ test('opening an existing local branch rejects an occupied deterministic checkou
 
 test('opening an existing local branch rejects a stale registered deterministic checkout path', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-registered-worktree-project-'));
-  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-registered-worktree-data-'));
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'isagi-registered-worktree-data-')));
   const branch = 'main';
   const checkoutPath = join(dataRoot, 'worktrees', String(project.id), branchPathHash(branch));
   const testProject = { ...project, rootPath: projectRoot };

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, cp, lstat, mkdir, rm, symlink } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, rm, stat, symlink } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import { Data, Effect } from 'effect';
@@ -165,17 +165,38 @@ function runCopyHook(
     try: async () => {
       const srcRoot = resolveRelativeRoot(projectRootPath, hook.src, 'copy.src');
       const destRoot = resolveRelativeRoot(worktreePath, hook.dest, 'copy.dest');
-      const matches = await glob([...hook.include], {
-        cwd: srcRoot,
-        dot: true,
-        ignore: [...hook.exclude],
-        onlyFiles: true,
-      });
+      const sourceStat = await statIfExists(srcRoot);
+      if (!sourceStat) {
+        throw new WorktreeSetupRunError({
+          message: `copy.src ${hook.src} does not exist in the project root.`,
+        });
+      }
+
+      // A file source copies straight to dest; include/exclude only filter directory sources.
+      let copies: readonly { readonly src: string; readonly dest: string }[];
+      if (sourceStat.isDirectory()) {
+        const matches = await glob([...(hook.include ?? ['**/*'])], {
+          cwd: srcRoot,
+          dot: true,
+          ignore: [...(hook.exclude ?? [])],
+          onlyFiles: true,
+        });
+        copies = matches.map((match) => ({
+          src: resolveRelativeRoot(srcRoot, match, 'copy.include'),
+          dest: resolveRelativeRoot(destRoot, match, 'copy.dest'),
+        }));
+      } else {
+        if (hook.include || hook.exclude) {
+          throw new WorktreeSetupRunError({
+            message: `copy.include and copy.exclude apply to directory sources only; copy.src ${hook.src} is a file.`,
+          });
+        }
+        copies = [{ src: srcRoot, dest: destRoot }];
+      }
+
       let copied = 0;
       let skipped = 0;
-      for (const match of matches) {
-        const src = resolveRelativeRoot(srcRoot, match, 'copy.include');
-        const dest = resolveRelativeRoot(destRoot, match, 'copy.dest');
+      for (const { src, dest } of copies) {
         if (!hook.overwrite && (await pathExists(dest))) {
           skipped += 1;
           continue;
@@ -193,7 +214,12 @@ function runCopyHook(
         },
       };
     },
-    catch: (cause) => new WorktreeSetupRunError({ message: errorMessage(cause), cause }),
+    catch: (cause) =>
+      new WorktreeSetupRunError({
+        message: errorMessage(cause),
+        cause,
+        details: { src: hook.src, dest: hook.dest },
+      }),
   });
 }
 
@@ -381,6 +407,17 @@ function resolveRelativeRoot(root: string, candidate: string, field: string) {
     throw new WorktreeSetupRunError({ message: `${field} must stay inside its root.` });
   }
   return resolved;
+}
+
+async function statIfExists(path: string) {
+  try {
+    return await stat(path);
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw cause;
+  }
 }
 
 async function pathExists(path: string) {
