@@ -29,8 +29,6 @@ test('worktree hooks preserve normalized defaults for all hook types', () => {
         type: 'copy',
         src: '.env.example',
         dest: '.env',
-        include: ['**/*'],
-        exclude: [],
         overwrite: true,
       },
       { type: 'symlink', src: 'scripts', dest: 'scripts', overwrite: false },
@@ -55,8 +53,24 @@ test('worktree hook trust hash stays stable for unchanged normalized config', ()
   assert.ok(config);
   assert.equal(
     hashWorktreeHooks(config),
-    'd8a3e150518719cd2f3bd814ef54766e0a8750cdde77e48a8f83a29d74572a76',
+    'c68dc78aa0e6193db08e15e1b201637e9ae2e4d984a40e6933b2fffc5db17f48',
   );
+});
+
+test('worktree hook trust hash changes when copy filters are configured', () => {
+  const hashFor = (copy: Record<string, unknown>) => {
+    const config = normalizeWorktreeHooksConfig({
+      worktrees: {
+        hooks: { postCreate: [{ type: 'copy', src: 'config', dest: 'config', ...copy }] },
+      },
+    });
+    assert.ok(config);
+    return hashWorktreeHooks(config);
+  };
+
+  const unfiltered = hashFor({});
+  assert.notEqual(hashFor({ include: ['**/*'] }), unfiltered);
+  assert.notEqual(hashFor({ exclude: ['**/*.example'] }), unfiltered);
 });
 
 test('worktree hooks reject malformed hook shapes while naming the field', () => {
@@ -146,8 +160,6 @@ test('worktree hooks preserve loose parse behavior for hook paths and timeout gr
       type: 'copy',
       src: '/tmp/source',
       dest: '../outside',
-      include: ['**/*'],
-      exclude: [],
       overwrite: true,
     },
     { type: 'command', run: 'pnpm install', cwd: '/tmp', timeout: 'banana', env: {} },

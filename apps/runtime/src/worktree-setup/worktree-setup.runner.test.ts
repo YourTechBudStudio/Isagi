@@ -82,6 +82,99 @@ test('copy hooks preserve relative paths and apply exclude after include', async
   }
 });
 
+async function runCopyHookFixture(
+  hook: { readonly src: string; readonly dest: string } & Partial<{
+    readonly include: readonly string[];
+    readonly exclude: readonly string[];
+    readonly overwrite: boolean;
+  }>,
+  arrange: (roots: { readonly projectRoot: string; readonly worktreeRoot: string }) => void,
+  inspect: (fixture: {
+    readonly worktreeRoot: string;
+    readonly result: Effect.Effect.Success<ReturnType<typeof runPostCreateSetup>>;
+    readonly step: CreateSetupStepFixture | undefined;
+  }) => void,
+) {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
+  const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
+  const captured: { input?: Parameters<WorktreeSetupRepositoryService['createRunWithSteps']>[0] } =
+    {};
+
+  try {
+    arrange({ projectRoot, worktreeRoot });
+    const result = await Effect.runPromise(
+      runPostCreateSetup({
+        config: { postCreate: [{ type: 'copy', overwrite: true, ...hook }] },
+        hash: 'hash-copy',
+        projectRootPath: projectRoot,
+        worktreeId: 7,
+        worktreePath: worktreeRoot,
+      }).pipe(Effect.provideService(WorktreeSetupRepository, capturingRepository(captured))),
+    );
+    inspect({ worktreeRoot, result, step: captured.input?.steps[0] });
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(worktreeRoot, { recursive: true, force: true });
+  }
+}
+
+type CreateSetupStepFixture = Parameters<
+  WorktreeSetupRepositoryService['createRunWithSteps']
+>[0]['steps'][number];
+
+test('copy hooks copy a file source directly to dest', async () => {
+  await runCopyHookFixture(
+    { src: '.env', dest: 'config/local/.env' },
+    ({ projectRoot }) => writeFileSync(join(projectRoot, '.env'), 'TOKEN=1'),
+    ({ worktreeRoot, result, step }) => {
+      assert.deepEqual(result, { status: 'succeeded', runId: 42 });
+      assert.equal(readFileSync(join(worktreeRoot, 'config', 'local', '.env'), 'utf8'), 'TOKEN=1');
+      assert.equal(step?.message, 'Copied 1 file.');
+    },
+  );
+});
+
+test('copy hooks skip an existing file dest when overwrite is false', async () => {
+  await runCopyHookFixture(
+    { src: '.env', dest: '.env', overwrite: false },
+    ({ projectRoot, worktreeRoot }) => {
+      writeFileSync(join(projectRoot, '.env'), 'TOKEN=project');
+      writeFileSync(join(worktreeRoot, '.env'), 'TOKEN=worktree');
+    },
+    ({ worktreeRoot, result, step }) => {
+      assert.deepEqual(result, { status: 'succeeded', runId: 42 });
+      assert.equal(readFileSync(join(worktreeRoot, '.env'), 'utf8'), 'TOKEN=worktree');
+      assert.equal(step?.message, 'Copied 0 files, skipped 1.');
+    },
+  );
+});
+
+test('copy hooks fail when the source does not exist', async () => {
+  await runCopyHookFixture(
+    { src: '.env', dest: '.env' },
+    () => {},
+    ({ result, step }) => {
+      assert.equal(result.status, 'failed');
+      assert.equal(step?.status, 'failed');
+      assert.equal(step?.message, 'copy.src .env does not exist in the project root.');
+      assert.equal(step?.src, '.env');
+      assert.equal(step?.dest, '.env');
+    },
+  );
+});
+
+test('copy hooks reject include or exclude on a file source', async () => {
+  await runCopyHookFixture(
+    { src: '.env', dest: '.env', include: ['**/*'] },
+    ({ projectRoot }) => writeFileSync(join(projectRoot, '.env'), 'TOKEN=1'),
+    ({ worktreeRoot, result, step }) => {
+      assert.equal(result.status, 'failed');
+      assert.match(step?.message ?? '', /apply to directory sources only/);
+      assert.equal(existsSync(join(worktreeRoot, '.env')), false);
+    },
+  );
+});
+
 test('command hooks are interrupted without persisting a setup run', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-project-'));
   const worktreeRoot = mkdtempSync(join(tmpdir(), 'isagi-setup-worktree-'));
