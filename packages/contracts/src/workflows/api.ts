@@ -2,9 +2,12 @@ import { workflowApiErrorSchema } from '../api/errors.js';
 import type { ApiContentEndpoint, ApiEndpoint } from '../api/types.js';
 import {
   advanceWorkflowInputSchema,
+  createCheckpointWorktreeInputSchema,
+  createCheckpointWorktreeOutputSchema,
   getWorkflowAttemptOutputSchema,
   getWorkflowCheckpointOutputSchema,
   getWorkflowEvidenceOutputSchema,
+  getWorkflowExecutionOutputSchema,
   getWorkflowOperationOutputSchema,
   getWorkflowPayloadOutputSchema,
   getWorkflowRunOutputSchema,
@@ -42,6 +45,7 @@ import {
   workflowCheckpointRouteParamsSchema,
   workflowEvidenceContentQuerySchema,
   workflowEvidenceRouteParamsSchema,
+  workflowExecutionRouteParamsSchema,
   workflowFrameRouteParamsSchema,
   workflowOperationRouteParamsSchema,
   workflowPayloadRouteParamsSchema,
@@ -134,6 +138,14 @@ export const workflowsEndpoints = {
     params: workflowRunRouteParamsSchema,
     query: listRunExecutionsQuerySchema,
     output: listRunExecutionsOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  getExecution: {
+    id: 'workflows.getExecution',
+    method: 'GET',
+    path: '/workflows/runs/:runId/executions/:executionId',
+    params: workflowExecutionRouteParamsSchema,
+    output: getWorkflowExecutionOutputSchema,
     errors: workflowApiErrorSchema,
   },
   listAttempts: {
@@ -229,6 +241,19 @@ export const workflowsEndpoints = {
     params: workflowCheckpointRouteParamsSchema,
     query: paginationQuerySchema,
     output: listWorkflowCheckpointManifestOutputSchema,
+    errors: workflowApiErrorSchema,
+  },
+  /**
+   * Creates a detached worktree at the checkpoint's own base commit, in the folder the caller names.
+   * It runs no setup hooks and no post-create commands, and creates or moves no branch.
+   */
+  createCheckpointWorktree: {
+    id: 'workflows.createCheckpointWorktree',
+    method: 'POST',
+    path: '/workflows/runs/:runId/checkpoints/:checkpointId/worktrees',
+    params: workflowCheckpointRouteParamsSchema,
+    body: createCheckpointWorktreeInputSchema,
+    output: createCheckpointWorktreeOutputSchema,
     errors: workflowApiErrorSchema,
   },
   getPayload: {

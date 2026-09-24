@@ -38,6 +38,23 @@ export const worktreeBaseRefSchema = Schema.Union(
   }),
 );
 
+/**
+ * Why a destination cannot hold a new worktree. One vocabulary for every place the rule is checked:
+ * the runtime's detached creation, the rejection it reports, and a client's own precheck.
+ */
+export const worktreeDestinationIssueSchema = Schema.Literal(
+  /** The runtime requires an absolute path. */
+  'not_absolute',
+  /** It exists and has entries. */
+  'not_empty',
+  /** It exists and is a file, a symlink or something else that is not a directory. */
+  'not_directory',
+  /** It is equal to, or inside, a project root or worktree Isagi knows. */
+  'inside_checkout',
+  /** It cannot be inspected, or its parent cannot be created. */
+  'inaccessible',
+);
+
 export const openWorktreeInputSchema = Schema.Struct({
   branch: Schema.String.pipe(Schema.minLength(1)),
   base: Schema.optional(worktreeBaseRefSchema),
@@ -236,6 +253,7 @@ export type WorktreeRouteParams = Schema.Schema.Type<typeof worktreeRouteParamsS
 export type WorktreeBranch = Schema.Schema.Type<typeof worktreeBranchSchema>;
 export type ListProjectBranchesOutput = Schema.Schema.Type<typeof listProjectBranchesOutputSchema>;
 export type WorktreeBaseRef = Schema.Schema.Type<typeof worktreeBaseRefSchema>;
+export type WorktreeDestinationIssue = Schema.Schema.Type<typeof worktreeDestinationIssueSchema>;
 export type OpenWorktreeInput = Schema.Schema.Type<typeof openWorktreeInputSchema>;
 export type CheckoutRemovalMode = Schema.Schema.Type<typeof checkoutRemovalModeSchema>;
 export type BranchRemovalMode = Schema.Schema.Type<typeof branchRemovalModeSchema>;

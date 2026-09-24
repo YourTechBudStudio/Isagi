@@ -249,6 +249,67 @@ test('a missing checkpoint and a missing checkpoint file each name what was aske
   assert.doesNotThrow(() => decode(rejection({ reason: 'workflow_checkpoint_not_found' })));
 });
 
+test('checkpoint worktree reasons name the repository, commit and destination they refused', () => {
+  const plain = [
+    { reason: 'workflow_execution_not_found', workflowRunId: 1 },
+    { reason: 'workflow_checkpoint_base_not_git', checkpointId: 'wcp_1' },
+    { reason: 'workflow_checkpoint_repository_unavailable', checkpointId: 'wcp_1', projectId: 2 },
+    {
+      reason: 'workflow_checkpoint_commit_unavailable',
+      checkpointId: 'wcp_1',
+      projectId: 2,
+      commitSha: 'a'.repeat(40),
+    },
+  ];
+  for (const data of plain) {
+    assert.deepEqual(
+      (decode({ ...rejection(data), status: 409 }) as { data: unknown }).data,
+      data,
+      data.reason,
+    );
+  }
+
+  const rejected = decode({
+    ...rejection({
+      reason: 'workflow_checkpoint_destination_rejected',
+      checkpointId: 'wcp_1',
+      destinationPath: '/repo/inside',
+      destinationIssue: 'inside_checkout',
+      worktreeId: 4,
+    }),
+    status: 409,
+  }) as { data: { destinationIssue?: string; worktreeId?: number } };
+  assert.deepEqual(
+    [rejected.data.destinationIssue, rejected.data.worktreeId],
+    ['inside_checkout', 4],
+  );
+
+  const failed = decode({
+    ...rejection({
+      reason: 'workflow_checkpoint_worktree_failed',
+      destinationPath: '/tmp/x',
+      stage: 'register',
+      created: true,
+    }),
+    status: 500,
+  }) as { data: { stage?: string; created?: boolean } };
+  assert.deepEqual([failed.data.stage, failed.data.created], ['register', true]);
+});
+
+test('checkpoint worktree failures cannot omit what a person will find on disk', () => {
+  const destination = { reason: 'workflow_checkpoint_destination_rejected' };
+  assert.throws(() => decode(rejection({ ...destination, destinationIssue: 'not_empty' })));
+  assert.throws(() => decode(rejection({ ...destination, destinationPath: '/tmp/x' })));
+  assert.throws(() =>
+    decode(rejection({ ...destination, destinationPath: '/tmp/x', destinationIssue: 'taken' })),
+  );
+
+  const failed = { reason: 'workflow_checkpoint_worktree_failed', destinationPath: '/tmp/x' };
+  assert.throws(() => decode(rejection({ ...failed, stage: 'git_add' })));
+  assert.throws(() => decode(rejection({ ...failed, created: false })));
+  assert.throws(() => decode(rejection({ ...failed, stage: 'setup', created: false })));
+});
+
 test('a missing record and a missing operation are told apart, and each names its key', () => {
   const missingEvidence = decode(
     rejection({ reason: 'workflow_evidence_not_found', workflowRunId: 1, evidenceKey: 'wev_abc' }),
@@ -330,8 +391,14 @@ test('the exported reason set cannot drift from the set the error data accepts',
     'workflow_checkpoint_not_found',
     'workflow_checkpoint_file_not_found',
     'workflow_checkpoint_content_unavailable',
+    'workflow_execution_not_found',
+    'workflow_checkpoint_base_not_git',
+    'workflow_checkpoint_repository_unavailable',
+    'workflow_checkpoint_commit_unavailable',
+    'workflow_checkpoint_destination_rejected',
+    'workflow_checkpoint_worktree_failed',
   ]);
-  assert.equal(every.length, 39);
+  assert.equal(every.length, 45);
 
   for (const reason of every) {
     const data: Record<string, unknown> = { reason };
@@ -348,6 +415,15 @@ test('the exported reason set cannot drift from the set the error data accepts',
       data.checkpointId = 'wcp_1';
       data.fileId = 'wcf_1';
       data.cause = 'corrupt';
+    }
+    if (reason === 'workflow_checkpoint_destination_rejected') {
+      data.destinationPath = '/tmp/x';
+      data.destinationIssue = 'not_empty';
+    }
+    if (reason === 'workflow_checkpoint_worktree_failed') {
+      data.destinationPath = '/tmp/x';
+      data.stage = 'git_add';
+      data.created = false;
     }
     assert.doesNotThrow(() => decode(rejection(data)), `${reason} is advertised but not accepted`);
   }

@@ -866,6 +866,7 @@ export function repository(rootPath: string): WorkspaceRepositoryService {
     findProjectWorktree: () => Effect.succeed(null),
     findProjectRootWorktree: () => Effect.succeed(null),
     findProjectWorktreeByBranch: () => Effect.succeed(null),
+    findProjectWorktreeByPath: () => Effect.succeed(null),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
     readWorktreeDeleteDiagnostics: () =>

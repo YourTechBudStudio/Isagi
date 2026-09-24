@@ -865,7 +865,10 @@ function scriptedReads(script: {
   return {
     executionQueries,
     eventQueries,
-    getRun: () => Promise.resolve(script.run ?? { run: workflowSummaryFixture() }),
+    getRun: () =>
+      Promise.resolve(
+        script.run ?? { run: workflowSummaryFixture(), rootFrame: workflowFrameFixture() },
+      ),
     listExecutions: (_runId, query) => {
       executionQueries.push(query);
       const index = Math.min(executionIndex, script.executions.length - 1);

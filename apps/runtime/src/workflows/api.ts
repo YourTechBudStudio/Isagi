@@ -11,6 +11,7 @@ import {
   errorMessage,
 } from '../lib/api/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
+import { prepareCheckpointWorktree } from './checkpoints/worktree.js';
 import { WorkflowEngine } from './engine/interpreter.service.js';
 import { WorkflowRunProjection } from './read/projection.service.js';
 import { WorkflowEngineError } from './types.js';
@@ -133,6 +134,12 @@ export function registerWorkflowApi(
     ),
   );
 
+  register(endpoints.getExecution, (_input, _context, params) =>
+    Effect.flatMap(WorkflowRunProjection, (projection) =>
+      projection.getExecution(params.runId, params.executionId),
+    ),
+  );
+
   register(endpoints.listAttempts, (_input, _context, params, query) =>
     Effect.flatMap(WorkflowRunProjection, (projection) =>
       projection.listAttempts(params.runId, query),
@@ -243,6 +250,16 @@ export function registerWorkflowApi(
     run,
   });
 
+  // --- checkpoint worktrees -------------------------------------------------
+
+  register(endpoints.createCheckpointWorktree, (input, _context, params) =>
+    prepareCheckpointWorktree({
+      runId: params.runId,
+      checkpointId: params.checkpointId,
+      destinationPath: input.destinationPath,
+    }),
+  );
+
   // --- controls -------------------------------------------------------------
 
   register(endpoints.pause, (_input, _context, params) =>
@@ -313,6 +330,7 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       ...(error.branch ? { branch: error.branch } : {}),
       ...(error.baseRef ? { baseRef: error.baseRef } : {}),
       ...(error.projectId ? { projectId: error.projectId } : {}),
+      ...(error.commitSha ? { commitSha: error.commitSha } : {}),
     };
 
     return {
@@ -345,7 +363,22 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
                     cause: error.payloadCause ?? 'missing',
                     ...identities,
                   }
-                : { reason: error.code, ...identities },
+                : error.code === 'workflow_checkpoint_destination_rejected'
+                  ? {
+                      ...identities,
+                      reason: error.code,
+                      destinationPath: error.destinationPath ?? '',
+                      destinationIssue: error.destinationIssue ?? 'inaccessible',
+                    }
+                  : error.code === 'workflow_checkpoint_worktree_failed'
+                    ? {
+                        ...identities,
+                        reason: error.code,
+                        destinationPath: error.destinationPath ?? '',
+                        stage: error.worktreeStage ?? 'git_add',
+                        created: error.created ?? true,
+                      }
+                    : { reason: error.code, ...identities },
     };
   }
 
@@ -390,5 +423,17 @@ function statusForWorkflowRejection(code: WorkflowEngineError['code']): 400 | 40
   // would succeed against a different live state. The workspace boundary answers 409 for the same
   // underlying condition on `worktrees.open`.
   if (code === 'workflow_environment_collision') return 409;
+  // A checkpoint worktree refused by the state of the disk or the repository: the request is
+  // well-formed and would succeed against a different destination or a repository that still holds
+  // the commit.
+  if (
+    code === 'workflow_checkpoint_destination_rejected' ||
+    code === 'workflow_checkpoint_repository_unavailable' ||
+    code === 'workflow_checkpoint_commit_unavailable'
+  ) {
+    return 409;
+  }
+  // The checks passed and creation itself failed: a degraded runtime, not a rejected request.
+  if (code === 'workflow_checkpoint_worktree_failed') return 500;
   return 400;
 }

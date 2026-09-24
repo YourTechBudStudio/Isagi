@@ -358,6 +358,16 @@ export const workflowTransitionSchema = Schema.Struct({
   stateRef: workflowPayloadSlotSchema,
 });
 
+export const workflowExecutionRouteParamsSchema = Schema.Struct({
+  runId: positiveInteger,
+  executionId: positiveInteger,
+});
+
+/** One execution on its own: the same projection a list row uses, so a row and its detail agree. */
+export const getWorkflowExecutionOutputSchema = Schema.Struct({
+  execution: workflowExecutionSchema,
+});
+
 export type WorkflowAttemptDto = typeof workflowAttemptSchema.Type;
 export type WorkflowOperationDto = typeof workflowOperationSchema.Type;
 export type WorkflowFrameDto = typeof workflowFrameSchema.Type;
@@ -371,3 +381,5 @@ export type WorkflowPriorFailureDto = typeof workflowPriorFailureSchema.Type;
 export type WorkflowOperationSummaryDto = typeof workflowOperationSummarySchema.Type;
 export type WorkflowTransitionKind = typeof workflowTransitionKindSchema.Type;
 export type WorkflowTransitionDto = typeof workflowTransitionSchema.Type;
+export type WorkflowExecutionRouteParams = typeof workflowExecutionRouteParamsSchema.Type;
+export type GetWorkflowExecutionOutput = typeof getWorkflowExecutionOutputSchema.Type;

@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import process from 'node:process';
 import test from 'node:test';
 
-import { normalizeAbsoluteHomePath, normalizeHomePath } from './path.utils.js';
+import {
+  canonicalizeProspectivePath,
+  normalizeAbsoluteHomePath,
+  normalizeHomePath,
+} from './path.utils.js';
 
 // Injecting a home is what makes tilde behavior testable without mutating
 // `process.env` in a suite that runs with `--experimental-test-isolation=none`.
@@ -44,4 +57,65 @@ test('absolute home normalization is unchanged by the optional parameter', () =>
   assert.equal(normalizeAbsoluteHomePath('/srv/repos/./nested'), '/srv/repos/nested');
   assert.throws(() => normalizeAbsoluteHomePath('   '));
   assert.throws(() => normalizeAbsoluteHomePath('relative/path'));
+});
+
+test('a path that does not exist yet keeps its missing segments under its resolved ancestor', () => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-canonical-'));
+  try {
+    const real = join(root, 'real');
+    mkdirSync(real);
+    symlinkSync(real, join(root, 'link'));
+    // The symlinked parent resolves even though the leaf is still to be created, which is the
+    // macOS `/tmp` → `/private/tmp` case in miniature.
+    assert.equal(
+      canonicalizeProspectivePath(join(root, 'link', 'a', 'b')),
+      join(realpathSync.native(real), 'a', 'b'),
+    );
+    assert.equal(canonicalizeProspectivePath(join(root, 'link')), realpathSync.native(real));
+    assert.equal(
+      canonicalizeProspectivePath(join(root, 'link', '..', 'x')),
+      join(realpathSync.native(root), 'x'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an existing ancestor is spelled in the letter case stored on disk', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'isagi-canonical-case-'));
+  try {
+    const onDisk = join(root, 'CaseProbe');
+    mkdirSync(onDisk);
+    const typed = join(root, 'caseprobe');
+    if (!existsSync(typed)) {
+      t.skip('the temporary filesystem is case-sensitive');
+      return;
+    }
+    assert.equal(
+      canonicalizeProspectivePath(join(typed, 'new')),
+      join(realpathSync.native(onDisk), 'new'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a failure other than "not found" is thrown rather than walked past', (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip('root ignores directory permissions');
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), 'isagi-canonical-denied-'));
+  const locked = join(root, 'locked');
+  mkdirSync(join(locked, 'inside'), { recursive: true });
+  chmodSync(locked, 0o000);
+  try {
+    assert.throws(
+      () => canonicalizeProspectivePath(join(locked, 'inside', 'new')),
+      (error: NodeJS.ErrnoException) => error.code === 'EACCES',
+    );
+  } finally {
+    chmodSync(locked, 0o755);
+    rmSync(root, { recursive: true, force: true });
+  }
 });

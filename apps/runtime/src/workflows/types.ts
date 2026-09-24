@@ -1,7 +1,11 @@
 import type { StructureDiagnostic } from '@yourtechbudstudio/isagi-workflow-verifier/structure';
 import { Data } from 'effect';
 
-import type { WorkflowLoadFailureReason, WorkflowRejectionReason } from '@isagi/contracts';
+import type {
+  WorkflowLoadFailureReason,
+  WorkflowRejectionReason,
+  WorktreeDestinationIssue,
+} from '@isagi/contracts';
 
 import type { DatabaseError } from '../persistence/index.js';
 
@@ -118,6 +122,19 @@ export class WorkflowEngineError extends Data.TaggedError('WorkflowEngineError')
   readonly branch?: string | undefined;
   /** The ref that could not be resolved, for `workflow_base_ref_not_found`. */
   readonly baseRef?: string | undefined;
-  /** The launch project, for `workflow_worktree_creation_unsupported`. */
+  /**
+   * The launch project, for `workflow_worktree_creation_unsupported`, or the project a checkpoint
+   * base names, for the checkpoint repository and commit reasons.
+   */
   readonly projectId?: number | undefined;
+  /** The commit a checkpoint base names, for `workflow_checkpoint_commit_unavailable`. */
+  readonly commitSha?: string | undefined;
+  /** The path judged, for the checkpoint destination and worktree-failed reasons. */
+  readonly destinationPath?: string | undefined;
+  /** Why the destination cannot hold a worktree, for `workflow_checkpoint_destination_rejected`. */
+  readonly destinationIssue?: WorktreeDestinationIssue | undefined;
+  /** Which step failed, for `workflow_checkpoint_worktree_failed`. */
+  readonly worktreeStage?: 'git_add' | 'register' | undefined;
+  /** Whether the destination is non-empty after the failure, for `workflow_checkpoint_worktree_failed`. */
+  readonly created?: boolean | undefined;
 }> {}

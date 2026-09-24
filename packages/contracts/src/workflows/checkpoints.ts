@@ -58,6 +58,13 @@ const hex64 = Schema.String.pipe(Schema.pattern(/^[a-f0-9]{64}$/));
 /** Git's object format is read at capture, so a commit id is SHA-1 or SHA-256 hex. */
 const commitShaSchema = Schema.String.pipe(Schema.pattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
 
+/** The `git` arm of `workflowCheckpointBaseSchema`, named so a route output can require it. */
+export const workflowCheckpointGitBaseSchema = Schema.Struct({
+  kind: Schema.Literal('git'),
+  repositoryId: positiveInteger,
+  commitSha: commitShaSchema,
+});
+
 /**
  * What reconstruction starts from before applying the inventory.
  *
@@ -67,11 +74,7 @@ const commitShaSchema = Schema.String.pipe(Schema.pattern(/^(?:[a-f0-9]{40}|[a-f
  * an empty directory and reproduces only captured coverage.
  */
 export const workflowCheckpointBaseSchema = Schema.Union(
-  Schema.Struct({
-    kind: Schema.Literal('git'),
-    repositoryId: positiveInteger,
-    commitSha: commitShaSchema,
-  }),
+  workflowCheckpointGitBaseSchema,
   Schema.Struct({
     kind: Schema.Literal('none'),
     reason: workflowCheckpointBaseReasonSchema,
@@ -219,6 +222,24 @@ export const workflowCheckpointFileRouteParamsSchema = Schema.Struct({
   fileId: nonEmptyString,
 });
 
+/**
+ * Asks for a detached worktree at the checkpoint's own base commit. The checkpoint names the
+ * repository and commit; the caller names only where the worktree goes.
+ */
+export const createCheckpointWorktreeInputSchema = Schema.Struct({
+  destinationPath: nonEmptyString,
+});
+
+export const createCheckpointWorktreeOutputSchema = Schema.Struct({
+  runId: positiveInteger,
+  checkpointId: nonEmptyString,
+  /** The canonical absolute path the runtime created: a client applies files here and nowhere else. */
+  destinationPath: nonEmptyString,
+  /** Always the checkpoint's own base. */
+  base: workflowCheckpointGitBaseSchema,
+  worktreeId: positiveInteger,
+});
+
 export const listWorkflowCheckpointsQuerySchema = Schema.extend(
   paginationQuerySchema,
   Schema.Struct({
@@ -271,6 +292,7 @@ export type WorkflowCheckpointScopeKind = typeof workflowCheckpointScopeKindSche
 export type WorkflowCheckpointChangeOperation = typeof workflowCheckpointChangeOperationSchema.Type;
 export type WorkflowCheckpointBaseReason = typeof workflowCheckpointBaseReasonSchema.Type;
 export type WorkflowCheckpointBase = typeof workflowCheckpointBaseSchema.Type;
+export type WorkflowCheckpointGitBase = typeof workflowCheckpointGitBaseSchema.Type;
 export type WorkflowCheckpointSummaryDto = typeof workflowCheckpointSummarySchema.Type;
 export type WorkflowCheckpointCounts = typeof workflowCheckpointCountsSchema.Type;
 export type WorkflowCheckpointWarningGroup = typeof workflowCheckpointWarningGroupSchema.Type;
@@ -288,3 +310,5 @@ export type ListWorkflowCheckpointInventoryOutput =
 export type ListWorkflowCheckpointManifestOutput =
   typeof listWorkflowCheckpointManifestOutputSchema.Type;
 export type WorkflowCheckpointContentQuery = typeof workflowCheckpointContentQuerySchema.Type;
+export type CreateCheckpointWorktreeInput = typeof createCheckpointWorktreeInputSchema.Type;
+export type CreateCheckpointWorktreeOutput = typeof createCheckpointWorktreeOutputSchema.Type;

@@ -219,6 +219,14 @@ export function repositoryWith(input: {
           ? input.worktree
           : null,
       ),
+    findProjectWorktreeByPath: (lookup) =>
+      Effect.succeed(
+        input.worktree &&
+          input.worktree.projectId === lookup.projectId &&
+          input.worktree.path === lookup.path
+          ? input.worktree
+          : null,
+      ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
     readWorktreeDeleteDiagnostics: () =>
@@ -277,6 +285,12 @@ export function repositoryWithWorktrees(input: {
         input.worktrees.find(
           (candidate) =>
             candidate.projectId === lookup.projectId && candidate.branch === lookup.branch,
+        ) ?? null,
+      ),
+    findProjectWorktreeByPath: (lookup) =>
+      Effect.succeed(
+        input.worktrees.find(
+          (candidate) => candidate.projectId === lookup.projectId && candidate.path === lookup.path,
         ) ?? null,
       ),
     deleteProject: () => Effect.succeed(false),

@@ -437,6 +437,14 @@ test('an attempt, a frame and a payload from another run are all refused', async
       harness.projection.listFrameExecutions(second.runId, first.rootFrameId, {}),
     );
     assert.equal(frames.code, 'workflow_run_not_found');
+
+    const executionId = (await read(harness.projection.listRunExecutions(first.runId, {})))
+      .items[0]!.executionId;
+    const execution = await rejection(harness.projection.getExecution(second.runId, executionId));
+    assert.equal(execution.code, 'workflow_execution_not_found');
+    assert.equal(execution.workflowRunId, second.runId);
+    const missing = await rejection(harness.projection.getExecution(first.runId, 999_999));
+    assert.equal(missing.code, 'workflow_execution_not_found');
   });
 });
 
@@ -788,6 +796,26 @@ test('a subgraph visit carries its child frame inline and counts the work beneat
     );
     assert.equal(frames.items[0]!.executionCount, 1);
     assert.deepEqual(frames.items[0]!.parametersRef, { inline: { draft: 'v1' } });
+
+    // Run detail carries the parentless root frame, projected exactly as the frame listing does,
+    // even though a nested frame now exists beneath it.
+    const detail = await read(harness.projection.getRun(runId));
+    assert.equal(detail.rootFrame.frameId, rootFrameId);
+    assert.equal(detail.rootFrame.parentExecutionId, null);
+    const allFrames = await read(harness.projection.listFrames(runId, {}));
+    assert.deepEqual(
+      detail.rootFrame,
+      allFrames.items.find((frame) => frame.frameId === rootFrameId),
+    );
+
+    // One execution on its own is exactly its list row, nested or not.
+    for (const executionId of [parent.id, childExecution.id]) {
+      const { execution } = await read(harness.projection.getExecution(runId, executionId));
+      assert.deepEqual(
+        execution,
+        executions.items.find((item) => item.executionId === executionId),
+      );
+    }
   });
 });
 
@@ -833,6 +861,7 @@ test('an unknown run is refused by every route that names one', async () => {
       harness.projection.listVersions(404, {}),
       harness.projection.listFrames(404, {}),
       harness.projection.listRunExecutions(404, {}),
+      harness.projection.getExecution(404, 1),
       harness.projection.listAttempts(404, {}),
       harness.projection.getAttempt(404, 1),
       harness.projection.listOperations(404, {}),

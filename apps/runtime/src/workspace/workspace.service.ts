@@ -46,7 +46,6 @@ import {
   type ProjectPathValidationError,
   validateProjectRoot,
 } from '../git/index.js';
-import { isPermissionError } from '../lib/fs-errors.js';
 import {
   DataDirectory,
   type DatabaseError,
@@ -72,6 +71,13 @@ import {
   WorktreeSetupRunError,
   WorktreeSetupService,
 } from '../worktree-setup/index.js';
+import {
+  createDetachedWorktree,
+  type DetachedWorktree,
+  type DetachedWorktreeError,
+  type DetachedWorktreeInput,
+} from './detached-worktree.js';
+import { directoryAvailability } from './directory-availability.js';
 import type { DiscoveredWorktree, ProjectRow, WorktreeRow } from './types.js';
 import {
   WorkspaceRepository,
@@ -185,6 +191,13 @@ export interface WorkspaceService {
    * that may have moved. It deliberately does not reconcile: the authoritative collision check is
    * the one `openWorktree` makes after its own `reconcileProject`.
    */
+  /**
+   * A worktree at an exact commit and an exact caller-chosen path, with no branch, no setup and no
+   * post-create commands. A refused request writes nothing. See `detached-worktree.ts`.
+   */
+  readonly createDetachedWorktree: (
+    input: DetachedWorktreeInput,
+  ) => Effect.Effect<DetachedWorktree, DetachedWorktreeError | DatabaseError | GitCommandError>;
   readonly preflightWorktreeCreation: (input: {
     readonly projectId: number;
     readonly branch: string;
@@ -530,6 +543,18 @@ export const WorkspaceServiceLive = Layer.effect(
               setup,
             } satisfies OpenWorktreeOutput;
           }),
+        ),
+      createDetachedWorktree: (input) =>
+        createDetachedWorktree(
+          {
+            repository,
+            git,
+            reconcile: (project) =>
+              reconcileProject(repository, commands, internalEvents, project).pipe(
+                Effect.provideService(Git, git),
+              ),
+          },
+          input,
         ),
       preflightWorktreeCreation: (input) =>
         diagnosticPhase(
@@ -1148,35 +1173,6 @@ function ensureProjectPathAvailable(repository: WorkspaceRepositoryService, proj
     });
     return yield* Effect.fail(projectNotPresent(project.id));
   });
-}
-
-type DirectoryAvailability =
-  | { readonly available: true }
-  | { readonly available: false; readonly reason: string };
-
-/**
- * Presence with a diagnosable cause, shared by both reconciliation branches and
- * by `ensureProjectPathAvailable` so the three cannot describe the same folder
- * differently. "Not there", "not a folder any more" and "could not be read" are
- * different answers, only some of them are the user's to fix, and the string
- * lands verbatim on the missing-project canvas.
- *
- * A successful stat establishes that something is there and that it is a
- * directory. It does not establish that the directory can be listed, that Git
- * can work inside it, or that it is the same physical directory as yesterday —
- * `stat` follows symlinks, exactly as the `pathIsDirectory` it replaces did.
- */
-function directoryAvailability(path: string): DirectoryAvailability {
-  try {
-    return statSync(path).isDirectory()
-      ? { available: true }
-      : { available: false, reason: `Project path is no longer a folder: ${path}` };
-  } catch (error) {
-    if (isPermissionError(error)) {
-      return { available: false, reason: `Isagi cannot read the project folder: ${path}` };
-    }
-    return { available: false, reason: `Project path not found: ${path}` };
-  }
 }
 
 function projectNotPresent(projectId: number) {

@@ -9,12 +9,16 @@ import type { ApiEndpoint } from '../api/types.js';
 import { runtimeEventSchema } from '../runtime-events/types.js';
 import { workflowContentEndpoints, workflowsEndpoints } from './api.js';
 import {
+  createCheckpointWorktreeInputSchema,
+  createCheckpointWorktreeOutputSchema,
   getWorkflowCheckpointOutputSchema,
   listWorkflowCheckpointManifestOutputSchema,
 } from './checkpoints.js';
 import { listWorkflowEvidenceQuerySchema, workflowEvidenceSchema } from './evidence.js';
 import {
+  getWorkflowExecutionOutputSchema,
   workflowAttemptSchema,
+  workflowExecutionRouteParamsSchema,
   workflowExecutionSchema,
   workflowFrameSchema,
   workflowOperationSchema,
@@ -34,6 +38,7 @@ import {
 } from './primitives.js';
 import {
   advanceWorkflowInputSchema,
+  getWorkflowRunOutputSchema,
   startWorkflowInputSchema,
   listFrameExecutionsOutputSchema,
   listRunExecutionsOutputSchema,
@@ -663,6 +668,7 @@ test('every retained read route is declared, including the ones the web client n
     'workflows.listFrames',
     'workflows.listFrameExecutions',
     'workflows.listExecutions',
+    'workflows.getExecution',
     'workflows.listAttempts',
     'workflows.getAttempt',
     'workflows.listOperations',
@@ -1823,4 +1829,54 @@ test('every manifest entry names its layer, and only change rows carry optional 
     nextCursor: 'c',
   });
   assert.ok(page.entries.every((entry) => entry.checkpointId === 'wcp_1'));
+});
+
+test('run detail carries its root frame, and a run without one does not decode', () => {
+  const decoded = decode(getWorkflowRunOutputSchema, { run: summary, rootFrame: frame });
+  assert.equal(decoded.rootFrame.frameId, frame.frameId);
+  assert.throws(() => decode(getWorkflowRunOutputSchema, { run: summary }));
+});
+
+test('one execution is read by run and execution id, and returns the list row shape', () => {
+  const endpoint = workflowsEndpoints.getExecution;
+  assert.equal(endpoint.method, 'GET');
+  assert.equal(endpoint.path, '/workflows/runs/:runId/executions/:executionId');
+  assert.deepEqual(decode(workflowExecutionRouteParamsSchema, { runId: 1, executionId: 7 }), {
+    runId: 1,
+    executionId: 7,
+  });
+  assert.throws(() => decode(workflowExecutionRouteParamsSchema, { runId: 1, executionId: 0 }));
+  const decoded = decode(getWorkflowExecutionOutputSchema, { execution });
+  assert.equal(decoded.execution.executionId, execution.executionId);
+});
+
+test('a checkpoint worktree is asked for by destination only and answers with a git base', () => {
+  const endpoint = workflowsEndpoints.createCheckpointWorktree;
+  assert.equal(endpoint.method, 'POST');
+  assert.equal(endpoint.path, '/workflows/runs/:runId/checkpoints/:checkpointId/worktrees');
+  assert.deepEqual(decode(createCheckpointWorktreeInputSchema, { destinationPath: '/tmp/x' }), {
+    destinationPath: '/tmp/x',
+  });
+  assert.throws(() => decode(createCheckpointWorktreeInputSchema, { destinationPath: '' }));
+  // The checkpoint picks the repository and commit, never the caller: extra fields are dropped.
+  assert.deepEqual(
+    decode(createCheckpointWorktreeInputSchema, { destinationPath: '/tmp/x', commitSha: 'a' }),
+    { destinationPath: '/tmp/x' },
+  );
+
+  const output = {
+    runId: 1,
+    checkpointId: 'wcp_1',
+    destinationPath: '/private/tmp/x',
+    base: { kind: 'git', repositoryId: 2, commitSha: 'b'.repeat(64) },
+    worktreeId: 5,
+  };
+  assert.equal(decode(createCheckpointWorktreeOutputSchema, output).worktreeId, 5);
+  // Only a git base can have produced a worktree.
+  assert.throws(() =>
+    decode(createCheckpointWorktreeOutputSchema, {
+      ...output,
+      base: { kind: 'none', reason: 'folder_project' },
+    }),
+  );
 });

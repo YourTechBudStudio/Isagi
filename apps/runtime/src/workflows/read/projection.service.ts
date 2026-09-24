@@ -9,6 +9,7 @@ import type {
   GetWorkflowAttemptOutput,
   GetWorkflowCheckpointOutput,
   GetWorkflowEvidenceOutput,
+  GetWorkflowExecutionOutput,
   GetWorkflowOperationOutput,
   GetWorkflowPayloadOutput,
   GetWorkflowRunOutput,
@@ -140,6 +141,11 @@ export interface WorkflowRunProjectionService {
     runId: number,
     query: ListRunExecutionsQuery,
   ) => Effect.Effect<ListRunExecutionsOutput, ReadFailure>;
+  /** One execution, projected exactly as its list row is, so a row and its detail cannot disagree. */
+  readonly getExecution: (
+    runId: number,
+    executionId: number,
+  ) => Effect.Effect<GetWorkflowExecutionOutput, ReadFailure>;
   readonly listAttempts: (
     runId: number,
     query: ListWorkflowAttemptsQuery,
@@ -402,8 +408,39 @@ export function makeWorkflowRunProjection(
         const row = requireRun(db, runId);
         const summary = summaryAt(db, row.id, row.revision);
         if (!summary) throw runNotFound(runId);
-        return { run: summary };
-      }),
+        // The parentless frame, projected as `listFrames` projects it. Frames nested under a subgraph
+        // execution carry a parent, so the root is the only one without.
+        const root = db
+          .select({ id: workflowGraphFrames.id })
+          .from(workflowGraphFrames)
+          .where(
+            and(
+              eq(workflowGraphFrames.runId, runId),
+              sql`${workflowGraphFrames.parentExecutionId} IS NULL`,
+            ),
+          )
+          .orderBy(asc(workflowGraphFrames.id))
+          .limit(1)
+          .get();
+        const rootFrame =
+          root === undefined
+            ? undefined
+            : recordsAt<WorkflowFrameDto>(db, {
+                runId,
+                kind: 'frame',
+                ids: [root.id],
+                atRevision: row.revision,
+              }).get(root.id);
+        return { run: summary, rootFrame };
+      }).pipe(
+        Effect.flatMap(({ run, rootFrame }) =>
+          // A run and its root frame are inserted in one transaction, so a run without one is a
+          // defect in the store, not an answer a client could act on.
+          rootFrame === undefined
+            ? Effect.dieMessage(`Workflow run ${runId} has no root frame.`)
+            : Effect.succeed({ run, rootFrame }),
+        ),
+      ),
 
     getStructure: (runId, query) =>
       Effect.gen(function* () {
@@ -661,6 +698,34 @@ export function makeWorkflowRunProjection(
           ? baselineExecutions(db, { runId, highWater, limit, binding, key })
           : recoveredExecutions(db, { runId, since, highWater, limit, binding, key });
       }),
+
+    getExecution: (runId, executionId) =>
+      read('workflow_get_execution', (db) => {
+        const run = requireRun(db, runId);
+        const owner = db
+          .select({ runId: workflowGraphFrames.runId })
+          .from(workflowNodeExecutions)
+          .innerJoin(
+            workflowGraphFrames,
+            eq(workflowGraphFrames.id, workflowNodeExecutions.frameId),
+          )
+          .where(eq(workflowNodeExecutions.id, executionId))
+          .get();
+        // Run-scoped like checkpoints: another run's execution is answered exactly as a missing one.
+        if (!owner || owner.runId !== runId) throw executionNotFound(runId, executionId);
+        return recordsAt<WorkflowExecutionDto>(db, {
+          runId,
+          kind: 'execution',
+          ids: [executionId],
+          atRevision: run.revision,
+        }).get(executionId);
+      }).pipe(
+        Effect.flatMap((execution) =>
+          execution === undefined
+            ? Effect.dieMessage(`Execution ${executionId} of run ${runId} has no projection.`)
+            : Effect.succeed({ execution }),
+        ),
+      ),
 
     listAttempts: (runId, query) =>
       read('workflow_list_attempts', (db) => {
@@ -1181,6 +1246,14 @@ function runNotFound(runId: number) {
   return new WorkflowEngineError({
     code: 'workflow_run_not_found',
     message: `Workflow run ${runId} was not found.`,
+    workflowRunId: runId,
+  });
+}
+
+function executionNotFound(runId: number, executionId: number) {
+  return new WorkflowEngineError({
+    code: 'workflow_execution_not_found',
+    message: `Execution ${executionId} does not belong to workflow run ${runId}.`,
     workflowRunId: runId,
   });
 }

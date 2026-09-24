@@ -139,7 +139,14 @@ export const listWorkflowRunsOutputSchema = Schema.Struct({
   nextCursor: Schema.NullOr(cursorSchema),
 });
 
-export const getWorkflowRunOutputSchema = Schema.Struct({ run: workflowRunSummarySchema });
+/**
+ * A run and its root frame: the parentless frame every other frame and execution descends from, so
+ * a client can start walking the run from one read.
+ */
+export const getWorkflowRunOutputSchema = Schema.Struct({
+  run: workflowRunSummarySchema,
+  rootFrame: workflowFrameSchema,
+});
 
 export const workflowStructureQuerySchema = Schema.Struct({
   /** Omitted returns the run's current pin. Retained in the API; the web client never sends it. */

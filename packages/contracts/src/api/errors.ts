@@ -6,6 +6,7 @@ import {
   workflowStructureDiagnosticSchema,
   workflowLoadFailureReasonSchema,
 } from '../workflows/types.js';
+import { worktreeDestinationIssueSchema } from '../worktrees/types.js';
 import { apiInfrastructureErrorSchema } from './responses.js';
 
 export const projectPathRejectionReasonSchema = Schema.Literal(
@@ -424,8 +425,13 @@ const workflowRejectionContextFields = {
   branch: Schema.optional(Schema.String),
   /** The ref that could not be resolved, for `workflow_base_ref_not_found`. */
   baseRef: Schema.optional(Schema.String),
-  /** The launch project, for `workflow_worktree_creation_unsupported`. */
+  /**
+   * The launch project, for `workflow_worktree_creation_unsupported`, or the project a checkpoint
+   * base names, for the checkpoint repository and commit reasons.
+   */
   projectId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  /** The commit a checkpoint base names, for `workflow_checkpoint_commit_unavailable`. */
+  commitSha: Schema.optional(Schema.String),
 } as const;
 
 /** The reasons whose context is mandatory; each has its own data variant below. */
@@ -444,6 +450,16 @@ const workflowContextualRejectionReasonSchema = Schema.Literal(
    * why.
    */
   'workflow_checkpoint_content_unavailable',
+  /**
+   * The destination named for a checkpoint worktree cannot hold one. Contextual because a client
+   * must say which path and why before it can suggest another. See `destinationIssue`.
+   */
+  'workflow_checkpoint_destination_rejected',
+  /**
+   * Creating or registering a checkpoint worktree failed after the checks passed. Contextual because
+   * a client cannot report what was left on disk from a reason alone. See `stage` and `created`.
+   */
+  'workflow_checkpoint_worktree_failed',
 );
 
 /** Reasons that carry no mandatory context of their own. */
@@ -522,6 +538,20 @@ const workflowPlainRejectionReasonSchema = Schema.Literal(
   'workflow_checkpoint_not_found',
   /** The checkpoint exists, but no file with that id belongs to its inventory. */
   'workflow_checkpoint_file_not_found',
+  /** No execution with that id belongs to this run. Run-scoped like checkpoints. */
+  'workflow_execution_not_found',
+  /** The checkpoint has no Git base, so there is no commit to create a worktree at. */
+  'workflow_checkpoint_base_not_git',
+  /**
+   * The repository a checkpoint base names cannot be used: its project is gone, not present, not
+   * Git, its folder is unavailable, or Git refuses the repository. Isagi does not restore from it.
+   */
+  'workflow_checkpoint_repository_unavailable',
+  /**
+   * Git positively answered that the checkpoint's base commit is absent. Base commits are recorded,
+   * not retained, so a discarded commit cannot be restored. See `commitSha`.
+   */
+  'workflow_checkpoint_commit_unavailable',
 );
 
 /**
@@ -579,6 +609,25 @@ export const workflowRejectionDataSchema = Schema.Union(
     checkpointId: Schema.String.pipe(Schema.minLength(1)),
     fileId: Schema.String.pipe(Schema.minLength(1)),
     cause: Schema.Literal('missing', 'corrupt'),
+  }),
+  Schema.Struct({
+    // Context first, as above, so the mandatory fields override any optional ones.
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_checkpoint_destination_rejected'),
+    /** The path as the runtime judged it: canonical when it got that far, otherwise as given. */
+    destinationPath: Schema.String.pipe(Schema.minLength(1)),
+    destinationIssue: worktreeDestinationIssueSchema,
+    /** The containing checkout, when `destinationIssue` is `inside_checkout` and Isagi knows it. */
+    worktreeId: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  }),
+  Schema.Struct({
+    ...workflowRejectionContextFields,
+    reason: Schema.Literal('workflow_checkpoint_worktree_failed'),
+    destinationPath: Schema.String.pipe(Schema.minLength(1)),
+    /** `git_add` failed while Git created the worktree; `register` failed while Isagi recorded it. */
+    stage: Schema.Literal('git_add', 'register'),
+    /** Whether the destination exists and is non-empty after the failure: what a person will find. */
+    created: Schema.Boolean,
   }),
   Schema.Struct({
     reason: workflowPlainRejectionReasonSchema,
@@ -768,7 +817,7 @@ export const worktreeCommandsApiErrorSchema = Schema.Union(
  * underneath it". They must be declared here or the response encoder refuses them and the caller
  * receives `api_response_encoding_failed` instead of the diagnosable failure.
  */
-export const workflowApiErrorSchema = Schema.Union(
+const workflowApiErrorUnion = Schema.Union(
   workflowRejectedErrorSchema,
   projectPathRejectedErrorSchema,
   worktreeSetupRejectedErrorSchema,
@@ -777,6 +826,18 @@ export const workflowApiErrorSchema = Schema.Union(
   runtimeStateFileFailedErrorSchema,
   runtimeDataDirectoryFailedErrorSchema,
 );
+
+/**
+ * Named rather than inferred. Every workflow endpoint carries this schema, and declaration emit
+ * would otherwise spell out the whole union at each one, which exceeds what the compiler will
+ * serialize for `workflowsEndpoints`.
+ */
+export interface WorkflowApiErrorSchema extends Schema.Schema<
+  typeof workflowApiErrorUnion.Type,
+  typeof workflowApiErrorUnion.Encoded
+> {}
+
+export const workflowApiErrorSchema: WorkflowApiErrorSchema = workflowApiErrorUnion;
 
 export const projectApiErrorSchema = Schema.Union(
   projectOperationRejectedErrorSchema,

@@ -437,6 +437,12 @@ test('workspace reads known rows without reconciling Git state', async () => {
             worktree.projectId === lookup.projectId && worktree.branch === lookup.branch,
         ) ?? null,
       ),
+    findProjectWorktreeByPath: (lookup) =>
+      Effect.succeed(
+        worktrees.find(
+          (worktree) => worktree.projectId === lookup.projectId && worktree.path === lookup.path,
+        ) ?? null,
+      ),
     deleteProject: () => Effect.succeed(false),
     deleteWorktree: () => Effect.succeed(false),
     readWorktreeDeleteDiagnostics: () =>

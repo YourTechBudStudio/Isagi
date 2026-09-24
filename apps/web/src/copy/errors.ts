@@ -233,6 +233,16 @@ const apiErrorCopy: Readonly<Record<string, CodeCopy>> = {
       // the saved bytes rather than the record.
       workflow_checkpoint_content_unavailable:
         "Isagi couldn't read the bytes this checkpoint saved for that file.",
+      workflow_execution_not_found: "That step isn't part of this run.",
+      workflow_checkpoint_base_not_git:
+        "That checkpoint wasn't taken in a Git repository, so there's no commit to start from.",
+      workflow_checkpoint_repository_unavailable:
+        "The repository that checkpoint came from isn't available anymore.",
+      // Base commits are recorded, not kept; Git may have discarded this one.
+      workflow_checkpoint_commit_unavailable:
+        "The commit that checkpoint started from isn't in its repository anymore.",
+      workflow_checkpoint_destination_rejected: "That folder can't hold a new worktree.",
+      workflow_checkpoint_worktree_failed: "Isagi couldn't finish creating that worktree.",
       // Deliberately not "it failed": nobody knows whether the work landed, and saying either way
       // would be the one thing the runtime refuses to guess.
       workflow_operation_uncertain:

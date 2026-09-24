@@ -528,6 +528,8 @@ function fakeWorkspaceService(
       Effect.succeed({ projectId: input.projectId, status: 'not_configured', summary: [] }),
     trustWorktreeSetup: () => Effect.die('trustWorktreeSetup is not used by workspace API tests'),
     openWorktree: () => Effect.die('openWorktree is not used by workspace API tests'),
+    createDetachedWorktree: () =>
+      Effect.die('createDetachedWorktree has no workspace route and is not used by API tests'),
     preflightWorktreeCreation: () =>
       Effect.die('preflightWorktreeCreation has no route and is not used by API tests'),
     runWorktreeSetup: () =>
