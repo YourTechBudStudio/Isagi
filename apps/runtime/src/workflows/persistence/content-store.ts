@@ -256,17 +256,30 @@ export function makeWorkflowContentStore(
         // The metadata row is written after the bytes are durable, so a crash between the two
         // leaves an unreferenced file — acceptable garbage — and never a row describing bytes that
         // are not there.
-        yield* database.use('workflow_upsert_payload', (db) => {
-          db.insert(workflowPayloads)
-            .values({
-              payloadRef: published.contentRef,
-              byteSize: published.byteSize,
-              mediaType: mediaTypeHint,
-              createdAt: new Date().toISOString(),
-            })
-            .onConflictDoNothing({ target: workflowPayloads.payloadRef })
-            .run();
-        });
+        yield* database
+          .use('workflow_upsert_payload', (db) => {
+            db.insert(workflowPayloads)
+              .values({
+                payloadRef: published.contentRef,
+                byteSize: published.byteSize,
+                mediaType: mediaTypeHint,
+                createdAt: new Date().toISOString(),
+              })
+              .onConflictDoNothing({ target: workflowPayloads.payloadRef })
+              .run();
+          })
+          .pipe(
+            // The failure hands the caller no reference, so this is the only place that can name the
+            // durable bytes the failed row leaves behind.
+            Effect.tapError((cause) =>
+              Effect.sync(() => {
+                console.warn(
+                  '[runtime] Workflow content was published but its catalog row was not written',
+                  { contentRef: published.contentRef, byteSize: published.byteSize, cause },
+                );
+              }),
+            ),
+          );
         return published;
       }),
 

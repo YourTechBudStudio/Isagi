@@ -3,10 +3,12 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 
 import { Effect } from 'effect';
 
+import { DatabaseError } from '../../persistence/index.js';
+import { makeWorkflowContentStore } from './content-store.js';
 import { contentPathFor, makeWorkflowPersistenceFixture, run } from './test-support.js';
 
 /**
@@ -212,6 +214,30 @@ test('the fixture can fail exactly one publication', async () => {
     );
     assert.equal(recovered.contentRef, refOf(Buffer.from('x')), 'only the next put is affected');
   } finally {
+    fixture.close();
+  }
+});
+
+test('a catalog write that fails after the bytes are durable names the orphaned reference', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  const warn = mock.method(console, 'warn', () => undefined);
+  try {
+    const store = makeWorkflowContentStore(fixture.contentRoot, {
+      ...fixture.database,
+      use: (operation) =>
+        Effect.fail(new DatabaseError({ operation, cause: 'injected catalog failure' })),
+    });
+    const bytes = Buffer.from('durable but uncatalogued');
+    const failed = await Effect.runPromise(
+      Effect.either(store.put({ source: bytes, mediaTypeHint: 'text/plain' })),
+    );
+    assert.equal(failed._tag === 'Left' ? failed.left._tag : null, 'DatabaseError');
+    assert.ok(existsSync(contentPathFor(fixture.contentRoot, refOf(bytes))), 'bytes stay on disk');
+    assert.equal(warn.mock.callCount(), 1);
+    const detail = warn.mock.calls[0]!.arguments[1] as Record<string, unknown>;
+    assert.equal(detail.contentRef, refOf(bytes));
+  } finally {
+    warn.mock.restore();
     fixture.close();
   }
 });
