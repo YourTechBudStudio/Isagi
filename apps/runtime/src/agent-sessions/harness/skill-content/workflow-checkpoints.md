@@ -93,6 +93,10 @@ A warning belongs to a checkpoint that was saved and describes what it does not 
 
 A checkpoint whose row was saved just before a crash or a Cancel is kept: re-entering that visit reuses it instead of capturing again, and a cancelled run keeps it as history.
 
+## Retrieving and reconstructing
+
+To list, inspect, and export a checkpoint from the command line, and to launch a fresh run from the export, read [CLI reconstruction](cli-reconstruct-and-launch.md). A checkpoint with a Git base exports as a detached worktree that a run can be placed in; one without a Git base exports as a plain folder of its captured files, with no worktree.
+
 ## Retention
 
 Checkpoint records and their saved file bytes are kept until the project is deleted. Saved bytes can still go missing or be corrupted on disk; opening a file is what discovers that, and its metadata stays readable.

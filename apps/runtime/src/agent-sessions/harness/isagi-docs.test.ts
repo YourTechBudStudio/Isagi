@@ -54,6 +54,10 @@ const templates = {
     emittedAs: 'references/cli-investigate-runs.md',
     tokens: ['DATA_ROOT'],
   },
+  'cli-reconstruct-and-launch.md': {
+    emittedAs: 'references/cli-reconstruct-and-launch.md',
+    tokens: [],
+  },
 } as const satisfies Record<
   keyof typeof isagiDocsContentSources,
   { readonly emittedAs: string; readonly tokens: readonly (keyof typeof substitutions)[] }
@@ -124,6 +128,7 @@ test('the skill package holds exactly the indexed references', () => {
       'references/workflow-evidence.md',
       'references/workflow-checkpoints.md',
       'references/cli-investigate-runs.md',
+      'references/cli-reconstruct-and-launch.md',
       'references/config-global.schema.ts',
       'references/config-project.schema.ts',
       'references/minimal-workflow/package.json',

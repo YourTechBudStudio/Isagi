@@ -40,6 +40,10 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   files.set('references/workflow-checkpoints.md', render('workflow-checkpoints.md', substitutions));
   files.set('references/cli-investigate-runs.md', render('cli-investigate-runs.md', substitutions));
   files.set(
+    'references/cli-reconstruct-and-launch.md',
+    render('cli-reconstruct-and-launch.md', substitutions),
+  );
+  files.set(
     'references/config-global.schema.ts',
     configSchemaReferenceSources['runtime-config.schema.ts'],
   );

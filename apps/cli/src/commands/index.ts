@@ -16,8 +16,10 @@ import {
 import type { CommandHandler, CommandHandlers } from './handlers.js';
 import { runsHandlers } from './runs.js';
 import type { CommandId } from './table.js';
+import { workflowsHandlers } from './workflows.js';
 
 export const commandHandlers = {
+  ...workflowsHandlers,
   ...runsHandlers,
   ...executionsHandlers,
   ...attemptsHandlers,

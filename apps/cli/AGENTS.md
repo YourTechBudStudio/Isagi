@@ -10,10 +10,12 @@
 - `src/commands/index.ts` maps every command id to its handler; its type forces exactly one handler per table entry.
 - `src/runtime-api.ts` is the `RuntimeApi` service over `@isagi/runtime-client`.
 - `src/main.ts` (`runCli(argv, io)`) is the in-process test seam; `src/bin.ts` is the process boundary.
+- `src/checkpoint-export/` is `checkpoints export`: its only public surface is `exportCheckpoint` (exported as `@isagi/cli/export`, which the runtime's end-to-end tests run against real routes). `result.ts` holds its IO-free stage and limitation vocabularies.
+- `src/paths.ts` duplicates the runtime's `canonicalizeProspectivePath`; the two must stay identical.
 
 ## Rules
 
-- The runtime owns state. The CLI reads no SQLite, no data-root paths, and runs no Git.
+- The runtime owns state. The CLI reads no SQLite, no data-root paths, and runs no Git. Export writes files only under the path the runtime returned, and never reads the manifest.
 - One route is one command unless the command is documented as composed.
 - With `--json`, stdout carries exactly one JSON document; progress goes to stderr.
 - Every CLI-owned error code is listed in `cliErrorCodeSchema` and documented in the shipped `isagi-docs` skill.

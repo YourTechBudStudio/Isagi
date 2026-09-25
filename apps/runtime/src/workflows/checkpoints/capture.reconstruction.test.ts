@@ -1,14 +1,26 @@
 /**
- * Reconstruction: each checkpoint's stored inventory, applied to a fresh worktree at that
- * checkpoint's own base (or an empty directory without one), reproduces what was declared — in
- * either order of writing files and removing absences, because the two never name the same entry.
+ * Reconstruction through the production path: each checkpoint, exported with `checkpoints export`
+ * over the real routes into a fresh worktree at its own base (or an empty directory without one),
+ * reproduces what was declared.
  */
 
 import assert from 'node:assert/strict';
-import { chmodSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
+import { contentPathFor } from '../persistence/content-store.js';
 import { run } from '../persistence/test-support.js';
 import { makeCaptureHarness, treeOf, type CaptureHarness } from './capture.test-support.js';
 
@@ -18,12 +30,16 @@ afterEach(() => harness?.close());
 const dir = (scope: string, directory: string, exclude?: string[]) =>
   exclude ? { scope, directory, exclude } : { scope, directory };
 
-/** Rebuild in both orders, require they agree, and return the reconstructed tree. */
-async function rebuilt(record: Parameters<CaptureHarness['rebuild']>[0], under?: string[]) {
-  const filesFirst = treeOf(await harness.rebuild(record, 'files_first'), under);
-  const absencesFirst = treeOf(await harness.rebuild(record, 'absences_first'), under);
-  assert.deepEqual(absencesFirst, filesFirst, 'both application orders must agree');
-  return filesFirst;
+/**
+ * Export the checkpoint and return the reconstructed tree. Export applies absences before files;
+ * that order is only safe because no inventory path is both, so that is checked directly.
+ */
+async function rebuilt(record: Parameters<CaptureHarness['exported']>[0], under?: string[]) {
+  const entries = await harness.inventory(record);
+  const files = new Set(entries.flatMap((entry) => (entry.kind === 'file' ? [entry.path] : [])));
+  const both = entries.filter((entry) => entry.kind === 'absent' && files.has(entry.path));
+  assert.deepEqual(both, [], 'no inventory path is both a file and an absence');
+  return treeOf(await harness.exported(record), under);
 }
 
 describe('reconstruction', () => {
@@ -81,7 +97,7 @@ describe('reconstruction', () => {
     );
     assert.deepEqual(await rebuilt(fourth), {
       ...treeOf(harness.repo, ['src']),
-      ...treeOf(await harness.rebuild(third, 'files_first'), ['docs', 'keep.md']),
+      ...treeOf(await harness.exported(third), ['docs', 'keep.md']),
     });
   });
 
@@ -193,6 +209,181 @@ describe('reconstruction', () => {
     assert.deepEqual(await rebuilt(record), {
       ...treeOf(linked),
       'other.md': { content: 'other v1', executable: false },
+    });
+  });
+});
+
+/** Everything about a checkout an export must not change: Git's view of it and its bytes. */
+function checkoutState(root: string, git: (args: readonly string[]) => string) {
+  const bytes: Record<string, string> = {};
+  const walk = (relative: string) => {
+    for (const name of readdirSync(join(root, relative)).sort()) {
+      if (relative === '' && name === '.git') continue;
+      const child = relative === '' ? name : `${relative}/${name}`;
+      const stats = lstatSync(join(root, child));
+      if (stats.isDirectory()) walk(child);
+      else bytes[child] = `${stats.mode.toString(8)} ${readFileSync(join(root, child), 'base64')}`;
+    }
+  };
+  walk('');
+  return {
+    head: git(['rev-parse', 'HEAD']),
+    branches: git(['branch', '--list', '--all', '--format=%(refname) %(objectname)']),
+    status: git(['status', '--porcelain', '--untracked-files=all']),
+    bytes,
+  };
+}
+
+describe('export through the real routes', () => {
+  it('leaves the source checkout unchanged and reports a complete Git export', async () => {
+    harness = makeCaptureHarness();
+    harness.write('src/a.ts', 'a1');
+    harness.write('src/b.ts', 'b1');
+    harness.commitAll('base');
+    harness.write('src/a.ts', 'a2');
+    harness.remove('src/b.ts');
+    harness.write('notes.md', 'undeclared dirt');
+    const record = await harness.captureOk([dir('src', 'src')]);
+    const before = checkoutState(harness.repo, harness.git);
+
+    // Deliberately not canonicalized: on macOS `os.tmpdir()` sits behind a symlink, so this also
+    // proves the CLI's canonical path and the one the runtime returns agree.
+    const destination = join(tmpdir(), `isagi-export-e2e-${randomUUID()}`, 'root');
+    try {
+      const { result } = await harness.exportCheckpoint(record, destination);
+      assert.equal(result.status, 'complete', JSON.stringify(result.failure));
+      assert.deepEqual(result.base, record.base);
+      assert.equal(typeof result.worktreeId, 'number');
+      assert.deepEqual(result.limitations, [
+        'git_baseline_is_committed_state_only',
+        'dependencies_not_captured',
+      ]);
+      assert.equal(result.failure, null);
+      assert.deepEqual(treeOf(result.destinationPath), {
+        'src/a.ts': { content: 'a2', executable: false },
+      });
+      // The new worktree is detached at the checkpoint's own commit, with no branch.
+      const exportedHead = harness.workspace
+        .git(result.destinationPath, ['rev-parse', 'HEAD'])
+        .trim();
+      assert.equal(exportedHead, (record.base as { commitSha: string }).commitSha);
+      assert.equal(
+        harness.workspace.git(result.destinationPath, ['branch', '--show-current']).trim(),
+        '',
+      );
+
+      const after = checkoutState(harness.repo, harness.git);
+      assert.equal(after.head, before.head);
+      assert.equal(after.branches, before.branches);
+      assert.equal(after.status, before.status);
+      assert.deepEqual(after.bytes, before.bytes);
+    } finally {
+      rmSync(dirname(destination), { recursive: true, force: true });
+    }
+  });
+
+  it('prunes a tracked directory whose only file the checkpoint deleted (R5)', async () => {
+    harness = makeCaptureHarness();
+    harness.write('src/keep.ts', 'keep');
+    harness.write('src/lonely/only.ts', 'only');
+    harness.commitAll('base');
+    harness.remove('src/lonely');
+    const record = await harness.captureOk([dir('src', 'src')]);
+    const root = await harness.exported(record);
+    assert.ok(!existsSync(join(root, 'src/lonely')), 'the emptied directory is removed');
+    assert.deepEqual(treeOf(root), { 'src/keep.ts': { content: 'keep', executable: false } });
+  });
+
+  it('fails before creating anything when Git has discarded the base commit', async () => {
+    harness = makeCaptureHarness();
+    harness.write('readme.md', 'main');
+    harness.commitAll('main');
+    harness.git(['checkout', '--quiet', '-b', 'feature']);
+    harness.write('docs/a.md', 'feature');
+    harness.commitAll('feature');
+    const record = await harness.captureOk([dir('docs', 'docs')]);
+    harness.remove('docs');
+    harness.git(['checkout', '--quiet', 'main']);
+    harness.git(['branch', '--quiet', '-D', 'feature']);
+    harness.git(['reflog', 'expire', '--expire=now', '--all']);
+    harness.git(['gc', '--quiet', '--prune=now']);
+    const commit = (record.base as { commitSha: string }).commitSha;
+    const pruned = (() => {
+      try {
+        harness.git(['cat-file', '-e', `${commit}^{commit}`]);
+        return false;
+      } catch {
+        return true;
+      }
+    })();
+    if (!pruned) return; // This Git kept the commit; there is nothing to prove here.
+
+    const { result, destination } = await harness.exportCheckpoint(record);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure?.stage, 'prepare_baseline');
+    assert.equal(result.failure?.code, 'workflow_rejected');
+    assert.equal(result.failure?.reason, 'workflow_checkpoint_commit_unavailable');
+    assert.deepEqual(result.failure?.created, { destination: false, worktreeId: null });
+    assert.ok(!existsSync(destination), 'no destination was created');
+  });
+
+  it('keeps the worktree and reports it when a saved file is corrupt', async () => {
+    harness = makeCaptureHarness();
+    harness.write('docs/a.md', 'a');
+    harness.commitAll('base');
+    harness.write('docs/a.md', 'a changed');
+    harness.write('docs/b.md', 'b new');
+    const record = await harness.captureOk([dir('docs', 'docs')]);
+    const saved = harness
+      .entries(record.id)
+      .find((row) => row.kind === 'file' && row.path === 'docs/b.md') as { contentRef: string };
+    writeFileSync(contentPathFor(harness.fixture.contentRoot, saved.contentRef), 'tampered');
+
+    const { result } = await harness.exportCheckpoint(record);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure?.stage, 'write_files');
+    assert.equal(result.failure?.reason, 'workflow_checkpoint_content_unavailable');
+    assert.equal(typeof result.worktreeId, 'number');
+    assert.deepEqual(result.failure?.created, { destination: true, worktreeId: result.worktreeId });
+    assert.ok(existsSync(join(result.destinationPath, '.git')), 'the worktree is left in place');
+    assert.ok(!existsSync(join(result.destinationPath, 'docs/b.md')));
+  });
+
+  it('refuses a folder-project export into its own source, leaving the source unchanged', async () => {
+    harness = makeCaptureHarness({ kind: 'folder' });
+    harness.write('site/index.html', 'index');
+    const record = await harness.captureOk([dir('site', 'site')]);
+    const before = treeOf(harness.repo);
+
+    const { result, destination } = await harness.exportCheckpoint(
+      record,
+      join(harness.repo, 'experiment'),
+    );
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure?.stage, 'resolve_destination');
+    assert.equal(result.failure?.code, 'export_destination_rejected');
+    assert.equal(
+      (result.failure!.data as { destinationIssue: string }).destinationIssue,
+      'inside_checkout',
+    );
+    assert.ok(!existsSync(destination));
+    assert.deepEqual(treeOf(harness.repo), before);
+  });
+
+  it('reports a complete directory-only export with its limitation', async () => {
+    harness = makeCaptureHarness({ kind: 'folder' });
+    harness.write('site/run.sh', '#!/bin/sh', true);
+    const record = await harness.captureOk([dir('site', 'site')]);
+    const { result } = await harness.exportCheckpoint(record);
+    assert.equal(result.status, 'complete');
+    assert.equal(result.worktreeId, null);
+    assert.deepEqual(result.base, { kind: 'none', reason: 'folder_project' });
+    assert.deepEqual(result.limitations, [
+      'no_baseline_captured_files_only',
+      'dependencies_not_captured',
+    ]);
+    assert.deepEqual(treeOf(result.destinationPath), {
+      'site/run.sh': { content: '#!/bin/sh', executable: true },
     });
   });
 });

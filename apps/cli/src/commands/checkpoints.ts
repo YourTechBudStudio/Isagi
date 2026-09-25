@@ -2,8 +2,10 @@ import { Effect } from 'effect';
 
 import { apiEndpoints } from '@isagi/contracts';
 
-import { CliFailure } from '../errors.js';
-import { collectPages } from '../pages.js';
+import { exportCheckpoint, exportSummaryText } from '../checkpoint-export/index.js';
+import { readInventory, readManifest } from '../checkpoint-reads.js';
+import { CliContext } from '../context.js';
+import { CommandResult } from '../output.js';
 import { call } from '../runtime-api.js';
 import type { GroupHandlers } from './handlers.js';
 import { compact } from './query.js';
@@ -25,45 +27,36 @@ export const checkpointsHandlers = {
 
   /**
    * A checkpoint's detail, plus — in `--resolved` or `--manifest` mode — every page of its final
-   * inventory or its layer manifest, in server order. Each page must name the checkpoint that was
-   * asked for; a page for another checkpoint would silently mix two checkpoints' files.
+   * inventory or its layer manifest, in server order.
    */
   'checkpoints inspect': ({ positionals, options }) =>
     Effect.gen(function* () {
       const params = { runId: options.run, checkpointId: positionals.checkpointId };
       const { checkpoint } = yield* call(workflows.getCheckpoint, params);
-      if (options.resolved) {
-        const inventory = yield* collectPages(
-          (query) =>
-            call(workflows.listCheckpointInventory, params, query).pipe(
-              Effect.tap((page) => echoesCheckpoint(page.checkpointId, params.checkpointId)),
-            ),
-          (page) => page.entries,
-        );
-        return { checkpoint, inventory };
-      }
-      if (options.manifest) {
-        const manifest = yield* collectPages(
-          (query) =>
-            call(workflows.listCheckpointManifest, params, query).pipe(
-              Effect.tap((page) => echoesCheckpoint(page.checkpointId, params.checkpointId)),
-            ),
-          (page) => page.entries,
-        );
-        return { checkpoint, manifest };
-      }
+      if (options.resolved) return { checkpoint, inventory: yield* readInventory(params) };
+      if (options.manifest) return { checkpoint, manifest: yield* readManifest(params) };
       return { checkpoint };
     }),
-} satisfies GroupHandlers<'checkpoints'>;
 
-function echoesCheckpoint(returned: string, requested: string) {
-  return returned === requested
-    ? Effect.void
-    : Effect.fail(
-        CliFailure.of(
-          'runtime_response_invalid',
-          `The runtime returned a page for checkpoint ${returned} while ${requested} was requested.`,
-          { requestedCheckpointId: requested, returnedCheckpointId: returned },
-        ),
-      );
-}
+  /**
+   * The checkpoint's files rebuilt under an empty folder. The result is printed on every outcome
+   * past argument parsing and targeting, including failures; `failed` and `uncertain` exit 1.
+   * Progress goes to stderr.
+   */
+  'checkpoints export': ({ positionals, options }) =>
+    Effect.gen(function* () {
+      const io = yield* CliContext;
+      const result = yield* exportCheckpoint({
+        runId: options.run,
+        checkpointId: positionals.checkpointId,
+        output: options.output,
+        cwd: io.cwd,
+        progress: (line) => io.stderr.write(`${line}\n`),
+      });
+      return new CommandResult({
+        value: result,
+        exitCode: result.status === 'complete' ? 0 : 1,
+        text: exportSummaryText(result),
+      });
+    }),
+} satisfies GroupHandlers<'checkpoints'>;

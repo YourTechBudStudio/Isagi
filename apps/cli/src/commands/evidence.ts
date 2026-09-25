@@ -7,7 +7,7 @@ import { apiEndpoints, workflowContentEndpoints } from '@isagi/contracts';
 
 import { streamContent } from '../content-stream.js';
 import { CliContext } from '../context.js';
-import { causeText, CliFailure } from '../errors.js';
+import { causeText, CliFailure, errnoOf, writeFailure } from '../errors.js';
 import { call, callContent } from '../runtime-api.js';
 import type { GroupHandlers } from './handlers.js';
 import { compact } from './query.js';
@@ -135,17 +135,4 @@ function streamInto<R>(
     // (a refused content request) and is a no-op otherwise.
     Effect.ensuring(Effect.promise(() => handle.close().catch(() => undefined))),
   );
-}
-
-function writeFailure(path: string, cause: unknown) {
-  return CliFailure.of('filesystem_write_failed', `Could not write ${path}: ${causeText(cause)}`, {
-    path,
-    errno: errnoOf(cause) ?? null,
-  });
-}
-
-function errnoOf(cause: unknown): string | undefined {
-  return cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string'
-    ? cause.code
-    : undefined;
 }

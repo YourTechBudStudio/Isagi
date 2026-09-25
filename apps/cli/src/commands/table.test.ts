@@ -124,8 +124,6 @@ test('unknown commands, flags and extra arguments are usage errors', () => {
   // Not exposed on purpose.
   parsesAsUsageError(['runs', 'dismiss', '1']);
   parsesAsUsageError(['runs', 'advance', '1']);
-  // Phase-later commands are not registered as placeholders.
-  parsesAsUsageError(['checkpoints', 'export', 'wcp_1', '--run', '1', '--output', '/tmp/x']);
 });
 
 test('global flags are read wherever they appear, including on a usage error', () => {
@@ -154,4 +152,100 @@ test('help is generated from the table', () => {
   assert.ok(one.kind === 'help');
   assert.match(one.text, /Usage: isagi checkpoints inspect <checkpointId> --run <runId>/);
   assert.match(one.text, /--resolved and --manifest are mutually exclusive/);
+});
+
+test('launch and export commands parse with their story flags', () => {
+  for (const argv of [
+    [
+      'checkpoints',
+      'export',
+      'wcp_01J',
+      '--run',
+      '42',
+      '--output',
+      '/Users/me/isagi-experiments/phase-2',
+      '--json',
+    ],
+    ['workflows', 'list', '--json'],
+    ['workflows', 'list', '--worktree', '3', '--surface', '9'],
+    ['runs', 'launch', 'implement-story', '--inputs', '{"story":47}', '--json'],
+    [
+      'runs',
+      'launch',
+      'implement-story',
+      '--worktree-placement',
+      'existing:31',
+      '--surface-placement',
+      'create:Experiment',
+    ],
+  ]) {
+    assert.equal(parseCommandLine(argv).kind, 'command', argv.join(' '));
+  }
+});
+
+test('placement values follow their grammar; a surface title keeps every colon', () => {
+  const placement = (worktree: string, surface: string) => {
+    const parsed = parseCommandLine([
+      'runs',
+      'launch',
+      'k',
+      '--worktree-placement',
+      worktree,
+      '--surface-placement',
+      surface,
+    ]);
+    assert.ok(parsed.kind === 'command', `${worktree} ${surface}`);
+    const options = parsed.arguments.options as Record<string, unknown>;
+    return [options['worktree-placement'], options['surface-placement']];
+  };
+  assert.deepEqual(placement('current', 'current'), [{ kind: 'current' }, { kind: 'current' }]);
+  assert.deepEqual(placement('existing:31', 'existing:7'), [
+    { kind: 'existing', worktreeId: 31 },
+    { kind: 'existing', surfaceId: 7 },
+  ]);
+  assert.deepEqual(placement('create:exp/retry:origin/main', 'create:Retry: phase 2: again'), [
+    { kind: 'create', branch: 'exp/retry', fromRef: 'origin/main' },
+    { kind: 'create', title: 'Retry: phase 2: again' },
+  ]);
+
+  for (const [worktree, surface] of [
+    ['existing:0', 'current'],
+    ['existing:x', 'current'],
+    ['create:branch', 'current'],
+    ['create::main', 'current'],
+    ['create:b:', 'current'],
+    ['elsewhere', 'current'],
+    ['current', 'create:'],
+    ['current', 'existing:-1'],
+    ['current', 'new'],
+  ] as const) {
+    parsesAsUsageError([
+      'runs',
+      'launch',
+      'k',
+      '--worktree-placement',
+      worktree,
+      '--surface-placement',
+      surface,
+    ]);
+  }
+});
+
+test('paired flags must be given together', () => {
+  assert.match(
+    parsesAsUsageError(['runs', 'launch', 'k', '--worktree-placement', 'current']),
+    /--worktree-placement requires --surface-placement/,
+  );
+  assert.match(
+    parsesAsUsageError(['runs', 'launch', 'k', '--surface-placement', 'current']),
+    /--surface-placement requires --worktree-placement/,
+  );
+  assert.match(
+    parsesAsUsageError(['runs', 'launch', 'k', '--worktree', '3']),
+    /--worktree requires --surface/,
+  );
+  assert.match(
+    parsesAsUsageError(['workflows', 'list', '--surface', '3']),
+    /--surface requires --worktree/,
+  );
 });

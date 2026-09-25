@@ -4,7 +4,7 @@ import { handlerFor } from './commands/index.js';
 import { parseCommandLine } from './commands/table.js';
 import { CliContext, type CliIo } from './context.js';
 import { CliFailure } from './errors.js';
-import { exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
+import { CommandResult, exitCodeFor, renderFailure, renderResult, renderText } from './output.js';
 import { runtimeApiLayer, type RuntimeApiService } from './runtime-api.js';
 import { resolveRuntimeUrl } from './target.js';
 
@@ -54,7 +54,13 @@ export async function runCli(
   const exit = await Effect.runPromiseExit(program);
 
   if (Exit.isSuccess(exit)) {
-    if (!mode.raw) await renderResult(io, exit.value, mode.json);
+    const result = exit.value;
+    if (result instanceof CommandResult) {
+      if (!mode.json && result.text !== undefined) await renderText(io, result.text);
+      else await renderResult(io, result.value, mode.json);
+      return result.exitCode;
+    }
+    if (!mode.raw) await renderResult(io, result, mode.json);
     return 0;
   }
   const failure = Cause.failureOption(exit.cause);

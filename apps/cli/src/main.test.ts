@@ -171,6 +171,10 @@ test('every command that is not composed issues exactly one request', async () =
     'evidence read',
     'evidence export',
     'checkpoints inspect',
+    'checkpoints export',
+    // Origin resolution reads the workspace snapshot unless --worktree and --surface are given.
+    'workflows list',
+    'runs launch',
   ]);
   for (const spec of commandTable) {
     const id = `${spec.group} ${spec.verb}`;
@@ -289,11 +293,17 @@ test('executions list starts at the root frame from the run detail and never lis
   );
 });
 
-test('the CLI-owned error codes are exactly the ones this phase uses', () => {
+test('the CLI-owned error codes are exactly the 13 the CLI documents', () => {
   assert.deepEqual([...cliErrorCodeSchema.literals].sort(), [
     'cli_usage_invalid',
     'content_integrity_mismatch',
+    'export_destination_not_visible',
+    'export_destination_rejected',
+    'export_inventory_conflict',
+    'export_path_conflict',
+    'export_path_unsafe',
     'filesystem_write_failed',
+    'origin_unresolved',
     'output_exists',
     'runtime_response_invalid',
     'runtime_unconfigured',

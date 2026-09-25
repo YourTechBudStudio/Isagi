@@ -3,26 +3,36 @@
  * a project with a worktree row, a migrated database, a real content store, and one run whose
  * visits each get their own execution and attempt.
  *
- * Also the test-only rebuild: applying one checkpoint's stored inventory rows to a fresh worktree at
- * that checkpoint's own base (or an empty directory without one). Public reads and export belong to
- * later work, so the rows are read directly here; what this proves is that the stored final state
- * is enough to reconstruct what was declared.
+ * Also reconstruction through the production path: `exportCheckpoint` serves the real workflow and
+ * workspace routes on a loopback port, over the real read projection and a real workspace service
+ * sharing this fixture's database, and runs the CLI's `checkpoints export` module against them. So
+ * there is exactly one implementation of applying a checkpoint, and these tests exercise it.
  */
 
+import assert from 'node:assert/strict';
 import {
   chmodSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { asc, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { Effect, Exit } from 'effect';
+import { Effect, Exit, ManagedRuntime } from 'effect';
+import Fastify from 'fastify';
+
+import { exportCheckpoint, runtimeApiLayer, type ExportResult } from '@isagi/cli/export';
+import type {
+  ListWorkflowCheckpointInventoryOutput,
+  WorkflowCheckpointInventoryEntry,
+} from '@isagi/contracts';
 
 import { Git, GitLive, type GitService } from '../../git/git.command.js';
 import { createFixtureWorkspace, type FixtureWorkspace } from '../../git/tests/fixtures.js';
@@ -31,9 +41,15 @@ import {
   workflowCheckpointEntries,
   workflowGraphFrames,
   workflowNodeExecutions,
+  workflowRunPreparations,
   workflowRuns,
   workflowSegmentAttempts,
 } from '../../persistence/schema.js';
+import { registerWorkspaceApi } from '../../workspace/api.js';
+import { liveWorkspaceLayer } from '../../workspace/tests/live-workspace-support.js';
+import { WorkspaceService } from '../../workspace/workspace.service.js';
+import { registerWorkflowApi } from '../api.js';
+import { WorkflowEngine } from '../engine/interpreter.service.js';
 import { nodeDirectoryReader, type DirectoryReader, type EntryStat } from '../paths.js';
 import type {
   WorkflowCheckpointEntryRecord,
@@ -42,9 +58,10 @@ import type {
 import { checkpointEntryRecord } from '../persistence/row-mappers.js';
 import {
   makeWorkflowPersistenceFixture,
-  run,
   type WorkflowPersistenceFixture,
 } from '../persistence/test-support.js';
+import { captureTransitionChanges } from '../read/capture.js';
+import { makeWorkflowRunProjection, WorkflowRunProjection } from '../read/projection.service.js';
 import {
   makeWorkflowCheckpointCapture,
   type CheckpointCaptureFailure,
@@ -99,11 +116,24 @@ export interface CaptureHarness {
   ) => Promise<CheckpointCaptureFailure>;
   readonly entries: (checkpointId: number) => WorkflowCheckpointEntryRecord[];
   readonly checkpointCount: () => number;
-  /** A fresh directory holding the checkpoint's reconstructed state. */
-  readonly rebuild: (
+  /**
+   * Exports the checkpoint with the production `checkpoints export` module, over the real routes
+   * and the real workspace service. `destination` defaults to a fresh path beside the repository,
+   * never inside it.
+   */
+  readonly exportCheckpoint: (
     record: WorkflowCheckpointRecord,
-    order: 'files_first' | 'absences_first',
-  ) => Promise<string>;
+    destination?: string,
+  ) => Promise<{ readonly result: ExportResult; readonly destination: string }>;
+  /** The checkpoint's resolved inventory, every page, through the public read. */
+  readonly inventory: (
+    record: WorkflowCheckpointRecord,
+  ) => Promise<readonly WorkflowCheckpointInventoryEntry[]>;
+  /**
+   * Exports and asserts the result is complete with the checkpoint's own base, the worktree a Git
+   * base implies (none otherwise) and the limitations for that base; returns the exported root.
+   */
+  readonly exported: (record: WorkflowCheckpointRecord, destination?: string) => Promise<string>;
   readonly close: () => void;
 }
 
@@ -142,6 +172,8 @@ export function makeCaptureHarness(
       rootGraphKey: 'root',
       artifactHash,
       status: 'running',
+      // Revision 1: the read model's revisions are positive, and one is published below.
+      revision: 1,
       positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
       destinationWorktreeId: worktreeId,
       destinationWorktreePath: repo,
@@ -162,6 +194,29 @@ export function makeCaptureHarness(
     })
     .returning()
     .get();
+  // The preparation row `createRun` writes with every run (a default current/current placement),
+  // and the run's read-model summary and root frame projected from these rows by the runtime's own
+  // writer, so the public run read (which the export's source-containment check uses) answers.
+  db.insert(workflowRunPreparations)
+    .values({
+      runId: runRow.id,
+      source: 'default',
+      requestJson: JSON.stringify({ worktree: { kind: 'current' }, surface: { kind: 'current' } }),
+      createdAt: at,
+      updatedAt: at,
+    })
+    .run();
+  Effect.runSync(
+    fixture.database.use('fixture_run_summary', (database) =>
+      captureTransitionChanges(
+        database,
+        runRow.id,
+        [runRow.revision],
+        [{ kind: 'run_started', frameId: frame.id }],
+      ),
+    ),
+  );
+
   let visits = 0;
   const visit = () => {
     const execution = db
@@ -253,38 +308,101 @@ export function makeCaptureHarness(
       .all()
       .map(checkpointEntryRecord);
 
-  let rebuilds = 0;
-  const rebuild: CaptureHarness['rebuild'] = async (record, order) => {
-    rebuilds += 1;
-    const target = join(workspace.root, `rebuild-${rebuilds}`);
+  // The workspace service and routes are built once, on first export, and torn down on close.
+  const workspaceData = mkdtempSync(join(tmpdir(), 'isagi-checkpoint-export-data-'));
+  let services: ReturnType<typeof makeServices> | undefined;
+  const makeServices = () => {
+    const runtime = ManagedRuntime.make(
+      liveWorkspaceLayer(workspaceData, { database: fixture.database }),
+    );
+    return { runtime, workspace: runtime.runPromise(WorkspaceService) };
+  };
+
+  let exports = 0;
+  const exportCheckpointFor: CaptureHarness['exportCheckpoint'] = async (record, destination) => {
+    exports += 1;
+    const target = destination ?? join(workspace.root, `export-${exports}`);
+    services ??= makeServices();
+    const workspaceService = await services.workspace;
+    const projection = makeWorkflowRunProjection(
+      fixture.database,
+      fixture.payloads,
+      fixture.content,
+    );
+    const routes = {
+      runPromise: <A>(effect: Effect.Effect<A, unknown, never>) =>
+        Effect.runPromise(
+          effect.pipe(
+            Effect.provideService(WorkflowEngine, {} as never),
+            Effect.provideService(WorkflowRunProjection, projection),
+            Effect.provideService(WorkspaceService, workspaceService),
+          ) as Effect.Effect<A, unknown, never>,
+        ),
+    } as never;
+    const fastify = Fastify({ logger: false });
+    registerWorkflowApi(fastify, routes);
+    registerWorkspaceApi(fastify, routes);
+    const url = await fastify.listen({ host: '127.0.0.1', port: 0 });
+    try {
+      const result = await Effect.runPromise(
+        exportCheckpoint({
+          runId: record.runId,
+          checkpointId: record.checkpointKey,
+          output: target,
+          cwd: workspace.root,
+          progress: () => {},
+        }).pipe(Effect.provide(runtimeApiLayer(url))),
+      );
+      return { result, destination: target };
+    } finally {
+      await fastify.close();
+    }
+  };
+
+  const inventory: CaptureHarness['inventory'] = async (record) => {
+    const projection = makeWorkflowRunProjection(
+      fixture.database,
+      fixture.payloads,
+      fixture.content,
+    );
+    const collected: WorkflowCheckpointInventoryEntry[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: ListWorkflowCheckpointInventoryOutput = await Effect.runPromise(
+        projection.listCheckpointInventory(record.runId, record.checkpointKey, {
+          limit: 500,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      );
+      collected.push(...page.entries);
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return collected;
+  };
+
+  const exported: CaptureHarness['exported'] = async (record, destination) => {
+    const { result } = await exportCheckpointFor(record, destination);
+    const described = JSON.stringify(result, null, 2);
+    assert.equal(result.status, 'complete', `expected a complete export, got ${described}`);
+    assert.equal(result.failure, null, described);
+    assert.deepEqual(result.base, record.base, 'the export reports the checkpoint’s own base');
     if (record.base.kind === 'git') {
-      git(['worktree', 'add', '--quiet', '--detach', target, record.base.commitSha]);
+      assert.ok(
+        Number.isInteger(result.worktreeId) && result.worktreeId! > 0,
+        `a Git export reports its worktree, got ${String(result.worktreeId)}`,
+      );
+      assert.deepEqual(result.limitations, [
+        'git_baseline_is_committed_state_only',
+        'dependencies_not_captured',
+      ]);
     } else {
-      mkdirSync(target);
+      assert.equal(result.worktreeId, null, 'a directory-only export has no worktree');
+      assert.deepEqual(result.limitations, [
+        'no_baseline_captured_files_only',
+        'dependencies_not_captured',
+      ]);
     }
-    const rows = entries(record.id);
-    const files = rows.filter((row) => row.kind === 'file');
-    const absences = rows.filter((row) => row.kind === 'absent');
-    const writeFiles = async () => {
-      for (const file of files) {
-        const bytes = await run(fixture.content.readAll(file.contentRef));
-        const destination = join(target, file.path);
-        mkdirSync(dirname(destination), { recursive: true });
-        writeFileSync(destination, bytes);
-        chmodSync(destination, file.executable ? 0o755 : 0o644);
-      }
-    };
-    const removeAbsences = () => {
-      for (const absence of absences) rmSync(join(target, absence.path), { force: true });
-    };
-    if (order === 'files_first') {
-      await writeFiles();
-      removeAbsences();
-    } else {
-      removeAbsences();
-      await writeFiles();
-    }
-    return target;
+    return result.destinationPath;
   };
 
   return {
@@ -317,10 +435,14 @@ export function makeCaptureHarness(
           n: number;
         }
       ).n,
-    rebuild,
+    exportCheckpoint: exportCheckpointFor,
+    inventory,
+    exported,
     close: () => {
+      void services?.runtime.dispose();
       fixture.close();
       workspace.cleanup();
+      rmSync(workspaceData, { recursive: true, force: true });
     },
   };
 }

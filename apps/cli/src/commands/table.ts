@@ -17,10 +17,18 @@ import {
   paginationQuerySchema,
   workflowRunStatusSchema,
   type WorkflowRunStatus,
+  type WorkflowSurfaceChoiceDto,
+  type WorkflowWorktreeChoiceDto,
 } from '@isagi/contracts';
 
 /** How a string value is validated and converted before any request. */
-export type ValueKind = 'positive_integer' | 'page_limit' | 'run_status' | 'text';
+export type ValueKind =
+  | 'positive_integer'
+  | 'page_limit'
+  | 'run_status'
+  | 'text'
+  | 'worktree_placement'
+  | 'surface_placement';
 
 export interface StringOptionSpec {
   readonly type: 'string';
@@ -80,11 +88,36 @@ const run = {
   required: true,
 } as const satisfies StringOptionSpec;
 
+const originWorktree = {
+  type: 'string',
+  value: 'positive_integer',
+  placeholder: 'worktreeId',
+  description:
+    'Launch origin worktree. Defaults to the worktree containing the current directory; give with --surface.',
+} as const satisfies StringOptionSpec;
+
+const originSurface = {
+  type: 'string',
+  value: 'positive_integer',
+  placeholder: 'surfaceId',
+  description:
+    "Launch origin surface. Defaults to that worktree's focused surface; give with --worktree.",
+} as const satisfies StringOptionSpec;
+
 const runIdPositional = [
   { name: 'runId', value: 'positive_integer', placeholder: 'runId' },
 ] as const satisfies readonly PositionalSpec[];
 
 export const commandTable = [
+  {
+    group: 'workflows',
+    verb: 'list',
+    summary: 'List the workflows that can be launched from an origin worktree.',
+    positionals: [],
+    options: { worktree: originWorktree, surface: originSurface },
+    requires: { worktree: 'surface', surface: 'worktree' },
+    stdout: 'json',
+  },
   {
     group: 'runs',
     verb: 'list',
@@ -145,6 +178,44 @@ export const commandTable = [
     summary: "List a run's history events, including pauses and Retry pin adoptions.",
     positionals: runIdPositional,
     options: { cursor, limit },
+    stdout: 'json',
+  },
+  {
+    group: 'runs',
+    verb: 'launch',
+    summary: 'Start a fresh run of a workflow, with explicit inputs and placement.',
+    positionals: [{ name: 'workflowKey', value: 'text', placeholder: 'workflowKey' }],
+    options: {
+      inputs: {
+        type: 'string',
+        value: 'text',
+        placeholder: 'json|@file',
+        description:
+          'The run inputs: a JSON object, or @<path> to a file holding one (relative to the current directory).',
+      },
+      'worktree-placement': {
+        type: 'string',
+        value: 'worktree_placement',
+        placeholder: 'placement',
+        description:
+          'current | existing:<worktreeId> | create:<branch>:<fromRef>. Give with --surface-placement.',
+      },
+      'surface-placement': {
+        type: 'string',
+        value: 'surface_placement',
+        placeholder: 'placement',
+        description:
+          'current | existing:<surfaceId> | create:<title>. Give with --worktree-placement.',
+      },
+      worktree: originWorktree,
+      surface: originSurface,
+    },
+    requires: {
+      'worktree-placement': 'surface-placement',
+      'surface-placement': 'worktree-placement',
+      worktree: 'surface',
+      surface: 'worktree',
+    },
     stdout: 'json',
   },
   {
@@ -375,6 +446,24 @@ export const commandTable = [
     exclusive: [['resolved', 'manifest']],
     stdout: 'json',
   },
+  {
+    group: 'checkpoints',
+    verb: 'export',
+    summary: "Rebuild a checkpoint's files in an empty folder outside every checkout.",
+    positionals: [{ name: 'checkpointId', value: 'text', placeholder: 'checkpointId' }],
+    options: {
+      run,
+      output: {
+        type: 'string',
+        value: 'text',
+        placeholder: 'dir',
+        description:
+          'The export root: absent or empty, and outside every checkout. Relative to the current directory.',
+        required: true,
+      },
+    },
+    stdout: 'json',
+  },
 ] as const satisfies readonly CommandSpec[];
 
 type Table = typeof commandTable;
@@ -398,7 +487,13 @@ type ConvertedValue<Kind extends ValueKind> = Kind extends 'positive_integer' | 
   ? number
   : Kind extends 'run_status'
     ? WorkflowRunStatus
-    : string;
+    : Kind extends 'worktree_placement'
+      ? WorkflowWorktreeChoiceDto
+      : Kind extends 'surface_placement'
+        ? WorkflowSurfaceChoiceDto
+        : string;
+
+type AnyConvertedValue = ConvertedValue<ValueKind>;
 
 type OptionValue<Option> = Option extends BooleanOptionSpec
   ? boolean
@@ -491,7 +586,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
     );
   }
 
-  const positionals: Record<string, string | number> = {};
+  const positionals: Record<string, AnyConvertedValue> = {};
   for (const [index, positional] of spec.positionals.entries()) {
     const raw = positionalValues[index];
     if (raw === undefined) {
@@ -504,7 +599,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
     positionals[positional.name] = converted.value;
   }
 
-  const options: Record<string, string | number | boolean | readonly string[] | undefined> = {};
+  const options: Record<string, AnyConvertedValue | boolean | readonly string[] | undefined> = {};
   for (const [name, option] of Object.entries(spec.options)) {
     const raw = parsed.values[name];
     if (option.type === 'boolean') {
@@ -517,7 +612,7 @@ export function parseCommandLine(argv: readonly string[]): ParsedCommandLine {
       continue;
     }
     const rawValues = Array.isArray(raw) ? raw : [raw];
-    const converted: (string | number)[] = [];
+    const converted: AnyConvertedValue[] = [];
     for (const value of rawValues) {
       const result = convertValue(option.value, String(value));
       if (!result.ok) return usageError(`--${name} ${result.problem}`, global);
@@ -628,7 +723,7 @@ function parseArgsOptions(spec: CommandSpec) {
 }
 
 type Converted =
-  | { readonly ok: true; readonly value: string | number }
+  | { readonly ok: true; readonly value: AnyConvertedValue }
   | { readonly ok: false; readonly problem: string };
 
 function convertValue(kind: ValueKind, raw: string): Converted {
@@ -649,6 +744,10 @@ function convertValue(kind: ValueKind, raw: string): Converted {
         ? { ok: true, value }
         : { ok: false, problem: `must be a page size the runtime accepts (1–500), got "${raw}".` };
     }
+    case 'worktree_placement':
+      return worktreePlacementOf(raw);
+    case 'surface_placement':
+      return surfacePlacementOf(raw);
     case 'run_status':
       return Schema.is(workflowRunStatusSchema)(raw)
         ? { ok: true, value: raw }
@@ -657,6 +756,54 @@ function convertValue(kind: ValueKind, raw: string): Converted {
             problem: `must be one of ${workflowRunStatusSchema.literals.join(', ')}, got "${raw}".`,
           };
   }
+}
+
+/**
+ * `current | existing:<id> | create:<branch>:<fromRef>`. Git ref names cannot contain `:`, so the
+ * value splits at its first two colons; anything after the second belongs to `fromRef`.
+ */
+function worktreePlacementOf(raw: string): Converted {
+  const problem = {
+    ok: false,
+    problem: `must be current, existing:<worktreeId> or create:<branch>:<fromRef>, got "${raw}".`,
+  } as const;
+  if (raw === 'current') return { ok: true, value: { kind: 'current' } };
+  if (raw.startsWith('existing:')) {
+    const worktreeId = integerOf(raw.slice('existing:'.length));
+    return worktreeId !== undefined && worktreeId > 0
+      ? { ok: true, value: { kind: 'existing', worktreeId } }
+      : problem;
+  }
+  if (raw.startsWith('create:')) {
+    const rest = raw.slice('create:'.length);
+    const colon = rest.indexOf(':');
+    const branch = colon < 0 ? '' : rest.slice(0, colon);
+    const fromRef = colon < 0 ? '' : rest.slice(colon + 1);
+    return branch.length > 0 && fromRef.length > 0
+      ? { ok: true, value: { kind: 'create', branch, fromRef } }
+      : problem;
+  }
+  return problem;
+}
+
+/** `current | existing:<id> | create:<title>`. A title is everything after `create:`, colons included. */
+function surfacePlacementOf(raw: string): Converted {
+  const problem = {
+    ok: false,
+    problem: `must be current, existing:<surfaceId> or create:<title>, got "${raw}".`,
+  } as const;
+  if (raw === 'current') return { ok: true, value: { kind: 'current' } };
+  if (raw.startsWith('existing:')) {
+    const surfaceId = integerOf(raw.slice('existing:'.length));
+    return surfaceId !== undefined && surfaceId > 0
+      ? { ok: true, value: { kind: 'existing', surfaceId } }
+      : problem;
+  }
+  if (raw.startsWith('create:')) {
+    const title = raw.slice('create:'.length);
+    return title.length > 0 ? { ok: true, value: { kind: 'create', title } } : problem;
+  }
+  return problem;
 }
 
 function integerOf(raw: string): number | undefined {

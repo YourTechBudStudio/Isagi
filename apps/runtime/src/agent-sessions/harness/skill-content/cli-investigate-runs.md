@@ -108,6 +108,8 @@ isagi checkpoints inspect wcp_6a3c9e21-4b7d-4f0a-9c2e-8d1f5b7a3e64 --run 42 --ma
 
 Isagi does not keep a checkpoint's base commit alive. If Git has discarded that commit, or the repository is gone, the checkpoint stays inspectable but its base cannot be restored.
 
+To rebuild a checkpoint's files on disk with `checkpoints export`, and to start a fresh run from them with `runs launch`, read [CLI reconstruction](cli-reconstruct-and-launch.md).
+
 ## Controls
 
 ```sh

@@ -40,6 +40,7 @@ export const isagiDocsContentSources = {
   'workflow-evidence.md': readTextAsset('isagi-docs/workflow-evidence.md'),
   'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
   'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
+  'cli-reconstruct-and-launch.md': readTextAsset('isagi-docs/cli-reconstruct-and-launch.md'),
 } as const;
 
 /**

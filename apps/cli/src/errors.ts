@@ -96,3 +96,18 @@ export function causeText(cause: unknown): string {
   }
   return String(cause);
 }
+
+/** A local write that failed, with the path and the errno a person needs to act on it. */
+export function writeFailure(path: string, cause: unknown): CliFailure {
+  return CliFailure.of('filesystem_write_failed', `Could not write ${path}: ${causeText(cause)}`, {
+    path,
+    errno: errnoOf(cause) ?? null,
+  });
+}
+
+/** The Node errno code (`ENOENT`, `EEXIST`, …) of a filesystem or socket failure, if it has one. */
+export function errnoOf(cause: unknown): string | undefined {
+  return cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string'
+    ? cause.code
+    : undefined;
+}

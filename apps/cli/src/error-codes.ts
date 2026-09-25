@@ -10,9 +10,15 @@ export const cliErrorCodeSchema = Schema.Literal(
   'runtime_unconfigured',
   'runtime_unreachable',
   'runtime_response_invalid',
+  'origin_unresolved',
   'output_exists',
   'filesystem_write_failed',
   'content_integrity_mismatch',
+  'export_destination_rejected',
+  'export_destination_not_visible',
+  'export_path_unsafe',
+  'export_path_conflict',
+  'export_inventory_conflict',
 );
 
 export type CliErrorCode = typeof cliErrorCodeSchema.Type;

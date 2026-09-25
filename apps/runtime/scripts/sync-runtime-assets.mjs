@@ -72,6 +72,7 @@ function syncAssets(assetRoot) {
     'workflow-evidence.md',
     'workflow-checkpoints.md',
     'cli-investigate-runs.md',
+    'cli-reconstruct-and-launch.md',
   ]) {
     copyFile(resolve(skillContentRoot, name), resolve(assetRoot, 'isagi-docs', name));
   }

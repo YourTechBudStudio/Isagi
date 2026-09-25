@@ -1,3 +1,5 @@
+import { Data } from 'effect';
+
 import type { CliIo } from './context.js';
 import type { ErrorDocument } from './errors.js';
 
@@ -8,6 +10,18 @@ import type { ErrorDocument } from './errors.js';
  * it, a result prints as indented JSON and a failure as one stderr line. A raw command's stdout is
  * its bytes, so its failure always goes to stderr (as JSON under `--json`).
  */
+/**
+ * A result that is its own report even when the operation failed: it prints like any result (one
+ * JSON document under `--json`) but carries its exit status, and optionally a short text summary
+ * for when `--json` is not given. Only `checkpoints export` returns one; every other command
+ * succeeds with its plain value or fails with an error document.
+ */
+export class CommandResult extends Data.TaggedClass('CommandResult')<{
+  readonly value: unknown;
+  readonly exitCode: 0 | 1;
+  readonly text?: string;
+}> {}
+
 export function renderResult(io: CliIo, value: unknown, json: boolean): Promise<void> {
   return write(io.stdout, `${JSON.stringify(value, null, json ? undefined : 2)}\n`);
 }

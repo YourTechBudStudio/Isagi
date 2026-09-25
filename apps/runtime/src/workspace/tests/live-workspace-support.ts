@@ -8,6 +8,7 @@ import { CommandService, type CommandServiceShape } from '../../commands/index.j
 import { Git, GitLive, type GitService } from '../../git/index.js';
 import {
   DataDirectory,
+  RuntimeDatabase,
   RuntimeDatabaseLive,
   type RuntimeDatabaseService,
   StateFile,
@@ -76,6 +77,12 @@ export interface LiveWorkspaceOptions {
   readonly worktreeSetup?: WorktreeSetupServiceShape | undefined;
   /** Replaces the setup-run recording stub, for tests that assert on the recorded run. */
   readonly worktreeSetupRepository?: WorktreeSetupRepositoryService | undefined;
+  /**
+   * An existing database connection to use instead of opening one in the data directory, so a
+   * fixture that already owns one (the workflow persistence fixture) and the workspace service read
+   * and write the same rows.
+   */
+  readonly database?: RuntimeDatabaseService | undefined;
 }
 
 const baseCommands = {
@@ -134,7 +141,9 @@ export function runWithLiveWorkspace<A, E>(
  */
 export function liveWorkspaceLayer(dataRoot: string, options: LiveWorkspaceOptions) {
   const dataDirectoryLayer = Layer.succeed(DataDirectory, makeTestDataDirectory(dataRoot));
-  const database = RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
+  const database = options.database
+    ? Layer.succeed(RuntimeDatabase, options.database)
+    : RuntimeDatabaseLive.pipe(Layer.provide(dataDirectoryLayer));
   const realRepository = WorkspaceRepositoryLive.pipe(Layer.provide(database));
   const repository = options.decorateRepository
     ? Layer.effect(
