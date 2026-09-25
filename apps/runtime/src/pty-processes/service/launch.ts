@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 
 import { Effect, Either } from 'effect';
 
+import type { CliAccessService } from '../../cli-access/index.js';
 import type { DatabaseError } from '../../persistence/index.js';
 import type { InternalRuntimeEventBusService } from '../../runtime-events/index.js';
 import type { PtyBackendCatalogService } from '../backend.js';
@@ -40,6 +41,7 @@ export interface PtyLaunchDependencies {
   readonly runtimeNamespace: string;
   readonly sessionsPath: string;
   readonly userProcessEnvironment: NodeJS.ProcessEnv;
+  readonly cliAccess: CliAccessService;
 }
 
 type PtyAllocationPhase = 'allocated' | 'starting' | 'settled' | 'abandoned';
@@ -257,8 +259,14 @@ function prepareLaunch(
     // `foreground.clear` and `envForProcess` have empty expected-error channels
     // by contract, so nothing they raise is folded into a launch failure.
     yield* deps.foreground.clear(ptyProcessId);
+    // Resolved per launch: the runtime URL is only known once the server listens, while the user
+    // environment was captured when the layer was built. Explicit overrides still win.
+    const cliEnvironment = yield* deps.cliAccess.launchEnvironment(
+      deps.userProcessEnvironment.PATH,
+    );
     const processEnvironment: NodeJS.ProcessEnv = {
       ...deps.userProcessEnvironment,
+      ...cliEnvironment,
       ...input.envOverrides,
       ...(input.envForProcess ? yield* input.envForProcess({ ptyProcessId }) : {}),
     };

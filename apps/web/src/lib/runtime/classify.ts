@@ -1,6 +1,6 @@
 import type { ApiError } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
 import { unwrapRuntimeFailure } from './run.js';
 
 /**

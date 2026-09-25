@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import type { WorkflowPayloadSlot } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { RuntimeApiError } from '../../../lib/runtime/errors.js';
 import { useWorkflowPayloadQuery } from '../../../lib/workspace/workflow/queries.js';
 import { inspectorCopy } from './copy.js';
 import { formatBytes } from './format.js';

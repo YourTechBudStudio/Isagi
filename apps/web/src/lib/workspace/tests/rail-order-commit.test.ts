@@ -4,8 +4,8 @@ import test, { beforeEach } from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
 
 import type { ApiError } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeTransportError } from '@isagi/runtime-client';
 
-import { RuntimeApiError, RuntimeTransportError } from '../../runtime/errors.js';
 import { useToastStore } from '../../toast/store.js';
 import type { WorkspaceData } from '../model.js';
 import { workspaceQueryKey } from '../query-keys.js';

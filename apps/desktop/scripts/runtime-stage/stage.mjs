@@ -351,6 +351,8 @@ export function validateStage(root, dependencyVersions) {
   for (const required of [
     'index.js',
     'assets/manifest.json',
+    // The bundled `isagi` CLI: the runtime refuses to start without it.
+    'assets/cli/isagi.mjs',
     'drizzle/meta/_journal.json',
     'package.json',
     stageMetadataFileName,

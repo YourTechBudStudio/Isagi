@@ -11,6 +11,7 @@ The local-or-remote Isagi runtime. It owns Git, worktrees, PTYs, commands, agent
 - `src/runtime-config`, `src/project-config`, and `src/paths` own configuration and path policy.
 - `src/workspace`, `src/git`, `src/worktree-setup`, and `src/commands` own repository and worktree operations.
 - `src/agent-sessions`, `src/terminal-sessions`, and `src/pty-processes` own durable sessions and their disposable processes.
+- `src/cli-access` makes the `isagi` CLI (`apps/cli`) available: it writes the versioned shim under the data root's tools directory at startup and gives every PTY launch the shim's `bin` on `PATH` and `ISAGI_RUNTIME_URL`.
 - `src/host-inventory` and `src/harness-control-plane` discover harness capabilities and apply harness policy.
 - `src/workflows` discovers, loads, and executes verified workflow artifacts.
 - `src/persistence`, `src/session-lifecycle`, `src/session-restore`, and `src/session-gc` own durable state and session lifecycle.

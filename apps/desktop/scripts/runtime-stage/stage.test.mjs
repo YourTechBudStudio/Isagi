@@ -18,6 +18,7 @@ import {
   pruneNodePtyPrebuilds,
   recoverGeneratedState,
   validateDependencyTree,
+  validateStage,
 } from './stage.mjs';
 
 test('fingerprint is stable for object key order and invalidates on an input change', () => {
@@ -236,4 +237,27 @@ test('recovery restores the previous stage and removes stale next directories', 
   } finally {
     rmSync(generatedRoot, { recursive: true, force: true });
   }
+});
+
+test('a stage without the bundled isagi CLI is invalid', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'isagi-stage-cli-'));
+  for (const file of [
+    'index.js',
+    'assets/manifest.json',
+    'drizzle/meta/_journal.json',
+    'package.json',
+    'runtime-stage.json',
+  ]) {
+    mkdirSync(resolve(root, file, '..'), { recursive: true });
+    writeFileSync(resolve(root, file), '{}');
+  }
+
+  assert.throws(
+    () => validateStage(root, {}),
+    (error) =>
+      error._tag === 'StageValidationError' &&
+      error.path === resolve(root, 'assets/cli/isagi.mjs') &&
+      /required staged file assets\/cli\/isagi.mjs is missing/.test(error.reason),
+  );
+  rmSync(root, { recursive: true, force: true });
 });

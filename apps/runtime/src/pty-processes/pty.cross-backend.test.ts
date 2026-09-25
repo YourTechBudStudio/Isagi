@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect, Either, Layer } from 'effect';
 
+import { CliAccessNone } from '../cli-access/index.js';
 import { UserShell, type UserShellService } from '../host-inventory/user-shell.service.js';
 import { DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
@@ -68,6 +69,7 @@ function serviceLayer(dataRoot: string, catalog: ReturnType<typeof fakeBackendCa
   const database = RuntimeDatabaseLive.pipe(Layer.provide(directory));
   const repository = PtyRepositoryLive.pipe(Layer.provide(database));
   const service = PtyServiceLive.pipe(
+    Layer.provide(CliAccessNone),
     Layer.provide(repository),
     Layer.provide(Layer.succeed(PtyBackendCatalog, catalog)),
     Layer.provide(PtyForegroundStateLive),

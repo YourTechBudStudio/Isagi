@@ -13,7 +13,7 @@
     "start": "node dist/index.js",
     "test": "pnpm workspace-deps && node scripts/sync-runtime-assets.mjs && node --import tsx --test --experimental-test-isolation=none --test-force-exit \"src/**/*.test.ts\"",
     "typecheck": "pnpm workspace-deps && tsc --noEmit -p tsconfig.json",
-    "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build"
+    "workspace-deps": "pnpm -C ../../packages/workflow-sdk build && pnpm -C ../../packages/workflow-verifier build && pnpm -C ../cli build"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
@@ -30,6 +30,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@isagi/cli": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "cross-env": "^10.1.0",

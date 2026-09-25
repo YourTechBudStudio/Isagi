@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
+import { noCliAccess } from '../../cli-access/index.js';
 import { DatabaseError, DataDirectory, RuntimeDatabaseLive } from '../../persistence/index.js';
 import { makeTestDataDirectory } from '../../persistence/test-support.js';
 import {
@@ -101,6 +102,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
             userProcessEnvironment: {},
+            cliAccess: noCliAccess,
           }),
         });
       }).pipe(Effect.provide(PtyRepositoryLive.pipe(Layer.provide(database)))),

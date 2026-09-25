@@ -4,6 +4,7 @@ import { Context, Effect, Either, Layer } from 'effect';
 
 import type { PtyStreamOutputMessageSet } from '@isagi/contracts';
 
+import { CliAccess } from '../cli-access/index.js';
 import { UserShell } from '../host-inventory/user-shell.service.js';
 import { DataDirectory, DatabaseError } from '../persistence/index.js';
 import {
@@ -182,6 +183,7 @@ export const PtyServiceLive = Layer.scoped(
     const directory = yield* DataDirectory;
     const eventBus = yield* InternalRuntimeEventBus;
     const userShell = yield* UserShell;
+    const cliAccess = yield* CliAccess;
     const userProcessEnvironment = launchEnv(userShell.environment.values);
     const activeAttachments = new Map<number, ActiveAttachment>();
     const pendingAttachments = new Set<number>();
@@ -234,6 +236,7 @@ export const PtyServiceLive = Layer.scoped(
       runtimeNamespace: namespace,
       sessionsPath: directory.paths.sessionsPath,
       userProcessEnvironment,
+      cliAccess,
     };
 
     const service = {

@@ -14,6 +14,7 @@ import {
   type AgentSessionAttentionProjectionService,
   type AgentSessionServiceShape,
 } from './agent-sessions/index.js';
+import { CliAccessLive, type CliAccessService } from './cli-access/index.js';
 import {
   CommandPortProbeLive,
   CommandRepositoryLive,
@@ -212,7 +213,11 @@ const WorkflowArtifactCatalogLayer = Layer.unwrapEffect(
   Layer.provide(DatabaseLive),
   Layer.provide(WorkflowPayloadStoreLayer),
 );
+// One instance for the whole runtime: the server publishes the URL into the same service every PTY
+// launch reads its environment from.
+const CliAccessLayer = CliAccessLive.pipe(Layer.provide(DataDirectoryLive));
 const PtyServiceLayer = PtyServiceLive.pipe(
+  Layer.provide(CliAccessLayer),
   Layer.provide(PtyRepositoryLayer),
   Layer.provide(PtyBackendCatalogLive),
   Layer.provide(PtyForegroundStateLayer),
@@ -371,6 +376,7 @@ const ApiServicesLayer = Layer.mergeAll(
   SessionGcLayer,
   EditorProvisioningLayer,
   EditorContextServiceLayer,
+  CliAccessLayer,
 );
 const StartupActivationLayer = Layer.scopedDiscard(
   Effect.gen(function* () {
@@ -411,6 +417,7 @@ export type RuntimeServices =
   | HostInventoryService
   | HarnessControlPlaneService
   | EditorProvisioningService
+  | CliAccessService
   // `EntityLockService` is deliberately absent, and stays absent now that the
   // placement path uses it: it is a construction dependency of
   // `SessionLifecycle`, `EditorContextService`, and `SurfaceService`, each of

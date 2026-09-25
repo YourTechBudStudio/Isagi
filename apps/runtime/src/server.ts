@@ -4,6 +4,7 @@ import { Effect, Exit, ManagedRuntime } from 'effect';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { registerAgentSessionsApi } from './agent-sessions/index.js';
+import { CliAccess } from './cli-access/index.js';
 import { registerClientSettingsApi } from './client-settings/api.js';
 import { registerCommandsApi } from './commands/index.js';
 import { EditorProvisioning } from './editor-provisioning/index.js';
@@ -78,6 +79,12 @@ export function startRuntimeServer(options: RuntimeServerOptions = {}) {
           port: options.port ?? 0,
         }),
       ).pipe(Effect.uninterruptible);
+      // Before anything can launch a PTY — the control plane and restored sessions below — so every
+      // terminal and agent session gets `ISAGI_RUNTIME_URL`.
+      yield* runInRuntime(
+        runtime,
+        Effect.flatMap(CliAccess, (cliAccess) => cliAccess.publishRuntimeUrl(url)),
+      );
       yield* runInRuntime(
         runtime,
         Effect.flatMap(HarnessControlPlane, (controlPlane) => controlPlane.start),

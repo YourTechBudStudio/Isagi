@@ -23,6 +23,12 @@ export const configSchemaReferenceSources = {
  */
 export const codeServerManifestSource = readTextAsset('code-server.manifest.json');
 
+/**
+ * The bundled `isagi` CLI, which the runtime's shim runs. Asserted at load, like every other asset:
+ * a runtime built without it is a build defect, and terminals would silently lack the CLI.
+ */
+export const cliEntryPath = requireAssetFile('cli/isagi.mjs');
+
 export const isagiDocsContentSources = {
   'SKILL.md': readTextAsset('isagi-docs/SKILL.md'),
   'config-global.md': readTextAsset('isagi-docs/config-global.md'),
@@ -33,6 +39,7 @@ export const isagiDocsContentSources = {
   'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
   'workflow-evidence.md': readTextAsset('isagi-docs/workflow-evidence.md'),
   'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
+  'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
 } as const;
 
 /**
@@ -76,6 +83,14 @@ function findRuntimeAssetRoot() {
     throw new Error(`Could not find runtime assets. Checked: ${candidates.join(', ')}`);
   }
   return root;
+}
+
+function requireAssetFile(relativePath: string) {
+  const path = resolve(runtimeAssetRoot, relativePath);
+  if (!existsSync(path)) {
+    throw new Error(`Missing runtime asset ${relativePath} under ${runtimeAssetRoot}.`);
+  }
+  return path;
 }
 
 function readTextAsset(relativePath: string) {

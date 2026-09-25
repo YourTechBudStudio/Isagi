@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 
 import type { ApiError, WorkflowRunSummary } from '@isagi/contracts';
 import { workflowEnvironmentFailureReasonSchema } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import {
   paletteCopy,
@@ -14,7 +15,6 @@ import {
   workflowEnvironmentFailureLine,
   workflowEnvironmentFailureRetryable,
 } from '../../copy/index.js';
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '../runtime/client.js';
 import { workflowSummaryFixture } from '../workspace/workflow/test-support.js';
 import {
   workflowFailurePresentation,

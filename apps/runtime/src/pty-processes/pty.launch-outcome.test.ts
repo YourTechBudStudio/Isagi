@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Effect, Layer } from 'effect';
 
+import { noCliAccess, type CliAccessService } from '../cli-access/index.js';
 import { DatabaseError, DataDirectory, RuntimeDatabaseLive } from '../persistence/index.js';
 import { makeTestDataDirectory } from '../persistence/test-support.js';
 import { publishOnlyRecordingEventBus } from '../runtime-events/test-support.js';
@@ -93,6 +94,7 @@ function withHarness<A, E>(body: (harness: Harness) => Effect.Effect<A, E, never
             runtimeNamespace: 'testns',
             sessionsPath: paths.paths.sessionsPath,
             userProcessEnvironment: {},
+            cliAccess: noCliAccess,
           }),
         });
       }).pipe(Effect.provide(PtyRepositoryLive.pipe(Layer.provide(database)))),
@@ -186,4 +188,53 @@ test('a post-spawn setup failure reports `spawn_failed`, not a preparation failu
       assert.notEqual(metadata.launchOutcome, 'preparation_failed');
     }),
   );
+});
+
+test('a launch gets the CLI environment over the user environment, and explicit overrides still win', async () => {
+  const cliAccess: CliAccessService = {
+    publishRuntimeUrl: () => Effect.void,
+    launchEnvironment: (basePath) =>
+      Effect.succeed({
+        PATH: `/data/tools/isagi-cli/1.0.0/bin:${basePath ?? ''}`,
+        ISAGI_RUNTIME_URL: 'http://127.0.0.1:4100',
+      }),
+  };
+  const launched: NodeJS.ProcessEnv[] = [];
+  const backend = backendStub('node_pty', {
+    launch: (input) => {
+      launched.push(input.env ?? {});
+      return backendStub('node_pty').launch(input);
+    },
+  });
+
+  await withHarness((harness) =>
+    Effect.gen(function* () {
+      const dependencies = {
+        ...harness.dependencies(backend),
+        userProcessEnvironment: { PATH: '/usr/bin:/bin', HOME: '/home/me' },
+        cliAccess,
+      } satisfies PtyLaunchDependencies;
+
+      const plain = yield* allocateLaunch(dependencies, {
+        command: 'zsh',
+        args: [],
+        cwd: '/repo/isagi',
+      });
+      yield* plain.start;
+      const overridden = yield* allocateLaunch(dependencies, {
+        command: 'zsh',
+        args: [],
+        cwd: '/repo/isagi',
+        envOverrides: { ISAGI_RUNTIME_URL: 'http://127.0.0.1:9999', PATH: '/custom' },
+      });
+      yield* overridden.start;
+    }),
+  );
+
+  assert.equal(launched.length, 2);
+  assert.equal(launched[0]!.ISAGI_RUNTIME_URL, 'http://127.0.0.1:4100');
+  assert.equal(launched[0]!.PATH, '/data/tools/isagi-cli/1.0.0/bin:/usr/bin:/bin');
+  assert.equal(launched[0]!.HOME, '/home/me');
+  assert.equal(launched[1]!.ISAGI_RUNTIME_URL, 'http://127.0.0.1:9999');
+  assert.equal(launched[1]!.PATH, '/custom');
 });

@@ -4,13 +4,9 @@ import test from 'node:test';
 import { Effect } from 'effect';
 
 import type { ApiError } from '@isagi/contracts';
+import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from '@isagi/runtime-client';
 
 import { runtimeErrorCopy } from '../../../copy/index.js';
-import {
-  RuntimeApiError,
-  RuntimeDecodeError,
-  RuntimeTransportError,
-} from '../../runtime/client.js';
 import {
   formatRuntimeError,
   formatRuntimeErrorSummary,

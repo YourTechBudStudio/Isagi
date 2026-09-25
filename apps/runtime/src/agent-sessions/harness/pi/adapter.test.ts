@@ -66,7 +66,6 @@ test('Pi adapter builds a fresh launch envelope with runtime-owned extension inj
       launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
     );
     assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-    assert.equal(env.ISAGI_RUNTIME_URL, undefined);
     assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
     assert.equal(
       env.ISAGI_HARNESS_METADATA_PATH,
@@ -270,7 +269,6 @@ test('OpenCode adapter launches from cwd and injects runtime config content', as
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   )) as NodeJS.ProcessEnv;
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
   assert.match(env.ISAGI_HARNESS_ARTIFACT_DIRECTORY ?? '', /agent-sessions\/10$/);
@@ -340,7 +338,6 @@ test('Claude adapter uses runtime-owned settings and resumes from cwd', async ()
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });
@@ -379,7 +376,6 @@ test('Codex adapter injects process-scoped hooks and resumes from cwd', async ()
     launch.envForProcess?.({ ptyProcessId: 20 }) ?? Effect.succeed({}),
   );
   assert.equal(env.ISAGI_AGENT_SESSION_ID, '10');
-  assert.equal(env.ISAGI_RUNTIME_URL, undefined);
   assert.equal(env.ISAGI_PTY_PROCESS_ID, '20');
   assert.match(env.ISAGI_HARNESS_METADATA_PATH ?? '', /harness\.json$/);
 });

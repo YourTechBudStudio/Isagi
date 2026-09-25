@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect';
+import { Effect } from 'effect';
 
 import {
   apiBasePath,
@@ -8,16 +8,6 @@ import {
   commandLogStreamWebSocketEndpoint,
   terminalSessionPtyWebSocketEndpoint,
   runtimeEventsWebSocketEndpoint,
-  apiErrorResponseSchema,
-  apiInfrastructureErrorSchema,
-  apiSuccessResponseSchema,
-  type ApiEndpoint,
-  type ApiContentEndpointError,
-  type ApiEndpointError,
-  type ApiEndpointOutput,
-  type ApiEndpointParams,
-  type ApiEndpointRequestArgs,
-  type ApiInfrastructureError,
   type AcceptHarnessPolicyInput,
   type AcceptHarnessPolicyOutput,
   type ControlPlaneSnapshot,
@@ -97,25 +87,16 @@ import {
   type WorkspaceSnapshot,
   type DurableSessionInventory,
 } from '@isagi/contracts';
-
-import { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError } from './errors.js';
-
-type RuntimeEndpointError<Endpoint> =
-  | RuntimeApiError<ApiEndpointError<Endpoint> | ApiInfrastructureError>
-  | RuntimeDecodeError
-  | RuntimeTransportError;
-
-/**
- * The same three failures for a content route.
- *
- * A separate alias because `ApiEndpointError` infers from `ApiEndpoint`, which a content endpoint
- * deliberately is not — it has no output schema. Inferring against it would silently collapse the
- * declared error union to `never` and leave only the infrastructure arm.
- */
-type RuntimeContentEndpointError<Endpoint> =
-  | RuntimeApiError<ApiContentEndpointError<Endpoint> | ApiInfrastructureError>
-  | RuntimeDecodeError
-  | RuntimeTransportError;
+import {
+  contentEndpointUrl,
+  createEndpointRequester,
+  interpolatePath,
+  requestContent,
+  RuntimeDecodeError,
+  type AnyApiContentEndpoint,
+  type RuntimeContentEndpointError,
+  type RuntimeEndpointError,
+} from '@isagi/runtime-client';
 
 export interface RuntimeClient {
   readonly fetchClientSettings: () => Effect.Effect<
@@ -678,20 +659,17 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     getWorkflowOperation: (runId, operationKey) =>
       request(apiEndpoints.workflows.getOperation, { runId, operationKey }),
     workflowEvidenceContentUrl: (runId, evidenceKey, options) =>
-      contentUrl(
+      contentEndpointUrl(
         runtimeUrl,
         workflowContentEndpoints.getEvidenceContent,
         { runId, evidenceKey },
         options,
       ),
     fetchWorkflowEvidenceContent: (runId, evidenceKey) =>
-      fetchContent(
-        workflowContentEndpoints.getEvidenceContent,
-        contentUrl(runtimeUrl, workflowContentEndpoints.getEvidenceContent, {
-          runId,
-          evidenceKey,
-        }),
-      ),
+      fetchContent(runtimeUrl, workflowContentEndpoints.getEvidenceContent, {
+        runId,
+        evidenceKey,
+      }),
     listWorkflowCheckpoints: (runId, query) =>
       request(apiEndpoints.workflows.listCheckpoints, { runId }, query),
     getWorkflowCheckpoint: (runId, checkpointId) =>
@@ -701,21 +679,18 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
     listWorkflowCheckpointManifest: (runId, checkpointId, query) =>
       request(apiEndpoints.workflows.listCheckpointManifest, { runId, checkpointId }, query),
     workflowCheckpointFileContentUrl: (runId, checkpointId, fileId, options) =>
-      contentUrl(
+      contentEndpointUrl(
         runtimeUrl,
         workflowContentEndpoints.getCheckpointFileContent,
         { runId, checkpointId, fileId },
         options,
       ),
     fetchWorkflowCheckpointFileContent: (runId, checkpointId, fileId) =>
-      fetchContent(
-        workflowContentEndpoints.getCheckpointFileContent,
-        contentUrl(runtimeUrl, workflowContentEndpoints.getCheckpointFileContent, {
-          runId,
-          checkpointId,
-          fileId,
-        }),
-      ),
+      fetchContent(runtimeUrl, workflowContentEndpoints.getCheckpointFileContent, {
+        runId,
+        checkpointId,
+        fileId,
+      }),
     listWorkflowDescriptors: (input) => request(apiEndpoints.workflows.descriptors, input),
     startWorkflow: (input) => request(apiEndpoints.workflows.start, input),
     getControlPlane: () => request(apiEndpoints.controlPlane.get),
@@ -733,167 +708,21 @@ export function createRuntimeClient(runtimeUrl: string): RuntimeClient {
   };
 }
 
-function createEndpointRequester(runtimeUrl: string) {
-  return function requestEndpoint<
-    Endpoint extends ApiEndpoint<
-      Schema.Schema.AnyNoContext | undefined,
-      Schema.Schema.AnyNoContext,
-      Schema.Schema.AnyNoContext,
-      Schema.Schema.AnyNoContext | undefined,
-      Schema.Schema.AnyNoContext | undefined
-    >,
-  >(
-    endpoint: Endpoint,
-    ...args: ApiEndpointRequestArgs<Endpoint>
-  ): Effect.Effect<ApiEndpointOutput<Endpoint>, RuntimeEndpointError<Endpoint>> {
-    return Effect.gen(function* () {
-      const response = yield* Effect.tryPromise({
-        try: (signal) => {
-          const init: RequestInit = { method: endpoint.method, signal };
-          const params = endpoint.params ? (args[0] as ApiEndpointParams<Endpoint>) : undefined;
-          const query = endpoint.query ? args[endpoint.params ? 1 : 0] : undefined;
-          const body = endpoint.body
-            ? args[(endpoint.params ? 1 : 0) + (endpoint.query ? 1 : 0)]
-            : undefined;
-          if (endpoint.body) {
-            init.headers = { 'Content-Type': 'application/json' };
-            init.body = JSON.stringify(body);
-          }
-          const url = new URL(
-            `${apiBasePath}${interpolatePath(endpoint.path, params)}`,
-            runtimeUrl,
-          );
-          appendQuery(url, query);
-          return fetch(url, init);
-        },
-        catch: (cause) =>
-          new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
-      });
-
-      const payload = yield* Effect.tryPromise({
-        try: () => response.json() as Promise<unknown>,
+/**
+ * One content route's bytes, buffered: the web renders or downloads a capture whole. The request and
+ * its error decoding are the shared client's, so a failure has the same shape as any other route's.
+ */
+function fetchContent<Endpoint extends AnyApiContentEndpoint>(
+  runtimeUrl: string,
+  endpoint: Endpoint,
+  params: Record<string, string | number>,
+): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
+  return requestContent(runtimeUrl, endpoint, params).pipe(
+    Effect.flatMap((response) =>
+      Effect.tryPromise({
+        try: () => response.blob(),
         catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-      });
-
-      if (!response.ok) {
-        const decoded = yield* decode(
-          apiErrorResponseSchema(endpoint.errors),
-          payload,
-          endpoint.id,
-        ).pipe(
-          Effect.catchAll(() =>
-            decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
-          ),
-        );
-        return yield* Effect.fail(new RuntimeApiError(decoded.error));
-      }
-
-      const decoded = yield* decode(
-        apiSuccessResponseSchema(endpoint.output),
-        payload,
-        endpoint.id,
-      );
-      return decoded.data as ApiEndpointOutput<Endpoint>;
-    });
-  };
-}
-
-function appendQuery(url: URL, query: unknown) {
-  if (!query || typeof query !== 'object') {
-    return;
-  }
-
-  for (const [key, value] of Object.entries(query)) {
-    if (value === undefined) continue;
-    // A repeated parameter is repeated on the wire, not comma-joined: that is the shape HTTP
-    // already has, and joining would make the separator illegal inside a value forever.
-    if (Array.isArray(value)) {
-      for (const entry of value as readonly unknown[]) {
-        url.searchParams.append(key, String(entry));
-      }
-      continue;
-    }
-    url.searchParams.set(key, String(value));
-  }
-}
-
-function interpolatePath(path: string, params: unknown) {
-  if (!params || typeof params !== 'object') {
-    return path;
-  }
-
-  return Object.entries(params).reduce(
-    (nextPath, [key, value]) => nextPath.replace(`:${key}`, encodeURIComponent(String(value))),
-    path,
+      }),
+    ),
   );
 }
-
-type WorkflowContentEndpoint =
-  (typeof workflowContentEndpoints)[keyof typeof workflowContentEndpoints];
-
-function contentUrl(
-  runtimeUrl: string,
-  endpoint: WorkflowContentEndpoint,
-  params: Record<string, string | number>,
-  options?: { readonly download?: boolean },
-): string {
-  const url = new URL(`${apiBasePath}${interpolatePath(endpoint.path, params)}`, runtimeUrl);
-  if (options?.download === true) url.searchParams.set('download', 'true');
-  return url.toString();
-}
-
-/**
- * One content route's bytes.
- *
- * A raw `fetch` rather than the typed requester, because the success body is not the JSON envelope.
- * A failure still is, so a non-OK response is decoded exactly as the typed requester decodes one
- * and the caller sees the same error shape whichever content route it called.
- */
-function fetchContent<Endpoint extends WorkflowContentEndpoint>(
-  endpoint: Endpoint,
-  url: string,
-): Effect.Effect<Blob, RuntimeContentEndpointError<Endpoint>> {
-  return Effect.gen(function* () {
-    const response = yield* Effect.tryPromise({
-      try: (signal) => fetch(url, { signal }),
-      catch: (cause) =>
-        new RuntimeTransportError(`Could not reach runtime endpoint ${endpoint.id}.`, cause),
-    });
-    if (!response.ok) {
-      const payload = yield* Effect.tryPromise({
-        try: () => response.json() as Promise<unknown>,
-        catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-      });
-      const decoded = yield* decode(
-        apiErrorResponseSchema(endpoint.errors),
-        payload,
-        endpoint.id,
-      ).pipe(
-        Effect.catchAll(() =>
-          decode(apiErrorResponseSchema(apiInfrastructureErrorSchema), payload, endpoint.id),
-        ),
-      );
-      return yield* Effect.fail(
-        new RuntimeApiError(decoded.error as ApiContentEndpointError<Endpoint>),
-      );
-    }
-    return yield* Effect.tryPromise({
-      try: () => response.blob(),
-      catch: (cause) => new RuntimeDecodeError(endpoint.id, cause),
-    });
-  });
-}
-
-function decode<Decoded, Encoded>(
-  schema: Schema.Schema<Decoded, Encoded, never>,
-  value: unknown,
-  endpointId: string,
-) {
-  return Effect.try({
-    try: () => Schema.decodeUnknownSync(schema)(value),
-    catch: (cause) => new RuntimeDecodeError(endpointId, cause),
-  });
-}
-
-export { RuntimeApiError, RuntimeDecodeError, RuntimeTransportError };
-export type { RuntimeClientError } from './errors.js';

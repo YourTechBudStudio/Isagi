@@ -38,7 +38,6 @@ export function harnessEnvForProcess(input: {
       ISAGI_HARNESS_ARTIFACT_DIRECTORY: paths.directory,
       ISAGI_HARNESS_METADATA_PATH: paths.metadataPath,
     };
-    delete environment.ISAGI_RUNTIME_URL;
     return environment;
   });
 }

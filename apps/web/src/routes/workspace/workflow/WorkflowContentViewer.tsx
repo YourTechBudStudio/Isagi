@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowEvidenceDto } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
-import { RuntimeApiError } from '../../../lib/runtime/errors.js';
 import { contentPresentation, previewCapBytes } from '../../../lib/workspace/workflow/evidence.js';
 import {
   useWorkflowCheckpointFileContent,

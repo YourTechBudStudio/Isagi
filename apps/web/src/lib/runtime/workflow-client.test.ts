@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import { Effect } from 'effect';
 
+import { RuntimeApiError } from '@isagi/runtime-client';
+
 import { executionsPageFixture } from '../workspace/workflow/test-support.js';
-import { createRuntimeClient, RuntimeApiError } from './client.js';
+import { createRuntimeClient } from './client.js';
 
 /**
  * The workflow half of the runtime client, checked against the real endpoint definitions.
@@ -305,40 +307,6 @@ test('checkpoint file bytes are fetched raw, with the download variant available
     `${runtimeUrl}/api/v1/workflows/runs/77/checkpoints/wcp_1/files/wcf_2/content?download=true`,
   );
 });
-
-for (const cause of ['missing', 'corrupt'] as const) {
-  test(`${cause} checkpoint bytes come back as the structured rejection naming the file`, async () => {
-    const data = {
-      reason: 'workflow_checkpoint_content_unavailable',
-      checkpointId: 'wcp_1',
-      fileId: 'wcf_2',
-      cause,
-    };
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({
-            error: {
-              code: 'workflow_rejected',
-              status: 400,
-              message: 'gone',
-              requestId: 'r',
-              data,
-            },
-          }),
-          { status: 400 },
-        ),
-      )) as typeof fetch;
-
-    const failure = await Effect.runPromise(
-      Effect.either(
-        createRuntimeClient(runtimeUrl).fetchWorkflowCheckpointFileContent(77, 'wcp_1', 'wcf_2'),
-      ),
-    );
-    assert.ok(failure._tag === 'Left');
-    assert.deepEqual(apiErrorData(failure.left as RuntimeApiError<never>), data);
-  });
-}
 
 async function capture<Output>(
   data: unknown,

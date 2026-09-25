@@ -1,0 +1,27 @@
+{
+  "name": "@isagi/cli",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./commands": "./src/commands/table.ts",
+    "./error-codes": "./src/error-codes.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@isagi/contracts": "workspace:*",
+    "@isagi/runtime-client": "workspace:*",
+    "effect": "^3.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.14"
+  }
+}

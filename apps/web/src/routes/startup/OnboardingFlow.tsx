@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import type { ControlPlaneSnapshot, DocsReconciliationResult } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
 import { editorProvisioningCopy, onboardingCopy } from '../../copy/index.js';
 import {
@@ -16,7 +17,6 @@ import {
 } from '../../lib/control-plane/queries.js';
 import { editorProvisioningManifestLine } from '../../lib/editor/provisioning.js';
 import { useRetryEditorProvisioningMutation } from '../../lib/editor/queries.js';
-import { RuntimeApiError } from '../../lib/runtime/client.js';
 import { runRuntimeEffect, unwrapRuntimeFailure } from '../../lib/runtime/run.js';
 import {
   fetchControlPlane,

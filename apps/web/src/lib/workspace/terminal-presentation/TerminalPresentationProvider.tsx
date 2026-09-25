@@ -2,9 +2,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import type { TerminalSettings } from '@isagi/contracts';
+import { RuntimeApiError } from '@isagi/runtime-client';
 
 import { controlPlaneQueryKey } from '../../control-plane/queries.js';
-import { RuntimeApiError } from '../../runtime/client.js';
 import { unwrapRuntimeFailure } from '../../runtime/run.js';
 import { isLaunchBlockCode } from '../pane-session/view.js';
 import { surfaceDetailQueryKey } from '../query-keys.js';

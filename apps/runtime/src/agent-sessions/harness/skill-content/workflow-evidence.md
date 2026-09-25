@@ -105,21 +105,11 @@ An `abandoned` capture means its intent was recorded but no evidence record comm
 
 Follow the source operation to inspect harness, requested model/effort, native session correlation, cwd, runtime identity, code version, and usage when available. Unknown values remain explicit; a send does not invent the model inherited from its session. A native transcript locator is evaluated on operation detail reads, not on list reads.
 
-## Find, fetch, and download
+## Find, read, and export
 
 The inspector's Evidence tab groups the run's captures by frame and visit. The Evidence dock column shows the selected visit and descendants on every inspector tab. Trace rows and declared nodes carry capture counts. Lists show metadata, not file availability; opening content is what discovers a missing or corrupt blob. HTML opens as source, with an opt-in isolated preview; downloads retain the captured bytes.
 
-API consumers use these runtime routes, under `/api/v1`:
-
-| Method and path | Result |
-| --- | --- |
-| `GET /workflows/runs/:runId/evidence` | Metadata-only `{ items, nextCursor }` |
-| `GET /workflows/runs/:runId/evidence/:evidenceKey` | One `{ evidence }` record |
-| `GET /workflows/runs/:runId/evidence/:evidenceKey/content` | Verified content bytes; add `?download=true` for attachment download |
-
-The SDK's `evidenceId` is the API's `evidenceKey`. List queries accept `limit`, `cursor`, `frameId`, `executionId`, `subtree=true`, `role`, and repeatable `label=key:value` filters. `subtree=true` requires `executionId` and includes its child-frame executions. Filters combine; repeat a label parameter rather than comma-joining values, for example `?role=review-feedback&label=phase:1&label=round:2`. URL-encode query values and follow `nextCursor` until null.
-
-Server-side `role`/`label` filters and the runtime client's `workflowEvidenceContentUrl(runId, evidenceKey, { download: true })` helper are API-consumer surfaces. These are not workflow `ctx` methods. Follow a record's `source.operationKey` through `GET /workflows/runs/:runId/operations/:operationKey` for source provenance; its top-level `operationKey` instead names the capture operation.
+From a terminal or agent session, list, filter, read, and export evidence with the `isagi` CLI; see [CLI investigation](cli-investigate-runs.md). The SDK's `evidenceId` is the CLI's `evidenceKey`. A record's `source.operationKey` names the source operation, which `isagi operations inspect` expands into provenance; its top-level `operationKey` instead names the capture operation.
 
 A missing record yields `workflow_evidence_not_found`. Missing or corrupt captured bytes yield `workflow_evidence_content_unavailable` with the key, content reference, and cause. Metadata remains inspectable. Do not interpret a failed content read as “nothing was captured.”
 
