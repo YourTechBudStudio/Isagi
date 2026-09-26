@@ -71,7 +71,11 @@ export function installFakeRuntime(): InspectorRuntimeControls {
     }
 
     if (method === 'GET' && path === `/workflows/runs/${RUN_ID}`) {
-      return success({ run: world.summary });
+      // The whole contract shape, as for structure below: the client decodes it, and a missing
+      // root frame fails the read and leaves the inspector with nothing to show.
+      const rootFrame = world.frames.find((frame) => frame.parentFrameId === null);
+      if (rootFrame === undefined) throw new Error('fixture world has no root frame');
+      return success({ run: world.summary, rootFrame });
     }
 
     if (method === 'GET' && path === `/workflows/runs/${RUN_ID}/structure`) {

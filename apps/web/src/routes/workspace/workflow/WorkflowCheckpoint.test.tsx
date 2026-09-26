@@ -466,7 +466,8 @@ test('the tab lists every checkpoint by node and shows the chosen one with its e
   assert.ok(
     markup.includes('isagi checkpoints export wcp_first --run 1 --output &lt;directory&gt;'),
   );
-  assert.ok(markup.includes(asRendered(inspectorCopy.checkpointExportNote)));
+  // The command has shipped; the line no longer carries a note saying it does not run yet.
+  assert.doesNotMatch(markup, /ships/);
   // No counts or warning badges on the list; the counts belong to the chosen checkpoint's tree.
   const list = markup.slice(0, markup.indexOf('data-checkpoint-files'));
   assert.doesNotMatch(list, /files|absent|warning/);

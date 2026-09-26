@@ -1,5 +1,5 @@
 import { motion } from 'motion/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type {
   WorkflowCheckpointSummaryDto,
@@ -22,6 +22,7 @@ import { inspectorCopy } from './copy.js';
 import { buildDockView } from './dock.js';
 import { noEvidenceFilters, type EvidenceSelectedFilters } from './evidence-view.js';
 import { dockMaxHeight, dockMinHeight } from './format.js';
+import { tabStep } from './list-navigation.js';
 import {
   selectionResolves,
   selectedExecutionId,
@@ -299,6 +300,21 @@ export function WorkflowInspector({
     });
   }, []);
 
+  /**
+   * A tab chosen from the strip, by click or by key: the two are one activation.
+   *
+   * From the tab strip the Evidence question is about the run, not about whatever happens to be
+   * selected below. The dock's link is the way into one visit.
+   */
+  const activateTab = useCallback((next: InspectorTab) => {
+    if (next === 'evidence') setEvidenceScope({ kind: 'run' });
+    setTab(next);
+  }, []);
+
+  const tabIds = useId();
+  const panelId = `${tabIds}-panel`;
+  const tabId = (value: InspectorTab) => `${tabIds}-${value}`;
+
   const clampDock = useCallback((height: number) => {
     setDockHeight(Math.min(dockMaxHeight, Math.max(dockMinHeight, height)));
   }, []);
@@ -337,32 +353,7 @@ export function WorkflowInspector({
         />
 
         <div className="flex flex-none items-center gap-3.5 border-b border-line/20 px-4.5 py-2">
-          <div
-            role="tablist"
-            aria-label={inspectorCopy.title}
-            className="flex gap-0.5 rounded-lg border border-line/28 bg-elevated/70 p-0.5"
-          >
-            <TabButton active={tab === 'declared'} onClick={() => setTab('declared')}>
-              {inspectorCopy.declaredTab}
-            </TabButton>
-            <TabButton active={tab === 'trace'} onClick={() => setTab('trace')}>
-              {inspectorCopy.traceTab}
-            </TabButton>
-            <TabButton
-              active={tab === 'evidence'}
-              onClick={() => {
-                // From the tab strip the question is about the run, not about whatever happens to
-                // be selected below. The dock's link is the way into one visit.
-                setEvidenceScope({ kind: 'run' });
-                setTab('evidence');
-              }}
-            >
-              {inspectorCopy.evidenceTab}
-            </TabButton>
-            <TabButton active={tab === 'checkpoints'} onClick={() => setTab('checkpoints')}>
-              {inspectorCopy.checkpointsTab}
-            </TabButton>
-          </div>
+          <InspectorTabList tab={tab} tabId={tabId} panelId={panelId} onActivate={activateTab} />
           <p className="font-mono text-[11px] text-fg-subtle opacity-70">
             {tab === 'declared'
               ? inspectorCopy.declaredHint
@@ -374,7 +365,14 @@ export function WorkflowInspector({
           </p>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col">
+        {/* One panel, relabelled by whichever tab is active: only the active tab's content is ever
+            mounted, and the dock below it is part of what that tab shows. */}
+        <div
+          id={panelId}
+          role="tabpanel"
+          aria-labelledby={tabId(tab)}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {tab === 'declared' ? (
             stale || structure.isPending ? (
               // Nothing renders under the old pin, not even for a frame. The run has been asked to
@@ -462,20 +460,90 @@ export function WorkflowInspector({
   );
 }
 
+const tabOrder: readonly { readonly value: InspectorTab; readonly label: string }[] = [
+  { value: 'declared', label: inspectorCopy.declaredTab },
+  { value: 'trace', label: inspectorCopy.traceTab },
+  { value: 'evidence', label: inspectorCopy.evidenceTab },
+  { value: 'checkpoints', label: inspectorCopy.checkpointsTab },
+];
+
+/**
+ * The tab strip, as a WAI-ARIA tablist.
+ *
+ * One tab stop: only the active tab is in the tab order. Left and Right wrap, Home and End go to the
+ * ends, and focus and activation move together, so an arrow press both focuses and opens a tab.
+ */
+function InspectorTabList({
+  tab,
+  tabId,
+  panelId,
+  onActivate,
+}: {
+  readonly tab: InspectorTab;
+  readonly tabId: (value: InspectorTab) => string;
+  readonly panelId: string;
+  readonly onActivate: (value: InspectorTab) => void;
+}) {
+  const buttons = useRef(new Map<InspectorTab, HTMLButtonElement>());
+  const index = tabOrder.findIndex((entry) => entry.value === tab);
+
+  return (
+    <div
+      role="tablist"
+      aria-label={inspectorCopy.title}
+      className="flex gap-0.5 rounded-lg border border-line/28 bg-elevated/70 p-0.5"
+      onKeyDown={(event) => {
+        const next = tabStep(event.key, index, tabOrder.length);
+        if (next === null) return;
+        event.preventDefault();
+        const value = tabOrder[next]!.value;
+        onActivate(value);
+        buttons.current.get(value)?.focus();
+      }}
+    >
+      {tabOrder.map((entry) => (
+        <TabButton
+          key={entry.value}
+          ref={(element) => {
+            if (element) buttons.current.set(entry.value, element);
+            else buttons.current.delete(entry.value);
+          }}
+          id={tabId(entry.value)}
+          panelId={panelId}
+          active={entry.value === tab}
+          onClick={() => onActivate(entry.value)}
+        >
+          {entry.label}
+        </TabButton>
+      ))}
+    </div>
+  );
+}
+
 function TabButton({
+  ref,
+  id,
+  panelId,
   active,
   onClick,
   children,
 }: {
+  readonly ref: React.Ref<HTMLButtonElement>;
+  readonly id: string;
+  readonly panelId: string;
   readonly active: boolean;
   readonly onClick: () => void;
   readonly children: string;
 }) {
   return (
     <button
+      ref={ref}
       type="button"
+      id={id}
       role="tab"
       aria-selected={active}
+      aria-controls={active ? panelId : undefined}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={`rounded-md px-3.5 py-1 text-[12.5px] transition duration-micro ease-expo ${
         active ? 'bg-blue font-semibold text-scrim' : 'text-fg-subtle hover:text-fg'

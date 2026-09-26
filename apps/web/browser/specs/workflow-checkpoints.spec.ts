@@ -237,12 +237,12 @@ test('the Checkpoints tab lists every checkpoint, moves the dock, and keeps its 
   await expect(dock(page).locator('header')).toContainText('· Phase 1');
   await expect(dialog(page).locator(`[data-checkpoint-files="${CLEAN}"]`)).toBeVisible();
 
-  // The export line, knowingly ahead of the command.
+  // The export line: the shipped command, shown and copyable, with no note that it does not run yet.
   const exportLine = dialog(page).locator('[data-checkpoint-export]');
   await expect(exportLine).toHaveText(
     `isagi checkpoints export ${CLEAN} --run 77 --output <directory>`,
   );
-  await expect(dialog(page)).toContainText('Runs once the checkpoint export command ships.');
+  await expect(dialog(page)).not.toContainText('Runs once the checkpoint export command ships.');
   await page.evaluate(() => {
     const scope = window as unknown as { copied: string[] };
     scope.copied = [];

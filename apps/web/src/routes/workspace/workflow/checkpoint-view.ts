@@ -56,8 +56,8 @@ export function shortCheckpointId(checkpointId: string): string {
 }
 
 /**
- * The export command #47 will run. Shown ahead of it, knowingly; the directory stays a placeholder
- * so a pasted line cannot write anywhere nobody chose.
+ * The `isagi checkpoints export` line for one checkpoint. The directory stays a placeholder so a
+ * pasted line cannot write anywhere nobody chose.
  */
 export function checkpointExportCommand(checkpointId: string, runId: number): string {
   return `isagi checkpoints export ${checkpointId} --run ${runId} --output <directory>`;

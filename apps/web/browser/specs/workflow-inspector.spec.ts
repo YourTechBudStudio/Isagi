@@ -20,10 +20,13 @@ import { expect, test, type Page } from '@playwright/test';
 const bar = (page: Page) => page.getByRole('region', { name: 'Workflow' });
 const inspect = (page: Page) => bar(page).getByRole('button', { name: 'Inspect', exact: true });
 const dialog = (page: Page) => page.getByRole('dialog');
-const tab = (page: Page, name: 'Declared' | 'Trace') =>
+const tab = (page: Page, name: 'Declared' | 'Trace' | 'Evidence' | 'Checkpoints') =>
   dialog(page).getByRole('tab', { name, exact: true });
 const canvas = (page: Page) => dialog(page).locator('[data-testid="declared-viewport"]');
 const traceTree = (page: Page) => dialog(page).getByRole('tree', { name: 'Executions' });
+/** The dock's own header, not the headers of the cards inside it. */
+const dockHeader = (page: Page) =>
+  dialog(page).getByRole('region', { name: 'Selection details' }).locator('header').first();
 /** The Data column alone — the card beside it repeats some of the same identifiers. */
 const dataColumn = (page: Page) => dialog(page).locator('[data-dock-column="Data"]');
 
@@ -325,6 +328,156 @@ test('nested subgraphs open and close from the keyboard at every depth', async (
   await expect
     .poll(async () => tree.locator('[role="treeitem"]').count())
     .toBeLessThanOrEqual(before);
+});
+
+test('the tabs are one tab stop whose arrows wrap and whose ends are Home and End', async ({
+  page,
+}) => {
+  await open(page);
+  const tabs = dialog(page).getByRole('tablist');
+  const selected = tabs.locator('[aria-selected="true"]');
+  const panel = dialog(page).getByRole('tabpanel');
+
+  await tab(page, 'Declared').focus();
+  // Only the active tab is in the tab order.
+  await expect(tabs.locator('[tabindex="0"]')).toHaveCount(1);
+  await expect(tabs.locator('[tabindex="0"]')).toHaveText('Declared');
+
+  // Focus and activation move together, and Left from the first tab wraps to the last.
+  await page.keyboard.press('ArrowLeft');
+  await expect(selected).toHaveText('Checkpoints');
+  await expect(tab(page, 'Checkpoints')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(selected).toHaveText('Declared');
+  await expect(tab(page, 'Declared')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(selected).toHaveText('Trace');
+  await expect(traceTree(page)).toBeVisible();
+  await page.keyboard.press('End');
+  await expect(selected).toHaveText('Checkpoints');
+  await page.keyboard.press('Home');
+  await expect(selected).toHaveText('Declared');
+  await expect(tabs.locator('[tabindex="0"]')).toHaveText('Declared');
+
+  // The one panel is labelled by whichever tab is active.
+  const labelledBy = await panel.getAttribute('aria-labelledby');
+  expect(labelledBy).toBe(await tab(page, 'Declared').getAttribute('id'));
+  expect(await tab(page, 'Declared').getAttribute('aria-controls')).toBe(
+    await panel.getAttribute('id'),
+  );
+});
+
+test('arrowing onto Evidence asks about the run, exactly as clicking the tab does', async ({
+  page,
+}) => {
+  await open(page, 'waiting_questions');
+  await tab(page, 'Trace').click();
+  await page.locator('[data-execution="102"]').click();
+  await tab(page, 'Evidence').click();
+  await dialog(page).locator('[data-evidence-scope="visit"]').click();
+  await expect(dialog(page).locator('[data-evidence-row]')).toHaveCount(7);
+
+  await tab(page, 'Evidence').focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(tab(page, 'Trace')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowRight');
+  await expect(dialog(page).locator('[data-evidence-scope="run"]')).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(dialog(page).locator('[data-evidence-row]')).toHaveCount(8);
+});
+
+test('the Evidence tree moves its selection with Up, Down, Home and End, as a click would', async ({
+  page,
+}) => {
+  await open(page, 'waiting_questions');
+  await tab(page, 'Evidence').click();
+  const tree = dialog(page).getByRole('tree', { name: 'Evidence' });
+  const rows = tree.locator('[data-evidence-row]');
+  await expect(rows).toHaveCount(8);
+  const keys = await rows.evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute('data-evidence-row')!),
+  );
+  const rowOf = (key: string) => tree.locator(`[data-evidence-row="${key}"]`);
+  const header = dockHeader(page);
+
+  // One tab stop: the rows themselves are not in the tab order.
+  await expect(tree).toHaveAttribute('tabindex', '0');
+  await expect(tree.locator('[data-evidence-row][tabindex="0"]')).toHaveCount(0);
+
+  // With nothing selected, Down lands on the first record.
+  await tree.focus();
+  await expect(tree).not.toHaveAttribute('aria-activedescendant');
+  await page.keyboard.press('ArrowDown');
+  await expect(rowOf(keys[0]!)).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowDown');
+  await expect(rowOf(keys[1]!)).toHaveAttribute('aria-selected', 'true');
+  await expect(tree).toHaveAttribute(
+    'aria-activedescendant',
+    (await rowOf(keys[1]!).getAttribute('id'))!,
+  );
+  await expect(tree).toBeFocused();
+
+  // End reaches the last record, three levels down, and the dock follows it as a click would.
+  await page.keyboard.press('End');
+  const last = rowOf(keys[keys.length - 1]!);
+  await expect(last).toHaveAttribute('aria-selected', 'true');
+  await expect(last).toBeInViewport();
+  const byKey = await header.textContent();
+  await page.keyboard.press('Home');
+  await expect(rowOf(keys[0]!)).toHaveAttribute('aria-selected', 'true');
+  await last.click();
+  await expect(header).toHaveText(byKey!);
+  // A click leaves focus on the tree, so the active descendant is where focus is, and the next
+  // key moves on from the clicked row.
+  await expect(tree).toBeFocused();
+  await expect(tree).toHaveAttribute('aria-activedescendant', (await last.getAttribute('id'))!);
+  await page.keyboard.press('ArrowUp');
+  await expect(rowOf(keys[keys.length - 2]!)).toHaveAttribute('aria-selected', 'true');
+});
+
+test('the Checkpoints list moves its choice with Up, Down, Home and End, as a click would', async ({
+  page,
+}) => {
+  await open(page, 'checkpoints');
+  await tab(page, 'Checkpoints').click();
+  const list = dialog(page).getByRole('listbox', { name: 'Checkpoints' });
+  const options = list.getByRole('option');
+  // The listing is read on entry; count once it has landed.
+  await expect(options.first()).toBeVisible();
+  expect(await options.count()).toBeGreaterThan(1);
+  const header = dockHeader(page);
+
+  await expect(list).toHaveAttribute('tabindex', '0');
+  await expect(list.locator('[role="option"][tabindex="0"]')).toHaveCount(0);
+
+  await list.focus();
+  await page.keyboard.press('Home');
+  await expect(options.first()).toHaveAttribute('aria-selected', 'true');
+  await expect(list).toHaveAttribute(
+    'aria-activedescendant',
+    (await options.first().getAttribute('id'))!,
+  );
+  const byKey = await header.textContent();
+  await page.keyboard.press('ArrowDown');
+  await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(list).toBeFocused();
+
+  // The key and the click are one choice: the dock lands in the same place either way.
+  await options.first().click();
+  await expect(header).toHaveText(byKey!);
+  await expect(list).toBeFocused();
+  await expect(list).toHaveAttribute(
+    'aria-activedescendant',
+    (await options.first().getAttribute('id'))!,
+  );
+
+  await page.keyboard.press('End');
+  await expect(options.last()).toHaveAttribute('aria-selected', 'true');
+  await expect(options.last()).toBeInViewport();
+  await page.keyboard.press('ArrowDown');
+  await expect(options.last()).toHaveAttribute('aria-selected', 'true');
 });
 
 test('the dock resizes from the keyboard as well as the pointer', async ({ page }) => {

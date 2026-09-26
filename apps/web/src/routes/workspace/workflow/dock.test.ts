@@ -207,7 +207,7 @@ test('attempts are summarized, and a repaired step still explains what went wron
     now,
   });
 
-  assert.equal(valueOf(view!.recorded, 'attempt'), '2 of 2 · latest shown');
+  assert.equal(valueOf(view!.recorded, 'attempt'), '2 of 2');
   assert.equal(view!.statusChip, 'repaired');
   // A visit that started under one pin and was repaired under another reads as first → latest.
   assert.equal(
@@ -218,6 +218,87 @@ test('attempts are summarized, and a repaired step still explains what went wron
   assert.match(valueOf(view!.recorded, 'attempt 1') ?? '', /field refused/);
   assert.match(valueOf(view!.recorded, 'repaired by') ?? '', /attempt 2/);
   assert.match(valueOf(view!.recorded, 'recovery') ?? '', /replayed/);
+});
+
+test('a visit retried twice reads 3 of 3 in warn, and never claims an attempt is hidden', () => {
+  const state = runStateFixture({
+    executions: [
+      visit({
+        executionId: 1,
+        nodeId: 'writer',
+        status: 'completed',
+        attemptCount: 3,
+        latestAttempt: {
+          attemptId: 3,
+          attemptIndex: 3,
+          artifactHash: 'sha256:ccccccc3',
+          status: 'succeeded',
+          invocationKind: 'retry',
+          failure: null,
+          recoveryMode: 'rerun_producer',
+          producerArtifactHash: null,
+        },
+      }),
+    ],
+  });
+
+  const view = buildDockView({
+    selection: { kind: 'execution', executionId: 1 },
+    state,
+    topology: currentPin,
+    now,
+  });
+
+  const attempt = fields(view!.recorded).find((row) => row.label === 'attempt');
+  assert.equal(attempt?.value, '3 of 3');
+  assert.equal(attempt?.tone, 'warn');
+  // The rows beneath list every earlier failure, so the attempt row must not suggest a hidden one.
+  assert.ok(fields(view!.recorded).every((row) => !row.value.includes('latest shown')));
+});
+
+test('a retried frame segment uses the same attempt wording as a visit', () => {
+  const state = runStateFixture({
+    frames: [
+      workflowFrameFixture({
+        frameId: 1,
+        status: 'active',
+        entry: {
+          segmentKind: 'graph_entry',
+          segmentRef: null,
+          attemptCount: 2,
+          startedAt: instant(0),
+          endedAt: instant(1),
+          endCertainty: 'observed',
+          firstArtifactHash: 'sha256:pin-1',
+          latestArtifactHash: 'sha256:pin-2',
+          latestAttempt: {
+            attemptId: 2,
+            attemptIndex: 2,
+            artifactHash: 'sha256:pin-2',
+            status: 'succeeded',
+            invocationKind: 'retry',
+            failure: null,
+            recoveryMode: 'rerun_producer',
+            producerArtifactHash: null,
+          },
+          priorFailures: [],
+        },
+      }),
+    ],
+    executions: [],
+  });
+
+  const view = buildDockView({
+    selection: { kind: 'frame_segment', frameId: 1, segment: 'entry' },
+    state,
+    topology: currentPin,
+    now,
+  });
+
+  const attempt = fields(view!.recorded).find((row) => row.label === 'attempt');
+  assert.equal(attempt?.value, '2 of 2');
+  assert.equal(attempt?.tone, 'warn');
+  assert.ok(fields(view!.recorded).every((row) => !row.value.includes('latest shown')));
 });
 
 test('a frame whose entry threw is inspectable through the frame, with no execution to hang from', () => {

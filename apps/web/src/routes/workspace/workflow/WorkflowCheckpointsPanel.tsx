@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type { WorkflowCheckpointSummaryDto } from '@isagi/contracts';
 
@@ -14,6 +14,7 @@ import {
   resolveCheckpointSelection,
 } from './checkpoint-view.js';
 import { inspectorCopy } from './copy.js';
+import { verticalIndex } from './list-navigation.js';
 import { formatClock } from './timing.js';
 import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
 
@@ -28,6 +29,10 @@ import { WorkflowCheckpointFiles } from './WorkflowCheckpointFiles.js';
  * The choice is the inspector's, not the panel's, so it survives the tab being closed. A choice that
  * still exists is kept whatever the dock does. Only when there is none does the panel seed one: the
  * dock's own checkpoint visit, or the most recent checkpoint.
+ *
+ * The list is one tab stop. Up, Down, Home and End move the choice through the checkpoints in the
+ * order they are drawn, exactly as a click would, and `aria-activedescendant` names the chosen one.
+ * Options are not focusable, so a click leaves focus on the list the active descendant belongs to.
  */
 export function WorkflowCheckpointsPanel({
   runId,
@@ -59,6 +64,11 @@ export function WorkflowCheckpointsPanel({
 
   const selected = items?.find((item) => item.checkpointId === resolved) ?? null;
 
+  const idPrefix = useId();
+  const optionId = (checkpointId: string) => `${idPrefix}-${checkpointId}`;
+  const order = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const selectedIndex = order.findIndex((item) => item.checkpointId === resolved);
+
   return (
     <div className="flex min-h-0 flex-1 bg-canvas/55">
       <div className="min-h-0 flex-none basis-68 overflow-auto border-r border-line/22 py-1.5">
@@ -82,7 +92,23 @@ export function WorkflowCheckpointsPanel({
             {inspectorCopy.checkpointsEmpty}
           </p>
         ) : (
-          <div role="listbox" aria-label={inspectorCopy.checkpointsTab}>
+          <div
+            role="listbox"
+            aria-label={inspectorCopy.checkpointsTab}
+            tabIndex={0}
+            aria-activedescendant={resolved === null ? undefined : optionId(resolved)}
+            onKeyDown={(event) => {
+              const next = verticalIndex(event.key, selectedIndex, order.length);
+              if (next === null) return;
+              event.preventDefault();
+              const item = order[next]!;
+              onSelect(item);
+              // A click lands on an option that is already visible; a key press may not.
+              document
+                .getElementById(optionId(item.checkpointId))
+                ?.scrollIntoView({ block: 'nearest' });
+            }}
+          >
             {groups.map((group) => (
               <div key={group.key} role="group" aria-label={group.label}>
                 <p className="px-3.5 pt-2 pb-0.5 font-mono text-[11px] text-fg-subtle">
@@ -92,6 +118,7 @@ export function WorkflowCheckpointsPanel({
                 {group.items.map((item) => (
                   <CheckpointItem
                     key={item.checkpointId}
+                    id={optionId(item.checkpointId)}
                     item={item}
                     selected={item.checkpointId === resolved}
                     onSelect={() => onSelect(item)}
@@ -117,22 +144,24 @@ export function WorkflowCheckpointsPanel({
 }
 
 function CheckpointItem({
+  id,
   item,
   selected,
   onSelect,
 }: {
+  readonly id: string;
   readonly item: WorkflowCheckpointSummaryDto;
   readonly selected: boolean;
   readonly onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <div
+      id={id}
       role="option"
       aria-selected={selected}
       data-checkpoint-item={item.checkpointId}
       onClick={onSelect}
-      className={`flex w-full gap-2.5 border-l-2 px-3.5 py-1.5 text-left transition duration-micro ease-expo ${
+      className={`flex w-full cursor-default gap-2.5 border-l-2 px-3.5 py-1.5 text-left transition duration-micro ease-expo ${
         selected ? 'border-l-cyan bg-cyan/6' : 'border-l-transparent hover:bg-elevated/60'
       }`}
     >
@@ -148,7 +177,7 @@ function CheckpointItem({
           {formatClock(item.createdAt)} · {checkpointBaseLabel(item.base)}
         </span>
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -191,9 +220,10 @@ function SelectedCheckpoint({
 }
 
 /**
- * The command #47 will run, shown and copyable before it does.
+ * The `isagi checkpoints export` line for this checkpoint, shown and copyable.
  *
- * The note under it is not optional: without it the line reads as something that works today.
+ * It names the checkpoint and run and leaves the output folder for the person to fill in: the
+ * command rebuilds the files there, and the panel has no business choosing where.
  */
 function ExportLine({ command }: { readonly command: string }) {
   const [copied, setCopied] = useState(false);
@@ -235,9 +265,6 @@ function ExportLine({ command }: { readonly command: string }) {
           {copied ? inspectorCopy.checkpointCopied : inspectorCopy.checkpointCopy}
         </button>
       </div>
-      <p className="mt-1.5 font-mono text-[11px] text-fg-subtle">
-        {inspectorCopy.checkpointExportNote}
-      </p>
     </div>
   );
 }

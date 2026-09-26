@@ -237,8 +237,6 @@ export const inspectorCopy = {
   checkpointsEmpty: 'This run has not saved a checkpoint yet.',
   checkpointVisits: (count: number) => plural(count, 'visit'),
   checkpointDetailFailed: "Isagi couldn't read this checkpoint.",
-  // Ahead of #47 on purpose. The line has to say so, or it reads as a command that works today.
-  checkpointExportNote: 'Runs once the checkpoint export command ships.',
   checkpointCopy: 'Copy',
   checkpointCopied: 'Copied',
 

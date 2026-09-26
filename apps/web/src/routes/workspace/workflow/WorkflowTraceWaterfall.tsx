@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { inspectorCopy } from './copy.js';
+import { verticalIndex } from './list-navigation.js';
 import { selectionEquals, type InspectorSelection } from './selection.js';
 import { formatDuration } from './timing.js';
 import type { TraceExecutionRow, TraceFrameRow, TraceModel } from './trace.js';
@@ -175,18 +176,11 @@ export function WorkflowTraceWaterfall({
         aria-label="Executions"
         tabIndex={0}
         onKeyDown={(event) => {
-          if (rows.length === 0) return;
-          const index = selectedIndex < 0 ? 0 : selectedIndex;
-          if (event.key === 'ArrowDown') {
-            onSelect(rows[Math.min(rows.length - 1, index + 1)]!.selection);
-          } else if (event.key === 'ArrowUp') {
-            onSelect(rows[Math.max(0, index - 1)]!.selection);
-          } else if (event.key === 'Home') {
-            onSelect(rows[0]!.selection);
-          } else if (event.key === 'End') {
-            onSelect(rows[rows.length - 1]!.selection);
+          const next = verticalIndex(event.key, selectedIndex, rows.length);
+          if (next !== null) {
+            onSelect(rows[next]!.selection);
           } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-            const row = rows[index];
+            const row = rows[selectedIndex];
             if (
               row?.kind === 'execution' &&
               row.expandable &&

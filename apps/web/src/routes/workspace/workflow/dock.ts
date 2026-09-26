@@ -725,14 +725,7 @@ function frameSegmentView(
   const recorded: DockRow[] = [
     { label: 'segment', value: segment.segmentKind },
     { label: 'frame', value: String(frame.frameId) },
-    {
-      label: 'attempt',
-      value:
-        segment.attemptCount > 1
-          ? `${segment.attemptCount} of ${segment.attemptCount} · latest shown`
-          : '1 of 1',
-      tone: segment.attemptCount > 1 ? 'warn' : 'default',
-    },
+    attemptCountRow(segment.attemptCount),
     {
       label: 'status',
       value: segment.latestAttempt.status,
@@ -863,12 +856,19 @@ function attemptsRow(execution: WorkflowExecutionDto): DockRow {
   if (execution.attemptCount === 0) {
     return { label: 'attempt', value: inspectorCopy.noAttemptYet, tone: 'dim' };
   }
-  return execution.attemptCount > 1
-    ? {
-        label: 'attempt',
-        value: `${execution.attemptCount} of ${execution.attemptCount} · latest shown`,
-        tone: 'warn',
-      }
+  return attemptCountRow(execution.attemptCount);
+}
+
+/**
+ * The attempt row for a visit or segment that has run at least once.
+ *
+ * `n of n`, never `· latest shown`: the rows beneath it list every earlier failed attempt and the
+ * attempt that repaired it, so nothing is hidden and the row must not suggest otherwise. One helper
+ * for the execution and the frame-segment views, so the two cannot drift apart.
+ */
+function attemptCountRow(attemptCount: number): DockRow {
+  return attemptCount > 1
+    ? { label: 'attempt', value: `${attemptCount} of ${attemptCount}`, tone: 'warn' }
     : { label: 'attempt', value: '1 of 1' };
 }
 
