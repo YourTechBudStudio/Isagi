@@ -286,6 +286,9 @@ test('Cancel must come before Dismiss, and Dismiss is inert once the attachment 
     const retained = await harness.runOf(launched.id);
     assert.equal(retained.status, 'cancelled');
     assert.ok((await run(harness.fixture.runs.listFrames(launched.id))).length > 0);
+    // Nor its owner: neither Cancel nor Dismiss touches the project the run was recorded under.
+    assert.equal(launched.projectId, harness.placement.projectId);
+    assert.equal(retained.projectId, launched.projectId);
 
     const beforeRepeat = await harness.runOf(launched.id);
     assert.equal((await run(harness.controls.dismiss(launched.id))).accepted, true);
@@ -857,6 +860,8 @@ test('an external operation resolves its wait while the run is paused, and Resum
     // effect that is already out in the world.
     assert.equal((await run(harness.controls.pause(launched.id))).accepted, true);
     assert.equal((await harness.runOf(launched.id)).paused, true);
+    assert.equal(launched.projectId, harness.placement.projectId);
+    assert.equal((await harness.runOf(launched.id)).projectId, launched.projectId, 'Pause');
 
     // The world answers, and the resolver delivers through its ordinary path.
     await harness.settleOperation({
@@ -889,6 +894,7 @@ test('an external operation resolves its wait while the run is paused, and Resum
 
     const finished = await harness.runOf(launched.id);
     assert.equal(finished.status, 'done');
+    assert.equal(finished.projectId, launched.projectId, 'Resume, and the run it finished');
     assert.deepEqual(await run(harness.fixture.payloads.resolve(finished.output!)), {
       verdict: 'recorded',
     });
@@ -1387,6 +1393,9 @@ test('Retry of a failed preparation adopts the latest verified version, and neve
     const after = await harness.runOf(started.id);
     assert.notEqual(after.artifactHash, failed.artifactHash, 'the newer version was adopted');
     assert.equal(after.position.kind, 'graph_entry');
+    // A version change and a re-entered preparation, and the owner is the one launch recorded.
+    assert.equal(failed.projectId, harness.placement.projectId);
+    assert.equal(after.projectId, failed.projectId);
     const kinds = transitionKindsOf(harness, started.id);
     assert.deepEqual(
       kinds.slice(kinds.indexOf('retry_pin_adopted')),

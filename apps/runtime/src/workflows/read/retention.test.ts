@@ -420,6 +420,10 @@ test('environment loss and restoration are each one recorded, idempotent transac
     const surface = harness.fixture.client
       .prepare('SELECT id, title FROM worktree_surfaces WHERE id = ?')
       .get(scenario.placement.surfaceId) as { id: number; title: string };
+    // The recorded owner, read from the run row itself: loss and restoration change where the run
+    // can go, never which project it belongs to.
+    const owner = (await currentRun(harness.fixture, scenario.runId)).projectId;
+    assert.equal(owner, worktree.project_id);
 
     harness.fixture.client
       .prepare('DELETE FROM worktrees WHERE id = ?')
@@ -440,6 +444,11 @@ test('environment loss and restoration are each one recorded, idempotent transac
     assert.deepEqual(repeated, [], 'an absence already on record is not news');
     const intervals = await run(harness.fixture.runs.listPauseIntervals(scenario.runId));
     assert.equal(intervals.length, 1, 'one absence, one band');
+    assert.equal(
+      (await currentRun(harness.fixture, scenario.runId)).projectId,
+      owner,
+      'after loss',
+    );
 
     // The environment comes back — and restoration is its own recorded fact, which lifts nothing.
     harness.fixture.client
@@ -461,6 +470,11 @@ test('environment loss and restoration are each one recorded, idempotent transac
       }),
     );
     assert.deepEqual(restored, [scenario.runId]);
+    assert.equal(
+      (await currentRun(harness.fixture, scenario.runId)).projectId,
+      owner,
+      'after restoration',
+    );
     const after = (await read(harness.projection.getRun(scenario.runId))).run;
     assert.equal(after.paused, true, 'a returning worktree does not decide to continue the work');
     assert.equal(after.destination.available, true);

@@ -51,7 +51,12 @@ interface Counters {
 
 function launchableWorkflow(
   counters: Counters,
-  options: { readonly commandThrows?: boolean; readonly validateThrows?: boolean } = {},
+  options: {
+    readonly commandThrows?: boolean;
+    readonly validateThrows?: boolean;
+    /** Runs inside `validate`, for a case that needs something to change while author code runs. */
+    readonly duringValidate?: () => void;
+  } = {},
 ): AnyWorkflowDefinition {
   const graph = createGraph<{ readonly rounds: number }, {}, Record<string, unknown>>({
     key: 'launchable',
@@ -76,6 +81,7 @@ function launchableWorkflow(
     },
     validate: (_origin, inputs) => {
       counters.validate += 1;
+      options.duringValidate?.();
       if (options.validateThrows || typeof inputs.topic !== 'string') {
         throw new Error('a topic is required');
       }
@@ -370,5 +376,61 @@ test('an occupant that appears after the pre-check leaves a failed run, never a 
 
     // Nothing is waiting for it: the dispatcher has no claimable run left.
     assert.equal(await harness.drain(), 0);
+  });
+});
+
+test('a launch records the project of the worktree it was launched from', async () => {
+  await withHarness(async (harness) => {
+    const counters: Counters = { command: 0, validate: 0, init: 0 };
+    harness.publish({
+      workflowKey: 'launchable',
+      version: '1',
+      definition: launchableWorkflow(counters),
+    });
+
+    const here = await harness.launch({ workflowKey: 'launchable', inputs: { topic: 'here' } });
+    assert.equal(here.projectId, harness.placement.projectId);
+
+    // A second project, so the recorded owner cannot be a constant that happens to match.
+    const elsewhere = harness.seedPlacement();
+    assert.notEqual(elsewhere.projectId, harness.placement.projectId);
+    const there = await harness.launch({
+      workflowKey: 'launchable',
+      inputs: { topic: 'there' },
+      placement: elsewhere,
+    });
+    assert.equal(there.projectId, elsewhere.projectId);
+  });
+});
+
+test('an origin removed while author code runs leaves no run', async () => {
+  await withHarness(async (harness) => {
+    const counters: Counters = { command: 0, validate: 0, init: 0 };
+    const origin = harness.placement;
+    harness.publish({
+      workflowKey: 'launchable',
+      version: '1',
+      definition: launchableWorkflow(counters, {
+        // After the launch has read the project, and before the run is recorded: the window only
+        // the in-transaction check in `createRun` can see.
+        duringValidate: () => {
+          harness.fixture.client
+            .prepare('DELETE FROM worktrees WHERE id = ?')
+            .run(origin.worktreeId);
+        },
+      }),
+    });
+
+    const refused = rejectionOf(
+      await harness.launchExit({ workflowKey: 'launchable', inputs: { topic: 'gone' } }),
+    );
+
+    assert.equal(counters.validate, 1, 'the origin went away during author code, not before it');
+    assert.equal(refused.code, 'worktree_not_found');
+    assert.equal(refused.worktreeId, origin.worktreeId);
+    // Only the ownership check says this; `requireProject` and `buildOrigin` word it differently,
+    // so a regression that refused the launch earlier could not pass here.
+    assert.match(refused.message, /is no longer in project \d+, so the run was not created\./);
+    await assertNothingWasCreated(harness);
   });
 });

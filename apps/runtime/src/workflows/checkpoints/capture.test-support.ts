@@ -168,6 +168,7 @@ export function makeCaptureHarness(
     .insert(workflowRuns)
     .values({
       workflowKey: 'fixture',
+      projectId,
       title: 'Run',
       rootGraphKey: 'root',
       artifactHash,

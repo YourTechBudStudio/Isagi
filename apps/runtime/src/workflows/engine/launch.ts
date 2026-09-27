@@ -189,6 +189,7 @@ export function startWorkflow(
     };
 
     const created = yield* deps.runs.createRun({
+      projectId: project.id,
       workflowKey: input.workflowKey,
       title: manifest.title,
       rootGraphKey: definition.graph.key,
@@ -214,12 +215,22 @@ export function startWorkflow(
     });
 
     if (!created.ok) {
+      const rejection = created.rejection;
       return yield* Effect.fail(
-        new WorkflowEngineError({
-          code: 'workflow_load_failed',
-          message: `The run could not be created: ${created.rejection.kind}.`,
-          workflowKey: input.workflowKey,
-        }),
+        rejection.kind === 'launch_project_changed'
+          ? // The same condition `requireProject` reports, found again at the moment ownership was
+            // recorded: the origin worktree went away (or left the project) while author code ran.
+            new WorkflowEngineError({
+              code: 'worktree_not_found',
+              message: `Worktree ${rejection.worktreeId} is no longer in project ${rejection.projectId}, so the run was not created.`,
+              workflowKey: input.workflowKey,
+              worktreeId: rejection.worktreeId,
+            })
+          : new WorkflowEngineError({
+              code: 'workflow_load_failed',
+              message: `The run could not be created: ${rejection.kind}.`,
+              workflowKey: input.workflowKey,
+            }),
       );
     }
 

@@ -62,10 +62,13 @@ afterEach(() => fixture.close());
 /** A run with one frame; `visit()` adds a checkpoint execution and its claimed attempt. */
 function seedRun() {
   const db = drizzle(fixture.client);
+  // A real owner: `project_id` has no foreign key, so an invented id would compile and lie.
+  const { projectId } = fixture.seedPlacement();
   const runRow = db
     .insert(workflowRuns)
     .values({
       workflowKey: 'fixture',
+      projectId,
       title: 'Run',
       rootGraphKey: 'root',
       artifactHash,

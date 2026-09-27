@@ -126,6 +126,31 @@ function historicalMigrationsFolder(root: string, tags: readonly string[] = HIST
   return folder;
 }
 
+/**
+ * Inserts one graph-era `workflow_runs` row into a historical schema, with raw SQL.
+ *
+ * Raw rather than through Drizzle because the current `workflowRuns` model names `project_id`, which
+ * no schema before `0016` has, and Drizzle's insert writes every column of the model. Every seed
+ * that needs a historical run shares this one row shape.
+ */
+function insertHistoricalRun(
+  client: BetterSqlite.Database,
+  input: { readonly artifactHash: string; readonly at: string },
+): { readonly id: number } {
+  const inserted = client
+    .prepare(
+      `INSERT INTO workflow_runs (workflow_key, title, root_graph_key, artifact_hash, status, position_json, created_at, updated_at)
+       VALUES ('demo', 'Demo run', 'root', ?, 'ready', ?, ?, ?)`,
+    )
+    .run(
+      input.artifactHash,
+      JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
+      input.at,
+      input.at,
+    );
+  return { id: Number(inserted.lastInsertRowid) };
+}
+
 const SEEDED_PROJECTS = [
   {
     name: 'isagi',
@@ -413,9 +438,10 @@ const PRE_PREPARATION_ADDED_COLUMNS = {
  * Builds a genuine pre-`0011` database and populates a whole graph-era run in it.
  *
  * The workflow rows go in through Drizzle rather than raw SQL, which the older cases in this file
- * need: `0011` changes only `worktree_surfaces` and adds a new table, so every workflow model here
- * already matches the pre-`0011` shape exactly. `worktree_surfaces` is still seeded with raw SQL,
- * because its model now names a column the historical schema does not have.
+ * need: `0011` changes only `worktree_surfaces` and adds a new table, so most workflow models here
+ * already match the pre-`0011` shape exactly. `worktree_surfaces` is still seeded with raw SQL,
+ * because its model now names a column the historical schema does not have, and so is
+ * `workflow_runs` (`insertHistoricalRun`), because its model now names `project_id` (`0016`).
  */
 function seedPrePreparationDatabase(databasePath: string, migrationsFolder: string) {
   const client = new BetterSqlite(databasePath);
@@ -487,20 +513,7 @@ function seedPrePreparationDatabase(databasePath: string, migrationsFolder: stri
       })
       .run();
 
-    const run = db
-      .insert(workflowRuns)
-      .values({
-        workflowKey: 'demo',
-        title: 'Demo run',
-        rootGraphKey: 'root',
-        artifactHash,
-        status: 'ready',
-        positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
-        createdAt: at,
-        updatedAt: at,
-      })
-      .returning({ id: workflowRuns.id })
-      .all()[0]!;
+    const run = insertHistoricalRun(client, { artifactHash, at });
 
     const frame = db
       .insert(workflowGraphFrames)
@@ -705,6 +718,9 @@ test('a fresh database initializes the whole retained model, not only the upgrad
       // second surface, and a run could carry two disagreeing placement decisions.
       assert.equal(indexExists(inspect, 'workflow_run_preparations_run_unique'), true);
       assert.equal(indexExists(inspect, 'worktree_surfaces_creation_key_unique'), true);
+      // Every run's recorded owner, and the index project deletion (#50) selects by.
+      assert.equal(hasColumn(inspect, 'workflow_runs', 'project_id'), true);
+      assert.equal(indexExists(inspect, 'workflow_runs_project_idx'), true);
 
       // The slot constraints have to be present on a fresh install too, not only implied by the
       // schema module: they are what stops a row that is simultaneously inline and referenced.
@@ -1058,8 +1074,9 @@ const ADDED_OPERATION_COLUMNS = [
  * misbehaves.
  *
  * `workflow_operations` goes in through raw SQL because its current Drizzle model names the seven
- * columns the historical schema does not have yet; everything else matches the pre-`0012` shape
- * exactly and goes in through Drizzle, as the pre-preparation seed does.
+ * columns the historical schema does not have yet, and `workflow_runs` does too
+ * (`insertHistoricalRun`) because its model names `project_id` (`0016`); everything else matches
+ * the pre-`0012` shape exactly and goes in through Drizzle, as the pre-preparation seed does.
  */
 function seedPreEvidenceDatabase(databasePath: string, migrationsFolder: string) {
   const client = new BetterSqlite(databasePath);
@@ -1138,20 +1155,7 @@ function seedPreEvidenceDatabase(databasePath: string, migrationsFolder: string)
       })
       .run();
 
-    const run = db
-      .insert(workflowRuns)
-      .values({
-        workflowKey: 'demo',
-        title: 'Demo run',
-        rootGraphKey: 'root',
-        artifactHash,
-        status: 'ready',
-        positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
-        createdAt: at,
-        updatedAt: at,
-      })
-      .returning({ id: workflowRuns.id })
-      .all()[0]!;
+    const run = insertHistoricalRun(client, { artifactHash, at });
 
     const frame = db
       .insert(workflowGraphFrames)
@@ -1266,18 +1270,20 @@ test('the evidence migration adds its tables and leaves historical operations ex
       historicalMigrationsFolder(dataRoot, PRE_EVIDENCE_TAGS),
     );
 
-    // The production layer, which runs the committed migrations users actually receive.
-    const database = RuntimeDatabaseLive.pipe(
-      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
-    );
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const db = yield* RuntimeDatabase;
-        return yield* db.use('test_open_evidence_database', (connection) =>
-          connection.select().from(workflowRuns).all(),
-        );
-      }).pipe(Effect.provide(database)),
-    );
+    // A later clean-state reset (`0015`) empties run history, so this case applies migrations
+    // only up to the one it proves, with the same pragma the production layer sets first.
+    const upgrade = new BetterSqlite(dataDirectory.paths.databasePath);
+    try {
+      upgrade.pragma('foreign_keys = ON');
+      migrate(drizzle(upgrade), {
+        migrationsFolder: historicalMigrationsFolder(join(dataRoot, 'through'), [
+          ...PRE_EVIDENCE_TAGS,
+          '0012_glossy_baron_zemo',
+        ]),
+      });
+    } finally {
+      upgrade.close();
+    }
 
     const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
     try {
@@ -1406,20 +1412,7 @@ test('the checkpoint migration adds its tables and leaves every historical row u
           firstSeenAt: at,
         })
         .run();
-      const run = db
-        .insert(workflowRuns)
-        .values({
-          workflowKey: 'demo',
-          title: 'Demo run',
-          rootGraphKey: 'root',
-          artifactHash,
-          status: 'ready',
-          positionJson: JSON.stringify({ kind: 'graph_entry', frameId: 1 }),
-          createdAt: at,
-          updatedAt: at,
-        })
-        .returning({ id: workflowRuns.id })
-        .get();
+      const run = insertHistoricalRun(client, { artifactHash, at });
       db.insert(workflowGraphFrames)
         .values({
           runId: run.id,
@@ -1436,17 +1429,20 @@ test('the checkpoint migration adds its tables and leaves every historical row u
       client.close();
     }
 
-    const database = RuntimeDatabaseLive.pipe(
-      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
-    );
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const db = yield* RuntimeDatabase;
-        return yield* db.use('test_open_checkpoint_database', (connection) =>
-          connection.select().from(workflowRuns).all(),
-        );
-      }).pipe(Effect.provide(database)),
-    );
+    // A later clean-state reset (`0015`) empties run history, so this case applies migrations
+    // only up to the one it proves, with the same pragma the production layer sets first.
+    const upgrade = new BetterSqlite(dataDirectory.paths.databasePath);
+    try {
+      upgrade.pragma('foreign_keys = ON');
+      migrate(drizzle(upgrade), {
+        migrationsFolder: historicalMigrationsFolder(join(dataRoot, 'through'), [
+          ...PRE_CHECKPOINT_TAGS,
+          '0013_workflow_checkpoints',
+        ]),
+      });
+    } finally {
+      upgrade.close();
+    }
 
     const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
     try {
@@ -1479,6 +1475,271 @@ test('the checkpoint migration adds its tables and leaves every historical row u
         /CONSTRAINT "workflow_checkpoint_entries_file_key_files_only"/,
       );
       assert.deepEqual(readHistoricalRows(inspect, PRE_CHECKPOINT_ADDED_COLUMNS), before);
+      assert.deepEqual(inspect.pragma('foreign_key_check'), []);
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+/** The migration set as it stood before runs recorded their owning project. */
+const PRE_PROJECT_OWNERSHIP_TAGS = [
+  ...PRE_CHECKPOINT_TAGS,
+  '0013_workflow_checkpoints',
+  '0014_workflow_checkpoint_warning_groups',
+] as const;
+
+/** Neither `0015` nor `0016` adds a column to an environment table. */
+const PRE_PROJECT_OWNERSHIP_ADDED_COLUMNS = {
+  projects: [],
+  worktrees: [],
+  worktree_surfaces: [],
+} as const satisfies Record<string, readonly string[]>;
+
+/** Every table a whole run graph occupies, and so every table the `0015` reset must empty. */
+const RUN_GRAPH_TABLES = [
+  'workflow_runs',
+  'workflow_graph_frames',
+  'workflow_node_executions',
+  'workflow_segment_attempts',
+  'workflow_transitions',
+  'workflow_run_attachments',
+  'workflow_run_preparations',
+  'workflow_operations',
+  'workflow_evidence',
+  'workflow_checkpoints',
+] as const;
+
+/**
+ * Builds a genuine pre-`0015` database holding one whole run graph beside the environment it ran in.
+ *
+ * Every workflow row goes in through raw SQL. `workflow_runs` has to (`insertHistoricalRun`), and
+ * keeping the rest beside it in one form makes the graph readable as a unit; the environment rows
+ * are raw for the same reason the older seeds give.
+ */
+function seedPreProjectOwnershipDatabase(databasePath: string, migrationsFolder: string) {
+  const client = new BetterSqlite(databasePath);
+  try {
+    client.pragma('foreign_keys = ON');
+    migrate(drizzle(client), { migrationsFolder });
+    assert.equal(
+      hasColumn(client, 'workflow_runs', 'project_id'),
+      false,
+      'Expected the historical schema to predate workflow_runs.project_id.',
+    );
+
+    const insertProject = client.prepare(
+      `INSERT INTO projects (name, root_path, kind, status, sort_order, created_at, updated_at, last_seen_at, missing_reason)
+       VALUES (@name, @root_path, 'git', @status, @sort_order, @created_at, @updated_at, @last_seen_at, @missing_reason)`,
+    );
+    for (const [index, project] of SEEDED_PROJECTS.entries()) {
+      insertProject.run({ ...project, sort_order: (SEEDED_PROJECTS.length - index) * 10 });
+    }
+    const insertWorktree = client.prepare(
+      `INSERT INTO worktrees (project_id, path, branch, head, sort_order, created_at, updated_at, first_seen_at, last_seen_at)
+       VALUES (@project_id, @path, @branch, @head, @sort_order, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL)`,
+    );
+    for (const [index, worktree] of SEEDED_WORKTREES.entries()) {
+      insertWorktree.run({ ...worktree, sort_order: index * 5 });
+    }
+    const insertSurface = client.prepare(
+      `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, creation_key, created_at, updated_at)
+       VALUES (@worktree_id, @title, '{}', @sort_order, NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    );
+    for (const surface of SEEDED_SURFACES) insertSurface.run(surface);
+
+    const at = '2026-09-26T00:00:00.000Z';
+    const artifactHash = 'c'.repeat(64);
+    const payloadRef = 'sha256:' + 'd'.repeat(64);
+    client
+      .prepare(
+        `INSERT INTO workflow_payloads (payload_ref, byte_size, media_type, created_at)
+         VALUES (?, 12, 'application/json', ?)`,
+      )
+      .run(payloadRef, at);
+    client
+      .prepare(
+        `INSERT INTO workflow_artifacts (
+           artifact_hash, workflow_key, contract_version, manifest_version, descriptor_version,
+           sdk_version, verifier_version, source_hash, structure_hash, root_graph_key,
+           descriptor_inline, descriptor_ref, first_seen_at
+         ) VALUES (?, 'demo', 3, 1, 1, '0.3.0', '0.3.0', ?, ?, 'root', '{}', NULL, ?)`,
+      )
+      .run(artifactHash, 'e'.repeat(64), 'f'.repeat(64), at);
+
+    const run = insertHistoricalRun(client, { artifactHash, at });
+    const insert = (sql: string, ...values: unknown[]) =>
+      Number(client.prepare(sql).run(...values).lastInsertRowid);
+    const frameId = insert(
+      `INSERT INTO workflow_graph_frames (run_id, graph_key, entry_artifact_hash, depth, status, entered_at)
+       VALUES (?, 'root', ?, 0, 'active', ?)`,
+      run.id,
+      artifactHash,
+      at,
+    );
+    const executionId = insert(
+      `INSERT INTO workflow_node_executions (run_id, frame_id, node_id, node_kind, visit_index, status, started_at, end_certainty)
+       VALUES (?, ?, 'work', 'operation', 0, 'running', ?, 'unknown')`,
+      run.id,
+      frameId,
+      at,
+    );
+    const attemptId = insert(
+      `INSERT INTO workflow_segment_attempts (
+         run_id, frame_id, execution_id, segment_kind, attempt_index, artifact_hash, status,
+         invocation_kind, started_at, end_certainty
+       ) VALUES (?, ?, ?, 'node_callback', 0, ?, 'running', 'initial', ?, 'unknown')`,
+      run.id,
+      frameId,
+      executionId,
+      artifactHash,
+      at,
+    );
+    const operationId = insert(
+      `INSERT INTO workflow_operations (
+         operation_key, run_id, frame_id, execution_id, origin_attempt_id, capability, call_index,
+         request_fingerprint, request_inline, artifact_hash, state, target_kind, attribution,
+         stop_state, created_at
+       ) VALUES ('wop_owned', ?, ?, ?, ?, 'run_headless_agent', 0, ?, '{"prompt":"judge"}', ?,
+                 'completed', 'pty_process', 'not_applicable', 'not_requested', ?)`,
+      run.id,
+      frameId,
+      executionId,
+      attemptId,
+      'b'.repeat(64),
+      artifactHash,
+      at,
+    );
+    insert(
+      `INSERT INTO workflow_evidence (
+         evidence_key, run_id, frame_id, execution_id, attempt_id, operation_id, artifact_hash,
+         title, role, labels_json, content_kind, media_type, byte_size, content_ref, source_path,
+         source_kind, source_agent_session_id, source_operation_id, source_attribution, captured_at
+       ) VALUES ('wev_owned', ?, ?, ?, ?, ?, ?, 'Report', 'report', '[]', 'text', 'text/plain', 12,
+                 ?, NULL, 'operation', NULL, ?, 'not_applicable', ?)`,
+      run.id,
+      frameId,
+      executionId,
+      attemptId,
+      operationId,
+      artifactHash,
+      payloadRef,
+      operationId,
+      at,
+    );
+    insert(
+      `INSERT INTO workflow_checkpoints (
+         checkpoint_key, run_id, frame_id, execution_id, attempt_id, artifact_hash,
+         parent_checkpoint_id, node_id, title, base_kind, base_reason, base_commit_sha,
+         repository_project_id, repository_root_path, scope_count, file_count, absent_count,
+         warning_count, created_at
+       ) VALUES ('wcp_owned', ?, ?, ?, ?, ?, NULL, 'work', 'Saved', 'git', NULL, ?, 1,
+                 '/repo/isagi', 0, 0, 0, 0, ?)`,
+      run.id,
+      frameId,
+      executionId,
+      attemptId,
+      artifactHash,
+      'a'.repeat(40),
+      at,
+    );
+    insert(
+      `INSERT INTO workflow_transitions (run_id, revision, recorded_at, kind) VALUES (?, 1, ?, 'run_started')`,
+      run.id,
+      at,
+    );
+    insert(
+      `INSERT INTO workflow_run_attachments (run_id, worktree_id, surface_id, attached_at) VALUES (?, 1, 1, ?)`,
+      run.id,
+      at,
+    );
+    insert(
+      `INSERT INTO workflow_run_preparations (run_id, source, request_json, created_at, updated_at)
+       VALUES (?, 'default', '{"worktree":{"kind":"current"},"surface":{"kind":"current"}}', ?, ?)`,
+      run.id,
+      at,
+      at,
+    );
+
+    // Without this the post-migration assertions could pass on a database that never held a run.
+    for (const table of RUN_GRAPH_TABLES) {
+      assert.equal(
+        (client.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count,
+        1,
+        `Expected the seed to populate ${table} before the upgrade.`,
+      );
+    }
+
+    return {
+      rows: readHistoricalRows(client, PRE_PROJECT_OWNERSHIP_ADDED_COLUMNS),
+      artifacts: client.prepare('SELECT * FROM workflow_artifacts').all(),
+      payloads: client.prepare('SELECT * FROM workflow_payloads').all(),
+    };
+  } finally {
+    client.close();
+  }
+}
+
+/**
+ * Proves the project-ownership migrations (`0015` reset, `0016` column) upgrade a database created
+ * before them: run history is cleared, because a required owner cannot be added to runs that have
+ * none, every run-graph table goes with it through the cascade, and nothing outside run state moves.
+ */
+test('the project-ownership migration resets runs, adds a required owner and keeps everything else', async () => {
+  const dataRoot = mkdtempSync(join(tmpdir(), 'isagi-project-ownership-migration-'));
+  const dataDirectory = makeTestDataDirectory(dataRoot);
+
+  try {
+    const seeded = seedPreProjectOwnershipDatabase(
+      dataDirectory.paths.databasePath,
+      historicalMigrationsFolder(dataRoot, PRE_PROJECT_OWNERSHIP_TAGS),
+    );
+
+    // The production layer, which runs the committed migrations users actually receive.
+    const database = RuntimeDatabaseLive.pipe(
+      Layer.provide(Layer.succeed(DataDirectory, dataDirectory)),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* RuntimeDatabase;
+        return yield* db.use('test_open_owned_database', (connection) =>
+          connection.select().from(workflowRuns).all(),
+        );
+      }).pipe(Effect.provide(database)),
+    );
+
+    const inspect = new BetterSqlite(dataDirectory.paths.databasePath, { readonly: true });
+    try {
+      for (const table of RUN_GRAPH_TABLES) {
+        assert.equal(
+          (inspect.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number })
+            .count,
+          0,
+          `The reset must empty ${table}, directly or through the cascade.`,
+        );
+      }
+
+      const owner = (
+        inspect.pragma('table_info(workflow_runs)') as { name: string; notnull: number }[]
+      ).find((column) => column.name === 'project_id');
+      assert.equal(owner?.notnull, 1, 'workflow_runs.project_id is required');
+      assert.equal(indexExists(inspect, 'workflow_runs_project_idx'), true);
+
+      // The control: content-addressed retained records are explicitly left in place.
+      assert.deepEqual(inspect.prepare('SELECT * FROM workflow_artifacts').all(), seeded.artifacts);
+      assert.deepEqual(inspect.prepare('SELECT * FROM workflow_payloads').all(), seeded.payloads);
+
+      // The environment the runs lived in is untouched.
+      assert.deepEqual(
+        readHistoricalRows(inspect, PRE_PROJECT_OWNERSHIP_ADDED_COLUMNS),
+        seeded.rows,
+      );
+      assert.equal(seeded.rows.projects.length, SEEDED_PROJECTS.length);
+      assert.equal(seeded.rows.worktrees.length, SEEDED_WORKTREES.length);
+      assert.equal(seeded.rows.worktree_surfaces.length, SEEDED_SURFACES.length);
+
       assert.deepEqual(inspect.pragma('foreign_key_check'), []);
     } finally {
       inspect.close();

@@ -41,6 +41,16 @@ export type WorkflowWriteRejection =
   | { readonly kind: 'wait_already_resolved'; readonly status: WorkflowWaitStatus }
   | { readonly kind: 'surface_busy'; readonly runId: number }
   /**
+   * The launch project no longer holds at the moment the run would be recorded: the origin worktree
+   * is gone, or it is not in the project the launch resolved. Checked inside the creating
+   * transaction because author code runs between the launch's own lookup and this write.
+   */
+  | {
+      readonly kind: 'launch_project_changed';
+      readonly worktreeId: number;
+      readonly projectId: number;
+    }
+  /**
    * The run's destination no longer exists. Structured, not an HTTP reason: phase 04's control layer
    * maps it to `workflow_environment_unavailable`, and this repository stays unaware of the wire.
    */

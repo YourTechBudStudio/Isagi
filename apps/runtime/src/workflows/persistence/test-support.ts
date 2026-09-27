@@ -50,8 +50,8 @@ export interface WorkflowPersistenceFixture {
   readonly evidence: WorkflowEvidenceRepositoryService;
   /** Registers a catalog row, so a run or attempt has a real pin to reference. */
   readonly seedArtifact: (artifactHash: string, rootGraphKey?: string) => void;
-  /** Seeds a worktree and surface, so the claim's live-placement re-check can pass. */
-  readonly seedPlacement: () => { readonly worktreeId: number; readonly surfaceId: number };
+  /** Seeds a project, worktree and surface, so the claim's live-placement re-check can pass. */
+  readonly seedPlacement: () => SeededPlacement;
   /**
    * Makes exactly the next content publication fail, then restores normal behaviour.
    *
@@ -165,6 +165,7 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
         )
         .run(worktree.lastInsertRowid);
       return {
+        projectId: Number(project.lastInsertRowid),
         worktreeId: Number(worktree.lastInsertRowid),
         surfaceId: Number(surface.lastInsertRowid),
       };
@@ -174,6 +175,18 @@ export function makeWorkflowPersistenceFixture(): WorkflowPersistenceFixture {
       rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * One independent environment: a project, a worktree in it and a surface on that worktree.
+ *
+ * `projectId` is the project the fixture really seeded, so a run created on this placement records
+ * an owner its origin actually belongs to.
+ */
+export interface SeededPlacement {
+  readonly projectId: number;
+  readonly worktreeId: number;
+  readonly surfaceId: number;
 }
 
 /**
@@ -194,7 +207,7 @@ export async function createPreparingRun(
     readonly rootGraphKey: string;
     readonly artifactHash: string;
     readonly rootFrame: CreateRunInput['rootFrame'];
-    readonly placement: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly placement: SeededPlacement;
     readonly worktreePath?: string;
     readonly owner?: string;
     readonly ownerIncarnation?: string;
@@ -214,6 +227,7 @@ export async function createPreparingRun(
   const ownerIncarnation = input.ownerIncarnation ?? PLACEMENT_INCARNATION;
   const created = await run(
     fixture.runs.createRun({
+      projectId: input.placement.projectId,
       workflowKey: input.workflowKey,
       title: input.title,
       rootGraphKey: input.rootGraphKey,
@@ -268,7 +282,7 @@ export async function createPlacedRun(
     readonly rootGraphKey: string;
     readonly artifactHash: string;
     readonly rootFrame: CreateRunInput['rootFrame'];
-    readonly placement: { readonly worktreeId: number; readonly surfaceId: number };
+    readonly placement: SeededPlacement;
     readonly worktreePath?: string;
     readonly owner?: string;
     readonly ownerIncarnation?: string;

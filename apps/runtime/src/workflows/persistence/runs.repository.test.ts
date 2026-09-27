@@ -7,12 +7,15 @@ import type { WorkflowPlacementRequestDto } from '@isagi/contracts';
 
 import type { WorkflowWriteResult } from './outcomes.js';
 import type { WorkflowAttemptRecord, WorkflowRunRecord } from './records.js';
+import type { CreateRunInput } from './runs.repository.js';
 import {
   contentPathFor,
   createPlacedRun,
+  createPreparingRun,
   makeWorkflowPersistenceFixture,
   prepareClaim,
   run,
+  type SeededPlacement,
   type WorkflowPersistenceFixture,
 } from './test-support.js';
 
@@ -762,6 +765,7 @@ test('one surface holds one attached run, including a terminal one until it is d
     const second = committedValue(
       await run(
         fixture.runs.createRun({
+          projectId: launched.placement.projectId,
           workflowKey: 'fixture',
           title: 'Second',
           rootGraphKey: 'root',
@@ -939,15 +943,16 @@ test('an unproduced slot and a recorded JSON null stay distinguishable', async (
     const withoutParameters = committedValue(
       await run(
         fixture.runs.createRun({
+          projectId: launched.placement.projectId,
           workflowKey: 'fixture',
           title: 'No parameters',
           rootGraphKey: 'root',
           artifactHash: PIN_A,
           rootFrame: { graphKey: 'root' },
           origin: {
-            worktreeId: null,
-            worktreePath: null,
-            surfaceId: null,
+            worktreeId: launched.placement.worktreeId,
+            worktreePath: '/repo/fixture',
+            surfaceId: launched.placement.surfaceId,
             paneId: null,
             agentSessionId: null,
           },
@@ -966,15 +971,16 @@ test('an unproduced slot and a recorded JSON null stay distinguishable', async (
     const withNull = committedValue(
       await run(
         fixture.runs.createRun({
+          projectId: launched.placement.projectId,
           workflowKey: 'fixture',
           title: 'Null parameters',
           rootGraphKey: 'root',
           artifactHash: PIN_A,
           rootFrame: { graphKey: 'root', parameters: { value: null } },
           origin: {
-            worktreeId: null,
-            worktreePath: null,
-            surfaceId: null,
+            worktreeId: launched.placement.worktreeId,
+            worktreePath: '/repo/fixture',
+            surfaceId: launched.placement.surfaceId,
             paneId: null,
             agentSessionId: null,
           },
@@ -1964,6 +1970,7 @@ async function preparing(
   const created = committedValue(
     await run(
       fixture.runs.createRun({
+        projectId: placement.projectId,
         workflowKey: 'fixture',
         title: 'Preparing run',
         rootGraphKey: 'root',
@@ -2066,6 +2073,305 @@ test('a created run is claimed at its preparation segment, unplaced, with its re
       history.map((row) => row.kind),
       ['run_started', 'node_dispatched'],
     );
+  } finally {
+    fixture.close();
+  }
+});
+
+// --- project ownership ---------------------------------------------------------------------------
+//
+// A run records the project it belongs to once, in the transaction that creates it, and the value
+// is re-checked there against the origin worktree because author code runs between the launch's own
+// lookup and this write.
+
+/** A current/current launch input from `placement`'s origin, claiming ownership for `projectId`. */
+function ownedLaunch(placement: SeededPlacement, projectId: number): CreateRunInput {
+  return {
+    projectId,
+    workflowKey: 'fixture',
+    title: 'Owned run',
+    rootGraphKey: 'root',
+    artifactHash: PIN_A,
+    rootFrame: { graphKey: 'root' },
+    origin: {
+      worktreeId: placement.worktreeId,
+      worktreePath: '/repo/fixture',
+      surfaceId: placement.surfaceId,
+      paneId: null,
+      agentSessionId: null,
+    },
+    preparation: {
+      source: 'default',
+      request: { worktree: { kind: 'current' }, surface: { kind: 'current' } },
+      baseCommit: null,
+      checkoutPath: null,
+    },
+    claim: { owner: OWNER, ownerIncarnation: INCARNATION, input: { value: {} } },
+  };
+}
+
+/** Every table a created run writes to, counted, so a refusal can prove it wrote nothing. */
+function creationRowCounts(fixture: WorkflowPersistenceFixture) {
+  const count = (table: string) =>
+    (fixture.client.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n;
+  return {
+    runs: count('workflow_runs'),
+    frames: count('workflow_graph_frames'),
+    preparations: count('workflow_run_preparations'),
+    attempts: count('workflow_segment_attempts'),
+    transitions: count('workflow_transitions'),
+  };
+}
+
+test('createRun records the launch project as the run owner', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    fixture.seedArtifact(PIN_A);
+    const placement = fixture.seedPlacement();
+    const created = await createPreparingRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Owned run',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement,
+    });
+
+    assert.equal(created.run.projectId, placement.projectId);
+    assert.equal((await run(fixture.runs.findRun(created.run.id)))!.projectId, placement.projectId);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('createRun refuses an owner its origin does not belong to, and writes nothing', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    fixture.seedArtifact(PIN_A);
+    const a = fixture.seedPlacement();
+    const b = fixture.seedPlacement();
+    assert.notEqual(a.projectId, b.projectId);
+    const before = creationRowCounts(fixture);
+
+    const refused = await run(fixture.runs.createRun(ownedLaunch(a, b.projectId)));
+
+    assert.deepEqual(rejection(refused), {
+      kind: 'launch_project_changed',
+      worktreeId: a.worktreeId,
+      projectId: b.projectId,
+    });
+    assert.deepEqual(creationRowCounts(fixture), before);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('createRun refuses an origin that no longer exists, and writes nothing', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    fixture.seedArtifact(PIN_A);
+    const placement = fixture.seedPlacement();
+    fixture.client.prepare('DELETE FROM worktrees WHERE id = ?').run(placement.worktreeId);
+    const before = creationRowCounts(fixture);
+
+    const refused = await run(fixture.runs.createRun(ownedLaunch(placement, placement.projectId)));
+
+    assert.deepEqual(rejection(refused), {
+      kind: 'launch_project_changed',
+      worktreeId: placement.worktreeId,
+      projectId: placement.projectId,
+    });
+    assert.deepEqual(creationRowCounts(fixture), before);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('listByProject selects every run the project owns, in any state, and nothing else', async () => {
+  const fixture = makeWorkflowPersistenceFixture();
+  try {
+    fixture.seedArtifact(PIN_A);
+    const a = fixture.seedPlacement();
+    const b = fixture.seedPlacement();
+    const at = '2026-01-01T00:00:00.000Z';
+    // One surface holds one attached run, so each placed run in A gets its own surface, and the run
+    // whose destination is later deleted gets its own worktree, all in A's real project.
+    const worktreeInA = (path: string) =>
+      Number(
+        fixture.client
+          .prepare(
+            `INSERT INTO worktrees (project_id, path, branch, head, sort_order, created_at, updated_at, first_seen_at)
+             VALUES (?, ?, 'side', NULL, 1, ?, ?, ?)`,
+          )
+          .run(a.projectId, path, at, at, at).lastInsertRowid,
+      );
+    const surfaceOn = (worktreeId: number): SeededPlacement => ({
+      projectId: a.projectId,
+      worktreeId,
+      surfaceId: Number(
+        fixture.client
+          .prepare(
+            `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+             VALUES (?, 'Surface', '{}', 1, ?, ?)`,
+          )
+          .run(worktreeId, at, at).lastInsertRowid,
+      ),
+    });
+    const placed = (placement: SeededPlacement, title: string) =>
+      createPlacedRun(fixture, {
+        workflowKey: 'fixture',
+        title,
+        rootGraphKey: 'root',
+        artifactHash: PIN_A,
+        rootFrame: { graphKey: 'root' },
+        placement,
+      });
+    const cancel = async (runId: number) => {
+      const current = (await run(fixture.runs.findRun(runId)))!;
+      committedValue(
+        await run(fixture.runs.applyCancel({ runId, controlRevision: current.controlRevision })),
+      );
+    };
+
+    const running = await placed(a, 'Running');
+
+    const completed = await placed(surfaceOn(a.worktreeId), 'Completed');
+    const entry = await claim(fixture, completed.run);
+    committedValue(
+      await run(
+        fixture.runs.commitGraphEntry({
+          ...fenceOf(completed.run, entry.attempt),
+          frameId: completed.frame.id,
+          state: { value: {} },
+          entryNode: { nodeId: 'work', nodeKind: 'operation' },
+        }),
+      ),
+    );
+    let current = (await run(fixture.runs.findRun(completed.run.id)))!;
+    const node = await claim(fixture, current);
+    committedValue(
+      await run(
+        fixture.runs.commitNodeResult({
+          ...fenceOf(current, node.attempt),
+          frameId: completed.frame.id,
+          executionId: node.attempt.executionId!,
+          state: { value: {} },
+          producerOutput: { value: { update: {} } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'routing', edgeId: 'work-out' },
+        }),
+      ),
+    );
+    current = (await run(fixture.runs.findRun(completed.run.id)))!;
+    const routing = await claim(fixture, current);
+    committedValue(
+      await run(
+        fixture.runs.commitRouting({
+          ...fenceOf(current, routing.attempt),
+          frameId: completed.frame.id,
+          executionId: node.attempt.executionId!,
+          state: { value: {} },
+          producerOutput: { value: { to: 'done' } },
+          producerArtifactHash: PIN_A,
+          next: { kind: 'outcome', outcomeId: 'done' },
+        }),
+      ),
+    );
+    current = (await run(fixture.runs.findRun(completed.run.id)))!;
+    const output = await claim(fixture, current);
+    committedValue(
+      await run(
+        fixture.runs.completeRun({
+          ...fenceOf(current, output.attempt),
+          frameId: completed.frame.id,
+          outcomeId: 'done',
+          outcomeKind: 'success',
+          output: { value: {} },
+          outputArtifactHash: PIN_A,
+        }),
+      ),
+    );
+
+    // Another project's run in the middle, so the selection cannot pass by id range alone.
+    const other = await placed(b, 'Other project');
+
+    const cancelled = await placed(surfaceOn(a.worktreeId), 'Cancelled');
+    await cancel(cancelled.run.id);
+
+    const dismissed = await placed(surfaceOn(a.worktreeId), 'Dismissed');
+    await cancel(dismissed.run.id);
+    const stopped = (await run(fixture.runs.findRun(dismissed.run.id)))!;
+    assert.deepEqual(
+      committedValue(
+        await run(
+          fixture.runs.detachRun({ runId: stopped.id, controlRevision: stopped.controlRevision }),
+        ),
+      ),
+      { detached: true },
+    );
+
+    const preparingRun = await createPreparingRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Preparing',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement: a,
+    });
+
+    const preparationFailed = await createPreparingRun(fixture, {
+      workflowKey: 'fixture',
+      title: 'Preparation failed',
+      rootGraphKey: 'root',
+      artifactHash: PIN_A,
+      rootFrame: { graphKey: 'root' },
+      placement: a,
+    });
+    committedValue(
+      await run(
+        fixture.runs.failSegment({
+          runId: preparationFailed.run.id,
+          attemptId: preparationFailed.attempt.id,
+          owner: preparationFailed.owner,
+          ownerIncarnation: preparationFailed.ownerIncarnation,
+          code: 'environment_preparation_failed',
+          message: 'worktree creation failed',
+        }),
+      ),
+    );
+
+    const sideWorktree = worktreeInA(join(fixture.contentRoot, 'side'));
+    const worktreeless = await placed(surfaceOn(sideWorktree), 'Destination deleted');
+    fixture.client.prepare('DELETE FROM worktrees WHERE id = ?').run(sideWorktree);
+
+    // Each state is what its name says, so the selection below really spans them.
+    const statusOf = async (id: number) => (await run(fixture.runs.findRun(id)))!;
+    assert.equal((await statusOf(completed.run.id)).status, 'done');
+    assert.equal((await statusOf(cancelled.run.id)).status, 'cancelled');
+    assert.equal(await run(fixture.runs.findAttachment(dismissed.run.id)), null);
+    assert.equal((await statusOf(preparingRun.run.id)).position.kind, 'environment_preparation');
+    assert.equal((await statusOf(preparationFailed.run.id)).status, 'failed');
+    assert.equal(await run(fixture.runs.findAttachment(worktreeless.run.id)), null);
+
+    const owned = await run(fixture.runs.listByProject(a.projectId));
+    assert.deepEqual(
+      owned.map((record) => record.id),
+      [
+        running.run.id,
+        completed.run.id,
+        cancelled.run.id,
+        dismissed.run.id,
+        preparingRun.run.id,
+        preparationFailed.run.id,
+        worktreeless.run.id,
+      ],
+    );
+    assert.ok(owned.every((record) => record.projectId === a.projectId));
+    assert.deepEqual(
+      (await run(fixture.runs.listByProject(b.projectId))).map((record) => record.id),
+      [other.run.id],
+    );
+    assert.deepEqual(await run(fixture.runs.listByProject(b.projectId + 1000)), []);
   } finally {
     fixture.close();
   }

@@ -222,6 +222,7 @@ test("another run's checkpoint is workflow_checkpoint_not_found, and an unknown 
       .insert(workflowRuns)
       .values({
         workflowKey: 'fixture',
+        projectId: setup.harness.projectId,
         title: 'Other run',
         rootGraphKey: 'root',
         artifactHash: 'a'.repeat(64),

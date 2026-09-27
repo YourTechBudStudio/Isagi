@@ -64,6 +64,8 @@ export interface WorkflowRunPlacement {
 export interface WorkflowRunRecord {
   readonly id: number;
   readonly workflowKey: string;
+  /** The owning project. Recorded at creation and never changed; see `workflow_runs.project_id`. */
+  readonly projectId: number;
   readonly title: string;
   readonly rootGraphKey: string;
   readonly artifactHash: string;

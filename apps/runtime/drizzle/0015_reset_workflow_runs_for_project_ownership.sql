@@ -1,0 +1,16 @@
+-- Clean-state reset for story #49 (architecture §4.2 / program design §4.2).
+--
+-- Every run must now record the project it belongs to, and `project_id` is required. A required
+-- owner cannot be added to rows that have none, and inferring one from whichever origin or
+-- destination worktree happens to survive would be the backfill #49 rules out. Only developer
+-- databases exist and epic #42 accepts a clean state for historical workflow tables, so the honest
+-- migration drops the runs. Cascades to frames, executions, attempts, transitions, transition
+-- changes, attachments, preparations, operations, waits, pause intervals, version adoptions,
+-- evidence, checkpoints and checkpoint entries.
+--
+-- `workflow_artifacts` and `workflow_payloads` are left in place, as in `0011`: they are
+-- content-addressed retained records, not run state.
+--
+-- This is its own migration so the delete can never land inside a generated table rebuild's
+-- `PRAGMA foreign_keys=OFF` window, where it would orphan rows instead of cascading.
+DELETE FROM `workflow_runs`;

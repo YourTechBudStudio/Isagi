@@ -443,8 +443,15 @@ export const worktreeEnvironmentStates = sqliteTable(
  * attachment and leaves the run, its frames, executions, attempts, transitions, operations and
  * payload references exactly as they were.
  *
- * #43 has no physical deletion path for any of this. Retention is indefinite and there is no TTL,
- * eviction or cleanup cap.
+ * Ownership follows the same rule. `workflow_runs.project_id` is the one fact that says which
+ * project a run belongs to, and it has no foreign key either. `origin_*`, `destination_*` and the
+ * attachment are provenance and placement, never ownership: a run whose worktrees are all gone still
+ * names its project. No workflow table may reference `projects`, `worktrees`, surfaces or panes
+ * except `workflow_run_attachments`; a test enforces this
+ * (`workflows/persistence/retention-shape.test.ts`).
+ *
+ * Nothing in #43 or #49 physically deletes any of this; project deletion (#50) is the operation
+ * meant to. Retention is indefinite and there is no TTL, eviction or cleanup cap.
  */
 
 /**
@@ -507,6 +514,16 @@ export const workflowRuns = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     /** Immutable launched key. Retry resolves the latest verified artifact for exactly this key. */
     workflowKey: text('workflow_key').notNull(),
+    /**
+     * The one project this run belongs to. Written only by `createRun`, from the launch project that
+     * transaction re-validated, and never updated.
+     *
+     * Deliberately no foreign key, like `origin_*` and `destination_*`: ownership has to outlive the
+     * project row so a project deletion can find and erase its runs through the workflow domain (#50)
+     * rather than through an SQL cascade that would neither stop dispatch nor clean owned storage.
+     * `projects.id` is AUTOINCREMENT, so a dangling id can never name a different project.
+     */
+    projectId: integer('project_id').notNull(),
     title: text('title').notNull(),
     rootGraphKey: text('root_graph_key').notNull(),
     /** The current pin. Uncommitted work always runs under this, never under a frame's entry pin. */
@@ -592,6 +609,7 @@ export const workflowRuns = sqliteTable(
     index('workflow_runs_status_idx').on(table.status),
     index('workflow_runs_dispatch_idx').on(table.status, table.paused),
     index('workflow_runs_key_idx').on(table.workflowKey, table.id),
+    index('workflow_runs_project_idx').on(table.projectId, table.id),
     index('workflow_runs_created_idx').on(table.createdAt),
     index('workflow_runs_revision_idx').on(table.revision),
     index('workflow_runs_destination_worktree_idx').on(table.destinationWorktreeId),

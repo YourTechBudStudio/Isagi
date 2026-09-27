@@ -502,8 +502,13 @@ test('a throwing output evaluator is repaired by an edited-code Retry, which pro
     assert.equal((await run(harness.controls.retry(launched.id))).accepted, true);
     await harness.drain();
 
-    assert.equal((await harness.runOf(launched.id)).status, 'done');
+    const repaired = await harness.runOf(launched.id);
+    assert.equal(repaired.status, 'done');
     assert.equal(counters.callback, 1, 'the frame’s nodes were not re-run to fix its output');
+    // Retry adopted a different pin; the owner is not part of what adoption can change.
+    assert.notEqual(repaired.artifactHash, failed.artifactHash, 'the fixed version was adopted');
+    assert.equal(failed.projectId, harness.placement.projectId);
+    assert.equal(repaired.projectId, failed.projectId);
   });
 });
 

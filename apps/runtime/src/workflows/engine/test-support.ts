@@ -208,6 +208,15 @@ export interface EngineHarness {
   /** Runs inside the window between a suspend committing and its arm-time reconciliation. */
   readonly onArmTimeReconcile: (hook: (waitId: number) => Promise<void> | void) => void;
   /**
+   * Runs once, the next time a preparation starts: after `createRun` has committed and before
+   * `prepareEnvironment` reaches its first step.
+   *
+   * Production forks preparation after the launch's create, so another request can land in that
+   * window. One-shot because the same `runPreparation` also serves preparation Retry, which a test
+   * using this seam must still be able to drive unhooked.
+   */
+  readonly onPreparationStart: (hook: (ctx: PreparationContext) => Promise<void> | void) => void;
+  /**
    * Runs while a control is resolving an artifact, outside any transaction.
    *
    * That window is where Retry does its expensive work — discovery, load, structural validation —
@@ -279,6 +288,7 @@ export function createBoth(branch: string, title: string) {
 
 /** One independent environment: a project, a worktree and a surface inside it. */
 export interface Placement {
+  readonly projectId: number;
   readonly worktreeId: number;
   readonly surfaceId: number;
 }
@@ -528,7 +538,13 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     ownerIncarnation: launchDeps.ownerIncarnation,
     poke: Effect.void,
   };
-  const runPreparation = (ctx: PreparationContext) => prepareEnvironment(prepDeps, ctx);
+  let beforePreparation: ((ctx: PreparationContext) => Promise<void> | void) | null = null;
+  const runPreparation = (ctx: PreparationContext) =>
+    Effect.promise(async () => {
+      const hook = beforePreparation;
+      beforePreparation = null;
+      await hook?.(ctx);
+    }).pipe(Effect.flatMap(() => prepareEnvironment(prepDeps, ctx)));
 
   let incarnation = await buildIncarnation();
   async function buildIncarnation() {
@@ -719,6 +735,9 @@ export async function makeEngineHarness(): Promise<EngineHarness> {
     },
     onArmTimeReconcile: (hook) => {
       beforeArmTimeReconcile = hook;
+    },
+    onPreparationStart: (hook) => {
+      beforePreparation = hook;
     },
     onArtifactResolve: (hook) => {
       beforeArtifactResolve = hook;

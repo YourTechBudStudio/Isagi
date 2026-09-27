@@ -100,6 +100,7 @@ export function runRecord(row: RunRow): WorkflowRunRecord {
   return {
     id: row.id,
     workflowKey: row.workflowKey,
+    projectId: row.projectId,
     title: row.title,
     rootGraphKey: row.rootGraphKey,
     artifactHash: row.artifactHash,

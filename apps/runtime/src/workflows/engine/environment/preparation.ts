@@ -92,14 +92,13 @@ export function prepareEnvironment(
       }
       worktree = yield* requireWorktree(deps, worktreeId);
       if (request.worktree.kind === 'existing') {
-        // Re-checked on every attempt, not trusted from launch: a worktree can be deleted and its
-        // id reused between the launch's validation and this step.
-        const projectId = yield* requireLaunchProjectId(deps, ctx);
-        if (worktree.projectId !== projectId) {
+        // Re-checked on every attempt against the run's recorded owner, not trusted from launch: a
+        // worktree row can change between the launch's validation and this step.
+        if (worktree.projectId !== ctx.run.projectId) {
           return yield* fail({
             step: 'worktree',
             reason: 'worktree_missing',
-            message: `Worktree ${worktree.id} is not in project ${projectId}.`,
+            message: `Worktree ${worktree.id} is not in project ${ctx.run.projectId}.`,
             worktreeId: worktree.id,
           });
         }
@@ -500,22 +499,6 @@ function requirePreparation(
   );
 }
 
-/** The project this launch belongs to, re-derived from its origin exactly as the launch did. */
-function requireLaunchProjectId(
-  deps: Pick<PreparationDeps, 'workspace'>,
-  ctx: PreparationContext,
-): Effect.Effect<number, SegmentFailure | SegmentFault> {
-  const worktreeId = ctx.run.origin.worktreeId;
-  if (worktreeId === null) {
-    return fail({
-      step: 'worktree',
-      reason: 'worktree_missing',
-      message: `Run ${ctx.run.id} no longer records the worktree it was launched from, so its project cannot be named.`,
-    });
-  }
-  return requireWorktree(deps, worktreeId).pipe(Effect.map((row) => row.projectId));
-}
-
 function requireWorktree(
   deps: Pick<PreparationDeps, 'workspace'>,
   worktreeId: number,
@@ -591,7 +574,7 @@ function createWorktree(
   return Effect.gen(function* () {
     const fence = fenceOf(deps, ctx);
     const branch = choice.branch.trim();
-    const projectId = yield* requireLaunchProjectId(deps, ctx);
+    const projectId = ctx.run.projectId;
     const baseCommit = prep.baseCommit;
     if (baseCommit === null) {
       return yield* fail({

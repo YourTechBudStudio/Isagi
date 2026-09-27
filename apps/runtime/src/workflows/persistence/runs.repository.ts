@@ -99,6 +99,11 @@ export interface RecordedValue {
 }
 
 export interface CreateRunInput {
+  /**
+   * The project the launch resolved from its origin worktree. `createRun` re-checks it against that
+   * worktree inside the transaction and records it as the run's immutable owner.
+   */
+  readonly projectId: number;
   readonly workflowKey: string;
   readonly title: string;
   readonly rootGraphKey: string;
@@ -109,7 +114,8 @@ export interface CreateRunInput {
     /** The launch inputs, stored on the root frame exactly as a nested frame stores its mapping. */
     readonly parameters?: RecordedValue | undefined;
   };
-  readonly origin: WorkflowRunPlacement;
+  /** A launch always has a live origin worktree: it is what the owning project is checked against. */
+  readonly origin: WorkflowRunPlacement & { readonly worktreeId: number };
   /**
    * The placement decision, recorded before anything is allocated.
    *
@@ -636,6 +642,16 @@ export interface WorkflowRunsRepositoryService {
   readonly listByDestinationSurface: (
     surfaceId: number,
   ) => Effect.Effect<readonly WorkflowRunRecord[], DatabaseError>;
+  /**
+   * Every run this project owns, oldest first, whatever its status, attachment or preparation state.
+   *
+   * Filters on the recorded owner only — no join to attachments or destinations — so detached,
+   * dismissed, preparing, preparation-failed and worktree-less runs are all included. The selection
+   * project deletion (#50) works from.
+   */
+  readonly listByProject: (
+    projectId: number,
+  ) => Effect.Effect<readonly WorkflowRunRecord[], DatabaseError>;
   /** The placement decision and the receipts for one run, or null for a run created before this. */
   readonly findPreparation: (
     runId: number,
@@ -751,6 +767,13 @@ export function makeWorkflowRunsRepository(
         // impossible.
         const claimInput = yield* publish(input.claim.input);
         return yield* database.transaction('workflow_create_run', (db) => {
+          if (!originBelongsToProject(db, input.origin.worktreeId, input.projectId)) {
+            return rejected<never>({
+              kind: 'launch_project_changed',
+              worktreeId: input.origin.worktreeId,
+              projectId: input.projectId,
+            });
+          }
           const now = new Date().toISOString();
 
           // The run and its root frame reference each other, so one of them is written first with a
@@ -760,6 +783,7 @@ export function makeWorkflowRunsRepository(
             .insert(workflowRuns)
             .values({
               workflowKey: input.workflowKey,
+              projectId: input.projectId,
               title: input.title,
               rootGraphKey: input.rootGraphKey,
               artifactHash: input.artifactHash,
@@ -2500,6 +2524,17 @@ export function makeWorkflowRunsRepository(
           .map(runRecord),
       ),
 
+    listByProject: (projectId) =>
+      database.use('workflow_list_by_project', (db) =>
+        db
+          .select()
+          .from(workflowRuns)
+          .where(eq(workflowRuns.projectId, projectId))
+          .orderBy(asc(workflowRuns.id))
+          .all()
+          .map(runRecord),
+      ),
+
     findPreparation: (runId) =>
       database.use('workflow_find_preparation', (db) => {
         const row = db
@@ -3320,6 +3355,25 @@ function placementIsLive(
     if (!surface) return false;
   }
   return true;
+}
+
+/**
+ * Whether the launch's origin worktree still exists and still belongs to `projectId`.
+ *
+ * Read-only composition over the workspace's rows (ADR 0008). `worktrees.project_id` cascades from
+ * `projects`, so a live origin row in the project also proves the project row exists.
+ */
+function originBelongsToProject(
+  db: RuntimeDrizzleDatabase,
+  worktreeId: number,
+  projectId: number,
+): boolean {
+  const row = db
+    .select({ projectId: worktrees.projectId })
+    .from(worktrees)
+    .where(eq(worktrees.id, worktreeId))
+    .get();
+  return row?.projectId === projectId;
 }
 
 /** Content equality for a recorded slot, which is what makes a prepared operand checkable. */

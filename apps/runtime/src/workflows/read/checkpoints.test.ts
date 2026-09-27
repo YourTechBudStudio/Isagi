@@ -213,11 +213,12 @@ function seedChildFrame(setup: Pick<Setup, 'db'>, runId: number, parentExecution
 }
 
 /** A second run with its own root frame, to prove every read is run-scoped. */
-function seedOtherRun(setup: Pick<Setup, 'db'>) {
+function seedOtherRun(setup: Pick<Setup, 'db' | 'harness'>) {
   const other = setup.db
     .insert(workflowRuns)
     .values({
       workflowKey: 'fixture',
+      projectId: setup.harness.projectId,
       title: 'Other run',
       rootGraphKey: 'root',
       artifactHash: pin,

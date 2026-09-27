@@ -124,6 +124,13 @@ function surfaceRows(harness: EngineHarness): { id: number; worktreeId: number; 
     .all() as { id: number; worktreeId: number; title: string }[];
 }
 
+function worktreeProjectOf(harness: EngineHarness, worktreeId: number): number | undefined {
+  const row = harness.fixture.client
+    .prepare('SELECT project_id AS projectId FROM worktrees WHERE id = ?')
+    .get(worktreeId) as { projectId: number } | undefined;
+  return row?.projectId;
+}
+
 async function failureDetailOf(harness: EngineHarness, runId: number) {
   const failed = await harness.runOf(runId);
   assert.equal(failed.status, 'failed');
@@ -249,6 +256,10 @@ test('creating a worktree records what it created, and only after the owning ser
       worktreePath: derivedCheckoutPath(1, 'feature/alpha'),
       surfaceId: prep.surface!.surfaceId,
     });
+    // The worktree was opened in the run's recorded owner: the fake inserts its row under whatever
+    // project preparation asked for, so this is what preparation passed, not what it re-derived.
+    assert.equal(placed.projectId, harness.placement.projectId);
+    assert.equal(worktreeProjectOf(harness, prep.worktree!.worktreeId), placed.projectId);
 
     await harness.drain();
     assert.deepEqual(seen.destinations, [
@@ -258,6 +269,67 @@ test('creating a worktree records what it created, and only after the owning ser
         surfaceId: prep.surface!.surfaceId,
       },
     ]);
+  });
+});
+
+/**
+ * The one preparation outcome recording the owner changes on purpose.
+ *
+ * Production forks preparation after `createRun` commits, so a worktree deletion can land before
+ * step 1. The origin is provenance, not ownership: a `create` or `existing` choice never lands on
+ * it, so losing it no longer stops preparation, which works in the run's recorded project. Before
+ * ownership was recorded both launches below failed `worktree_missing`, because the project was
+ * re-derived from the origin. (`current` still fails: there the origin *is* the destination.)
+ */
+test('preparation keeps working in the recorded project after the origin worktree is removed', async () => {
+  await withHarness(async (harness) => {
+    publish(harness, counters());
+    harness.owning.allowsWorktrees().allowsSurfaces();
+    const removeOrigin = (worktreeId: number) =>
+      harness.onPreparationStart(() => {
+        harness.fixture.client.prepare('DELETE FROM worktrees WHERE id = ?').run(worktreeId);
+      });
+
+    // `create`: the new worktree is opened in the recorded project.
+    removeOrigin(harness.placement.worktreeId);
+    const created = await harness.launch({
+      workflowKey: 'placeable',
+      request: createBoth('feature/orphaned', 'Orphaned'),
+    });
+    assert.equal(worktreeProjectOf(harness, harness.placement.worktreeId), undefined);
+    assert.equal(created.position.kind, 'graph_entry', 'placed, not failed');
+    assert.equal(created.projectId, harness.placement.projectId);
+    assert.equal(worktreeProjectOf(harness, created.destination.worktreeId!), created.projectId);
+
+    // `existing`: a live sibling in the same project is still a valid destination.
+    const origin = harness.seedPlacement();
+    const siblingId = seedWorktreeRow(harness.fixture, {
+      projectId: origin.projectId,
+      branch: 'sibling',
+      path: '/repo/fixture-sibling',
+    });
+    const siblingSurfaceId = Number(
+      harness.fixture.client
+        .prepare(
+          `INSERT INTO worktree_surfaces (worktree_id, title, layout_json, sort_order, created_at, updated_at)
+           VALUES (?, 'Sibling', '{}', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+        )
+        .run(siblingId).lastInsertRowid,
+    );
+    removeOrigin(origin.worktreeId);
+    const existing = await harness.launch({
+      workflowKey: 'placeable',
+      placement: origin,
+      request: {
+        worktree: { kind: 'existing', worktreeId: siblingId },
+        surface: { kind: 'existing', surfaceId: siblingSurfaceId },
+      },
+    });
+    assert.equal(worktreeProjectOf(harness, origin.worktreeId), undefined);
+    assert.equal(existing.position.kind, 'graph_entry', 'placed, not failed');
+    assert.equal(existing.projectId, origin.projectId);
+    assert.equal(existing.destination.worktreeId, siblingId);
+    assert.equal(existing.destination.surfaceId, siblingSurfaceId);
   });
 });
 
@@ -327,6 +399,9 @@ test('setup that fails during creation keeps the worktree, and Retry re-runs onl
     assert.equal(detail.step, 'setup');
     assert.equal(detail.reason, 'setup_failed');
     assert.equal(detail.diagnostic, 'ERR_PNPM_NO_LOCKFILE');
+    // Ownership is recorded before preparation can fail, so a run that never got an environment
+    // still names its project.
+    assert.equal((await harness.runOf(started.id)).projectId, harness.placement.projectId);
 
     // The worktree it created is still there, named by a receipt, with its failed setup recorded.
     const failedPrep = (await harness.preparationOf(started.id))!;

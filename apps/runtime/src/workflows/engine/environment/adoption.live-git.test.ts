@@ -217,6 +217,7 @@ test('Retry adopts a checkout its interrupted attempt really created, and re-run
           });
 
           const created = yield* fixtures.runs.createRun({
+            projectId,
             workflowKey: 'adoptable',
             title: 'Adoptable',
             rootGraphKey: 'root',
