@@ -16,9 +16,11 @@ Operations perform work and can complete immediately or return an explicit wait.
 
 Checkpoint nodes save declared files from the run's destination at a point in the graph. The runtime layers each capture over earlier checkpoints in the run and stores a resolved inventory of final files and required absences for inspection and later reconstruction. For Git projects, it also records the current commit as the baseline, which must still be available when reconstruction happens. A checkpoint does not save graph state, agent sessions, or other execution context; durable continuation remains part of the run.
 
+The `isagi` CLI can export that resolved filesystem state into an empty destination on the runtime's machine. The runtime resolves the checkpoint and creates a Git worktree at its recorded baseline when needed; the CLI applies the final files and required absences. Export does not resume or launch a run.
+
 One run contains the whole composed graph. A graph definition describes reusable structure, a frame represents one invocation of that graph, a node execution represents one visit, and an attempt records one try at an execution segment. Repeated visits and retries retain distinct history under the same run.
 
-Workflows are independently built and verified packages discovered from global, configured, and project sources. Higher-priority sources own matching workflow keys; a broken winning package does not silently fall back to another definition. Users launch workflows through the command palette, and runtime API callers supply an explicit destination.
+Workflows are independently built and verified packages discovered from global, configured, and project sources. Higher-priority sources own matching workflow keys; a broken winning package does not silently fall back to another definition. Users can launch workflows through the command palette or the `isagi` CLI; both use the runtime's launch API.
 
 Verification checks declared structure and produces the artifact the runtime loads. It does not prove that author routing is correct, loops terminate, or arbitrary author code is safe. Author callbacks run as trusted code inside the runtime.
 
@@ -58,7 +60,7 @@ The workflow bar presents controls and human input and opens the read-only inspe
 
 The client derives its presentation from runtime-owned facts. Coherent snapshots and revision-ordered updates let it recover missed changes without treating arrival order as execution order. Inspection reads do not execute author callbacks or perform operational recovery.
 
-The inspector is reached through an attached run's workflow bar. Retained history remains accessible through the run API after Dismiss, but there is currently no detached-run entry in the UI.
+The inspector is reached through an attached run's workflow bar. Retained history remains accessible through the run API and `isagi` CLI after Dismiss, but there is currently no detached-run entry in the UI.
 
 ## Source entry points
 
