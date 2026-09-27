@@ -26,6 +26,7 @@ export function workflowSummaryFixture(
   return {
     runId: 1,
     workflowKey: 'review',
+    projectId: 1,
     title: 'Review',
     rootGraphKey: 'root',
     status: 'running',

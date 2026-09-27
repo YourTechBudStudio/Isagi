@@ -97,6 +97,25 @@ test('a run summary reports where the run is, which pin it is on, and what it wi
   });
 });
 
+test('a run reports the project that owns it, and the listing and the run agree', async () => {
+  await withHarness(async (harness) => {
+    // Two runs in two projects, so a value borrowed from the wrong run cannot pass.
+    const first = await startRun(harness.fixture);
+    const second = await startRun(harness.fixture);
+    assert.notEqual(first.placement.projectId, second.placement.projectId);
+
+    const listed = await read(harness.projection.listRuns({}));
+    for (const started of [first, second]) {
+      const { run: summary } = await read(harness.projection.getRun(started.runId));
+      assert.equal(summary.projectId, started.placement.projectId);
+      assert.equal(
+        listed.items.find((item) => item.runId === started.runId)?.projectId,
+        started.placement.projectId,
+      );
+    }
+  });
+});
+
 test('a cancelled run stays listed and inspectable, and only Dismiss releases its surface', async () => {
   await withHarness(async (harness) => {
     const { runId, rootFrameId, placement } = await startRun(harness.fixture);

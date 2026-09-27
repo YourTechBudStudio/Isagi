@@ -292,6 +292,11 @@ test('deleting a surface takes the place to show a run, and nothing else', async
       'provenance still names what was deleted',
     );
     assert.equal(summary.paused, true, 'and the run is gated rather than dispatched into nothing');
+    assert.equal(
+      summary.projectId,
+      scenario.placement.projectId,
+      'losing a surface never changes whose run it is',
+    );
     await assertFullyReadable(harness, scenario, 'surface-loss');
 
     const revisionBefore = (await currentRun(harness.fixture, scenario.runId)).revision;
@@ -349,6 +354,11 @@ test('deleting a project takes the environment, and a stopped run stops claiming
     assert.equal(summary.destination.available, false);
     assert.equal(summary.destination.worktreeId, scenario.placement.worktreeId);
     assert.equal(summary.origin.worktreePath, '/repo/fixture', 'origin provenance is immutable');
+    assert.equal(
+      summary.projectId,
+      scenario.placement.projectId,
+      'and the run still names the project that owned it, though that project is gone',
+    );
     await assertFullyReadable(harness, scenario, 'project-loss');
 
     const revisionBefore = (await currentRun(harness.fixture, scenario.runId)).revision;
@@ -359,6 +369,36 @@ test('deleting a project takes the environment, and a stopped run stops claiming
       revisionBefore,
       'and still nothing was written on a read path',
     );
+  });
+});
+
+test('dismissing a run keeps its project and its history', async () => {
+  await withReadHarness(async (harness) => {
+    const scenario = await runWithHistory(harness, 'dismissed');
+    const active = await currentRun(harness.fixture, scenario.runId);
+    value(
+      await run(
+        harness.fixture.runs.applyCancel({
+          runId: scenario.runId,
+          controlRevision: active.controlRevision,
+        }),
+      ),
+    );
+    const cancelled = await currentRun(harness.fixture, scenario.runId);
+    value(
+      await run(
+        harness.fixture.runs.detachRun({
+          runId: scenario.runId,
+          controlRevision: cancelled.controlRevision,
+        }),
+      ),
+    );
+
+    // Dismiss releases the place the run was shown, and nothing else: not its owner, not its past.
+    const summary = (await read(harness.projection.getRun(scenario.runId))).run;
+    assert.equal(summary.attachment, null, 'the surface is released');
+    assert.equal(summary.projectId, scenario.placement.projectId);
+    await assertFullyReadable(harness, scenario, 'dismissed');
   });
 });
 
@@ -389,6 +429,11 @@ test('a run whose environment is gone is not offered Resume, because the runtime
     assert.equal(parked.controls.retry, false, 'nor Retry, which cannot resolve a version either');
     assert.equal(parked.controls.pause, false, 'already gated');
     assert.equal(parked.controls.cancel, true, 'stopping a run never needs its environment');
+    assert.equal(
+      parked.projectId,
+      scenario.placement.projectId,
+      'a deleted worktree takes where the run can go, never whose run it is',
+    );
 
     // The refusal the summary is speaking for: the control itself rejects this exact state.
     const current = await currentRun(harness.fixture, scenario.runId);
@@ -479,6 +524,7 @@ test('environment loss and restoration are each one recorded, idempotent transac
     assert.equal(after.paused, true, 'a returning worktree does not decide to continue the work');
     assert.equal(after.destination.available, true);
     assert.equal(after.controls.resume, true, 'but Resume is offered again, because it would work');
+    assert.equal(after.projectId, owner, 'and the summary reports the owner the run recorded');
 
     // Every one of those facts is deliverable: the client sees them as ordinary revisions.
     const events = await read(

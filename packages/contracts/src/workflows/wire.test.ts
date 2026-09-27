@@ -112,6 +112,7 @@ function operation(overrides: Record<string, unknown> = {}) {
 const summary = {
   runId: 1,
   workflowKey: 'reviewed-document',
+  projectId: 1,
   title: 'Reviewed document',
   rootGraphKey: 'Story',
   status: 'waiting',
@@ -172,8 +173,17 @@ const summary = {
 test('a representative run summary decodes, controls and all', () => {
   const decoded = decode(workflowRunSummarySchema, summary);
   assert.equal(decoded.pinOrdinal, 4);
+  assert.equal(decoded.projectId, 1);
   assert.equal(decoded.controls.advance, true);
   assert.equal(decoded.blockingWait?.waitId, 9);
+});
+
+test('every summary names the project that owns the run, as a real project id', () => {
+  // Ownership is recorded when the run is created, so a summary without it describes a run that
+  // does not exist; and project ids start at 1, so zero names no project at all.
+  const { projectId: _omitted, ...withoutProject } = summary;
+  assert.throws(() => decode(workflowRunSummarySchema, withoutProject));
+  assert.throws(() => decode(workflowRunSummarySchema, { ...summary, projectId: 0 }));
 });
 
 test('a summary carrying an uncertain operation and an honest stop report decodes', () => {

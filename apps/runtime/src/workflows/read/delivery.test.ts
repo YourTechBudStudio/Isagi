@@ -136,6 +136,7 @@ test('every workflow write wakes the publisher, and no read does', async () => {
 test('a committed write reaches the public bus without anybody asking it to', async () => {
   await withHarness(async (harness) => {
     const events: RuntimeEvent[] = [];
+    let projectId: number | undefined;
     const bus: Pick<RuntimeEventBusService, 'publish'> = {
       publish: (event) =>
         Effect.sync(() => {
@@ -163,7 +164,9 @@ test('a committed write reaches the public bus without anybody asking it to', as
             wake,
           );
 
-          const { runId, rootFrameId } = yield* await0(startRun(harness.fixture));
+          const started = yield* await0(startRun(harness.fixture));
+          const { runId, rootFrameId } = started;
+          projectId = started.placement.projectId;
           yield* runs.appendDiagnostic({
             runId,
             kind: 'ui_feedback',
@@ -185,6 +188,11 @@ test('a committed write reaches the public bus without anybody asking it to', as
       (event) => event.type === 'workflow_run_changed' && event.payload.uiFeedback !== null,
     );
     assert.ok(feedback, 'and surface bookkeeping rode along with the same summary');
+    assert.equal(
+      feedback.type === 'workflow_run_changed' ? feedback.payload.projectId : undefined,
+      projectId,
+      'naming the project the run was launched in',
+    );
   });
 });
 

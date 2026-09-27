@@ -16,6 +16,7 @@ import { GitCommandError } from '../../git/index.js';
 import { WorktreeSetupError } from '../../worktree-setup/index.js';
 import { firstIncompleteStep } from '../persistence/preparations.js';
 import { run } from '../persistence/test-support.js';
+import { projectSummary } from '../read/project/summary.js';
 import type { AnyWorkflowDefinition } from '../structure/loader.js';
 import type { WorkflowDestination } from '../types.js';
 import { surfaceCreationKey } from './environment/preparation.js';
@@ -402,6 +403,12 @@ test('setup that fails during creation keeps the worktree, and Retry re-runs onl
     // Ownership is recorded before preparation can fail, so a run that never got an environment
     // still names its project.
     assert.equal((await harness.runOf(started.id)).projectId, harness.placement.projectId);
+    // ...and so does its summary. Read through the builder every run read and event uses, since
+    // this harness has no projection service.
+    const summary = await run(
+      harness.fixture.database.use('test_summary', (db) => projectSummary(db, started.id)),
+    );
+    assert.equal(summary?.projectId, harness.placement.projectId);
 
     // The worktree it created is still there, named by a receipt, with its failed setup recorded.
     const failedPrep = (await harness.preparationOf(started.id))!;

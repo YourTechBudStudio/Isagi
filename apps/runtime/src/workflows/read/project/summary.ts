@@ -95,6 +95,7 @@ export function summaryDto(db: RuntimeDrizzleDatabase, row: RunRow): WorkflowRun
   return {
     runId: row.id,
     workflowKey: row.workflowKey,
+    projectId: row.projectId,
     title: row.title,
     rootGraphKey: row.rootGraphKey,
     status: row.status,

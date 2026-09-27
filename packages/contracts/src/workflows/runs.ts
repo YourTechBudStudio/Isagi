@@ -127,6 +127,11 @@ export const workflowRunControlsSchema = Schema.Struct({
 export const workflowRunSummarySchema = Schema.Struct({
   runId: positiveInteger,
   workflowKey: nonEmptyString,
+  /**
+   * The project this run belongs to, recorded at launch and never changed. Still reported after the
+   * project, its worktrees or the run's surface are gone: it is retained identity, not availability.
+   */
+  projectId: positiveInteger,
   title: nonEmptyString,
   rootGraphKey: nonEmptyString,
   status: workflowRunStatusSchema,
