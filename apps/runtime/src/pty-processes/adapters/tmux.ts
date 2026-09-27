@@ -24,6 +24,11 @@ import {
   PtyStartError,
   PtyWriteError,
 } from '../types.js';
+import {
+  killProcessTreeSurvivors,
+  signalProcessTreeDescendants,
+  snapshotProcessTree,
+} from './process-tree.js';
 import { collectTmuxGarbage } from './tmux-gc.js';
 
 const execFileAsync = promisify(execFile);
@@ -38,6 +43,8 @@ const isagiTmuxOptions = [
   ['set-option', '-gq', 'terminal-features[99]', 'xterm*:extkeys'],
   ['set-option', '-gqu', 'terminal-overrides[99]'],
 ] as const;
+
+const tmuxKillTimeoutMs = 5_000;
 
 export const TmuxBackend = Context.GenericTag<PtyBackendShape>('isagi/TmuxBackend');
 
@@ -260,22 +267,106 @@ export const TmuxBackendLive = Layer.succeed(TmuxBackend, {
     console.warn(
       '[runtime] tmux PTY backend does not support reliable graceful termination; killing tmux session directly.',
     );
-    return killTmuxSession(input.ref.backend === 'tmux' ? input.ref.sessionName : '');
+    return killTmuxSession(
+      input.ref.backend === 'tmux' ? input.ref.sessionName : '',
+      input.gracefulTimeoutMs,
+    );
   },
-  kill: (ref) => killTmuxSession(ref.backend === 'tmux' ? ref.sessionName : ''),
+  kill: (ref) => killTmuxSession(ref.backend === 'tmux' ? ref.sessionName : '', null),
 } satisfies PtyBackendShape);
 
 // A successful `kill-session` is an affirmative kill. A missing session or a
 // missing server is verified absence: the attempt terminated nothing, so its
 // caller must persist no `killed` fact. Everything else — an unusable tmux
 // binary included — stays a control failure with no terminal evidence.
-function killTmuxSession(sessionName: string) {
-  return runTmux(['kill-session', '-t', sessionName]).pipe(
-    Effect.as({ terminated: true } satisfies BackendTerminateResult),
+//
+// `kill-session` only SIGHUPs the pane processes, so their process trees are
+// snapshotted first and swept afterwards (see `process-tree.ts`). With a
+// graceful timeout the survivors get SIGTERM and that long to exit before the
+// SIGKILL sweep; without one they are SIGKILLed at once.
+//
+// `kill-session` and the sweep form one uninterruptible operation: the tmux
+// server can act before the client returns, so a cancellation that landed
+// while the command was in flight would otherwise strand the descendants of a
+// session that is already dead. A timeout bounds it instead, so a wedged tmux
+// still cannot hold the caller forever — it surfaces as a control failure,
+// after sweeping whatever panes that failure demonstrably killed anyway.
+function killTmuxSession(sessionName: string, gracefulTimeoutMs: number | null) {
+  return Effect.gen(function* () {
+    const ptyProcessId = ptyProcessIdFromTmuxSessionName(sessionName);
+    const panePids = yield* listTmuxPanePids(sessionName, ptyProcessId);
+    const trees = yield* Effect.forEach(panePids, (rootPid) =>
+      snapshotProcessTree({ ptyProcessId, rootPid }),
+    );
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const result = yield* runTmux(['kill-session', '-t', sessionName], {
+          timeoutMs: tmuxKillTimeoutMs,
+        }).pipe(
+          Effect.as({ terminated: true } satisfies BackendTerminateResult),
+          Effect.catchAll((cause) =>
+            isTmuxBinaryMissing(cause) ||
+            !(isTmuxSessionMissing(cause) || isTmuxServerMissing(cause))
+              ? Effect.fail(new PtyKillError({ cause }))
+              : Effect.succeed({ terminated: false } satisfies BackendTerminateResult),
+          ),
+          // A control failure — a timeout included — does not say whether the
+          // server acted before it failed. Sweep only the trees whose root is
+          // demonstrably gone, then still report the failure: the kill is not
+          // affirmed, so the caller persists no `killed` fact.
+          Effect.tapError(() =>
+            Effect.forEach(trees, (tree) =>
+              killProcessTreeSurvivors(tree, { requireRootExited: true }),
+            ),
+          ),
+        );
+        if (gracefulTimeoutMs !== null && trees.some((tree) => tree !== null)) {
+          yield* Effect.forEach(trees, (tree) => signalProcessTreeDescendants(tree, 'SIGTERM'));
+          yield* Effect.sleep(gracefulTimeoutMs);
+        }
+        const swept = yield* Effect.forEach(trees, (tree) => killProcessTreeSurvivors(tree));
+        // A missing session does not mean its panes are gone: a pane root that
+        // ignored the hangup outlives the session it ran in. The sweep kills it
+        // rather than leaving it untracked, and that kill is affirmed so the
+        // caller does not record absence for a process this attempt ended.
+        if (!result.terminated && swept.some((sweep) => sweep.killedRoot)) {
+          console.warn(
+            `[runtime] tmux session was already gone but its pane root was still alive; killed it ptyProcessId=${ptyProcessId} sessionName=${sessionName}`,
+          );
+          return { terminated: true } satisfies BackendTerminateResult;
+        }
+        return result;
+      }),
+    );
+  });
+}
+
+// Pane root pids for the tree sweep. Best effort: the kill itself must not
+// depend on it, so a failure yields no panes. An already-gone session or server
+// has no panes to sweep and stays quiet; anything else means the sweep is lost
+// for this kill, which is logged so the degradation is visible.
+function listTmuxPanePids(sessionName: string, ptyProcessId: number) {
+  return runTmux(['list-panes', '-s', '-t', sessionName, '-F', '#{pane_pid}']).pipe(
+    Effect.map(({ stdout }) =>
+      stdout
+        .split('\n')
+        .map((line) => Number(line.trim()))
+        .filter((pid) => Number.isSafeInteger(pid) && pid > 0),
+    ),
     Effect.catchAll((cause) =>
-      isTmuxBinaryMissing(cause) || !(isTmuxSessionMissing(cause) || isTmuxServerMissing(cause))
-        ? Effect.fail(new PtyKillError({ cause }))
-        : Effect.succeed({ terminated: false } satisfies BackendTerminateResult),
+      Effect.sync(() => {
+        if (
+          !isTmuxBinaryMissing(cause) &&
+          (isTmuxSessionMissing(cause) || isTmuxServerMissing(cause))
+        ) {
+          return [] as number[];
+        }
+        console.warn(
+          `[runtime] Could not list tmux pane pids; PTY descendants will not be swept ptyProcessId=${ptyProcessId} sessionName=${sessionName}`,
+          cause,
+        );
+        return [] as number[];
+      }),
     ),
   );
 }
@@ -296,7 +387,10 @@ function runConfiguredTmux(
 
 function runTmux(
   args: readonly string[],
-  options: { readonly env?: NodeJS.ProcessEnv | undefined } = {},
+  options: {
+    readonly env?: NodeJS.ProcessEnv | undefined;
+    readonly timeoutMs?: number | undefined;
+  } = {},
 ) {
   return Effect.tryPromise({
     try: async (signal) => {
@@ -304,6 +398,7 @@ function runTmux(
         encoding: 'utf8',
         env: options.env,
         signal,
+        timeout: options.timeoutMs,
       });
       return { stdout, stderr };
     },

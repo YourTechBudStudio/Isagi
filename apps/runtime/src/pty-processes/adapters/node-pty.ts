@@ -20,6 +20,11 @@ import type {
 } from '../types.js';
 import { PtyKillError, PtyResizeError, PtyStartError, PtyWriteError } from '../types.js';
 import { collectNodePtyGarbage } from './node-pty-gc.js';
+import {
+  killProcessTreeSurvivors,
+  signalProcessTreeDescendants,
+  snapshotProcessTree,
+} from './process-tree.js';
 
 interface LiveNodePtyProcess {
   readonly ptyProcessId: number;
@@ -217,75 +222,114 @@ export const NodePtyBackendLive = Layer.effect(
       // and its caller must persist no `killed` fact. `true` is returned only
       // when a signal operation completed successfully — a throwing SIGKILL
       // escalation surfaces `PtyKillError` instead.
+      //
+      // Both paths act on the whole process tree, not just the spawned root: the
+      // tree is snapshotted while the root still anchors it, and anything left of
+      // it afterwards is SIGKILLed (see `process-tree.ts`). Everything from the
+      // first signal on is uninterruptible: once the tree has been told to die, a
+      // cancelled request must not strand the descendants that ignored it. A
+      // failed root kill skips the sweep, since the root may still be a live,
+      // tracked process whose children are not ours to take.
       terminate: (input) =>
-        Effect.tryPromise({
-          try: async (): Promise<BackendTerminateResult> => {
-            const ref = input.ref;
-            if (ref.backend !== 'node_pty') {
-              throw new Error(`Cannot terminate node-pty backend for ${ref.backend} ref.`);
+        Effect.gen(function* () {
+          const ref = input.ref;
+          const ptyProcessId = ref.backend === 'node_pty' ? ref.ptyProcessId : undefined;
+          const toKillError = (cause: unknown) => new PtyKillError({ ptyProcessId, cause });
+          if (ref.backend !== 'node_pty') {
+            return yield* Effect.fail(
+              toKillError(new Error(`Cannot terminate node-pty backend for ${ref.backend} ref.`)),
+            );
+          }
+          const live = liveSessions.get(ref.ptyProcessId);
+          if (!live) {
+            return { terminated: false } satisfies BackendTerminateResult;
+          }
+          const tree = yield* snapshotProcessTree({
+            ptyProcessId: ref.ptyProcessId,
+            rootPid: live.process.pid,
+          });
+          return yield* Effect.gen(function* () {
+            const graceful = yield* Effect.try({
+              try: () => {
+                try {
+                  live.process.kill('SIGTERM');
+                  return true;
+                } catch {
+                  live.process.kill();
+                  return false;
+                }
+              },
+              catch: toKillError,
+            });
+            if (graceful) {
+              yield* signalProcessTreeDescendants(tree, 'SIGTERM');
+              yield* Effect.sleep(input.gracefulTimeoutMs);
+              const current = liveSessions.get(ref.ptyProcessId);
+              if (current?.running) {
+                current.suppressExitCallback = true;
+                liveSessions.delete(ref.ptyProcessId);
+                yield* Effect.try({
+                  try: () => current.process.kill('SIGKILL'),
+                  // A failed escalation leaves the root possibly alive, so it
+                  // goes back under tracking rather than running unwatched.
+                  catch: (cause) => {
+                    current.suppressExitCallback = false;
+                    if (current.running) {
+                      liveSessions.set(ref.ptyProcessId, current);
+                    }
+                    return toKillError(cause);
+                  },
+                });
+              }
             }
-            const live = liveSessions.get(ref.ptyProcessId);
-            if (!live) {
-              return { terminated: false };
-            }
-            try {
-              live.process.kill('SIGTERM');
-            } catch {
-              live.process.kill();
-              return { terminated: true };
-            }
-            await delay(input.gracefulTimeoutMs);
-            const current = liveSessions.get(ref.ptyProcessId);
-            if (current?.running) {
-              current.suppressExitCallback = true;
-              liveSessions.delete(ref.ptyProcessId);
-              current.process.kill('SIGKILL');
-            }
-            return { terminated: true };
-          },
-          catch: (cause) =>
-            new PtyKillError({
-              ptyProcessId: input.ref.backend === 'node_pty' ? input.ref.ptyProcessId : undefined,
-              cause,
-            }),
+            return { terminated: true } satisfies BackendTerminateResult;
+          }).pipe(
+            Effect.tap(() => killProcessTreeSurvivors(tree)),
+            Effect.uninterruptible,
+          );
         }),
       kill: (ref) =>
-        Effect.try({
-          try: (): BackendTerminateResult => {
-            if (ref.backend !== 'node_pty') {
-              throw new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`);
-            }
-            const nodeRef = ref;
-            const live = liveSessions.get(nodeRef.ptyProcessId);
-            if (!live) {
-              return { terminated: false };
-            }
+        Effect.gen(function* () {
+          const ptyProcessId = ref.backend === 'node_pty' ? ref.ptyProcessId : undefined;
+          const toKillError = (cause: unknown) => new PtyKillError({ ptyProcessId, cause });
+          if (ref.backend !== 'node_pty') {
+            return yield* Effect.fail(
+              toKillError(new Error(`Cannot kill node-pty backend for ${ref.backend} ref.`)),
+            );
+          }
+          const live = liveSessions.get(ref.ptyProcessId);
+          if (!live) {
+            return { terminated: false } satisfies BackendTerminateResult;
+          }
+          const tree = yield* snapshotProcessTree({
+            ptyProcessId: ref.ptyProcessId,
+            rootPid: live.process.pid,
+          });
+          return yield* Effect.gen(function* () {
             live.suppressExitCallback = true;
-            liveSessions.delete(nodeRef.ptyProcessId);
-            try {
-              live.process.kill();
-            } catch (error) {
-              live.suppressExitCallback = false;
-              if (live.running) {
-                liveSessions.set(nodeRef.ptyProcessId, live);
-              }
-              throw error;
-            }
-            return { terminated: true };
-          },
-          catch: (cause) =>
-            new PtyKillError({
-              ptyProcessId: ref.backend === 'node_pty' ? ref.ptyProcessId : undefined,
-              cause,
-            }),
+            liveSessions.delete(ref.ptyProcessId);
+            yield* Effect.try({
+              // SIGKILL, not node-pty's default SIGHUP: the live entry is dropped
+              // above, so a root that ignored a softer signal would keep running
+              // with nothing left that tracks it.
+              try: () => live.process.kill('SIGKILL'),
+              catch: (cause) => {
+                live.suppressExitCallback = false;
+                if (live.running) {
+                  liveSessions.set(ref.ptyProcessId, live);
+                }
+                return toKillError(cause);
+              },
+            });
+            return { terminated: true } satisfies BackendTerminateResult;
+          }).pipe(
+            Effect.tap(() => killProcessTreeSurvivors(tree)),
+            Effect.uninterruptible,
+          );
         }),
     } satisfies PtyBackendShape;
   }),
 );
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 type NodePtySpawn = typeof nodePty.spawn;
 
