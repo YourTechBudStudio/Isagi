@@ -1,44 +1,38 @@
 # Workflow recovery
 
-Use this reference when repairing a saved run or changing code it may use. For package checks and graph authoring, see [Workflow authoring](workflows.md).
+Use this reference when repairing a saved run. For failed environment preparation, use [Workflow environments](workflow-environments.md#failed-preparation).
 
-## Choose the kind of continuation
+## Choose the continuation
 
-For failures during environment preparation, read [Workflow environments](workflow-environments.md): Retry replays the recorded placement request and base commit without re-running `environment`, and some failures require a new launch. Pause and Resume are refused during preparation; a run interrupted there is failed on restart, with Retry as its re-entry path. The continuation guidance below applies after preparation has completed.
+| Intent | Mechanism | Consequence |
+| --- | --- | --- |
+| Continue after Pause or restart | Resume | Uses saved code and state; human gates still need answers. |
+| Repair a segment that threw | Retry | Can adopt the latest compatible verified build at the saved position. |
+| Deliberately repeat work after a delivered failure | Route to a new node visit | Starts new work under the same code version; bound it with a durable budget. |
+| Observe new facts or get input | Read operation or human wait | Makes the new observation explicit. |
 
-| Intent                                                | Mechanism                            | Authoring consequence                                                                          |
-| ----------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Continue saved work after Pause or restart            | Resume                               | Uses the saved verified code version; does not restart initialization or satisfy a human gate  |
-| Repair an execution segment that threw                | Retry                                | Can adopt the latest verified composed code; preserves saved state and continuation            |
-| Deliberately try work again after a delivered failure | An edge routes to another node visit | Starts new work under the existing version; store a budget and choose an exhausted-budget path |
-| Get new input or recheck current facts                | Human wait or a read operation       | Express the desired observation explicitly rather than repeating earlier side effects          |
+Pause gates future execution; an in-flight callback and external work can continue. Restart parks unfinished execution until Resume. Cancel stops progression and requests cleanup; it does not undo external effects. A declared failure outcome is a graph result, not a thrown segment waiting for Retry.
 
-After environment preparation, Pause gates future execution; an in-flight callback can finish its durable boundary, and external work can continue. Restart parks unfinished runs past preparation until explicit Resume. Cancel prevents further progression and requests best-effort cleanup; it does not undo external effects.
+A failed edge can be repaired without repeating its completed operation. A failed parent output mapping can be repaired without rerunning its completed child.
 
-A failure outcome is a graph result, including when delivered by a child. It is not a thrown segment waiting for the Retry control. A failed route can be repaired without repeating the preceding completed operation. A failed parent result mapping can be repaired without rerunning the completed child.
+## Edit for Retry
 
-## Editing code for Retry
+Preserve saved graph registrations, node kinds, and pending routing/mapping locations. Retry checks structure before adopting code; rejection leaves the saved version unchanged. Authors must also preserve the meaning of active state, parameters, events, reducer updates, and outputs. `init` does not migrate saved state. Rebuild and verify using [Workflow authoring](workflows.md#completion-and-verification).
 
-Preserve the saved graph registrations, node kinds, and pending routing/mapping locations. Retry checks structure before adopting a build; failed loading or structural checks leave the saved version and execution unchanged. These checks cannot prove that new code understands old state, pending events, reducer updates, parameters, or outputs. Review those meanings before retrying; `init` does not migrate saved state. A missing saved build is a recovery failure, not permission for Resume to load newer code.
+When an unfinished callback re-enters, preserve recorded calls in order with the same requests. `spawnAgentSession`, `sendAgentPrompt`, `runHeadlessAgent`, `closePane`, and `captureEvidence` reuse matching results; changing a recorded request fails. Keep a now-unused call if needed to preserve the sequence. Put deliberate new work in a later visit. Direct filesystem, process, and network effects need their own repeatability checks.
 
-For an operation callback that failed after recorded calls, preserve those calls in the same order with the same requests. `spawnAgentSession`, `sendAgentPrompt`, `runHeadlessAgent`, `closePane`, and `captureEvidence` reuse matching recorded results. Changing a recorded request is rejected. If repaired code no longer needs a recorded result, it may still need to make the original call and discard the returned value to preserve that sequence. Put deliberate follow-up work in a subsequent node visit.
+`getConversationHistory` normally reads fresh data. To keep judgment input stable, save the selected response before capturing or judging it; see [Workflow evidence](workflow-evidence.md). `log` and `setUiFeedback` may repeat. Use `ctx.invocation` (`initial`, `resumed`, `retry`) only when invocation-specific behavior is needed; ordinary recovery belongs in visible routes.
 
-For `captureEvidence`, matching means stable metadata, source, content kind, media type, and file path; the bytes themselves are excluded from the recorded identity. An `abandoned` capture recorded intent but committed no evidence record, and re-entry can complete that position. Repair a file capture that failed after intent by restoring the file at its original path, not by editing the recorded path. See [Workflow evidence](workflow-evidence.md) for the later-visit rule.
+## Retry after an agent continued
 
-`getConversationHistory` is normally a fresh read and can return changed data. Explicit Retry is the exception when a failed response-reading step has retained agent-turn provenance: Isagi refreshes that durable agent session, selects the latest exact native turn, and restricts matching conversation reads in the resumed attempt to that turn. An open selected turn waits without sending another prompt; a failed turn remains a failure; missing exact response content fails visibly instead of falling back. Reads of other agent sessions remain ordinary fresh reads. `log` and `setUiFeedback` can be written again; neither is an external-operation receipt. The SDK's `OperationInvocation` exposes `initial`, `resumed`, and `retry` when distinguishing invocation context is necessary; most recovery should be visible in graph routes rather than hidden in retry-only branches.
+For a failed routing or response-reading segment with retained turn provenance, explicit Retry can select the latest observed turn in the same Isagi session without resending the prompt. It waits if that turn is open, delivers its failure if failed, and restricts matching conversation reads to its completed response. Missing response content fails visibly. Other session reads remain fresh.
 
-The same rule repairs a routing segment that consumed an agent-turn event: explicit Retry can bind the segment to a newer event from that session without rerunning the prompt operation. This authority belongs only to the Retry control. Resume and ordinary execution keep the original wait association, and a saved callback result or routing decision is never replaced by newer turn data during reduction recovery.
+This authority belongs to explicit Retry. Resume and ordinary re-entry keep their original association. A saved callback result or routing decision is preserved when retrying a failed reduction. Workflow authors use Isagi handles and ordinary conversation APIs; the runtime selects the native turn.
 
-## Failure, interruption, and unknown delivery
+## Diagnose before repeating effects
 
-Handle delivered agent failure/interruption through declared routes. A new attempt may encounter files already changed by the previous attempt; assess those effects before repeating work. Bound repeated review or repair work in durable state and choose an alternative, human decision, or terminal result when the budget is exhausted.
+Handle confirmed failure/interruption through declared routes, accounting for files already changed. Partial headless output is diagnostic material, not a completed judgment; inspect interruption and stop information before replacing work. Bound retries and choose an exhausted-budget outcome or human gate.
 
-A recorded headless launch whose output-capture owner was lost is interrupted unless its result was already committed. Partial output is diagnostic evidence, not a completed judgment. Interruption does not prove the underlying process stopped or its effects were rolled back; inspect the result's interruption and stop information when choosing follow-up work.
+Unknown delivery means the runtime cannot establish whether an action happened. It blocks dependent work; Retry does not authorize resending it. Inspect the evidence, leave the run blocked, or cancel it rather than inventing a failure event.
 
-Unknown delivery is different: the runtime cannot establish whether an external action happened. It blocks dependent work, and Retry cannot authorize a blind resend. Such a run can remain blocked or be cancelled; do not turn uncertainty into an authored failure event or an automatic replacement launch.
-
-For direct Node filesystem, network, or process work, choose effects safe to repeat or check durable evidence before repeating them. Runtime-managed agent calls do not make arbitrary author code exactly-once or roll back external changes.
-
-## Inspect the failed boundary
-
-From the attached run's workflow bar, Declared shows the pinned graph and Trace shows actual visits and attempts. Use the failed boundary, recorded inputs/results, and diagnostics to identify what needs repair and what already completed. Give nodes meaningful titles and log identifiers, paths, and failure causes from operations so that recovery does not depend on guessing from a phase label.
+Use [CLI investigation](cli-investigate-runs.md) to inspect the failed visit, attempts, recorded inputs/results, and code versions. Meaningful node titles and operation logs containing identifiers, paths, and causes make this possible without guessing.

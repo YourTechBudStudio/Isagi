@@ -237,7 +237,7 @@ export const commandTable = [
   {
     group: 'runs',
     verb: 'retry',
-    summary: 'Retry a failed run on its current workflow version.',
+    summary: 'Retry a failed run using the latest compatible verified workflow build.',
     positionals: runIdPositional,
     options: {},
     stdout: 'json',

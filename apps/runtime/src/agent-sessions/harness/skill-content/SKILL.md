@@ -1,6 +1,6 @@
 ---
 name: isagi-docs
-description: Configure Isagi projects and runtime settings, author or repair Isagi workflows, and investigate workflow run history, checkpoint export and fresh launches with the `isagi` CLI. Use for worktree hooks, commands and ports, harness policy, terminal history, scrollback and cache retention, workflow discovery, graph authoring, workflow environments and placement, workflow checkpoints, and workflow verification or recovery. Do not use for ordinary development work merely because it runs inside Isagi.
+description: Configure Isagi, author or repair Isagi workflows, verify workflow packages, and investigate or reconstruct runs with the isagi CLI. Do not use for ordinary development work merely because it runs inside Isagi.
 ---
 
 # Configure Isagi and author workflows

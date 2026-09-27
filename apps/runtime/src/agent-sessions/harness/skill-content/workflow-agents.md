@@ -15,7 +15,7 @@ Read [Workflow authoring](workflows.md) for graph structure and package checks. 
 | `setUiFeedback`          | Meaningful phase/message for the user                                                          |
 | `log`                    | Durable diagnostic context                                                                     |
 
-Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success. If a routing or response-reading segment fails after this wait, a human-triggered Retry may select the latest observed turn in the same durable agent session; workflow code still uses only the Isagi session handle and ordinary event/conversation APIs.
+Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success.
 
 ## Interactive turn and observation
 
@@ -160,11 +160,4 @@ export const reviewInput = {
 } satisfies WorkflowPromptInput;
 ```
 
-| Harness    | Skill           | Command   |
-| ---------- | --------------- | --------- |
-| `pi`       | `/skill:<name>` | `/<name>` |
-| `opencode` | `/<name>`       | `/<name>` |
-| `claude`   | `/<name>`       | `/<name>` |
-| `codex`    | `$<name>`       | `$<name>` |
-
-Rendering does not check that a skill or command exists or that a harness applies stacked skills. Use command modifiers for native prompt templates/commands that start an agent turn. UI-only commands such as `/help`, `/settings`, or `/model` do not satisfy a turn wait. Pi and OpenCode provide first-class command syntax; on Claude and Codex a command renders like a skill. Headless OpenCode may treat slash-looking text as ordinary prompt text rather than invoke a native command.
+Rendering does not check that a skill or command exists or that a harness applies stacked skills. Use command modifiers for native templates that start an agent turn; UI-only commands such as `/help`, `/settings`, or `/model` cannot satisfy a turn wait. Headless OpenCode may treat slash-looking text as ordinary prompt text.
