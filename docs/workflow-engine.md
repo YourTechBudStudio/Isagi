@@ -52,7 +52,7 @@ Pause gates future execution while allowing an in-flight callback to reach its d
 
 Cancel prevents further graph progression and requests best-effort cleanup of owned operations. History and late evidence remain available. Dismiss removes a finished or cancelled run's surface attachment without deleting its history. A surface holds at most one attached run, including a finished run until it is dismissed.
 
-Run history also survives deletion of its surface or worktree. Retention preserves evidence, not a usable execution environment: a run cannot resume into a destination that no longer exists.
+Run history also survives deletion of its surface or worktree. Every run belongs to the project it was launched in; that ownership is recorded when the run is created and never changes, so retained history stays attributable after its worktrees are gone. Retention preserves evidence, not a usable execution environment: a run cannot resume into a destination that no longer exists.
 
 ## Inspection and the client boundary
 
