@@ -4,7 +4,7 @@
 
 Workflows coordinate long-running agent work through declared graphs. Authors put the sequence, routing, and human gates in TypeScript; agents perform the work and supply judgments that the graph can act on.
 
-The runtime owns execution, saved state, code versions, external-operation tracking, and recovery. Author code uses the TypeScript SDK and Promise-based capabilities; the runtime manages operational lifecycles internally through Effect. The web client presents run state and sends explicit controls. A surface is where a run is shown; the run has its own durable identity.
+The runtime owns execution, saved state, code versions, the record of external operations, and recovery. Author code uses the TypeScript SDK and Promise-based capabilities; the runtime manages operational lifecycles internally through Effect. The web client presents run state and sends explicit controls. A surface is where a run is shown; the run has its own durable identity.
 
 This overview explains the subsystem's model and guarantees. Concrete authoring types, API shapes, persistence, and execution mechanics live in the code.
 
@@ -12,13 +12,13 @@ This overview explains the subsystem's model and guarantees. Concrete authoring 
 
 A workflow combines its launch inputs and validation with a root graph. Graphs declare operations, checkpoints, nested graphs, routing edges, and completion outcomes. Each graph invocation owns private state; pure per-field reducers apply updates, and mappings pass parameters into children and completed outputs back to parents. Graph execution is sequential, with explicit waits for external work or human input.
 
-Operations perform work and can complete immediately or return an explicit wait. Pure routing edges consume the resulting event and choose a declared destination. A callback or reducer exception fails the execution segment; an agent reporting failure is an event the graph can handle through ordinary routing. Reducer failures do not partially apply graph state.
+Operations perform work and can complete immediately or return an explicit wait. Pure routing edges consume the resulting event and choose a declared destination. An exception in a node function, reducer, edge or mapping fails that execution; an agent reporting failure is an event the graph can handle through ordinary routing. A failed step changes no graph state.
 
 Checkpoint nodes save declared files from the run's destination at a point in the graph. The runtime layers each capture over earlier checkpoints in the run and stores a resolved inventory of final files and required absences for inspection and later reconstruction. For Git projects, it also records the current commit as the baseline, which must still be available when reconstruction happens. A checkpoint does not save graph state, agent sessions, or other execution context; durable continuation remains part of the run.
 
 The `isagi` CLI can export that resolved filesystem state into an empty destination on the runtime's machine. The runtime resolves the checkpoint and creates a Git worktree at its recorded baseline when needed; the CLI applies the final files and required absences. Export does not resume or launch a run.
 
-One run contains the whole composed graph. A graph definition describes reusable structure, a frame represents one invocation of that graph, a node execution represents one visit, and an attempt records one try at an execution segment. Repeated visits and retries retain distinct history under the same run.
+One run contains the whole composed graph. A graph definition describes reusable structure, a graph invocation is one entry into a graph (the root once, and each subgraph visit once), and a node execution is one run of one node. A Retry is another execution that points at the one it retries. Repeated visits and retries keep distinct history under the same run.
 
 Workflows are independently built and verified packages discovered from global, configured, and project sources. Higher-priority sources own matching workflow keys; a broken winning package does not silently fall back to another definition. Users can launch workflows through the command palette or the `isagi` CLI; both use the runtime's launch API.
 
@@ -26,39 +26,35 @@ Verification checks declared structure and produces the artifact the runtime loa
 
 ## Durable continuation and code versions
 
-The runtime persists graph state and the exact position from which execution should continue. Completed transitions are committed with their history. Recovery follows that saved position without replaying completed history.
+Each node execution runs its node function once and saves what it returned before anything routes. That saved result is the only thing the runtime ever reuses. Everything after it is pure and always runs with the run's current code, in one transaction: the result's update through the reducers, the edge, and, when a graph reaches an outcome, its output, the parent's `onResult`, reducers and edge, and the next execution. A throwing step records its stage and the graph and node or outcome whose code threw, fails the execution being stepped, and writes nothing else. A `suspend`'s update is applied together with the edge once the wait is delivered, so a failed step can always be replayed on unchanged state.
 
-The position distinguishes operational work from routing and applying a child's completed output. A failed route can therefore be retried without sending the preceding prompt again, and a failed parent mapping can be retried without rerunning the completed child.
+Each execution records what the node returned, the event that came back, where the edge went, and the invocation's state afterwards, as a history of the run.
 
-A run is pinned to an immutable verified artifact containing its composed code. Resume continues under that pin; a missing or corrupt pinned artifact is a recovery failure, not permission to load newer code. Explicit Retry can adopt the latest verified version after checking that the saved structural locations still exist. Rejected loading or structural validation leaves the saved execution and pin unchanged. Authors remain responsible for the meaning and compatibility of saved state, events, outputs, and capability calls across edits. Earlier attempts retain the code identity under which they ran.
+A run points at an immutable verified artifact. Resume and Retry both reload the latest verified build first, after checking that every open graph is still declared, that each subgraph link on the active path still enters the same graph, and that the parked node still exists with the same kind. A refused reload leaves the run unchanged. Authors remain responsible for the meaning and compatibility of saved state, events and outputs across edits. Each execution records the build that ran it.
 
 ## External work and recovery
 
-Runtime capabilities record durable operation intents and receipts separately from graph transitions. When an unfinished callback is entered again, matching recorded calls reuse known receipts rather than repeating their effects. New visits to a node represent new work.
+Every side-effecting capability call (spawning an agent, sending a prompt, running a headless job, closing a pane) appends an operation to the run's log: the full request, what came back, and for agent turns the agent's reply, recorded when the turn is delivered. The log is history only. Nothing is reused from it, so a node function that runs again performs its effects again; authors keep each node to one side effect so a repeat is small and visible.
 
-External dispatch and database writes cannot form one atomic transaction. Recovery reconciles durable evidence and blocks dependent work when delivery remains unknown. Retry does not authorize a blind resend. Confirmed success, failure, or interruption can resolve a wait and reach the graph's routing logic; unknown delivery is not an authored failure outcome.
+An agent-turn wait is answered by the latest turn in the session that started after the prompt was sent: a running turn keeps the wait open, an ended or failed one is delivered. The same rule applies to ordinary waiting, Resume and Retry (see ADR 0009), so a turn a person runs by hand after a failure is what a Retry picks up. A headless wait is delivered once every listed job has finished, with results in declared order.
 
-Explicit Retry has one additional authority for agent-turn failures: after forcing a fresh observation of the same durable agent session, it may select the latest exact native turn. The selection is persisted as a runtime-owned `agent_turn` wait before the run moves. An open selected turn remains waiting without another prompt; a completed or failed selected turn is delivered immediately. The resumed routing segment sees that exact event, and a resumed response-reading callback reads only that exact completed turn. Missing selected content fails visibly rather than falling back to another response. A refresh failure leaves the failed run and its pin unchanged.
+Recovery that needs judgement is authored in the graph: a bounded self-retry route with a counter in state, or a human gate that asks a person to fix something and then routes back.
 
-The selected recovery event is bound to the next attempt's recorded input. It does not replace a producer result or routing decision that an earlier attempt already captured, so reduction recovery continues from its saved operand. Recovery waits are retained as history but are not treated as authored waits by later routing segments.
-
-A recorded headless launch whose runtime capture owner was lost is interrupted unless a result was already committed. A launch whose outcome was never recorded can remain uncertain. Neither interruption nor cancellation proves that external effects were rolled back or every process stopped. Arbitrary filesystem and process effects performed directly by author code remain the author's retry-safety responsibility.
-
-On restart, unfinished runs are parked before graph dispatch begins. The runtime reconciles operations and waits against durable evidence, and continuation requires explicit Resume. A human gate still requires its own explicit answer.
+On restart, a node function that was running is marked interrupted and its run fails, so a person decides whether to Retry it. A run still preparing its environment fails the same way. Every other active run is paused; Resume re-checks its waits. Headless jobs that were running are interrupted and delivered to their edge as such on Resume. Neither interruption nor cancellation proves that external effects were rolled back.
 
 ## Controls and retention
 
-Pause gates future execution while allowing an in-flight callback to reach its durable boundary. Already launched external work may continue. Resume lifts the gate under the existing code pin; Retry starts another attempt at a failed segment using verified code and the saved continuation; that attempt can fail again.
+Pause stops anything new from starting while an in-flight node function finishes and its result is saved; a person's answer is stored, but nothing routes until Resume. Resume reloads the latest build and continues. Retry, on a failed run, reloads the latest build and repeats the failed execution as a new execution: it reuses the saved result when there is one, and otherwise runs the node function again.
 
-Cancel prevents further graph progression and requests best-effort cleanup of owned operations. History and late evidence remain available. Dismiss removes a finished or cancelled run's surface attachment without deleting its history. A surface holds at most one attached run, including a finished run until it is dismissed.
+Cancel stops the run and stops its running headless processes on a best-effort basis; agent panes stay open and history remains. Dismiss detaches a completed, failed or cancelled run from its surface without deleting its history. A surface holds at most one attached run, including a finished run until it is dismissed.
 
-Run history also survives deletion of its surface or worktree. Every run belongs to the project it was launched in; that ownership is recorded when the run is created and never changes, so retained history stays attributable after its worktrees are gone. Retention preserves evidence, not a usable execution environment: a run cannot resume into a destination that no longer exists.
+Run history survives deletion of its surface or worktree. Every run belongs to the project it was launched in; that ownership is recorded when the run is created and never changes, so retained history stays attributable after its worktrees are gone. Retention preserves history, not a usable execution environment: a run cannot resume into a surface that no longer exists.
 
 ## Inspection and the client boundary
 
-The workflow bar presents controls and human input and opens the read-only inspector. Declared shows the current pinned graph structure and execution position. Trace shows recorded executions across visits and code versions. Definition structure and actual execution history remain distinct.
+The workflow bar presents controls and human input and opens the read-only inspector. Declared shows the graph structure of the run's current build and its position. Trace shows recorded executions across visits and code versions. Definition structure and actual execution history remain distinct.
 
-The client derives its presentation from runtime-owned facts. Coherent snapshots and revision-ordered updates let it recover missed changes without treating arrival order as execution order. Inspection reads do not execute author callbacks or perform operational recovery.
+Every change a run goes through appends to its event log, and each appended event is pushed live to clients together with the run's new summary. A client appends the event to its trace and refetches the run or execution the event names; the read routes are the source of truth and page by id. Inspection reads never run author code.
 
 The inspector is reached through an attached run's workflow bar. Retained history remains accessible through the run API and `isagi` CLI after Dismiss, but there is currently no detached-run entry in the UI.
 

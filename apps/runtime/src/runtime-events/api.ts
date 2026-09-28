@@ -13,7 +13,7 @@ import {
 import { AgentSessionAttentionProjection } from '../agent-sessions/index.js';
 import { enforceRuntimeWebSocketOrigin } from '../lib/security/origin.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { WorkflowRunProjection } from '../workflows/index.js';
+import { WorkflowEngine } from '../workflows/index.js';
 import { nextRuntimeEventEnvelope, RuntimeEventBus } from './event-bus.js';
 
 const runWithRuntime =
@@ -168,8 +168,8 @@ function handleClientMessage(
       });
     case 'workflow_run_snapshot_requested':
       return Effect.gen(function* () {
-        const projection = yield* WorkflowRunProjection;
-        const summaries = yield* projection.listAttachedSummaries();
+        const engine = yield* WorkflowEngine;
+        const summaries = yield* engine.listAttachedSummaries;
         return {
           ...nextRuntimeEventEnvelope(),
           type: 'workflow_run_snapshot',

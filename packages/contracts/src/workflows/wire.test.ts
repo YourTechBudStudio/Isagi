@@ -8,7 +8,7 @@ import {
   listWorkflowCheckpointsQuerySchema,
   workflowCheckpointFileQuerySchema,
 } from './checkpoints.js';
-import { workflowExecutionDetailSchema } from './executions.js';
+import { workflowErrorSchema, workflowExecutionDetailSchema } from './executions.js';
 import {
   listWorkflowRunsOutputSchema,
   listWorkflowRunsQuerySchema,
@@ -154,6 +154,26 @@ test('an execution detail carries its operations with the recorded reply', () =>
     ],
   });
   assert.equal(detail.operations[0]?.responseText, 'Done.');
+});
+
+test('an execution error can say which graph and node or outcome threw', () => {
+  const located = Schema.decodeUnknownSync(workflowErrorSchema)({
+    stage: 'edge',
+    message: 'boom',
+    graphKey: 'Story',
+    nodeId: 'review',
+  });
+  assert.deepEqual(located, {
+    stage: 'edge',
+    message: 'boom',
+    graphKey: 'Story',
+    nodeId: 'review',
+  });
+  const bare = Schema.decodeUnknownSync(workflowErrorSchema)({
+    stage: 'environment',
+    message: 'x',
+  });
+  assert.equal('graphKey' in bare, false);
 });
 
 test('each appended event is pushed as one workflow_run_event', () => {

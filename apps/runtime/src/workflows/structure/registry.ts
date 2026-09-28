@@ -16,13 +16,13 @@ import {
   loadPinnedWorkflowArtifact,
   validateAndPublishWorkflowPackage,
   WorkflowLoadError,
-  type AnyWorkflowDefinition,
-  type WorkflowDefinitionCache,
   type LoadedWorkflowArtifact,
+  type PublishedWorkflowArtifact,
+  type WorkflowDefinitionCache,
 } from './loader.js';
 
 export class WorkflowRegistryError extends Data.TaggedError('WorkflowRegistryError')<{
-  readonly code: 'scan_failed' | 'in_memory_mutation_unsupported';
+  readonly code: 'scan_failed';
   readonly message: string;
   readonly workflowSourceDirectory?: string | undefined;
   readonly sourceKind?: WorkflowDiscoverySource['kind'] | undefined;
@@ -34,22 +34,11 @@ export interface WorkflowPackageProvenance {
   readonly shadowedWorkflowPackageDirectories: readonly string[];
 }
 
-const discoveredWorkflowLocator = Symbol('isagi/DiscoveredWorkflowLocator');
-
-type DiscoveredWorkflowLocator =
-  | {
-      readonly kind: 'filesystem';
-      readonly load: () => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
-    }
-  | {
-      readonly kind: 'in_memory';
-      readonly load: () => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
-    };
-
 export interface DiscoveredWorkflowEntry {
   readonly workflowKey: string;
   readonly provenance?: WorkflowPackageProvenance | undefined;
-  readonly [discoveredWorkflowLocator]: DiscoveredWorkflowLocator;
+  /** Verifies the package and publishes its artifact to the content-addressed cache. */
+  readonly load: () => Effect.Effect<PublishedWorkflowArtifact, WorkflowLoadError>;
 }
 
 export interface WorkflowDiscoverySnapshot {
@@ -57,21 +46,21 @@ export interface WorkflowDiscoverySnapshot {
   readonly find: (workflowKey: string) => DiscoveredWorkflowEntry | undefined;
 }
 
+/**
+ * Where workflows come from and how their verified builds are loaded.
+ *
+ * `discover` lists the packages visible from a project, an entry's `load` verifies it and publishes
+ * its artifact to the content-addressed cache, and `loadPinned` imports an artifact already in the
+ * cache by its hash. Tests supply their own implementation.
+ */
 export interface WorkflowRegistryService {
   readonly discover: (
     context?: WorkflowRegistryContext,
   ) => Effect.Effect<WorkflowDiscoverySnapshot, WorkflowRegistryError>;
-  readonly loadDiscovered: (
-    entry: DiscoveredWorkflowEntry,
-  ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
   readonly loadPinned: (
     artifactHash: string,
     workflowKey?: string,
   ) => Effect.Effect<LoadedWorkflowArtifact, WorkflowLoadError>;
-  readonly addWorkflow: (
-    workflowKey: string,
-    definition: AnyWorkflowDefinition,
-  ) => Effect.Effect<void, WorkflowRegistryError>;
 }
 
 export const WorkflowRegistry =
@@ -131,16 +120,8 @@ export function createFilesystemWorkflowRegistry(
                 cause,
               }),
       }),
-    loadDiscovered: (entry) => entry[discoveredWorkflowLocator].load(),
     loadPinned: (artifactHash, workflowKey) =>
       loadPinnedWorkflowArtifact({ artifactHash, cacheRoot, workflowKey, definitionCache }),
-    addWorkflow: () =>
-      Effect.fail(
-        new WorkflowRegistryError({
-          code: 'in_memory_mutation_unsupported',
-          message: 'Filesystem workflow registry does not support addWorkflow.',
-        }),
-      ),
   };
 }
 
@@ -229,31 +210,16 @@ function filesystemDiscoveryEntry(
     workflowPackageDirectory: workflow.winner.packageRoot,
     shadowedWorkflowPackageDirectories: workflow.shadowed.map((candidate) => candidate.packageRoot),
   } satisfies WorkflowPackageProvenance;
-  return createDiscoveredWorkflowEntry(
-    workflow.workflowKey,
-    {
-      kind: 'filesystem',
-      load: () =>
-        validateAndPublishWorkflowPackage({
-          workflowKey: workflow.workflowKey,
-          packageRoot: workflow.winner.packageRoot,
-          cacheRoot,
-          definitionCache,
-        }),
-    },
-    provenance,
-  );
-}
-
-function createDiscoveredWorkflowEntry(
-  workflowKey: string,
-  locator: DiscoveredWorkflowLocator,
-  provenance?: WorkflowPackageProvenance,
-): DiscoveredWorkflowEntry {
   return {
-    workflowKey,
-    ...(provenance ? { provenance } : {}),
-    [discoveredWorkflowLocator]: locator,
+    workflowKey: workflow.workflowKey,
+    provenance,
+    load: () =>
+      validateAndPublishWorkflowPackage({
+        workflowKey: workflow.workflowKey,
+        packageRoot: workflow.winner.packageRoot,
+        cacheRoot,
+        definitionCache,
+      }),
   };
 }
 

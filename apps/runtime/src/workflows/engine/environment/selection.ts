@@ -2,9 +2,10 @@ import { Effect, Schema } from 'effect';
 
 import { workflowPlacementRequestSchema, type WorkflowPlacementRequestDto } from '@isagi/contracts';
 
+import { WorkflowEngineError } from '../../errors.js';
 import { errorMessage } from '../../state/pure.js';
 import type { AnyWorkflowDefinition } from '../../structure/loader.js';
-import { WorkflowEngineError, type WorkflowOrigin } from '../../types.js';
+import type { WorkflowOrigin } from '../../types.js';
 import { makeEnvironmentContext, type DiscoveryDeps } from './discovery.js';
 import type { LaunchProject, PlacementSelection } from './types.js';
 
@@ -32,9 +33,8 @@ export interface SelectionInput {
  * hook, then the current/current default. The caller is a person or a CLI saying "put this here",
  * and an override that the workflow could quietly overrule would not be an override.
  *
- * Both non-default sources are decoded through the contract schema before they leave. That is what
- * keeps a malformed placement a *launch rejection* the person sees immediately, rather than a
- * failure deep inside preparation with a run row and a claimed attempt already behind it.
+ * Both non-default sources are decoded through the contract schema before they leave, so a malformed
+ * placement is a launch rejection the person sees immediately rather than a failed run.
  */
 export function selectPlacement(
   deps: DiscoveryDeps,

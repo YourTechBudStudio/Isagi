@@ -122,30 +122,7 @@ export type InternalRuntimeEvent =
   | {
       readonly type: 'pty_foreground_command_ended';
       readonly ptyProcessId: number;
-    }
-  | {
-      /**
-       * A durable workflow operation reached a settled state.
-       *
-       * A wake-up, never the authority: the operation row is what says *what* it settled as, and a
-       * dropped notification costs a delay rather than a fact, because the wait resolver's own
-       * reconciliation reads the same rows. It replaces the old `headless_op_completed`, which named
-       * only one of the four capabilities that can settle.
-       */
-      readonly type: 'workflow_operation_settled';
-      readonly runId: number;
-      readonly operationId: number;
-      readonly operationKey: string;
     };
-
-/*
- * `workflow_run_terminal`, `workflow_run_touched` and `workflow_run_recompute_requested` are gone
- * with the v1 projection that was their only consumer. The first was never published at all; the
- * other two carried `rootRunId`, a child-run identity this story retired. Nothing recomputes a
- * summary from a notification any more: a committed transition captures its own read model, and the
- * publisher drains it from the database. A variant nobody produces or consumes is not a seam kept
- * open for later — it is a claim about the runtime that is not true.
- */
 
 export interface InternalRuntimeEventSubscription {
   readonly take: Effect.Effect<InternalRuntimeEvent>;

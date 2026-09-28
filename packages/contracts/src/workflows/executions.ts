@@ -37,9 +37,17 @@ export const workflowErrorStageSchema = Schema.Literal(
   'checkpoint_capture',
 );
 
+/**
+ * `graphKey` and `nodeId` say whose code threw when a pure step failed. The failure is recorded on
+ * the execution being stepped, which for a child graph's return path is the child's last execution,
+ * so these can name a parent graph and node. `nodeId` names an outcome when the stage is
+ * `graph_output`, and a node otherwise.
+ */
 export const workflowErrorSchema = Schema.Struct({
   stage: workflowErrorStageSchema,
   message: Schema.String,
+  graphKey: Schema.optionalWith(nonEmptyString, { exact: true }),
+  nodeId: Schema.optionalWith(nonEmptyString, { exact: true }),
 });
 
 /** A graph's terminal result. `output` is whatever the outcome produced. */

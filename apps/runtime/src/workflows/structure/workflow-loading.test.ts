@@ -84,7 +84,7 @@ test('live registry captures configured sources once at layer construction', asy
  * honest about that — recognition has to work on plain data or it does not work at all.
  */
 function bundleSource(input: { readonly graphKey: string; readonly nodes: string }): string {
-  return `const brand = (kind) => ({ isagiContract: 3, isagiKind: kind });
+  return `const brand = (kind) => ({ isagiContract: ${supportedWorkflowContractVersion}, isagiKind: kind });
 export default {
   ...brand('workflow'),
   command: () => ({ title: 'Packaged workflow' }),
@@ -188,7 +188,7 @@ test('reports stable reasons for legacy, stale, tampered, and missing pinned art
 
     assert.equal(
       await reason(registry.loadPinned('f'.repeat(64), 'missing')),
-      'pinned_artifact_unavailable',
+      'artifact_load_failed',
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -363,14 +363,8 @@ test('retains malformed children as blocking winners without lower-priority fall
       discovery.entries.map((entry) => entry.workflowKey),
       ['file-winner', 'symlink-winner'],
     );
-    assert.equal(
-      await reason(registry.loadDiscovered(discovery.find('file-winner')!)),
-      'invalid_package',
-    );
-    assert.equal(
-      await reason(registry.loadDiscovered(discovery.find('symlink-winner')!)),
-      'invalid_package',
-    );
+    assert.equal(await reason(discovery.find('file-winner')!.load()), 'invalid_package');
+    assert.equal(await reason(discovery.find('symlink-winner')!.load()), 'invalid_package');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -393,7 +387,7 @@ test('does not rediscover or fall back when a discovered winner disappears befor
 
     await rm(projectWinner, { recursive: true });
 
-    assert.equal(await reason(registry.loadDiscovered(shared)), 'invalid_package');
+    assert.equal(await reason(shared.load()), 'invalid_package');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -417,7 +411,7 @@ test('discovers lone file and symlink children as malformed package descriptors'
       ['file-child', 'symlink-child'],
     );
     for (const entry of discovery.entries) {
-      assert.equal(await reason(registry.loadDiscovered(entry)), 'invalid_package');
+      assert.equal(await reason(entry.load()), 'invalid_package');
     }
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -625,7 +619,7 @@ function discoverAndLoad(
     const discovery = yield* registry.discover(context);
     const entry = discovery.find(workflowKey);
     assert.ok(entry, `Expected workflow '${workflowKey}' to be discovered.`);
-    return yield* registry.loadDiscovered(entry);
+    return yield* entry.load();
   });
 }
 

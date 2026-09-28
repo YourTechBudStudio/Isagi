@@ -6,9 +6,8 @@ import {
   WorkspaceError,
   type WorkspaceServiceError,
 } from '../../../workspace/workspace.service.js';
-import type { WorkflowRunRecord } from '../../persistence/records.js';
-import type { WorkflowRunsRepositoryService } from '../../persistence/runs.repository.js';
-import { WorkflowEngineError, type WorkflowOrigin } from '../../types.js';
+import { WorkflowEngineError } from '../../errors.js';
+import type { WorkflowOrigin } from '../../types.js';
 import type { LaunchProject, PlacementSelection, ResolvedPlacement } from './types.js';
 /**
  * What the worktree preflight can still fail with once its own rejections have been mapped.
@@ -24,11 +23,10 @@ export type PlacementInfrastructureError = Exclude<WorkspaceServiceError, Worksp
  * What `resolvePlacement` reads, and the one service call it makes.
  *
  * `preflightWorktreeCreation` allocates nothing — it answers "could this creation happen, and with
- * what facts" — so this whole function is still read-only. That is the property the rejection tests
- * assert on: a refused launch has neither written a row nor called anything that creates.
+ * what facts" — so this whole function is still read-only: a refused launch has neither written a
+ * row nor called anything that creates.
  */
 export interface PlacementDeps {
-  readonly runs: Pick<WorkflowRunsRepositoryService, 'listByDestinationSurface' | 'findAttachment'>;
   readonly workspace: {
     readonly findWorktree: (
       worktreeId: number,
@@ -42,7 +40,7 @@ export interface PlacementDeps {
       readonly projectId: number;
       readonly branch: string;
       readonly fromRef: string;
-    }) => Effect.Effect<{ commit: string; checkoutPath: string }, WorkspaceServiceError>;
+    }) => Effect.Effect<{ readonly commit: string }, WorkspaceServiceError>;
   };
   readonly surfaceRepository: {
     readonly findSurface: (
@@ -70,7 +68,10 @@ export interface ResolvePlacementInput {
  * anything, including the branch a `create` choice names. And it does not re-derive anything later:
  * the returned `ResolvedPlacement` is what preparation acts on, so a `create` worktree carries the
  * commit its `fromRef` pointed at *now*, and preparation creates from that commit even if the
- * branch has moved (criterion 7).
+ * branch has moved.
+ *
+ * Whether a reused surface is free is checked by the launch inside the transaction that creates the
+ * run, so two launches cannot both take it.
  */
 export function resolvePlacement(
   deps: PlacementDeps,
@@ -83,28 +84,6 @@ export function resolvePlacement(
       worktree.kind === 'reuse' ? worktree.worktreeId : (null as number | null);
 
     const surface = yield* resolveSurface(deps, input, resolvedWorktreeId);
-
-    // Occupancy applies only to a surface this launch is *taking over*. A surface it is about to
-    // create cannot already hold a run, and checking a title against the attachment table would be
-    // meaningless. The authority remains the partial unique index re-checked by the commit; this is
-    // the pre-check that turns the common case into a useful message instead of a retained failure.
-    if (surface.kind === 'reuse') {
-      const occupant = yield* firstAttached(
-        deps,
-        yield* deps.runs.listByDestinationSurface(surface.surfaceId),
-      );
-      if (occupant !== null) {
-        return yield* Effect.fail(
-          new WorkflowEngineError({
-            code: 'workflow_surface_attached',
-            message: `Surface ${surface.surfaceId} already has a workflow attached. Dismiss it before starting another.`,
-            workflowKey: input.workflowKey,
-            activeWorkflowRunId: occupant,
-            surfaceId: surface.surfaceId,
-          }),
-        );
-      }
-    }
 
     return {
       source: input.selection.source,
@@ -182,7 +161,6 @@ function resolveWorktree(
           branch,
           fromRef: choice.fromRef,
           baseCommit: preflight.commit,
-          checkoutPath: preflight.checkoutPath,
         } as const;
       });
   }
@@ -366,18 +344,4 @@ function resolveSurface(
         return { kind: 'create', title } as const;
       });
   }
-}
-
-/** The run currently holding this surface's attachment, if any. */
-export function firstAttached(
-  deps: Pick<PlacementDeps, 'runs'>,
-  candidates: readonly WorkflowRunRecord[],
-): Effect.Effect<number | null, DatabaseError> {
-  return Effect.reduce(candidates, null as number | null, (held, candidate) =>
-    held !== null
-      ? Effect.succeed(held)
-      : deps.runs
-          .findAttachment(candidate.id)
-          .pipe(Effect.map((attachment) => (attachment ? candidate.id : null))),
-  );
 }

@@ -2,7 +2,7 @@
  * The boundary between a committed state snapshot and an author's callback.
  *
  * Every pure callback — `init`, `parameters`, `choose`, `output`, `onResult`, and every `reduce` —
- * is handed an isolated copy rather than the value the interpreter is holding. Two properties come
+ * is handed an isolated copy rather than the value the engine is holding. Two properties come
  * from that, and both matter:
  *
  * - a callback that mutates its argument throws instead of corrupting a live snapshot, because the

@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  assertSerializable,
-  canonicalBytes,
-  canonicalJson,
-  UnserializableValueError,
-} from './serializable.js';
+import { assertSerializable, UnserializableValueError } from './serializable.js';
 
 /** `assert.throws` does not hand back the error, and these tests assert on its contents. */
 function capture(run: () => unknown): UnserializableValueError {
@@ -65,28 +60,4 @@ test('a repeated object is not mistaken for a cycle', () => {
   // Two references to one object along *different* branches is ordinary data. Tracking visited
   // objects globally rather than per-path would reject this, which would reject a lot of real state.
   assert.doesNotThrow(() => assertSerializable({ left: shared, right: shared }));
-});
-
-test('canonical JSON sorts keys and preserves array order', () => {
-  assert.equal(canonicalJson({ b: 1, a: 2 }), '{"a":2,"b":1}');
-  assert.equal(canonicalJson({ a: { d: 1, c: 2 } }), '{"a":{"c":2,"d":1}}');
-  assert.equal(canonicalJson([3, 1, 2]), '[3,1,2]');
-  // Two objects that differ only by insertion order must hash the same, which is what makes
-  // content identity and request fingerprinting work at all.
-  assert.equal(
-    canonicalJson({ x: 1, y: [{ b: 1, a: 2 }] }),
-    canonicalJson({ y: [{ a: 2, b: 1 }], x: 1 }),
-  );
-});
-
-test('canonical bytes are UTF-8, so size is measured in what is actually stored', () => {
-  // One character, four bytes. Measuring JavaScript string length here would misclassify a state
-  // boundary full of non-ASCII text as small enough to inline.
-  assert.equal(canonicalBytes('😀').byteLength, Buffer.from('"😀"', 'utf8').byteLength);
-  assert.equal(canonicalBytes('😀').byteLength, 6);
-});
-
-test('a recorded JSON null is encoded, not dropped', () => {
-  assert.equal(canonicalJson(null), 'null');
-  assert.equal(canonicalJson({ a: null }), '{"a":null}');
 });

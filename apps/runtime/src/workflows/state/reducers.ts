@@ -1,6 +1,6 @@
 import type { GraphStateFields, StateField } from '../types.js';
 import { isolate } from './isolation.js';
-import { checkSerializable, evaluatePure, pureFailure, type PureFailure } from './pure.js';
+import { checkSerializable, evaluatePure, pureFailure } from './pure.js';
 
 /**
  * Applying an author's update to a committed state boundary.
@@ -11,8 +11,8 @@ import { checkSerializable, evaluatePure, pureFailure, type PureFailure } from '
  *   partially reduced candidate, so reducers cannot observe each other's results and their order is
  *   not a hidden part of the contract.
  * - **All or nothing.** The candidate is built beside `current`, which is never mutated. A reducer
- *   that throws halfway through leaves nothing partial to commit, which is what lets the caller
- *   write state, result and history in one transaction and mean it.
+ *   that throws halfway through leaves nothing partial to commit, which is what lets a failed step
+ *   leave the invocation's state unchanged.
  * - **No implicit clears.** Omitting a key is the only way to leave a field unchanged; an own key
  *   whose value is `undefined` is rejected, so a typo cannot quietly erase a field.
  */
@@ -22,7 +22,7 @@ export type ReduceOutcome =
       /** The new boundary. Reference-equal to `current` when the update changed nothing. */
       readonly state: Record<string, unknown>;
     }
-  | { readonly ok: false; readonly failure: PureFailure };
+  | { readonly ok: false; readonly message: string };
 
 export function reduceState(input: {
   readonly fields: GraphStateFields<Record<string, unknown>, Record<string, unknown>>;
@@ -36,27 +36,18 @@ export function reduceState(input: {
   // publishes no new state boundary at all.
   if (update === undefined) return { ok: true, state: current };
   if (!isPlainObject(update)) {
-    return pureFailure(
-      'invalid_update_shape',
-      `A state update must be a plain object; received ${describeShape(update)}.`,
-    );
+    return pureFailure(`A state update must be a plain object; received ${describeShape(update)}.`);
   }
 
   const keys = Object.keys(update);
   for (const key of keys) {
     const field = fieldFor(fields, key);
     if (!field) {
-      return pureFailure(
-        'unknown_state_field',
-        `Graph '${graphKey}' has no state field '${key}'.`,
-        { field: key, graphKey },
-      );
+      return pureFailure(`Graph '${graphKey}' has no state field '${key}'.`);
     }
     if (update[key] === undefined) {
       return pureFailure(
-        'implicit_clear_rejected',
         `State field '${key}' was set to undefined. Omit the key to leave it unchanged, or use an explicit clear.`,
-        { field: key, graphKey },
       );
     }
   }
@@ -68,11 +59,10 @@ export function reduceState(input: {
     const field = fieldFor(fields, key)!;
     const reduced = evaluatePure({
       what: `Reducer for state field '${key}'`,
-      failureCode: 'reducer_failed',
       run: () => field.reduce(isolate(current[key]), isolate(update[key])),
       serializeAs: key,
     });
-    if (!reduced.ok) return reduced;
+    if (!reduced.ok) return { ok: false, message: reduced.message };
     candidate[key] = reduced.value;
   }
 
@@ -80,11 +70,7 @@ export function reduceState(input: {
   // individually fine and still produce a state that is not, and the boundary is what gets stored.
   const unserializable = checkSerializable(candidate, '');
   if (unserializable) {
-    return pureFailure(
-      'unserializable_state',
-      `Reduced state for graph '${graphKey}' ${unserializable.message}`,
-      { path: unserializable.path, graphKey },
-    );
+    return pureFailure(`Reduced state for graph '${graphKey}' ${unserializable}`);
   }
   return { ok: true, state: candidate };
 }
@@ -100,20 +86,13 @@ export function assertDeclaredStateFields(input: {
   readonly fields: GraphStateFields<Record<string, unknown>, Record<string, unknown>>;
   readonly state: unknown;
   readonly graphKey: string;
-}): PureFailure | null {
+}): string | null {
   if (!isPlainObject(input.state)) {
-    return {
-      code: 'invalid_update_shape',
-      message: `Graph '${input.graphKey}' init must return a plain object; received ${describeShape(input.state)}.`,
-    };
+    return `Graph '${input.graphKey}' init must return a plain object; received ${describeShape(input.state)}.`;
   }
   for (const key of Object.keys(input.state)) {
     if (fieldFor(input.fields, key)) continue;
-    return {
-      code: 'unknown_state_field',
-      message: `Graph '${input.graphKey}' init returned '${key}', which has no declared reducer.`,
-      detail: { field: key, graphKey: input.graphKey },
-    };
+    return `Graph '${input.graphKey}' init returned '${key}', which has no declared reducer.`;
   }
   return null;
 }

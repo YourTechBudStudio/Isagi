@@ -36,7 +36,6 @@ export function isagiDocsPackageFiles(dataRoot: string): ReadonlyMap<string, str
   );
   files.set('references/workflow-agents.md', render('workflow-agents.md', substitutions));
   files.set('references/workflow-recovery.md', render('workflow-recovery.md', substitutions));
-  files.set('references/workflow-evidence.md', render('workflow-evidence.md', substitutions));
   files.set('references/workflow-checkpoints.md', render('workflow-checkpoints.md', substitutions));
   files.set('references/cli-investigate-runs.md', render('cli-investigate-runs.md', substitutions));
   files.set(

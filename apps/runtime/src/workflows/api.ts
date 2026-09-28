@@ -4,30 +4,22 @@ import type { FastifyInstance } from 'fastify';
 import { apiEndpoints, workflowContentEndpoints, type ApiError } from '@isagi/contracts';
 
 import {
+  errorMessage,
   infrastructureApiError,
   registerApiEndpoint,
   registerContentEndpoint,
   type ApiRouteContext,
-  errorMessage,
 } from '../lib/api/index.js';
 import type { RuntimeServices } from '../runtime.layer.js';
-import { prepareCheckpointWorktree } from './checkpoints/worktree.js';
-import { WorkflowEngine } from './engine/interpreter.service.js';
-import { WorkflowRunProjection } from './read/projection.service.js';
-import { WorkflowEngineError } from './types.js';
+import { WorkflowEngine } from './engine/service.js';
+import { WorkflowEngineError } from './errors.js';
 
 /**
- * The workflow HTTP surface: one retained read model, six controls, and a launch path.
+ * The workflow HTTP surface: launch, the controls, and plain reads.
  *
- * Reads and mutations are deliberately different shapes. A read answers from durable records and
- * changes nothing — no reconciliation, no repair, no old code imported, no prompt delivered. A
- * mutation returns only what was accepted and where the run is now; the read routes and the
- * committed revision deltas are the authority for everything else, so a control result can never
- * become a second, competing snapshot.
- *
- * There is no per-run websocket. Committed transitions reach clients on the shared runtime event
- * bus, and a client that misses one recovers the identical deltas through the paginated history
- * routes.
+ * Every control returns the run's summary after it was applied. Live changes reach clients on the
+ * shared runtime event socket as `workflow_run_event` and `workflow_run_changed`; these routes are
+ * what a client refetches from.
  */
 
 const runWithRuntime =
@@ -54,14 +46,12 @@ export function registerWorkflowApi(
       run,
     });
 
-  // --- launch ---------------------------------------------------------------
-
   register(endpoints.descriptors, (input) =>
     Effect.gen(function* () {
       const engine = yield* WorkflowEngine;
-      const workflows = yield* engine.listWorkflowDescriptors({ origin: input.origin });
+      const listings = yield* engine.listWorkflowDescriptors(input.origin);
       return {
-        workflows: workflows.map((listing) =>
+        workflows: listings.map((listing) =>
           listing.result.ok
             ? {
                 ok: true as const,
@@ -80,234 +70,130 @@ export function registerWorkflowApi(
   );
 
   register(endpoints.start, (input) =>
-    Effect.gen(function* () {
-      const engine = yield* WorkflowEngine;
-      const created = yield* engine.startWorkflow({
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.launch({
         workflowKey: input.workflowKey,
-        inputs: input.inputs,
+        inputs: input.inputs ?? {},
         origin: input.origin,
-        // Omitted rather than passed as undefined: absent means "no override, select normally",
-        // and the engine's own selection reads the key's presence.
         ...(input.placement === undefined ? {} : { placement: input.placement }),
-      });
-      return { runId: created.id, workflowKey: created.workflowKey };
-    }),
+      }),
+    ),
   );
-
-  // --- retained reads -------------------------------------------------------
 
   register(endpoints.listRuns, (_input, _context, _params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) => projection.listRuns(query)),
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listRuns(query)),
   );
-
   register(endpoints.getRun, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) => projection.getRun(params.runId)),
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getRun(params.runId)),
   );
-
   register(endpoints.getStructure, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getStructure(params.runId, query),
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      engine.getStructure(params.runId, query.artifactHash),
     ),
   );
-
-  register(endpoints.listVersions, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listVersions(params.runId, query),
-    ),
-  );
-
-  register(endpoints.listFrames, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listFrames(params.runId, query),
-    ),
-  );
-
-  register(endpoints.listFrameExecutions, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listFrameExecutions(params.runId, params.frameId, query),
-    ),
-  );
-
-  register(endpoints.listExecutions, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listRunExecutions(params.runId, query),
-    ),
-  );
-
-  register(endpoints.getExecution, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getExecution(params.runId, params.executionId),
-    ),
-  );
-
-  register(endpoints.listAttempts, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listAttempts(params.runId, query),
-    ),
-  );
-
-  register(endpoints.getAttempt, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getAttempt(params.runId, params.attemptId),
-    ),
-  );
-
-  register(endpoints.listOperations, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listOperations(params.runId, query),
-    ),
-  );
-
   register(endpoints.listEvents, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listEvents(params.runId, query),
-    ),
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listEvents(params.runId, query)),
   );
-
-  register(endpoints.getPayload, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getPayload(params.runId, params.payloadRef),
-    ),
+  register(endpoints.listOperations, (_input, _context, params, query) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.listOperations(params.runId, query)),
   );
-
-  // --- evidence -------------------------------------------------------------
-
+  register(endpoints.getExecution, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getExecution(params.executionId)),
+  );
   register(endpoints.getOperation, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getOperation(params.runId, params.operationKey),
-    ),
+    Effect.flatMap(WorkflowEngine, (engine) => engine.getOperation(params.operationId)),
   );
 
-  register(endpoints.listEvidence, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listEvidence(params.runId, query),
+  // Checkpoints are captured, read and exported by a later change. Until then these routes answer
+  // honestly that no checkpoint exists.
+  register(endpoints.listCheckpoints, (_input, _context, params) =>
+    Effect.flatMap(WorkflowEngine, (engine) =>
+      Effect.as(engine.getRun(params.runId), { items: [], nextCursor: null }),
     ),
   );
-
-  register(endpoints.getEvidence, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getEvidence(params.runId, params.evidenceKey),
-    ),
+  register(endpoints.getCheckpoint, (_input, _context, params) =>
+    Effect.fail(checkpointNotFound(params.checkpointId)),
   );
-
-  /**
-   * The one route in the runtime whose success body is not the JSON envelope.
-   *
-   * It is a declared content endpoint rather than a hand-rolled raw route, so its params, query and
-   * error contract are checked exactly like every other route's, and every non-200 it can send is
-   * still the envelope a client already knows how to read.
-   */
-  registerContentEndpoint<typeof workflowContentEndpoints.getEvidenceContent, RuntimeServices>(
+  register(endpoints.exportCheckpoint, (_input, _context, params) =>
+    Effect.fail(checkpointNotFound(params.checkpointId)),
+  );
+  registerContentEndpoint<typeof workflowContentEndpoints.getCheckpointFile, RuntimeServices>(
     fastify,
-    workflowContentEndpoints.getEvidenceContent,
+    workflowContentEndpoints.getCheckpointFile,
     {
-      handle: (_context, params) =>
-        Effect.flatMap(WorkflowRunProjection, (projection) =>
-          projection.openEvidenceContent(params.runId, params.evidenceKey),
-        ),
-      attachment: (query) => query?.download === 'true',
+      handle: (_context, params) => Effect.fail(checkpointNotFound(params.checkpointId)),
       mapError: toWorkflowApiError,
       run,
     },
   );
 
-  // --- checkpoints ----------------------------------------------------------
-
-  register(endpoints.listCheckpoints, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listCheckpoints(params.runId, query),
-    ),
-  );
-
-  register(endpoints.getCheckpoint, (_input, _context, params) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.getCheckpoint(params.runId, params.checkpointId),
-    ),
-  );
-
-  register(endpoints.listCheckpointInventory, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listCheckpointInventory(params.runId, params.checkpointId, query),
-    ),
-  );
-
-  register(endpoints.listCheckpointManifest, (_input, _context, params, query) =>
-    Effect.flatMap(WorkflowRunProjection, (projection) =>
-      projection.listCheckpointManifest(params.runId, params.checkpointId, query),
-    ),
-  );
-
-  registerContentEndpoint<
-    typeof workflowContentEndpoints.getCheckpointFileContent,
-    RuntimeServices
-  >(fastify, workflowContentEndpoints.getCheckpointFileContent, {
-    handle: (_context, params) =>
-      Effect.flatMap(WorkflowRunProjection, (projection) =>
-        projection.openCheckpointFileContent(params.runId, params.checkpointId, params.fileId),
-      ),
-    attachment: (query) => query?.download === 'true',
-    mapError: toWorkflowApiError,
-    run,
-  });
-
-  // --- checkpoint worktrees -------------------------------------------------
-
-  register(endpoints.createCheckpointWorktree, (input, _context, params) =>
-    prepareCheckpointWorktree({
-      runId: params.runId,
-      checkpointId: params.checkpointId,
-      destinationPath: input.destinationPath,
-    }),
-  );
-
-  // --- controls -------------------------------------------------------------
-
   register(endpoints.pause, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.pause({ runId: params.runId })),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.pause(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
   );
-
   register(endpoints.resume, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.resume({ runId: params.runId })),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.resume(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
   );
-
   register(endpoints.retry, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.retry({ runId: params.runId })),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.retry(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
   );
-
   register(endpoints.cancel, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.cancel({ runId: params.runId })),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.cancel(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
   );
-
   register(endpoints.dismiss, (_input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) => engine.dismiss({ runId: params.runId })),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) => engine.dismiss(params.runId)),
+      (summary) => ({ run: summary }),
+    ),
   );
-
   register(endpoints.advance, (input, _context, params) =>
-    Effect.flatMap(WorkflowEngine, (engine) =>
-      engine.advance({ runId: params.runId, waitId: input.waitId, answers: input.answers }),
+    Effect.map(
+      Effect.flatMap(WorkflowEngine, (engine) =>
+        engine.advance({
+          runId: params.runId,
+          executionId: input.executionId,
+          answers: input.answers,
+        }),
+      ),
+      (summary) => ({ run: summary }),
     ),
   );
 }
 
-/**
- * One vocabulary, mapped rather than renamed.
- *
- * The engine already decides in the contract's own reason set, so this maps identities and context
- * onto the wire envelope and never invents a reason. The two reasons whose context is mandatory
- * carry it here, because a client that must render a structural rejection or an unreadable payload
- * cannot do so from a reason alone.
- */
+function checkpointNotFound(checkpointId: number) {
+  return new WorkflowEngineError({
+    code: 'workflow_checkpoint_not_found',
+    message: `Checkpoint ${checkpointId} was not found: checkpoints are not implemented in this build.`,
+    checkpointId,
+  });
+}
+
+/** One vocabulary: the engine already decides in the contract's reasons, so this only copies context. */
 function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError {
   if (error instanceof WorkflowEngineError) {
     const identities = {
       ...(error.workflowKey ? { workflowKey: error.workflowKey } : {}),
       ...(error.workflowRunId ? { workflowRunId: error.workflowRunId } : {}),
       ...(error.activeWorkflowRunId ? { activeWorkflowRunId: error.activeWorkflowRunId } : {}),
-      ...(error.operation ? { operation: error.operation } : {}),
       ...(error.worktreeId ? { worktreeId: error.worktreeId } : {}),
       ...(error.surfaceId ? { surfaceId: error.surfaceId } : {}),
       ...(error.paneId ? { paneId: error.paneId } : {}),
       ...(error.agentSessionId ? { agentSessionId: error.agentSessionId } : {}),
+      ...(error.executionId ? { executionId: error.executionId } : {}),
+      ...(error.operationId ? { operationId: error.operationId } : {}),
+      ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
+      ...(error.control ? { control: error.control } : {}),
       ...(error.workflowLoadFailureReason
         ? { workflowLoadFailureReason: error.workflowLoadFailureReason }
         : {}),
@@ -320,84 +206,27 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
       ...(error.shadowedWorkflowPackageDirectories?.length
         ? { shadowedWorkflowPackageDirectories: [...error.shadowedWorkflowPackageDirectories] }
         : {}),
-      ...(error.artifactHash ? { artifactHash: error.artifactHash } : {}),
-      ...(error.operationKey ? { operationKey: error.operationKey } : {}),
-      ...(error.evidenceKey ? { evidenceKey: error.evidenceKey } : {}),
-      ...(error.checkpointId ? { checkpointId: error.checkpointId } : {}),
-      ...(error.fileId ? { fileId: error.fileId } : {}),
       ...(error.placementIssue ? { placementIssue: error.placementIssue } : {}),
       ...(error.collision ? { collision: error.collision } : {}),
       ...(error.branch ? { branch: error.branch } : {}),
       ...(error.baseRef ? { baseRef: error.baseRef } : {}),
       ...(error.projectId ? { projectId: error.projectId } : {}),
-      ...(error.commitSha ? { commitSha: error.commitSha } : {}),
     };
-
     return {
       code: 'workflow_rejected',
-      status: statusForWorkflowRejection(error.code),
+      status: statusFor(error.code),
       message: error.message,
       requestId: context.requestId,
       data:
-        error.code === 'workflow_structure_validation_failed'
-          ? { reason: error.code, diagnostics: [...(error.diagnostics ?? [])], ...identities }
-          : error.code === 'workflow_payload_unavailable'
-            ? {
-                reason: error.code,
-                payloadRef: error.payloadRef ?? '',
-                cause: error.payloadCause ?? 'missing',
-                ...identities,
-              }
-            : error.code === 'workflow_evidence_content_unavailable'
-              ? {
-                  reason: error.code,
-                  evidenceKey: error.evidenceKey ?? '',
-                  cause: error.payloadCause ?? 'missing',
-                  ...identities,
-                }
-              : error.code === 'workflow_checkpoint_content_unavailable'
-                ? {
-                    reason: error.code,
-                    checkpointId: error.checkpointId ?? '',
-                    fileId: error.fileId ?? '',
-                    cause: error.payloadCause ?? 'missing',
-                    ...identities,
-                  }
-                : error.code === 'workflow_checkpoint_destination_rejected'
-                  ? {
-                      ...identities,
-                      reason: error.code,
-                      destinationPath: error.destinationPath ?? '',
-                      destinationIssue: error.destinationIssue ?? 'inaccessible',
-                    }
-                  : error.code === 'workflow_checkpoint_worktree_failed'
-                    ? {
-                        ...identities,
-                        reason: error.code,
-                        destinationPath: error.destinationPath ?? '',
-                        stage: error.worktreeStage ?? 'git_add',
-                        created: error.created ?? true,
-                      }
-                    : { reason: error.code, ...identities },
+        error.code === 'workflow_structure_validation_failed' ||
+        error.code === 'workflow_code_incompatible'
+          ? { ...identities, reason: error.code, diagnostics: [...(error.diagnostics ?? [])] }
+          : { ...identities, reason: error.code },
     };
   }
 
-  /**
-   * The launch path's one owning-service call, and what it can fail with that is not a placement.
-   *
-   * `resolvePlacement` maps every `WorkspaceError` the worktree preflight raises into a workflow
-   * rejection, so what reaches here is infrastructure: Git, the database, the state file, project
-   * paths, project configuration. It is reported through the shared mapper rather than restated
-   * here, so the same Git failure reads identically whichever route hit it.
-   *
-   * One class the launch channel declares is deliberately not covered there: `WorktreeSetupRunError`
-   * is in `WorkspaceServiceError` because `openWorktree` and `runWorktreeSetup` can raise it,
-   * neither of which the launch path calls — the preflight runs no hooks. It also has no honest
-   * `worktree_setup_rejected` reason, since that union names configuration and trust states rather
-   * than a hook that failed while running, and inventing one would put a wrong fact on the response.
-   * It therefore falls through to the unhandled arm below and is logged. Preparation, which *can*
-   * really produce it, records it as a segment failure and never as a fault.
-   */
+  // Launch makes one owning-service call (the worktree preflight), so Git, the database, the
+  // state file and project paths can fail underneath it. They are reported as themselves.
   const infrastructure = infrastructureApiError(error, context);
   if (infrastructure) return infrastructure;
 
@@ -405,7 +234,6 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
     `[runtime] Unhandled workflow API handler error during ${context.endpointId}`,
     error,
   );
-
   return {
     code: 'api_unhandled_error',
     status: 500,
@@ -415,25 +243,20 @@ function toWorkflowApiError(error: unknown, context: ApiRouteContext): ApiError 
   };
 }
 
-function statusForWorkflowRejection(code: WorkflowEngineError['code']): 400 | 409 | 500 {
-  if (code === 'workflow_discovery_failed') return 500;
-  // A surface already showing a run is a conflict with somebody else's state, not a bad request.
-  if (code === 'workflow_surface_attached') return 409;
-  // So is a branch, worktree or checkout path that already exists: the request is well-formed and
-  // would succeed against a different live state. The workspace boundary answers 409 for the same
-  // underlying condition on `worktrees.open`.
-  if (code === 'workflow_environment_collision') return 409;
-  // A checkpoint worktree refused by the state of the disk or the repository: the request is
-  // well-formed and would succeed against a different destination or a repository that still holds
-  // the commit.
-  if (
-    code === 'workflow_checkpoint_destination_rejected' ||
-    code === 'workflow_checkpoint_repository_unavailable' ||
-    code === 'workflow_checkpoint_commit_unavailable'
-  ) {
-    return 409;
+function statusFor(code: WorkflowEngineError['code']): 400 | 409 | 500 {
+  switch (code) {
+    case 'workflow_discovery_failed':
+    case 'workflow_checkpoint_export_failed':
+      return 500;
+    // A conflict with somebody else's state: the request would succeed against a different one.
+    case 'workflow_surface_busy':
+    case 'workflow_environment_collision':
+    case 'workflow_control_unavailable':
+    case 'workflow_code_incompatible':
+    case 'workflow_checkpoint_repository_unavailable':
+    case 'workflow_checkpoint_commit_unavailable':
+      return 409;
+    default:
+      return 400;
   }
-  // The checks passed and creation itself failed: a degraded runtime, not a rejected request.
-  if (code === 'workflow_checkpoint_worktree_failed') return 500;
-  return 400;
 }

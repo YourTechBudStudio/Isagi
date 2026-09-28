@@ -46,8 +46,8 @@ export const MinimalGraph = createGraph<State, {}, Parameters, { readonly note: 
   },
   entry: 'askForAck',
   nodes: {
-    // The callback suspends on a user-continue wait. It runs again only if this segment is
-    // repaired; the wait itself is durable, so a restart does not re-ask the person.
+    // The callback suspends on a user-continue wait. Its result is saved before anything routes,
+    // so it never runs again for this visit; the wait is durable, so a restart does not re-ask.
     askForAck: operation(async () => suspend({ wait: wait.userContinue('Continue') }), {
       title: 'Wait for acknowledgement',
     }),

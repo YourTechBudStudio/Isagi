@@ -20,11 +20,11 @@ import {
  * `write` produces a phase directory and appends to a shared decisions file; `save` checkpoints
  * that phase's directory and the decisions file; the loop runs twice; then a nested `finalize`
  * graph seals everything under `scratch` with one more checkpoint. That is three checkpoints on
- * three distinct executions — two visits of one root node and one in a nested frame — which is
- * what makes run-linear parentage observable rather than asserted.
+ * three distinct executions: two visits of one root node and one in a nested graph invocation.
  *
- * Phase 2 deletes phase 1's draft, and the nested seal recaptures `scratch` as a whole, so the last
- * checkpoint's inventory has to say the draft is gone even though the phase-1 checkpoint saved it.
+ * Phase 2 deletes phase 1's draft, and the nested seal copies `scratch` as a whole, so the last
+ * checkpoint has no draft even though the phase-1 checkpoint saved it. Checkpoints do not stack:
+ * each one is a complete copy of the scopes it names.
  *
  * Hermetic: `write` touches only the run's destination directory, which the test makes a Git
  * repository.
@@ -39,7 +39,7 @@ interface PhaseState {
 export interface PhaseCheckpointsVariant {
   /** Replaces `save`'s `prepare`, for the failure and plan-shape cases. */
   readonly savePrepare?: (state: PhaseState) => unknown;
-  /** Registers `save` as an operation instead: the changed-node pin a Retry must refuse. */
+  /** Registers `save` as an operation instead: a changed node kind a Retry must refuse. */
   readonly saveAsOperation?: boolean;
 }
 

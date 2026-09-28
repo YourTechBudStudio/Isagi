@@ -36,7 +36,10 @@ export function complete<Update>(input?: {
     : { ...brand('operation-result'), type: 'complete' };
 }
 
-/** Commit an update and park this node visit until the declared wait is delivered. */
+/**
+ * Park the node execution until the wait is delivered. Its `update` is applied together with the
+ * edge's update, in one step, once the event arrives.
+ */
 export function suspend<Update>(input: {
   readonly update?: Update | undefined;
   readonly wait: WaitDeclaration;

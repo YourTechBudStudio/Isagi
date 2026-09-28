@@ -41,7 +41,7 @@ export class WorkflowLoadError extends Data.TaggedError('WorkflowLoadError')<{
 /**
  * An imported, structurally verified artifact.
  *
- * `graphs` is how the interpreter turns a saved `graph_key` back into executable code without
+ * `graphs` is how the engine turns a saved `graph_key` back into executable code without
  * re-entering discovery, and `descriptor` is the same structure as data — which is what lets the
  * inspector describe a version it must never import.
  */
@@ -58,6 +58,18 @@ export interface LoadedWorkflowArtifact {
 export type AnyWorkflowDefinition = WorkflowDefinition<Record<string, unknown>, unknown>;
 export type AnyGraphDefinition = GraphDefinition<unknown, unknown, unknown, unknown>;
 
+/** The versions a freshly verified build recorded in its manifest, stored on its artifact row. */
+export interface WorkflowBuildVersions {
+  readonly sdkVersion: string;
+  readonly verifierVersion: string;
+  readonly contractVersion: number;
+}
+
+/** A build just verified from its package, with the versions its manifest records. */
+export interface PublishedWorkflowArtifact extends LoadedWorkflowArtifact {
+  readonly versions: WorkflowBuildVersions;
+}
+
 export type WorkflowDefinitionCache = Map<string, Promise<LoadedWorkflowArtifact>>;
 
 const exactSemver =
@@ -68,7 +80,7 @@ export function validateAndPublishWorkflowPackage(input: {
   readonly packageRoot: string;
   readonly cacheRoot: string;
   readonly definitionCache: WorkflowDefinitionCache;
-}) {
+}): Effect.Effect<PublishedWorkflowArtifact, WorkflowLoadError> {
   return Effect.tryPromise({
     try: async () => {
       const packageStat = await lstat(input.packageRoot).catch((cause) => {
@@ -109,12 +121,20 @@ export function validateAndPublishWorkflowPackage(input: {
         );
       }
       await publishArtifact(input.cacheRoot, manifest.artifact.sha256, artifactBytes, input);
-      return await importCachedArtifact(
+      const artifact = await importCachedArtifact(
         input.cacheRoot,
         manifest.artifact.sha256,
         { ...input, structureHash: manifest.structure.sha256 },
         input.definitionCache,
       );
+      return {
+        ...artifact,
+        versions: {
+          sdkVersion: manifest.sdk.version,
+          verifierVersion: manifest.verifier.version,
+          contractVersion: manifest.workflowContractVersion,
+        },
+      };
     },
     catch: (cause) => normalizeFailure(cause, input),
   });
@@ -129,16 +149,12 @@ export function loadPinnedWorkflowArtifact(input: {
   return Effect.tryPromise({
     try: async () => {
       if (!/^[a-f0-9]{64}$/.test(input.artifactHash)) {
-        throw failure(
-          'pinned_artifact_unavailable',
-          input,
-          'Workflow run has an invalid artifact pin.',
-        );
+        throw failure('artifact_load_failed', input, 'Workflow run has an invalid artifact pin.');
       }
       const path = artifactCachePath(input.cacheRoot, input.artifactHash);
-      const bytes = await readRegularFile(path, input, 'pinned_artifact_unavailable');
+      const bytes = await readRegularFile(path, input, 'artifact_load_failed');
       if (hashArtifact(bytes) !== input.artifactHash) {
-        throw failure('pinned_artifact_unavailable', input, 'Pinned workflow artifact is corrupt.');
+        throw failure('artifact_load_failed', input, 'Pinned workflow artifact is corrupt.');
       }
       // The same structural steps run on the pinned bytes, so a corrupt pin fails closed
       // instead of executing.
@@ -149,7 +165,7 @@ export function loadPinnedWorkflowArtifact(input: {
         input.definitionCache,
       );
     },
-    catch: (cause) => normalizeFailure(cause, input, 'pinned_artifact_unavailable'),
+    catch: (cause) => normalizeFailure(cause, input, 'artifact_load_failed'),
   });
 }
 

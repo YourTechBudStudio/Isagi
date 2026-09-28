@@ -34,7 +34,7 @@ function apply(update: unknown, over: Record<string, unknown> = current) {
 function expectFailure(outcome: ReturnType<typeof apply>) {
   assert.equal(outcome.ok, false);
   if (outcome.ok) throw new Error('unreachable');
-  return outcome.failure;
+  return outcome.message;
 }
 
 describe('reduceState', () => {
@@ -91,26 +91,24 @@ describe('reduceState', () => {
   });
 
   it('rejects an own undefined rather than treating it as a clear', () => {
-    const failure = expectFailure(apply({ summary: undefined }));
-    assert.equal(failure.code, 'implicit_clear_rejected');
-    assert.deepEqual(failure.detail?.field, 'summary');
+    assert.match(expectFailure(apply({ summary: undefined })), /'summary' was set to undefined/);
   });
 
   it('rejects a key that names no declared field, naming the key and the graph', () => {
-    const failure = expectFailure(apply({ nope: 1 }));
-    assert.equal(failure.code, 'unknown_state_field');
-    assert.deepEqual(failure.detail, { field: 'nope', graphKey: 'reviewed-document' });
+    assert.match(
+      expectFailure(apply({ nope: 1 })),
+      /'reviewed-document' has no state field 'nope'/,
+    );
   });
 
   it('rejects an update that is not a plain object', () => {
-    assert.equal(expectFailure(apply(['rounds'])).code, 'invalid_update_shape');
-    assert.equal(expectFailure(apply(7)).code, 'invalid_update_shape');
-    assert.equal(expectFailure(apply(null)).code, 'invalid_update_shape');
+    assert.match(expectFailure(apply(['rounds'])), /plain object; received an array/);
+    assert.match(expectFailure(apply(7)), /plain object; received number/);
+    assert.match(expectFailure(apply(null)), /plain object; received null/);
   });
 
   it('never reaches a field reachable only through the prototype chain', () => {
-    const failure = expectFailure(apply({ toString: 'nope' }));
-    assert.equal(failure.code, 'unknown_state_field');
+    assert.match(expectFailure(apply({ toString: 'nope' })), /no state field 'toString'/);
   });
 
   it('commits nothing when one reducer throws part-way through', () => {
@@ -128,9 +126,7 @@ describe('reduceState', () => {
       update: { title: 'changed', rounds: 1 },
       graphKey: 'reviewed-document',
     });
-    const failure = expectFailure(outcome);
-    assert.equal(failure.code, 'reducer_failed');
-    assert.match(failure.message, /rounds/);
+    assert.match(expectFailure(outcome), /Reducer for state field 'rounds' threw/);
     assert.equal(current.title, 'draft', 'the earlier field was not written to the boundary');
   });
 
@@ -174,7 +170,7 @@ describe('reduceState', () => {
         graphKey: 'reviewed-document',
       }),
     );
-    assert.equal(failure.code, 'async_pure_callback');
+    assert.match(failure, /returned a promise/);
   });
 
   it('rejects unserializable reduced values, naming the JSON path', () => {
@@ -194,8 +190,7 @@ describe('reduceState', () => {
           graphKey: 'reviewed-document',
         }),
       );
-      assert.equal(failure.code, 'unserializable_state');
-      assert.equal(failure.detail?.path, 'title');
+      assert.match(failure, /cannot be stored at title/);
     }
   });
 
@@ -209,7 +204,7 @@ describe('reduceState', () => {
     const failure = expectFailure(
       reduceState({ fields: bad, current, update: { title: 'x' }, graphKey: 'g' }),
     );
-    assert.equal(failure.code, 'unserializable_state');
+    assert.match(failure, /cycle/);
   });
 
   it('throws inside a reducer that mutates its isolated input rather than corrupting the boundary', () => {
@@ -225,7 +220,7 @@ describe('reduceState', () => {
     const failure = expectFailure(
       reduceState({ fields: mutating, current, update: { notes: 'x' }, graphKey: 'g' }),
     );
-    assert.equal(failure.code, 'reducer_failed');
+    assert.match(failure, /Reducer for state field 'notes' threw/);
     assert.deepEqual(current.notes, ['first']);
   });
 });
@@ -244,14 +239,13 @@ describe('assertDeclaredStateFields', () => {
       state: { ...current, stray: 1 },
       graphKey: 'reviewed-document',
     });
-    assert.equal(failure?.code, 'unknown_state_field');
-    assert.match(failure?.message ?? '', /stray/);
+    assert.match(failure ?? '', /'stray', which has no declared reducer/);
   });
 
   it('rejects an init that returned something other than an object', () => {
-    assert.equal(
-      assertDeclaredStateFields({ fields, state: [], graphKey: 'g' })?.code,
-      'invalid_update_shape',
+    assert.match(
+      assertDeclaredStateFields({ fields, state: [], graphKey: 'g' }) ?? '',
+      /must return a plain object/,
     );
   });
 });

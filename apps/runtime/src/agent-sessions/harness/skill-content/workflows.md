@@ -45,7 +45,9 @@ Graph keys and node, edge, and outcome IDs match `[A-Za-z][A-Za-z0-9_-]{0,63}`. 
 
 ## Operations, waits, and routing
 
-An `operation(async (ctx, state) => ...)` performs work and returns `complete({ update })` or `suspend({ update, wait })`. `complete` finishes this node visit, not the workflow. A wait is a durable declaration returned with `suspend`, not a Promise to await.
+An `operation(async (ctx, state) => ...)` performs work and returns `complete({ update })` or `suspend({ update, wait })`. `complete` finishes this node visit, not the workflow. A wait is a durable declaration returned with `suspend`, not a Promise to await. A `suspend`'s update is applied together with the edge's update, in one step, once the event arrives; until then the graph's state does not include it.
+
+Write each operation as its preparation, then **one** side effect, then return: one prompt, one headless launch, or one pane to close. A second effect belongs in its own node. Reads such as `getConversationHistory` are preparation, not effects. File snapshots belong in [checkpoint](workflow-checkpoints.md) nodes.
 
 | Wait                                  | Delivered event                                                 |
 | ------------------------------------- | --------------------------------------------------------------- |
@@ -84,9 +86,11 @@ Start with `reduce.replace`. Use `add`, `append`, or `union` for accumulated fac
 
 ## Continuation essentials
 
-Completed progress is saved rather than replayed. Resume uses the saved code version; Retry can adopt a newly verified build at a failed segment. When an unfinished operation runs again, matching recorded external calls reuse their results. Preserve the order and requests of those calls; a changed prompt at an already recorded position is not a new attempt. Direct filesystem/process/network effects need their own retry safety. Unknown delivery blocks dependent work rather than authorizing a resend.
+A run is a tree of graph invocations: the root graph once, and one invocation per subgraph visit. Each node visit is an execution. What a node function returns is saved before anything routes and is the only thing ever reused; reducers, edges, outcomes and `onResult` always run with the current code. Resume and Retry both reload the latest verified build. Nothing earlier is reused when a function runs again, so its side effects repeat; keeping each node to one effect keeps that repeat small and visible.
 
-Read [Workflow recovery](workflow-recovery.md) when editing saved runs or handling failed, interrupted, or uncertain work, including Retry after a manually continued agent turn.
+Every side-effecting `ctx` call is recorded with its full request, and an agent's reply is recorded when its turn is delivered, so a run's dialogue can be read afterwards without author code.
+
+Read [Workflow recovery](workflow-recovery.md) when editing saved runs, handling failed or interrupted work, or designing self-healing loops.
 
 ## Completion and verification
 

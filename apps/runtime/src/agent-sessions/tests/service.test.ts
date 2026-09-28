@@ -368,8 +368,6 @@ function fakePtyService(
           args: input.args,
           cwd: input.cwd,
           logPath: null,
-          launchOutcome: 'spawned' as const,
-          launchFailureCause: null,
         };
       }),
     getAttachmentPlan: () => Effect.die('getAttachmentPlan is not used'),

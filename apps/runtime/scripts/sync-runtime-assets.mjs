@@ -69,7 +69,6 @@ function syncAssets(assetRoot) {
     'workflow-environments.md',
     'workflow-agents.md',
     'workflow-recovery.md',
-    'workflow-evidence.md',
     'workflow-checkpoints.md',
     'cli-investigate-runs.md',
     'cli-reconstruct-and-launch.md',

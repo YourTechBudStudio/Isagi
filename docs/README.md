@@ -34,7 +34,7 @@ These docs should explain the shape of Isagi without becoming a running transcri
 - **Product Model**: the seven primary primitives: global config, project, worktree, worktree environment, command, surface/panel, and attention signal.
 - **Architecture**: Electron client plus server/runtime architecture, source-of-truth principles, and integration posture.
 - **Configuration Model**: global/project/worktree configuration layers, command persistence, templates, presets, and agent-assisted configuration direction.
-- **Workflow Subsystem**: the runtime-owned graph execution model, saved continuation and code versions, external-operation recovery, controls, retention, and inspection.
+- **Workflow Subsystem**: the runtime-owned graph execution model, saved continuation and code versions, the operation log and recovery, controls, retention, and inspection.
 - **Engineering Guidance**: principles and review lenses for boundaries, module shape, drift prevention, runtime diagnostics, product behavior, and verification.
 - **Development Runtime**: the command-accurate preparation and supervision flow, worktree isolation, runtime staging, packaging parity, the end-to-end release process, and the troubleshooting model used by maintainers.
 - **Issue Tracking Guidance**: the repository-specific mapping for epics and stories — tracker fields, relationships, append-only amendments, retrieval, and the publication flow.

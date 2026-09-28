@@ -48,7 +48,6 @@ const templates = {
   'workflow-environments.md': { emittedAs: 'references/workflow-environments.md', tokens: [] },
   'workflow-agents.md': { emittedAs: 'references/workflow-agents.md', tokens: [] },
   'workflow-recovery.md': { emittedAs: 'references/workflow-recovery.md', tokens: [] },
-  'workflow-evidence.md': { emittedAs: 'references/workflow-evidence.md', tokens: [] },
   'workflow-checkpoints.md': { emittedAs: 'references/workflow-checkpoints.md', tokens: [] },
   'cli-investigate-runs.md': {
     emittedAs: 'references/cli-investigate-runs.md',
@@ -125,7 +124,6 @@ test('the skill package holds exactly the indexed references', () => {
       'references/workflow-environments.md',
       'references/workflow-agents.md',
       'references/workflow-recovery.md',
-      'references/workflow-evidence.md',
       'references/workflow-checkpoints.md',
       'references/cli-investigate-runs.md',
       'references/cli-reconstruct-and-launch.md',

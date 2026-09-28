@@ -9,13 +9,18 @@ Read [Workflow authoring](workflows.md) for graph structure and package checks. 
 | `spawnAgentSession`      | Interactive session handle with pane ID and turn target                                        |
 | `sendAgentPrompt`        | Turn target for an existing session                                                            |
 | `runHeadlessAgent`       | Operation handle, not its completed output                                                     |
-| `captureEvidence`        | Durable reference to selected immutable content; see [Workflow evidence](workflow-evidence.md) |
-| `getConversationHistory` | Role-tagged messages for a session                                                             |
+| `getConversationHistory` | Role-tagged messages of the session's latest conversation                                      |
 | `closePane`              | Closes a pane owned by the workflow when no longer needed                                      |
 | `setUiFeedback`          | Meaningful phase/message for the user                                                          |
 | `log`                    | Durable diagnostic context                                                                     |
 
 Pass the spawn/send target directly to `wait.agentTurn`. Send one prompt per controlled turn; allow it to settle before another prompt or a harness conversation reset/switch. Persist stable Isagi handles needed by later nodes, rather than provider/native-session identity. Native conversation history can be unavailable; handle that explicitly rather than treating an empty response as success.
+
+Every spawn, send, headless launch and pane close is recorded with its full request. When an agent turn is delivered, Isagi records the agent's last reply on the operation that sent the prompt, so the run's dialogue can be read later without author code. A reply that cannot be read is recorded as unavailable and the run continues.
+
+## Which turn answers a wait
+
+The latest turn wins. Among the session's turns that started at or after the prompt was sent, Isagi takes the latest: while it runs the wait keeps waiting, an ended turn delivers `ended`, and a failed turn delivers `failed`. A newer turn always replaces an older one, so if the person continues an agent by hand after a failure, that newer turn is what answers the wait, on Resume and Retry too. A session that dies is delivered as `interrupted` with `session_died`. The comparison uses the runtime's clock for the prompt and the harness's clock for the turn, so a turn started within clock skew of the prompt may be misread; this is a known limitation.
 
 ## Interactive turn and observation
 
@@ -137,15 +142,15 @@ export const afterJudge = edge<State, State>({
 
 The containing graph initializes `result` to `null` and registers a replacement reducer for it. The recovery operation can inspect `state.result` for status, error, exit code, and interruption details, including partial output and stop information, before choosing follow-up work.
 
-For several headless tasks, launch them and pass their handles to `wait.headlessAgent(handles)`. Results arrive in declared input order; inspect each status, matching by operation ID where clearer. Partial output from an interrupted operation is not a completed judgment. Read [Workflow recovery](workflow-recovery.md) before adding retry-specific handling or replacing interrupted work.
+For several headless tasks, launch them and pass their handles to `wait.headlessAgent(handles)`. Results arrive in declared input order; inspect each status, matching by operation ID where clearer. Partial output from an interrupted operation is not a completed judgment. A job that was running when the app restarted is delivered as `interrupted` with `{ reason: 'runtime_restarted' }`. Read [Workflow recovery](workflow-recovery.md) before adding retry handling or replacing interrupted work.
 
 ## Prompts and judgments
 
 Give unattended agents a goal, relevant inputs, constraints, acceptance criteria, and stop conditions. Give them a path for uncertainty that does not depend on someone answering mid-turn; place required human decisions in graph waits. Keep authorization boundaries explicit when the requested work can have external effects.
 
-Read the latest complete assistant turn across its messages and parts. Capture the response before building the judgment prompt, passing the retained turn target as its source; [Workflow evidence](workflow-evidence.md) explains Retry reuse and later-visit recapture. Validate the evidence or structured output needed for the next route. A separate judgment agent is useful when a semantic decision is needed, but is not required for every workflow. When using structured judgments, keep the prompt, parser, and result type coherent; cover each meaningful outcome, including work completed beyond the requested phase when that changes what follows. Test invalid responses and consequential routes. Log parse failures with enough context to diagnose them.
+Read the latest complete assistant turn across its messages and parts. In a node that judges a reply, read it as preparation and then launch the judgment as that node's one side effect; the judged text is in the judgment's recorded request. Validate the structured output needed for the next route. A separate judgment agent is useful when a semantic decision is needed, but is not required for every workflow. When using structured judgments, keep the prompt, parser, and result type coherent; cover each meaningful outcome, including work completed beyond the requested phase when that changes what follows. Test invalid responses and consequential routes. Log parse failures with enough context to diagnose them.
 
-Change feedback when the business-facing phase changes rather than at every internal transition. Before intentional failure or human escalation, explain the problem and next action through feedback and log the relevant evidence from an operation. Pure routing cannot call these capabilities.
+Change feedback when the business-facing phase changes rather than at every internal transition. Before intentional failure or human escalation, explain the problem and next action through feedback and log the relevant details from an operation. Pure routing cannot call these capabilities.
 
 ## Prompt modifiers
 

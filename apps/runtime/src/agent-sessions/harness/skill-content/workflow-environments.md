@@ -45,13 +45,15 @@ A second launch with that ticket requests another creation and can collide. To r
 
 ## Ordering and overrides
 
-Precedence is caller `placement`, then `environment`, then current/current. A caller override skips the selector, while input and placement validation still run. The order is `command → validate → selection → prepare → init`. Root `init(destination, parameters)` runs after preparation; initialized frames are not initialized again on Retry. Subgraphs inherit the root destination.
+Precedence is caller `placement`, then `environment`, then current/current. A caller override skips the selector, while input and placement validation still run. The order is `command → validate → selection → prepare → init`. Root `init(destination, parameters)` runs after preparation; a graph invocation that already exists is not initialized again on Retry. Subgraphs inherit the root destination.
 
-Inspect `preparation.source`, `preparation.request`, and `destination` to distinguish requested and effective placement. A returned run ID alone does not prove preparation succeeded: check `preparation.status` and failure details.
+A run starts `preparing`. Its summary's `placement` holds what was requested (`request`), who decided it (`source`: `override`, `selector` or `default`), and the commit a new worktree's `fromRef` resolved to (`baseCommit`); `worktreeId`, `surfaceId` and `setupDone` hold what preparation has actually produced so far. A returned run ID alone does not prove preparation succeeded: a failure leaves the run `failed` with an error at stage `environment`.
+
+Preparation runs these steps, saving each result on the run and appending an environment event as it finishes: create the worktree (`worktree_created`), run its setup hooks (`setup_finished` or `setup_failed`, with their output), create the surface (`surface_created`). A failure appends `preparation_failed`.
 
 ## Failed preparation
 
-Retry reuses the recorded placement and base commit. Editing `environment` does not relocate that run. Created resources remain after failure or cancellation; inspect the preparation receipts before acting. Setup may repeat unless already succeeded or skipped, so hooks must tolerate partial prior execution. See [Project config](config-project.md) for setup and trust.
+Retry runs preparation again and skips every step whose result is already saved, so it creates the worktree from the recorded base commit even if the ref has moved, and never creates a second one. Editing `environment` does not relocate that run. Created resources remain after failure or cancellation; the run's environment events say exactly what was created. Setup reruns until it succeeds, so hooks must tolerate partial prior execution. A `current` or `existing` surface that was deleted fails preparation again: a run never replaces a surface it did not create. See [Project config](config-project.md) for setup and trust.
 
 Resolve trust, occupancy, or collision failures before Retry. Missing worktrees/surfaces, a surface on the wrong worktree, or a deleted origin may require a fresh launch with valid placement. Pause and Resume are unavailable during preparation; interrupted preparation fails on restart and uses Retry for recovery. Cancel does not roll back resources or stop an in-flight setup hook.
 

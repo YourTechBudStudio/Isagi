@@ -1,13 +1,8 @@
 /**
  * The runtime's serialization boundary for author-supplied values.
  *
- * Everything a workflow persists — a frame's state, a graph's parameters, an outcome's output, an
- * emitted update, a normalized operation request — passes through here on its way to storage, and
- * the same canonical bytes are what get hashed. Keeping both in one module is what makes "the hash
- * identifies the stored bytes" true by construction rather than by two implementations agreeing.
- *
- * Pure TypeScript on purpose: this is validation and encoding, not operational work. The fallible
- * IO that *uses* it lives in the payload store's Effect boundary.
+ * Everything a workflow stores — an invocation's state, a graph's parameters, an outcome's output,
+ * a node's result — passes through here on its way to a `*_json` column.
  */
 
 /**
@@ -103,42 +98,4 @@ function walk(value: unknown, path: string, ancestors: Set<object>): void {
     }
   }
   ancestors.delete(object);
-}
-
-/**
- * The canonical JSON encoding: object keys sorted lexicographically by UTF-16 code unit, array
- * order preserved, no insignificant whitespace.
- *
- * Canonicalization is what makes content identity work — republishing an identical state boundary
- * costs one hash rather than one file — and it is also what makes an operation request fingerprint
- * stable across a callback that happens to build its object in a different key order.
- *
- * The value is validated first, so this never silently drops a member.
- */
-export function canonicalJson(value: unknown): string {
-  assertSerializable(value);
-  return encode(value);
-}
-
-function encode(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) as string;
-  if (Array.isArray(value)) return `[${value.map(encode).join(',')}]`;
-  const entries = Object.keys(value as Record<string, unknown>)
-    .sort(compareCodeUnits)
-    .map((key) => `${JSON.stringify(key)}:${encode((value as Record<string, unknown>)[key])}`);
-  return `{${entries.join(',')}}`;
-}
-
-/**
- * `Array.prototype.sort`'s default comparator already orders by UTF-16 code unit, but it does so by
- * stringifying first. Comparing the strings directly says what the ordering actually is, which
- * matters because this ordering is part of a hash other processes reproduce.
- */
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-/** Canonical bytes, in the encoding the threshold and the hash are both measured in: UTF-8. */
-export function canonicalBytes(value: unknown): Buffer {
-  return Buffer.from(canonicalJson(value), 'utf8');
 }

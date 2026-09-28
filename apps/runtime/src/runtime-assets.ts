@@ -37,7 +37,6 @@ export const isagiDocsContentSources = {
   'workflow-environments.md': readTextAsset('isagi-docs/workflow-environments.md'),
   'workflow-agents.md': readTextAsset('isagi-docs/workflow-agents.md'),
   'workflow-recovery.md': readTextAsset('isagi-docs/workflow-recovery.md'),
-  'workflow-evidence.md': readTextAsset('isagi-docs/workflow-evidence.md'),
   'workflow-checkpoints.md': readTextAsset('isagi-docs/workflow-checkpoints.md'),
   'cli-investigate-runs.md': readTextAsset('isagi-docs/cli-investigate-runs.md'),
   'cli-reconstruct-and-launch.md': readTextAsset('isagi-docs/cli-reconstruct-and-launch.md'),

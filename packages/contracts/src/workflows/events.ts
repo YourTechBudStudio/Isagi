@@ -46,6 +46,11 @@ export const workflowEventKindSchema = Schema.Literal(
   'node_completed',
   'node_failed',
   'node_interrupted',
+  // An operation row was inserted, and later settled. Data `{ operationId, kind }`, plus `status`
+  // when finished. A spawn, send or pane close finishes when its effect does; a headless job at
+  // exit, timeout, Cancel or restart.
+  'operation_started',
+  'operation_finished',
   // log and ui
   'log',
   'ui_feedback',

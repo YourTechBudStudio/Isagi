@@ -20,7 +20,8 @@ import {
  * Writer → headless judgment → nested reviewer → revisions, under one root, with every shape the
  * acceptance criteria name present at least once:
  *
- * - **three layers of graph**, so a frame's depth and a node's identity are visibly different things;
+ * - **three layers of graph**, so an invocation's depth and a node's identity are visibly different
+ *   things;
  * - **a reusable graph invoked repeatedly** (`review`), so one definition and many invocations are
  *   distinguishable in the record rather than collapsed;
  * - **a non-linear return** to the writer when a turn confirms it failed, which is edge *data*, not
@@ -28,11 +29,11 @@ import {
  * - **bounded rounds** through a counter reduced with `reduce.add()`, because nothing in the runtime
  *   bounds an author's loop for them;
  * - **a human escalation** the runtime will never satisfy on its own;
- * - **an authored failure outcome**, delivered to the parent's router as data — which is a different
- *   thing again from a segment that threw.
+ * - **an authored failure outcome**, delivered to the parent's edge as data — which is a different
+ *   thing again from an execution that threw.
  *
- * It is hermetic: every external effect goes through `ctx`, so the capability adapters are the only
- * thing a test has to stand in for.
+ * It is hermetic: every external effect goes through `ctx`, so the engine's ports are the only thing
+ * a test has to stand in for.
  */
 
 const reviewLimit = 2;
@@ -59,7 +60,7 @@ export interface ReviewOutput {
  * One review pass: spawn a reviewer, wait for its turn, then judge what it said.
  *
  * Registered by the document graph and invoked once per round, which is what makes "a definition is
- * structure, a frame is one invocation of it" observable rather than asserted.
+ * structure, a graph invocation is one entry into it" observable rather than asserted.
  */
 export const ReviewGraph = createGraph<ReviewState, {}, ReviewParameters, ReviewOutput>({
   key: 'review',
@@ -212,8 +213,8 @@ export const ReviewedDocumentGraph = createGraph<
   nodes: {
     askWriter: operation(
       async (ctx, state) => {
-        // A recorded call position either way: the first visit creates the session, later ones send
-        // into the one it created, and both are durable operations with their own receipts.
+        // The first visit creates the session and later ones send into it: one side effect either
+        // way, and each is its own row in the operation log.
         if (state.writerSessionId === null) {
           const session = await ctx.spawnAgentSession({
             harness: 'claude',
@@ -346,8 +347,8 @@ interface StoryState {
  *
  * Deliberately a real authoring mistake rather than a test switch: the delivered outcome reads a
  * nested summary field that this workflow never produces. It is the kind of bug that only shows up
- * at the last segment, after the writer has worked, the child has published its output and a person
- * has answered — which is exactly the shape a mid-run version change has to survive.
+ * at the last step, after the writer has worked, the child has published its output and a person
+ * has answered — which is exactly the shape a mid-run code change has to survive.
  */
 export interface StoryGraphVariant {
   readonly deliveredReadsMissingSummary?: boolean;
